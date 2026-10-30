@@ -4,7 +4,8 @@ use super::{
     assets::{self, NftLifecycleStandard},
 };
 use crate::{
-    response::{default_limit, ok, ApiError, ApiResult},
+    response::{default_limit, ok, ApiError, ApiResult, CursorPaginatedResponse},
+    utils::parse_optional_block_tx_cursor,
     AppState,
 };
 use axum::{
@@ -91,6 +92,12 @@ fn item_feed(
     ok(result)
 }
 
+/// One page of a collection's Activities / Transactions tab, read at the
+/// source: the collection's activity index is seeked from the cursor for
+/// `limit + 1` canonical rows, so a page costs the same whether the
+/// collection has 100 or 653,018 activities (ID-COL-1). `total` is the
+/// collection's one activity count (`ResolvedCollection::activities_count`),
+/// the same number its detail page reports.
 fn collection_feed(
     state: &Arc<AppState>,
     raw: &str,
@@ -105,40 +112,67 @@ fn collection_feed(
     };
     if kind == "spore" {
         super::spore::read_cluster(state, &id)?;
-    } else if assets::get_collection_aggregate(&state.store, &id)
+    }
+    let collection = assets::get_collection_aggregate(&state.store, &id)
         .map_err(|e| ApiError::internal(e.to_string()))?
-        .is_none()
-    {
-        return Err(ApiError::not_found("Collection not found"));
+        .ok_or_else(|| ApiError::not_found("Collection not found"))?;
+    let context =
+        |e: anyhow::Error| ApiError::internal(format!("collection=0x{}: {e:#}", hex::encode(&id)));
+    let limit = asset_feed::feed_limit(params.limit);
+    let cursor =
+        parse_optional_block_tx_cursor(params.cursor.as_deref(), "asset transaction cursor")?;
+    let page_size =
+        usize::try_from(limit).map_err(|_| ApiError::internal("feed limit overflow"))?;
+    let mut rows = assets::list_canonical_nft_collection_activities_page(
+        &state.store,
+        &state.append_only_store,
+        &id,
+        page_size + 1,
+        cursor,
+        None,
+    )
+    .map_err(context)?;
+    let more = rows.len() > page_size;
+    rows.truncate(page_size);
+    let page = asset_feed::canonical_scope(
+        &state.store,
+        rows.iter().map(|(_, _, entry)| entry.tx_hash.clone()),
+    )
+    .map_err(context)?;
+    let located: Vec<_> = page
+        .iter()
+        .map(|row| (row.block_number, row.tx_index))
+        .collect();
+    let indexed: Vec<_> = rows
+        .iter()
+        .map(|(block, index, _)| (*block, *index))
+        .collect();
+    if located != indexed {
+        return Err(ApiError::internal(format!(
+            "collection=0x{} activity index rows {indexed:?} do not match their canonical locations {located:?}",
+            hex::encode(&id)
+        )));
     }
-    let mut hashes = Vec::new();
-    let mut cursor = None;
-    loop {
-        let rows = assets::list_canonical_nft_collection_activities_page(
-            &state.store,
-            &state.append_only_store,
-            &id,
-            1024,
-            cursor,
-            None,
-        )
-        .map_err(|e| ApiError::internal(format!("collection=0x{}: {e:#}", hex::encode(&id))))?;
-        if rows.is_empty() {
-            break;
-        }
-        cursor = rows.last().map(|(block, index, _)| (*block, *index));
-        hashes.extend(rows.into_iter().map(|(_, _, entry)| entry.tx_hash));
-    }
-    let scope = asset_feed::canonical_scope(&state.store, hashes)
-        .map_err(|e| ApiError::internal(format!("collection=0x{}: {e:#}", hex::encode(&id))))?;
-    let response = if transactions {
-        serde_json::to_value(
-            asset_feed::transactions(state, scope, params.limit, params.cursor.as_deref())?.0,
-        )
+    let next = if more {
+        page.last().map(asset_feed::feed_cursor)
     } else {
-        serde_json::to_value(
-            asset_feed::activities(state, scope, params.limit, params.cursor.as_deref())?.0,
-        )
+        None
+    };
+    let total = collection.activities_count(state, &id).map_err(context)?;
+    let response = if transactions {
+        serde_json::to_value(CursorPaginatedResponse::new(
+            asset_feed::project_transactions(state, page)?,
+            total,
+            limit,
+            next,
+        ))
+    } else {
+        serde_json::to_value(CursorPaginatedResponse::new(
+            asset_feed::project_activities(state, page)?,
+            total,
+            limit,
+            next,
+        ))
     };
     ok(response.map_err(|e| ApiError::internal(e.to_string()))?)
 }

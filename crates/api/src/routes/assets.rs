@@ -94,9 +94,11 @@ pub(super) struct ResolvedCollection {
 }
 
 impl ResolvedCollection {
-    /// Only detail needs this potentially scanning projection. Source discovery,
-    /// item/holder pages and charts do not pay for a collection history count.
-    fn activities_count(&self, state: &AppState, id: &[u8]) -> anyhow::Result<i64> {
+    /// The collection's one activity count: detail and the collection feeds'
+    /// `total` (persisted for identity / m-NFT, the cached canonical count for
+    /// a Spore cluster). Source discovery, item/holder pages and charts do not
+    /// pay for it.
+    pub(super) fn activities_count(&self, state: &AppState, id: &[u8]) -> anyhow::Result<i64> {
         let count = match self.activities {
             CollectionActivityCount::Persisted(count) => count,
             CollectionActivityCount::CanonicalHistory => count_nft_collection_activities_cached(

@@ -2,14 +2,14 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{ensure, Context};
-use ckbadger_store::{CkbadgerStore, TxIndexEntry};
+use ckbadger_store::{CkbadgerStore, TxActions, TxIndexEntry};
 
 use super::{
     activities::{build_global_activity_response, GlobalActivityResponse},
     transactions::{transaction_response, TransactionResponse},
 };
 use crate::{
-    response::{ok, ApiError, ApiResult, CursorPaginatedResponse},
+    response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse},
     utils::parse_optional_block_tx_cursor,
     AppState,
 };
@@ -93,12 +93,22 @@ pub(crate) fn canonical_scope(
     Ok(scope)
 }
 
+/// Page-size bounds every asset feed applies to the requested `limit`.
+pub(crate) fn feed_limit(limit: i64) -> i64 {
+    limit.clamp(1, 100)
+}
+
+/// The `nextCursor` of a page whose last row is `row`.
+pub(crate) fn feed_cursor(row: &AssetTransaction) -> String {
+    format!("{}:{}", row.block_number, row.tx_index)
+}
+
 fn page(
     scope: Vec<AssetTransaction>,
     limit: i64,
     cursor: Option<&str>,
-) -> Result<(Vec<AssetTransaction>, i64, i64, Option<String>), crate::response::ApiRouteError> {
-    let limit = limit.clamp(1, 100);
+) -> Result<(Vec<AssetTransaction>, i64, i64, Option<String>), ApiRouteError> {
+    let limit = feed_limit(limit);
     let cursor = parse_optional_block_tx_cursor(cursor, "asset transaction cursor")?;
     let total = i64::try_from(scope.len())
         .map_err(|_| ApiError::internal("asset transaction count overflow"))?;
@@ -120,8 +130,7 @@ fn page(
     let more = rows.len() > limit as usize;
     rows.truncate(limit as usize);
     let next = if more {
-        rows.last()
-            .map(|row| format!("{}:{}", row.block_number, row.tx_index))
+        rows.last().map(feed_cursor)
     } else {
         None
     };
@@ -135,39 +144,26 @@ pub(crate) fn activities(
     cursor: Option<&str>,
 ) -> ApiResult<CursorPaginatedResponse<GlobalActivityResponse>> {
     let (rows, total, limit, next) = page(scope, limit, cursor)?;
+    ok(CursorPaginatedResponse::new(
+        project_activities(state, rows)?,
+        total,
+        limit,
+        next,
+    ))
+}
+
+/// The one activity projection of already-paged canonical rows, shared by
+/// in-memory scopes ([`activities`]) and feeds paged at their source index.
+pub(crate) fn project_activities(
+    state: &AppState,
+    rows: Vec<AssetTransaction>,
+) -> Result<Vec<GlobalActivityResponse>, ApiRouteError> {
     let mut scripts = HashMap::new();
     let mut addresses = HashMap::new();
-    let data = rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             let result = (|| -> anyhow::Result<_> {
-                let actions = state
-                    .store
-                    .get_tx_actions(row.block_number, row.tx_index, &row.entry.tx_hash)?
-                    .with_context(|| {
-                        format!(
-                            "asset feed missing actions block={} index={} tx=0x{}",
-                            row.block_number,
-                            row.tx_index,
-                            hex::encode(row.entry.tx_hash)
-                        )
-                    })?;
-                let header = state
-                    .store
-                    .get_block_header(row.block_number)?
-                    .with_context(|| {
-                        format!("asset feed missing header block={}", row.block_number)
-                    })?;
-                ensure!(
-                    actions.block_hash == header.hash
-                        && actions.tx_hash == row.entry.tx_hash
-                        && actions.block_number == row.block_number
-                        && actions.tx_index == row.tx_index,
-                    "asset feed action identity mismatch block={} index={} tx=0x{}",
-                    row.block_number,
-                    row.tx_index,
-                    hex::encode(row.entry.tx_hash)
-                );
+                let actions = canonical_actions(state, &row)?;
                 build_global_activity_response(
                     &state.store,
                     &state.append_only_store,
@@ -179,8 +175,41 @@ pub(crate) fn activities(
             })();
             result.map_err(|e| ApiError::internal(e.to_string()))
         })
-        .collect::<Result<_, _>>()?;
-    ok(CursorPaginatedResponse::new(data, total, limit, next))
+        .collect()
+}
+
+/// The canonical `TxActions` of one resolved row, checked against the block
+/// header it claims.
+pub(crate) fn canonical_actions(
+    state: &AppState,
+    row: &AssetTransaction,
+) -> anyhow::Result<TxActions> {
+    let actions = state
+        .store
+        .get_tx_actions(row.block_number, row.tx_index, &row.entry.tx_hash)?
+        .with_context(|| {
+            format!(
+                "asset feed missing actions block={} index={} tx=0x{}",
+                row.block_number,
+                row.tx_index,
+                hex::encode(row.entry.tx_hash)
+            )
+        })?;
+    let header = state
+        .store
+        .get_block_header(row.block_number)?
+        .with_context(|| format!("asset feed missing header block={}", row.block_number))?;
+    ensure!(
+        actions.block_hash == header.hash
+            && actions.tx_hash == row.entry.tx_hash
+            && actions.block_number == row.block_number
+            && actions.tx_index == row.tx_index,
+        "asset feed action identity mismatch block={} index={} tx=0x{}",
+        row.block_number,
+        row.tx_index,
+        hex::encode(row.entry.tx_hash)
+    );
+    Ok(actions)
 }
 
 pub(crate) fn transactions(
@@ -190,8 +219,20 @@ pub(crate) fn transactions(
     cursor: Option<&str>,
 ) -> ApiResult<CursorPaginatedResponse<TransactionResponse>> {
     let (rows, total, limit, next) = page(scope, limit, cursor)?;
-    let data = rows
-        .into_iter()
+    ok(CursorPaginatedResponse::new(
+        project_transactions(state, rows)?,
+        total,
+        limit,
+        next,
+    ))
+}
+
+/// The one transaction-row projection of already-paged canonical rows.
+pub(crate) fn project_transactions(
+    state: &AppState,
+    rows: Vec<AssetTransaction>,
+) -> Result<Vec<TransactionResponse>, ApiRouteError> {
+    rows.into_iter()
         .map(|row| {
             let header = state
                 .store
@@ -212,6 +253,5 @@ pub(crate) fn transactions(
                 None,
             )
         })
-        .collect::<Result<_, _>>()?;
-    ok(CursorPaginatedResponse::new(data, total, limit, next))
+        .collect()
 }

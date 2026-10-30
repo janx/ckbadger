@@ -12,6 +12,7 @@ mod api_assets;
 mod api_blocks;
 mod api_cells;
 mod api_charts;
+mod api_collection_feed;
 mod api_dao;
 mod api_fiber;
 mod api_forks;
