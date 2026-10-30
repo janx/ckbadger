@@ -2521,6 +2521,8 @@ async fn cluster_creation_object_delta_names_the_cluster_itself() {
         12,
     );
     batch.commit().unwrap();
+    // The address feed's `total` reads the counters a synced store keeps.
+    sync_address_tx_counters(&store, &lock_hash);
     let app = create_router(test_config(store)).await;
 
     let expected = serde_json::json!([{

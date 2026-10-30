@@ -96,6 +96,90 @@ async fn test_refresh_assets_loop_seeds_cache_in_background() {
     );
 }
 
+/// A failed asset build is not a permanent error. While the store breaches the
+/// "live items ⇒ daily capacity history" invariant, `/tokens` answers 500
+/// naming the collection (fail fast, no stale list). A failure never advances
+/// the loop's `last_refreshed_tip`, so the loop rebuilds on its next iteration
+/// (30 s later) whatever the tip, and the first successful build clears the
+/// recorded error with no restart.
+///
+/// Runs on the real clock: it waits out one 30 s loop interval.
+#[tokio::test]
+async fn failed_asset_build_is_retried_by_the_refresh_loop() {
+    let store = test_store();
+    let class_id = [0x3cu8; 24];
+    let class_hex = hex::encode(class_id);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            standard: ObjectStandard::MnftToken,
+            total_count: 1,
+            live_count: 1,
+            holders_count: 1,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+
+    let state = test_app_state(test_config(store.clone()));
+    let app = router_from_state(state.clone());
+    let loop_state = state.clone();
+    let handle =
+        tokio::spawn(
+            async move { ckbadger_api::warmup::refresh_assets_cache_loop(loop_state).await },
+        );
+
+    let recorded_error = || state.asset_cache_warmup_error.read().unwrap().clone();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while recorded_error().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the first build must fail on the breached store"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let (status, json) = get_json(&app, "/tokens?limit=2").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&format!(
+            "object collection 0x{class_hex} has 1 live items but no daily capacity history"
+        )),
+        "{message}"
+    );
+
+    // The indexer's row for the class lands; the store is consistent again.
+    store
+        .put_mnft_daily_delta(
+            &class_id,
+            20240115,
+            &MnftDailyDelta {
+                owned_capacity_delta: 100,
+                owned_knowledge_delta: 60,
+            },
+        )
+        .unwrap();
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while recorded_error().is_some() || state.token_cache.load().is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the loop must retry a failed build: {:?}",
+            recorded_error()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    handle.abort();
+
+    let (status, json) = get_json(&app, "/tokens?limit=2").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let (status, json) = get_json(&app, "/assets?type=object").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["id"], format!("0x{class_hex}"));
+    assert_eq!(json["data"][0]["ownedCapacity"], "100");
+}
+
 #[tokio::test]
 async fn test_router_drop_cleans_up_temp_ckb_db() {
     let store = test_store();
