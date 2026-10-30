@@ -246,6 +246,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           key={objectId}
           queryKey={`mnft:${objectId}`}
           scope="Its whole life"
+          itemKind="object"
           loadActivities={(params) => api.getItemActivityFeed('mnft', objectId, params)}
           loadTransactions={(params) => api.getItemTransactions('mnft', objectId, params)}
           context={{

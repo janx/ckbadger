@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { GlobalActivity, ItemActivity, Transaction, CursorPaginatedResponse } from '@/lib/api';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { capitalizeAction } from '@/components/activity-event-row';
+import { activityHeadline, capitalizeAction } from '@/components/activity-event-row';
 import { classifyActivity } from '@/lib/activity-classify';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
@@ -15,20 +15,45 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
-/** Prefer the item's own action over net item-delta inference on identity/object feeds. */
-export function itemFeedHeadline(activity: GlobalActivity): string | undefined {
-  const context = (activity as ItemActivity).itemContext;
-  if (!context?.action) return undefined;
-  const kind = classifyActivity(activity).displayType;
-  const noun =
-    kind === 'identity'
-      ? 'Identity'
-      : kind === 'object'
-        ? 'Object'
-        : kind === 'token'
-          ? 'Token'
-          : 'Item';
-  return `${noun} ${capitalizeAction(context.action)}`;
+export interface ItemFeedHeadline {
+  text: string;
+  /** Someone else's action that only rewrote this item's cell (a ring neighbour): dimmed. */
+  neighbour: boolean;
+}
+
+/**
+ * Headline of a row in one item's own feed (ID-C1). A protocol action is the exact,
+ * standard-specific name (".cell · edit records"); without one, the item's own action names the
+ * row ("Identity Renew"), never a net-delta guess. A .cell registration whose `relinked` names
+ * this item only rewrote its ring pointer: "Neighbour registered".
+ */
+export function itemFeedHeadline(
+  activity: ItemActivity,
+  kind: 'identity' | 'object'
+): ItemFeedHeadline {
+  const context = activity.itemContext;
+  if (!context?.action)
+    throw new Error(`${activity.txHash}: item feed row has no item action for ${kind}`);
+  const relink = activity.protocolActions.find(
+    (pa) => pa.protocol === 'dotcell' && pa.metadata.relinked !== undefined
+  );
+  if (relink) {
+    const relinked = relink.metadata.relinked;
+    if (
+      relink.action !== 'register' ||
+      typeof relinked !== 'string' ||
+      !/^0x[0-9a-f]+$/i.test(relinked)
+    )
+      throw new Error(`${activity.txHash}: invalid .cell relink ${JSON.stringify(relinked)}`);
+    if (relinked.toLowerCase() === context.itemId.toLowerCase())
+      return { text: 'Neighbour registered', neighbour: true };
+  }
+  if (classifyActivity(activity).primaryProtocolAction)
+    return { text: activityHeadline(activity), neighbour: false };
+  return {
+    text: `${kind === 'identity' ? 'Identity' : 'Object'} ${capitalizeAction(context.action)}`,
+    neighbour: false,
+  };
 }
 
 export function tokenMoved(transaction: Transaction, typeHash: string): string {
@@ -173,6 +198,8 @@ export interface AssetFeedProps {
   }) => Promise<CursorPaginatedResponse<Transaction>>;
   token?: AssetTransactionsProps['token'];
   context?: AssetTransactionsProps['context'];
+  /** One item's own feed: every row carries its item action (see itemFeedHeadline). */
+  itemKind?: 'identity' | 'object';
 }
 export function AssetFeed({
   queryKey,
@@ -183,6 +210,7 @@ export function AssetFeed({
   context,
   initialActivityCursor,
   onActivityCursorChange,
+  itemKind,
 }: AssetFeedProps) {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
@@ -228,9 +256,17 @@ export function AssetFeed({
           <AssetReadState error={current.error} label={tab} retained />
           {tab === 'activities' ? (
             acts.data!.data.length ? (
-              acts.data!.data.map((a) => (
-                <ActivityRow key={a.txHash} activity={a} headline={itemFeedHeadline(a)} />
-              ))
+              acts.data!.data.map((a) => {
+                const headline = itemKind && itemFeedHeadline(a as ItemActivity, itemKind);
+                return (
+                  <ActivityRow
+                    key={a.txHash}
+                    activity={a}
+                    headline={headline ? headline.text : undefined}
+                    className={headline && headline.neighbour ? 'opacity-[0.45]' : undefined}
+                  />
+                );
+              })
             ) : (
               <p className="text-text-dim py-6 text-xs">No activities.</p>
             )
