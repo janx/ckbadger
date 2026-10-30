@@ -10,6 +10,7 @@ import {
   clusterDetailProducer,
   clusterProtocolProducer,
   dotcellProtocolProducer,
+  mnftCollectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
@@ -67,6 +68,24 @@ it('retains collection evidence and reports a failed background refresh', async 
   ).toBeInTheDocument();
   expect(
     within(screen.getByRole('complementary', { name: 'Facts' })).getByText('4,000')
+  ).toBeInTheDocument();
+});
+it('shows an m-NFT class its real holder buckets and no DOB blueprint line (#3)', async () => {
+  vi.mocked(api.getCollectionInsights).mockResolvedValue(mnftCollectionInsightsProducer);
+  render(<CollectionDetail id={'0x' + '8f'.repeat(24)} kind="object" />);
+  expect(await screen.findByText('Full collection: 2 holders · 8 items')).toBeInTheDocument();
+  expect(api.getCollectionInsights).toHaveBeenCalledWith('0x' + '8f'.repeat(24), 'object');
+  expect(screen.queryByText('No DOB blueprint in this collection.')).not.toBeInTheDocument();
+  expect(screen.queryByText('No current holders.')).not.toBeInTheDocument();
+});
+it('reports failed m-NFT insights instead of drawing an empty weekly panel (#17)', async () => {
+  vi.mocked(api.getCollectionInsights).mockRejectedValue(new Error('insights unavailable'));
+  render(<CollectionDetail id={'0x' + '8f'.repeat(24)} kind="object" />);
+  expect(
+    await screen.findByText(/Could not load collection insights: insights unavailable/)
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByText('Weekly transfers unavailable: insights unavailable')
   ).toBeInTheDocument();
 });
 it('separates physical cell ownership from protocol-named .cell parties', async () => {

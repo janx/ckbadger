@@ -15,7 +15,8 @@ import type { TokenHistory } from '@/lib/api';
 const DAY = 86400000;
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
-  weekly: readonly { weekStart: string; transfersCount: number }[];
+  /** Completed weekly transfer totals, or why this page has none to draw. */
+  weekly: readonly { weekStart: string; transfersCount: number }[] | { unavailable: string };
   completeThrough: string;
   token?: { symbol: string | null; decimals: number | null };
   supplyEvents?: TokenHistory['supplyEvents'];
@@ -35,7 +36,7 @@ function ckbDecimal(value: string) {
 }
 export function AssetHistory({
   daily,
-  weekly,
+  weekly: weeklySource,
   completeThrough,
   token,
   supplyEvents,
@@ -56,6 +57,8 @@ export function AssetHistory({
       throw new Error(`${p.date}: occupied exceeds held capacity`);
     if (token && p.supply === undefined) throw new Error(`${p.date}: token supply history missing`);
   }
+  const weeklyUnavailable = 'unavailable' in weeklySource ? weeklySource.unavailable : null;
+  const weekly = 'unavailable' in weeklySource ? [] : weeklySource;
   let previousWeek = -Infinity;
   for (const w of weekly) {
     const t = time(w.weekStart);
@@ -236,9 +239,10 @@ export function AssetHistory({
               </span>
             )}
             <span>
-              {week
-                ? `Week of ${week.weekStart}: ${week.transfersCount.toLocaleString('en-US')} transfers`
-                : 'No completed weekly total for this day'}
+              {weeklyUnavailable ??
+                (week
+                  ? `Week of ${week.weekStart}: ${week.transfersCount.toLocaleString('en-US')} transfers`
+                  : 'No completed weekly total for this day')}
             </span>
           </div>
           <Chart
@@ -281,27 +285,29 @@ export function AssetHistory({
               cursorX={selectedDate === null ? null : time(selectedDate)}
             />
           )}
-          <Chart
-            title="Transfers per week"
-            subtitle="Completed UTC+8 weeks"
-            data={weeks.map((w) => ({
-              label: w.weekStart,
-              x: time(w.weekStart),
-              values: { count: String(w.transfersCount) },
-            }))}
-            series={[
-              { key: 'count', label: 'Transfers', assetClass: token ? 'tokens' : 'objects' },
-            ]}
-            unit="transfers"
-            kind="bars"
-            height={120}
-            plotLeft={100}
-            xDomain={domain}
-            activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
-            onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}
-            hideCaption
-            cursorX={selectedDate === null ? null : time(selectedDate)}
-          />
+          {weeklyUnavailable === null && (
+            <Chart
+              title="Transfers per week"
+              subtitle="Completed UTC+8 weeks"
+              data={weeks.map((w) => ({
+                label: w.weekStart,
+                x: time(w.weekStart),
+                values: { count: String(w.transfersCount) },
+              }))}
+              series={[
+                { key: 'count', label: 'Transfers', assetClass: token ? 'tokens' : 'objects' },
+              ]}
+              unit="transfers"
+              kind="bars"
+              height={120}
+              plotLeft={100}
+              xDomain={domain}
+              activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
+              onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}
+              hideCaption
+              cursorX={selectedDate === null ? null : time(selectedDate)}
+            />
+          )}
         </>
       ) : (
         <p className="text-text-dim py-6 text-xs">No complete daily history in this range.</p>

@@ -63,6 +63,11 @@ function ScopedCollectionHolders({ load, queryKey, distribution }: CollectionHol
     holderKey(holder);
     count(holder.itemCount, 'holder item count');
   }
+  // One holder scope: a listed page cannot hold more holders than the full distribution counts.
+  if (distribution && holders.data && BigInt(holders.data.data.length) > totalHolders)
+    throw new Error(
+      `Collection holder distribution counts ${totalHolders} holders but the list returned ${holders.data.data.length}`
+    );
   const columns: ListColumn<CollectionHolder>[] = [
     {
       key: 'rank',

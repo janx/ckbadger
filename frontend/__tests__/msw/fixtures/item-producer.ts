@@ -161,6 +161,30 @@ export const collectionInsightsProducer = {
   ],
   weeklyActivity: [],
 } satisfies CollectionInsights;
+/** `/assets/objects/{class id}/insights` for an m-NFT class: real holder buckets, no DOB items. */
+export const mnftCollectionInsightsProducer = {
+  calendarAnchor: null,
+  calendarSource: 'indexedChainTimeUtc8',
+  completeThrough: null,
+  currentPattern: { status: 'notDob', steps: [] },
+  genetics: {
+    complete: true,
+    decodedItems: 0,
+    eligibleItems: 0,
+    failedItems: 0,
+    liveItems: 8,
+    nonDobItems: 8,
+    pendingItems: 0,
+    traits: [],
+  },
+  holderDistribution: [
+    { holders: 0, items: 0, range: '1' },
+    { holders: 1, items: 2, range: '2' },
+    { holders: 0, items: 0, range: '3\u20135' },
+    { holders: 1, items: 6, range: '6+' },
+  ],
+  weeklyActivity: [],
+} satisfies CollectionInsights;
 export const collectionInsightsPendingProducer = {
   calendarAnchor: null,
   calendarSource: 'indexedChainTimeUtc8',

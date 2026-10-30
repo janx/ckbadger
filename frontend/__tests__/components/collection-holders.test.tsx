@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   act,
@@ -144,5 +145,34 @@ describe('Collection holders', () => {
     } finally {
       error.mockRestore();
     }
+  });
+
+  it('fails fast when the distribution counts fewer holders than the list returned (#3)', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const load = vi.fn().mockResolvedValue(page([named, resolved]));
+    class Boundary extends Component<{ children: ReactNode }, { message: string | null }> {
+      state = { message: null as string | null };
+      static getDerivedStateFromError(e: Error) {
+        return { message: e.message };
+      }
+      render() {
+        return this.state.message ? <p role="alert">{this.state.message}</p> : this.props.children;
+      }
+    }
+    render(
+      <Boundary>
+        <CollectionHolders load={load} queryKey="stub" distribution={[]} />
+      </Boundary>
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'distribution counts 0 holders but the list returned 2'
+    );
+    error.mockRestore();
+  });
+
+  it('lets an empty distribution with no listed holders read as genuinely no holders', async () => {
+    const load = vi.fn().mockResolvedValue(page([], { total: 0 }));
+    render(<CollectionHolders load={load} queryKey="none" distribution={[]} />);
+    expect(await screen.findByText('Full collection: 0 holders · 0 items')).toBeInTheDocument();
   });
 });

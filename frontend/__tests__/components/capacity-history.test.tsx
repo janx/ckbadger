@@ -43,7 +43,11 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
   expect(() =>
     render(
-      <CapacityHistory subject="Broken" history={{ ...history, completeThrough: '2023-11-13' }} />
+      <CapacityHistory
+        subject="Broken"
+        history={{ ...history, completeThrough: '2023-11-13' }}
+        weekly={[]}
+      />
     )
   ).toThrow('incomplete day');
   expect(() =>
@@ -51,6 +55,7 @@ it('rejects an incomplete calendar day and missing exact occupied state', () => 
       <CapacityHistory
         subject="Broken"
         history={{ ...history, data: [{ date: '2023-11-01', values: { unused: '1' } }] }}
+        weekly={[]}
       />
     )
   ).toThrow('occupied');
@@ -64,7 +69,11 @@ it.each([928, 358])(
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       render(
-        <CapacityHistory subject="Producer collection" history={clusterCapacityHistoryProducer} />
+        <CapacityHistory
+          subject="Producer collection"
+          history={clusterCapacityHistoryProducer}
+          weekly={[]}
+        />
       );
       const plot = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
       expect(plot).toHaveTextContent('0.0000005 CKB');
@@ -80,3 +89,18 @@ it.each([928, 358])(
     }
   }
 );
+
+it('says why a collection has no weekly transfers instead of drawing an empty chart (OB-K2)', () => {
+  render(
+    <CapacityHistory
+      subject="Identity collection"
+      history={history}
+      weekly={{ unavailable: 'Weekly transfer totals are not indexed for identity collections' }}
+    />
+  );
+  expect(
+    screen.getByText('Weekly transfer totals are not indexed for identity collections')
+  ).toBeInTheDocument();
+  expect(screen.queryByText('No completed weekly total for this day')).not.toBeInTheDocument();
+  expect(screen.queryByRole('img', { name: 'Transfers per week, transfers' })).toBeNull();
+});

@@ -50,7 +50,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
   const insights = useQuery({
     queryKey: ['collection-insights', kind, id],
     queryFn: () => api.getCollectionInsights(id, kind === 'object' ? 'object' : 'spore'),
-    // Weekly activity is keyed by collection id for Spore clusters and m-NFT classes.
+    // Spore clusters and m-NFT classes have insights; identity collections have none indexed.
     enabled: kind === 'spore' || kind === 'object',
     retry: false,
   });
@@ -232,7 +232,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               )}
             </section>
           )}
-          {insights.data && <CurrentPatternEvidence pattern={insights.data.currentPattern} />}
+          {kind === 'spore' && insights.data && (
+            <CurrentPatternEvidence pattern={insights.data.currentPattern} />
+          )}
           <section className="space-y-4">
             <h2 className="text-text-bright text-[15px]">Collection metadata</h2>
             {cluster.data && (
@@ -290,11 +292,30 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           <CapacityHistory
             history={chart.data}
             subject={title}
-            weekly={insights.data?.weeklyActivity}
+            weekly={
+              insights.data
+                ? insights.data.weeklyActivity
+                : {
+                    unavailable:
+                      kind === 'identity'
+                        ? 'Weekly transfer totals are not indexed for identity collections'
+                        : insights.error
+                          ? `Weekly transfers unavailable: ${insights.error.message}`
+                          : 'Loading weekly transfers…',
+                  }
+            }
           />
         </>
       ) : (
         <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
+      )}
+      {kind === 'object' && (
+        <AssetReadState
+          label="collection insights"
+          error={insights.error}
+          retained={!!insights.data}
+          loading={insights.isLoading}
+        />
       )}
       {kind === 'spore' && (
         <>
