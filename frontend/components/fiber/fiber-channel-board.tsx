@@ -16,7 +16,7 @@ import {
   type FiberChannelEvidence,
   type FiberEpochDelay,
 } from '@/lib/api';
-import { epochDelayWords, fiberDuration } from '@/lib/fiber-format';
+import { epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
 import { formatCount } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
@@ -67,14 +67,42 @@ const ckb = (shannons: string | bigint, signed = false) => (
 );
 
 /** The opening flows of the two observed parties, in their order, when both put CKB in. */
-function openingSplit(channel: FiberChannelDetail, evidence: FiberChannelEvidence | undefined) {
-  if (!evidence || channel.observedParties.length !== 2) return null;
-  const flows = channel.observedParties.map((party) => {
-    const flow = evidence.openingPartyFlows.find((f) => f.lockScriptHash === party.lockScriptHash);
-    return flow ? { party, net: BigInt(flow.observedNetInput) } : null;
+type Stage = FiberChannelEvidence['stages'][number];
+const STAGE_KEYS = {
+  open: 'opening',
+  close: 'close',
+  commitment: 'currentCommitment',
+  settle: 'settlement',
+} as const;
+
+function stageOf(evidence: FiberChannelEvidence | undefined, key: string): Stage | undefined {
+  return evidence?.stages.find((stage) => stage.stage === key);
+}
+
+/** The stage that paid the channel out: the settlement, or a cooperative close. */
+function finalStage(channel: FiberChannelDetail, evidence: FiberChannelEvidence | undefined) {
+  if (channel.state === 'settled') return stageOf(evidence, STAGE_KEYS.settle);
+  if (channel.state === 'cooperativelyClosed') return stageOf(evidence, STAGE_KEYS.close);
+  return undefined;
+}
+
+/**
+ * Each observed party's amount in one stage, from the API's exact party flows (R2b-b-16):
+ * `sign` −1 reads what it put in (opening), +1 what it received (the close). Only parties with
+ * a positive amount are returned, in the channel's party order.
+ */
+function stageAmounts(channel: FiberChannelDetail, stage: Stage | undefined, sign: 1 | -1) {
+  if (!stage) return [];
+  return channel.observedParties.flatMap((party) => {
+    const flow = stage.partyFlows.find((f) => f.lockScriptHash === party.lockScriptHash);
+    const amount = flow ? BigInt(flow.netReceived) * BigInt(sign) : BigInt(0);
+    return amount > BigInt(0) ? [{ party, amount }] : [];
   });
-  if (flows.some((flow) => flow === null || flow.net <= BigInt(0))) return null;
-  return flows as { party: Party; net: bigint }[];
+}
+
+/** A two-party split, drawable only when both observed parties have a positive amount. */
+function split(channel: FiberChannelDetail, amounts: { party: Party; amount: bigint }[]) {
+  return channel.observedParties.length === 2 && amounts.length === 2 ? amounts : null;
 }
 
 function Summary({
@@ -88,16 +116,9 @@ function Summary({
     ? fiberDuration(channel.observedLifetimeMs, `${channel.channelId} lifetime`)
     : null;
   if (lifetime === null) throw new Error(`Fiber channel ${channel.channelId} lacks a lifetime`);
-  const putIn = evidence
-    ? channel.observedParties.flatMap((party) => {
-        const flow = evidence.openingPartyFlows.find(
-          (f) => f.lockScriptHash === party.lockScriptHash
-        );
-        return flow && BigInt(flow.observedNetInput) > BigInt(0)
-          ? [{ party, net: flow.observedNetInput }]
-          : [];
-      })
-    : [];
+  const putIn = stageAmounts(channel, stageOf(evidence, STAGE_KEYS.open), -1).map(
+    ({ party, amount }) => ({ party, net: amount })
+  );
   const delay = channel.delayEpochDecoded ? epochDelayWords(channel.delayEpochDecoded) : null;
   const story =
     channel.state === 'open'
@@ -132,6 +153,15 @@ function Summary({
 
 const STEP_WORDS = ['no', 'one', 'two', 'three', 'four'];
 
+/** "ppedrr received 899.99998733 CKB net" for each party paid in the final stage. */
+function receivedLines(channel: FiberChannelDetail, stage: Stage | undefined): ReactNode[] {
+  return stageAmounts(channel, stage, 1).map(({ party, amount }) => (
+    <span key={party.lockScriptHash}>
+      {tail(party)} received {ckb(amount)} net
+    </span>
+  ));
+}
+
 interface StepSpec {
   key: string;
   title: string;
@@ -139,6 +169,8 @@ interface StepSpec {
   blockNumber: number;
   timestamp: string;
   description: string;
+  /** The evidence stage key, for the step's epoch. */
+  stage: (typeof STAGE_KEYS)[keyof typeof STAGE_KEYS];
   consumes?: { txHash: string; index: number; role: string };
   carries?: { index: number; role: string };
   box: FiberStepBox;
@@ -173,6 +205,7 @@ function channelSteps(
   const steps: StepSpec[] = [
     {
       key: 'open',
+      stage: STAGE_KEYS.open,
       title: 'Open',
       txHash: channel.fundingTxHash,
       blockNumber: channel.openBlock,
@@ -204,6 +237,7 @@ function channelSteps(
         : undefined;
     steps.push({
       key: 'close',
+      stage: STAGE_KEYS.close,
       title: forced ? 'Force close' : 'Close',
       txHash: channel.closeTxHash,
       blockNumber: required(channel.closeBlock, 'a close block', id),
@@ -214,7 +248,13 @@ function channelSteps(
       consumes: { ...funding, role: 'Fiber funding' },
       carries: carriesCommitment,
       box: !forced
-        ? { head: 'Closed', lines: ['the channel no longer exists on chain'] }
+        ? {
+            head: 'Closed',
+            lines: [
+              ...receivedLines(channel, finalStage(channel, evidence)),
+              'the channel no longer exists on chain',
+            ],
+          }
         : channel.state === 'settled'
           ? {
               head: `→ step ${updated ? 4 : 3}, after ${delay}`,
@@ -236,6 +276,7 @@ function channelSteps(
   if (updated && tracked)
     steps.push({
       key: 'commitment',
+      stage: STAGE_KEYS.commitment,
       title: 'Updated commitment',
       txHash: updated.txHash,
       blockNumber: updated.blockNumber,
@@ -251,6 +292,7 @@ function channelSteps(
   if (channel.settlementTxHash)
     steps.push({
       key: 'settle',
+      stage: STAGE_KEYS.settle,
       title: 'Settle',
       txHash: channel.settlementTxHash,
       blockNumber: required(channel.settlementBlock, 'a settlement block', id),
@@ -260,7 +302,13 @@ function channelSteps(
       consumes: tracked
         ? { txHash: tracked.txHash, index: tracked.outputIndex, role: 'Fiber commitment' }
         : undefined,
-      box: { head: 'Closed', lines: ['the channel no longer exists on chain'] },
+      box: {
+        head: 'Closed',
+        lines: [
+          ...receivedLines(channel, finalStage(channel, evidence)),
+          'the channel no longer exists on chain',
+        ],
+      },
     });
   return steps;
 }
@@ -282,7 +330,9 @@ function StageWitnesses({ stage }: { stage: FiberChannelEvidence['stages'][numbe
     <span>
       {formatCount(stage.witnessCount, 'witness', 'witnesses')}
       {sizes && sizes.length > 0 && `, ${sizes.join(', ')} B`}
-      {tx.data && ` · fee ${BigInt(tx.data.fee).toLocaleString('en-US')} shannons`}
+      {` · fee ${BigInt(stage.fee).toLocaleString('en-US')} shannons, ${
+        stage.feeSource === 'channel_only' ? 'out of the channel' : 'from outside inputs'
+      }`}
     </span>
   );
 }
@@ -300,7 +350,20 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   const delayBytes = tracked
     ? u64Hex(tracked.delayEpoch, `Fiber commitment ${tracked.txHash} delay`)
     : null;
-  const split = openingSplit(channel, evidence);
+  const atOpen = split(channel, stageAmounts(channel, stageOf(evidence, STAGE_KEYS.open), -1));
+  const closing = finalStage(channel, evidence);
+  const atClose = split(channel, stageAmounts(channel, closing, 1));
+  const commitmentStage =
+    stageOf(evidence, STAGE_KEYS.commitment) ??
+    (channel.state === 'forceClosed' || channel.state === 'settled'
+      ? stageOf(evidence, STAGE_KEYS.close)
+      : undefined);
+  const settlement = stageOf(evidence, STAGE_KEYS.settle);
+  const waitParts = [
+    commitmentStage && `commitment at epoch ${stageEpoch(commitmentStage.epoch)}`,
+    tracked?.readyEpoch && `earliest payout at epoch ${tracked.readyEpoch}`,
+    settlement && `settled at epoch ${stageEpoch(settlement.epoch)}`,
+  ].filter((part): part is string => Boolean(part));
   const steps = channelSteps(channel, evidence);
   const [first, second] = channel.observedParties;
   const argsBytes = (hex: string) => (hex.length - 2) / 2;
@@ -345,17 +408,30 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           )}
         </div>
 
-        {split && (
+        {atOpen && (
           <DetailSection title="What moved inside the channel">
             <p className="text-text-dim mb-3.5 max-w-[900px] text-[12.5px]">
               The chain never sees a Fiber payment, only the split when the channel opens and the
               split when it closes.
+              {atClose &&
+                ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
             </p>
-            <FiberSplitBar
-              left={{ name: tail(split[0].party), shannons: split[0].net }}
-              right={{ name: tail(split[1].party), shannons: split[1].net }}
-              note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
-            />
+            <div className="flex flex-col gap-4">
+              <FiberSplitBar
+                left={{ name: tail(atOpen[0].party), shannons: atOpen[0].amount }}
+                right={{ name: tail(atOpen[1].party), shannons: atOpen[1].amount }}
+                note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
+              />
+              {atClose && closing && (
+                <FiberSplitBar
+                  left={{ name: tail(atClose[0].party), shannons: atClose[0].amount }}
+                  right={{ name: tail(atClose[1].party), shannons: atClose[1].amount }}
+                  note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${
+                    closing.stage === STAGE_KEYS.settle ? 'settlement' : 'closing'
+                  } transaction, payout and change alike`}
+                />
+              )}
+            </div>
           </DetailSection>
         )}
 
@@ -377,6 +453,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                 blockNumber={step.blockNumber}
                 timestamp={step.timestamp}
                 description={step.description}
+                epoch={stageOf(evidence, step.stage)?.epoch}
                 consumes={step.consumes}
                 carries={step.carries}
                 box={step.box}
@@ -461,9 +538,15 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                     <StageWitnesses stage={stage} />
                   </span>
                 ))}
-                {tracked && (
+                {waitParts.length > 0 && (
                   <>
                     <span className="text-text-dim">the wait</span>
+                    <span className="text-text">{waitParts.join(' · ')}</span>
+                  </>
+                )}
+                {tracked && (
+                  <>
+                    <span className="text-text-dim">delay rule</span>
                     <span className="text-text">
                       {tracked.epochLock === 'firstSettlementDelay'
                         ? `first settlement delay ${tracked.epochLockMetAtTip ? 'met' : 'waiting'}: ready at epoch ${tracked.readyEpoch}; indexed tip at ${tracked.tipEpoch}`
