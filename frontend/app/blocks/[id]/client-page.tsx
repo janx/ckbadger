@@ -22,7 +22,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 
 /** A proposal with a committing tx was committed in a block; a missing number is a contract bug. */
@@ -336,8 +336,7 @@ export default function BlockDetailPage() {
                         <Hash hash={uncle.hash} copyable={false} />
                       </Link>
                       <p className="text-text-dim">
-                        {new Date(uncle.timestamp).toUTCString()} · {uncle.proposalIds.length}{' '}
-                        proposals
+                        {formatUtc8DateTime(uncle.timestamp)} · {uncle.proposalIds.length} proposals
                       </p>
                       <Link href={`/blocks/${uncle.parentHash}`} className="text-text-dim">
                         Parent <Hash hash={uncle.parentHash} copyable={false} />
@@ -479,7 +478,7 @@ export default function BlockDetailPage() {
                     mined by <Address address={block.minerAddress} />
                   </>
                 )}{' '}
-                on {new Date(block.timestamp).toUTCString()}.
+                on {formatUtc8DateTime(block.timestamp)}.
                 {block.miningReward !== null && (
                   <> The miner earns {amount(block.miningReward, 'reward')} for this block.</>
                 )}
@@ -562,7 +561,7 @@ export default function BlockDetailPage() {
               <dl className="space-y-5">
                 <div>
                   <dt className="text-text-dim mb-1">Time</dt>
-                  <dd>{new Date(block.timestamp).toUTCString()}</dd>
+                  <dd>{formatUtc8DateTime(block.timestamp)}</dd>
                   <dd className="text-text-dim mt-1">
                     {formatTimeAgo(block.timestamp)}
                     {parentElapsedMs !== null && (

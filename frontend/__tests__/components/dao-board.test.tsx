@@ -150,7 +150,7 @@ describe('DaoBoard', () => {
     expect(amount).toHaveClass('whitespace-nowrap');
   });
 
-  it('reads the 365-day AR anchor as a rate, a UTC time and a span, not raw integers (#11)', () => {
+  it('reads the 365-day AR anchor as a rate, a UTC+8 time and a span, not raw integers (#11)', () => {
     const year365 = {
       anchorBlockNumber: 3,
       anchorChainTimeMs: '1761733970452',
@@ -163,7 +163,7 @@ describe('DaoBoard', () => {
     );
     const line = screen.getByText(/365-day anchor/);
     expect(line).toHaveTextContent(
-      '365-day anchor: block #3 · chain time 2025-10-29 10:32:50 UTC · AR 1.0100000000000000 · observed span 365 d'
+      '365-day anchor: block #3 · chain time 2025-10-29 18:32:50 UTC+8 · AR 1.0100000000000000 · observed span 365 d'
     );
     expect(line).not.toHaveTextContent(/ ms|10100000000000000/);
   });

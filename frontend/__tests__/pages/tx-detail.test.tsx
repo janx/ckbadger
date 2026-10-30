@@ -352,12 +352,12 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(/position 2/)).not.toBeInTheDocument();
   });
 
-  it('shows commit time as UTC with a relative age, not a raw ISO Z string (TX-10)', async () => {
+  it('shows commit time as UTC+8 with a relative age, not a raw ISO Z string (TX-10)', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date('2026-02-20T17:46:12Z'));
     render(<TransactionDetailPage />);
     const time = await screen.findByRole('time');
-    expect(time).toHaveTextContent('2026-02-20 16:46:12 UTC');
+    expect(time).toHaveTextContent('2026-02-21 00:46:12 UTC+8');
     expect(time).toHaveTextContent(/· 1h ago/);
     expect(time.textContent).not.toMatch(/Z/);
   });

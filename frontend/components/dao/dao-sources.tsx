@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import type { GlobalActivity, Transaction } from '@/lib/api';
-import { formatUtcClock } from '@/lib/utils';
+import { formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 
 function actionLabel(actions: GlobalActivity['protocolActions']): string {
@@ -31,7 +31,7 @@ function ActivityRow({ row }: { row: GlobalActivity }) {
           {formatBlockNumber(row.blockNumber)}
         </Link>
       </td>
-      <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
+      <td className="text-text-dim text-right">{formatUtc8DateTime(row.timestamp)}</td>
     </tr>
   );
 }
@@ -54,7 +54,7 @@ function TransactionRow({ row }: { row: Transaction }) {
           {formatBlockNumber(row.blockNumber)}
         </Link>
       </td>
-      <td className="text-text-dim text-right">{formatUtcClock(row.timestamp)}</td>
+      <td className="text-text-dim text-right">{formatUtc8DateTime(row.timestamp)}</td>
     </tr>
   );
 }
@@ -113,7 +113,7 @@ export function DaoSources() {
                   <th className="py-2">DAO step</th>
                   <th>Transaction</th>
                   <th>Block</th>
-                  <th className="text-right">UTC</th>
+                  <th className="text-right">UTC+8</th>
                 </tr>
               </thead>
               <tbody>

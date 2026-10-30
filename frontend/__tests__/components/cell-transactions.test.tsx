@@ -31,10 +31,10 @@ const tx = {
   witnessesAvailable: true,
 } as unknown as TransactionDetail;
 
-it('prints the committing block time as the UTC clock, not raw ISO (#16)', async () => {
+it('prints the committing block time as the site UTC+8 clock, not raw ISO (#16, D2)', async () => {
   vi.spyOn(api, 'getTransactionDetail').mockResolvedValue(tx);
   vi.spyOn(api, 'getTransactionCellDeps').mockResolvedValue([]);
   render(<TransactionEvidence hash={hash} label="Created" />);
-  expect(await screen.findByText('2026-10-29 10:12:50 UTC')).toBeInTheDocument();
+  expect(await screen.findByText('2026-10-29 18:12:50 UTC+8')).toBeInTheDocument();
   expect(screen.queryByText(tx.timestamp!)).not.toBeInTheDocument();
 });

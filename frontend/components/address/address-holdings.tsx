@@ -19,7 +19,7 @@ import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
 import { formatCompositionTier } from '@/lib/asset-utils';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { cn, formatCkbAmount } from '@/lib/utils';
+import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
@@ -519,7 +519,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                           <Link href={`/blocks/${eventBlock}`}>
                             {formatBlockNumber(eventBlock)}
                           </Link>{' '}
-                          · {new Date(eventTimestamp).toISOString().slice(0, 10)}
+                          · {formatUtc8Date(eventTimestamp)}
                         </span>
                         <ExactCkb
                           shannons={BigInt(cell.capacity)}
@@ -748,7 +748,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       <span>
                         {c.expiresAt === null
                           ? 'Expiry unavailable'
-                          : `expires ${new Date(c.expiresAt * 1000).toISOString().slice(0, 10)}`}{' '}
+                          : `expires ${formatUtc8Date(c.expiresAt * 1000)}`}{' '}
                         · held since{' '}
                         <Link href={`/blocks/${c.heldSinceBlock!}`}>
                           {formatBlockNumber(c.heldSinceBlock!)}

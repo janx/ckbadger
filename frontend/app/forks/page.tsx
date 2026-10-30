@@ -10,9 +10,9 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatObserverTimeUtc8 } from '@/lib/fork-time';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatUtc8DateTime } from '@/lib/utils';
 
 const eventLink = (event: ReorgEvent) => `/forks/${event.id}`;
 const hash = (value: string) => <span className="break-all font-mono">{value}</span>;
@@ -109,7 +109,7 @@ export default function ForksPage() {
                       minWidth: 175,
                       render: (event) => (
                         <Link href={eventLink(event)} className="text-emphasis hover:underline">
-                          {formatObserverTimeUtc8(event.detectedAt)}
+                          {formatUtc8DateTime(event.detectedAt)}
                         </Link>
                       ),
                     },
@@ -200,7 +200,7 @@ export default function ForksPage() {
                     <div className="min-w-0 space-y-2 text-xs">
                       <div className="flex flex-wrap justify-between gap-2">
                         <Link href={eventLink(event)} className="text-emphasis">
-                          {formatObserverTimeUtc8(event.detectedAt)}
+                          {formatUtc8DateTime(event.detectedAt)}
                         </Link>
                         <span>
                           {event.depth} block{event.depth === 1 ? '' : 's'}

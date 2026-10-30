@@ -6,6 +6,7 @@ import { BlockContents } from '@/components/blocks/block-visual';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatUtc8Time } from '@/lib/utils';
 
 interface BlockPositionProps {
   block: Pick<
@@ -275,7 +276,7 @@ export function BlockPosition({
                   </text>
                   {timestamp && (
                     <text x="10" y="39" fill="#7c849c" fontSize="11">
-                      {new Date(timestamp).toISOString().slice(11, 19)} UTC
+                      {formatUtc8Time(timestamp)}
                     </text>
                   )}
                 </Link>

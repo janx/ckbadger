@@ -10,7 +10,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { api, isNotFoundApiError, type BlockUncle } from '@/lib/api';
 import { decodeDaoHeader } from '@/lib/dao-header';
-import { formatTimeAgo, formatUtcClock } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatEpochPosition } from '@/lib/epoch';
 
@@ -118,7 +118,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
           label: 'Time',
           value: (
             <>
-              {formatUtcClock(uncle.timestamp)}
+              {formatUtc8DateTime(uncle.timestamp)}
               <span className="text-text-dim block text-[11px]">
                 {formatTimeAgo(uncle.timestamp)}
               </span>
@@ -187,7 +187,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         <Link href={`/blocks/${uncle.parentHash}`}>
           <Hash hash={uncle.parentHash} copyable={false} />
         </Link>{' '}
-        at {formatUtcClock(uncle.timestamp)} and is not part of the canonical chain: its
+        at {formatUtc8DateTime(uncle.timestamp)} and is not part of the canonical chain: its
         transactions never ran, but the proposals it carried count toward the proposal window.
       </p>
     </DetailLayout>

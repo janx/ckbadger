@@ -30,7 +30,7 @@ import {
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref, getIdentityItemDetailHref } from '@/lib/detail-routes';
-import { cn, formatTimeAgo, formatUtcClock, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo, truncateHash, formatUtc8DateTime } from '@/lib/utils';
 import dynamic from '@/lib/dynamic-client';
 import { formatBlockNumber } from '@/lib/format-block';
 
@@ -937,7 +937,7 @@ export default function TransactionDetailPage() {
               <PendingValue />
             ) : (
               <time dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}>
-                {formatUtcClock(required(tx.timestamp, hash, 'timestamp'))}
+                {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
                 <span className="text-text-dim">
                   {' '}
                   · {formatTimeAgo(required(tx.timestamp, hash, 'timestamp'))}
@@ -970,7 +970,7 @@ export default function TransactionDetailPage() {
           <div>
             <dt className="text-text-dim">Pending Since</dt>
             <dd className="mt-1">
-              {formatUtcClock(tx.pendingSince)} · {formatTimeAgo(tx.pendingSince)}
+              {formatUtc8DateTime(tx.pendingSince)} · {formatTimeAgo(tx.pendingSince)}
             </dd>
           </div>
         )}

@@ -12,8 +12,7 @@ import {
 } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
-import { formatObserverTimeUtc8 } from '@/lib/fork-time';
-import { formatUtcClock } from '@/lib/utils';
+import { formatUtc8DateTime } from '@/lib/utils';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
@@ -51,7 +50,7 @@ const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false)
         key: 'time',
         label: 'Header time',
         minWidth: 180,
-        render: (block) => formatUtcClock(block.timestamp),
+        render: (block) => formatUtc8DateTime(block.timestamp),
       },
     ]}
     mobileRow={(block) => (
@@ -61,7 +60,7 @@ const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false)
         <div>
           Miner: {block.minerLockHash ? fullHash(block.minerLockHash) : 'witness unavailable'}
         </div>
-        <div>{formatUtcClock(block.timestamp)}</div>
+        <div>{formatUtc8DateTime(block.timestamp)}</div>
       </div>
     )}
   />
@@ -104,7 +103,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
       title={`Fork event #${event.id}`}
       identity={
         <>
-          Detected {formatObserverTimeUtc8(event.detectedAt)} ·{' '}
+          Detected {formatUtc8DateTime(event.detectedAt)} ·{' '}
           {event.eventType === 'deep' ? 'deep fork detection' : 'branch switch'}
         </>
       }

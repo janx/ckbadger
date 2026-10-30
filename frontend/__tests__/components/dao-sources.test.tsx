@@ -82,12 +82,12 @@ describe('DaoSources', () => {
     expect(await screen.findByText('withdraw request')).toBeInTheDocument();
   });
 
-  it('prints the UTC column in UTC whatever the browser zone (DAO-1)', async () => {
+  it('prints the time column in the site UTC+8 whatever the browser zone (DAO-1, D2)', async () => {
     render(<DaoSources />);
-    expect(await screen.findByText('2026-10-29 10:12:50 UTC')).toBeInTheDocument();
+    expect(await screen.findByText('2026-10-29 18:12:50 UTC+8')).toBeInTheDocument();
     expect(screen.queryByText(/1793268770452/)).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'transactions' }));
-    expect(await screen.findByText('2026-10-29 11:12:50 UTC')).toBeInTheDocument();
+    expect(await screen.findByText('2026-10-29 19:12:50 UTC+8')).toBeInTheDocument();
   });
 
   it('reports source errors without inventing rows', async () => {

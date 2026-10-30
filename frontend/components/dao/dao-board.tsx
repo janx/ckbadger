@@ -9,7 +9,7 @@ import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@
 import { DaoSources } from '@/components/dao/dao-sources';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
-import { formatCapacity, formatDurationMs, formatUtcClock } from '@/lib/utils';
+import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
@@ -633,7 +633,7 @@ export function DaoBoard({
           {evidence.ar.year365 && (
             <div className="text-text-dim mt-2 font-mono text-[11px]">
               365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} ·
-              chain time {formatUtcClock(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+              chain time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
               {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
               {formatDurationMs(
                 exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')

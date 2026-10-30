@@ -7,7 +7,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { hexBytes } from '@/lib/hex-bytes';
 import { HUE_RAMP } from '@/lib/design-tokens';
-import { formatUnixSecondsUtc } from '@/lib/utils';
+import { formatUnixSecondsUtc8 } from '@/lib/utils';
 
 export interface ObjectGeneticsViewProps {
   evidence: ObjectGenetics;
@@ -66,7 +66,7 @@ export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGene
       </div>
       <p className="text-text-dim text-[11px]">
         The byte map describes the current decoder. Trait values are cached VM results
-        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc(cached.decodedAt)}` : ''};
+        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
         the original decoder binary hash was not recorded. These are separate pieces of evidence.
       </p>
       {cached.status === 'pending' && (

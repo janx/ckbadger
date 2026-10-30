@@ -36,7 +36,7 @@ describe('Uncle detail page', () => {
       '/mainnet/blocks/8775638'
     );
     expect(screen.getByText('uncle 0', { exact: false })).toBeInTheDocument();
-    expect(screen.getAllByText('2026-02-21 23:59:40 UTC').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('2026-02-22 07:59:40 UTC+8').length).toBeGreaterThan(0);
     expect(screen.getAllByText('5,414 · 1 / 1,800')).toHaveLength(2);
     expect(screen.getByText('0xaabbccddeeff00112233')).toBeInTheDocument();
     expect(screen.getByText('1,210,829,853,049,231,829')).toBeInTheDocument();

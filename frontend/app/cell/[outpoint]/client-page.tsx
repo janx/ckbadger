@@ -12,7 +12,7 @@ import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
-import { formatDurationMs, formatUtcClock } from '@/lib/utils';
+import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
@@ -138,7 +138,10 @@ function CellIdentity({ cell }: { cell: Cell }) {
         {cell.createdTimestamp && (
           <>
             {' '}
-            · <time dateTime={cell.createdTimestamp}>{formatUtcClock(cell.createdTimestamp)}</time>
+            ·{' '}
+            <time dateTime={cell.createdTimestamp}>
+              {formatUtc8DateTime(cell.createdTimestamp)}
+            </time>
           </>
         )}
       </p>
@@ -153,7 +156,8 @@ function CellIdentity({ cell }: { cell: Cell }) {
           {cell.spentTimestamp && (
             <>
               {' '}
-              · <time dateTime={cell.spentTimestamp}>{formatUtcClock(cell.spentTimestamp)}</time>
+              ·{' '}
+              <time dateTime={cell.spentTimestamp}>{formatUtc8DateTime(cell.spentTimestamp)}</time>
             </>
           )}
           {cell.consumingInputIndex != null && <> · input #{cell.consumingInputIndex}</>}
