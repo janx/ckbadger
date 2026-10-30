@@ -772,6 +772,9 @@ pub struct TransactionInputResponse {
     pub address: Option<String>,
     pub cell_type: Option<String>,
     pub display: Option<super::transaction_cells::CellDisplay>,
+    /// The lock's args decoded by its family's layout (TX-20); `null` for a
+    /// lock family without a known layout, and for the cellbase's null input.
+    pub lock_args_decoded: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -804,6 +807,35 @@ pub struct TransactionOutputResponse {
     /// inputs and it carries no type script. Decided once, in
     /// [`settle_fee_payers_and_change`].
     pub is_change: bool,
+    /// The lock's args decoded by its family's layout (TX-20); `null` for a
+    /// lock family without a known layout.
+    pub lock_args_decoded: Option<serde_json::Value>,
+}
+
+/// Decode every input and output lock's args through the one lock-args
+/// decoder activity lock calls use ([`super::activities::decode_lock_args`]).
+fn decode_detail_lock_args(
+    inputs: &mut [TransactionInputResponse],
+    outputs: &mut [TransactionOutputResponse],
+    tx: &str,
+) -> Result<(), ApiRouteError> {
+    let decode = |lock: Option<&ScriptResponse>, at: &str| {
+        let Some(lock) = lock else {
+            return Ok(None);
+        };
+        let code_hash =
+            decode_hex_bytes_with_context(&lock.code_hash, "lock code hash", at, Some(32))?;
+        let args = decode_hex_bytes_with_context(&lock.args, "lock args", at, None)?;
+        super::activities::decode_lock_args(&code_hash, &args)
+            .map_err(|e| ApiError::internal(format!("{at}: {e}")))
+    };
+    for (index, input) in inputs.iter_mut().enumerate() {
+        input.lock_args_decoded = decode(input.lock.as_ref(), &format!("{tx} input {index}"))?;
+    }
+    for (index, output) in outputs.iter_mut().enumerate() {
+        output.lock_args_decoded = decode(output.lock.as_ref(), &format!("{tx} output {index}"))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1427,6 +1459,7 @@ async fn get_transaction_detail(
             ))
         })?;
         let fee_paid_by = settle_fee_payers_and_change(&io.inputs, &mut io.outputs, &hash)?;
+        decode_detail_lock_args(&mut io.inputs, &mut io.outputs, &hash)?;
         // A cellbase is never pending; one the node has committed and this
         // store has not indexed yet still names the block it pays.
         let pays = match (pool_is_cellbase, tx_lookup.block_number) {
@@ -1523,7 +1556,7 @@ async fn get_transaction_detail(
 
     // Read full transaction from CKB node's RocksDB for inputs/outputs
     let (
-        inputs,
+        mut inputs,
         mut outputs,
         inputs_capacity,
         outputs_capacity,
@@ -1666,6 +1699,7 @@ async fn get_transaction_detail(
     let header_deps = header_deps_response(&state.store, &header_deps, true, &tx_hash_hex)?;
     let cellbase_witness = cellbase_witness_response(is_cellbase, &witnesses, &tx_hash_hex)?;
     let fee_paid_by = settle_fee_payers_and_change(&inputs, &mut outputs, &tx_hash_hex)?;
+    decode_detail_lock_args(&mut inputs, &mut outputs, &tx_hash_hex)?;
     let pays = if is_cellbase {
         let window = state.consensus().await?.tx_proposal_window;
         cellbase_pays_response(true, window, block_number)
@@ -1775,6 +1809,7 @@ fn build_inputs_outputs_from_pool_tx(
                 }
                 // The cellbase pseudo-input spends no cell.
                 return Ok(TransactionInputResponse {
+                    lock_args_decoded: None,
                     display: None,
                     previous_output,
                     since: input.since.clone(),
@@ -1848,6 +1883,7 @@ fn build_inputs_outputs_from_pool_tx(
                 .transpose()?;
 
             Ok(TransactionInputResponse {
+                lock_args_decoded: None,
                 display: None,
                 previous_output,
                 since: input.since.clone(),
@@ -1938,6 +1974,7 @@ fn build_inputs_outputs_from_pool_tx(
                 status: Some("pending".into()),
                 consumed_by_tx: None,
                 is_change: false,
+                lock_args_decoded: None,
                 capacity: cell.capacity.to_string(),
                 used_capacity: occupied.to_string(),
                 virtual_used_capacity: virtual_occupied_capacity,
@@ -2202,6 +2239,7 @@ fn build_inputs_outputs_from_ckb(
             };
 
             Ok(TransactionInputResponse {
+                lock_args_decoded: None,
                 display,
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
@@ -2328,6 +2366,7 @@ fn build_inputs_outputs_from_ckb(
                     status: None,
                     consumed_by_tx: None,
                     is_change: false,
+                    lock_args_decoded: None,
                     capacity: cap.to_string(),
                     used_capacity: occ.to_string(),
                     virtual_used_capacity: virtual_occupied_capacity,
@@ -3072,6 +3111,7 @@ mod tests {
     #[test]
     fn test_transaction_input_response_serializes_type_script() {
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             used_capacity: Some("61".into()),
             cell_type: Some("plain".into()),

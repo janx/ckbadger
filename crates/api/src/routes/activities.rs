@@ -542,8 +542,166 @@ static LOCK_ARGS_DECODERS: LazyLock<HashMap<Vec<u8>, ArgsDecoder>> = LazyLock::n
             decode_utxoswap_intent_args as ArgsDecoder,
         );
     }
+    // The ordinary lock families (TX-20); each code hash is a
+    // `canonical_ref_hash` of its `docs/metadata/scripts/<slug>.toml`, which
+    // `lock_args_decoders_follow_the_script_registry` checks.
+    for (decoder, hexes) in [
+        (
+            decode_secp256k1_blake160_args as ArgsDecoder,
+            &["0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"][..], // default-lock
+        ),
+        (
+            decode_multisig_args as ArgsDecoder,
+            &[
+                "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+                "0xd1a9f877aed3f5e07cb9c52b61ab96d06f250ae6883cc7f0a2423db0976fc821",
+                "0x36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29",
+                "0x765b3ed6ae264b335d07e73ac332bf2c0f38f8d3340ed521cb447b4c42dd5f09",
+            ][..], // default-multisig
+        ),
+        (
+            decode_anyone_can_pay_args as ArgsDecoder,
+            &[
+                "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354",
+                "0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356",
+                "0x86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b",
+            ][..], // anyone-can-pay-lock
+        ),
+        (
+            decode_omnilock_args as ArgsDecoder,
+            &[
+                "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26",
+                "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d",
+                "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb",
+                "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e",
+            ][..], // omni-lock
+        ),
+    ] {
+        for hex in hexes {
+            m.insert(parse_hex_code_hash(hex), decoder);
+        }
+    }
     m
 });
+
+/// The one lock-args decoder (activity lock calls and the transaction
+/// detail): the decoded args of a lock with code hash `code_hash`, integers
+/// as exact strings; `None` for a lock family with no known args layout or
+/// args that do not fit it.
+pub(crate) fn decode_lock_args(
+    code_hash: &[u8],
+    args: &[u8],
+) -> Result<Option<serde_json::Value>, String> {
+    LOCK_ARGS_DECODERS
+        .get(code_hash)
+        .and_then(|decoder| decoder(args))
+        .map(|decoded| integers_as_strings(decoded, "decoded lock args"))
+        .transpose()
+}
+
+/// secp256k1-blake160-sighash-all: args are the 20-byte blake160 of the
+/// public key.
+fn decode_secp256k1_blake160_args(args: &[u8]) -> Option<serde_json::Value> {
+    (args.len() == 20).then(|| {
+        serde_json::json!({
+            "lock": "secp256k1_blake160",
+            "pubkeyHash": format!("0x{}", hex::encode(args)),
+        })
+    })
+}
+
+/// secp256k1-blake160-multisig-all: the 20-byte blake160 of the multisig
+/// script, optionally followed by an 8-byte `since` (u64 LE) the inputs must
+/// satisfy.
+fn decode_multisig_args(args: &[u8]) -> Option<serde_json::Value> {
+    let mut decoded = serde_json::json!({
+        "lock": "multisig",
+        "multisigScriptHash": format!("0x{}", hex::encode(args.get(..20)?)),
+    });
+    match args.len() {
+        20 => {}
+        28 => {
+            decoded["since"] = serde_json::json!(u64::from_le_bytes(args[20..28].try_into().ok()?))
+        }
+        _ => return None,
+    }
+    Some(decoded)
+}
+
+/// anyone-can-pay (RFC-0026): a 20-byte pubkey hash, then optionally the
+/// minimum-CKB exponent and the minimum-UDT exponent, one byte each.
+fn decode_anyone_can_pay_args(args: &[u8]) -> Option<serde_json::Value> {
+    if !(20..=22).contains(&args.len()) {
+        return None;
+    }
+    let mut decoded = serde_json::json!({
+        "lock": "anyone_can_pay",
+        "pubkeyHash": format!("0x{}", hex::encode(&args[..20])),
+    });
+    if let Some(exponent) = args.get(20) {
+        decoded["minimumCkbExponent"] = serde_json::json!(exponent);
+    }
+    if let Some(exponent) = args.get(21) {
+        decoded["minimumUdtExponent"] = serde_json::json!(exponent);
+    }
+    Some(decoded)
+}
+
+/// Omnilock (RFC-0042): a 21-byte auth (flag + 20-byte content), the
+/// omnilock flags byte, then exactly the optional fields the flags turn on,
+/// in order — administrator RC cell type ID (0x1, 32 B), anyone-can-pay
+/// minimums (0x2, 2 B), time-lock `since` (0x4, 8 B LE), supply type script
+/// hash (0x8, 32 B).
+fn decode_omnilock_args(args: &[u8]) -> Option<serde_json::Value> {
+    let flag = *args.first()?;
+    let flags = *args.get(21)?;
+    if flags & !0x0f != 0 {
+        return None;
+    }
+    let auth_kind = match flag {
+        0x00 => Some("secp256k1_blake160"),
+        0x01 => Some("ethereum"),
+        0x02 => Some("eos"),
+        0x03 => Some("tron"),
+        0x04 => Some("bitcoin"),
+        0x05 => Some("dogecoin"),
+        0x06 => Some("ckb_multisig"),
+        0x07 => Some("ethereum_display"),
+        0xfc => Some("owner_lock"),
+        0xfd => Some("exec"),
+        0xfe => Some("dynamic_linking"),
+        _ => None,
+    };
+    let mut decoded = serde_json::json!({
+        "lock": "omnilock",
+        "authFlag": flag,
+        "authKind": auth_kind,
+        "authContent": format!("0x{}", hex::encode(&args[1..21])),
+        "omnilockFlags": flags,
+    });
+    let mut rest = &args[22..];
+    let mut take = |len: usize| -> Option<&[u8]> {
+        let (field, tail) = (rest.get(..len)?, rest.get(len..)?);
+        rest = tail;
+        Some(field)
+    };
+    if flags & 0x1 != 0 {
+        decoded["adminListCellTypeId"] = serde_json::json!(format!("0x{}", hex::encode(take(32)?)));
+    }
+    if flags & 0x2 != 0 {
+        let minimums = take(2)?;
+        decoded["minimumCkbExponent"] = serde_json::json!(minimums[0]);
+        decoded["minimumUdtExponent"] = serde_json::json!(minimums[1]);
+    }
+    if flags & 0x4 != 0 {
+        decoded["since"] = serde_json::json!(u64::from_le_bytes(take(8)?.try_into().ok()?));
+    }
+    if flags & 0x8 != 0 {
+        decoded["supplyTypeScriptHash"] =
+            serde_json::json!(format!("0x{}", hex::encode(take(32)?)));
+    }
+    rest.is_empty().then_some(decoded)
+}
 
 fn decode_rgbpp_lock_args(args: &[u8]) -> Option<serde_json::Value> {
     if args.len() < 36 {
@@ -650,11 +808,7 @@ fn convert_lock_call(
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
         script_name,
-        decoded: LOCK_ARGS_DECODERS
-            .get(call.lock_code_hash.as_slice())
-            .and_then(|decoder| decoder(&call.lock_args))
-            .map(|decoded| integers_as_strings(decoded, "decoded lock args"))
-            .transpose()
+        decoded: decode_lock_args(&call.lock_code_hash, &call.lock_args)
             .map_err(anyhow::Error::msg)?,
     })
 }
@@ -1801,6 +1955,85 @@ mod tests {
         assert_eq!(result["version"], 3);
         assert!(result.get("settlementHash").is_none());
         assert!(result.get("settlementFlag").is_none());
+    }
+
+    #[test]
+    fn lock_args_decoders_follow_the_script_registry() {
+        // Every ordinary-family code hash in the table is a canonical_ref_hash
+        // of the registry file named beside it.
+        let registry = |toml: &str| -> Vec<Vec<u8>> {
+            toml.lines()
+                .filter_map(|line| line.trim().strip_prefix("canonical_ref_hash = \""))
+                .map(|rest| parse_hex_code_hash(rest.trim_end_matches('"')))
+                .collect()
+        };
+        for (toml, family) in [
+            (
+                include_str!("../../../../docs/metadata/scripts/default-lock.toml"),
+                "secp256k1_blake160",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/default-multisig.toml"),
+                "multisig",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/anyone-can-pay-lock.toml"),
+                "anyone_can_pay",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/omni-lock.toml"),
+                "omnilock",
+            ),
+        ] {
+            let hashes = registry(toml);
+            assert!(!hashes.is_empty(), "{family}");
+            let table: Vec<&Vec<u8>> = LOCK_ARGS_DECODERS
+                .iter()
+                .filter(|(_, decoder)| {
+                    let probe = decoder(&[0u8; 22]).or_else(|| decoder(&[0u8; 20]));
+                    probe.is_some_and(|value| value["lock"] == family)
+                })
+                .map(|(hash, _)| hash)
+                .collect();
+            for hash in &hashes {
+                assert!(
+                    table.contains(&hash),
+                    "{family}: 0x{} not decoded",
+                    hex::encode(hash)
+                );
+            }
+            assert_eq!(
+                table.len(),
+                hashes
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                "{family}"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_lock_args_decode_by_their_specified_layouts() {
+        assert_eq!(
+            decode_multisig_args(&[[7u8; 20].as_slice(), &5u64.to_le_bytes()].concat()).unwrap()
+                ["since"],
+            5
+        );
+        assert!(decode_multisig_args(&[7u8; 21]).is_none());
+        let acp = decode_anyone_can_pay_args(&[[1u8; 20].as_slice(), &[8, 2]].concat()).unwrap();
+        assert_eq!(acp["minimumCkbExponent"], 8);
+        assert_eq!(acp["minimumUdtExponent"], 2);
+        assert!(decode_anyone_can_pay_args(&[1u8; 23]).is_none());
+        // Omnilock: the flags must account for every byte after the auth.
+        let plain = [[0u8].as_slice(), &[9u8; 20], &[0]].concat();
+        assert_eq!(decode_omnilock_args(&plain).unwrap()["omnilockFlags"], 0);
+        assert!(decode_omnilock_args(&[plain.as_slice(), &[1]].concat()).is_none());
+        let acp_mode = [[0x06u8].as_slice(), &[9u8; 20], &[0x2], &[3, 4]].concat();
+        let decoded = decode_omnilock_args(&acp_mode).unwrap();
+        assert_eq!(decoded["authKind"], "ckb_multisig");
+        assert_eq!(decoded["minimumUdtExponent"], 4);
+        assert!(decode_secp256k1_blake160_args(&[0u8; 21]).is_none());
     }
 
     #[test]

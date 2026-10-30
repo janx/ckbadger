@@ -1067,6 +1067,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -1099,6 +1100,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -1156,6 +1158,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -1178,6 +1181,7 @@ mod tests {
             status: None,
             consumed_by_tx: None,
             is_change: false,
+            lock_args_decoded: None,
         };
         let mut groups = script_groups(&[input.clone(), input], &[output]).unwrap();
         assert_eq!(groups.len(), 3);
@@ -1245,6 +1249,7 @@ mod tests {
     }
     fn input(lock: &ScriptResponse, r#type: Option<&ScriptResponse>) -> TransactionInputResponse {
         TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -1269,6 +1274,7 @@ mod tests {
             status: None,
             consumed_by_tx: None,
             is_change: false,
+            lock_args_decoded: None,
         }
     }
     fn hex_bytes(raw: &str) -> Vec<u8> {

@@ -3565,3 +3565,84 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
     assert!(actions[1].get("name").is_none(), "{json}");
     assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
 }
+
+/// TX-20: the detail decodes each input and output lock's args for the lock
+/// families whose args layout is specified — the same decoder table activity
+/// lock calls use: a secp256k1-blake160 pubkey hash, an Omnilock auth with
+/// its flags and optional fields — and leaves any other lock's args raw.
+#[tokio::test]
+async fn detail_decodes_lock_args_of_known_lock_families() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    // Omnilock (mainnet): auth flag 0x00 (secp256k1-blake160) + 20-byte
+    // content, omnilock flags 0x04 (time lock) + an 8-byte since.
+    let omnilock_args = [
+        vec![0x00],
+        vec![0x55; 20],
+        vec![0x04],
+        42u64.to_le_bytes().to_vec(),
+    ]
+    .concat();
+    let hash = pending_tx_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &hash,
+            &[(&parent, 0)],
+            vec![
+                serde_json::json!({
+                    "capacity": "0x174876e400",
+                    "lock": {
+                        "code_hash": "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26",
+                        "hash_type": "type",
+                        "args": format!("0x{}", hex::encode(&omnilock_args)),
+                    },
+                    "type": null,
+                }),
+                serde_json::json!({
+                    "capacity": "0x0",
+                    "lock": {
+                        "code_hash": format!("0x{}", "99".repeat(32)),
+                        "hash_type": "type",
+                        "args": "0x01",
+                    },
+                    "type": null,
+                }),
+            ],
+            vec!["0x".into(), "0x".into()],
+            "pending",
+            None,
+        ),
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["inputs"][0]["lockArgsDecoded"],
+        serde_json::json!({"lock": "secp256k1_blake160", "pubkeyHash": format!("0x{}", "33".repeat(20))}),
+        "{json}"
+    );
+    assert_eq!(
+        json["outputs"][0]["lockArgsDecoded"],
+        serde_json::json!({
+            "lock": "omnilock",
+            "authFlag": "0",
+            "authKind": "secp256k1_blake160",
+            "authContent": format!("0x{}", "55".repeat(20)),
+            "omnilockFlags": "4",
+            "since": "42",
+        }),
+        "{json}"
+    );
+    assert!(json["outputs"][1]["lockArgsDecoded"].is_null(), "{json}");
+}
