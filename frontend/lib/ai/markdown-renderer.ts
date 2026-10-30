@@ -1887,6 +1887,39 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+    // F2 group dao (DAO-12, R2b-a 42): every current depositor, ranked at one tip
+    case 'dao_depositors': {
+      const limit = parseLimit(searchParams);
+      const cursor = searchParams.get('cursor') ?? undefined;
+      const ranked = await api.getDaoDepositors({ limit, cursor });
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        '# DAO depositors',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['anchorBlockNumber', ranked.anchor.blockNumber],
+            ['anchorBlockHash', ranked.anchor.blockHash],
+            ['total', ranked.total],
+            ['limit', ranked.limit],
+            ['nextCursor', ranked.nextCursor ?? '-'],
+          ]
+        ),
+        '',
+        markdownTable(
+          ['rank', 'address', 'lockScriptHash', 'depositCount', 'capacity', 'sharePercent'],
+          ranked.data.map((d) => [
+            d.rank,
+            d.address,
+            d.lockScriptHash,
+            d.depositCount,
+            d.capacity,
+            d.sharePercent,
+          ])
+        ),
+      ]);
+      return { status: 200, body };
+    }
     case 'dao_charts': {
       const [totalDeposit, dailyDeposit, circulationRatio] = await Promise.all([
         api.getDaoTotalDepositChart(),

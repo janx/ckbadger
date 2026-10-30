@@ -2009,6 +2009,12 @@ interface DaoStatistics {
   depositorsChange24h: number | null;
   claimedCompensationChange24h: string | null;
   unclaimedCompensationChange24h: string | null;
+  // ---- F2 group dao: lane R2b-a 41/44 (DAO-10, DAO-16) ----
+  /** Deposit / withdrawal-request cells created in the rolling-24 h window; null exactly with it. */
+  deposits24h: number | null;
+  withdrawalRequests24h: number | null;
+  /** Header S at `tipBlockNumber`, from the same row as `unclaimedCompensation` and `burnt`. */
+  tipSecondaryPool: string;
 }
 
 interface DaoEpoch {
@@ -2108,6 +2114,10 @@ interface DaoCalculatorResult {
   totalWithdrawable: string;
   totalWithdrawableCkb: string;
   apc: string | null;
+  // ---- F2 group dao: lane R2b-a 43 (DAO-8) ----
+  /** The standard secp256k1 DAO cell the calculator assumes, and capacity minus it (shannons). */
+  occupiedCapacity: string;
+  freeCapacity: string;
 }
 
 interface DaoQueryParams {
@@ -5228,6 +5238,21 @@ export const api = {
    */
   getForkAt: (forkPointNumber: number, orphanPrefix: string): Promise<ReorgDetail> =>
     fetchApi(`/forks/${forkPointNumber}/${orphanPrefix}`),
+
+  // ---- F2 group dao: lane R2b-a 42/43 (DAO-12, DAO-8) ----
+  /** Every current phase-0 depositor, ranked; the cursor is tied to the tip it was ranked at. */
+  getDaoDepositors: (
+    params: { limit?: number; cursor?: string } = {}
+  ): Promise<DaoDepositorsPage> => {
+    const query = new URLSearchParams();
+    if (params.limit) query.set('limit', String(params.limit));
+    if (params.cursor) query.set('cursor', params.cursor);
+    const qs = query.toString();
+    return fetchApi(`/dao/depositors${qs ? `?${qs}` : ''}`);
+  },
+
+  /** Header AR at the close of every complete UTC+8 day since genesis. */
+  getDaoArHistory: (): Promise<DaoArHistory> => fetchApi('/dao/ar-history'),
 };
 
 // ---- F2 group `fiber`: lane R2b-b fork contracts ----
@@ -5289,3 +5314,37 @@ export interface FiberTokenChannels {
   channels: number;
   openChannels: number;
 }
+
+// ---- F2 group dao: lane R2b-a 42/43 (DAO-12, DAO-8) ----
+interface DaoAnchor {
+  blockNumber: number;
+  blockHash: string;
+}
+
+interface DaoDepositorRow {
+  rank: number;
+  lockScriptHash: string;
+  address: string;
+  /** Shannons. */
+  capacity: string;
+  depositCount: number;
+  sharePercent: string;
+}
+
+/** `/dao/depositors`: ranked at `anchor`; a cursor from another tip answers 400 ("start again"). */
+interface DaoDepositorsPage {
+  anchor: DaoAnchor;
+  total: number;
+  limit: number;
+  hasMore: boolean;
+  nextCursor: string | null;
+  data: DaoDepositorRow[];
+}
+
+/** `/dao/ar-history`: `anchor` is the block the newest complete day closes at. */
+interface DaoArHistory {
+  anchor: DaoAnchor | null;
+  days: { date: string; blockNumber: number; ar: string; arIndex: string }[];
+}
+
+export type { DaoAnchor, DaoDepositorRow, DaoDepositorsPage, DaoArHistory };

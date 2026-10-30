@@ -358,16 +358,21 @@ export function DaoHistory({
               className="fill-text"
             >
               {TITLE}
+              {clipNote !== null && noteInline && (
+                <tspan data-role="clip-note" className="fill-text-dim">
+                  {`\u00a0·\u00a0${clipNote}`}
+                </tspan>
+              )}
             </text>
-            {clipNote !== null && (
+            {clipNote !== null && !noteInline && (
               <text
                 data-role="clip-note"
-                x={noteInline ? LEFT + TITLE.length * 6.6 : LEFT}
+                x={LEFT}
                 y={C_Y - 6}
-                fontSize="11"
+                fontSize="10"
                 className="fill-text-dim"
               >
-                {noteInline ? `\u00a0·\u00a0${clipNote}` : clipNote}
+                {clipNote}
               </text>
             )}
           </g>

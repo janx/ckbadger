@@ -30,6 +30,8 @@ vi.mock('@/lib/api', () => ({
     getFiberChannels: vi.fn(),
     getFiberChannel: vi.fn(),
     getBlockUncle: vi.fn(),
+    // F2 group dao (DAO-12)
+    getDaoDepositors: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
@@ -91,6 +93,40 @@ describe('renderMarkdownPage', () => {
     window.__CKBADGER_RUNTIME_CONFIG__ = {
       buildVersion: '0.1.0+feature/foo@abcdef123456',
     };
+  });
+
+  // ---- F2 group dao (DAO-12, R2b-a 42) ----
+  it('renders every DAO depositor, ranked at one tip, with the cursor to continue', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValue({
+      anchor: { blockNumber: 20879205, blockHash: `0x${'a'.repeat(64)}` },
+      total: 16641,
+      limit: 1,
+      hasMore: true,
+      nextCursor: '20879205:1',
+      data: [
+        {
+          rank: 1,
+          lockScriptHash: `0x${'1'.repeat(64)}`,
+          address:
+            'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfs6k9ygrwtdrn828l4a04ns9fnes960jg3x8k26',
+          capacity: '67073483600000000',
+          depositCount: 1,
+          sharePercent: '8.27',
+        },
+      ],
+    });
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/dao/depositors'),
+      searchParams: new URLSearchParams('limit=1'),
+      origin: 'http://localhost:3000',
+    });
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# DAO depositors');
+    expect(result.body).toContain('| anchorBlockNumber | 20879205 |');
+    expect(result.body).toContain('| nextCursor | 20879205:1 |');
+    expect(result.body).toContain('| 1 | ckb1qzda0cr08m85');
+    expect(result.body).toContain('| 67073483600000000 | 8.27 |');
+    expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 1, cursor: undefined });
   });
 
   it('renders blocks list markdown', async () => {

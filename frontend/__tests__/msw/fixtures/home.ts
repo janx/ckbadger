@@ -181,6 +181,11 @@ export const daoStatistics: DaoStatistics = {
   depositorsChange24h: -3,
   claimedCompensationChange24h: '0',
   unclaimedCompensationChange24h: '0',
+  // ---- F2 group dao: lane R2b-a 41/44 ----
+  deposits24h: 12,
+  withdrawalRequests24h: 9,
+  // = unclaimedCompensation + burnt, the singleton's own S
+  tipSecondaryPool: '758490237601868027',
 };
 
 const SCRIPT_COUNTS = [

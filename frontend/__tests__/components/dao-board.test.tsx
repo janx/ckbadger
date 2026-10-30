@@ -12,22 +12,39 @@ vi.mock('@/components/dao/dao-sources', () => ({
 }));
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, calculateDaoCompensation: vi.fn() } };
+  return {
+    ...actual,
+    api: { ...actual.api, calculateDaoCompensation: vi.fn(), getDaoArHistory: vi.fn() },
+  };
 });
+
+/** R2b-a 43: AR at the close of four complete days; the evidence tip (#5) has AR 1.02. */
+const AR_DAYS = [
+  { date: '2019-11-16', blockNumber: 1, ar: '10000000000000000', arIndex: '1.0000000000000000' },
+  { date: '2019-11-17', blockNumber: 2, ar: '10050000000000000', arIndex: '1.0050000000000000' },
+  { date: '2019-11-18', blockNumber: 3, ar: '10100000000000000', arIndex: '1.0100000000000000' },
+  { date: '2019-11-19', blockNumber: 4, ar: '10150000000000000', arIndex: '1.0150000000000000' },
+];
 
 /** The API calculator for 10,000 CKB: compensation = 100 CKB per 0.01 of AR gained (fixture). */
 function stubCalculator() {
+  vi.mocked(api.getDaoArHistory).mockResolvedValue({
+    anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
+    days: AR_DAYS,
+  });
   vi.mocked(api.calculateDaoCompensation).mockImplementation(
     async (capacity: string, depositBlock: number, withdrawBlock?: number) => ({
       capacity,
       capacityCkb: '10000',
       depositBlock,
       withdrawBlock: withdrawBlock!,
-      estimatedCompensation: depositBlock === 0 ? '20000000000' : '9801980198',
+      estimatedCompensation: depositBlock === 1 ? '20000000000' : '9801980198',
       estimatedCompensationCkb: '',
       totalWithdrawable: '',
       totalWithdrawableCkb: '',
       apc: null,
+      occupiedCapacity: '10200000000',
+      freeCapacity: '989800000000',
     })
   );
 }
@@ -41,6 +58,7 @@ const stats = {
   totalCompensationPaid: '100000000',
   unclaimedCompensation: '200000000',
   burnt: '300000000',
+  tipSecondaryPool: '500000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   // Free capacity in DAO counts frozen phase-1 cells; the depositors' weight does not, but adds
@@ -262,6 +280,8 @@ describe('DaoBoard', () => {
           burnt: '0',
           totalCompensationPaid: '0',
           unclaimedCompensation: '0',
+          // nothing issued yet: the statistics row's S is 0 too
+          tipSecondaryPool: '0',
         }}
         evidence={{ ...evidence, header: { ...evidence.header, s: '0' } }}
       />
@@ -311,8 +331,8 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
     // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
     expect(hero).not.toHaveTextContent(/anchor/i);
     expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
-    // The API has no 24 h deposit / request counts: nothing stands in for them (needs backend).
-    expect(hero).not.toHaveTextContent(/deposits in|requests out/);
+    // R2b-a 41: the 24 h window's own counts (board: "N deposits in, M withdrawal requests out").
+    expect(hero).toHaveTextContent('12 deposits in, 9 withdrawal requests out');
   });
 
   it('fails when the deposit history arrives without its R8 peak', () => {
@@ -404,30 +424,36 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
   afterEach(() => vi.restoreAllMocks());
   const grows = () => screen.getByRole('region', { name: 'How a deposit grows' });
 
-  it("reads what 10,000 CKB deposited on a date is owed, from the API's calculator", async () => {
+  it("reads what 10,000 CKB deposited on a day is owed, from the API's calculator", async () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const reading = within(grows()).getByLabelText('Deposit reading');
-    expect(
-      await within(reading).findByText((_, el) => el?.getAttribute('data-role') === 'owed')
-    ).toHaveTextContent('+200.00000000 CKB compensation');
-    expect(reading).toHaveTextContent(
-      '10,000 CKB deposited on 1970-01-01 is owed +200.00000000 CKB compensation · 2.0000% on its free capacity, by #5'
+    const reading = await within(grows()).findByLabelText('Deposit reading');
+    await waitFor(() =>
+      expect(
+        within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
+      ).toHaveTextContent('+200.00000000 CKB compensation')
     );
-    // One compensation path: the API's calculator, deposit block → the evidence tip.
-    expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 0, 5);
+    // R2b-a 43: the calculator says which free capacity it assumed (board: "its 9,898 free CKB").
+    expect(reading).toHaveTextContent(
+      '10,000 CKB deposited on 2019-11-16 is owed +200.00000000 CKB compensation · 2.0000% on its 9,898 free CKB, by #5'
+    );
+    // One compensation path: the API's calculator, the day's closing block → the evidence tip.
+    expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 1, 5);
     expect(grows()).not.toHaveTextContent(/interest|earned/i);
   });
 
-  it('plots AR by date, moves the reading along it, and bars each whole year', async () => {
+  it('plots AR for every complete day, moves the reading to any day, and bars each whole year', async () => {
     stubChartWidth(600);
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const chart = within(grows()).getByRole('img', { name: /^AR by date/ });
+    const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
+    // one point per complete day (the x axis prints the first and last)
+    expect(chart).toHaveTextContent('2019-11-16');
+    expect(chart).toHaveTextContent('2019-11-19');
     fireEvent.keyDown(chart, { key: 'ArrowLeft' });
     const reading = within(grows()).getByLabelText('Deposit reading');
-    expect(reading).toHaveTextContent('10,000 CKB deposited on 1971-01-01');
-    expect(reading).toHaveTextContent('0.9901% on its free capacity');
+    expect(reading).toHaveTextContent('10,000 CKB deposited on 2019-11-18');
+    expect(reading).toHaveTextContent('0.9901% on its');
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
@@ -440,6 +466,18 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // Anniversary to anniversary only: the year in progress (to the tip) is not a bar.
     expect(years.querySelectorAll('[data-year]')).toHaveLength(1);
     expect(years).toHaveTextContent('1.00%from 1970-01');
+  });
+
+  it('refuses a daily AR series with a missing day', async () => {
+    stubCalculator();
+    vi.mocked(api.getDaoArHistory).mockResolvedValue({
+      anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
+      days: [AR_DAYS[0], AR_DAYS[2], AR_DAYS[3]],
+    });
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(await within(grows()).findByRole('alert')).toHaveTextContent(
+      'DAO AR history skips from 2019-11-16 to 2019-11-18'
+    );
   });
 
   it('keeps the AR anchors and the observed span out of tier 1 (DAO-9)', () => {
@@ -510,8 +548,11 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     expect(
       within(who()).getByRole('list', { name: 'Largest depositors, compact' })
     ).toHaveTextContent('300.00000000');
-    // No "All N depositors" link: the API has no ranked list of every depositor (needs backend).
-    expect(within(who()).queryByRole('link', { name: /depositors →/ })).toBeNull();
+    // R2b-a 42: every depositor, ranked, on its own page (board: "All N depositors →").
+    expect(within(who()).getByRole('link', { name: 'All 2 depositors →' })).toHaveAttribute(
+      'href',
+      '/mainnet/dao/depositors'
+    );
   });
 });
 
@@ -535,7 +576,7 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).not.toHaveTextContent('10200000000000000 scaled rate');
     expect(t2).toHaveTextContent('Cbytes 0..810,000,000.00000000 CKB issued in total');
     expect(t2).toHaveTextContent(
-      'At block #5, S equals the compensation still owed plus the burnt share to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+      'At block #5, S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
     );
     expect(t2).toHaveTextContent(
       'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
@@ -543,30 +584,32 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8');
   });
 
-  it('says in place when the header S disagrees with still owed + burnt at one height', () => {
+  it('fails when the statistics row S is not still owed + burnt', () => {
+    stubCalculator();
+    expect(() =>
+      render(
+        <DaoBoard
+          statistics={{ ...sameBlock, tipSecondaryPool: '500000001' }}
+          evidence={evidence}
+        />
+      )
+    ).toThrow('DAO statistics at #5: S 500000001 is not still owed + burnt 500000000');
+  });
+
+  it('states the identity from the statistics row even when the header shown is another block', () => {
     stubCalculator();
     const { container } = render(
       <DaoBoard
-        statistics={{ ...sameBlock, burnt: '300000001', miningReward: '99999999' }}
+        statistics={{ ...sameBlock, tipBlockNumber: 4, tipSecondaryPool: '500000000' }}
         evidence={evidence}
       />
     );
-    expect(within(tier2(container) as HTMLElement).getByRole('alert')).toHaveTextContent(
-      'DAO header S at #5 is 500000000 shannons, but still owed + burnt is 500000001'
-    );
-    expect(tier2(container)).not.toHaveTextContent('to the shannon');
-  });
-
-  it('does not claim the S identity across two different blocks', () => {
-    stubCalculator();
-    const { container } = render(
-      <DaoBoard statistics={{ ...sameBlock, tipBlockNumber: 4 }} evidence={evidence} />
-    );
     const t2 = tier2(container);
-    expect(t2).not.toHaveTextContent('to the shannon');
+    expect(t2).toHaveTextContent('The DAO field in every block header · #5');
     expect(t2).toHaveTextContent(
-      'This S is block #5’s and the statistics above are block #4’s, so S = still owed + burnt is not shown across two blocks.'
+      'At block #4, S (5.00000000 CKB) equals the compensation still owed'
     );
+    expect(t2).not.toHaveTextContent('not shown across two blocks');
   });
 });
 
@@ -595,19 +638,19 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     expect(amount).toHaveClass('text-[24px]', 'sm:text-[30px]');
   });
 
-  it('draws AR around its own range, not from zero', () => {
+  it('draws AR around its own range, not from zero', async () => {
     stubChartWidth(600);
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const chart = within(screen.getByRole('region', { name: 'How a deposit grows' })).getByRole(
-      'img',
-      { name: /^AR by date/ }
-    );
+    const chart = await within(
+      screen.getByRole('region', { name: 'How a deposit grows' })
+    ).findByRole('img', { name: /^AR by date/ });
     const ticks = Array.from(chart.querySelectorAll('text[text-anchor="end"]')).map((t) =>
       t.textContent!.trim()
     );
     expect(ticks[0]).not.toBe('0');
-    expect(ticks).toContain('1.01');
+    // the daily series spans 1.000 … 1.015
+    expect(ticks).toContain('1.010');
   });
 });
 
@@ -622,5 +665,40 @@ describe('DaoBoard tier-1 rhythm (board V63)', () => {
       'text-[15px]',
       'font-medium'
     );
+  });
+});
+
+describe('DaoBoard 24 h counts (DAO-10, R2b-a 41)', () => {
+  it('says one deposit and one request in the singular, and nothing without a 24 h window', () => {
+    stubCalculator();
+    const { rerender } = render(
+      <DaoBoard
+        statistics={{ ...stats, deposits24h: 1, withdrawalRequests24h: 1 }}
+        evidence={evidence}
+      />
+    );
+    const hero = () => screen.getByRole('region', { name: 'Nervos DAO summary' });
+    expect(hero()).toHaveTextContent('1 deposit in, 1 withdrawal request out');
+    rerender(
+      <DaoBoard
+        statistics={{
+          ...stats,
+          deposits24h: null,
+          withdrawalRequests24h: null,
+          depositChange24h: null,
+        }}
+        evidence={evidence}
+      />
+    );
+    expect(hero()).not.toHaveTextContent(/ in, .* out/);
+  });
+
+  it('refuses a 24 h window with one count and not the other', () => {
+    stubCalculator();
+    expect(() =>
+      render(
+        <DaoBoard statistics={{ ...stats, withdrawalRequests24h: null }} evidence={evidence} />
+      )
+    ).toThrow('DAO statistics at #5: 24 h deposits 12 without its withdrawal-request count');
   });
 });

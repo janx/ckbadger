@@ -69,7 +69,15 @@ function formatAr(raw: string): string {
   return formatAccumulatedRate(BigInt(raw));
 }
 
-function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
+function Section({
+  title,
+  note,
+  children,
+}: {
+  title: string;
+  note?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="min-w-0" aria-label={title}>
       <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
@@ -123,6 +131,10 @@ function Hero({
     throw new Error('/dao/charts/total-deposit has no peak (R8 chart contract)');
   const share = ratio?.data.at(-1);
   const peak = deposited?.peak ?? null;
+  if ((statistics.deposits24h === null) !== (statistics.withdrawalRequests24h === null))
+    throw new Error(
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: 24 h deposits ${statistics.deposits24h} without its withdrawal-request count`
+    );
   const change = statistics.depositChange24h;
   const changeShannons = change === null ? null : parseCkbDecimal(change);
   const year = evidence.ar.year365;
@@ -178,7 +190,15 @@ function Hero({
         >
           {evidence.phase0.count.toLocaleString('en-US')}
         </Metric>
-        <Metric label="Change in 24 h" className="col-span-2">
+        <Metric
+          label="Change in 24 h"
+          className="col-span-2"
+          detail={
+            statistics.deposits24h === null || statistics.withdrawalRequests24h === null
+              ? undefined
+              : `${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`
+          }
+        >
           {changeShannons === null ? (
             <span className="text-text-dim">—</span>
           ) : (
@@ -737,7 +757,11 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
   return (
     <Section
       title="Who deposits"
-      note={`${evidence.concentration.currentDepositors.toLocaleString('en-US')} current phase-0 owners`}
+      note={
+        <Link href="/dao/depositors" className="text-text hover:text-text-bright hover:underline">
+          All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors →
+        </Link>
+      }
     >
       {total > BigInt(0) && (
         <div className="mb-4">
@@ -791,14 +815,15 @@ function RawEvidence({
   statistics: DaoStatistics;
 }) {
   const header = evidence.header;
-  const s = parseShannons(header.s, 'DAO header S');
-  const sameBlock = statistics.tipBlockNumber === header.blockNumber;
-  const owedPlusBurnt =
-    parseShannons(statistics.unclaimedCompensation, 'unclaimedCompensation') +
-    parseShannons(statistics.burnt, 'burnt');
-  // Same height, different S: the two reads disagree (a reorg between them, or a wrong aggregate).
-  // Said in place with the numbers, never smoothed over and never claimed as the identity.
-  const identity = !sameBlock ? 'other-block' : owedPlusBurnt === s ? 'holds' : 'differs';
+  // DAO-16 (R2b-a 44): S, still owed and burnt from ONE statistics row at ONE block, so the
+  // identity is stated whatever block the header table below comes from.
+  const statsS = parseShannons(statistics.tipSecondaryPool, 'tipSecondaryPool');
+  const owed = parseShannons(statistics.unclaimedCompensation, 'unclaimedCompensation');
+  const burnt = parseShannons(statistics.burnt, 'burnt');
+  if (owed + burnt !== statsS)
+    throw new Error(
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: S ${statsS} is not still owed + burnt ${owed + burnt}`
+    );
   const fields = [
     {
       key: 'C',
@@ -856,26 +881,12 @@ function RawEvidence({
           Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
           {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
           capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
-          %. Compensation freezes at the withdrawal request AR.{' '}
-          {identity === 'holds' ? (
-            <>
-              At block {formatBlockNumber(header.blockNumber)}, S equals the compensation still owed
-              plus the burnt share to the shannon: S only counts the burnt share, it does not hold
-              it for anyone. Compensation paid + still owed equals the depositors’ share.
-            </>
-          ) : identity === 'differs' ? (
-            <span role="alert" className="text-negative">
-              DAO header S at {formatBlockNumber(header.blockNumber)} is {s.toString()} shannons,
-              but still owed + burnt is {owedPlusBurnt.toString()}: the two reads disagree at one
-              height.
-            </span>
-          ) : (
-            <>
-              This S is block {formatBlockNumber(header.blockNumber)}’s and the statistics above are
-              block {formatBlockNumber(statistics.tipBlockNumber)}’s, so S = still owed + burnt is
-              not shown across two blocks.
-            </>
-          )}
+          %. Compensation freezes at the withdrawal request AR. At block{' '}
+          {formatBlockNumber(statistics.tipBlockNumber)}, S (
+          <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
+          <Amount value={owed.toString()} />) plus the burnt share (
+          <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it
+          does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.
         </p>
         {evidence.ar.year365 && (
           <div className="text-text-dim mt-2 font-mono text-[11px]">

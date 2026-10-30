@@ -19,6 +19,8 @@ export const PAGE_ROUTES = [
   { pattern: '/clusters/{clusterId}', kind: 'clusters_detail', rawProfiles: [] },
   { pattern: '/dao', kind: 'dao_overview', rawProfiles: [] },
   { pattern: '/dao/charts', kind: 'dao_charts', rawProfiles: [] },
+  // F2 group dao (DAO-12): every depositor, ranked
+  { pattern: '/dao/depositors', kind: 'dao_depositors', rawProfiles: [] },
   { pattern: '/forks', kind: 'forks_list', rawProfiles: [] },
   { pattern: '/forks/{height}/{orphan}', kind: 'fork_detail', rawProfiles: [] },
   { pattern: '/hardforks', kind: 'hardforks', rawProfiles: [] },
