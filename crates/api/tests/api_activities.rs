@@ -2349,6 +2349,7 @@ async fn object_item_deltas_name_collection_class_and_composition() {
             "collection": {"id": format!("0x{}", hex::encode(&cluster)), "name": "Nervape"},
             "class": "object",
             "composition": "btc_ckb",
+            "role": "spore",
         },
         {
             "kind": "object",
@@ -2357,6 +2358,7 @@ async fn object_item_deltas_name_collection_class_and_composition() {
             "collection": {"id": format!("0x{}", "3c".repeat(24)), "name": null},
             "class": "object",
             "composition": null,
+            "role": "mnft_token",
         },
     ]);
 
@@ -2373,6 +2375,118 @@ async fn object_item_deltas_name_collection_class_and_composition() {
     assert_eq!(
         global["data"][0]["participants"][0]["itemDeltas"], expected,
         "global feed"
+    );
+}
+
+/// The activity writer emits object deltas for every cell of the Spore and
+/// Cluster type scripts and the m-NFT token type script
+/// (`emit_object_item_deltas` over `spore_*` / `nft_*`), so a committed
+/// cluster-creation transaction carries a `+1` delta naming the CLUSTER. That
+/// is a legitimate chain state: the delta describes the cluster by its own
+/// facts (its own id and immutable name, no composition), on the `object`
+/// filter of both global listings, the unfiltered feed, the address feed and
+/// the transaction's own activity — mainnet tx at block 20,584,2xx answered
+/// 500 "names a SporeCluster row, not a spore" on all of them.
+#[tokio::test]
+async fn cluster_creation_object_delta_names_the_cluster_itself() {
+    use ckbadger_store::types::{ParticipantDelta, ParticipantId, TAG_OBJECT};
+
+    let store = test_store();
+    let (cluster, _, _) = seed_named_cluster_spore_and_mnft(&store);
+    let lock_hash = [0x44u8; 32];
+    let tx_hash = vec![0xae; 32];
+    let actions = TxActions {
+        tx_hash: tx_hash.clone(),
+        block_hash: vec![0xbd; 32],
+        block_number: 12,
+        tx_index: 0,
+        timestamp: 1_700_000_000_000,
+        is_cellbase: false,
+        protocol_actions: vec![],
+        type_calls: vec![],
+        lock_calls: vec![],
+        participants: vec![ParticipantDelta {
+            id: ParticipantId::Lock(lock_hash),
+            ckb_delta: 0,
+            used_delta: 0,
+            item_deltas: vec![object_delta(&cluster, false)],
+            tags: TAG_OBJECT,
+            roles: 0,
+        }],
+    };
+    seed_named_tx(&store, 12, &tx_hash, &actions);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_addr_tx(
+        &lock_hash,
+        12,
+        0,
+        &tx_hash,
+        &AddrTxValue::new(0, true, true, TAG_OBJECT),
+    );
+    // The transaction list sums each listed tx's output payloads.
+    batch.put_cell(
+        &tx_hash,
+        0,
+        &ckbadger_store::types::LiveCellInfo {
+            capacity: 300_00000000,
+            lock_script_hash: lock_hash.to_vec(),
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        12,
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let expected = serde_json::json!([{
+        "kind": "object",
+        "objectId": format!("0x{}", hex::encode(&cluster)),
+        "delta": 1,
+        "collection": {"id": format!("0x{}", hex::encode(&cluster)), "name": "Nervape"},
+        "class": "object",
+        "composition": null,
+        "role": "cluster",
+    }]);
+
+    for uri in ["/activities?filter=object&limit=20", "/activities?limit=20"] {
+        let (status, json) = get_json(&app, uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {json}");
+        assert_eq!(
+            json["data"][0]["participants"][0]["itemDeltas"], expected,
+            "{uri}"
+        );
+    }
+    let (status, json) = get_json(&app, "/transactions?activity_type=object&limit=20").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["data"][0]["activity"]["participants"][0]["itemDeltas"], expected,
+        "transactions?activity_type=object"
+    );
+    let (status, json) = get_json(
+        &app,
+        &format!("/addresses/0x{}/activities", hex::encode(lock_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["data"][0]["itemDeltas"], expected, "address feed");
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/activity", hex::encode(&tx_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["participants"][0]["itemDeltas"], expected,
+        "transaction activity: {json}"
     );
 }
 
@@ -2468,6 +2582,7 @@ async fn pending_object_delta_names_what_the_store_knows() {
                 "collection": null,
                 "class": "object",
                 "composition": null,
+                "role": null,
             },
             {
                 "kind": "object",
@@ -2476,6 +2591,7 @@ async fn pending_object_delta_names_what_the_store_knows() {
                 "collection": {"id": format!("0x{}", hex::encode(&cluster)), "name": "Nervape"},
                 "class": "object",
                 "composition": "btc_ckb",
+                "role": "spore",
             },
         ]),
         "{json}"

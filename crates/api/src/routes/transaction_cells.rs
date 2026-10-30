@@ -320,20 +320,52 @@ pub struct ObjectDeltaContext {
     /// `object` for an object item.
     pub class: &'static str,
     /// `CompositionTier::as_str` (`pure_ckb | btc_ckb | decentralized_mixture |
-    /// centralized_mixture | unknown | decode_pending`); `None` for m-NFT.
+    /// centralized_mixture | unknown | decode_pending`) for a spore; `None`
+    /// for a cluster and an m-NFT token.
     pub composition: Option<&'static str>,
+    /// What the object is ([`ObjectDeltaRole::as_str`]); `None` only on a pool
+    /// row whose object is not indexed yet.
+    pub role: Option<&'static str>,
 }
 
-/// [`ObjectDeltaContext`] of the object `object_id` (a spore or an m-NFT
-/// token), read from its indexed row.
+/// The object cells the activity writer emits object item deltas for
+/// (`emit_object_item_deltas` over the Spore / Cluster type scripts and the
+/// m-NFT token type script) — every kind a committed delta can name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectDeltaRole {
+    Spore,
+    Cluster,
+    MnftToken,
+}
+
+impl ObjectDeltaRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Spore => "spore",
+            Self::Cluster => "cluster",
+            Self::MnftToken => "mnft_token",
+        }
+    }
+}
+
+/// [`ObjectDeltaContext`] of the object `object_id` (a spore, a Spore cluster
+/// or an m-NFT token), read from its indexed row: each kind is described by
+/// its own facts.
+///
+/// - spore: its cluster (immutable name; the Sole Spores sentinel with no
+///   name for a clusterless spore) and its media tier;
+/// - cluster: itself (its own id and immutable name), no composition — a
+///   cluster holds no media;
+/// - m-NFT token: its class id only (the class row's name and tier are
+///   mutable, not evidence about this item).
 ///
 /// `indexed` says whether the delta comes from a committed transaction. A
 /// committed delta's object row is written in the same batch, so an id that
-/// names no spore or m-NFT token is an error. A pool (pending) delta may
-/// name an object whose creating transaction is the pending one: no row
-/// exists yet, so nothing is known about its collection or composition and
-/// both are `None` — the same rule as a pending tile ([`from_parts`] with
-/// `indexed == false`).
+/// names no spore, cluster or m-NFT token is an error. A pool (pending) delta
+/// may name an object whose creating transaction is the pending one: no row
+/// exists yet, so nothing is known about its kind, collection or composition
+/// and all three are `None` — the same rule as a pending tile ([`from_parts`]
+/// with `indexed == false`).
 pub fn object_delta_context(
     store: &CkbadgerStore,
     object_id: &[u8],
@@ -341,30 +373,50 @@ pub fn object_delta_context(
 ) -> Result<ObjectDeltaContext> {
     let id = format!("0x{}", hex::encode(object_id));
     if let Some(entry) = store.get_spore(object_id)? {
-        ensure!(
-            entry.standard == ObjectStandard::Spore,
-            "object item delta {id} names a {:?} row, not a spore",
-            entry.standard
-        );
-        let ObjectExtra::Spore { media_profile, .. } = &entry.extra else {
-            anyhow::bail!("spore {id} has payload variant {:?}", entry.extra);
+        return match (&entry.standard, &entry.extra) {
+            (ObjectStandard::Spore, ObjectExtra::Spore { media_profile, .. }) => {
+                let cluster = entry.collection_id.as_deref().with_context(|| {
+                    format!("spore {id} has no collection (not even Sole Spores)")
+                })?;
+                Ok(ObjectDeltaContext {
+                    collection: Some(DeltaCollection {
+                        id: format!("0x{}", hex::encode(cluster)),
+                        name: if cluster == ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION
+                        {
+                            None
+                        } else {
+                            spore_cluster_name(store, cluster, true, &id)?
+                        },
+                    }),
+                    class: "object",
+                    composition: Some(media_profile.tier.as_str()),
+                    role: Some(ObjectDeltaRole::Spore.as_str()),
+                })
+            }
+            (ObjectStandard::SporeCluster, ObjectExtra::SporeCluster) => {
+                // A cluster IS its collection (both writers store it with no
+                // parent); one that names a parent contradicts that.
+                if let Some(parent) = &entry.collection_id {
+                    anyhow::bail!(
+                        "Spore cluster {id} names a parent collection 0x{}",
+                        hex::encode(parent)
+                    );
+                }
+                Ok(ObjectDeltaContext {
+                    collection: Some(DeltaCollection {
+                        id: id.clone(),
+                        name: entry.name,
+                    }),
+                    class: "object",
+                    composition: None,
+                    role: Some(ObjectDeltaRole::Cluster.as_str()),
+                })
+            }
+            (standard, extra) => anyhow::bail!(
+                "object item delta {id} names a {standard:?} row with payload {extra:?} in the spore store, \
+                 neither a spore nor a Spore cluster"
+            ),
         };
-        let cluster = entry
-            .collection_id
-            .as_deref()
-            .with_context(|| format!("spore {id} has no collection (not even Sole Spores)"))?;
-        return Ok(ObjectDeltaContext {
-            collection: Some(DeltaCollection {
-                id: format!("0x{}", hex::encode(cluster)),
-                name: if cluster == ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION {
-                    None
-                } else {
-                    spore_cluster_name(store, cluster, true, &id)?
-                },
-            }),
-            class: "object",
-            composition: Some(media_profile.tier.as_str()),
-        });
     }
     if let Some(entry) = store.get_mnft(object_id)? {
         ensure!(
@@ -383,16 +435,18 @@ pub fn object_delta_context(
             }),
             class: "object",
             composition: None,
+            role: Some(ObjectDeltaRole::MnftToken.as_str()),
         });
     }
     ensure!(
         !indexed,
-        "object item delta {id} names no indexed spore or m-NFT token"
+        "object item delta {id} names no indexed spore, Spore cluster or m-NFT token"
     );
     Ok(ObjectDeltaContext {
         collection: None,
         class: "object",
         composition: None,
+        role: None,
     })
 }
 
@@ -714,6 +768,18 @@ mod tests {
                 "collection": {"id": format!("0x{}", "86".repeat(32)), "name": "Nervape"},
                 "class": "object",
                 "composition": "btc_ckb",
+                "role": "spore",
+            })
+        );
+        // A cluster (its creation / transfer emits an object delta too) is its
+        // own collection and holds no media.
+        assert_eq!(
+            serde_json::to_value(object_delta_context(&store, &cluster, true).unwrap()).unwrap(),
+            serde_json::json!({
+                "collection": {"id": format!("0x{}", "86".repeat(32)), "name": "Nervape"},
+                "class": "object",
+                "composition": null,
+                "role": "cluster",
             })
         );
         // An m-NFT token names its class; the class's mutable current name and
@@ -724,6 +790,7 @@ mod tests {
                 "collection": {"id": format!("0x{}", "3c".repeat(24)), "name": null},
                 "class": "object",
                 "composition": null,
+                "role": "mnft_token",
             })
         );
         // An object delta naming no indexed object is an error, not a blank.
@@ -736,13 +803,55 @@ mod tests {
         assert_eq!(
             serde_json::to_value(object_delta_context(&store, &[0x99; 32], false).unwrap())
                 .unwrap(),
-            serde_json::json!({"collection": null, "class": "object", "composition": null})
+            serde_json::json!({
+                "collection": null, "class": "object", "composition": null, "role": null,
+            })
         );
         // An indexed object reads the same from a pending row.
         assert_eq!(
             object_delta_context(&store, &spore, false).unwrap(),
             object_delta_context(&store, &spore, true).unwrap()
         );
+        // A spore-store row that is neither a spore nor a cluster is no object
+        // the activity writer emits deltas for: an error naming it.
+        let foreign = vec![0x5f; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore(
+            &foreign,
+            &entry(
+                ObjectStandard::MnftIssuer,
+                None,
+                None,
+                ObjectExtra::MnftIssuer {
+                    class_count: 0,
+                    set_count: 0,
+                    info: None,
+                },
+            ),
+        );
+        // A cluster row that names a parent collection contradicts both writers.
+        let nested = vec![0x6e; 32];
+        batch.put_spore(
+            &nested,
+            &entry(
+                ObjectStandard::SporeCluster,
+                Some(cluster.clone()),
+                Some("Nested"),
+                ObjectExtra::SporeCluster,
+            ),
+        );
+        batch.commit().unwrap();
+        let error = object_delta_context(&store, &foreign, true)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&"5f".repeat(32)) && error.contains("MnftIssuer"),
+            "{error}"
+        );
+        let error = object_delta_context(&store, &nested, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("parent collection 0x8686"), "{error}");
     }
 
     #[test]
