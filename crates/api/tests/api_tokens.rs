@@ -41,6 +41,8 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         ),
         (
@@ -58,6 +60,8 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         ),
         (
@@ -75,6 +79,8 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         ),
         (
@@ -92,6 +98,8 @@ async fn test_tokens_list_includes_maximum_supply_status() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         ),
     ];
@@ -166,6 +174,8 @@ async fn test_get_token_includes_maximum_supply() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -225,6 +235,8 @@ async fn test_get_token_supply_exceeding_u128_serializes_as_decimal_string() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -281,6 +293,8 @@ async fn test_get_token_returns_store_backed_detail_when_filtered_from_warmup_ca
                 icon_url: None,
                 description: Some("Store-backed token detail".to_string()),
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -331,6 +345,8 @@ async fn test_get_token_derives_stats_from_holder_and_stats_cfs_when_token_row_i
                 icon_url: Some("logo.png".to_string()),
                 description: Some("label metadata only".to_string()),
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -412,6 +428,8 @@ async fn test_get_token_holders_preserves_equal_balance_pagination() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -504,6 +522,8 @@ async fn test_get_token_holders_paginates_balance_above_u128() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -593,6 +613,8 @@ async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cac
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -612,6 +634,8 @@ async fn test_get_address_tokens_uses_store_backed_pagination_without_warmup_cac
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -702,6 +726,8 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -725,6 +751,8 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -748,6 +776,8 @@ async fn test_get_token_maximum_supply_status_without_cap() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -829,6 +859,8 @@ async fn test_token_capacity_chart_returns_cumulative_series() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -925,6 +957,8 @@ async fn test_token_capacity_chart_reads_daily_deltas_from_derived_store() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -985,6 +1019,8 @@ async fn test_token_capacity_chart_rejects_invalid_date_range() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -1025,6 +1061,8 @@ fn placeholder_token_without_metadata() -> TokenInfo {
         icon_url: None,
         description: None,
         transfers_count: 0,
+        metadata_source: None,
+        chain_metadata: None,
     }
 }
 
@@ -1391,6 +1429,8 @@ async fn test_get_token_reports_pre_fork_capacity_after_real_writer_rollback() {
                 icon_url: None,
                 description: None,
                 transfers_count: 3,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -1488,4 +1528,183 @@ async fn redesign_transfer_sequence_is_distinct_from_transaction_index() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["data"][0]["txIndex"], 3);
     assert_eq!(body["data"][0]["transferSequence"], 0);
+}
+
+// ── IV-26: token metadata provenance ────────────────────────────────────
+
+fn provenance_token(
+    args_byte: u8,
+    name: &str,
+    symbol: &str,
+    source: ckbadger_store::types::TokenMetadataSource,
+    chain: Option<ckbadger_store::types::ChainTokenMetadata>,
+) -> TokenInfo {
+    TokenInfo {
+        type_code_hash: vec![0x50; 32],
+        hash_type: 2,
+        type_args: vec![args_byte; 32],
+        standard: "xudt".to_string(),
+        name: Some(name.to_string()),
+        symbol: Some(symbol.to_string()),
+        decimals: Some(18),
+        max_supply: None,
+        first_seen_block: 0,
+        icon_url: None,
+        description: None,
+        transfers_count: 0,
+        metadata_source: Some(source),
+        chain_metadata: chain,
+    }
+}
+
+fn rgbpp_chain_metadata() -> ckbadger_store::types::ChainTokenMetadata {
+    ckbadger_store::types::ChainTokenMetadata {
+        name: Some("RGB++ Protocol".to_string()),
+        symbol: Some("RGB++".to_string()),
+        decimals: 18,
+        binding: ckbadger_store::types::OnchainInfoBinding::IssuanceCooccurrence,
+    }
+}
+
+async fn token_detail(
+    store: Arc<CkbadgerStore>,
+    type_hash: &[u8],
+) -> (StatusCode, serde_json::Value) {
+    let app = create_router(test_config(store)).await;
+    let request = Request::builder()
+        .uri(format!("/api/v1/tokens/0x{}", hex::encode(type_hash)))
+        .body(Body::empty())
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    (status, serde_json::from_slice(&body).unwrap())
+}
+
+/// IV-26 (RGB++_Jump): the page shows a curated label's name while the
+/// token's own Unique Cell calls itself "RGB++". The detail says where the
+/// stored name/symbol/decimals came from, what the chain says, and that the
+/// two disagree; the same-symbol warning matches the chain symbol too, so the
+/// real RGB++ token and the renamed one warn about each other.
+#[tokio::test]
+async fn token_detail_reports_label_provenance_and_the_chain_conflict() {
+    use ckbadger_store::types::TokenMetadataSource;
+    let store = test_store();
+    let jump = vec![0xec; 32];
+    let rgbpp = vec![0xed; 32];
+    store
+        .put_token_direct(
+            &jump,
+            &provenance_token(
+                0x24,
+                "RGB++_Jump",
+                "RGB++_Jump",
+                TokenMetadataSource::Label,
+                Some(rgbpp_chain_metadata()),
+            ),
+        )
+        .unwrap();
+    store
+        .put_token_direct(
+            &rgbpp,
+            &provenance_token(
+                0x08,
+                "RGB++ Protocol",
+                "RGB++",
+                TokenMetadataSource::Label,
+                Some(ckbadger_store::types::ChainTokenMetadata {
+                    decimals: 18,
+                    ..rgbpp_chain_metadata()
+                }),
+            ),
+        )
+        .unwrap();
+
+    let (status, json) = token_detail(store.clone(), &jump).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["metadata"],
+        serde_json::json!({
+            "name": "RGB++_Jump",
+            "symbol": "RGB++_Jump",
+            "decimals": 18,
+            "source": "label",
+            "chain": {"name": "RGB++ Protocol", "symbol": "RGB++", "decimals": 18},
+            "conflict": true,
+        }),
+        "{json}"
+    );
+    assert_eq!(
+        json["sameSymbolTokens"],
+        serde_json::json!([{"typeScriptHash": format!("0x{}", hex::encode(&rgbpp)), "holdersCount": 0}]),
+        "the renamed token answers to its chain symbol"
+    );
+
+    let (status, json) = token_detail(store, &rgbpp).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["metadata"]["source"], "label", "{json}");
+    assert_eq!(json["metadata"]["conflict"], false, "{json}");
+    assert_eq!(
+        json["sameSymbolTokens"],
+        serde_json::json!([{"typeScriptHash": format!("0x{}", hex::encode(&jump)), "holdersCount": 0}]),
+        "RGB++ warns that another token's Unique Cell also calls itself RGB++"
+    );
+}
+
+/// A token no label and no Unique Cell named has no provenance: `metadata`
+/// is null. A token whose stored fields came from its Unique Cell is
+/// chain-sourced and agrees with itself.
+#[tokio::test]
+async fn token_detail_metadata_is_null_without_a_source_and_chain_when_unlabelled() {
+    use ckbadger_store::types::TokenMetadataSource;
+    let store = test_store();
+    let unnamed = vec![0x5e; 32];
+    store
+        .put_token_direct(&unnamed, &placeholder_token_without_metadata())
+        .unwrap();
+    let chained = vec![0x5f; 32];
+    store
+        .put_token_direct(
+            &chained,
+            &provenance_token(
+                0x31,
+                "RGB++ Protocol",
+                "RGB++",
+                TokenMetadataSource::Chain,
+                Some(rgbpp_chain_metadata()),
+            ),
+        )
+        .unwrap();
+
+    let (status, json) = token_detail(store.clone(), &unnamed).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json.as_object().unwrap().contains_key("metadata"), "{json}");
+    assert_eq!(json["metadata"], serde_json::Value::Null, "{json}");
+
+    let (status, json) = token_detail(store, &chained).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["metadata"]["source"], "chain", "{json}");
+    assert_eq!(json["metadata"]["conflict"], false, "{json}");
+    assert_eq!(json["metadata"]["chain"]["symbol"], "RGB++", "{json}");
+}
+
+/// A stored row with name/symbol/decimals but no source is corrupt: a 500
+/// naming the token, never a guessed source.
+#[tokio::test]
+async fn token_detail_with_fields_but_no_source_is_a_500() {
+    let store = test_store();
+    let type_hash = vec![0x60; 32];
+    let mut row = placeholder_token_without_metadata();
+    row.symbol = Some("ORPHAN".to_string());
+    store.put_token_direct(&type_hash, &row).unwrap();
+
+    let (status, json) = token_detail(store, &type_hash).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("no metadata source"),
+        "{json}"
+    );
 }

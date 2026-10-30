@@ -880,6 +880,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -911,6 +913,8 @@ async fn test_most_utilized_assets_chart_ranks_mixed_asset_types() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();

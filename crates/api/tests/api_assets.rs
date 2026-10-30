@@ -102,6 +102,8 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                     icon_url: None,
                     description: None,
                     transfers_count: 1,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .unwrap();
@@ -439,6 +441,8 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 icon_url: None,
                 description: None,
                 transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -458,6 +462,8 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
                 icon_url: None,
                 description: None,
                 transfers_count: 2,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -553,6 +559,8 @@ async fn test_assets_supply_sort_orders_aggregate_beyond_u128() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -572,6 +580,8 @@ async fn test_assets_supply_sort_orders_aggregate_beyond_u128() {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -652,6 +662,8 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
                     icon_url: None,
                     description: None,
                     transfers_count: 1,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .unwrap();
@@ -3590,6 +3602,8 @@ fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]
                     icon_url: None,
                     description: None,
                     transfers_count: 1,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .unwrap();
@@ -3935,6 +3949,8 @@ async fn test_assets_list_token_capacity_after_real_writer_rollback() {
                     icon_url: None,
                     description: None,
                     transfers_count: 1,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .unwrap();

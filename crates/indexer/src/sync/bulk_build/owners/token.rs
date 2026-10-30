@@ -540,6 +540,10 @@ impl TokenOwner {
                 if existing.description.is_some() {
                     info.description = existing.description.clone();
                 }
+                // Which source wrote the fields just copied, and any chain
+                // values already bound to the token (IV-26).
+                info.metadata_source = existing.metadata_source;
+                info.chain_metadata = existing.chain_metadata.clone();
             }
 
             // max_supply: an on-chain observation (omnilock supply info cell)
@@ -750,6 +754,8 @@ impl TokenAccum {
             icon_url: None,
             description: None,
             transfers_count: self.transfers_count,
+            metadata_source: None,
+            chain_metadata: None,
         }
     }
 }
@@ -2185,6 +2191,8 @@ mod tests {
             icon_url: Some("logo.png".to_string()),
             description: Some("curated".to_string()),
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         }
     }
 

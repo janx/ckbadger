@@ -252,44 +252,6 @@ impl ScriptNetworkMetadata {
     }
 }
 
-/// Describe the fields where the stored token row contradicts what another
-/// source asserts about the same token. `None` when they agree, when the store
-/// has no value yet, or when the other source asserts nothing (`None` argument).
-///
-/// This is the one comparison used by every token-metadata observation point:
-/// label import (label vs. store) and the sync write path (chain vs. store).
-/// Keeping a single implementation is what makes "the bundled label disagrees
-/// with the chain" a detectable event rather than a matter of which observer
-/// happened to be written most recently.
-pub(crate) fn token_metadata_divergence(
-    existing: &ckbadger_store::types::TokenInfo,
-    asserted_name: Option<&str>,
-    asserted_symbol: Option<&str>,
-    asserted_decimals: Option<i32>,
-) -> Option<String> {
-    let mut parts = Vec::new();
-    if let (Some(name), Some(asserted)) = (existing.name.as_deref(), asserted_name) {
-        if name != asserted {
-            parts.push(format!("name {name:?} -> {asserted:?}"));
-        }
-    }
-    if let (Some(symbol), Some(asserted)) = (existing.symbol.as_deref(), asserted_symbol) {
-        if symbol != asserted {
-            parts.push(format!("symbol {symbol:?} -> {asserted:?}"));
-        }
-    }
-    if let (Some(decimals), Some(asserted)) = (existing.decimals, asserted_decimals) {
-        if decimals != asserted {
-            parts.push(format!("decimals {decimals} -> {asserted}"));
-        }
-    }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join(", "))
-    }
-}
-
 /// Describe label fields that would overwrite a *different* pre-existing
 /// value (chain-derived on-chain info or an earlier label). Returns None when
 /// the label agrees with, or only fills, the existing metadata.
@@ -305,8 +267,7 @@ fn label_override_conflicts(
     existing: &ckbadger_store::types::TokenInfo,
     label: &TokenMetadata,
 ) -> Option<String> {
-    token_metadata_divergence(
-        existing,
+    existing.metadata_divergence(
         Some(&label.name),
         Some(&label.symbol),
         Some(i32::from(label.decimals)),
@@ -572,6 +533,8 @@ fn upsert_token_label(
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: None,
+                chain_metadata: None,
             });
 
     if let Some(conflict) = label_override_conflicts(&info, token) {
@@ -585,10 +548,13 @@ fn upsert_token_label(
         );
     }
 
-    // Update label fields while preserving chain-derived metadata.
-    info.name = Some(token.name.clone());
-    info.symbol = Some(token.symbol.clone());
-    info.decimals = Some(token.decimals as i32);
+    // The label writes name/symbol/decimals (and says so); the bound chain
+    // values on the row are kept beside it (IV-26).
+    info.apply_label(
+        token.name.clone(),
+        token.symbol.clone(),
+        i32::from(token.decimals),
+    );
     info.icon_url = token.icon.clone();
     info.description = token.description.clone();
     info.standard = token.standard.clone();
@@ -2557,6 +2523,8 @@ canonical_hash_type = "data1"
                     icon_url: None,
                     description: None,
                     transfers_count: 0,
+                    metadata_source: None,
+                    chain_metadata: None,
                 },
             )
             .unwrap();
@@ -2754,6 +2722,9 @@ mod label_override_conflict_tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: (name.is_some() || symbol.is_some() || decimals.is_some())
+                .then_some(ckbadger_store::types::TokenMetadataSource::Chain),
+            chain_metadata: None,
         }
     }
 

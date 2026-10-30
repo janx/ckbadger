@@ -101,6 +101,8 @@ async fn calendar_contract_real_api_and_verifier_keep_amounts_exact_and_dates_ex
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         },
     );
     batch.commit().unwrap();

@@ -722,6 +722,8 @@ fn test_rollback_updates_derived_cfs_inline() {
         icon_url: None,
         description: None,
         transfers_count: 0,
+        metadata_source: None,
+        chain_metadata: None,
     };
     batch.put_token(&type_script_hash, &token_info);
 

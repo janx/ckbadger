@@ -129,6 +129,9 @@ async fn catalog_visibility_ignores_zero_holders_but_finds_later_positive_holder
                     icon_url: None,
                     description: None,
                     transfers_count: 0,
+                    metadata_source: (id == 3)
+                        .then_some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .unwrap();

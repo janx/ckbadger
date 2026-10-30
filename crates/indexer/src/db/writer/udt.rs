@@ -321,6 +321,8 @@ impl BatchWriter {
                     icon_url: None,
                     description: None,
                     transfers_count: 0,
+                    metadata_source: None,
+                    chain_metadata: None,
                 },
             };
             Self::apply_observed_max_supply(type_hash, &mut updated, max_supply_observations);
@@ -538,30 +540,21 @@ struct TokenUpdate<'a> {
     transfers_count: i64,
 }
 
-/// The one definition of how a token's on-chain Unique Cell metadata merges
-/// into the row about to be stored. Both sync modes call this: live sync from
-/// the batch writer, bulk sync from `TokenOwner::emit_snapshot_rows`. Keeping
-/// a second copy of the rule is how the two modes came to store different
-/// metadata for the same chain data.
+/// How a token's on-chain Unique Cell metadata merges into the row about to
+/// be stored. Both sync modes call this: live sync from the batch writer,
+/// bulk sync from `TokenOwner::emit_snapshot_rows`. The rule itself —
+/// precedence by binding, the stored source, the kept chain values — is
+/// `TokenInfo::merge_chain_metadata` (`ckbadger-store` `token_metadata.rs`),
+/// the one definition label import and the API also read (IV-26).
 ///
 /// `info` must already carry whatever the store holds for this token, because
-/// precedence is decided against it. Precedence follows
-/// [`crate::sync::token_helpers::OnchainInfoBinding`] and nothing else:
+/// precedence is decided against it.
 ///
-/// * `XudtExtension` — the xUDT's own args name the Unique Cell, so the
-///   association is cryptographic and the chain wins.
-/// * `IssuanceCooccurrence` — the Unique Cell was merely co-created in the
-///   token's mint transaction. That is a heuristic, so it fills gaps only and
-///   never displaces already-known metadata (a curated label, or an earlier
-///   extension-bound observation, which is the stronger evidence).
-///
-/// Whichever side wins, a *disagreement* is reported. This is the only moment
-/// in the process where both values exist: label import runs once, before the
-/// first block is indexed, so the conflict check it performs can only compare
-/// a label against the label it wrote itself. Without the report here, a
-/// bundled label that contradicts the chain stays silently authoritative and
-/// is discoverable only by a human noticing the wrong name in the UI — which
-/// is exactly how the wrong RGB++ symbol was eventually found.
+/// Whichever side wins, a *disagreement* is reported and persisted (the
+/// stored source plus `chain_metadata`, which the API serves as `conflict`).
+/// This is the only moment in the process where both values exist: label
+/// import runs before the first block is indexed, so the conflict check it
+/// performs can only compare a label against the label it wrote itself.
 pub(crate) fn apply_onchain_token_info(
     type_hash: &[u8],
     info: &mut TokenInfo,
@@ -570,15 +563,7 @@ pub(crate) fn apply_onchain_token_info(
     let Some(bound) = bound else {
         return;
     };
-
-    // Only values that would actually be written can conflict: an empty
-    // name/symbol in a Unique Cell asserts nothing and is never stored.
-    if let Some(divergence) = crate::label_import::token_metadata_divergence(
-        info,
-        Some(bound.info.name.as_str()).filter(|name| !name.is_empty()),
-        Some(bound.info.symbol.as_str()).filter(|symbol| !symbol.is_empty()),
-        Some(i32::from(bound.info.decimal)),
-    ) {
+    if let Some(divergence) = info.merge_chain_metadata(&bound.chain_metadata()) {
         warn!(
             token_type_hash = %hex::encode(type_hash),
             binding = ?bound.binding,
@@ -592,32 +577,6 @@ pub(crate) fn apply_onchain_token_info(
              the label contradicts the chain and the correction belongs upstream in \
              token-labels"
         );
-    }
-
-    match bound.binding {
-        crate::sync::token_helpers::OnchainInfoBinding::XudtExtension => {
-            // Cryptographic binding: always write on-chain data.
-            if !bound.info.name.is_empty() {
-                info.name = Some(bound.info.name.clone());
-            }
-            if !bound.info.symbol.is_empty() {
-                info.symbol = Some(bound.info.symbol.clone());
-            }
-            info.decimals = Some(bound.info.decimal as i32);
-        }
-        crate::sync::token_helpers::OnchainInfoBinding::IssuanceCooccurrence => {
-            // Heuristic same-tx binding: fill gaps only, never overwrite
-            // already-known metadata (TOML labels or earlier on-chain info).
-            if info.name.is_none() && !bound.info.name.is_empty() {
-                info.name = Some(bound.info.name.clone());
-            }
-            if info.symbol.is_none() && !bound.info.symbol.is_empty() {
-                info.symbol = Some(bound.info.symbol.clone());
-            }
-            if info.decimals.is_none() {
-                info.decimals = Some(bound.info.decimal as i32);
-            }
-        }
     }
 }
 
@@ -763,6 +722,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -824,6 +785,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -916,6 +879,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -970,6 +935,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1017,6 +984,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1080,6 +1049,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1148,6 +1119,8 @@ mod tests {
                     icon_url: None,
                     description: None,
                     transfers_count: 0,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .unwrap();
@@ -1231,6 +1204,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1309,6 +1284,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1406,6 +1383,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 5,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1511,6 +1490,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 5,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1571,6 +1552,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 5,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -1695,6 +1678,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         }
     }
 
@@ -1703,6 +1688,7 @@ mod tests {
             name: None,
             symbol: None,
             decimals: None,
+            metadata_source: None,
             ..token_with_metadata()
         }
     }

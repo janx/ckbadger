@@ -465,23 +465,28 @@ pub(crate) fn collect_unique_cell_token_info(
     infos
 }
 
-/// How an on-chain token-info observation was bound to a token type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum OnchainInfoBinding {
-    /// The xUDT's extension script points at the Unique Cell — a cryptographic
-    /// binding, applied like any on-chain metadata update.
-    XudtExtension,
-    /// The Unique Cell was co-created in the token's single-type issuance
-    /// (mint) transaction — a heuristic binding that must never overwrite
-    /// already-known metadata.
-    IssuanceCooccurrence,
-}
+/// How an on-chain token-info observation was bound to a token type (one
+/// definition, in the store: it is persisted on `TokenInfo.chain_metadata`).
+pub(crate) use ckbadger_store::types::OnchainInfoBinding;
 
 /// A Unique Cell token-info observation together with how it was bound.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OnchainTokenInfo {
     pub info: UniqueTokenInfo,
     pub binding: OnchainInfoBinding,
+}
+
+impl OnchainTokenInfo {
+    /// What this observation asserts about the token, as stored: an empty
+    /// name or symbol asserts nothing.
+    pub(crate) fn chain_metadata(&self) -> ckbadger_store::types::ChainTokenMetadata {
+        ckbadger_store::types::ChainTokenMetadata {
+            name: Some(self.info.name.clone()).filter(|name| !name.is_empty()),
+            symbol: Some(self.info.symbol.clone()).filter(|symbol| !symbol.is_empty()),
+            decimals: self.info.decimal,
+            binding: self.binding,
+        }
+    }
 }
 
 /// Type script hash by outpoint — a borrowed view over cells the caller has
@@ -1122,6 +1127,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         }
     }
 

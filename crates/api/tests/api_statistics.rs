@@ -2151,6 +2151,8 @@ async fn test_asset_ecosystem_returns_expected_structure() {
                 icon_url: None,
                 description: None,
                 transfers_count: 10,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -2311,6 +2313,8 @@ async fn test_asset_ecosystem_breakdown_is_share_of_total_live_capacity() {
                 icon_url: None,
                 description: None,
                 transfers_count: 10,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();

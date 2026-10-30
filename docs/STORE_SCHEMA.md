@@ -424,6 +424,17 @@ inline as Class C sealed aggregates:
   `code_hash + hash_type + kind(lock/type) + YYYYMMDD` — the hash_type byte keeps
   references that share code_hash bytes but differ in hash_type (data/type/data1/data2)
   on independent daily timelines.
+- `tokens` rows (`TokenInfo`) carry metadata provenance (IV-26). `metadata_source` (`Label` or
+  `Chain`) names which source wrote the stored `name` / `symbol` / `decimals`: `None` exactly when
+  all three are `None`, `Label` while any label-written field survives. `chain_metadata` (a
+  `ChainTokenMetadata` with `name`, `symbol`, `decimals` and `binding`, `XudtExtension` or
+  `IssuanceCooccurrence`) keeps the bound Unique Cell's own values even when the label kept the
+  stored fields. The one rule is `ckbadger-store` `token_metadata.rs`: label import calls
+  `TokenInfo::apply_label`; the live writer and the bulk snapshot writer both call
+  `TokenInfo::merge_chain_metadata` through `udt::apply_onchain_token_info` (an extension binding
+  overwrites and replaces the chain values; a co-occurrence fills gaps only and never displaces an
+  earlier binding); the API reads `checked_metadata_source`, `chain_metadata_conflict` and
+  `claimed_symbols`.
 - `stats_token` stores total transfer counters, hourly transfer buckets, and `TokenDailyDelta`
   rows keyed by token `type_script_hash`. A token's daily capacity/knowledge history counts every
   cell whose type script is that sUDT/xUDT instance, whatever its data holds (an owner-mode cell

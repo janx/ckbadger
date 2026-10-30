@@ -5917,6 +5917,8 @@ mod tests {
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: None,
+            chain_metadata: None,
         };
         store.put_token_direct(&type_hash, &token).unwrap();
 
@@ -10276,6 +10278,187 @@ mod tests {
             assert!(
                 account_lock_party.item_deltas.is_empty(),
                 "the protocol's own lock never owns the names it holds"
+            );
+        }
+    }
+
+    /// IV-26: a token's metadata provenance — which source wrote the stored
+    /// name / symbol / decimals, and the bound Unique Cell's own values — is
+    /// persisted identically by the live writer and the bulk snapshot writer,
+    /// and a shallow rollback takes the chain observation back out.
+    mod token_metadata_provenance_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, write_live_block,
+            write_live_blocks_with_parser_token_daily, AR_DEPOSIT, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+        use ckbadger_store::types::{
+            ChainTokenMetadata, OnchainInfoBinding, TokenInfo, TokenMetadataSource,
+        };
+
+        /// The mainnet RGB++_Jump xUDT (`docs/metadata/tokens/rgb-jump.toml`):
+        /// plain owner-hash args, so its Unique Cell binds by issuance
+        /// co-occurrence.
+        const RGBPP_JUMP_ARGS: &str =
+            "0x2402ef1d9813a71e3b20c8c8d54e3ef1d752a06b546bd4f274f47380ecd341ca";
+        /// A Unique Cell calling itself decimals 18, name "RGB++ Protocol",
+        /// symbol "RGB++" — what the RGB++_Jump issuance's own cell says.
+        const IMPERSONATING_UNIQUE_CELL_DATA: &str =
+            "0x120e5247422b2b2050726f746f636f6c055247422b2b";
+
+        fn rgbpp_jump_label() -> crate::label_import::TokenMetadata {
+            crate::label_import::bundled::udt_labels()
+                .into_iter()
+                .find(|token| {
+                    token
+                        .mainnet
+                        .as_ref()
+                        .is_some_and(|d| d.args.eq_ignore_ascii_case(RGBPP_JUMP_ARGS))
+                })
+                .expect("the bundled labels carry RGB++_Jump")
+        }
+
+        fn import_label(store: &CkbadgerStore) -> Result<()> {
+            let result = crate::label_import::import_all(
+                store,
+                "mainnet",
+                std::slice::from_ref(&rgbpp_jump_label()),
+                &[],
+            )?;
+            anyhow::ensure!(result.errors.is_empty(), "{:?}", result.errors);
+            Ok(())
+        }
+
+        fn xudt_type() -> Script {
+            Script {
+                code_hash: crate::parser::udt::XUDT_CODE_HASH_DATA1.to_string(),
+                hash_type: "data1".to_string(),
+                args: RGBPP_JUMP_ARGS.to_string(),
+            }
+        }
+
+        /// 100 funds the issuer; 101 issues `[Unique Cell, xUDT cell, change]`.
+        fn blocks() -> Vec<BlockResponseWithCycles> {
+            let unique_type = Script {
+                code_hash: crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET.to_string(),
+                hash_type: "data1".to_string(),
+                args: format!("0x{}", "98".repeat(20)),
+            };
+            let issuance = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: format!("0x{}", hex::encode([0xc0u8; 32])),
+                        index: "0x0".to_string(),
+                    },
+                }],
+                outputs: vec![
+                    CellOutput {
+                        capacity: format!("0x{:x}", 300_00000000u64),
+                        lock: lock_script(),
+                        type_: Some(unique_type),
+                    },
+                    CellOutput {
+                        capacity: format!("0x{:x}", 300_00000000u64),
+                        lock: lock_script(),
+                        type_: Some(xudt_type()),
+                    },
+                    CellOutput {
+                        capacity: format!("0x{:x}", FUNDING_CAPACITY - 601_00000000),
+                        lock: lock_script(),
+                        type_: None,
+                    },
+                ],
+                outputs_data: vec![
+                    IMPERSONATING_UNIQUE_CELL_DATA.to_string(),
+                    format!("0x{}", hex::encode(2_724_885u128.to_le_bytes())),
+                    "0x".to_string(),
+                ],
+                witnesses: vec![],
+            };
+            vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR_DEPOSIT,
+                    vec![cellbase_tx(0xc1, 100_000_000), issuance],
+                ),
+            ]
+        }
+
+        #[tokio::test]
+        async fn label_and_chain_metadata_persist_identically_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+
+            let bulk = crate::sync::bulk_build::materialize_bulk_artifacts_with_seed_for_test(
+                &blocks,
+                import_label,
+            )
+            .expect("bulk");
+            let bulk_bytes = bulk
+                .token_rows
+                .tokens
+                .get(&type_hash)
+                .expect("bulk writes the token row")
+                .clone();
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            import_label(store.as_ref()).unwrap();
+            let labelled = store.get_token(&type_hash).unwrap().unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                .await
+                .unwrap();
+            let live_rows =
+                crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap();
+            let live_bytes = live_rows.tokens.get(&type_hash).unwrap().clone();
+
+            let chain = ChainTokenMetadata {
+                name: Some("RGB++ Protocol".to_string()),
+                symbol: Some("RGB++".to_string()),
+                decimals: 18,
+                binding: OnchainInfoBinding::IssuanceCooccurrence,
+            };
+            for (path, bytes) in [("bulk", &bulk_bytes), ("live", &live_bytes)] {
+                let row: TokenInfo = bincode::deserialize(bytes).unwrap();
+                assert_eq!(
+                    (row.name.as_deref(), row.symbol.as_deref(), row.decimals),
+                    (Some("RGB++_Jump"), Some("RGB++_Jump"), Some(18)),
+                    "{path}: the label keeps the stored fields"
+                );
+                assert_eq!(
+                    row.metadata_source,
+                    Some(TokenMetadataSource::Label),
+                    "{path}"
+                );
+                assert_eq!(row.chain_metadata.as_ref(), Some(&chain), "{path}");
+                assert!(row.chain_metadata_conflict(), "{path}");
+            }
+            let mut live: TokenInfo = bincode::deserialize(&live_bytes).unwrap();
+            let bulk_row: TokenInfo = bincode::deserialize(&bulk_bytes).unwrap();
+            // Pre-existing, outside IV-26: the live writer keeps the label
+            // placeholder's first_seen_block (0) while bulk records the issuance
+            // block; see the INT result file, "Found, not fixed".
+            assert_eq!((live.first_seen_block, bulk_row.first_seen_block), (0, 101));
+            live.first_seen_block = bulk_row.first_seen_block;
+            assert_eq!(live, bulk_row, "live and bulk CF_TOKENS rows");
+            // Label import alone wrote the label and nothing about the chain.
+            assert_eq!(
+                (labelled.metadata_source, labelled.chain_metadata),
+                (Some(TokenMetadataSource::Label), None)
             );
         }
     }

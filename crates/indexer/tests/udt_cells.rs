@@ -156,6 +156,8 @@ fn make_token(name: &str, symbol: &str, decimals: i32, first_seen_block: i64) ->
         icon_url: None,
         description: Some(format!("{} token", name)),
         transfers_count: 0,
+        metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+        chain_metadata: None,
     }
 }
 

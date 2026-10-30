@@ -52,6 +52,7 @@ mod script_reference_ops;
 mod spore_ops;
 mod stats_ops;
 mod sync_ops;
+mod token_metadata;
 mod token_ops;
 mod tx_ops;
 mod undo_log_ops;

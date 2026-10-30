@@ -9237,6 +9237,8 @@ mod tests {
                 icon_url: None,
                 description: None,
                 transfers_count: 3,
+                metadata_source: Some(crate::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         );
         batch.put_token_holder(&type_hash, &lock_b, 100);
@@ -9616,6 +9618,8 @@ mod tests {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(crate::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         );
         batch.put_token_holder(&type_hash, &lock_b, 100);
@@ -9824,6 +9828,8 @@ mod tests {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(crate::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         );
         batch.put_token_holder(&type_hash, &lock_b, big);
@@ -10034,6 +10040,8 @@ mod tests {
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(crate::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         );
         // Tip holder balance for lock_a is `big` (held by the live output cell).

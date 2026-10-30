@@ -599,7 +599,7 @@ pub struct DaoTopDepositors {
 // Group F: Tokens & Objects
 // ============================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TokenInfo {
     pub type_code_hash: Vec<u8>,
     pub hash_type: u8,
@@ -615,6 +615,58 @@ pub struct TokenInfo {
     pub description: Option<String>,
     #[serde(default)]
     pub transfers_count: i64,
+    /// Which source wrote the stored `name` / `symbol` / `decimals` (IV-26).
+    /// `None` exactly when all three are `None`. Written only by
+    /// [`TokenInfo::apply_label`] and [`TokenInfo::merge_chain_metadata`]
+    /// (`token_metadata.rs`), the one rule both sync modes and label import use.
+    pub metadata_source: Option<TokenMetadataSource>,
+    /// The token's own bound Unique Cell values, kept even when the stored
+    /// fields kept the label (the RGB++_Jump case: label "RGB++_Jump", chain
+    /// symbol "RGB++"). `None` until a Unique Cell is bound to the token.
+    pub chain_metadata: Option<ChainTokenMetadata>,
+}
+
+/// Which source wrote a token's stored `name` / `symbol` / `decimals`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TokenMetadataSource {
+    /// A curated label shipped with CKBadger wrote at least one stored field.
+    Label,
+    /// Every stored field came from the token's own on-chain Unique Cell.
+    Chain,
+}
+
+impl TokenMetadataSource {
+    /// The wire value (`"label" | "chain"`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Label => "label",
+            Self::Chain => "chain",
+        }
+    }
+}
+
+/// How a token's Unique Cell observation is bound to the token type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OnchainInfoBinding {
+    /// The xUDT's extension script points at the Unique Cell — a cryptographic
+    /// binding: the chain's values win over a label.
+    XudtExtension,
+    /// The Unique Cell was co-created in the token's single-type issuance
+    /// (mint) transaction — a heuristic binding that fills gaps only and never
+    /// overwrites already-known metadata.
+    IssuanceCooccurrence,
+}
+
+/// A token's bound Unique Cell values (IV-26).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChainTokenMetadata {
+    /// `None` when the Unique Cell's name is empty (an empty string asserts
+    /// nothing and is never stored).
+    pub name: Option<String>,
+    /// `None` when the Unique Cell's symbol is empty.
+    pub symbol: Option<String>,
+    pub decimals: u8,
+    pub binding: OnchainInfoBinding,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

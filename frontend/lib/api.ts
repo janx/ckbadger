@@ -1615,6 +1615,22 @@ export interface DidPdsDistribution {
   groups: { endpoint: string; count: number }[];
 }
 
+/**
+ * IV-26: where a token's stored name / symbol / decimals came from, and what
+ * its own on-chain Unique Cell says. Token detail only.
+ */
+export interface TokenMetadataProvenance {
+  name: string | null;
+  symbol: string | null;
+  decimals: number | null;
+  /** 'label': a curated label shipped with CKBadger wrote at least one field. */
+  source: 'label' | 'chain';
+  /** The bound Unique Cell's values; null when no Unique Cell is bound. */
+  chain: { name: string | null; symbol: string | null; decimals: number } | null;
+  /** The stored fields disagree with `chain`. */
+  conflict: boolean;
+}
+
 interface Token {
   typeScriptHash: string;
   typeCodeHash: string;
@@ -1641,7 +1657,10 @@ interface Token {
   transfersCount: number;
   transfers24h: number;
   cellsCount: number | null;
+  /** Matches the stored symbol or the Unique Cell's (IV-26). */
   sameSymbolTokens?: { typeScriptHash: string; holdersCount: number }[];
+  /** Token detail only; null when neither a label nor a Unique Cell named the token. */
+  metadata?: TokenMetadataProvenance | null;
   issuer: { lockHash: string; address: string | null; lockKind: string | null } | null;
   totalCapacity: string | null;
   totalCommonKnowledgeSize: string | null;

@@ -200,6 +200,8 @@ async fn fixture_with_cluster(has_cluster: bool) -> Fixture {
             icon_url: None,
             description: None,
             transfers_count: 1,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         },
     );
     batch.put_spore_outpoint(&hash, 6, &[0x41; 32]);

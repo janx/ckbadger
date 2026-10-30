@@ -3412,6 +3412,17 @@ pub(crate) fn materialize_bulk_artifacts_with_script_label_for_test(
     })
 }
 
+/// Bulk artifacts over a store `seed` prepared first — the state a fresh
+/// bulk run meets after label import, for example.
+#[doc(hidden)]
+#[cfg(test)]
+pub(crate) fn materialize_bulk_artifacts_with_seed_for_test(
+    blocks: &[BlockResponseWithCycles],
+    seed: impl FnOnce(&CkbadgerStore) -> Result<()>,
+) -> Result<BulkArtifactSnapshot> {
+    materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], false, seed)
+}
+
 #[doc(hidden)]
 pub(crate) fn materialize_bulk_artifacts_with_latest_dao_for_test(
     blocks: &[BlockResponseWithCycles],
@@ -7187,6 +7198,8 @@ mod tests {
                     icon_url: None,
                     description: None,
                     transfers_count: 1,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
                 },
             )
             .expect("put token");

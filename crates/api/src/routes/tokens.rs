@@ -111,10 +111,68 @@ pub struct TokenResponse {
     pub cells_count: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub same_symbol_tokens: Option<Vec<SameSymbolToken>>,
+    /// Token detail only (absent on list rows): where the stored name /
+    /// symbol / decimals came from and what the token's own Unique Cell says
+    /// (IV-26). `null` when neither a label nor a Unique Cell named the token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Option<TokenMetadataResponse>>,
     pub issuer: Option<TokenIssuer>,
     pub total_capacity: Option<String>,
     #[serde(rename = "totalCommonKnowledgeSize")]
     pub total_used_capacity: Option<String>,
+}
+
+/// A token's metadata provenance (IV-26), from the one store rule
+/// (`TokenInfo::checked_metadata_source` / `chain_metadata_conflict`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenMetadataResponse {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub decimals: Option<i16>,
+    /// `"label"` when a curated label shipped with CKBadger wrote at least one
+    /// of the fields above, `"chain"` when all came from the Unique Cell.
+    pub source: &'static str,
+    /// The token's bound Unique Cell values; `null` when none is bound.
+    pub chain: Option<ChainTokenMetadataResponse>,
+    /// The stored fields disagree with `chain`.
+    pub conflict: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChainTokenMetadataResponse {
+    /// `null` when the Unique Cell's name is empty.
+    pub name: Option<String>,
+    /// `null` when the Unique Cell's symbol is empty.
+    pub symbol: Option<String>,
+    pub decimals: u8,
+}
+
+/// The `metadata` of a token detail; `None` when nothing named the token. A
+/// row whose fields and source disagree is an error naming the token.
+fn token_metadata_response(
+    type_hash: &[u8],
+    info: &ckbadger_store::TokenInfo,
+) -> Result<Option<TokenMetadataResponse>, ApiRouteError> {
+    let source = info.checked_metadata_source().map_err(|error| {
+        ApiError::internal(format!("token 0x{}: {error}", hex::encode(type_hash)))
+    })?;
+    Ok(source.map(|source| TokenMetadataResponse {
+        name: info.name.clone(),
+        symbol: info.symbol.clone(),
+        decimals: info.decimals.map(|d| d as i16),
+        source: source.as_str(),
+        chain: info
+            .chain_metadata
+            .as_ref()
+            .map(|chain| ChainTokenMetadataResponse {
+                name: chain.name.clone(),
+                symbol: chain.symbol.clone(),
+                decimals: chain.decimals,
+            }),
+        conflict: info.chain_metadata_conflict(),
+    }))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -228,6 +286,7 @@ fn token_info_to_response(
         transfers_24h: derived.transfers_24h,
         cells_count: None,
         same_symbol_tokens: None,
+        metadata: None,
         issuer: None,
         total_capacity: derived.owned_capacity.map(|c| c.to_string()),
         total_used_capacity: derived.owned_knowledge.map(|c| c.to_string()),
@@ -439,6 +498,7 @@ fn serve_tokens_from_cache(
                 transfers_24h: entry.transfers_24h,
                 cells_count: None,
                 same_symbol_tokens: None,
+                metadata: None,
                 issuer: None,
                 total_capacity: None,
                 total_used_capacity: None,
@@ -521,14 +581,24 @@ async fn get_token(
                 super::token_history::live_cells_count(&state, &hash)
                     .map_err(|error| ApiError::internal(error.to_string()))?,
             );
+            response.metadata = Some(token_metadata_response(&hash, &info)?);
+            // Same-symbol warning: any symbol either token answers to — its
+            // stored one or its Unique Cell's (IV-26: a label that renamed a
+            // token still collides with the symbol its own cell claims).
             let mut others = Vec::new();
-            if let Some(symbol) = info.symbol.as_deref() {
+            let symbols = info.claimed_symbols();
+            if !symbols.is_empty() {
                 for (other_hash, other) in state
                     .store
                     .list_tokens()
                     .map_err(|error| ApiError::internal(error.to_string()))?
                 {
-                    if other_hash != hash && other.symbol.as_deref() == Some(symbol) {
+                    if other_hash != hash
+                        && other
+                            .claimed_symbols()
+                            .iter()
+                            .any(|symbol| symbols.contains(symbol))
+                    {
                         let (holders_count, _) = state
                             .store
                             .aggregate_token_holder_stats(&other_hash)

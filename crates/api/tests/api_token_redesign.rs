@@ -44,6 +44,8 @@ fn fixture() -> Arc<CkbadgerStore> {
                 icon_url: None,
                 description: None,
                 transfers_count: 4,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
@@ -550,6 +552,8 @@ fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
                 icon_url: None,
                 description: None,
                 transfers_count: blocks,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();

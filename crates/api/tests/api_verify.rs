@@ -62,6 +62,8 @@ fn seed_token(store: &Arc<CkbadgerStore>, type_hash: &[u8], rows: &[(u32, i128, 
             icon_url: None,
             description: None,
             transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
         },
     );
     batch.commit().unwrap();

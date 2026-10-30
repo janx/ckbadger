@@ -537,6 +537,14 @@ export const handlers = [
       transfersCount: 10000,
       transfers24h: 50,
       cellsCount: 200,
+      metadata: {
+        name: 'Test Token',
+        symbol: 'TT',
+        decimals: 8,
+        source: 'label',
+        chain: { name: 'Test Token on chain', symbol: 'TTC', decimals: 8 },
+        conflict: true,
+      },
       totalCapacity: null,
       totalCommonKnowledgeSize: null,
     });

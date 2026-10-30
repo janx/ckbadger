@@ -279,6 +279,8 @@ async fn display_fixture(
                 icon_url: None,
                 description: None,
                 transfers_count: 0,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
             },
         )
         .unwrap();
