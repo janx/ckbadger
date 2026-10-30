@@ -363,6 +363,7 @@ pub(crate) fn cluster_insights(state: &AppState, id: &[u8]) -> Result<Value, Api
             super::assets::nft_collection_weekly_activity(
                 &state.store,
                 &state.append_only_store,
+                &state.mem_cache,
                 id,
             )?;
         Ok(
