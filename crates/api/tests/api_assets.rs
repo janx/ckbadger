@@ -5693,6 +5693,7 @@ fn mnft_insights_fixture(aggregate_live_count: i64) -> (Arc<CkbadgerStore>, [u8;
         );
     }
     batch.commit().unwrap();
+    sync_collection_activity_daily(&store, &class_id);
     (store, class_id)
 }
 
@@ -5830,6 +5831,98 @@ async fn mnft_class_insights_serve_real_holder_distribution_and_weekly_rows() {
             {"weekStart": "2026-10-19", "mintTransactions": 0, "transferTransactions": 0, "burnTransactions": 0},
         ])
     );
+}
+
+/// ID-COL: a cold collection calendar walked every activity row of the
+/// collection (653,019 for `.bit`, ≈ 60 s, a 504 behind the proxy). It now
+/// folds the collection's persisted `collection_activity_daily` rows: the
+/// insights read no activity row, no transaction location and no per-block
+/// header, and their reads do not grow with the collection's history.
+#[tokio::test]
+async fn collection_insights_calendar_reads_daily_rows_not_activity_rows() {
+    const EXTRA: i32 = 1_200;
+    let (store, class_id) = mnft_insights_fixture(6);
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (block, action) in [(1, AssetAction::Transfer), (2, AssetAction::Mint)] {
+        let header = store.get_block_header(block).unwrap().unwrap();
+        for index in 100..100 + EXTRA {
+            let mut hash = [block as u8; 32];
+            hash[28..].copy_from_slice(&index.to_be_bytes());
+            batch.put_tx_hash_map(&hash, block, index);
+            batch.put_tx_index(
+                block,
+                index,
+                &TxIndexEntry {
+                    tx_hash: hash,
+                    is_cellbase: false,
+                    timestamp: header.timestamp,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 200,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            batch.put_object_collection_activity(
+                &class_id,
+                block,
+                index,
+                &ObjectCollectionActivityEntry {
+                    tx_hash: hash.to_vec(),
+                    block_hash: header.hash.clone(),
+                    timestamp_ms: header.timestamp,
+                    actions: vec![action],
+                },
+            );
+        }
+    }
+    batch.commit().unwrap();
+    sync_collection_activity_daily(&store, &class_id);
+    let app = create_router(test_config(store.clone())).await;
+    let path = format!("/assets/objects/0x{}/insights", hex::encode(class_id));
+
+    store.reset_read_call_counters();
+    let (status, insights) = get_json(&app, &path).await;
+    let (get_cf, multi_get) = store.read_call_counts();
+    let walked = [
+        "object_collection_activities",
+        "identity_collection_activities",
+        "tx_hash_map",
+        "tx_index",
+    ]
+    .map(|cf| (cf, store.iterated_rows(cf)));
+    let headers = store.iterated_rows("block_headers");
+    let daily_rows = store.iterated_rows("collection_activity_daily");
+    eprintln!(
+        "{path}: get_cf={get_cf} multi_get={multi_get} walked={walked:?} headers={headers} daily={daily_rows}"
+    );
+    assert_eq!(status, StatusCode::OK, "{insights}");
+    assert_eq!(
+        insights["weeklyActivity"],
+        serde_json::json!([
+            {"weekStart": "2026-10-05", "mintTransactions": 2, "transferTransactions": 1 + EXTRA, "burnTransactions": 0},
+            {"weekStart": "2026-10-12", "mintTransactions": EXTRA, "transferTransactions": 0, "burnTransactions": 1},
+            {"weekStart": "2026-10-19", "mintTransactions": 0, "transferTransactions": 0, "burnTransactions": 0},
+        ])
+    );
+    assert_eq!(
+        walked,
+        [
+            ("object_collection_activities", 0),
+            ("identity_collection_activities", 0),
+            ("tx_hash_map", 0),
+            ("tx_index", 0),
+        ],
+        "the calendar walked the collection's history"
+    );
+    // `ChainTime::load`: the tip header and the current day's first block.
+    assert!(headers <= 2, "{headers} header rows iterated");
+    // One row per active day (10-05, 10-06, 10-13, 10-27).
+    assert_eq!(daily_rows, 4);
+    // Aggregate, chain time, anchor header: a constant, not per row or block.
+    assert_eq!(multi_get, 0);
+    assert!(get_cf <= 12, "{get_cf} point reads");
 }
 
 #[tokio::test]

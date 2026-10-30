@@ -2495,6 +2495,16 @@ impl Indexer {
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         let mut identity_activity_batch = StoreBatch::new(self.writer.store());
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        // Every collection activity row this batch writes, folded per
+        // (collection, UTC+8 day of its block's chain time): staged into
+        // `collection_activity_daily` once, beside the rows, before the commit.
+        let mut collection_daily = ckbadger_store::CollectionActivityDailyDeltas::new();
+        let collection_day_of_block = |block: i64| -> Result<u32> {
+            let chain_time = chain_time_by_block.get(&block).ok_or_else(|| {
+                anyhow!("collection activity row of block {block} outside this batch")
+            })?;
+            ckbadger_store::keys::stats_day_yyyymmdd(*chain_time)
+        };
 
         let mut pending_object_collection_aggs = HashMap::new();
         let mut pending_cluster_ids = HashSet::new();
@@ -3221,8 +3231,10 @@ impl Indexer {
                     activity.block_number,
                     activity.tx_idx,
                     activity.timestamp_ms,
+                    collection_day_of_block(activity.block_number)?,
                     &mut identity_activity_batch,
-                );
+                    &mut collection_daily,
+                )?;
                 // identity collection activities are now in domain store;
                 // rollback deletes entries directly (no undo log needed)
                 if inserted {
@@ -3239,7 +3251,11 @@ impl Indexer {
             // Object/identity collection activities are now in domain store;
             // rollback deletes entries directly (no undo log needed)
             for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
-                object_activity_acc.flush(&mut object_activity_batch)
+                object_activity_acc.flush(
+                    &mut object_activity_batch,
+                    &mut collection_daily,
+                    &collection_day_of_block,
+                )?
             {
                 let delta = object_activity_count_deltas
                     .entry(collection_id)
@@ -3249,7 +3265,11 @@ impl Indexer {
                 })?;
             }
             for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
-                identity_activity_acc.flush_identity(&mut identity_activity_batch)
+                identity_activity_acc.flush_identity(
+                    &mut identity_activity_batch,
+                    &mut collection_daily,
+                    &collection_day_of_block,
+                )?
             {
                 let delta = identity_activity_count_deltas
                     .entry(collection_id)
@@ -3403,6 +3423,11 @@ impl Indexer {
                             tx_actions.tx_index,
                             &entry,
                         );
+                        collection_daily.add_row(
+                            &DOTCELL_SENTINEL_COLLECTION,
+                            collection_day_of_block(tx_actions.block_number)?,
+                            &entry.actions,
+                        )?;
                         let delta = identity_activity_count_deltas
                             .entry(DOTCELL_SENTINEL_COLLECTION.to_vec())
                             .or_insert(0);
@@ -3511,6 +3536,14 @@ impl Indexer {
             };
             domain_analytics_batch.put_addr_prefix_stats(prefix, &next);
         }
+
+        // Each (collection, day) this batch's collection activity rows touched:
+        // its committed counts plus this batch's, read once and written once
+        // into the same atomic domain commit as the rows. No undo pre-image —
+        // rollback subtracts the rows it deletes (`collection_activity_daily`).
+        self.writer
+            .store()
+            .stage_collection_activity_daily(&collection_daily, &mut domain_analytics_batch)?;
 
         // Every entity daily/hourly key this batch touched is written exactly
         // once, here, with its final value. This must happen after the last
@@ -11317,6 +11350,172 @@ mod tests {
                 .unwrap();
         }
 
+        /// Block 103 burns the token (0xe2:0) into a plain cell.
+        fn burn_block() -> BlockResponseWithCycles {
+            let burn = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe4u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe2, 0)],
+                outputs: vec![output(TOKEN_CAPACITY - 200_000, lock_script_b(), None)],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![],
+            };
+            block(103, AR_DEPOSIT, vec![cellbase_tx(0xc3, 100_000_000), burn])
+        }
+
+        fn collection_daily_rows(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
+            store
+                .iterator_cf(
+                    store.cf_collection_activity_daily(),
+                    rocksdb::IteratorMode::Start,
+                )
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        }
+
+        fn daily_row(day: u32, mint: u64, transfer: u64, burn: u64) -> (Vec<u8>, Vec<u8>) {
+            (
+                ckbadger_store::keys::encode_collection_activity_daily_key(&class_id(), day)
+                    .to_vec(),
+                bincode::serialize(&ckbadger_store::CollectionActivityDailyCounts {
+                    mint_transactions: mint,
+                    transfer_transactions: transfer,
+                    burn_transactions: burn,
+                })
+                .unwrap(),
+            )
+        }
+
+        /// ID-COL: `collection_activity_daily` — one row per (collection,
+        /// UTC+8 day) with the day's mint / transfer / burn transactions —
+        /// is byte-identical from bulk build, a block-at-a-time live sync and
+        /// a multi-block live batch; a shallow rollback takes the deleted
+        /// rows' contributions back off their day (deleting a day that
+        /// reaches zero) and never touches the append-only store. The mint
+        /// (101) lands on day one, the transfer (102) and the burn (103) on
+        /// day two.
+        #[tokio::test]
+        async fn collection_daily_rows_match_on_both_paths_and_roll_back() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let mut blocks = vec![
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                mint_block(),
+                transfer_block(),
+                burn_block(),
+            ];
+            const DAY_MS: u64 = 86_400_000;
+            for b in &mut blocks[2..] {
+                let raw = u64::from_str_radix(&b.block.header.timestamp[2..], 16).unwrap();
+                b.block.header.timestamp = format!("0x{:x}", raw + DAY_MS);
+            }
+            let day = |b: &BlockResponseWithCycles| {
+                ckbadger_store::keys::stats_day_yyyymmdd(
+                    i64::from_str_radix(&b.block.header.timestamp[2..], 16).unwrap(),
+                )
+                .unwrap()
+            };
+            let (day_one, day_two) = (day(&blocks[1]), day(&blocks[2]));
+            assert_ne!(day_one, day_two);
+            let expected = vec![daily_row(day_one, 1, 0, 0), daily_row(day_two, 0, 1, 1)];
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+            assert_eq!(bulk.collection_activity_daily, expected, "bulk rows");
+
+            let open = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                let indexer = indexer_for_live_write_test(store.clone());
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                seed_pre_parent_header(store.as_ref());
+                seed_secp_script_info(store.as_ref());
+                for code_hash in [
+                    MNFT_ISSUER_CODE_HASH,
+                    MNFT_CLASS_CODE_HASH,
+                    MNFT_TOKEN_CODE_HASH,
+                ] {
+                    seed_script_info(store.as_ref(), code_hash);
+                }
+                (store, indexer)
+            };
+            let (single, single_indexer) = open();
+            for b in blocks.clone() {
+                write_live_block(&single_indexer, b).await.unwrap();
+            }
+            assert_eq!(
+                collection_daily_rows(&single),
+                expected,
+                "single-block live"
+            );
+            let (multi, multi_indexer) = open();
+            write_live_block(&multi_indexer, blocks[0].clone())
+                .await
+                .unwrap();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[1..].to_vec(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(collection_daily_rows(&multi), expected, "multi-block live");
+
+            let cells_before = cells_dump(&single);
+            rollback_to(&single, 102);
+            assert_eq!(
+                collection_daily_rows(&single),
+                vec![daily_row(day_one, 1, 0, 0), daily_row(day_two, 0, 1, 0)],
+                "rolling back the burn takes it off day two"
+            );
+            rollback_to(&single, 101);
+            assert_eq!(
+                collection_daily_rows(&single),
+                vec![daily_row(day_one, 1, 0, 0)],
+                "day two reached zero and is deleted"
+            );
+            assert_eq!(cells_dump(&single), cells_before, "CF_CELLS untouched");
+        }
+
+        /// A rollback that would take a day below zero — a day row the
+        /// forward writer never wrote — fails naming the collection and day.
+        #[tokio::test]
+        async fn collection_daily_rollback_fails_on_a_day_without_its_counts() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let store = indexed_through(transfer_block()).await;
+            let transfer_day = ckbadger_store::keys::stats_day_yyyymmdd(
+                store.get_block_header(102).unwrap().unwrap().chain_time_ms,
+            )
+            .unwrap();
+            store
+                .delete_cf(
+                    store.cf_collection_activity_daily(),
+                    &ckbadger_store::keys::encode_collection_activity_daily_key(
+                        &class_id(),
+                        transfer_day,
+                    ),
+                )
+                .unwrap();
+            let undo = store.rollback_via_undo_log(store.as_ref(), 101).unwrap();
+            let error = store
+                .rollback_to_block_with_tx_contexts(101, Some(store.as_ref()), undo.tx_contexts)
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("collection_activity_daily underflow during rollback")
+                    && error.contains(&hex::encode(class_id()))
+                    && error.contains(&format!("day={transfer_day}")),
+                "{error}"
+            );
+        }
+
         #[tokio::test]
         async fn mnft_transfer_rollback_removes_the_new_outpoint_row() {
             let _guard =
@@ -12772,6 +12971,139 @@ mod tests {
             .await
             .expect("live replay after shallow fork");
             assert_eq!(bucket_rows(&multi), expected, "bulk vs rollback/replay");
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+        }
+
+        fn collection_daily_rows(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
+            store
+                .iterator_cf(
+                    store.cf_collection_activity_daily(),
+                    rocksdb::IteratorMode::Start,
+                )
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect()
+        }
+
+        /// ID-COL: the identity collections' `collection_activity_daily` rows
+        /// (here the `.cell` registrations, whose feed rows come from the
+        /// `dotcell:*` actions) are byte-identical from bulk build, a
+        /// block-at-a-time live sync, a multi-block live batch and a rollback
+        /// + replay, and equal the fold of the collection rows themselves.
+        #[tokio::test]
+        async fn bulk_live_batch_shapes_and_replay_write_identical_identity_collection_days() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_dao_token_and_name();
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+            let expected = bulk.collection_activity_daily.clone();
+            let dotcell = ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION;
+            assert!(
+                expected.iter().any(|(key, _)| key.starts_with(&dotcell)),
+                "the fixture writes `.cell` collection days: {expected:?}"
+            );
+
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+            assert_eq!(
+                collection_daily_rows(&single),
+                expected,
+                "bulk vs single live"
+            );
+            assert_eq!(
+                collection_daily_rows(&multi),
+                expected,
+                "bulk vs multi live"
+            );
+
+            // The rows are the fold of the persisted collection rows by the
+            // store's one rule.
+            let mut folded = ckbadger_store::CollectionActivityDailyDeltas::new();
+            for row in multi.iterator_cf(
+                multi.cf_identity_collection_activities(),
+                rocksdb::IteratorMode::Start,
+            ) {
+                let (key, value) = row.unwrap();
+                let (collection, block, _, _, _) =
+                    ckbadger_store::keys::decode_object_collection_activity_key(&key);
+                let entry: ckbadger_store::ObjectCollectionActivityEntry =
+                    bincode::deserialize(&value).unwrap();
+                let chain_time = multi
+                    .get_block_header(block)
+                    .unwrap()
+                    .unwrap()
+                    .chain_time_ms;
+                folded
+                    .add_row(
+                        &collection,
+                        ckbadger_store::keys::stats_day_yyyymmdd(chain_time).unwrap(),
+                        &entry.actions,
+                    )
+                    .unwrap();
+            }
+            let folded: Vec<(Vec<u8>, Vec<u8>)> = folded
+                .iter()
+                .map(|((collection, day), counts)| {
+                    (
+                        ckbadger_store::keys::encode_collection_activity_daily_key(
+                            collection, *day,
+                        )
+                        .to_vec(),
+                        bincode::serialize(counts).unwrap(),
+                    )
+                })
+                .collect();
+            assert_eq!(folded, expected, "days are the fold of the collection rows");
+
+            let immutable_before = cell_payload_rows(&multi);
+            multi_indexer
+                .writer
+                .cleanup_batch_range(multi.as_ref(), 2, 3)
+                .unwrap();
+            multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(1)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[2..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_eq!(
+                collection_daily_rows(&multi),
+                expected,
+                "bulk vs rollback/replay"
+            );
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 

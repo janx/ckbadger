@@ -1317,13 +1317,21 @@ struct ActivityStatsAccumulator {
     daily_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
     hourly_stats: FxHashMap<String, DailyActivityStats>,
     hourly_addrs: FxHashMap<String, FxHashSet<[u8; 32]>>,
+    /// `collection_activity_daily` days not yet complete at the chain-time
+    /// watermark; a day is written once, when its UTC+8 end is sealed (the
+    /// same rule as `ACTIVITY_DAILY`), or at finalize.
+    collection_daily: ckbadger_store::CollectionActivityDailyDeltas,
     sealed_through_ms: Option<i64>,
     last_block_number: Option<i64>,
 }
 
 impl ActivityStatsAccumulator {
     fn estimated_bytes(&self) -> u64 {
-        crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_stats)
+        // A (padded collection id, day) key and its three counters, plus the
+        // B-tree's per-entry overhead.
+        const COLLECTION_DAY_BYTES: u64 = 32 + 4 + 24 + 32;
+        self.collection_daily.len() as u64 * COLLECTION_DAY_BYTES
+            + crate::sync::bulk_build::accounting::hash_map_serialized_bytes(&self.daily_stats)
             + crate::sync::bulk_build::accounting::hash_map_bytes(
                 &self.daily_addrs,
                 |date, addrs| {
@@ -1557,6 +1565,30 @@ impl ActivityStatsAccumulator {
         self.accumulate_tx_actions(tx_actions_list, &times)
     }
 
+    /// Fold one batch's collection activity rows into their open days
+    /// (before [`Self::apply_batch`] advances the watermark and seals). A row
+    /// on a day an earlier batch already sealed is an ordering bug, never a
+    /// second write of that day.
+    fn apply_collection_daily(
+        &mut self,
+        batch: &ckbadger_store::CollectionActivityDailyDeltas,
+    ) -> Result<()> {
+        if let Some(watermark) = self.sealed_through_ms {
+            let first_open_day = ckbadger_store::keys::stats_day_yyyymmdd(watermark)?;
+            if let Some(((collection_id, day), _)) =
+                batch.iter().find(|((_, day), _)| *day < first_open_day)
+            {
+                bail!(
+                    "already sealed collection activity day received a late row: collection=0x{} day={} chain_watermark_ms={}",
+                    hex::encode(collection_id),
+                    day,
+                    watermark
+                );
+            }
+        }
+        self.collection_daily.merge(batch)
+    }
+
     fn drain_sealed_rows(
         &mut self,
         watermark_ms: i64,
@@ -1573,11 +1605,24 @@ impl ActivityStatsAccumulator {
             watermark_ms,
             false,
         )?);
+        // A collection day is complete once the watermark reaches the next
+        // day: every day before the watermark's own.
+        let first_open_day = ckbadger_store::keys::stats_day_yyyymmdd(watermark_ms)?;
+        rows.extend(collection_daily_rows(
+            self.collection_daily.split_before(first_open_day),
+        )?);
         Ok(rows)
     }
 
     fn build_rows(&self) -> Result<Vec<materialize::MaterializedRow>> {
         let mut rows = Vec::with_capacity(self.daily_stats.len() + self.hourly_stats.len());
+        // The days still open at finalize (the handoff tip's day).
+        rows.extend(collection_daily_rows(
+            self.collection_daily
+                .iter()
+                .map(|(key, counts)| (*key, *counts))
+                .collect(),
+        )?);
 
         let mut daily_entries = self
             .daily_stats
@@ -1643,6 +1688,24 @@ impl ActivityStatsAccumulator {
 
         Ok(rows)
     }
+}
+
+/// `collection_activity_daily` rows for complete `(collection, day)` counts.
+fn collection_daily_rows(
+    days: Vec<(
+        ([u8; 32], u32),
+        ckbadger_store::CollectionActivityDailyCounts,
+    )>,
+) -> Result<Vec<materialize::MaterializedRow>> {
+    days.into_iter()
+        .map(|((collection_id, day), counts)| {
+            Ok(materialize::MaterializedRow::new(
+                ckbadger_store::CF_COLLECTION_ACTIVITY_DAILY,
+                keys::encode_collection_activity_daily_key(&collection_id, day).to_vec(),
+                bincode::serialize(&counts)?,
+            ))
+        })
+        .collect()
 }
 
 fn drain_activity_bucket_rows(
@@ -2429,6 +2492,7 @@ impl BulkBuildRuntimeState {
 
                 // activity_stats depends only on history.tx_actions_list, not on any reducer state.
                 let activity_stats_started = Instant::now();
+                activity_stats.apply_collection_daily(&history.collection_activity_daily)?;
                 let activity_sealed_rows =
                     activity_stats.apply_batch(&arena.blocks, &history.tx_actions_list)?;
                 let activity_stats_elapsed = activity_stats_started.elapsed();
@@ -2764,6 +2828,7 @@ impl BulkBuildRuntimeState {
                 )?;
                 let history_elapsed = history_started.elapsed();
                 let activity_stats_started = Instant::now();
+                activity_stats.apply_collection_daily(&history.collection_activity_daily)?;
                 let activity_sealed_rows =
                     activity_stats.apply_batch(&arena.blocks, &history.tx_actions_list)?;
                 let activity_stats_elapsed = activity_stats_started.elapsed();
@@ -3089,6 +3154,8 @@ fn apply_cell_dist_cohort_deltas(
 
 struct HistoryBuildResult {
     rows: Vec<materialize::EncodedHistoryChunk>,
+    /// This batch's collection activity rows per (collection, UTC+8 day).
+    collection_activity_daily: ckbadger_store::CollectionActivityDailyDeltas,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     prefix_tx_count_deltas: FxHashMap<[u8; 20], i64>,
@@ -3214,6 +3281,8 @@ fn retained_memory_breakdown(
 struct BlockHistoryRows {
     rows: materialize::EncodedHistoryChunk,
     lock_script_rows: Vec<(crate::sync::types::InternId, materialize::MaterializedRow)>,
+    /// The block's collection activity rows on its one UTC+8 day.
+    collection_activity_daily: ckbadger_store::CollectionActivityDailyDeltas,
     object_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     identity_activity_count_deltas: FxHashMap<Vec<u8>, i64>,
     /// Standalone protocol-named participations per 20-byte lock-hash prefix.
@@ -3353,6 +3422,9 @@ pub struct BulkArtifactSnapshot {
     /// `CF_TX_ACTIONS_BY_BUCKET` keys, raw, in key order. Compared
     /// byte-for-byte against the live write path's rows.
     pub tx_actions_by_bucket: Vec<Vec<u8>>,
+    /// `CF_COLLECTION_ACTIVITY_DAILY` rows, raw, in key order. Compared
+    /// byte-for-byte against the live write path's rows.
+    pub collection_activity_daily: Vec<(Vec<u8>, Vec<u8>)>,
     /// Every row a `.cell` name touches, raw. Compared byte-for-byte against
     /// the live write path's rows.
     pub dotcell: DotCellArtifacts,
@@ -3849,6 +3921,13 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
     ) = collect_cell_snapshot(domain_store, append_store)?;
     let (addr_txs, addr_txs_by_prefix, addr_prefix_stats) = collect_addr_tx_snapshot(domain_store)?;
+    let collection_activity_daily = domain_store
+        .iterator_cf(
+            domain_store.cf_collection_activity_daily(),
+            IteratorMode::Start,
+        )
+        .map(|row| row.map(|(key, value)| (key.to_vec(), value.to_vec())))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
     let mut tx_actions_by_bucket = Vec::new();
     for row in domain_store.iterator_cf(domain_store.cf_tx_actions_by_bucket(), IteratorMode::Start)
     {
@@ -3887,6 +3966,7 @@ fn collect_bulk_artifact_snapshot(
         addr_txs_by_prefix,
         addr_prefix_stats,
         tx_actions_by_bucket,
+        collection_activity_daily,
         dotcell,
         token_rows,
         stats_dao_rows,
@@ -4096,8 +4176,10 @@ fn build_history_batches(
     let mut all_identity_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut all_prefix_deltas: FxHashMap<[u8; 20], i64> = FxHashMap::default();
     let mut all_tx_actions: Vec<ckbadger_store::types::TxActions> = Vec::new();
+    let mut collection_activity_daily = ckbadger_store::CollectionActivityDailyDeltas::new();
     for result in block_results {
         let mut block_rows = result?;
+        collection_activity_daily.merge(&block_rows.collection_activity_daily)?;
 
         // Cross-batch dedup: the interner keeps one exact write bit beside each
         // reusable InternId slot. Reclaim clears the bit before the ID can be
@@ -4138,6 +4220,7 @@ fn build_history_batches(
 
     Ok(HistoryBuildResult {
         rows: all_rows,
+        collection_activity_daily,
         object_activity_count_deltas: all_object_deltas,
         identity_activity_count_deltas: all_identity_deltas,
         prefix_tx_count_deltas: all_prefix_deltas,
@@ -4357,6 +4440,10 @@ fn build_history_rows_for_block(
     let mut rows = materialize::EncodedHistoryChunk::with_capacity(row_capacity, 0);
     let mut object_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
     let mut identity_activity_count_deltas: FxHashMap<Vec<u8>, i64> = FxHashMap::default();
+    // Every collection activity row this block pushes, folded into the
+    // block's UTC+8 day — the same `add_row` the live writer calls.
+    let collection_day = keys::stats_day_yyyymmdd(block.chain_time_ms)?;
+    let mut collection_activity_daily = ckbadger_store::CollectionActivityDailyDeltas::new();
 
     // Block header + hash index (2 rows per block).
     let header = CachedBlockHeader {
@@ -4601,6 +4688,11 @@ fn build_history_rows_for_block(
                 &tx_actions.tx_hash,
             );
             rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+            collection_activity_daily.add_row(
+                &DOTCELL_SENTINEL_COLLECTION,
+                collection_day,
+                &entry.actions,
+            )?;
             let delta = identity_activity_count_deltas
                 .entry(DOTCELL_SENTINEL_COLLECTION.to_vec())
                 .or_insert(0);
@@ -4777,6 +4869,11 @@ fn build_history_rows_for_block(
                     &tx.tx_hash,
                 );
                 rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
+                collection_activity_daily.add_row(
+                    &DOTBIT_SENTINEL_COLLECTION,
+                    collection_day,
+                    &entry.actions,
+                )?;
                 let delta = identity_activity_count_deltas
                     .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
                     .or_insert(0);
@@ -4812,6 +4909,11 @@ fn build_history_rows_for_block(
                 &activity_key,
                 &resolved_entry.entry,
             )?;
+            collection_activity_daily.add_row(
+                &resolved_entry.collection_id,
+                collection_day,
+                &resolved_entry.entry.actions,
+            )?;
         }
 
         for resolved_entry in identity_activity_acc.into_resolved_entries() {
@@ -4835,6 +4937,11 @@ fn build_history_rows_for_block(
                 CF_IDENTITY_COLLECTION_ACTIVITIES,
                 &activity_key,
                 &resolved_entry.entry,
+            )?;
+            collection_activity_daily.add_row(
+                &resolved_entry.collection_id,
+                collection_day,
+                &resolved_entry.entry.actions,
             )?;
         }
     }
@@ -4888,6 +4995,7 @@ fn build_history_rows_for_block(
     Ok(BlockHistoryRows {
         rows,
         lock_script_rows,
+        collection_activity_daily,
         object_activity_count_deltas,
         identity_activity_count_deltas,
         prefix_tx_count_deltas,

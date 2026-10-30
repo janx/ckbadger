@@ -1743,6 +1743,10 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
         );
     }
     batch.commit().unwrap();
+    // The day rows the indexer stages beside these rows: block 4's raw
+    // timestamp is 10-18, but its chain time (10-26) puts it in the tip's
+    // incomplete week.
+    sync_collection_activity_daily(&store, &cluster);
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(
         &app,
@@ -1757,6 +1761,19 @@ async fn weekly_collection_history_uses_complete_indexed_calendar_and_quiet_zero
         serde_json::json!([{"weekStart":"2026-10-12","mintTransactions":1,"transferTransactions":1,"burnTransactions":0},{"weekStart":"2026-10-19","mintTransactions":0,"transferTransactions":0,"burnTransactions":0}])
     );
     capture_producer("collection-complete-week-history", &json);
+
+    // Each collection activity row names its block's chain time: block 4's
+    // raw timestamp is 10-18, its chain time (the day it is counted on) 10-26.
+    let (status, rows) = get_json(
+        &app,
+        &format!("/assets/objects/0x{}/activities", hex::encode(cluster)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{rows}");
+    let row = &rows["data"][0];
+    assert_eq!(row["blockNumber"], 4, "{rows}");
+    assert_eq!(row["timestamp"], utc_ms("2026-10-18T00:00:00Z").to_string());
+    assert_eq!(row["chainTime"], utc_ms("2026-10-26T00:00:00Z").to_string());
 }
 
 #[tokio::test]

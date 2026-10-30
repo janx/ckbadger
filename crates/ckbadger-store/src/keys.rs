@@ -1930,6 +1930,46 @@ pub fn timestamp_ms_to_date(timestamp_ms: i64) -> u32 {
         .expect("timestamp_ms_to_date: formatted date must parse into u32")
 }
 
+/// The UTC+8 stats day of a chain time as `YYYYMMDD` — the day number every
+/// day-keyed row uses (`stats_day`), failing instead of panicking on a chain
+/// time no date can represent.
+pub fn stats_day_yyyymmdd(chain_time_ms: i64) -> anyhow::Result<u32> {
+    use chrono::Datelike;
+    let day = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
+    let year = u32::try_from(day.year())
+        .map_err(|_| anyhow::anyhow!("stats day before year 0: chain_time_ms={chain_time_ms}"))?;
+    Ok(year * 10_000 + day.month() * 100 + day.day())
+}
+
+/// `collection_activity_daily` key: collection_id (32B, padded like the
+/// collection activity keys) + UTC+8 day `YYYYMMDD` (u32 BE) = 36 bytes, so a
+/// collection's days sort ascending under its prefix.
+pub const COLLECTION_ACTIVITY_DAILY_KEY_SIZE: usize = 36;
+
+pub fn encode_collection_activity_daily_key(
+    collection_id: &[u8],
+    day_yyyymmdd: u32,
+) -> [u8; COLLECTION_ACTIVITY_DAILY_KEY_SIZE] {
+    let mut key = [0u8; COLLECTION_ACTIVITY_DAILY_KEY_SIZE];
+    key[..32].copy_from_slice(&pad_id_32(collection_id));
+    key[32..].copy_from_slice(&day_yyyymmdd.to_be_bytes());
+    key
+}
+
+pub fn decode_collection_activity_daily_key(key: &[u8]) -> anyhow::Result<([u8; 32], u32)> {
+    anyhow::ensure!(
+        key.len() == COLLECTION_ACTIVITY_DAILY_KEY_SIZE,
+        "collection_activity_daily key has {} bytes, expected {}: key=0x{}",
+        key.len(),
+        COLLECTION_ACTIVITY_DAILY_KEY_SIZE,
+        crate::bytes_to_hex(key)
+    );
+    let mut collection_id = [0u8; 32];
+    collection_id.copy_from_slice(&key[..32]);
+    let day = u32::from_be_bytes(key[32..].try_into().expect("4-byte day"));
+    Ok((collection_id, day))
+}
+
 /// Object collection activity key:
 /// collection_id(32B padded) + block_num_desc(8B BE) + tx_idx_desc(4B BE) + block_hash(32B) + tx_hash(32B)
 /// Uses descending block_num and tx_idx so newest activities come first in prefix scan.

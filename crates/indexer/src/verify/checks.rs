@@ -830,6 +830,7 @@ mod status_model_tests {
             "global_activity_bucket_index_consistency",
             "address_cellbase_count_consistency",
             "token_live_cells_consistency",
+            "collection_daily_activity_consistency",
             "dotcell_records_hash_parity",
         ];
         let mut declared = declared;

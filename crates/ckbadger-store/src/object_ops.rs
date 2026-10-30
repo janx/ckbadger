@@ -10,8 +10,101 @@ use crate::types::{
 pub(crate) type MnftBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 
 use crate::bytes_to_hex;
+use crate::types::{CollectionActivityDailyCounts, CollectionActivityDailyDeltas};
+
+/// Decode a `collection_activity_daily` value, naming the row on failure.
+fn decode_collection_activity_daily(
+    collection_id: &[u8],
+    day: u32,
+    value: &[u8],
+) -> anyhow::Result<CollectionActivityDailyCounts> {
+    bincode::deserialize(value).map_err(|e| {
+        anyhow::anyhow!(
+            "invalid collection_activity_daily value: collection=0x{} day={day} value_len={}: {e}",
+            bytes_to_hex(collection_id),
+            value.len()
+        )
+    })
+}
 
 impl CkbadgerStore {
+    /// A collection's `collection_activity_daily` rows, ascending by day.
+    /// O(days the collection was active), no activity row read.
+    pub fn list_collection_activity_daily(
+        &self,
+        collection_id: &[u8],
+    ) -> anyhow::Result<Vec<(u32, CollectionActivityDailyCounts)>> {
+        let prefix = keys::pad_id_32(collection_id);
+        let mut rows = Vec::new();
+        for item in self.prefix_iterator_cf(self.cf_collection_activity_daily(), &prefix) {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate collection_activity_daily: collection=0x{}: {e}",
+                    bytes_to_hex(&prefix)
+                )
+            })?;
+            let (_, day) = keys::decode_collection_activity_daily_key(&key)?;
+            rows.push((day, decode_collection_activity_daily(&prefix, day, &value)?));
+        }
+        Ok(rows)
+    }
+
+    /// The stored rows of `days` (`(padded collection id, YYYYMMDD)`), one
+    /// `multi_get`, `None` where a day has no row.
+    pub fn get_collection_activity_daily_batch(
+        &self,
+        days: &[([u8; 32], u32)],
+    ) -> anyhow::Result<Vec<Option<CollectionActivityDailyCounts>>> {
+        let keys: Vec<_> = days
+            .iter()
+            .map(|(collection_id, day)| {
+                keys::encode_collection_activity_daily_key(collection_id, *day)
+            })
+            .collect();
+        let cf = self.cf_collection_activity_daily();
+        self.multi_get_cf_sorted(keys.iter().map(|key| (cf, key.as_slice())).collect())
+            .into_iter()
+            .zip(days)
+            .map(|(value, (collection_id, day))| {
+                match value.map_err(|e| {
+                    anyhow::anyhow!(
+                        "collection_activity_daily read failed: collection=0x{} day={day}: {e}",
+                        bytes_to_hex(collection_id)
+                    )
+                })? {
+                    Some(bytes) => {
+                        decode_collection_activity_daily(collection_id, *day, &bytes).map(Some)
+                    }
+                    None => Ok(None),
+                }
+            })
+            .collect()
+    }
+
+    /// Stage a live batch's `collection_activity_daily` contributions into
+    /// `batch`: each touched `(collection, day)` row read once (one
+    /// `multi_get`) and written once with its committed counts plus the
+    /// batch's. The batch carries the collection activity rows themselves,
+    /// so rows and counts commit together.
+    pub fn stage_collection_activity_daily(
+        &self,
+        deltas: &CollectionActivityDailyDeltas,
+        batch: &mut crate::batch::StoreBatch,
+    ) -> anyhow::Result<()> {
+        let days: Vec<([u8; 32], u32)> = deltas.iter().map(|(key, _)| *key).collect();
+        let stored = self.get_collection_activity_daily_batch(&days)?;
+        for (((collection_id, day), added), previous) in deltas.iter().zip(stored) {
+            let next = previous.unwrap_or_default().checked_add(added).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "collection_activity_daily overflow: collection=0x{} day={day} stored={previous:?} added={added:?}",
+                    bytes_to_hex(collection_id)
+                )
+            })?;
+            batch.put_collection_activity_daily(collection_id, *day, &next);
+        }
+        Ok(())
+    }
+
     pub fn get_mnft(&self, id: &[u8]) -> anyhow::Result<Option<ObjectEntry>> {
         match self.get_cf(self.cf_mnft_data(), id)? {
             Some(value) => Ok(Some(bincode::deserialize(&value)?)),
@@ -498,6 +591,124 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         (dir, store)
+    }
+
+    /// The one rule: a row adds 1 to each of Mint / Transfer / Burn it
+    /// carries; Recycle / Renew / Update add nothing and an all-zero row adds
+    /// no day. Days fold per padded collection id and seal in day order.
+    #[test]
+    fn test_collection_activity_daily_rule_folds_rows_per_padded_collection_and_day() {
+        use crate::types::{AssetAction::*, CollectionActivityDailyCounts};
+        assert_eq!(
+            CollectionActivityDailyCounts::of_actions(&[Mint, Burn, Update]),
+            CollectionActivityDailyCounts {
+                mint_transactions: 1,
+                transfer_transactions: 0,
+                burn_transactions: 1,
+            }
+        );
+        assert!(CollectionActivityDailyCounts::of_actions(&[Renew, Recycle, Update]).is_zero());
+
+        let class_id = [0x3cu8; 24];
+        let mut deltas = CollectionActivityDailyDeltas::new();
+        deltas.add_row(&class_id, 20261006, &[Mint]).unwrap();
+        deltas
+            .add_row(&class_id, 20261006, &[Mint, Transfer])
+            .unwrap();
+        deltas.add_row(&class_id, 20261007, &[Update]).unwrap();
+        deltas.add_row(&class_id, 20261013, &[Burn]).unwrap();
+        let mut other = CollectionActivityDailyDeltas::new();
+        other
+            .add_row(&keys::pad_id_32(&class_id), 20261013, &[Burn])
+            .unwrap();
+        deltas.merge(&other).unwrap();
+        assert_eq!(deltas.len(), 2, "the update-only day has no key");
+        let sealed = deltas.split_before(20261013);
+        assert_eq!(
+            sealed,
+            vec![(
+                (keys::pad_id_32(&class_id), 20261006),
+                CollectionActivityDailyCounts {
+                    mint_transactions: 2,
+                    transfer_transactions: 1,
+                    burn_transactions: 0,
+                }
+            )]
+        );
+        assert_eq!(
+            deltas.iter().collect::<Vec<_>>(),
+            vec![(
+                &(keys::pad_id_32(&class_id), 20261013),
+                &CollectionActivityDailyCounts {
+                    mint_transactions: 0,
+                    transfer_transactions: 0,
+                    burn_transactions: 2,
+                }
+            )]
+        );
+    }
+
+    /// A day key is the padded collection id then the day, big-endian, so a
+    /// collection's days list ascending under its prefix; the UTC+8 day of a
+    /// chain time is the one `stats_day` gives.
+    #[test]
+    fn test_collection_activity_daily_keys_sort_by_collection_then_day() {
+        let a = keys::encode_collection_activity_daily_key(&[0x01; 20], 20261231);
+        let b = keys::encode_collection_activity_daily_key(&[0x01; 20], 20270101);
+        let c = keys::encode_collection_activity_daily_key(&[0x02; 32], 20200101);
+        assert!(a < b && b < c);
+        assert_eq!(
+            keys::decode_collection_activity_daily_key(&b).unwrap(),
+            (keys::pad_id_32(&[0x01; 20]), 20270101)
+        );
+        assert!(keys::decode_collection_activity_daily_key(&b[..35]).is_err());
+        // 2026-10-18T16:00:00Z is 2026-10-19 00:00 at UTC+8.
+        assert_eq!(
+            keys::stats_day_yyyymmdd(1_792_339_199_999).unwrap(),
+            20261018
+        );
+        assert_eq!(
+            keys::stats_day_yyyymmdd(1_792_339_200_000).unwrap(),
+            20261019
+        );
+    }
+
+    /// The live writer's staging adds a batch's contributions to the
+    /// committed day rows (one read per touched day) and the reader lists a
+    /// collection's days ascending, other collections excluded.
+    #[test]
+    fn test_stage_collection_activity_daily_adds_to_committed_rows() {
+        use crate::types::{AssetAction::*, CollectionActivityDailyCounts};
+        let (_dir, store) = test_domain_store();
+        let collection = [0x5au8; 32];
+        for batch_rows in [
+            vec![(20261006, vec![Mint]), (20261013, vec![Transfer])],
+            vec![(20261006, vec![Mint, Burn])],
+        ] {
+            let mut deltas = CollectionActivityDailyDeltas::new();
+            for (day, actions) in &batch_rows {
+                deltas.add_row(&collection, *day, actions).unwrap();
+            }
+            deltas.add_row(&[0x5b; 32], 20261006, &[Mint]).unwrap();
+            let mut batch = StoreBatch::new(&store);
+            store
+                .stage_collection_activity_daily(&deltas, &mut batch)
+                .unwrap();
+            batch.commit().unwrap();
+        }
+        let counts = |mint, transfer, burn| CollectionActivityDailyCounts {
+            mint_transactions: mint,
+            transfer_transactions: transfer,
+            burn_transactions: burn,
+        };
+        assert_eq!(
+            store.list_collection_activity_daily(&collection).unwrap(),
+            vec![(20261006, counts(2, 0, 1)), (20261013, counts(0, 1, 0))]
+        );
+        assert_eq!(
+            store.list_collection_activity_daily(&[0x5b; 32]).unwrap(),
+            vec![(20261006, counts(2, 0, 0))]
+        );
     }
 
     #[test]

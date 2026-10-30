@@ -435,6 +435,10 @@ pub const CF_TX_ACTIONS: &str = "activities";
 /// Global activity bucket index: bucket(1) + block_num_desc(8) + tx_idx_desc(4)
 /// -> empty. One row per non-cellbase `CF_TX_ACTIONS` row.
 pub const CF_TX_ACTIONS_BY_BUCKET: &str = "tx_actions_by_bucket";
+/// Collection activity per UTC+8 day: collection_id(32, padded) + day
+/// YYYYMMDD (u32 BE) -> `CollectionActivityDailyCounts`. One row per
+/// (collection, day) with a mint, transfer or burn row.
+pub const CF_COLLECTION_ACTIVITY_DAILY: &str = "collection_activity_daily";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_MNFT_COLLECTION_AGG: &str = "mnft_collection_agg";
 pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities";
@@ -487,6 +491,7 @@ const CF_WRITE_POLICY_APPEND_ONLY: &[&str] = &[
 ];
 
 const CF_WRITE_POLICY_SEALED_AGGREGATE: &[&str] = &[
+    CF_COLLECTION_ACTIVITY_DAILY,
     CF_STATS_CHAIN,
     CF_STATS_DAO,
     CF_STATS_HODL,
@@ -654,6 +659,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_DOTCELL_NAME_BY_OWNER,
     CF_DOTCELL_RING,
     CF_TX_ACTIONS_BY_BUCKET,
+    CF_COLLECTION_ACTIVITY_DAILY,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -723,6 +729,7 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_DOTCELL_NAME_BY_OWNER,
     CF_DOTCELL_RING,
     CF_TX_ACTIONS_BY_BUCKET,
+    CF_COLLECTION_ACTIVITY_DAILY,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1766,6 +1773,9 @@ impl CkbadgerStore {
     }
     pub fn cf_tx_actions_by_bucket(&self) -> &ColumnFamily {
         self.cf(CF_TX_ACTIONS_BY_BUCKET)
+    }
+    pub fn cf_collection_activity_daily(&self) -> &ColumnFamily {
+        self.cf(CF_COLLECTION_ACTIVITY_DAILY)
     }
 
     // ---- Raw DB operations ----
@@ -3287,7 +3297,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 64);
+        assert_eq!(DOMAIN_CFS.len(), 65);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 

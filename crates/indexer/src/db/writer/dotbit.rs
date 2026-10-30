@@ -287,6 +287,9 @@ pub(crate) fn build_dotbit_tx_activity_entry<S: BuildHasher>(
     })
 }
 
+/// Write the `.bit` collection activity row of one transaction (if it has
+/// one) and fold it into its `collection_activity_daily` day `day`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_dotbit_tx_activity(
     das_action: Option<&str>,
     created_account_ids: &HashSet<Vec<u8>>,
@@ -296,8 +299,10 @@ pub(crate) fn resolve_dotbit_tx_activity(
     block_number: i64,
     tx_idx: i32,
     timestamp_ms: i64,
+    day: u32,
     batch: &mut StoreBatch,
-) -> bool {
+    daily: &mut ckbadger_store::CollectionActivityDailyDeltas,
+) -> anyhow::Result<bool> {
     let Some(entry) = build_dotbit_tx_activity_entry(
         das_action,
         created_account_ids,
@@ -306,7 +311,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
         block_hash,
         timestamp_ms,
     ) else {
-        return false;
+        return Ok(false);
     };
 
     batch.put_identity_collection_activity(
@@ -315,7 +320,8 @@ pub(crate) fn resolve_dotbit_tx_activity(
         tx_idx,
         &entry,
     );
-    true
+    daily.add_row(&DOTBIT_SENTINEL_COLLECTION, day, &entry.actions)?;
+    Ok(true)
 }
 
 /// Generic fallback: same-account in both → Transfer, output-only → Mint, input-only → Burn.

@@ -336,31 +336,11 @@ async fn list_identity_collection_activities(
     .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let has_more = results.len() as i64 > limit;
-    let page: Vec<CollectionActivityResponse> = results
-        .into_iter()
-        .take(limit as usize)
-        .map(|(block_number, tx_index, entry)| {
-            let actions: Vec<String> = entry
-                .actions
-                .iter()
-                .map(|a| match a {
-                    ckbadger_store::AssetAction::Mint => "mint".to_string(),
-                    ckbadger_store::AssetAction::Transfer => "transfer".to_string(),
-                    ckbadger_store::AssetAction::Burn => "burn".to_string(),
-                    ckbadger_store::AssetAction::Recycle => "recycle".to_string(),
-                    ckbadger_store::AssetAction::Renew => "renew".to_string(),
-                    ckbadger_store::AssetAction::Update => "update".to_string(),
-                })
-                .collect();
-            CollectionActivityResponse {
-                tx_hash: format!("0x{}", hex::encode(&entry.tx_hash)),
-                block_number,
-                tx_index,
-                timestamp: entry.timestamp_ms.to_string(),
-                actions,
-            }
-        })
-        .collect();
+    let page = super::assets::collection_activity_responses(
+        state.store.as_ref(),
+        results.into_iter().take(limit as usize).collect(),
+    )
+    .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let next_cursor = if has_more {
         page.last()
