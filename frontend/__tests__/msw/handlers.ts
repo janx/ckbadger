@@ -486,6 +486,7 @@ export const handlers = [
       ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xws',
       isLive: true,
       createdAtBlock: 100000,
+      typeScriptHash: '0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998',
       ownedCapacity: '14500000000',
       ownedKnowledge: '14300000000',
       mediaProfile: {

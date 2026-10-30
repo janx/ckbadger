@@ -1985,6 +1985,8 @@ interface SporeNft {
 
 /** `/spore/objects/{id}`: a spore plus the exact capacity its cell owns (lists carry neither). */
 interface SporeDetail extends SporeNft {
+  /** Hash of the spore cell's type script (0x + 64 hex): the key DOB marketplaces use. */
+  typeScriptHash: string;
   /** Shannons the spore's cell holds; `"0"` once melted. */
   ownedCapacity: string;
   /** The occupied part of `ownedCapacity` (common knowledge), in shannons. */
