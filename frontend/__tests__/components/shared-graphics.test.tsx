@@ -236,6 +236,61 @@ describe('TenureBar (ID-C7)', () => {
   });
 });
 
+// F2 identities (round 2, visual pass at 390): the bar is drawn in its own measured width so its
+// 11 px labels stay 11 px; edge labels stay inside; an expired term shows its lapsed time.
+describe('TenureBar at any width (ID-C7, visual pass)', () => {
+  const day = 86_400_000;
+  const reg = Date.parse('2024-02-20T00:00:00Z');
+  const three = [
+    { label: 'paid at registration', start: reg, end: reg + 365 * day },
+    { label: 'renewed 2025-02-04', start: reg + 365 * day, end: reg + 730 * day },
+    { label: 'renewed 2025-02-18', start: reg + 730 * day, end: reg + 1095 * day },
+  ];
+  afterEach(() => vi.unstubAllGlobals());
+  it('uses its measured width as the drawing width and shortens labels that do not fit', () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(private cb: (e: { contentRect: { width: number } }[]) => void) {}
+        observe() {
+          this.cb([{ contentRect: { width: 358 } }]);
+        }
+        disconnect() {}
+      }
+    );
+    const { container } = render(
+      <TenureBar name="valar.bit" periods={three} now={reg + 979 * day} />
+    );
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 358 92');
+    expect(screen.queryByText('renewed 2025-02-04')).not.toBeInTheDocument();
+    expect(screen.getAllByText('renewed').length).toBe(2);
+    expect(screen.getByText('now · 116 days left')).toBeInTheDocument();
+  });
+  it('keeps the now label inside at the right edge and draws the lapsed time dashed', () => {
+    const { container } = render(
+      <TenureBar
+        name="888899.bit"
+        periods={[{ label: 'from minting', start: reg, end: reg + 365 * day }]}
+        now={reg + 549 * day}
+      />
+    );
+    expect(screen.getByText('expired 184 days ago')).toHaveAttribute('text-anchor', 'end');
+    const lapsed = container.querySelector('[data-lapsed]')!;
+    expect(lapsed).toHaveAttribute('stroke-dasharray', '3 3');
+    expect(screen.getByText('lapsed · not renewed')).toBeInTheDocument();
+  });
+  it('writes day counts with thousands separators, as the rail does', () => {
+    render(
+      <TenureBar
+        name="alice.bit"
+        periods={[{ label: 'paid at registration', start: reg, end: reg + 4000 * day }]}
+        now={reg + 100 * day}
+      />
+    );
+    expect(screen.getByText('now · 3,900 days left')).toBeInTheDocument();
+  });
+});
+
 describe('shared graphics demo (fixture page, no route)', () => {
   it.each([1440, 390])(
     'fits a %i px column: every graphic scales by viewBox or percentages',
