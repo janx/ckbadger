@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/te
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
 import {
   clusterDetailProducer,
   collectionGalleryFilteredProducer,
@@ -234,4 +235,38 @@ it('still shows an empty Newest list honestly', async () => {
   expect(
     await screen.findByText('No matching objects.', undefined, { timeout: 5000 })
   ).toBeInTheDocument();
+});
+
+// Visual pass on the live services (2026-10-30).
+it('marks every collection activity row as an object row, as the board does', async () => {
+  // An RGB++ row classifies as a protocol action (no class mark of its own); on a collection
+  // page it is still a row about this collection's objects (live: Nervape's RGB++ transfers).
+  const row = collectionActivityFeedProducer.data[0];
+  vi.spyOn(api, 'getCollectionActivityFeed').mockResolvedValue({
+    ...collectionActivityFeedProducer,
+    data: [
+      {
+        ...row,
+        protocolActions: [
+          { protocol: 'rgbpp', protocolName: 'RGB++', action: 'transfer', metadata: {} },
+        ],
+      },
+    ],
+  });
+  await page();
+  await screen.findAllByRole('article', undefined, { timeout: 5000 });
+  const rows = [...document.querySelectorAll('[data-feed-row]')];
+  expect(rows.length).toBeGreaterThan(0);
+  for (const row of rows)
+    expect(row.querySelector('[data-role="headline"] [data-class="objects"]')).not.toBeNull();
+});
+
+it('explains occupied and free once in History, and keeps Newest rows compact at 390', async () => {
+  await page();
+  const history = screen.getByRole('region', { name: 'History' });
+  expect(
+    history.textContent!.match(/beyond that byte cost|parked in the same cells/g)
+  ).toHaveLength(1);
+  const row = screen.getAllByRole('row')[1];
+  expect(row).toHaveClass('grid-cols-[minmax(0,1fr)_auto]');
 });

@@ -54,7 +54,9 @@ describe('Asset history', () => {
     const readout = screen.getByLabelText('History readout');
     expect(readout).toHaveTextContent('200.00000001');
     expect(readout).toHaveTextContent('0.00000026');
-    expect(readout).toHaveTextContent('No completed weekly total for this day');
+    // F2 objects (OB-C6, visual pass): before any hover, today's week is incomplete, so the
+    // reading names the latest complete week instead of "No completed weekly total".
+    expect(readout).toHaveTextContent('Latest complete week, from 2024-01-01: 3 transfers');
     expect(screen.getByText(/CKB held peaked/)).toHaveTextContent('on 2024-01-08');
     expect(screen.getByText(/Complete UTC\+8 days through 2024-01-08/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: '1W' }));
