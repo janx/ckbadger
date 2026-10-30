@@ -886,6 +886,10 @@ interface Cell {
   // references from the script registry (null = unregistered); absent on the single-cell detail.
   lockScriptName?: string | null;
   typeScriptName?: string | null;
+  // group scripts (F2-5), R2b-b: single-cell detail only.
+  createdEpoch?: { number: number; index: number; length: number };
+  /** CKB data hash of the cell data (32 zero bytes for empty data); null without the cell bytes. */
+  dataHash?: string | null;
 }
 
 interface LiveCellSummary {
@@ -2419,6 +2423,9 @@ interface StackedAreaChartResponse {
   data: StackedAreaDataPoint[];
   series: StackedAreaSeries[];
   title: string;
+  // group scripts (F2-4), R2b-b: script capacity histories only — the first day with the
+  // greatest used + unused (shannons); null for an empty series.
+  totalPeak?: { date: string; value: string } | null;
 }
 
 export interface AssetCapacityHistory extends StackedAreaChartResponse {
@@ -2479,6 +2486,15 @@ interface KnownScript {
   codeClasses?: ScriptCodeClassTotalApi[];
   // group scripts (F2-4): the family's registered code versions (list rows only).
   versionsCount?: number;
+  // group scripts (F2-4), R2b-b: the family's earliest code cell; null when none is indexed.
+  firstDeployedAt?: ScriptFirstDeployedApi | null;
+}
+
+// group scripts (F2-4), R2b-b
+export interface ScriptFirstDeployedApi {
+  blockNumber: number;
+  timestampMs: number;
+  versionHash: string;
 }
 
 interface DeploymentUsage {
@@ -2516,6 +2532,8 @@ interface ScriptFamilyListItemApi {
   ownedKnowledgeSum: string;
   versionsCount: number;
   codeClasses?: ScriptCodeClassTotalApi[];
+  // group scripts (F2-4), R2b-b
+  firstDeployedAt: ScriptFirstDeployedApi | null;
 }
 
 export interface ScriptCodeClassTotalApi {
@@ -2531,6 +2549,8 @@ export interface ScriptCodeClassTotalApi {
   lockCellsCount: number;
   lockOwnedCapacitySum: string;
   referenceCount: number;
+  // group scripts (F2-4), R2b-b: families with a reference of this class (classSummary only).
+  familyCount?: number;
 }
 
 export interface ScriptsListApi extends CursorPaginatedResponse<KnownScript> {
@@ -2714,6 +2734,7 @@ function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): Kno
     codeClasses: script.codeClasses,
     // group scripts (F2-4)
     versionsCount: script.versionsCount,
+    firstDeployedAt: script.firstDeployedAt,
   };
 }
 

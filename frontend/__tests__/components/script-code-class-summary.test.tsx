@@ -17,18 +17,21 @@ const classes: ScriptCodeClassTotalApi[] = [
     lockCellsCount: 161049,
     lockOwnedCapacitySum: '172700000000000000',
     referenceCount: 18,
+    familyCount: 18,
   },
   {
     class: 'fixed',
     lockCellsCount: 9000000,
     lockOwnedCapacitySum: '4803000000000000000',
     referenceCount: 40,
+    familyCount: 36,
   },
   {
     class: 'one_key',
     lockCellsCount: 92,
     lockOwnedCapacitySum: '3730000000000000',
     referenceCount: 7,
+    familyCount: 7,
   },
 ];
 
@@ -68,7 +71,7 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
     expect(within(legend).getAllByRole('listitem')).toHaveLength(3);
     expect(within(legend).getByText(/a multisig can replace/i)).toBeInTheDocument();
     expect(legend.textContent).toContain('1,727,000,000');
-    expect(legend.textContent).toContain('18 references');
+    expect(legend.textContent).toContain('18 scripts');
   });
 });
 
@@ -92,3 +95,57 @@ function hexToRgb(hex: string): string {
   const h = hex.replace('#', '');
   return `rgb(${parseInt(h.slice(0, 2), 16)}, ${parseInt(h.slice(2, 4), 16)}, ${parseInt(h.slice(4, 6), 16)})`;
 }
+
+describe('ScriptCodeClassSummary · visual pass (R2b-b familyCount, D6, 390 px)', () => {
+  it('counts scripts per class from familyCount, in the sentence and the legend (SC-L3)', () => {
+    render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
+    const sentence = screen.getByTestId('code-class-sentence').textContent!;
+    expect(sentence).toContain('3.47% runs code a multisig can replace (18 scripts)');
+    expect(sentence).toContain('0.075% runs code a single key can replace (7 scripts)');
+    const legend = screen.getByRole('list', { name: 'Code classes' });
+    expect(legend).toHaveTextContent('· 18 scripts');
+    expect(legend).toHaveTextContent('· 36 scripts');
+    expect(legend.textContent).not.toContain('references');
+  });
+
+  it('fails loudly when a class summary row has no familyCount', () => {
+    expect(() =>
+      render(
+        <ScriptCodeClassSummary
+          classes={[
+            { class: 'fixed', lockCellsCount: 1, lockOwnedCapacitySum: '1', referenceCount: 1 },
+          ]}
+          lockScriptCount={1}
+        />
+      )
+    ).toThrow(/familyCount/);
+  });
+
+  it('says why an all-zero-args secp256k1 lock counts as unspendable (D6, SC-L9)', () => {
+    render(
+      <ScriptCodeClassSummary
+        classes={[
+          {
+            class: 'unspendable',
+            lockCellsCount: 2,
+            lockOwnedCapacitySum: '200',
+            referenceCount: 5,
+            familyCount: 4,
+          },
+        ]}
+        lockScriptCount={4}
+      />
+    );
+    expect(screen.getByTestId('unspendable-note')).toHaveTextContent(
+      'secp256k1 lock over 20 zero bytes'
+    );
+  });
+
+  it('lets legend items wrap so a long exact amount never widens a phone screen', () => {
+    render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
+    for (const item of within(screen.getByRole('list', { name: 'Code classes' })).getAllByRole(
+      'listitem'
+    ))
+      expect(item).toHaveClass('flex-wrap');
+  });
+});
