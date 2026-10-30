@@ -837,6 +837,56 @@ export async function renderMarkdownPage(
       ]);
       return { status: 200, body };
     }
+    case 'uncle_detail': {
+      if (!/^(0|[1-9]\d*)$/.test(page.index))
+        return {
+          status: 404,
+          body: buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+            '# Unknown Uncle',
+            '',
+            `\`${page.index}\` is not a position in a block's uncle list.`,
+          ]),
+        };
+      const uncle = await api.getBlockUncle(page.id, Number(page.index));
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# Uncle ${uncle.number}`,
+        '',
+        `Uncle at height ${uncle.number}, included by block ${uncle.includedBy.number} as its uncle ${uncle.includedBy.index}; block ${uncle.number} on the canonical chain is ${uncle.canonicalAtHeight.hash}.`,
+        '',
+        '## Header',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['number', uncle.number],
+            ['hash', uncle.hash],
+            ['parentHash', uncle.parentHash],
+            ['timestamp', uncle.timestamp],
+            ['epoch', uncle.epoch.display],
+            ['compactTarget', uncle.compactTarget],
+            ['difficulty', uncle.difficulty],
+            ['nonce', uncle.nonce],
+            ['version', uncle.version],
+            ['transactionsRoot', uncle.transactionsRoot],
+            ['proposalsHash', uncle.proposalsHash],
+            ['extraHash', uncle.extraHash],
+            ['dao', uncle.dao.raw],
+            ['includedBy', `${uncle.includedBy.number} (${uncle.includedBy.hash})`],
+            ['canonicalAtHeight', uncle.canonicalAtHeight.hash],
+          ]
+        ),
+        '',
+        '## Proposals',
+        '',
+        uncle.proposalIds.length
+          ? markdownTable(
+              ['proposalId'],
+              uncle.proposalIds.map((id) => [id])
+            )
+          : 'This uncle proposed nothing.',
+      ]);
+      return { status: 200, body };
+    }
     case 'block_detail': {
       const [block, feeStats, proposals] = await Promise.all([
         api.getBlock(page.id),

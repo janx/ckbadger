@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseMarkdownSourcePath } from '@/lib/ai/markdown-route';
 import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-renderer';
 import { api } from '@/lib/api';
+import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -28,6 +29,7 @@ vi.mock('@/lib/api', () => ({
     getNetworkSummary: vi.fn(),
     getFiberChannels: vi.fn(),
     getFiberChannel: vi.fn(),
+    getBlockUncle: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
@@ -1155,5 +1157,25 @@ describe('renderMarkdownPage', () => {
     expect(result.body).toContain('| blockNumber | not indexed |');
     expect(result.body).toContain('| confirmations | not indexed |');
     expect(result.body).not.toContain('undefined');
+  });
+
+  it('renders an uncle through its including block (BA-10)', async () => {
+    vi.mocked(api.getBlockUncle).mockResolvedValue(blockUncle);
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/blocks/8775638/uncles/0'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(api.getBlockUncle).toHaveBeenCalledWith('8775638', 0);
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Uncle 8775637');
+    expect(result.body).toContain('included by block 8775638 as its uncle 0');
+    expect(result.body).toContain(`| canonicalAtHeight | ${blockUncle.canonicalAtHeight.hash} |`);
+    const bad = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/blocks/8775638/uncles/x'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(bad.status).toBe(404);
   });
 });

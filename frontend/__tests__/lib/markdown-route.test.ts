@@ -38,6 +38,7 @@ function sampleDynamicPath(routePath: string): string {
     .replace('[typeHash]', `0x${'e'.repeat(64)}`)
     .replace('[hash]', `0x${'f'.repeat(64)}`)
     .replace('[name]', 'secp256k1_blake160_sighash_all')
+    .replace('[index]', '0')
     .replace('[id]', routePath.startsWith('/forks/') ? '1' : '123');
 }
 
@@ -58,6 +59,11 @@ describe('parseMarkdownSourcePath', () => {
     expect(parseMarkdownSourcePath('/activities').kind).toBe('activities_list');
     expect(parseMarkdownSourcePath('/blocks').kind).toBe('blocks_list');
     expect(parseMarkdownSourcePath('/blocks/123').kind).toBe('block_detail');
+    expect(parseMarkdownSourcePath('/blocks/123/uncles/0')).toMatchObject({
+      kind: 'uncle_detail',
+      id: '123',
+      index: '0',
+    });
     expect(parseMarkdownSourcePath('/tx/0x123').kind).toBe('tx_detail');
     expect(parseMarkdownSourcePath('/charts/hash-rate').kind).toBe('chart_detail');
     expect(parseMarkdownSourcePath('/identities/dotbit/0x123').kind).toBe('dotbit_item_detail');

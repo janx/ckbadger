@@ -11,6 +11,7 @@ export const PAGE_ROUTES = [
   { pattern: '/inventory/identities', kind: 'inventory_identities', rawProfiles: [] },
   { pattern: '/blocks', kind: 'blocks_list', rawProfiles: [] },
   { pattern: '/blocks/{id}', kind: 'block_detail', rawProfiles: ['default'] },
+  { pattern: '/blocks/{id}/uncles/{index}', kind: 'uncle_detail', rawProfiles: [] },
   { pattern: '/cell/{outpoint}', kind: 'cell_detail', rawProfiles: ['default'] },
   { pattern: '/charts', kind: 'charts_overview', rawProfiles: [] },
   { pattern: '/charts/{slug}', kind: 'chart_detail', rawProfiles: [] },

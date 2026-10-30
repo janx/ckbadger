@@ -13,6 +13,7 @@ export type ParsedMarkdownPage =
   | { kind: 'inventory_identities'; pathname: '/inventory/identities' }
   | { kind: 'blocks_list'; pathname: '/blocks' }
   | { kind: 'block_detail'; pathname: string; id: string }
+  | { kind: 'uncle_detail'; pathname: string; id: string; index: string }
   | { kind: 'cell_detail'; pathname: string; outpoint: string }
   | { kind: 'charts_overview'; pathname: '/charts' }
   | { kind: 'chart_detail'; pathname: string; slug: string }
