@@ -19,3 +19,20 @@ describe('fiber-format', () => {
     });
   });
 });
+
+describe('epochDelayWords', () => {
+  it('says a since delay in words: relative epochs with any fraction, or an absolute epoch', async () => {
+    const { epochDelayWords } = await import('@/lib/fiber-format');
+    expect(epochDelayWords({ relative: true, epochs: 6, index: 0, length: 1 })).toBe('6 epochs');
+    expect(epochDelayWords({ relative: true, epochs: 1, index: 0, length: 1 })).toBe('1 epoch');
+    expect(epochDelayWords({ relative: true, epochs: 6, index: 1, length: 2 })).toBe(
+      '6 1/2 epochs'
+    );
+    expect(epochDelayWords({ relative: false, epochs: 180, index: 0, length: 1 })).toBe(
+      'until epoch 180'
+    );
+    expect(() => epochDelayWords({ relative: true, epochs: 1, index: 2, length: 2 })).toThrow(
+      'invalid epoch delay'
+    );
+  });
+});
