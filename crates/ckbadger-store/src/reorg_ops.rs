@@ -5348,7 +5348,12 @@ impl CkbadgerStore {
         // row names.
         let mnft_collection_by_padded_id: HashMap<Vec<u8>, Vec<u8>> = object_collection_aggs
             .keys()
-            .map(|collection_id| (keys::pad_id_32(collection_id).to_vec(), collection_id.clone()))
+            .map(|collection_id| {
+                (
+                    keys::pad_id_32(collection_id).to_vec(),
+                    collection_id.clone(),
+                )
+            })
             .collect();
         let mut unclaimed_activity_totals: Vec<(&Vec<u8>, i64)> = Vec::new();
         for (activity_collection_id, rows) in &object_activity_totals {

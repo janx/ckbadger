@@ -4130,7 +4130,9 @@ fn semantic_tag_to_bit(tag: facts::CellSemanticTag) -> u16 {
 /// one). The live path reads the same decision
 /// back from `CF_DOTBIT_OUTPOINT` and the unindexed-outpoint marker this
 /// engine writes for those cells.
-pub(in crate::sync) fn bulk_input_dotbit_account_id(input: &facts::ResolvedInputFacts) -> Result<&[u8]> {
+pub(in crate::sync) fn bulk_input_dotbit_account_id(
+    input: &facts::ResolvedInputFacts,
+) -> Result<&[u8]> {
     match (input.semantic_tag, input.protocol_facts.as_ref()) {
         (facts::CellSemanticTag::Dotbit, Some(facts::CellProtocolFacts::Dotbit(dotbit))) => {
             Ok(&dotbit.account_id)

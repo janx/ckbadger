@@ -1880,8 +1880,8 @@ mod tests {
     fn test_dotbit_unindexed_marker_is_undone_by_rollback_and_survivor_stays() {
         let (domain, append) = test_split_stores();
         let writer = BatchWriter::new(domain.clone(), append.clone());
-        let state =
-            writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         let survivor_tx = [0xE1u8; 32];
         let rolled_back_tx = [0xE2u8; 32];
 
@@ -1893,17 +1893,25 @@ mod tests {
             .insert_dotbit_unindexed_outpoint(&rolled_back_tx, 1, 200, &mut batch, &state)
             .unwrap();
         batch.commit().unwrap();
-        assert!(domain.is_dotbit_unindexed_outpoint(&survivor_tx, 0).unwrap());
-        assert!(domain.is_dotbit_unindexed_outpoint(&rolled_back_tx, 1).unwrap());
+        assert!(domain
+            .is_dotbit_unindexed_outpoint(&survivor_tx, 0)
+            .unwrap());
+        assert!(domain
+            .is_dotbit_unindexed_outpoint(&rolled_back_tx, 1)
+            .unwrap());
 
         domain.rollback_via_undo_log(append.as_ref(), 150).unwrap();
 
         assert!(
-            domain.is_dotbit_unindexed_outpoint(&survivor_tx, 0).unwrap(),
+            domain
+                .is_dotbit_unindexed_outpoint(&survivor_tx, 0)
+                .unwrap(),
             "a marker at or below the fork point survives"
         );
         assert!(
-            !domain.is_dotbit_unindexed_outpoint(&rolled_back_tx, 1).unwrap(),
+            !domain
+                .is_dotbit_unindexed_outpoint(&rolled_back_tx, 1)
+                .unwrap(),
             "a rolled-back marker is removed by its undo pre-image"
         );
     }

@@ -5378,7 +5378,10 @@ mod tests {
         let live = dotbit_item_deltas(&live_dotbit_parity_actions(&input, &output).unwrap());
         let bulk = dotbit_item_deltas(&bulk_dotbit_parity_actions(&input, &output).unwrap());
 
-        assert_eq!(bulk, live, "bulk and live .bit item deltas must be identical");
+        assert_eq!(
+            bulk, live,
+            "bulk and live .bit item deltas must be identical"
+        );
         assert!(
             live.iter().all(|(_, deltas)| deltas.is_empty()),
             "an in-place update moves no .bit identity: {live:?}"
@@ -5430,7 +5433,9 @@ mod tests {
     #[test]
     fn nameless_dotbit_account_is_an_identity_on_both_sides_in_bulk_and_live() {
         use crate::parser::dotbit::fixtures::MAINNET_ACCOUNT_CELL_DATA;
-        use crate::sync::bulk_build::facts::{parse_protocol_facts, CellProtocolFacts, CellSemanticTag};
+        use crate::sync::bulk_build::facts::{
+            parse_protocol_facts, CellProtocolFacts, CellSemanticTag,
+        };
         let data_hex = MAINNET_ACCOUNT_CELL_DATA;
         let type_script = crate::rpc::Script {
             code_hash: crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
@@ -5462,7 +5467,12 @@ mod tests {
         let live = crate::parser::DotbitParser::parse_account_outputs(&tx).unwrap();
         assert!(live.unindexed_output_indices.is_empty(), "{live:?}");
         assert_eq!(live.accounts.len(), 1);
-        let live_id: [u8; 20] = live.accounts[0].account.account_id.clone().try_into().unwrap();
+        let live_id: [u8; 20] = live.accounts[0]
+            .account
+            .account_id
+            .clone()
+            .try_into()
+            .unwrap();
 
         // Bulk: the cell's protocol facts carry the same id.
         let parsed = crate::parser::cell::ParsedCell {
@@ -5511,7 +5521,11 @@ mod tests {
         );
         assert_eq!(bulk_deltas, live_deltas);
         let moved: Vec<_> = live_deltas.iter().filter(|(_, d)| !d.is_empty()).collect();
-        assert_eq!(moved.len(), 2, "sender −1 and recipient +1: {live_deltas:?}");
+        assert_eq!(
+            moved.len(),
+            2,
+            "sender −1 and recipient +1: {live_deltas:?}"
+        );
     }
 
     /// A consumed AccountCell with neither its indexed id nor an unindexed
@@ -5559,10 +5573,16 @@ mod tests {
             Ok(_) => panic!("an unclassified consumed AccountCell must fail fast"),
             Err(err) => err.to_string(),
         };
-        assert!(err.contains("neither an indexed account id nor an unindexed-outpoint marker"), "{err}");
+        assert!(
+            err.contains("neither an indexed account id nor an unindexed-outpoint marker"),
+            "{err}"
+        );
         assert!(err.contains("block=77"), "{err}");
         assert!(
-            err.contains(&format!("prev_outpoint=0x{}:0", hex::encode(DOTBIT_PARITY_PREV_TX))),
+            err.contains(&format!(
+                "prev_outpoint=0x{}:0",
+                hex::encode(DOTBIT_PARITY_PREV_TX)
+            )),
             "{err}"
         );
     }

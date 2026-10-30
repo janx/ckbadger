@@ -804,14 +804,9 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
         batch.put_tx_actions(&tx_actions);
         batch.put_spore_outpoint(hash, 0, &id);
         match txs.get(position + 1) {
-            Some((consumer, _)) => batch.put_consumed_cell_with_consumer(
-                hash,
-                0,
-                &version,
-                100,
-                100,
-                Some(consumer),
-            ),
+            Some((consumer, _)) => {
+                batch.put_consumed_cell_with_consumer(hash, 0, &version, 100, 100, Some(consumer))
+            }
             None => batch.put_cell(hash, 0, &version, 100),
         }
     }
@@ -837,7 +832,12 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
     };
     let none = serde_json::json!([]);
     let expected = [
-        ([0x61; 32], "mint", serde_json::json!(["register"]), serde_json::Value::Null),
+        (
+            [0x61; 32],
+            "mint",
+            serde_json::json!(["register"]),
+            serde_json::Value::Null,
+        ),
         (
             [0x62; 32],
             "update",
@@ -875,7 +875,11 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
             serde_json::Value::Null,
         ),
     ];
-    assert_eq!(feed["data"].as_array().unwrap().len(), expected.len(), "{feed}");
+    assert_eq!(
+        feed["data"].as_array().unwrap().len(),
+        expected.len(),
+        "{feed}"
+    );
     for (hash, action, protocol_actions, ring_relink) in &expected {
         let context = context_of(&feed, *hash);
         assert_eq!(context["itemId"], item.as_str());
@@ -940,7 +944,10 @@ async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() 
     let app = create_router(test_config(store)).await;
     let (status, feed) = get_json(
         &app,
-        &format!("/assets/identities/did/items/0x{}/activity-feed", hex::encode(&id)),
+        &format!(
+            "/assets/identities/did/items/0x{}/activity-feed",
+            hex::encode(&id)
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{feed}");

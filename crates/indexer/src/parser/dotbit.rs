@@ -1110,7 +1110,8 @@ mod tests {
             hex::encode(create_account_cell_data(&[0x24; 20], None, None))
         ));
         tx.outputs.push(root);
-        tx.outputs_data.push(format!("0x{}", hex::encode([0xAA; 51])));
+        tx.outputs_data
+            .push(format!("0x{}", hex::encode([0xAA; 51])));
 
         let outputs = DotbitParser::parse_account_outputs(&tx).unwrap();
         assert_eq!(

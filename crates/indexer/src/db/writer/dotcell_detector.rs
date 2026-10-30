@@ -305,7 +305,9 @@ fn unattributed_ring_links(transitions: &[DotCellTransition]) -> Vec<[u8; 20]> {
         .collect();
     transitions
         .iter()
-        .filter(|t| matches!(t.kind, DotCellTransitionKind::RingLink) && !attributed.contains(&t.id))
+        .filter(|t| {
+            matches!(t.kind, DotCellTransitionKind::RingLink) && !attributed.contains(&t.id)
+        })
         .map(|t| t.id)
         .collect()
 }
@@ -1635,14 +1637,24 @@ mod tests {
         let fresh = DotCellParser::derive_id("fresh");
         let old_successor = [0x99u8; 20];
         let root = |next: [u8; 20], as_input: bool| {
-            synthetic_cell(name_data("", [0u8; 20], [0u8; 20], 0, next, [0u8; 32]), as_input)
+            synthetic_cell(
+                name_data("", [0u8; 20], [0u8; 20], 0, next, [0u8; 32]),
+                as_input,
+            )
         };
         let owned = synthetic_tx(
             vec![root(old_successor, true)],
             vec![
                 root(fresh, false),
                 synthetic_cell(
-                    name_data("fresh", owner, owner, 1_900_000_000, old_successor, [0u8; 32]),
+                    name_data(
+                        "fresh",
+                        owner,
+                        owner,
+                        1_900_000_000,
+                        old_successor,
+                        [0u8; 32],
+                    ),
                     false,
                 ),
             ],
@@ -1652,7 +1664,12 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].action, "register");
         assert!(
-            actions[0].metadata.to_value().unwrap().get("relinked").is_none(),
+            actions[0]
+                .metadata
+                .to_value()
+                .unwrap()
+                .get("relinked")
+                .is_none(),
             "the ring root is never a relinked neighbour: {:?}",
             actions[0].metadata
         );
@@ -1676,7 +1693,10 @@ mod tests {
             vec![p(successor, true)],
             vec![
                 p(a, false),
-                synthetic_cell(name_data("aaa", owner, owner, 1_900_000_000, b, [0u8; 32]), false),
+                synthetic_cell(
+                    name_data("aaa", owner, owner, 1_900_000_000, b, [0u8; 32]),
+                    false,
+                ),
                 synthetic_cell(
                     name_data("bbb", owner, owner, 1_900_000_000, successor, [0u8; 32]),
                     false,
@@ -1717,7 +1737,11 @@ mod tests {
         );
         let ts = classify_dotcell_transitions(&owned.view()).unwrap();
         let actions = protocol_actions_for(&ts);
-        assert_eq!(actions.len(), 1, "the relink itself emits nothing: {actions:?}");
+        assert_eq!(
+            actions.len(),
+            1,
+            "the relink itself emits nothing: {actions:?}"
+        );
         assert_eq!(actions[0].action, "recycle");
         assert_eq!(
             actions[0].metadata.to_value().unwrap()["relinked"],
@@ -1750,7 +1774,10 @@ mod tests {
         let ts = classify_dotcell_transitions(&owned.view()).expect("never stops the sync");
         let register = ts.iter().find(|t| t.id == target).unwrap();
         assert!(
-            matches!(register.kind, DotCellTransitionKind::Register { relinked: None, .. }),
+            matches!(
+                register.kind,
+                DotCellTransitionKind::Register { relinked: None, .. }
+            ),
             "{:?}",
             register.kind
         );
@@ -1760,7 +1787,10 @@ mod tests {
             .map(|t| t.id)
             .collect();
         unattributed.sort();
-        let mut expected = vec![DotCellParser::derive_id("one"), DotCellParser::derive_id("two")];
+        let mut expected = vec![
+            DotCellParser::derive_id("one"),
+            DotCellParser::derive_id("two"),
+        ];
         expected.sort();
         assert_eq!(unattributed, expected);
 
@@ -1768,7 +1798,12 @@ mod tests {
         let mut relinked: Vec<String> = actions
             .iter()
             .filter(|a| a.action == DOTCELL_RING_RELINK_ACTION)
-            .map(|a| a.metadata.to_value().unwrap()["id"].as_str().unwrap().to_string())
+            .map(|a| {
+                a.metadata.to_value().unwrap()["id"]
+                    .as_str()
+                    .unwrap()
+                    .to_string()
+            })
             .collect();
         relinked.sort();
         let mut expected_ids: Vec<String> = expected.iter().map(|id| hex0x(id)).collect();

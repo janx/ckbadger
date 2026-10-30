@@ -258,7 +258,10 @@ mod tests {
         assert!(store.is_dotbit_unindexed_outpoint(&tx, 0).unwrap());
         assert!(!store.is_dotbit_unindexed_outpoint(&tx, 1).unwrap());
         // The marker is not an account row: account lookups do not see it.
-        assert_eq!(store.get_dotbit_account_id_by_outpoint(&tx, 0).unwrap(), None);
+        assert_eq!(
+            store.get_dotbit_account_id_by_outpoint(&tx, 0).unwrap(),
+            None
+        );
         let outpoints: Vec<(&[u8], i16)> = vec![(&tx, 0)];
         assert!(store
             .get_dotbit_account_ids_by_outpoints_batch(&outpoints)
@@ -274,7 +277,10 @@ mod tests {
         store.put_cf(store.cf_stats_mnft(), &key, b"x").unwrap();
 
         let err = store.is_dotbit_unindexed_outpoint(&tx, 2).unwrap_err();
-        assert!(err.to_string().contains("unindexed .bit outpoint marker"), "{err}");
+        assert!(
+            err.to_string().contains("unindexed .bit outpoint marker"),
+            "{err}"
+        );
         assert!(err.to_string().contains(&hex::encode(tx)), "{err}");
     }
 

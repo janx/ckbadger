@@ -4675,8 +4675,10 @@ mod tests {
         assert_eq!(marker_rows.len(), 1, "one marker row for the root cell");
         assert!(marker_rows[0].value.is_empty());
         assert!(
-            !rows.iter().any(|row| row.key
-                == keys::encode_dotbit_account_outpoint_key(&[0x35; 32], 1).to_vec()),
+            !rows
+                .iter()
+                .any(|row| row.key
+                    == keys::encode_dotbit_account_outpoint_key(&[0x35; 32], 1).to_vec()),
             "a cell that names no account gets no account outpoint row"
         );
     }
