@@ -76,9 +76,18 @@ export function formatCompactRatio(numerator: bigint, denominator: bigint): stri
       return `${formatScaledInteger(numerator, denominator * unit, 2)}${suffix}`;
     }
   }
-  // Exact whole counts must not force a ".00" suffix (CH-02: "600.00 addresses").
-  const scaled = formatScaledInteger(numerator, denominator, 2);
-  return scaled.endsWith('.00') ? scaled.slice(0, -3) : scaled;
+  return formatScaledInteger(numerator, denominator, 2);
+}
+
+/**
+ * An exact (optionally signed) decimal string with its whole part grouped in thousands. Every
+ * fractional digit is kept: this never rounds, so it is the path for values shown exactly.
+ */
+export function formatExactDecimal(value: string, context: string): string {
+  const match = /^([+-])?(0|[1-9]\d*)(?:\.(\d+))?$/.exec(value);
+  if (!match) throw new Error(`${context}: invalid decimal ${JSON.stringify(value)}`);
+  const [, sign = '', whole, fraction] = match;
+  return `${sign}${BigInt(whole).toLocaleString('en-US')}${fraction ? `.${fraction}` : ''}`;
 }
 
 /** Share of exact decimal values. Zero total has no defined percentage. */

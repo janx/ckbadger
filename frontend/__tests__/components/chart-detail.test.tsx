@@ -63,6 +63,19 @@ describe('shared chart detail', () => {
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, log' })).toBeInTheDocument();
   });
 
+  it('prints the latest value and last change exactly, thousands grouped (CH-02)', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue({
+      ...response,
+      data: [
+        { date: '2024-01-01', value: '1000000000000000' },
+        { date: '2024-02-10', value: '1234567890123456789' },
+      ],
+    });
+    render(<ChartDetail slug="hash-rate" />);
+    expect(await screen.findByText('2024-02-10 · 1,234.567890123456789 PH/s')).toBeInTheDocument();
+    expect(screen.getByText('+1,233.567890123456789 PH/s')).toBeInTheDocument();
+  });
+
   it('shows transport error with retry and distinguishes empty indexed data', async () => {
     vi.mocked(api.getHashRateChart)
       .mockRejectedValueOnce(new Error('upstream unavailable'))

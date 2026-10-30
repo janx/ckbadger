@@ -12,7 +12,12 @@ import {
   chartApiPath,
   type ChartDefinition,
 } from '@/components/charts/chart-catalogue';
-import { chartModel, formatChartReadout, type ChartModel } from '@/components/charts/chart-model';
+import {
+  chartModel,
+  formatChartExact,
+  formatChartHover,
+  type ChartModel,
+} from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -83,7 +88,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                 {row.identity && <span className="text-text-dim ml-2">({row.identity})</span>}
               </span>
               <span className="shrink-0 tabular-nums">
-                {formatChartReadout(row.value, model.unit)} {model.unit} · {row.share}
+                {formatChartExact(row.value, model.unit)} {model.unit} · {row.share}
               </span>
             </div>
             <div className="bg-base-elevated mt-1 h-1 rounded">
@@ -146,10 +151,15 @@ function DetailBody({
           ? [
               {
                 label: model.summaryLabel ?? 'Latest returned',
-                value: `${model.latest.label} · ${model.latest.display} ${model.unit}`,
+                value: `${model.latest.label} · ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`,
               },
               ...(model.delta
-                ? [{ label: 'Last change', value: `${model.delta} ${model.unit}` }]
+                ? [
+                    {
+                      label: 'Last change',
+                      value: `${formatChartExact(model.delta, model.unit)} ${model.unit}`,
+                    },
+                  ]
                 : []),
               ...(model.coverage ? [{ label: 'Coverage', value: model.coverage }] : []),
               ...(model.contextFacts ?? []),
@@ -206,7 +216,7 @@ function DetailBody({
             yScale={supportsLog && logScale ? 'log' : 'linear'}
             height={360}
             markers={markers}
-            formatValue={(value) => formatChartReadout(value, model.unit)}
+            formatValue={(value) => formatChartHover(value, model.unit)}
           />
         )}
       </DetailSection>
@@ -226,7 +236,7 @@ function DetailBody({
               unit={history.unit}
               kind="stacked"
               height={260}
-              formatValue={(value) => formatChartReadout(value, history.unit)}
+              formatValue={(value) => formatChartHover(value, history.unit)}
             />
           ) : (
             <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
@@ -247,7 +257,7 @@ function DetailBody({
             unit={model.secondary.unit}
             kind={definition.visual === 'bars' ? 'bars' : 'line'}
             height={220}
-            formatValue={(value) => formatChartReadout(value, model.secondary!.unit)}
+            formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
           />
         </DetailSection>
       )}
@@ -264,7 +274,7 @@ function DetailBody({
             unit={model.dailyFlow.unit}
             kind="line"
             height={220}
-            formatValue={(value) => formatChartReadout(value, model.dailyFlow!.unit)}
+            formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
           />
         </DetailSection>
       )}

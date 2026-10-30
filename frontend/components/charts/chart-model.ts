@@ -9,8 +9,16 @@ import {
   exactSignedDecimalRatio,
   exactUnsignedInteger,
   formatCompactRatio,
+  formatExactDecimal,
   formatScaledInteger,
 } from '@/lib/exact-integer';
+
+export interface RankedPreviewRow {
+  /** Short display label; `title` keeps the full identity. */
+  label: string;
+  title: string;
+  share: string;
+}
 
 export interface ChartModel {
   title: string;
@@ -24,6 +32,8 @@ export interface ChartModel {
   /** Exact, signed change between the final two returned points. */
   delta: string | null;
   rankedRows?: { label: string; value: string; share: string; href?: string; identity?: string }[];
+  /** Card preview of a ranking: the top five plus an exact "Others" for every remaining rank. */
+  rankedPreview?: { rows: RankedPreviewRow[]; summaryLabel: string | undefined };
   /** Exact signed day-over-day change in occupied CKB, when the source is knowledge size. */
   dailyFlow?: { points: ChartPoint[]; series: ChartSeries[]; unit: string; title: string };
   /** Exact daily histories from both distinct utilization scopes. */
@@ -83,16 +93,49 @@ function exactDelta(a: string, b: string, context: string): string {
   return `${negative ? '-' : '+'}${whole}${fraction ? `.${fraction}` : ''}`;
 }
 
-/** Compact chart card/detail readouts; strip trailing ".00" on exact whole counts (CH-02). */
+/** Units whose readouts are rates or durations: the design shows them at two decimals. */
+const RATE_UNITS = new Set(['%', 'PH/s', 'P', 'hours', 'seconds']);
+/** Units that count discrete things; an exact whole count is shown without decimals. */
+const COUNT_UNITS = new Set([
+  'activities',
+  'addresses',
+  'blocks',
+  'cells',
+  'depositors',
+  'epochs',
+  'holders',
+  'transactions',
+]);
+
+/**
+ * The rounded chart readout of a card headline, card "Last change" and the hover readout (CH-02):
+ * rates at two decimals, exact whole counts as integers, everything else compact at two decimals.
+ * A leading `+` (an exact delta) is kept. The exact value is `formatChartExact`.
+ */
 export function formatChartReadout(value: string, unit: string): string {
-  if (unit === '%' || unit === 'PH/s' || unit === 'P' || unit === 'hours' || unit === 'seconds') {
-    return value;
-  }
-  const [numerator, denominator] = exactSignedDecimalRatio(value, 'chart summary');
+  const plus = value.startsWith('+');
+  const [numerator, denominator] = exactSignedDecimalRatio(
+    plus ? value.slice(1) : value,
+    `chart ${unit} readout`
+  );
   const negative = numerator < BigInt(0);
   const abs = negative ? -numerator : numerator;
-  const compact = formatCompactRatio(abs, denominator);
-  return negative ? `-${compact}` : compact;
+  const sign = negative ? '-' : plus ? '+' : '';
+  if (RATE_UNITS.has(unit))
+    return `${sign}${formatExactDecimal(formatScaledInteger(abs, denominator, 2), `chart ${unit} readout`)}`;
+  if (COUNT_UNITS.has(unit) && abs % denominator === BigInt(0) && abs < denominator * BigInt(1000))
+    return `${sign}${abs / denominator}`;
+  return `${sign}${formatCompactRatio(abs, denominator)}`;
+}
+
+/** The exact chart value, every returned digit, thousands grouped (detail facts and rows). */
+export function formatChartExact(value: string, unit: string): string {
+  return formatExactDecimal(value, `chart ${unit} exact value`);
+}
+
+/** Detail-page hover readout: rates at the design's two decimals, every other value exact. */
+export function formatChartHover(value: string, unit: string): string {
+  return RATE_UNITS.has(unit) ? formatChartReadout(value, unit) : formatChartExact(value, unit);
 }
 
 function summary(value: string, unit: string): string {
@@ -139,9 +182,7 @@ function singleChart(
     }
     return { label: point.date, values };
   });
-  const currentIndex = timelineMarkers
-    ? payload.data.findIndex((point) => point.value2 === 'current')
-    : -1;
+  const currentIndex = timelineMarkers ? timelineCurrentIndex(definition.slug, payload.data) : null;
   const series: ChartSeries[] = [
     {
       key: 'primary',
@@ -204,15 +245,9 @@ function singleChart(
           : best;
       }, null)
     : null;
-  const todayPoint = currentIndex >= 0 ? points[currentIndex] : null;
+  // A model timeline is summarised at its "today" sample; any other series at its last point.
+  const todayPoint = currentIndex === null ? null : points[currentIndex];
   const summaryPoint = leadingBucket ?? todayPoint ?? last;
-  const deltaPrevious =
-    todayPoint && currentIndex > 0
-      ? points[currentIndex - 1]
-      : previous && !todayPoint
-        ? previous
-        : null;
-  const deltaCurrent = todayPoint ?? last;
   return {
     title: payload.title,
     points,
@@ -240,22 +275,47 @@ function singleChart(
         : undefined,
     latest: summaryPoint
       ? {
-          label: summaryPoint.label,
+          label: todayPoint ? `year ${summaryPoint.label}` : summaryPoint.label,
           raw: summaryPoint.values.primary,
           display: summary(summaryPoint.values.primary, definition.unit),
         }
       : null,
-    delta: bucketDistribution
-      ? null
-      : deltaCurrent && deltaPrevious
-        ? exactDelta(deltaPrevious.values.primary, deltaCurrent.values.primary, definition.slug)
-        : null,
-    summaryLabel: leadingBucket
-      ? 'Largest bucket'
-      : todayPoint
-        ? `Year ${todayPoint.label} (today)`
-        : undefined,
+    // Neighbouring samples of a model curve or of a bucket histogram are not a change over time.
+    delta:
+      bucketDistribution || todayPoint
+        ? null
+        : last && previous
+          ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
+          : null,
+    summaryLabel: leadingBucket ? 'Largest bucket' : todayPoint ? 'Today' : undefined,
   };
+}
+
+/**
+ * The nominal-APC timeline marks every sample past, current or future relative to the tip year.
+ * Exactly one `current` sample, after every past one and before every future one, is the contract;
+ * anything else fails here rather than summarising some other year (CH-03).
+ */
+function timelineCurrentIndex(
+  slug: string,
+  data: readonly { date: string; value2?: string | null }[]
+): number | null {
+  if (data.length === 0) return null;
+  let current: number | null = null;
+  for (const [index, point] of data.entries()) {
+    const marker = point.value2;
+    if (marker !== 'past' && marker !== 'current' && marker !== 'future')
+      throw new Error(
+        `${slug}: invalid timeline marker ${JSON.stringify(marker)} at ${point.date}`
+      );
+    if (marker === 'current') {
+      if (current !== null) throw new Error(`${slug}: second current sample at ${point.date}`);
+      current = index;
+    } else if ((marker === 'past') !== (current === null))
+      throw new Error(`${slug}: ${marker} sample at ${point.date} is out of timeline order`);
+  }
+  if (current === null) throw new Error(`${slug}: timeline has no current sample`);
+  return current;
 }
 
 function stackedChart(
@@ -440,6 +500,37 @@ function stackedChart(
   };
 }
 
+const PREVIEW_RANKS = 5;
+
+/**
+ * Top five ranked entries plus one "Others" row for the exact remainder of the total, so the card
+ * never drops ranks six and beyond (CH-01). The remainder is computed from exact amounts, never
+ * from rounded shares; a zero remainder (or zero total) has no "Others" row.
+ */
+function rankedPreviewRows(
+  ranked: readonly { label: string; shortLabel: string; amount: bigint; share: string }[],
+  total: bigint,
+  remainderShare: (remainder: bigint) => string,
+  context: string
+): RankedPreviewRow[] {
+  const top = ranked.slice(0, PREVIEW_RANKS);
+  const shown = top.reduce((sum, entry) => sum + entry.amount, BigInt(0));
+  const remainder = total - shown;
+  if (remainder < BigInt(0))
+    throw new Error(`${context}: top ${top.length} ranks exceed the returned total`);
+  return [
+    ...top.map((entry) => ({ label: entry.shortLabel, title: entry.label, share: entry.share })),
+    ...(remainder > BigInt(0)
+      ? [{ label: 'Others', title: 'Others', share: remainderShare(remainder) }]
+      : []),
+  ];
+}
+
+/** Long identities share long prefixes; keep the design's head…tail form (CH-04). */
+export function shortRankLabel(label: string): string {
+  return label.length > 20 ? `${label.slice(0, 10)}…${label.slice(-6)}` : label;
+}
+
 function shareRows(
   definition: ChartDefinition,
   payload: {
@@ -518,19 +609,21 @@ function shareRows(
   });
   if (!entries.length) throw new Error(`${definition.slug}: dated ranking has no series`);
   const total = entries.reduce((sum, entry) => sum + entry.shannons, BigInt(0));
-  const rankedRows = [...entries]
-    .sort((a, b) =>
-      a.shannons === b.shannons ? a.label.localeCompare(b.label) : a.shannons > b.shannons ? -1 : 1
-    )
-    .map((entry) => ({
-      label: entry.label,
-      value: entry.value,
-      share:
-        total === BigInt(0)
-          ? '—'
-          : `${formatScaledInteger(entry.shannons * BigInt(100), total, 2)}%`,
-    }));
-  const leader = rankedRows.find((row) => row.label !== 'Others') ?? rankedRows[0];
+  const share = (shannons: bigint) =>
+    total === BigInt(0) ? '—' : `${formatScaledInteger(shannons * BigInt(100), total, 2)}%`;
+  const sorted = [...entries].sort((a, b) =>
+    a.shannons === b.shannons ? a.label.localeCompare(b.label) : a.shannons > b.shannons ? -1 : 1
+  );
+  const othersKey = used.series.find((series) => series.key === 'others')?.label;
+  const named = sorted.filter((entry) => entry.label !== othersKey);
+  // The API's own bucket holds the ranks beyond its named list; say so, the card's "Others" differs.
+  const rankedRows = sorted.map((entry) => ({
+    label: entry.label === othersKey ? `Others beyond the top ${named.length}` : entry.label,
+    value: entry.value,
+    share: share(entry.shannons),
+  }));
+  const leader = named[0] ?? sorted[0];
+  const summaryLabel = `Largest ${definition.source === 'scripts' ? 'script' : 'asset'}: ${leader.label}`;
   return {
     title: definition.title,
     points: [],
@@ -540,9 +633,23 @@ function shareRows(
     latest: { label: last.date, raw: leader.value, display: summary(leader.value, 'CKB') },
     delta: null,
     rankedRows,
+    rankedPreview: {
+      rows: rankedPreviewRows(
+        named.map((entry) => ({
+          label: entry.label,
+          shortLabel: entry.label,
+          amount: entry.shannons,
+          share: share(entry.shannons),
+        })),
+        total,
+        share,
+        definition.slug
+      ),
+      summaryLabel,
+    },
     historicalShares: histories,
     coverage: `${payload.capacityShare.data.length} owned-capacity dates`,
-    summaryLabel: `Largest ${definition.source === 'scripts' ? 'script' : 'asset'}: ${leader.label}`,
+    summaryLabel,
   };
 }
 
@@ -564,20 +671,31 @@ function minerRows(
 ): ChartModel {
   if (!Number.isSafeInteger(payload.totalBlocks) || payload.totalBlocks < 0)
     throw new Error(`${definition.slug}: invalid totalBlocks`);
-  const rankedRows = payload.data.map((miner) => {
+  const miners = payload.data.map((miner) => {
     if (!Number.isSafeInteger(miner.blocksMined) || miner.blocksMined < 0)
       throw new Error(`${definition.slug}: invalid blocksMined for ${miner.minerLockHash}`);
     exactDecimalRatio(miner.percentage, `${definition.slug} percentage`);
+    const label = miner.minerName ?? miner.address ?? miner.minerLockHash;
     return {
-      label: miner.minerName ?? miner.address ?? miner.minerLockHash,
-      value: String(miner.blocksMined),
-      share: `${miner.percentage}%`,
-      href: miner.address
-        ? `/address/${miner.address}`
-        : `/address/${miner.minerLockHash.replace(/^0x/, '')}`,
-      identity: miner.address ? 'Address' : 'Lock hash',
+      row: {
+        label,
+        value: String(miner.blocksMined),
+        share: `${miner.percentage}%`,
+        href: miner.address
+          ? `/address/${miner.address}`
+          : `/address/${miner.minerLockHash.replace(/^0x/, '')}`,
+        identity: miner.address ? 'Address' : 'Lock hash',
+      },
+      shortLabel: miner.minerName ?? shortRankLabel(label),
+      blocks: BigInt(miner.blocksMined),
     };
   });
+  const rankedRows = miners.map((miner) => miner.row);
+  // The API floors each percentage at four decimals; the remainder follows the same rule.
+  const floorPercent4 = (blocks: bigint) => {
+    const scaled = (blocks * BigInt(1_000_000)) / BigInt(payload.totalBlocks);
+    return `${scaled / BigInt(10_000)}.${(scaled % BigInt(10_000)).toString().padStart(4, '0')}%`;
+  };
   return {
     title: payload.title,
     points: [],
@@ -593,6 +711,22 @@ function minerRows(
       : null,
     delta: null,
     rankedRows,
+    rankedPreview: {
+      rows: rankedPreviewRows(
+        miners.map((miner) => ({
+          label: miner.row.label,
+          shortLabel: miner.shortLabel,
+          amount: miner.blocks,
+          share: miner.row.share,
+        })),
+        BigInt(payload.totalBlocks),
+        floorPercent4,
+        definition.slug
+      ),
+      summaryLabel: miners[0]
+        ? `Leading miner: ${miners[0].shortLabel} (${miners[0].row.share})`
+        : undefined,
+    },
     coverage: `${payload.fromDate}–${payload.toDate} · ${payload.totalBlocks.toLocaleString()} blocks`,
     summaryLabel: rankedRows[0]
       ? `Leading miner: ${rankedRows[0].label} (${rankedRows[0].share})`

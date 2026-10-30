@@ -4,9 +4,14 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import type { ChartDefinition } from '@/components/charts/chart-catalogue';
-import { chartModel, formatChartReadout, type ChartModel } from '@/components/charts/chart-model';
+import {
+  chartModel,
+  formatChartExact,
+  formatChartReadout,
+  type ChartModel,
+} from '@/components/charts/chart-model';
 
-function parseSharePercent(share: string, title: string): number {
+function shareWidth(share: string, title: string): number {
   if (share === '—') return 0;
   if (!share.endsWith('%')) throw new Error(`${title}: share missing %: ${share}`);
   const width = Number(share.slice(0, -1));
@@ -15,41 +20,27 @@ function parseSharePercent(share: string, title: string): number {
   return width;
 }
 
-/** Top 5 named rows; Others is the remainder so ranks 6+ are not dropped. */
+/** Top five ranks plus the exact remainder as "Others", both computed by the chart model. */
 function RankedPreview({ model }: { model: ChartModel }) {
-  const allRows = model.rankedRows ?? [];
-  const named = allRows.filter((row) => row.label !== 'Others');
-  const top = named.slice(0, 5);
-  const topShare = top.reduce((sum, row) => sum + parseSharePercent(row.share, model.title), 0);
-  const remainder = Math.round((100 - topShare) * 100) / 100;
-  const rows =
-    remainder > 0
-      ? [...top, { label: 'Others', value: '—', share: `${remainder.toFixed(2)}%` }]
-      : top;
+  if (!model.rankedPreview) throw new Error(`${model.title}: ranked chart has no preview rows`);
   return (
     <ol className="space-y-2" aria-label={`${model.title} ranked preview`}>
-      {rows.map((row) => {
-        const width = parseSharePercent(row.share, model.title);
-        return (
-          <li key={row.label} className="min-w-0 text-[11px]">
-            <div className="flex justify-between gap-2">
-              <span className="truncate font-mono" title={row.label}>
-                {row.href?.startsWith('/address/') && row.label.length > 20
-                  ? // Keep more of the unique suffix so top miners stay distinguishable (CH-04).
-                    `${row.label.slice(0, 6)}…${row.label.slice(-10)}`
-                  : row.label}
-              </span>
-              <span className="shrink-0 tabular-nums">{row.share}</span>
-            </div>
-            <div className="bg-base-elevated mt-1 h-1 rounded">
-              <div
-                className="bg-jade h-1 rounded"
-                style={{ width: row.share === '—' ? '0%' : `${width}%` }}
-              />
-            </div>
-          </li>
-        );
-      })}
+      {model.rankedPreview.rows.map((row) => (
+        <li key={row.title} className="min-w-0 text-[11px]">
+          <div className="flex justify-between gap-2">
+            <span className="truncate font-mono" title={row.title}>
+              {row.label}
+            </span>
+            <span className="shrink-0 tabular-nums">{row.share}</span>
+          </div>
+          <div className="bg-base-elevated mt-1 h-1 rounded">
+            <div
+              className="bg-jade h-1 rounded"
+              style={{ width: `${shareWidth(row.share, model.title)}%` }}
+            />
+          </div>
+        </li>
+      ))}
     </ol>
   );
 }
@@ -68,6 +59,8 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
       modelError = cause instanceof Error ? cause.message : String(cause);
     }
   }
+  // A ranked card names its leader in the preview's short form; the detail keeps the full one.
+  const cardSummary = model?.rankedPreview ? model.rankedPreview.summaryLabel : model?.summaryLabel;
   return (
     <article className="min-w-0" aria-label={`${definition.title} chart preview`}>
       <div className="mb-2 min-w-0">
@@ -83,12 +76,12 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         {model?.latest && (
           <div
             className="mt-2 min-w-0 text-right"
-            title={`${model.latest.label}: ${model.latest.raw} ${model.unit}`}
+            title={`${model.latest.label}: ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`}
           >
             <div className="text-text-dim text-[10px]">{model.latest.label}</div>
-            {model.summaryLabel && (
+            {cardSummary && (
               <div className="text-text-dim break-words text-[10px]" title={model.summaryLabel}>
-                {model.summaryLabel}
+                {cardSummary}
               </div>
             )}
             <div
@@ -148,9 +141,9 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
       {model?.delta && (
         <div
           className="text-text-dim mt-1 break-all text-[10px]"
-          title={`Exact change: ${model.delta} ${model.unit}`}
+          title={`Exact change: ${formatChartExact(model.delta, model.unit)} ${model.unit}`}
         >
-          Last change {model.delta} {model.unit}
+          Last change {formatChartReadout(model.delta, model.unit)} {model.unit}
         </div>
       )}
     </article>
