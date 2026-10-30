@@ -89,6 +89,7 @@ const HexRows = memo(function HexRows({
   parts,
   from,
   to,
+  digits,
 }: {
   block: 'output' | 'data';
   bytes: readonly string[];
@@ -96,16 +97,18 @@ const HexRows = memo(function HexRows({
   parts: ReadonlyMap<string, CellPart>;
   from: number;
   to: number;
+  /** Offset digits for the whole box, so both blocks' columns line up. */
+  digits: 4 | 5;
 }) {
   const rows: ReactNode[] = [];
-  const width = bytes.length > 0xffff ? 5 : 4;
+  const width = digits;
   for (let r = alignDown(from); r < to; r += ROW) {
     const hex: ReactNode[] = [];
     const ascii: ReactNode[] = [];
     for (let b = r; b < r + ROW; b++) {
       if (b < from || b >= to || b >= bytes.length) {
         hex.push(
-          <span key={b} aria-hidden="true" className="invisible">
+          <span key={b} aria-hidden="true" data-pad="" className="invisible rounded-sm px-px">
             00
           </span>
         );
@@ -147,7 +150,12 @@ const HexRows = memo(function HexRows({
     }
     rows.push(
       <div key={`${block}:${r}`} className="flex h-[21px] items-center">
-        <span className="w-[62px] shrink-0 select-none text-[#4b5266]">
+        <span
+          className={cn(
+            'shrink-0 select-none text-[#4b5266]',
+            width === 5 ? 'w-[74px]' : 'w-[62px]'
+          )}
+        >
           0x{r.toString(16).padStart(width, '0')}
         </span>
         <span className="flex shrink-0 gap-1">{hex}</span>
@@ -248,6 +256,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     if (id) setActive({ kind: 'part', id });
   };
 
+  const digits: 4 | 5 = Math.max(outBytes.length, dataBytes.length) > 0xffff ? 5 : 4;
   const dataRows: ReactNode[] = [];
   let cursor = 0;
   ranges.forEach(([from, to], i) => {
@@ -256,6 +265,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       <HexRows
         key={`rows:${from}`}
         block="data"
+        digits={digits}
         bytes={dataBytes}
         owner={dataOwner}
         parts={byId}
@@ -278,7 +288,10 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       <div
         key={`gap:${from}`}
         data-gap={`${from}-${to}`}
-        className="text-text-dim my-1 flex h-[30px] items-center gap-3 border-y border-dashed border-[#1a1f30] pl-[62px] text-[11.5px]"
+        className={cn(
+          'text-text-dim my-1 flex h-[30px] items-center gap-3 border-y border-dashed border-[#1a1f30] text-[11.5px]',
+          digits === 5 ? 'pl-[74px]' : 'pl-[62px]'
+        )}
       >
         <span>
           ⋯ {fmt(to - from)} bytes [{fmt(from)}..{fmt(to)}): {listed}
@@ -382,6 +395,14 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             rows={[
               [`${g} hash`, `blake2b(bytes ${range[0]}..${range[1]})`, '#7c849c'],
               ['', hash, CELL_COLORS[g]],
+            ]}
+          />
+        )}
+        {g === 'data' && cell.dataHash && (
+          <DetailRows
+            rows={[
+              ['data hash', 'blake2b(data)', '#7c849c'],
+              ['', cell.dataHash, CELL_COLORS.data],
             ]}
           />
         )}
@@ -490,7 +511,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               color: CELL_COLORS[g],
             }}
           >
-            {groupBytes[g] >= 30 ? `${g} ${fmt(groupBytes[g])}` : groupBytes[g]}
+            {groupBytes[g] >= (big ? 1000 : 30) ? `${g} ${fmt(groupBytes[g])}` : groupBytes[g]}
           </button>
         ))}
       </div>
@@ -610,6 +631,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 </div>
                 <HexRows
                   block="output"
+                  digits={digits}
                   bytes={outBytes}
                   owner={outOwner}
                   parts={byId}

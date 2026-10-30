@@ -167,7 +167,13 @@ function CellFacts({
       <Fact label="Occupied">
         <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
         <span className="text-text-dim text-xs">
-          · <ExactCkb shannons={capacity - occupied} signed={false} tone="plain" /> free
+          ·{' '}
+          {capacity === occupied ? (
+            '0'
+          ) : (
+            <ExactCkb shannons={capacity - occupied} signed={false} tone="plain" />
+          )}{' '}
+          free
         </span>
       </Fact>
       <ScriptFact label="Lock" script={cell.lock} name={lockName} color={CELL_COLORS.lock} />
@@ -175,27 +181,27 @@ function CellFacts({
       <Fact label="Data" sub={cell.elf ? 'RISC-V ELF' : undefined}>
         <span style={{ color: CELL_COLORS.data }}>{cell.dataSize.toLocaleString('en-US')} B</span>
       </Fact>
-      <Fact label="Owner">
-        {cell.address ? (
-          <Link
-            href={`/address/${cell.address}`}
-            className="text-text hover:text-jade"
-            title={cell.address}
-          >
-            {short(cell.address, 8, 6)}
-          </Link>
-        ) : (
-          <span className="text-text-dim">Address unavailable</span>
-        )}
-      </Fact>
       <Fact
         label="Created"
         sub={
-          cell.createdTimestamp && (
-            <time dateTime={cell.createdTimestamp}>
-              {formatUtc8DateTime(cell.createdTimestamp)}
-            </time>
-          )
+          <>
+            {cell.createdTimestamp && (
+              <time dateTime={cell.createdTimestamp}>
+                {formatUtc8DateTime(cell.createdTimestamp)}
+              </time>
+            )}
+            {cell.createdEpoch ? (
+              <>
+                {cell.createdTimestamp && ' · '}epoch{' '}
+                {cell.createdEpoch.number.toLocaleString('en-US')} · {cell.createdEpoch.index}/
+                {cell.createdEpoch.length}
+              </>
+            ) : (
+              <span role="alert" className="text-rouge block">
+                Cell {cell.txHash}:{cell.outputIndex} has no createdEpoch
+              </span>
+            )}
+          </>
         }
       >
         <Link href={`/blocks/${cell.createdAtBlock}`} className="text-text-bright">

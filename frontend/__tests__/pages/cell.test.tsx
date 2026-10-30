@@ -42,6 +42,8 @@ const base = {
   dataSize: 0,
   createdAtBlock: 123,
   createdTimestamp: '2024-01-01T00:00:00Z',
+  createdEpoch: { number: 7, index: 8, length: 1000 },
+  dataHash: `0x${'00'.repeat(32)}`,
   status: 'live' as const,
   liveAgeMs: 60000,
   liveAgeAtBlock: 125,

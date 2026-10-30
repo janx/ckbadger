@@ -48,6 +48,9 @@ export interface TxStructureProps {
   meOut?: string;
   /** txviz `onward`: the legend for that bridge. */
   onward?: string;
+  // group scripts (F2-5): what the bridge leads to (Cell page "Not spent yet" box), drawn right
+  // under the bridge legend instead of after the script groups.
+  afterOnward?: ReactNode;
 }
 /** One hover selection ties cells, continuity and the script evidence together. */
 export function TxStructure({
@@ -66,6 +69,7 @@ export function TxStructure({
   onCellHover,
   meOut,
   onward = 'this cell, onward',
+  afterOnward,
 }: TxStructureProps) {
   const continuityColor = (kind: TxContinuity['kind']) =>
     kind === 'file'
@@ -262,6 +266,7 @@ export function TxStructure({
           {onward}
         </p>
       )}
+      {meOut !== undefined && afterOnward}
       {poolCapacity !== undefined && (
         <p className="text-text-dim text-[11px]">
           Capacity entering the pool{' '}
