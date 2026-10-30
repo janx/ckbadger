@@ -15,7 +15,7 @@ describe('AlignedBar (BA-01)', () => {
           label="Size, bytes"
           scale={4000}
           segments={[
-            { key: 'overhead', value: 652, tone: 'overhead', label: 'block overhead' },
+            { key: 'overhead', value: 652, tone: 'overhead', label: 'overhead' },
             { key: 'user', value: 3_000, tone: 'data', label: 'user transactions' },
           ]}
         />
@@ -41,9 +41,7 @@ describe('AlignedBar (BA-01)', () => {
     expect((segments[1] as HTMLElement).style.width).toBe('90px');
     expect(rows[0]).toHaveTextContent('3,652');
     expect(
-      screen.getByRole('img', {
-        name: 'Size, bytes: 3,652 · block overhead 652 · user transactions 3,000',
-      })
+      screen.getByRole('img', { name: 'Size, bytes: 3,652, 652 overhead, 3,000 user transactions' })
     ).toBeInTheDocument();
   });
 

@@ -22,7 +22,7 @@ export function SharedGraphicsDemo({ width }: { width: number }) {
             label="Size, bytes"
             scale={4000}
             segments={[
-              { key: 'overhead', label: 'block overhead', value: overhead, tone: 'overhead' },
+              { key: 'overhead', label: 'overhead', value: overhead, tone: 'overhead' },
               { key: 'user', label: 'user transactions', value: user, tone: 'data' },
             ]}
           />

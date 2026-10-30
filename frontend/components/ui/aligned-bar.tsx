@@ -39,16 +39,17 @@ export function AlignedBar({
       throw new Error(`${label}: invalid ${s.label} ${s.value}`);
   const total = segments.reduce((sum, s) => sum + s.value, 0);
   if (total > scale) throw new Error(`${label}: ${total} exceeds the scale ${scale}`);
+  // "Size, bytes: 3,205, 883 overhead, 2,322 user transactions": the total, then each part.
   const described = [
     fmt(total),
-    ...(segments.length > 1 ? segments.map((s) => `${s.label} ${fmt(s.value)}`) : []),
+    ...(segments.length > 1 ? segments.map((s) => `${fmt(s.value)} ${s.label}`) : []),
   ];
   return (
     <span data-aligned-bar className={cn('flex min-w-0 items-center gap-2.5', className)}>
       <span
         data-track
         role="img"
-        aria-label={`${label}: ${described.join(' · ')}`}
+        aria-label={`${label}: ${described.join(', ')}`}
         className="bg-base-elevated flex h-2 shrink-0 overflow-hidden rounded-sm"
         style={{ width: `${trackWidth}px` }}
       >

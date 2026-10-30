@@ -23,6 +23,21 @@ describe('block evidence visuals', () => {
     expect(screen.getByText('3,205')).toBeInTheDocument();
     expect(resourceScale([640, 3917])).toBeGreaterThanOrEqual(3917);
   });
+  it('starts every inline bar at one left baseline whatever the number width (BA-01)', () => {
+    const { container } = render(
+      <>
+        <ResourceBar label="Cycles" value={7_654_321} scale={8_000_000} />
+        <ResourceBar label="Cycles" value={0} scale={8_000_000} />
+      </>
+    );
+    for (const row of Array.from(container.querySelectorAll('[data-aligned-bar]'))) {
+      const [track, value] = Array.from(row.children) as HTMLElement[];
+      expect(track).toHaveAttribute('role', 'img');
+      expect(track.style.width).toBe('120px');
+      expect(value.style.width).toBe('9ch');
+    }
+    expect(container.querySelectorAll('[data-aligned-bar]')).toHaveLength(2);
+  });
   it('uses stacked resource bars without shortening an exact cycle count', () => {
     render(<ResourceBar label="Cycles" value={3500000000} scale={4000000000} stacked />);
     const bar = screen.getByRole('img', { name: 'Cycles: 3,500,000,000' });
