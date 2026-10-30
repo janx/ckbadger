@@ -377,13 +377,122 @@ pub struct ChartDataPoint {
     pub value2: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A chart response's series and labels. Serialized with each series' peak
+/// (`peak` for `value`, `peak2` for a second numeric series `value2`),
+/// derived from `data` by [`series_peak`] — never stored, so it cannot drift
+/// from the points it summarizes (CH-21).
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartResponse {
     pub data: Vec<ChartDataPoint>,
     pub title: String,
     pub y_axis_label: String,
     pub y2_axis_label: Option<String>,
+}
+
+/// `y2AxisLabel` of a chart whose `value2` is a timeline marker
+/// (`past | current | future`), not a numeric series.
+pub const NOMINAL_APC_TIMELINE_LABEL: &str = "nominal-apc-timeline";
+
+impl Serialize for ChartResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeStruct};
+        let context = |series: &str, e: String| {
+            S::Error::custom(format!("chart {:?} {series} peak: {e}", self.title))
+        };
+        let peak = series_peak(
+            self.data
+                .iter()
+                .map(|point| (point.date.as_str(), point.value.as_str())),
+        )
+        .map_err(|e| context("value", e))?;
+        let peak2 = match self.y2_axis_label.as_deref() {
+            Some(label) if label != NOMINAL_APC_TIMELINE_LABEL => series_peak(
+                self.data
+                    .iter()
+                    .filter_map(|point| Some((point.date.as_str(), point.value2.as_deref()?))),
+            )
+            .map_err(|e| context("value2", e))?,
+            _ => None,
+        };
+        let mut state = serializer.serialize_struct("ChartResponse", 6)?;
+        state.serialize_field("data", &self.data)?;
+        state.serialize_field("title", &self.title)?;
+        state.serialize_field("yAxisLabel", &self.y_axis_label)?;
+        state.serialize_field("y2AxisLabel", &self.y2_axis_label)?;
+        state.serialize_field("peak", &peak)?;
+        state.serialize_field("peak2", &peak2)?;
+        state.end()
+    }
+}
+
+/// The highest point of one chart series: its x label and its exact value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartPeak {
+    pub date: String,
+    pub value: String,
+}
+
+/// The one peak computation of every chart series: the FIRST point holding
+/// the greatest value, compared as exact decimals (no float rounding). `None`
+/// for an empty series; a value that is not a plain decimal is an error.
+pub fn series_peak<'a>(
+    points: impl IntoIterator<Item = (&'a str, &'a str)>,
+) -> Result<Option<ChartPeak>, String> {
+    let mut best: Option<(&str, &str)> = None;
+    for (date, value) in points {
+        let greater = match best {
+            None => {
+                cmp_decimal(value, value)?;
+                true
+            }
+            Some((_, current)) => cmp_decimal(value, current)? == std::cmp::Ordering::Greater,
+        };
+        if greater {
+            best = Some((date, value));
+        }
+    }
+    Ok(best.map(|(date, value)| ChartPeak {
+        date: date.to_string(),
+        value: value.to_string(),
+    }))
+}
+
+/// Compare two plain decimal strings (`-?digits(.digits)?`) exactly.
+fn cmp_decimal(a: &str, b: &str) -> Result<std::cmp::Ordering, String> {
+    use std::cmp::Ordering;
+    fn parts(raw: &str) -> Result<(bool, &str, &str), String> {
+        let (negative, unsigned) = match raw.strip_prefix('-') {
+            Some(rest) => (true, rest),
+            None => (false, raw),
+        };
+        let (int, frac) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+        let valid = !int.is_empty()
+            && int.bytes().all(|b| b.is_ascii_digit())
+            && frac.bytes().all(|b| b.is_ascii_digit())
+            && (frac.is_empty() == !unsigned.contains('.'));
+        if !valid {
+            return Err(format!("{raw:?} is not a plain decimal"));
+        }
+        let int = int.trim_start_matches('0');
+        let frac = frac.trim_end_matches('0');
+        let zero = int.is_empty() && frac.is_empty();
+        Ok((negative && !zero, int, frac))
+    }
+    let magnitude = |(_, ai, af): (bool, &str, &str), (_, bi, bf): (bool, &str, &str)| {
+        ai.len()
+            .cmp(&bi.len())
+            .then_with(|| ai.cmp(bi))
+            .then_with(|| af.cmp(bf))
+    };
+    let (a, b) = (parts(a)?, parts(b)?);
+    Ok(match (a.0, b.0) {
+        (false, true) => Ordering::Greater,
+        (true, false) => Ordering::Less,
+        (false, false) => magnitude(a, b),
+        (true, true) => magnitude(b, a),
+    })
 }
 
 pub fn chart_response_has_data(response: &ChartResponse) -> bool {
@@ -393,6 +502,39 @@ pub fn chart_response_has_data(response: &ChartResponse) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn series_peak_is_the_first_greatest_exact_decimal() {
+        let peak = |points: &[(&'static str, &'static str)]| {
+            series_peak(points.iter().copied()).map(|p| p.map(|p| (p.date, p.value)))
+        };
+        assert_eq!(peak(&[]), Ok(None));
+        // Beyond f64 precision: 9007199254740993 > 9007199254740992.
+        assert_eq!(
+            peak(&[
+                ("a", "9007199254740992"),
+                ("b", "9007199254740993"),
+                ("c", "2")
+            ]),
+            Ok(Some(("b".into(), "9007199254740993".into())))
+        );
+        assert_eq!(
+            peak(&[("a", "2.50"), ("b", "2.5"), ("c", "2.4999")]),
+            Ok(Some(("a".into(), "2.50".into()))),
+            "ties keep the first point"
+        );
+        assert_eq!(
+            peak(&[("a", "-3"), ("b", "-0.5"), ("c", "-1")]),
+            Ok(Some(("b".into(), "-0.5".into())))
+        );
+        assert_eq!(
+            peak(&[("a", "0.0"), ("b", "-0")]),
+            Ok(Some(("a".into(), "0.0".into())))
+        );
+        for malformed in ["", "1e9", "NaN", "1.", ".5", "1,000"] {
+            assert!(peak(&[("a", malformed)]).is_err(), "{malformed:?}");
+        }
+    }
 
     #[test]
     fn test_cursor_paginated_response_with_total() {

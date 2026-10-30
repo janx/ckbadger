@@ -16,8 +16,8 @@ use std::sync::Arc;
 
 use crate::cache::{CacheKeys, CacheTtl};
 use crate::response::{
-    chart_response_has_data, ok, ApiError, ApiResult, ApiRouteError, ChartDataPoint, ChartResponse,
-    SyncStatusResponse as SyncStatus,
+    chart_response_has_data, ok, series_peak, ApiError, ApiResult, ApiRouteError, ChartDataPoint,
+    ChartResponse, SyncStatusResponse as SyncStatus, NOMINAL_APC_TIMELINE_LABEL,
 };
 use crate::utils::daily_series::{
     certify_blockless_daily_gap, consecutive_daily_chart, consecutive_daily_records,
@@ -716,12 +716,41 @@ pub struct StackedAreaSeries {
     pub color: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Serialized with `peaks`: each series' peak by series key, derived from
+/// `data` by the one [`series_peak`] (CH-21).
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StackedAreaChartResponse {
     pub data: Vec<StackedAreaDataPoint>,
     pub series: Vec<StackedAreaSeries>,
     pub title: String,
+}
+
+impl Serialize for StackedAreaChartResponse {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::{Error, SerializeStruct};
+        let mut peaks = std::collections::BTreeMap::new();
+        for series in &self.series {
+            let peak = series_peak(self.data.iter().filter_map(|point| {
+                Some((point.date.as_str(), point.values.get(&series.key)?.as_str()))
+            }))
+            .map_err(|e| {
+                S::Error::custom(format!(
+                    "chart {:?} series {} peak: {e}",
+                    self.title, series.key
+                ))
+            })?;
+            if let Some(peak) = peak {
+                peaks.insert(series.key.as_str(), peak);
+            }
+        }
+        let mut state = serializer.serialize_struct("StackedAreaChartResponse", 4)?;
+        state.serialize_field("data", &self.data)?;
+        state.serialize_field("series", &self.series)?;
+        state.serialize_field("title", &self.title)?;
+        state.serialize_field("peaks", &peaks)?;
+        state.end()
+    }
 }
 
 /// Secondary issuance exposes exact decimal-CKB stacked values alongside
@@ -3635,7 +3664,37 @@ fn nominal_apc_last_quarter(tip_quarter: i64) -> Result<i64, ApiRouteError> {
     Ok(std::cmp::max(NOMINAL_APC_MIN_LAST_QUARTER, projected))
 }
 
-async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
+/// Nominal APC's samples plus `today`: the model at the indexed tip's exact
+/// elapsed chain time (CH-03), the value a headline shows.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NominalApcChartResponse {
+    #[serde(flatten)]
+    pub chart: ChartResponse,
+    pub today: NominalApcToday,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NominalApcToday {
+    /// The indexed tip the value is computed at.
+    pub block_number: i64,
+    /// The tip's UTC+8 stats day.
+    pub date: String,
+    /// Exact elapsed chain time since genesis, in mean Gregorian years.
+    pub year: String,
+    /// The model's APC at `year`, formatted like every sample.
+    pub value: String,
+}
+
+/// One APC value as every nominal-APC point shows it.
+fn format_nominal_apc(year: f64, genesis_supply_ckb: f64) -> String {
+    format!("{:.4}", calculate_nominal_apc(year, genesis_supply_ckb))
+}
+
+async fn get_nominal_apc_chart(
+    State(state): State<Arc<AppState>>,
+) -> ApiResult<NominalApcChartResponse> {
     // Derived genesis circulating supply in CKB (25.2B on mainnet), from the
     // persisted per-network GenesisBaseline — not a hardcoded mainnet literal.
     let baseline = state.genesis_baseline()?;
@@ -3656,10 +3715,9 @@ async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<
     let data: Vec<ChartDataPoint> = (0..=last_quarter)
         .map(|i| {
             let year = i as f64 * 0.25;
-            let apc = calculate_nominal_apc(year, genesis_supply_ckb);
             ChartDataPoint {
                 date: format!("{}", year),
-                value: format!("{:.4}", apc),
+                value: format_nominal_apc(year, genesis_supply_ckb),
                 // Timeline marker: exactly one sample — the tip's quarter — is
                 // "current" (not a Y2 series).
                 value2: Some(
@@ -3674,12 +3732,23 @@ async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<
         })
         .collect();
 
-    ok(ChartResponse {
-        data,
-        title: "Nominal DAO Compensation Rate".to_string(),
-        y_axis_label: "APC".to_string(),
-        // Sentinel so clients know value2 is a timeline marker, not a series.
-        y2_axis_label: Some("nominal-apc-timeline".into()),
+    // The tip's exact elapsed time in the model's unit: 4 quarters a year.
+    let elapsed_ms = chain.chain_time_ms() - genesis.chain_time_ms;
+    let today_year = elapsed_ms as f64 / (4 * NOMINAL_APC_QUARTER_MS) as f64;
+    ok(NominalApcChartResponse {
+        chart: ChartResponse {
+            data,
+            title: "Nominal DAO Compensation Rate".to_string(),
+            y_axis_label: "APC".to_string(),
+            // Sentinel so clients know value2 is a timeline marker, not a series.
+            y2_axis_label: Some(NOMINAL_APC_TIMELINE_LABEL.into()),
+        },
+        today: NominalApcToday {
+            block_number: chain.tip_number(),
+            date: chain.tip_day()?.to_string(),
+            year: today_year.to_string(),
+            value: format_nominal_apc(today_year, genesis_supply_ckb),
+        },
     })
 }
 

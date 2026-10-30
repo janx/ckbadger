@@ -1199,6 +1199,9 @@ async fn test_uncle_rate_chart_carries_the_orphan_rate_target() {
             "title": "Uncle Rate",
             "yAxisLabel": "Uncle Rate",
             "y2AxisLabel": null,
+            // CH-21: every chart response names its series' peaks.
+            "peak": { "date": "2024-01-15", "value": "0.025000" },
+            "peak2": null,
             "orphanRateTarget": { "numerator": 1, "denominator": 40 }
         })
     );
@@ -1557,4 +1560,106 @@ async fn nominal_apc_tip_beyond_year_twenty_extends_the_sampled_range() {
     assert_eq!(points[93]["date"], "23.25");
     assert_eq!(points[92]["value2"], "past");
     assert_eq!(points[94]["value2"], "future");
+}
+
+/// CH-21: every time-series chart names its peak — the first point holding
+/// the series' greatest exact value — so a detail page's headline can say
+/// "peak, 2024-01-15" without re-deriving it.
+#[tokio::test]
+async fn chart_responses_carry_the_peak_of_each_series() {
+    let store = test_store();
+    for (date, difficulty, transactions) in [
+        ("20240114", 3_000_000u128, 700),
+        ("20240115", 9_007_199_254_740_993u128, 500),
+        ("20240116", 2_000_000, 900),
+    ] {
+        store
+            .put_daily_block_stats(
+                date,
+                &DailyBlockStats {
+                    difficulty_sum: difficulty * 100,
+                    block_count: 100,
+                    total_uncles: 2,
+                },
+            )
+            .unwrap();
+        store
+            .put_daily_stats(
+                date,
+                &DailyStats {
+                    blocks_count: 100,
+                    transactions_count: transactions,
+                    cells_created: 10,
+                    total_all_cells: 10,
+                    total_live_cells: 8,
+                    total_dead_cells: 2,
+                    block_time_sum_ms: 100 * 10_000,
+                    block_time_count: 100,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    seed_tip_block_on_utc8_day(&store, 300, "2024-01-17");
+    let app = create_router(test_config(store)).await;
+    for uri in [
+        "/charts/difficulty",
+        "/charts/transaction-count",
+        "/charts/hash-rate",
+    ] {
+        let (status, json) = get_json(&app, uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {json}");
+        let data = json["data"].as_array().unwrap();
+        let best = data
+            .iter()
+            .max_by(|a, b| {
+                let parse =
+                    |p: &serde_json::Value| p["value"].as_str().unwrap().parse::<f64>().unwrap();
+                parse(a).partial_cmp(&parse(b)).unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            json["peak"],
+            serde_json::json!({"date": best["date"], "value": best["value"]}),
+            "{uri}: {json}"
+        );
+    }
+    let (_, difficulty) = get_json(&app, "/charts/difficulty").await;
+    assert_eq!(
+        difficulty["peak"],
+        serde_json::json!({"date": "2024-01-15", "value": "9007199254740993"})
+    );
+}
+
+/// CH-03: Nominal APC's headline is the model at the indexed tip's exact
+/// elapsed time, not the last (year-20) sample nor the tip's quarter sample.
+#[tokio::test]
+async fn nominal_apc_reports_today_at_the_tip() {
+    let elapsed = 29 * QUARTER_MS + 3_600_000;
+    let app = create_router(test_config(nominal_apc_store(elapsed))).await;
+    let (status, json) = get_json(&app, "/charts/nominal-apc").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let today = &json["today"];
+    assert_eq!(today["blockNumber"], 1, "{json}");
+    let year: f64 = today["year"].as_str().unwrap().parse().unwrap();
+    assert!(
+        (year - elapsed as f64 / (4.0 * QUARTER_MS as f64)).abs() < 1e-9,
+        "{today}"
+    );
+    // Between the tip quarter's sample and the next one (APC falls with time).
+    let at = |i: usize| {
+        json["data"][i]["value"]
+            .as_str()
+            .unwrap()
+            .parse::<f64>()
+            .unwrap()
+    };
+    let value: f64 = today["value"].as_str().unwrap().parse().unwrap();
+    assert!(
+        value <= at(29) && value >= at(30),
+        "{today} vs {} / {}",
+        at(29),
+        at(30)
+    );
+    assert_ne!(today["value"], json["data"][80]["value"]);
 }
