@@ -14,6 +14,8 @@ export interface TenureBarProps {
   /** End of a grace period after expiry (`.cell`: 30 days), drawn dashed. */
   graceEnd?: number;
   now: number;
+  /** F2 identities (round 2): a caption beside the title, e.g. "3 years paid · 2 renewals". */
+  note?: string;
 }
 
 const W = 900;
@@ -24,7 +26,7 @@ const DAY = 86_400_000;
  * "Held until / Expired on" (ID-C7): the paid term as registration + renewals, the elapsed part
  * dim and the remaining part bright, a dashed grace period, and a now marker.
  */
-export function TenureBar({ name, periods, graceEnd, now }: TenureBarProps) {
+export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps) {
   if (!periods.length) throw new Error(`${name}: tenure has no paid period`);
   periods.forEach((p, i) => {
     if (!(p.end > p.start)) throw new Error(`${name}: period ${p.label} ends before it starts`);
@@ -45,9 +47,12 @@ export function TenureBar({ name, periods, graceEnd, now }: TenureBarProps) {
   const endDate = formatUtc8Date(end);
   return (
     <section className="min-w-0 space-y-3">
-      <h2 className="text-text-bright text-[15px] font-medium">
-        {expired ? `Expired on ${endDate}` : `Held until ${endDate}`}
-      </h2>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-text-bright text-[15px] font-medium">
+          {expired ? `Expired on ${endDate}` : `Held until ${endDate}`}
+        </h2>
+        {note && <span className="text-text-dim text-[12px]">{note}</span>}
+      </div>
       <svg
         role="img"
         aria-label={`${name} is held from ${formatUtc8Date(first)} to ${endDate}${graceEnd ? `, then a grace period to ${formatUtc8Date(graceEnd)}` : ''}; ${expired ? `expired ${days} days ago` : `${days} days remain`}`}

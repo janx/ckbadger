@@ -221,6 +221,19 @@ describe('TenureBar (ID-C7)', () => {
       CLASS_COLORS.identities
     );
   });
+  // F2 identities (round 2): the board's caption beside the title (IdentityBit "3 years paid").
+  it('sets an optional caption beside its title', () => {
+    render(
+      <TenureBar
+        name="valar.bit"
+        periods={[{ label: 'paid at registration', start: reg, end: reg + 365 * day }]}
+        now={reg + 100 * day}
+        note="1 year paid at registration · not renewed"
+      />
+    );
+    const heading = screen.getByRole('heading', { name: 'Held until 2025-02-19' });
+    expect(heading.parentElement).toHaveTextContent('1 year paid at registration · not renewed');
+  });
 });
 
 describe('shared graphics demo (fixture page, no route)', () => {

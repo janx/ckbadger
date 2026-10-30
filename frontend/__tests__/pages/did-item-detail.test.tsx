@@ -24,7 +24,9 @@ afterEach(() => vi.restoreAllMocks());
 it('renders exact canonical protocol, whole cell history and raw bytes for did', async () => {
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
-  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent('cell data');
+  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
+    /[Cc]ell data · \d+ bytes/
+  );
   expect(api.getDidCkbItemDetail).toHaveBeenCalledWith(evidence.itemId);
   expect(api.getItemProtocol).toHaveBeenCalledWith('did', evidence.itemId);
   const link = screen
@@ -55,8 +57,8 @@ it('keeps recycled identity history while showing no live capacity', async () =>
   };
   vi.mocked(api.getItemCellVersions).mockResolvedValue(cells);
   render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
-  expect(await screen.findByText('No live cell')).toBeInTheDocument();
+  expect(await screen.findByText('Inactive')).toBeInTheDocument();
+  expect(await screen.findByText('no live cell')).toBeInTheDocument();
   expect(screen.getAllByText('0').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Raw item evidence')).toBeInTheDocument();
 });
@@ -160,4 +162,27 @@ it('keeps a failed identity source distinct from an absent identity', async () =
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('alert')).toHaveTextContent('identity index mismatch');
   expect(screen.queryByText('An unanswered name.')).not.toBeInTheDocument();
+});
+
+// ── F2 identities (round 2): IdentityDid — titled by its handle, the document read (ID-D1/D2/D3) ──
+it('titles a did:ckb by its handle, reads its document and places it among did:ckb', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.test')
+  );
+  expect(
+    screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
+  ).toHaveTextContent('.test');
+  // The DID string is the identity line under the title (with copy), not the title.
+  expect(screen.getByRole('heading', { level: 1 }).closest('header')).toHaveTextContent(
+    'did:ckb:ceirceirceirceirceirceirceirceir'
+  );
+  const doc = screen.getByRole('region', { name: 'DID document' });
+  expect(doc).toHaveTextContent('at://alice.test');
+  expect(doc).toHaveTextContent('Personal data server');
+  expect(doc).not.toHaveTextContent('Document version 1');
+  const among = await screen.findByRole('region', { name: 'Among did:ckb' });
+  expect(among).toHaveTextContent('this one');
+  expect(screen.getByLabelText('Facts')).toHaveTextContent('Expiry');
+  expect(screen.getByLabelText('Facts')).toHaveTextContent('none');
 });

@@ -111,6 +111,42 @@ export interface CollectionItemsProps {
   id: string;
   kind: 'object' | 'identity';
 }
+// ── F2 identities (round 2): R3 owners on item rows (ID-COL-2 / ID-COL-3) ──
+/**
+ * An item row's owner as the API names it: its address; a lock hash whose script is not
+ * indexed, as a hash; a `.cell` owner prefix no indexed lock has, as that prefix. A lock hash is
+ * never passed off as an address, and a named owner is never reported as "No live owner".
+ */
+function ItemOwner({ item }: { item: CollectionItem }) {
+  if (item.ownerAddress) return <Address address={item.ownerAddress} className="text-[11px]" />;
+  if (item.ownerLockHash)
+    return (
+      <span className="text-[11px]">
+        <Hash hash={item.ownerLockHash} copyable={false} className="text-[11px]" />
+        <span className="text-text-dim block">address not indexed</span>
+      </span>
+    );
+  if (item.ownerHashPrefix)
+    return (
+      <span className="text-[11px] [overflow-wrap:anywhere]">
+        <Hash
+          hash={item.ownerHashPrefix}
+          truncate={false}
+          copyable={false}
+          className="text-[11px]"
+        />
+        <span className="text-text-dim block">named owner prefix · no indexed lock</span>
+      </span>
+    );
+  if (item.isLive)
+    return (
+      <span role="alert" className="text-text-dim text-[11px]">
+        {item.nftId}: a live item with no owner in the API response
+      </span>
+    );
+  return <span className="text-text-dim text-[11px]">No live owner</span>;
+}
+
 export function CollectionItems({ id, kind }: CollectionItemsProps) {
   const [search, setSearch] = useState(''),
     [status, setStatus] = useState<ItemStatusFilter>('all');
@@ -190,11 +226,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
                   </span>
                 </div>
                 <div className="min-w-0">
-                  {item.ownerLockHash ? (
-                    <Address address={item.ownerLockHash} className="text-[11px]" />
-                  ) : (
-                    <span className="text-text-dim text-[11px]">No live owner</span>
-                  )}
+                  <ItemOwner item={item} />
                 </div>
                 <AppLink href={`/blocks/${item.createdAtBlock}`} className="text-[11px]">
                   {formatBlockNumber(item.createdAtBlock)}

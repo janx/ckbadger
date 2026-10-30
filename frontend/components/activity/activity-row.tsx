@@ -22,6 +22,7 @@ import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
 import type { GlobalActivity, ParticipantInfo, PoolStatus, PoolInterpretation } from '@/lib/api';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import type { ActivityBody } from '@/lib/activity-classify';
+import type { AssetClass } from '@/lib/design-tokens';
 import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
@@ -250,6 +251,8 @@ export type ActivityRowProps = {
   /** Participant endpoints cannot infer whole-transaction mint/burn from a single delta. */
   headline?: ReactNode;
   className?: string;
+  /** F2 identities (round 2, ID-C13): the row's class mark when the feed knows it (an item feed). */
+  mark?: AssetClass | null;
   showParticipants?: boolean;
   showScriptDetails?: boolean;
   showEvidence?: boolean;
@@ -265,6 +268,7 @@ export function ActivityRow({
   fresh = false,
   headline,
   className,
+  mark: markOverride,
   mode = 'cross-user',
   participant,
   showParticipants = true,
@@ -274,7 +278,7 @@ export function ActivityRow({
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
-  const mark = activityClassMark(activity);
+  const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
   return (
     <article
       data-feed-row={activity.txHash}

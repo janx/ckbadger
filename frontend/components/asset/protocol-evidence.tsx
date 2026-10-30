@@ -4,6 +4,8 @@ import { useState, type ReactNode } from 'react';
 import { HexMap, type HexField } from '@/components/ui/hex-map';
 import { hexBytes } from '@/lib/hex-bytes';
 import { CELL_COLORS } from '@/lib/design-tokens';
+import { useDetailTier } from '@/components/ui/detail-layout';
+import { cn } from '@/lib/utils';
 
 export interface ProtocolEvidenceProps {
   title: string;
@@ -46,6 +48,8 @@ export function ProtocolEvidence({
     coverage.fill(1, field.start, field.end);
   });
   const unexplained = coverage.reduce((total, covered) => total + (covered === 0 ? 1 : 0), 0);
+  // ID-C12 / TX-16: inside tier 2 the heading is quiet, as DetailSection's are.
+  const tier = useDetailTier();
   const [selection, setSelection] = useState({ dataHex, page: 0 });
   const [active, setActive] = useState<string | null>(null);
   const [copyResult, setCopyResult] = useState<{ dataHex: string; error?: string } | null>(null);
@@ -99,7 +103,14 @@ export function ProtocolEvidence({
   return (
     <section aria-label={title} className="min-w-0 space-y-4">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-text-bright text-[15px] font-medium">{title}</h2>
+        <h2
+          className={cn(
+            'font-medium',
+            tier === 2 ? 'text-text text-[13px]' : 'text-text-bright text-[15px]'
+          )}
+        >
+          {title}
+        </h2>
         <button
           type="button"
           onClick={copy}
