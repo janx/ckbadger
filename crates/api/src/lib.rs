@@ -117,6 +117,8 @@ pub struct AppState {
     pub pool_max_tracked_txs: std::num::NonZeroUsize,
     /// `/dao/evidence` for the current canonical tip (API memory only; DAO-17).
     pub dao_evidence: Arc<cache::TipMemo<serde_json::Value>>,
+    /// The fork history of one canonical tip (`routes::ForkView`).
+    pub fork_view: Arc<cache::TipMemo<routes::ForkView>>,
 }
 
 impl AppState {
@@ -365,6 +367,7 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
         pool_mirror,
         pool_max_tracked_txs: config.pool_max_tracked_txs,
         dao_evidence: Arc::new(cache::TipMemo::new()),
+        fork_view: Arc::new(cache::TipMemo::new()),
     });
 
     dispatch_initial_warmup(state.clone(), config.start_background_tasks).await;

@@ -227,7 +227,7 @@ pub struct ForkEventRefResponse {
 }
 
 /// The node's switch history as a whole (Forks overview, FF-L1 / FF-L3).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NodeSwitchRecordResponse {
     /// When this indexer's live sync began (the bulk → live handoff): switches
@@ -252,7 +252,7 @@ pub struct NodeSwitchRecordResponse {
     pub orphan_fates: Option<OrphanFateTotalsResponse>,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrphanFateTotalsResponse {
     /// Automatic switches whose old branch the node still has.
@@ -265,7 +265,7 @@ pub struct OrphanFateTotalsResponse {
     pub competing: CompetingBlockTotalsResponse,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrphanBlockFateTotalsResponse {
     pub total: i64,
@@ -276,16 +276,18 @@ pub struct OrphanBlockFateTotalsResponse {
     pub not_included_as_uncle: i64,
     pub uncle_fate_pending: i64,
     pub awaiting_canonical_tip: i64,
+    /// No indexed canonical chain to judge against yet.
+    pub canonical_evidence_unavailable: i64,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UncleDistanceCountResponse {
     pub distance: i64,
     pub count: i64,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OrphanTxFateTotalsResponse {
     pub total: i64,
@@ -293,9 +295,11 @@ pub struct OrphanTxFateTotalsResponse {
     pub canonical_now: i64,
     pub committed_on_canonical_branch: i64,
     pub not_committed_as_of_tip: i64,
+    /// No indexed canonical chain to judge against yet.
+    pub canonical_evidence_unavailable: i64,
 }
 
-#[derive(Debug, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompetingBlockTotalsResponse {
     /// Dropped blocks with a different canonical block at their height.
@@ -570,17 +574,15 @@ async fn get_forks_overview(
     if !(1..=90).contains(&days) {
         return Err(ApiError::bad_request("days must be between 1 and 90"));
     }
-    let store = state.store.clone();
-    let reader = state.ckb_store.clone();
-    let network = state.ckb_network.clone();
     let response = tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
-        let chain = ChainTime::load(&store)?;
+        let store = state.store.as_ref();
+        let view = fork_view(&state).map_err(|e| ApiError::internal(format!("fork overview: {e:#}")))?;
+        let chain = ChainTime::load(store)?;
         let rows = store.list_daily_block_stats().map_err(|e| ApiError::internal(e.to_string()))?;
-        let events = store.list_reorg_events(usize::MAX, None).map_err(|e| ApiError::internal(e.to_string()))?;
+        let events = &view.history.records;
         let node_switches_all_time = i64::try_from(events.iter().filter(|record| record.event.kind == ReorgEventKind::Automatic).count())
             .map_err(|_| ApiError::internal("node switch count exceeds i64"))?;
-        let node_record = node_switch_record(&store, reader.as_deref(), &network, &events)
-            .map_err(|e| ApiError::internal(format!("fork node record: {e:#}")))?;
+        let node_record = view.node_record.clone();
         let Some(chain) = chain else {
             if !rows.is_empty() || !events.is_empty() {
                 return Err(ApiError::internal("fork evidence exists without an indexed canonical chain"));
@@ -693,14 +695,12 @@ fn add_one(counter: &mut i64, what: &str) -> anyhow::Result<()> {
 
 /// The node's switch history as a whole: persisted counts over every event,
 /// and — with the node reader — what became of every dropped block and
-/// transaction, from the same branch evidence the list and detail read.
+/// transaction, from the same branch evidence the list previews read.
 fn node_switch_record(
-    store: &CkbadgerStore,
-    reader: Option<&CkbChainReader>,
-    network: &str,
+    status: &ckbadger_store::types::SyncStatus,
     events: &[ReorgEventRecord],
+    evidence: Option<&HashMap<String, Option<BranchEvidence>>>,
 ) -> anyhow::Result<NodeSwitchRecordResponse> {
-    let status = store.get_sync_status()?;
     let observed_since = status
         .bulk_sync_completed_at
         .map(|seconds| {
@@ -747,9 +747,9 @@ fn node_switch_record(
             .count(),
         "deep detection",
     )?;
-    let (evidence_status, orphan_fates) = match reader {
+    let (evidence_status, orphan_fates) = match evidence {
         None => ("node_reader_unavailable", None),
-        Some(reader) => {
+        Some(evidence) => {
             let mut totals = OrphanFateTotalsResponse::default();
             let mut distances: std::collections::BTreeMap<i64, i64> = Default::default();
             let mut gaps: Vec<i64> = Vec::new();
@@ -757,9 +757,9 @@ fn node_switch_record(
                 .iter()
                 .filter(|record| record.event.orphaned_blocks > 0)
             {
-                let Some((blocks, transactions)) =
-                    read_branch_evidence(store, reader, network, &record.event)
-                        .map_err(|e| e.context(format!("fork {}", record.key)))?
+                let Some((blocks, transactions)) = evidence
+                    .get(&record.key)
+                    .ok_or_else(|| anyhow::anyhow!("fork {} has no branch evidence", record.key))?
                 else {
                     add_one(
                         &mut totals.events_old_branch_unavailable,
@@ -768,7 +768,7 @@ fn node_switch_record(
                     continue;
                 };
                 add_one(&mut totals.events_with_evidence, "evidence event")?;
-                for block in &blocks {
+                for block in blocks.iter() {
                     add_one(&mut totals.blocks.total, "orphan block")?;
                     let counter = match block.fate.as_str() {
                         "included_as_uncle" => {
@@ -782,6 +782,9 @@ fn node_switch_record(
                         "not_included_as_uncle" => &mut totals.blocks.not_included_as_uncle,
                         "uncle_fate_pending" => &mut totals.blocks.uncle_fate_pending,
                         "awaiting_canonical_tip" => &mut totals.blocks.awaiting_canonical_tip,
+                        "canonical_evidence_unavailable" => {
+                            &mut totals.blocks.canonical_evidence_unavailable
+                        }
                         other => anyhow::bail!("orphan {} has unexpected fate {other}", block.hash),
                     };
                     add_one(counter, "orphan fate")?;
@@ -814,6 +817,9 @@ fn node_switch_record(
                         }
                         "not_committed_as_of_tip" => {
                             &mut totals.user_transactions.not_committed_as_of_tip
+                        }
+                        "canonical_evidence_unavailable" => {
+                            &mut totals.user_transactions.canonical_evidence_unavailable
                         }
                         other => anyhow::bail!("orphan tx {} has unexpected fate {other}", tx.hash),
                     };
@@ -867,49 +873,38 @@ async fn list_forks(
         .clamp(1, MAX_FORKS_LIMIT);
     let cursor = parse_forks_cursor(params.cursor.as_deref())?;
 
-    let store = state.store.clone();
-    let reader = state.ckb_store.clone();
-    let network = state.ckb_network.clone();
     let page_size = limit as usize;
     let (events, total, next_cursor) =
         tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
-            let internal = |e: anyhow::Error| ApiError::internal(format!("fork list: {e:#}"));
-            let mut records = store
-                .list_reorg_events(page_size + 1, cursor.as_deref())
-                .map_err(internal)?;
-            let total = store.count_reorg_events().map_err(internal)?;
-            let history = ForkHistory::load(&store, reader.as_deref()).map_err(internal)?;
-            let has_more = records.len() > page_size;
+            let view =
+                fork_view(&state).map_err(|e| ApiError::internal(format!("fork list: {e:#}")))?;
+            // Newest first; the cursor is the last row's key, exclusive.
+            let mut page: Vec<&ReorgEventRecord> = view
+                .history
+                .records
+                .iter()
+                .filter(|record| {
+                    cursor
+                        .as_deref()
+                        .is_none_or(|cursor| record.key.as_bytes() < cursor)
+                })
+                .take(page_size + 1)
+                .collect();
+            let has_more = page.len() > page_size;
             if has_more {
-                records.truncate(page_size);
+                page.truncate(page_size);
             }
             let next_cursor = if has_more {
-                records.last().map(|record| record.key.clone())
+                page.last().map(|record| record.key.clone())
             } else {
                 None
             };
-            let mut events = Vec::with_capacity(records.len());
-            for record in &records {
-                let mut event = reorg_event_response(record, &history)?;
-                match reader.as_deref() {
-                    Some(reader) => {
-                        let (status, preview) =
-                            event_preview(&store, reader, &network, record, &history)
-                                .map_err(internal)?;
-                        event.preview_status = status.to_string();
-                        event.preview = preview;
-                    }
-                    None => {
-                        event.preview_status = if record.event.orphaned_blocks == 0 {
-                            "no_old_branch"
-                        } else {
-                            "node_reader_unavailable"
-                        }
-                        .to_string();
-                    }
-                }
-                events.push(event);
-            }
+            let total = i64::try_from(view.history.records.len())
+                .map_err(|_| ApiError::internal("fork event count exceeds i64"))?;
+            let events = page
+                .into_iter()
+                .map(|record| view.row(record))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok((events, total, next_cursor))
         })
         .await
@@ -950,21 +945,15 @@ fn read_branch_evidence(
     }
 }
 
+/// One event's dropped branch with every block's and transaction's fate.
+type BranchEvidence = (Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>);
+
 /// The list row's preview: the first dropped block and its competitor.
-fn event_preview(
-    store: &CkbadgerStore,
-    reader: &CkbChainReader,
-    network: &str,
+fn preview_from_evidence(
     record: &ReorgEventRecord,
     history: &ForkHistory,
-) -> anyhow::Result<(&'static str, Option<ForkEventPreviewResponse>)> {
-    if record.event.orphaned_blocks == 0 {
-        return Ok(("no_old_branch", None));
-    }
-    let Some((blocks, transactions)) = read_branch_evidence(store, reader, network, &record.event)?
-    else {
-        return Ok(("old_branch_unavailable", None));
-    };
+    (blocks, transactions): &BranchEvidence,
+) -> anyhow::Result<ForkEventPreviewResponse> {
     let first = blocks.first().ok_or_else(|| {
         anyhow::anyhow!(
             "fork {} recorded old blocks but node branch is empty",
@@ -984,27 +973,132 @@ fn event_preview(
             .filter(|tx| tx.block_hash == first.hash && tx.fate == "committed_later")
             .count(),
     )?;
-    Ok((
-        "available",
-        Some(ForkEventPreviewResponse {
-            old_block_hash: first.hash.clone(),
-            old_miner_lock_hash: first.miner_lock_hash.clone(),
-            old_miner_address: first.miner_address.clone(),
-            competing_miner_lock_hash: first
-                .competing_block
-                .as_ref()
-                .and_then(|block| block.miner_lock_hash.clone()),
-            competing_miner_address: first
-                .competing_block
-                .as_ref()
-                .and_then(|block| block.miner_address.clone()),
-            fate: first.fate.clone(),
-            uncle_in_block: first.uncle_in.as_ref().map(|uncle| uncle.block_number),
-            timestamp_gap_ms: first.timestamp_gap_ms,
-            noncellbase_transactions,
-            committed_later_transactions,
-        }),
-    ))
+    Ok(ForkEventPreviewResponse {
+        old_block_hash: first.hash.clone(),
+        old_miner_lock_hash: first.miner_lock_hash.clone(),
+        old_miner_address: first.miner_address.clone(),
+        competing_miner_lock_hash: first
+            .competing_block
+            .as_ref()
+            .and_then(|block| block.miner_lock_hash.clone()),
+        competing_miner_address: first
+            .competing_block
+            .as_ref()
+            .and_then(|block| block.miner_address.clone()),
+        fate: first.fate.clone(),
+        uncle_in_block: first.uncle_in.as_ref().map(|uncle| uncle.block_number),
+        timestamp_gap_ms: first.timestamp_gap_ms,
+        noncellbase_transactions,
+        committed_later_transactions,
+    })
+}
+
+/// One canonical tip's fork history: every event with its first orphan, each
+/// list row's preview and the overview's node record. Built once inside one
+/// pinned read view and served from API memory (never written to a store)
+/// until the tip, the deep-fork flag or a pending reconcile says the event rows
+/// may have changed.
+pub struct ForkView {
+    deep_fork_detected: bool,
+    history: ForkHistory,
+    previews: HashMap<String, (&'static str, Option<ForkEventPreviewResponse>)>,
+    node_record: NodeSwitchRecordResponse,
+}
+
+impl ForkView {
+    fn build(
+        store: &CkbadgerStore,
+        reader: Option<&CkbChainReader>,
+        network: &str,
+        status: &ckbadger_store::types::SyncStatus,
+    ) -> anyhow::Result<Self> {
+        let history = ForkHistory::load(store, reader)?;
+        let evidence = match reader {
+            None => None,
+            Some(reader) => {
+                let mut evidence = HashMap::new();
+                for record in history
+                    .records
+                    .iter()
+                    .filter(|record| record.event.orphaned_blocks > 0)
+                {
+                    let branch = read_branch_evidence(store, reader, network, &record.event)
+                        .map_err(|e| e.context(format!("fork {}", record.key)))?;
+                    evidence.insert(record.key.clone(), branch);
+                }
+                Some(evidence)
+            }
+        };
+        let mut previews = HashMap::with_capacity(history.records.len());
+        for record in &history.records {
+            let preview = if record.event.orphaned_blocks == 0 {
+                ("no_old_branch", None)
+            } else {
+                match &evidence {
+                    None => ("node_reader_unavailable", None),
+                    Some(evidence) => match evidence.get(&record.key) {
+                        Some(Some(branch)) => (
+                            "available",
+                            Some(preview_from_evidence(record, &history, branch)?),
+                        ),
+                        Some(None) => ("old_branch_unavailable", None),
+                        None => anyhow::bail!("fork {} has no branch evidence", record.key),
+                    },
+                }
+            };
+            previews.insert(record.key.clone(), preview);
+        }
+        let node_record = node_switch_record(status, &history.records, evidence.as_ref())?;
+        Ok(Self {
+            deep_fork_detected: status.deep_fork_detected,
+            history,
+            previews,
+            node_record,
+        })
+    }
+
+    /// One list row: the persisted event with its D7 references and preview.
+    fn row(&self, record: &ReorgEventRecord) -> Result<ReorgEventResponse, ApiRouteError> {
+        let mut event = reorg_event_response(record, &self.history)?;
+        let (status, preview) = self.previews.get(&record.key).ok_or_else(|| {
+            ApiError::internal(format!("fork view has no preview for {}", record.key))
+        })?;
+        event.preview_status = status.to_string();
+        event.preview = preview.clone();
+        Ok(event)
+    }
+}
+
+/// The fork view for the request's pinned read view. Memoized per canonical
+/// tip (number and hash) and deep-fork flag; never memoized while a reconcile
+/// is pending, because reconciliation rewrites event rows at an unchanged tip.
+/// Call on a blocking thread.
+fn fork_view(state: &AppState) -> anyhow::Result<Arc<ForkView>> {
+    let store = &state.store;
+    let status = store.get_sync_status()?;
+    let pending = store.get_reorg_reconcile_pending()?.is_some();
+    let tip = store.get_sync_tip_block()?;
+    if !pending {
+        if let Some((number, header)) = &tip {
+            if let Some(view) = state.fork_view.get(*number, &header.hash) {
+                if view.deep_fork_detected == status.deep_fork_detected {
+                    return Ok(view);
+                }
+            }
+        }
+    }
+    let view = Arc::new(ForkView::build(
+        store,
+        state.ckb_store.as_deref(),
+        &state.ckb_network,
+        &status,
+    )?);
+    if !pending {
+        if let Some((number, header)) = tip {
+            state.fork_view.set(number, header.hash, view.clone());
+        }
+    }
+    Ok(view)
 }
 
 /// The node's branch must start at the block the event's D7 address names.
@@ -1110,29 +1204,28 @@ async fn get_fork_at(
 ) -> ApiResult<ReorgDetailResponse> {
     let height = parse_fork_point_segment(&fork_point)?;
     let prefix = parse_orphan_prefix_segment(&orphan)?;
-    let store = state.store.clone();
-    let reader = state.ckb_store.clone();
-    let network = state.ckb_network.clone();
     let response = tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
         let internal =
             |e: anyhow::Error| ApiError::internal(format!("fork /forks/{height}/{prefix}: {e:#}"));
-        let history = ForkHistory::load(&store, reader.as_deref()).map_err(internal)?;
-        let record = resolve_fork_address(&history, height, &prefix)?;
-        let event = reorg_event_response(record, &history)?;
-        let reader = reader.ok_or_else(|| {
+        let view = fork_view(&state).map_err(internal)?;
+        let history = &view.history;
+        let record = resolve_fork_address(history, height, &prefix)?;
+        let event = view.row(record)?;
+        let reader = state.ckb_store.clone().ok_or_else(|| {
             ApiError::internal(format!(
                 "fork {} evidence unavailable: CKB RocksDB reader is not open",
                 record.key
             ))
         })?;
+        let network = &state.ckb_network;
         let (mut blocks, mut transactions) =
-            read_orphaned_branch(&reader, &network, &record.event).map_err(internal)?;
+            read_orphaned_branch(&reader, network, &record.event).map_err(internal)?;
         let adopted_branch =
-            read_adopted_branch(&reader, &network, &record.event).map_err(internal)?;
+            read_adopted_branch(&reader, network, &record.event).map_err(internal)?;
         let (canonical_branch, canonical_tip_number) = enrich_branch_fate(
-            &store,
+            &state.store,
             &reader,
-            &network,
+            network,
             &record.event,
             &mut blocks,
             &mut transactions,
@@ -1141,7 +1234,7 @@ async fn get_fork_at(
         let first = blocks
             .first()
             .ok_or_else(|| internal(anyhow::anyhow!("node branch is empty")))?;
-        ensure_first_orphan_matches(record, &history, &first.hash).map_err(internal)?;
+        ensure_first_orphan_matches(record, history, &first.hash).map_err(internal)?;
         Ok(ReorgDetailResponse {
             event,
             orphaned_blocks: blocks,
@@ -1594,20 +1687,17 @@ fn enrich_branch_fate(
 }
 
 async fn get_recent_reorg(State(state): State<Arc<AppState>>) -> ApiResult<RecentReorgResponse> {
-    let store = state.store.clone();
-    let reader = state.ckb_store.clone();
     let (sync_status, latest, reorg) =
         tokio::task::spawn_blocking(move || -> Result<_, ApiRouteError> {
             let internal = |e: anyhow::Error| ApiError::internal(format!("{e:#}"));
-            let sync_status = store.get_sync_status().map_err(internal)?;
-            let latest = store.get_latest_reorg_event().map_err(internal)?;
-            let reorg = match &latest {
-                Some(record) => {
-                    let history = ForkHistory::load(&store, reader.as_deref()).map_err(internal)?;
-                    Some(reorg_event_response(record, &history)?)
-                }
-                None => None,
-            };
+            let sync_status = state.store.get_sync_status().map_err(internal)?;
+            let view = fork_view(&state).map_err(internal)?;
+            // Newest first: the history's first row is the latest event.
+            let latest = view.history.records.first().cloned();
+            let reorg = latest
+                .as_ref()
+                .map(|record| reorg_event_response(record, &view.history))
+                .transpose()?;
             Ok((sync_status, latest, reorg))
         })
         .await

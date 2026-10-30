@@ -733,6 +733,25 @@ impl CkbadgerStore {
         Ok(rows)
     }
 
+    /// The automatic switch whose reconciliation is still pending, if any.
+    ///
+    /// Read-only. Every write to a persisted reorg event happens either while
+    /// this marker is set (rollback interruption, reconciliation) or together
+    /// with setting it (a new automatic event) or with the deep-fork flag in
+    /// `sync_status` (a deep detection), so a reader that sees no marker and
+    /// an unchanged tip and deep-fork flag sees an unchanged event history.
+    pub fn get_reorg_reconcile_pending(&self) -> anyhow::Result<Option<String>> {
+        let Some(bytes) =
+            self.get_cf(self.cf_sync_meta(), sync_meta_keys::REORG_RECONCILE_PENDING)?
+        else {
+            return Ok(None);
+        };
+        keys::decode_reorg_event_key(&bytes)?;
+        Ok(Some(String::from_utf8(bytes).map_err(|e| {
+            anyhow!("pending reorg reconcile marker is not UTF-8: {e}")
+        })?))
+    }
+
     /// Exact number of persisted reorg events.
     pub fn count_reorg_events(&self) -> anyhow::Result<i64> {
         let iter = self.iterator_cf(
@@ -1258,6 +1277,30 @@ mod tests {
                 &bincode::serialize(&event).unwrap(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn test_get_reorg_reconcile_pending_reads_the_marker_and_rejects_garbage() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        assert_eq!(store.get_reorg_reconcile_pending().unwrap(), None);
+        let key = keys::encode_reorg_event_key(1_700_000_000_000, &[7; 16]).unwrap();
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::REORG_RECONCILE_PENDING,
+                key.as_bytes(),
+            )
+            .unwrap();
+        assert_eq!(store.get_reorg_reconcile_pending().unwrap(), Some(key));
+        store
+            .put_cf(
+                store.cf_sync_meta(),
+                sync_meta_keys::REORG_RECONCILE_PENDING,
+                b"not-a-key",
+            )
+            .unwrap();
+        assert!(store.get_reorg_reconcile_pending().is_err());
     }
 
     #[test]

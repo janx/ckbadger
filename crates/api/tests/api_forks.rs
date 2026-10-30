@@ -1218,3 +1218,63 @@ async fn overview_reports_the_node_switch_record_over_all_events() {
     assert_eq!(record["evidenceStatus"], "node_reader_unavailable");
     assert_eq!(record["orphanFates"], serde_json::Value::Null);
 }
+
+#[tokio::test]
+async fn fork_history_is_read_once_per_tip_and_fresh_while_reconcile_is_pending() {
+    let store = test_store();
+    seed_block_headers_at(&store, &[(0, 1_700_000_000_000), (1, 1_700_000_001_000)]);
+    put_event(
+        &store,
+        1_754_000_000_000,
+        0x11,
+        &automatic(10, 11, [0xa1; 32]),
+    );
+    let app = create_router(config_without_node_reader(store.clone())).await;
+    let (status, first) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["total"], 1);
+
+    // Production writes an event row only together with the reconcile marker
+    // or the deep-fork flag. A row slipped in without either, at the same tip,
+    // is invisible: the history was read from the store once for this tip.
+    put_event(
+        &store,
+        1_754_000_001_000,
+        0x12,
+        &automatic(20, 21, [0xa2; 32]),
+    );
+    let (_, second) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(second["total"], 1, "{second}");
+    let (_, recent) = get_json(&app, "/forks/recent").await;
+    assert_eq!(recent["reorg"]["forkPointNumber"], 10, "{recent}");
+
+    // The tip moves: the history is read again.
+    seed_block_headers_at(&store, &[(2, 1_700_000_002_000)]);
+    let (_, third) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(third["total"], 2, "{third}");
+
+    // While a reconcile is pending, every request reads the history afresh.
+    let pending = put_event(
+        &store,
+        1_754_000_002_000,
+        0x13,
+        &automatic(30, 31, [0xa3; 32]),
+    );
+    store
+        .put_cf(
+            store.cf_sync_meta(),
+            ckbadger_store::keys::sync_meta_keys::REORG_RECONCILE_PENDING,
+            pending.as_bytes(),
+        )
+        .unwrap();
+    let (_, fourth) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(fourth["total"], 3, "{fourth}");
+    put_event(
+        &store,
+        1_754_000_003_000,
+        0x14,
+        &automatic(40, 41, [0xa4; 32]),
+    );
+    let (_, fifth) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(fifth["total"], 4, "{fifth}");
+}
