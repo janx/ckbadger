@@ -134,6 +134,30 @@ export default function DaoDepositorsPage() {
                 columns={COLUMNS}
                 rowKey={(d) => d.lockScriptHash}
                 empty="No live deposits at this tip."
+                mobileRow={(d) => (
+                  <div className="space-y-1 text-[12px]">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="min-w-0">
+                        <span className="text-text-dim mr-2">{d.rank.toLocaleString('en-US')}</span>
+                        <Link
+                          href={`/address/${d.address}`}
+                          className="text-text-bright hover:underline"
+                        >
+                          {d.address.slice(0, 12)}…{d.address.slice(-7)}
+                        </Link>
+                      </span>
+                      <span className="text-text-dim shrink-0">{d.sharePercent}%</span>
+                    </div>
+                    <div className="text-text-bright">
+                      <Ckb shannons={d.capacity} /> CKB
+                      <span className="text-text-dim">
+                        {' · '}
+                        {d.depositCount.toLocaleString('en-US')} deposit
+                        {d.depositCount === 1 ? '' : 's'}
+                      </span>
+                    </div>
+                  </div>
+                )}
               />
               <div className="flex justify-between gap-3 pt-4">
                 {cursors.length > 1 ? (

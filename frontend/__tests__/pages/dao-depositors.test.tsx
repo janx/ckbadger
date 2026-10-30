@@ -64,6 +64,15 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(screen.getByRole('button', { name: 'Next 50 →' })).toBeInTheDocument();
   });
 
+  it('folds each depositor into a two-line card on phones, not a five-fact sheet', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
+    render(<DaoDepositorsPage />);
+    const cards = await screen.findByRole('list', { name: 'DAO depositors, compact' });
+    const first = within(cards).getAllByRole('listitem')[0];
+    expect(first.querySelectorAll('dt')).toHaveLength(0);
+    expect(first).toHaveTextContent('1ckb1qzda0cr0…ssd2hqn1.00%999.00000000 CKB · 1 deposit');
+  });
+
   it('says the ranking moved with the tip and starts again from rank 1', async () => {
     vi.mocked(api.getDaoDepositors)
       .mockResolvedValueOnce(page([1, 2], '20879205:2'))
