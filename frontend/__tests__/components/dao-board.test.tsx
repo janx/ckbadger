@@ -1,14 +1,36 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { fireEvent, screen, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoBoard } from '@/components/dao/dao-board';
+import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
 import evidence from '@/__tests__/fixtures/dao-evidence.json';
 
 vi.mock('@/components/dao/dao-sources', () => ({
   DaoSources: () => <div data-testid="sources" />,
 }));
+vi.mock('@/lib/api', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/api')>();
+  return { ...actual, api: { ...actual.api, calculateDaoCompensation: vi.fn() } };
+});
+
+/** The API calculator for 10,000 CKB: compensation = 100 CKB per 0.01 of AR gained (fixture). */
+function stubCalculator() {
+  vi.mocked(api.calculateDaoCompensation).mockImplementation(
+    async (capacity: string, depositBlock: number, withdrawBlock?: number) => ({
+      capacity,
+      capacityCkb: '10000',
+      depositBlock,
+      withdrawBlock: withdrawBlock!,
+      estimatedCompensation: depositBlock === 0 ? '20000000000' : '9801980198',
+      estimatedCompensationCkb: '',
+      totalWithdrawable: '',
+      totalWithdrawableCkb: '',
+      apc: null,
+    })
+  );
+}
 
 const stats = {
   ...daoStatistics,
@@ -356,5 +378,55 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     expect(legend).toHaveTextContent('to miners');
     expect(legend).toHaveTextContent('paid out');
     expect(legend).toHaveTextContent('No cell can ever claim it.');
+  });
+});
+
+describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const grows = () => screen.getByRole('region', { name: 'How a deposit grows' });
+
+  it("reads what 10,000 CKB deposited on a date is owed, from the API's calculator", async () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const reading = within(grows()).getByLabelText('Deposit reading');
+    expect(
+      await within(reading).findByText((_, el) => el?.getAttribute('data-role') === 'owed')
+    ).toHaveTextContent('+200.00000000 CKB compensation');
+    expect(reading).toHaveTextContent(
+      '10,000 CKB deposited on 1970-01-01 is owed +200.00000000 CKB compensation · 2.0000% on its free capacity, by #5'
+    );
+    // One compensation path: the API's calculator, deposit block → the evidence tip.
+    expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 0, 5);
+    expect(grows()).not.toHaveTextContent(/interest|earned/i);
+  });
+
+  it('plots AR by date, moves the reading along it, and bars each whole year', async () => {
+    stubChartWidth(600);
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = within(grows()).getByRole('img', { name: /^AR by date/ });
+    fireEvent.keyDown(chart, { key: 'ArrowLeft' });
+    const reading = within(grows()).getByLabelText('Deposit reading');
+    expect(reading).toHaveTextContent('10,000 CKB deposited on 1971-01-01');
+    expect(reading).toHaveTextContent('0.9901% on its free capacity');
+    await waitFor(() =>
+      expect(
+        within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
+      ).toHaveTextContent('+98.01980198 CKB compensation')
+    );
+    expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 3, 5);
+    const years = within(grows()).getByRole('img', {
+      name: 'Compensation on free capacity in each year since launch',
+    });
+    // Anniversary to anniversary only: the year in progress (to the tip) is not a bar.
+    expect(years.querySelectorAll('[data-year]')).toHaveLength(1);
+    expect(years).toHaveTextContent('1.00%from 1970-01');
+  });
+
+  it('keeps the AR anchors and the observed span out of tier 1 (DAO-9)', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(grows()).not.toHaveTextContent(/anchor|observed span/);
+    expect(screen.getByText(/365-day anchor/).closest('[data-tier="2"]')).not.toBeNull();
   });
 });

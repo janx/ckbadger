@@ -16,6 +16,7 @@ vi.mock('@/lib/api', () => ({
     getDaoCirculationRatioChart: vi.fn(),
     getGlobalActivities: vi.fn(),
     getTransactions: vi.fn(),
+    calculateDaoCompensation: vi.fn(),
   },
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="header" /> }));
@@ -53,6 +54,19 @@ describe('DaoPage', () => {
       nextCursor: null,
       limit: 12,
     });
+    vi.mocked(api.calculateDaoCompensation).mockImplementation(
+      async (capacity: string, depositBlock: number, withdrawBlock?: number) => ({
+        capacity,
+        capacityCkb: '10000',
+        depositBlock,
+        withdrawBlock: withdrawBlock!,
+        estimatedCompensation: '20000000000',
+        estimatedCompensationCkb: '200',
+        totalWithdrawable: '1020000000000',
+        totalWithdrawableCkb: '10200',
+        apc: null,
+      })
+    );
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       hasMore: false,

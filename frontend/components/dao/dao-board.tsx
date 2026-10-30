@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
-import { Chart } from '@/components/ui/chart';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
 import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { DaoSources } from '@/components/dao/dao-sources';
 import { DaoHistory } from '@/components/dao/dao-history';
+import { DaoGrows } from '@/components/dao/dao-grows';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
@@ -689,6 +689,24 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
         <div className="text-text-dim mt-4 break-all font-mono text-[11px]">
           {evidence.header.daoHex}
         </div>
+        <p className="text-text-dim mt-3 text-[12px] leading-relaxed">
+          Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
+          {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
+          capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
+          %. Compensation freezes at the withdrawal request AR.
+        </p>
+        {evidence.ar.year365 && (
+          <div className="text-text-dim mt-2 font-mono text-[11px]">
+            365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} · chain
+            time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+            {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
+            {formatDurationMs(
+              exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
+            )}{' '}
+            · the last canonical block at or before the 365-day chain-time cutoff, behind
+            &ldquo;Compensation, last 365 days&rdquo;
+          </div>
+        )}
         <Link
           href={`/blocks/${evidence.header.blockNumber}`}
           className="mt-2 inline-block text-[12px] text-[#f2c55c] hover:underline"
@@ -739,40 +757,10 @@ export function DaoBoard({
         />
         <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
         <Issuance statistics={statistics} />
-        <Section title="How a deposit grows" note="header AR · free capacity only">
-          <p className="text-text-dim text-[13px]">
-            AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
-            {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: +
-            {evidence.ar.sinceGenesisGrowthPercent}% on a deposit’s free capacity since genesis.
-            Compensation freezes at the withdrawal request AR. Estimated APC above models current
-            issuance; the observed growth uses the last canonical block at or before the 365-day
-            chain-time cutoff.
-          </p>
-          <Chart
-            title="Accumulated rate"
-            subtitle="Canonical yearly chain-time anchors and indexed tip"
-            data={evidence.ar.milestones.map((row) => ({
-              label: `${formatBlockNumber(row.blockNumber)}`,
-              values: { ar: row.arIndex },
-            }))}
-            series={[{ key: 'ar', label: 'AR', color: '#f2c55c' }]}
-            unit="×"
-            kind="line"
-            height={165}
-            formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
-          />
-          {evidence.ar.year365 && (
-            <div className="text-text-dim mt-2 font-mono text-[11px]">
-              365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} ·
-              chain time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
-              {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
-              {formatDurationMs(
-                exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
-              )}
-            </div>
-          )}
-        </Section>
-        <Windows evidence={evidence} />
+        <div className="grid min-w-0 items-start gap-12 lg:grid-cols-2 lg:gap-14">
+          <DaoGrows evidence={evidence} />
+          <Windows evidence={evidence} />
+        </div>
         <Owners evidence={evidence} />
         <DaoSources />
       </div>
