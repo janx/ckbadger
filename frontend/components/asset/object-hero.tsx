@@ -212,7 +212,10 @@ export function cellLifeSentence(
   return `${now} It held ${ckbText(was)} ${noun === 'token' ? 'at issue' : 'at minting'}${why}`;
 }
 
-export function lockFootnote(versions: readonly ItemCellVersion[]): string | null {
+export function lockFootnote(
+  versions: readonly ItemCellVersion[],
+  noun: 'object' | 'token'
+): string | null {
   const first = versions[0],
     last = versions.at(-1)!;
   if (versions.length < 2) return null;
@@ -223,6 +226,6 @@ export function lockFootnote(versions: readonly ItemCellVersion[]): string | nul
   const lock =
     first.lock.codeHash === last.lock.codeHash && first.lock.args === last.lock.args
       ? `Lock: ${first.lockName ?? 'unregistered lock'} throughout.`
-      : `Lock: ${first.lockName ?? 'unregistered lock'} with ${args(first)}-byte args at minting → ${last.lockName ?? 'unregistered lock'} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
+      : `Lock: ${first.lockName ?? 'unregistered lock'} with ${args(first)}-byte args ${noun === 'token' ? 'at issue' : 'at minting'} → ${last.lockName ?? 'unregistered lock'} with ${args(last)}-byte args ${last.isLive ? 'now' : 'last'}.`;
   return `${lock}${sameType ? ' Type and data never changed.' : ''}`;
 }

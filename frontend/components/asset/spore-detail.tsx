@@ -255,6 +255,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           scope="This object's whole life"
           item={{ kind: 'object' }}
           plain
+          mark="objects"
           focusItemId={id}
           loadActivities={(p) => api.getItemActivityFeed('spore', id, p)}
           loadTransactions={(p) => api.getItemTransactions('spore', id, p)}
@@ -370,8 +371,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 )
               }
             />
-            {lockFootnote(versions.data.data) && (
-              <p className="text-text-dim text-[12px]">{lockFootnote(versions.data.data)}</p>
+            {lockFootnote(versions.data.data, 'object') && (
+              <p className="text-text-dim text-[12px]">
+                {lockFootnote(versions.data.data, 'object')}
+              </p>
             )}
           </>
         ) : (

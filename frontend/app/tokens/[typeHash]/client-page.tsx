@@ -182,7 +182,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
                     {formatTimeAgo(latest.data.data[0].timestamp)}
                   </AppLink>
-                  , in a transaction the feed names “{activityHeadline(latest.data.data[0])}”.
+                  : {activityHeadline(latest.data.data[0])}.
                 </p>
               ) : (
                 <p className="text-text-dim">No recorded token movements.</p>

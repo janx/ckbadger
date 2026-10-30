@@ -66,7 +66,7 @@ export function AlleleGel({
   const inkId = `gel-ink-${useId().replace(/:/g, '')}`;
   const lw = (width - LX - LR) / Math.max(lanes.length, 1);
   const top = HEAD + 14;
-  const h = height - HEAD - 14 - 40;
+  const h = height - HEAD - 14 - 24;
   const placed: Placed[][] = lanes.map((lane) => {
     const spaced = lane.bands.length < h / 2;
     const usable = spaced ? h - GAP * (lane.bands.length - 1) : h;
@@ -190,10 +190,6 @@ export function AlleleGel({
             </g>
           );
         })}
-        <text x={LX} y={r(top + h + 32)} fontSize="10" fill={GEL_COLORS.label}>
-          variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
-          {total.toLocaleString('en-US')} objects, common at the top, rare below
-        </text>
         {overlays.map((o) => {
           if (o.points.length === 0) return null;
           const pts = o.points.map((p) => centre(p.lane, p.band));
@@ -242,6 +238,11 @@ export function AlleleGel({
           );
         })}
       </svg>
+      {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
+      <p className="text-text-dim mt-1 text-[11px]">
+        variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
+        {total.toLocaleString('en-US')} objects, common at the top, rare below
+      </p>
     </div>
   );
 }

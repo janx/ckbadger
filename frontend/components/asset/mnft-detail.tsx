@@ -347,6 +347,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           scope="Its whole life"
           item={{ kind: 'object' }}
           plain
+          mark="objects"
           focusItemId={objectId}
           loadActivities={(params) => api.getItemActivityFeed('mnft', objectId, params)}
           loadTransactions={(params) => api.getItemTransactions('mnft', objectId, params)}
@@ -431,8 +432,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               )
             }
           />
-          {lockFootnote(history.data) && (
-            <p className="text-text-dim text-[12px]">{lockFootnote(history.data)}</p>
+          {lockFootnote(history.data, 'token') && (
+            <p className="text-text-dim text-[12px]">{lockFootnote(history.data, 'token')}</p>
           )}
         </div>
       )}

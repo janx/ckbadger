@@ -310,4 +310,13 @@ describe('Token board (F2 objects)', () => {
     );
     expect(tier2).toHaveTextContent('Live cells150');
   });
+
+  // Visual pass: the last movement reads as one plain clause.
+  it('says when it last moved and what that transaction did', async () => {
+    vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
+    render(<TokenDetailPage typeHash={hash} />);
+    const line = await screen.findByText(/^It last moved/, undefined, { timeout: 5000 });
+    expect(line.textContent).toMatch(/^It last moved .+ ago: .+\.$/);
+    expect(line).not.toHaveTextContent('the feed names');
+  });
 });

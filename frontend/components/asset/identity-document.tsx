@@ -1,4 +1,5 @@
 'use client';
+import { useDetailTier } from '@/components/ui/detail-layout';
 import type { MnftProtocol, DotCellPartyRef } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -48,9 +49,17 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
     allowDestroyBeforeClaim: 'Destroy before claim',
     allowDestroyAfterClaim: 'Destroy after claim',
   };
+  // F2 objects (visual pass): in tier 2 (m-NFT item and class pages) the heading is tier-2 style.
+  const tier = useDetailTier();
   return (
     <section aria-label="mNFT permissions" className="space-y-4">
-      <h2 className="text-text-bright text-[15px]">What its configuration permits</h2>
+      <h2
+        className={
+          tier === 2 ? 'text-[13px] font-medium text-[#a0a8be]' : 'text-text-bright text-[15px]'
+        }
+      >
+        What its configuration permits
+      </h2>
       <p className="text-text-dim text-[11px]">
         Configure 0x{configure.toString(16).padStart(2, '0')} · zero permission bits allow the
         operation.

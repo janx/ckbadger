@@ -11,6 +11,7 @@ import { AlleleGel } from '@/components/ui/allele-gel';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
+import { useDetailTier } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import {
@@ -182,9 +183,16 @@ export function ObjectGeneticsEvidence({
 }) {
   const { dnaHex, cachedVmTraits: cached } = evidence;
   const layout = dnaHex === null ? null : sequencingGenes(evidence, subject);
+  const tier = useDetailTier();
   return (
     <section aria-label="DNA evidence" className="min-w-0 space-y-3">
-      <h2 className="text-text-bright text-[15px]">DNA evidence</h2>
+      <h2
+        className={
+          tier === 2 ? 'text-[13px] font-medium text-[#a0a8be]' : 'text-text-bright text-[15px]'
+        }
+      >
+        DNA evidence
+      </h2>
       <p className="text-text-dim text-[11px]">
         The byte map describes the current decoder. Trait values are cached VM results
         {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
@@ -198,7 +206,9 @@ export function ObjectGeneticsEvidence({
               <dt>
                 {g.name}{' '}
                 <span className="text-text-dim">
-                  bytes {g.offset}–{g.offset + g.length - 1}
+                  {g.length === 1
+                    ? `byte ${g.offset}`
+                    : `bytes ${g.offset}–${g.offset + g.length - 1}`}
                 </span>
               </dt>
               <dd className="text-text-dim break-words">

@@ -191,7 +191,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 // ── F2 objects (round 2): the asset boards' participant line — lock kind as its own unwrapped
 // column (IV-14, OB-12), and a batch of objects folded behind "+N more objects" (OB-M3). ──
 const PARTICIPANT_GRID_LOCK =
-  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs sm:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)]';
+  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs sm:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)]';
 function FoldedItemDeltas({
   items,
   focusItemId,
@@ -277,7 +277,7 @@ function Participants({
               data-role="occupied"
               className={cn(
                 'text-text-dim col-start-2 text-right text-[11px]',
-                lockColumn ? 'sm:col-start-4' : 'sm:col-start-3'
+                lockColumn ? 'whitespace-nowrap sm:col-start-4' : 'sm:col-start-3'
               )}
             >
               occupied {formatOccupiedDelta(p.usedDelta)}

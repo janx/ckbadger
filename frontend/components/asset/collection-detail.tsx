@@ -377,6 +377,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           scope="This collection"
           collection
           plain={kind !== 'identity'}
+          // visual pass: every row of a Spore cluster / m-NFT class feed is about objects
+          mark={kind === 'identity' ? undefined : 'objects'}
           loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
           loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
           context={{
@@ -542,11 +544,6 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                   : ''}
               </p>
             )}
-            <p className="text-text-dim text-[12px] leading-relaxed">
-              <span className="text-jade">Occupied</span> is the CKB that pays for the bytes of
-              these cells, the state the collection keeps on CKB; free is CKB their owners parked in
-              the same cells.
-            </p>
           </>
         )}
       </div>

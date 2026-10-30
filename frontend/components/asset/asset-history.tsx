@@ -262,7 +262,11 @@ export function AssetHistory({
               {weeklyUnavailable ??
                 (week
                   ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
-                  : 'No completed weekly total for this day')}
+                  : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
+                    // complete yet; it names the latest complete week instead of nothing.
+                    selectedDate === null && weekly.length > 0
+                    ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
+                    : 'No completed weekly total for this day')}
             </span>
           </div>
           <Chart

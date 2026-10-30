@@ -21,7 +21,8 @@ import { cn } from '@/lib/utils';
 
 const NEWEST = 8;
 const ROW_GRID =
-  'grid min-w-0 items-center gap-x-3.5 gap-y-1 sm:grid-cols-[minmax(0,150px)_minmax(0,120px)_minmax(0,1fr)_132px_100px]';
+  // visual pass: at 390 two columns (name | id, owner | gel, minted) instead of five lines
+  'grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3.5 gap-y-1 sm:grid-cols-[minmax(0,150px)_minmax(0,120px)_minmax(0,1fr)_132px_100px]';
 
 function objectNumber(number: string | null, sporeId: string): string {
   if (number === null) return `${sporeId.slice(0, 10)}…${sporeId.slice(-4)}`;
