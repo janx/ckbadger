@@ -120,11 +120,7 @@ impl CkbadgerStore {
                     e
                 )
             })?;
-            if key.len() != keys::TX_ACTIONS_KEY_SIZE {
-                continue;
-            }
-
-            let (block_num, tx_idx, tx_hash_from_key) = keys::decode_tx_actions_key(&key);
+            let (block_num, tx_idx, tx_hash_from_key) = keys::decode_stored_tx_actions_key(&key)?;
             if after_block.is_some_and(|number| block_num <= number) {
                 break;
             }
@@ -753,6 +749,26 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].block_number, 100);
         assert_eq!(results[0].tx_index, 0);
+    }
+
+    /// I6 (b): a wrong-width `activities` key is corruption the recent-window
+    /// scan used to step over; it now names the key.
+    #[test]
+    fn list_tx_actions_recent_in_range_rejects_a_key_of_the_wrong_width() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let short_key = [0x00; 12];
+        store
+            .put_cf(store.cf_tx_actions(), &short_key, b"orphan")
+            .unwrap();
+        let err = store
+            .list_tx_actions_recent_in_range(10, None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(&hex::encode(short_key)) && err.contains("12 bytes"),
+            "{err}"
+        );
     }
 
     #[test]

@@ -1726,6 +1726,20 @@ pub fn encode_tx_actions_seek_after_key(block_num: i64, tx_idx: i32) -> Vec<u8> 
     key
 }
 
+/// [`decode_tx_actions_key`] for a key read back from the store: only
+/// 44-byte keys are ever written to `activities`, so any other width is
+/// corruption, reported with the key instead of skipped.
+pub fn decode_stored_tx_actions_key(key: &[u8]) -> anyhow::Result<(i64, i32, Vec<u8>)> {
+    anyhow::ensure!(
+        key.len() == TX_ACTIONS_KEY_SIZE,
+        "activities key 0x{} has {} bytes, expected {}",
+        hex::encode(key),
+        key.len(),
+        TX_ACTIONS_KEY_SIZE
+    );
+    Ok(decode_tx_actions_key(key))
+}
+
 pub fn decode_tx_actions_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
     assert!(
         key.len() == TX_ACTIONS_KEY_SIZE,

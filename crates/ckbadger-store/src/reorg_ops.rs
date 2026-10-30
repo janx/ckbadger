@@ -3269,10 +3269,10 @@ impl CkbadgerStore {
                             e
                         )
                     })?;
-                    if key.len() != keys::TX_ACTIONS_KEY_SIZE {
-                        continue;
-                    }
-                    let (block_num, _tx_idx, _tx_hash) = keys::decode_tx_actions_key(&key);
+                    let (block_num, _tx_idx, _tx_hash) = keys::decode_stored_tx_actions_key(&key)
+                        .map_err(|e| {
+                        anyhow::anyhow!("rollback delta prescan, rollback_to={rollback_to}: {e}")
+                    })?;
                     if block_num <= rollback_to {
                         break;
                     }
@@ -3755,10 +3755,12 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                if key.len() != keys::TX_ACTIONS_KEY_SIZE {
-                    continue;
-                }
-                let (block_num, _tx_idx, tx_hash) = keys::decode_tx_actions_key(&key);
+                let (block_num, _tx_idx, tx_hash) = keys::decode_stored_tx_actions_key(&key)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "rollback delete_activities, rollback_to={rollback_to}: {e}"
+                        )
+                    })?;
                 if block_num <= rollback_to {
                     // Keys are in descending block_num order; all remaining entries
                     // are also <= rollback_to, so stop scanning.
@@ -7794,6 +7796,26 @@ mod tests {
         );
         assert!(err.contains("rollback_to=1"), "{err}");
         assert_eq!(bucket_rows(&store).len(), 7, "nothing commits");
+    }
+
+    /// I6 (b): only 44-byte keys are ever written to `activities`; a key of
+    /// another width is corruption. Rollback skipped it, so a damaged row
+    /// above the fork point survived the rollback; it now fails, naming the
+    /// key, and commits nothing.
+    #[test]
+    fn test_rollback_fails_on_an_activities_key_of_the_wrong_width() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        seed_bucket_rollback_fixture(&store);
+        let short_key = [0x7f; 43];
+        store
+            .put_cf(store.cf_tx_actions(), &short_key, b"orphan")
+            .unwrap();
+
+        let err = format!("{:#}", rollback_fixture(&store, 1).unwrap_err());
+        assert!(err.contains(&hex::encode(short_key)), "{err}");
+        assert!(err.contains("43 bytes"), "{err}");
+        assert_eq!(bucket_rows(&store).len(), 6, "nothing commits");
     }
 
     #[test]

@@ -73,6 +73,31 @@ impl ParserPrecomputePhaseMetrics {
 /// inputs keep raw inputs >= outputs). `write_parsed_batch` MUST correct the
 /// fee for every tx that consumes a withdraw-request outpoint BEFORE
 /// serializing `TxIndexEntry` (see `correct_dao_withdrawal_fees`).
+/// The resolved cell an input spends: a cell created before this batch
+/// (`input_cell_info`, prefetched) or by an earlier transaction of this
+/// batch (`batch_cell_infos`). The input prefetch retries until every input
+/// resolves, so a miss here is a broken invariant: an error naming the
+/// input, never a skipped input.
+pub(crate) fn resolve_parsed_input<'a>(
+    input_cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    batch_cell_infos: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+    key: &(Vec<u8>, i16),
+    tx_hash: &[u8],
+    block_number: i64,
+) -> Result<&'a PositionedCellInfo> {
+    input_cell_info
+        .get(key)
+        .or_else(|| batch_cell_infos.get(key))
+        .ok_or_else(|| {
+            anyhow!(
+                "parser input resolves to no cell: block={block_number} tx=0x{} input=0x{}:{}",
+                hex::encode(tx_hash),
+                hex::encode(&key.0),
+                key.1
+            )
+        })
+}
+
 pub(crate) fn compute_parser_input_capacities_and_fees(
     all_tx_data: &mut [TxData],
     input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
@@ -87,18 +112,20 @@ pub(crate) fn compute_parser_input_capacities_and_fees(
             let output_index =
                 parsed_input_outpoint_index_i16(input.previous_output_index, "sync_indexer")?;
             let key = (input.previous_tx_hash.to_vec(), output_index);
-            if let Some(info) = input_cell_info
-                .get(&key)
-                .or_else(|| batch_cell_infos.get(&key))
+            let info = resolve_parsed_input(
+                input_cell_info,
+                batch_cell_infos,
+                &key,
+                &tx_data.hash,
+                tx_data.block_number,
+            )?;
+            tx_data.total_input_capacity += info.capacity;
+            if info
+                .type_code_hash
+                .as_deref()
+                .is_some_and(DaoParser::is_dao_code_hash)
             {
-                tx_data.total_input_capacity += info.capacity;
-                if info
-                    .type_code_hash
-                    .as_deref()
-                    .is_some_and(DaoParser::is_dao_code_hash)
-                {
-                    has_dao_input = true;
-                }
+                has_dao_input = true;
             }
         }
         tx_data.fee = checked_tx_fee(
@@ -1989,10 +2016,26 @@ impl Indexer {
                                 }
                             };
                             let key = (input.previous_tx_hash.to_vec(), output_index);
-                            let info = input_cell_info
-                                .get(&key)
-                                .or_else(|| batch_cell_infos.get(&key));
-                            if let Some(info) = info {
+                            let info = match resolve_parsed_input(
+                                &input_cell_info,
+                                &batch_cell_infos,
+                                &key,
+                                &tx_data.hash,
+                                tx_data.block_number,
+                            ) {
+                                Ok(info) => info,
+                                Err(e) => {
+                                    error!(start_block, end_block, "Parser: {e}");
+                                    record_worker_exit_reason(
+                                        &parser_exit_reason_for_parser,
+                                        format!(
+                                            "unresolved input in pass 3 for range {start_block}-{end_block}: {e}"
+                                        ),
+                                    );
+                                    return;
+                                }
+                            };
+                            {
                                 *tx_balance_changes
                                     .entry(info.lock_script_hash.clone())
                                     .or_default() -= i128::from(info.capacity);
@@ -3331,6 +3374,70 @@ mod tests {
         TransactionView,
     };
     use crate::sync::TEST_CELLBASE_WITNESS;
+
+    // -----------------------------------------------------------------------
+    // I6 (a) — an input the parser cannot resolve is an error, not a skip
+    // -----------------------------------------------------------------------
+
+    /// The input prefetch retries until every input of the range resolves
+    /// (`collect_missing_input_outpoints` is empty), so an input missing from
+    /// both the prefetched cells and this batch's outputs is a broken
+    /// invariant. The fee pass used to skip it — undercounting the fee and
+    /// every per-tx contribution the parser derives from that cell — instead
+    /// of naming it.
+    #[test]
+    fn an_unresolvable_input_fails_the_parser_with_its_location() {
+        let tx_hash = [0x5e; 32];
+        let missing = [0x6f; 32];
+        let mut all_tx_data = vec![TxData {
+            hash: tx_hash,
+            block_number: 4_242,
+            tx_index: 1,
+            inputs_count: 1,
+            outputs_count: 0,
+            is_cellbase: false,
+            inputs: vec![crate::parser::transaction::ParsedInput {
+                previous_tx_hash: missing,
+                previous_output_index: 3,
+                since: 0,
+            }],
+            cells: vec![],
+            witnesses: vec![],
+            total_input_capacity: 0,
+            total_output_capacity: 0,
+            fee: 0,
+            tx_size: 0,
+            cycles: None,
+            timestamp: chrono::Utc::now(),
+            semantic_tags: 0,
+        }];
+        let error = compute_parser_input_capacities_and_fees(
+            &mut all_tx_data,
+            &HashMap::new(),
+            &HashMap::new(),
+        )
+        .expect_err("an input resolved by neither the prefetch nor the batch is an error")
+        .to_string();
+        assert!(
+            error.contains(&hex::encode(tx_hash))
+                && error.contains(&hex::encode(missing))
+                && error.contains("block=4242")
+                && error.contains(":3"),
+            "{error}"
+        );
+        assert_eq!(
+            resolve_parsed_input(
+                &HashMap::new(),
+                &HashMap::new(),
+                &(missing.to_vec(), 3),
+                &tx_hash,
+                4_242
+            )
+            .unwrap_err()
+            .to_string(),
+            error
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Task 1.3 — `.bit Cell` create → consume classification symmetry
