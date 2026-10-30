@@ -78,3 +78,42 @@ it('interprets an uncommitted body without fabricated block evidence', () => {
     activityHeadline({ participants, protocolActions, typeCalls, lockCalls, isCellbase })
   ).toBe('Object transfer');
 });
+
+it('names a .cell ring_relink as the ring pointer it changed, without throwing', () => {
+  const ringRelink = {
+    protocol: 'dotcell',
+    protocolName: '.cell',
+    action: 'ring_relink',
+    metadata: { label: 'apt', name: 'apt.cell', id: '0x' + 'a7'.repeat(20), changes: ['next'] },
+  };
+  expect(protocolActionLabel(ringRelink)).toBe('.cell · ring pointer changed for apt.cell');
+  // A ring_relink names no participants and moves no items; it labels on its own.
+  expect(protocolActionLabel({ ...ringRelink, metadata: { changes: ['next'] } })).toBe(
+    '.cell · ring pointer changed'
+  );
+});
+it('shows a register beside the ring_relink it caused in one transaction', () => {
+  const activity: GlobalActivity = {
+    ...feedSamples.tokenTransfer,
+    participants: feedSamples.tokenTransfer.participants.map((p) => ({ ...p, itemDeltas: [] })),
+    typeCalls: [],
+    protocolActions: [
+      {
+        protocol: 'dotcell',
+        protocolName: '.cell',
+        action: 'register',
+        metadata: { label: 'ckb', name: 'ckb.cell', id: '0x' + 'cc'.repeat(20) },
+      },
+      {
+        protocol: 'dotcell',
+        protocolName: '.cell',
+        action: 'ring_relink',
+        metadata: { label: 'apt', name: 'apt.cell', id: '0x' + 'a7'.repeat(20), changes: ['next'] },
+      },
+    ],
+  };
+  render(<ActivityRow activity={activity} />);
+  expect(screen.getByText('.cell · register')).toBeInTheDocument();
+  expect(screen.getByText(/ring pointer changed for apt\.cell/)).toBeInTheDocument();
+  expect(screen.queryByTestId('activity-read-error')).not.toBeInTheDocument();
+});
