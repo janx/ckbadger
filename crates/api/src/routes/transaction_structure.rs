@@ -2,6 +2,7 @@
 use super::transactions::{TransactionInputResponse, TransactionOutputResponse};
 use crate::response::ScriptResponse;
 use ckb_types::{packed, prelude::*};
+use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -269,6 +270,87 @@ pub struct CobuildActionResponse {
     pub script_info_hash: String,
     pub script_hash: String,
     pub data: String,
+    /// The action schema `data` decodes under, when one is known for the
+    /// script it is for (TX-36): `"spore"` (spore-contract `SporeAction`).
+    /// Absent for any other script — the schema is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
+    /// The action's name in that schema, e.g. `"TransferSpore"`; present
+    /// exactly when `schema` is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// spore-contract `action.mol` `union SporeAction`, in item-id order: each
+/// item's name and its table's field count.
+const SPORE_ACTIONS: [(&str, usize); 11] = [
+    ("MintSpore", 3),
+    ("TransferSpore", 3),
+    ("BurnSpore", 2),
+    ("MintCluster", 3),
+    ("TransferCluster", 3),
+    ("MintProxy", 3),
+    ("TransferProxy", 4),
+    ("BurnProxy", 3),
+    ("MintAgent", 3),
+    ("TransferAgent", 3),
+    ("BurnAgent", 2),
+];
+
+/// The `SporeAction` name `data` encodes for a script of `family` — the
+/// Spore type (items 0..=2) or the Cluster type (items 3..=4) — when `data`
+/// is that union with a well-formed item table; `None` otherwise.
+fn spore_action_name(family: ProtocolScript, data: &[u8]) -> Option<&'static str> {
+    let item = word(data, 0)?;
+    let allowed = match family {
+        ProtocolScript::SporeNft => 0..=2,
+        ProtocolScript::Cluster => 3..=4,
+        _ => return None,
+    };
+    if !allowed.contains(&item) {
+        return None;
+    }
+    let (name, fields) = SPORE_ACTIONS[item];
+    molecule_fields(data.get(4..)?, Some(fields))?;
+    Some(name)
+}
+
+/// Name the CoBuild actions whose schema is known (TX-36). An action is for
+/// the script whose hash it carries; when that is a type script of this
+/// transaction's inputs or outputs registered as a Spore or Cluster, its data
+/// is decoded as `SporeAction`. Every other action keeps only its hashes and
+/// raw data: no schema registry exists for it.
+pub fn name_cobuild_actions(
+    witnesses: &mut [WitnessResponse],
+    inputs: &[TransactionInputResponse],
+    outputs: &[TransactionOutputResponse],
+) -> anyhow::Result<()> {
+    let mut families = BTreeMap::new();
+    for script in inputs
+        .iter()
+        .filter_map(|input| input.r#type.as_ref())
+        .chain(outputs.iter().filter_map(|output| output.r#type.as_ref()))
+    {
+        let code_hash = hex::decode(script.code_hash.trim_start_matches("0x"))?;
+        if let Some(family) = PROTOCOL_REGISTRY.get(&code_hash) {
+            families.insert(script_hash(script)?, family);
+        }
+    }
+    for action in witnesses
+        .iter_mut()
+        .filter_map(|witness| witness.actions.as_mut())
+        .flatten()
+    {
+        let Some(family) = families.get(&action.script_hash) else {
+            continue;
+        };
+        let data = hex::decode(action.data.trim_start_matches("0x"))?;
+        if let Some(name) = spore_action_name(*family, &data) {
+            action.schema = Some("spore".to_string());
+            action.name = Some(name.to_string());
+        }
+    }
+    Ok(())
 }
 
 /// The actions of a CoBuild witness's message (`Message { actions:
@@ -298,6 +380,8 @@ fn cobuild_actions(bytes: &[u8]) -> Option<Vec<CobuildActionResponse>> {
             script_info_hash: hash(fields[0])?,
             script_hash: hash(fields[1])?,
             data: format!("0x{}", hex::encode(&data[4..])),
+            schema: None,
+            name: None,
         });
     }
     Some(out)
@@ -327,6 +411,27 @@ pub fn cellbase_witness(bytes: &[u8]) -> Option<CellbaseWitnessResponse> {
     })
 }
 
+/// The text of a cellbase message, decided once (BA-17).
+///
+/// The CKB node's block assembler writes the message as `versionbits (u32
+/// LE) + " "` — when it computes versionbits, as every node since the 2021
+/// hardfork does — then the client's binary version and its configured
+/// message. Consensus reads the first four bytes as that version word, and
+/// accepts it as one only when its top three bits are `000`
+/// (`VERSIONBITS_TOP_MASK`), i.e. when the fourth byte is below `0x20`. A
+/// printable character there is always `>= 0x20`, so the prefix is exactly:
+/// at least five bytes, byte 3 below `0x20`, byte 4 a space. The text is the
+/// rest of the message when it is UTF-8 without control characters; any other
+/// message (a pool's binary extra-nonce, say) has no text and `None` says so.
+pub(crate) fn cellbase_message_text(message: &[u8]) -> Option<String> {
+    let payload = match message {
+        [_, _, _, version_top, b' ', rest @ ..] if *version_top < 0x20 => rest,
+        _ => message,
+    };
+    let text = std::str::from_utf8(payload).ok()?;
+    (!text.is_empty() && !text.chars().any(char::is_control)).then(|| text.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedDependencyCell {
@@ -334,7 +439,19 @@ pub struct ResolvedDependencyCell {
     pub index: u32,
     pub data_hash: String,
     pub type_hash: Option<String>,
+    /// Scripts that ran in this transaction (input locks, input and output
+    /// types) whose code this cell supplies.
     pub script_hashes: Vec<String>,
+    /// Output locks whose code this cell supplies: attached here, run only
+    /// when that output is spent — "not run here" (TX-14). A lock that is
+    /// also an input lock ran, and is in `scriptHashes` instead.
+    pub output_lock_script_hashes: Vec<String>,
+    /// The cell's data length in bytes: the code's size (TX-15).
+    pub code_size: usize,
+    /// The script registry's names of the references this cell supplies in
+    /// this transaction (run or attached), distinct and sorted; empty when it
+    /// supplies none or none is registered (TX-15).
+    pub script_names: Vec<String>,
 }
 
 fn node_cell(
@@ -364,6 +481,7 @@ fn node_cell(
 pub fn resolved_dependencies(
     tx: &ckb_types::core::TransactionView,
     reader: &ckb_store_reader::CkbChainReader,
+    store: &ckbadger_store::CkbadgerStore,
 ) -> anyhow::Result<Vec<super::transactions::CellDepResponse>> {
     let mut scripts = BTreeMap::<String, packed::Script>::new();
     for input in tx
@@ -392,6 +510,29 @@ pub fn resolved_dependencies(
             );
         }
     }
+    // Output locks do not run in this transaction; one that is also a script
+    // that ran is listed only there.
+    let output_locks: BTreeMap<String, packed::Script> = tx
+        .outputs()
+        .into_iter()
+        .map(|output| {
+            let lock = output.lock();
+            (
+                format!("0x{}", hex::encode(lock.calc_script_hash().as_slice())),
+                lock,
+            )
+        })
+        .filter(|(hash, _)| !scripts.contains_key(hash))
+        .collect();
+    let supplies = |script: &packed::Script,
+                    data_hash: &packed::Byte32,
+                    type_hash: Option<&packed::Byte32>| {
+        if script.hash_type().as_slice()[0] == 1 {
+            type_hash.is_some_and(|hash| *hash == script.code_hash())
+        } else {
+            *data_hash == script.code_hash()
+        }
+    };
     tx.cell_deps()
         .into_iter()
         .map(|dep| {
@@ -416,19 +557,27 @@ pub fn resolved_dependencies(
                         .type_()
                         .to_opt()
                         .map(|script| script.calc_script_hash());
-                    let script_hashes = scripts
-                        .iter()
-                        .filter_map(|(hash, script)| {
-                            let matched = if script.hash_type().as_slice()[0] == 1 {
-                                type_hash
-                                    .as_ref()
-                                    .is_some_and(|hash| *hash == script.code_hash())
-                            } else {
-                                data_hash == script.code_hash()
-                            };
-                            matched.then(|| hash.clone())
-                        })
-                        .collect();
+                    let matching = |set: &BTreeMap<String, packed::Script>| -> Vec<String> {
+                        set.iter()
+                            .filter(|(_, script)| supplies(script, &data_hash, type_hash.as_ref()))
+                            .map(|(hash, _)| hash.clone())
+                            .collect()
+                    };
+                    let script_hashes = matching(&scripts);
+                    let output_lock_script_hashes = matching(&output_locks);
+                    let mut script_names = std::collections::BTreeSet::new();
+                    for hash in script_hashes.iter().chain(&output_lock_script_hashes) {
+                        let script = scripts
+                            .get(hash)
+                            .or_else(|| output_locks.get(hash))
+                            .expect("matched hash is a key of its set");
+                        if let Some(name) = crate::utils::script_resolution::registered_script_name(
+                            store,
+                            script.code_hash().as_slice(),
+                        )? {
+                            script_names.insert(name);
+                        }
+                    }
                     Ok(ResolvedDependencyCell {
                         tx_hash: format!("0x{}", hex::encode(point.tx_hash().as_slice())),
                         index: point.index().unpack(),
@@ -436,12 +585,21 @@ pub fn resolved_dependencies(
                         type_hash: type_hash
                             .map(|hash| format!("0x{}", hex::encode(hash.as_slice()))),
                         script_hashes,
+                        output_lock_script_hashes,
+                        code_size: data.len(),
+                        script_names: script_names.into_iter().collect(),
                     })
                 })
                 .collect::<anyhow::Result<_>>()?;
             let script_hashes = resolved_cells
                 .iter()
                 .flat_map(|cell| cell.script_hashes.iter().cloned())
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let output_lock_script_hashes = resolved_cells
+                .iter()
+                .flat_map(|cell| cell.output_lock_script_hashes.iter().cloned())
                 .collect::<std::collections::BTreeSet<_>>()
                 .into_iter()
                 .collect();
@@ -457,6 +615,7 @@ pub fn resolved_dependencies(
                 .into(),
                 resolved_cells,
                 script_hashes,
+                output_lock_script_hashes,
             })
         })
         .collect()
@@ -724,6 +883,36 @@ pub fn witness_details(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cellbase_message_text_strips_the_versionbits_prefix_only() {
+        // The node's own format: versionbits 0 + " " + binary version.
+        let mut message = vec![0, 0, 0, 0, b' '];
+        message.extend_from_slice(b"0.210.0 (2592ddf 2026-09-17)");
+        assert_eq!(
+            cellbase_message_text(&message).as_deref(),
+            Some("0.210.0 (2592ddf 2026-09-17)")
+        );
+        // A signalling version word (bit 1 set) is still the prefix.
+        let mut signalling = vec![2, 0, 0, 0, b' '];
+        signalling.extend_from_slice(b"0.119.0");
+        assert_eq!(
+            cellbase_message_text(&signalling).as_deref(),
+            Some("0.119.0")
+        );
+        // Text from the first byte (no versionbits) is kept whole.
+        assert_eq!(
+            cellbase_message_text(b"ckb 0.210.0").as_deref(),
+            Some("ckb 0.210.0")
+        );
+        // Trailing binary bytes, a bare prefix, or no bytes: no text.
+        let mut binary = b"0.210.0 (860c9bb 2026-09-21) ".to_vec();
+        binary.extend_from_slice(&[0xff, 0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(cellbase_message_text(&binary), None);
+        assert_eq!(cellbase_message_text(&[0, 0, 0, 0, b' ']), None);
+        assert_eq!(cellbase_message_text(&[]), None);
+    }
+
     #[test]
     fn witness_args_fields_retain_byte_ranges_and_payload() {
         let lock = packed::BytesOpt::new_builder()
@@ -828,6 +1017,37 @@ mod tests {
     }
 
     #[test]
+    fn spore_actions_decode_only_for_their_own_script_family() {
+        let script = table(&[vec![0x22; 32], vec![1], vec![0, 0, 0, 0]]);
+        let address = [0u32.to_le_bytes().to_vec(), script].concat();
+        let union =
+            |item: u32, fields: &[Vec<u8>]| [item.to_le_bytes().to_vec(), table(fields)].concat();
+        let transfer = union(1, &[vec![0x41; 32], address.clone(), address.clone()]);
+        assert_eq!(
+            spore_action_name(ProtocolScript::SporeNft, &transfer),
+            Some("TransferSpore")
+        );
+        // A Spore item is not a Cluster action, and vice versa.
+        assert_eq!(spore_action_name(ProtocolScript::Cluster, &transfer), None);
+        let mint_cluster = union(3, &[vec![0x41; 32], address.clone(), vec![0x55; 32]]);
+        assert_eq!(
+            spore_action_name(ProtocolScript::Cluster, &mint_cluster),
+            Some("MintCluster")
+        );
+        // A wrong field count or an unknown item is not a SporeAction.
+        let burn_with_three = union(2, &[vec![0x41; 32], address.clone(), address]);
+        assert_eq!(
+            spore_action_name(ProtocolScript::SporeNft, &burn_with_three),
+            None
+        );
+        assert_eq!(
+            spore_action_name(ProtocolScript::SporeNft, &[11, 0, 0, 0]),
+            None
+        );
+        assert_eq!(spore_action_name(ProtocolScript::Sudt, &transfer), None);
+    }
+
+    #[test]
     fn cobuild_rejects_message_before_seal_layout() {
         let message = table(&[4u32.to_le_bytes().to_vec()]);
         let body = table(&[message, vec![0, 0, 0, 0]]);
@@ -847,6 +1067,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -879,6 +1100,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -936,6 +1158,7 @@ mod tests {
             args: "0x".into(),
         };
         let input = TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -957,6 +1180,8 @@ mod tests {
             address: None,
             status: None,
             consumed_by_tx: None,
+            is_change: false,
+            lock_args_decoded: None,
         };
         let mut groups = script_groups(&[input.clone(), input], &[output]).unwrap();
         assert_eq!(groups.len(), 3);
@@ -1024,6 +1249,7 @@ mod tests {
     }
     fn input(lock: &ScriptResponse, r#type: Option<&ScriptResponse>) -> TransactionInputResponse {
         TransactionInputResponse {
+            lock_args_decoded: None,
             display: None,
             previous_output: None,
             since: "0x0".into(),
@@ -1047,6 +1273,8 @@ mod tests {
             address: None,
             status: None,
             consumed_by_tx: None,
+            is_change: false,
+            lock_args_decoded: None,
         }
     }
     fn hex_bytes(raw: &str) -> Vec<u8> {

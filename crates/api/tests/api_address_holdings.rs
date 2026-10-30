@@ -942,3 +942,243 @@ async fn address_clusterless_spore_uses_no_fabricated_onchain_collection() {
     assert_eq!(s, StatusCode::OK, "{j}");
     assert!(j["data"][0]["display"]["collectionId"].is_null());
 }
+
+/// A phase-0 DAO deposit cell `hash:index` of `capacity` under `owner`.
+fn put_dao_deposit_cell(
+    batch: &mut StoreBatch,
+    owner: &[u8],
+    dao: &packed::Script,
+    hash: &[u8],
+    index: i16,
+    capacity: u64,
+) {
+    let used = (8 + 33 + 20 + 33 + 8) as i64 * 100_000_000;
+    let cell = LiveCellInfo {
+        capacity: capacity as i64,
+        lock_script_hash: owner.to_vec(),
+        lock_code_hash: vec![0x11; 32],
+        lock_hash_type: 1,
+        lock_args: vec![0x23; 20],
+        type_script_hash: Some(dao.calc_script_hash().as_slice().to_vec()),
+        type_code_hash: Some(dao.code_hash().as_slice().to_vec()),
+        type_hash_type: Some(1),
+        type_args: Some(vec![]),
+        data_size: 8,
+        occupied_capacity: used,
+        udt_amount: None,
+        data_hash: Some(ckb_hash::blake2b_256([0u8; 8]).to_vec()),
+    };
+    batch.put_cell(hash, index, &cell, 7);
+    batch.put_cell_by_lock(owner, 7, hash, index);
+    batch.put_dao_deposit(
+        &ckbadger_store::keys::encode_outpoint(hash, index),
+        &DaoDepositCacheEntry {
+            capacity: capacity as i64,
+            occupied_capacity: used,
+            deposit_block_number: 7,
+            deposit_timestamp: 1_700_000_001_000,
+            lock_script_hash: owner.to_vec(),
+            deposit_ar: 10_000_000_000_000_000,
+            status: 0,
+            withdraw_request_tx: None,
+            withdraw_request_output_index: None,
+            withdraw_request_block: None,
+            withdraw_request_ar: None,
+            withdraw_request_occupied_capacity: None,
+            withdraw_block: None,
+            withdraw_tx: None,
+            withdraw_to_output_index: None,
+            compensation: None,
+            deposit_chain_time_ms: 1_700_000_001_000,
+        },
+    );
+}
+
+/// Three phase-0 DAO deposits of 500, 2,000 and 1,200 CKB under one lock.
+async fn dao_capacity_fixture() -> (axum::Router, Arc<CkbadgerStore>, Vec<u8>, packed::Script) {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash([0x11; 32].pack())
+        .hash_type(1u8.into())
+        .args([0x23; 20].pack())
+        .build();
+    let owner = lock.calc_script_hash().as_slice().to_vec();
+    let dao = script(ProtocolScript::Dao, &[]);
+    let capacities: [u64; 3] = [50_000_000_000, 200_000_000_000, 120_000_000_000];
+    let outputs: Vec<_> = capacities
+        .iter()
+        .map(|capacity| {
+            packed::CellOutput::new_builder()
+                .capacity(capacity.pack())
+                .lock(lock.clone())
+                .type_(Some(dao.clone()).pack())
+                .build()
+        })
+        .collect();
+    let tx = TransactionBuilder::default()
+        .outputs(outputs)
+        .outputs_data(
+            capacities
+                .iter()
+                .map(|_| Bytes::from(vec![0u8; 8]).pack())
+                .collect::<Vec<_>>(),
+        )
+        .build();
+    let hash = tx.hash().as_slice().to_vec();
+    let chain = seed_ckb_chain(&[BlockBuilder::default()
+        .number(7u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .transaction(tx)
+        .build()]);
+    let used = (8 + 33 + 20 + 33 + 8) as i64 * 100_000_000;
+    let mut batch = StoreBatch::new(&store);
+    for (i, capacity) in capacities.iter().enumerate() {
+        put_dao_deposit_cell(&mut batch, &owner, &dao, &hash, i as i16, *capacity);
+    }
+    batch.put_addr_balance(
+        &owner,
+        &AddressBalance {
+            balance: capacities.iter().map(|c| i128::from(*c)).sum(),
+            used_capacity: 3 * i128::from(used),
+            live_cells_count: 3,
+            total_cells_count: 3,
+            txs_count: 1,
+            first_seen_block: 7,
+            first_seen_tx: hash.clone(),
+            last_activity_block: 7,
+            last_activity_tx: hash.clone(),
+        },
+    );
+    batch.commit().unwrap();
+    seed_block_headers_at(&store, &[(7, 1_700_000_001_000)]);
+    let mut header = store.get_block_header(7).unwrap().unwrap();
+    header.dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+    let mut tip = StoreBatch::new(&store);
+    tip.put_block_header(7, &header);
+    tip.commit().unwrap();
+    store
+        .update_sync_status(|s| {
+            s.tip_block_number = 7;
+            s.tip_block_hash = header.hash.clone();
+        })
+        .unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store.clone(),
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    (app, store, owner, dao)
+}
+
+/// BA-34: an address's DAO cells page by capacity, largest first, when the
+/// list spans pages (the frontend may only sort a complete set). The order is
+/// for the DAO class; anything else is refused.
+#[tokio::test]
+async fn address_dao_cells_page_by_capacity_largest_first() {
+    let (app, _, owner, _) = dao_capacity_fixture().await;
+    let owner = format!("0x{}", hex::encode(owner));
+    let capacities = |json: &serde_json::Value| -> Vec<String> {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["capacity"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (s, first) = get(
+        &app,
+        &format!("/api/v1/addresses/{owner}/cells?class=dao&order=capacity&limit=2"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{first}");
+    assert_eq!(
+        capacities(&first),
+        vec!["200000000000", "120000000000"],
+        "{first}"
+    );
+    let cursor = first["nextCursor"]
+        .as_str()
+        .expect("a second page")
+        .to_string();
+    let (s, second) = get(
+        &app,
+        &format!(
+            "/api/v1/addresses/{owner}/cells?class=dao&order=capacity&limit=2&cursor={cursor}"
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{second}");
+    assert_eq!(capacities(&second), vec!["50000000000"], "{second}");
+    assert!(second["nextCursor"].is_null(), "{second}");
+
+    let (s, j) = get(
+        &app,
+        &format!("/api/v1/addresses/{owner}/cells?order=capacity"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{j}");
+    let (s, j) = get(
+        &app,
+        &format!("/api/v1/addresses/{owner}/cells?class=dao&order=sideways"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{j}");
+}
+
+/// The capacity order is computed once per (owner, canonical tip) and paged
+/// from memory: a DAO cell indexed after the first page, at the same tip,
+/// shows on no page of that tip — the owner's cells were walked once — and
+/// shows (first, as the largest) once the tip moves.
+#[tokio::test]
+async fn address_dao_capacity_order_walks_the_owner_once_per_tip() {
+    let (app, store, owner, dao) = dao_capacity_fixture().await;
+    let path = |cursor: Option<&str>| {
+        format!(
+            "/api/v1/addresses/0x{}/cells?class=dao&order=capacity&limit=2{}",
+            hex::encode(&owner),
+            cursor.map_or(String::new(), |c| format!("&cursor={c}"))
+        )
+    };
+    let capacities = |json: &serde_json::Value| -> Vec<String> {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["capacity"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (s, first) = get(&app, &path(None)).await;
+    assert_eq!(s, StatusCode::OK, "{first}");
+    assert_eq!(capacities(&first), vec!["200000000000", "120000000000"]);
+
+    // A 3,000 CKB deposit lands in the owner index; the tip header does not move.
+    let mut batch = StoreBatch::new(&store);
+    put_dao_deposit_cell(&mut batch, &owner, &dao, &[0x5e; 32], 0, 300_000_000_000);
+    batch.commit().unwrap();
+
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+    let (s, second) = get(&app, &path(Some(&cursor))).await;
+    assert_eq!(s, StatusCode::OK, "{second}");
+    assert_eq!(capacities(&second), vec!["50000000000"], "{second}");
+    assert!(second["nextCursor"].is_null(), "{second}");
+    let (s, again) = get(&app, &path(None)).await;
+    assert_eq!(s, StatusCode::OK, "{again}");
+    assert_eq!(
+        capacities(&again),
+        capacities(&first),
+        "same tip, same walk"
+    );
+
+    // The tip moves: the next first page walks the owner again.
+    seed_block_headers_at(&store, &[(8, 1_700_000_002_000)]);
+    let (s, moved) = get(&app, &path(None)).await;
+    assert_eq!(s, StatusCode::OK, "{moved}");
+    assert_eq!(
+        capacities(&moved),
+        vec!["300000000000", "200000000000"],
+        "{moved}"
+    );
+}

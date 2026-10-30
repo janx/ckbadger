@@ -86,6 +86,18 @@ pub(crate) fn block_proposal_zone(block: &ckb_types::core::BlockView) -> Vec<Zon
     zone
 }
 
+/// The block whose reward block `number`'s cellbase pays: `number -
+/// (farthest + 1)`, CKB's finalization delay (ckb `build_cellbase`: "miner
+/// should collect the block reward for finalize target H(c - w_far - 1)").
+///
+/// `None` when that target would be genesis or earlier (blocks `0 ..=
+/// farthest + 1`): CKB finalizes no reward there and such a cellbase has no
+/// output. The one rule the block page, transaction rows and `/pipeline` use.
+pub(crate) fn cellbase_reward_target(window: ProposalWindow, number: i64) -> Option<i64> {
+    let target = number - (window.farthest() + 1);
+    (target > 0).then_some(target)
+}
+
 /// The transaction that committed a proposal, `(tx_hash, committing block
 /// number)`; `None` while no block in the window (yet) committed it.
 pub(crate) type Commitment = Option<(Vec<u8>, i64)>;
@@ -228,6 +240,18 @@ mod tests {
             short_id: vec![byte; 10],
             uncle: None,
         }
+    }
+
+    #[test]
+    fn cellbase_reward_target_is_the_finalization_delay_back_and_never_genesis() {
+        // Mainnet window {2, 10}: block X pays X - 11; blocks 0..=11 pay nothing.
+        assert_eq!(
+            cellbase_reward_target(window(), 20_827_932),
+            Some(20_827_921)
+        );
+        assert_eq!(cellbase_reward_target(window(), 12), Some(1));
+        assert_eq!(cellbase_reward_target(window(), 11), None);
+        assert_eq!(cellbase_reward_target(window(), 0), None);
     }
 
     #[test]

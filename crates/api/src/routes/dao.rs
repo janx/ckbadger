@@ -30,6 +30,7 @@ mod dao_epoch;
 #[path = "dao_evidence.rs"]
 mod dao_evidence;
 pub(crate) use dao_evidence::dao_header_fields;
+pub use dao_evidence::DaoEvidenceMemo;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -42,6 +43,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/dao/summary/{lock_hash}", get(get_address_dao_summary))
         .route("/dao/statistics", get(get_statistics))
         .route("/dao/evidence", get(dao_evidence::get_evidence))
+        .route("/dao/depositors", get(dao_evidence::get_depositors))
+        .route("/dao/ar-history", get(get_ar_history))
         .route("/dao/top-depositors", get(get_top_depositors))
         .route("/dao/calculator", get(calculate_compensation))
         .route("/dao/charts/total-deposit", get(get_total_deposit_chart))
@@ -240,6 +243,17 @@ pub struct DaoStatisticsResponse {
     pub depositors_change_24h: Option<i32>,
     pub claimed_compensation_change_24h: Option<String>,
     pub unclaimed_compensation_change_24h: Option<String>,
+    /// DAO header `S` of `tip_block_number`, from the same singleton row as
+    /// `unclaimedCompensation` and `burnt` — so `S = still owed + burnt` is
+    /// stated at one block from one row (DAO-16).
+    pub tip_secondary_pool: String,
+    /// Deposit cells created over the rolling 24 h the `*Change24h` deltas
+    /// cover — blocks `(rolling24hBaselineBlockNumber, tipBlockNumber]` —
+    /// counted from the DAO activity index (DAO-10); `null` exactly when
+    /// there is no complete 24 h baseline yet.
+    pub deposits_24h: Option<u64>,
+    /// Withdrawal-request cells created over the same window.
+    pub withdrawal_requests_24h: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -282,6 +296,11 @@ pub struct CalculatorResponse {
     pub total_withdrawable_ckb: String,
     /// Realized annualized return; absent for a zero chain-time span or no free capacity.
     pub apc: Option<String>,
+    /// The occupied capacity the calculator assumed: a standard secp256k1 DAO
+    /// cell's (DAO-8).
+    pub occupied_capacity: String,
+    /// `capacity − occupiedCapacity`: what compensation accrues on.
+    pub free_capacity: String,
 }
 
 /// Convert a DAO deposit entry from the store to an API response.
@@ -570,10 +589,61 @@ fn compute_dao_24h_deltas(latest: &ckbadger_store::DaoLatestStatistics) -> DaoDe
     }
 }
 
+/// The DAO deposits and withdrawal requests of the singleton's rolling 24 h:
+/// every `dao` protocol action in a DAO-bucket transaction of blocks
+/// `(baseline, tip]`, read newest first from the bucket index (one row per
+/// DAO transaction; a transaction with any `dao` action is in the DAO bucket).
+fn dao_24h_counts(
+    store: &ckbadger_store::CkbadgerStore,
+    latest: &ckbadger_store::DaoLatestStatistics,
+) -> anyhow::Result<Option<(u64, u64)>> {
+    let Some(rolling) = &latest.rolling_24h else {
+        return Ok(None);
+    };
+    let (baseline, tip) = (rolling.baseline_block_number, latest.tip_block_number);
+    anyhow::ensure!(
+        baseline <= tip,
+        "DAO rolling 24h baseline {baseline} is above its tip {tip}"
+    );
+    const PAGE: usize = 256;
+    let mut cursor = Some((tip + 1, 0));
+    let (mut deposits, mut requests) = (0u64, 0u64);
+    'pages: loop {
+        let rows = store.list_tx_actions_page_by_bucket(
+            ckbadger_store::GlobalBucket::Dao,
+            cursor,
+            PAGE,
+        )?;
+        let full = rows.len() == PAGE;
+        for actions in &rows {
+            if actions.block_number <= baseline {
+                break 'pages;
+            }
+            for action in actions
+                .protocol_actions
+                .iter()
+                .filter(|a| a.protocol == "dao")
+            {
+                match action.action.as_str() {
+                    "deposit" => deposits += 1,
+                    "withdraw_request" => requests += 1,
+                    _ => {}
+                }
+            }
+            cursor = Some((actions.block_number, actions.tx_index));
+        }
+        if !full {
+            break;
+        }
+    }
+    Ok(Some((deposits, requests)))
+}
+
 fn dao_latest_to_response(
     latest: &ckbadger_store::DaoLatestStatistics,
     deltas: DaoDeltas,
     genesis_baseline_burnt: i128,
+    counts_24h: Option<(u64, u64)>,
 ) -> DaoStatisticsResponse {
     let tip_block_number = latest.tip_block_number;
     let total_deposited = latest.total_deposited.to_string();
@@ -625,6 +695,9 @@ fn dao_latest_to_response(
         depositors_change_24h: deltas.depositors_change,
         claimed_compensation_change_24h: deltas.claimed_compensation_change,
         unclaimed_compensation_change_24h: deltas.unclaimed_compensation_change,
+        tip_secondary_pool: latest.tip_secondary_pool.to_string(),
+        deposits_24h: counts_24h.map(|(deposits, _)| deposits),
+        withdrawal_requests_24h: counts_24h.map(|(_, requests)| requests),
     }
 }
 
@@ -808,11 +881,17 @@ pub(crate) fn dao_singleton_missing(state: &AppState, singleton: &str) -> ApiRou
 #[instrument(skip(state), level = "debug")]
 async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStatisticsResponse> {
     let store = state.store.clone();
-    let latest = tokio::task::spawn_blocking(move || store.get_latest_dao_statistics())
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    let Some(latest) = latest else {
+    let latest = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let Some(latest) = store.get_latest_dao_statistics()? else {
+            return Ok(None);
+        };
+        let counts = dao_24h_counts(&store, &latest)?;
+        Ok(Some((latest, counts)))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    let Some((latest, counts_24h)) = latest else {
         return Err(dao_singleton_missing(&state, "dao_latest_stats"));
     };
 
@@ -822,6 +901,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         &latest,
         deltas,
         genesis_baseline_burnt,
+        counts_24h,
     ))
 }
 
@@ -1040,6 +1120,8 @@ async fn calculate_compensation(
         total_withdrawable: total.to_string(),
         total_withdrawable_ckb: shannon_to_ckb(&total.to_string()),
         apc,
+        occupied_capacity: ckbadger_common::dao::DAO_OCCUPIED_CAPACITY.to_string(),
+        free_capacity: free.to_string(),
     })
 }
 
@@ -1172,6 +1254,99 @@ async fn get_total_deposit_chart(State(state): State<Arc<AppState>>) -> ApiResul
         state.cache.set(cache_key, &response, CHART_CACHE_TTL).await;
         state.mem_cache.set(cache_key, &response, CHART_CACHE_TTL);
     }
+    ok(response)
+}
+
+/// One complete UTC+8 day's accumulated rate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoArDayResponse {
+    pub date: String,
+    /// The last canonical block at or before the day's end: its header's AR
+    /// is the rate the day closed at (a day with no block of its own closes
+    /// at the previous day's last block).
+    pub block_number: i64,
+    /// Header `AR`, scaled by 10^16.
+    pub ar: String,
+    /// `ar` as an index, 16 decimals.
+    pub ar_index: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoArHistoryResponse {
+    /// The block the newest day closes at — the series' anchor; `null` while
+    /// no day is complete.
+    pub anchor: Option<DaoArAnchor>,
+    pub days: Vec<DaoArDayResponse>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaoArAnchor {
+    pub block_number: i64,
+    pub block_hash: String,
+}
+
+/// `/dao/ar-history` (DAO-8): the accumulated rate at the end of every
+/// complete UTC+8 day from genesis, each read exactly from the header of the
+/// last canonical block at or before that day's end (by canonical chain
+/// time). Built once per complete-day boundary and served from API memory.
+async fn get_ar_history(State(state): State<Arc<AppState>>) -> ApiResult<DaoArHistoryResponse> {
+    let chain = load_chain_time(&state.store).await?;
+    let cache_key = complete_days_cache_key("dao:ar-history:v1", chain)?;
+    if let Some(cached) = state.mem_cache.get::<DaoArHistoryResponse>(&cache_key) {
+        return ok(cached);
+    }
+    let Some(chain) = chain else {
+        return ok(DaoArHistoryResponse {
+            anchor: None,
+            days: Vec::new(),
+        });
+    };
+    let last_complete = chain.last_complete_day()?;
+    let store = state.store.clone();
+    let response = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let genesis = store
+            .get_block_header(0)?
+            .ok_or_else(|| anyhow::anyhow!("missing genesis header"))?;
+        let mut day = ckbadger_common::stats_bucket::stats_day(genesis.chain_time_ms)?;
+        let mut days = Vec::new();
+        let mut anchor = None;
+        while day <= last_complete {
+            let end = ckbadger_common::stats_bucket::utc8_day_end_ms(day)?;
+            let block = store
+                .find_last_block_at_or_before_chain_time_ms(end - 1)?
+                .ok_or_else(|| anyhow::anyhow!("no canonical block closes day {day}"))?;
+            let header = store
+                .get_block_header(block)?
+                .ok_or_else(|| anyhow::anyhow!("missing canonical header {block} closing {day}"))?;
+            anyhow::ensure!(
+                header.chain_time_ms < end,
+                "block {block} closing {day} has chain time {} past the day's end {end}",
+                header.chain_time_ms
+            );
+            let ar = dao_header_fields(&header.dao, &format!("block {block}"))?[1];
+            days.push(DaoArDayResponse {
+                date: day.format("%Y-%m-%d").to_string(),
+                block_number: block,
+                ar: ar.to_string(),
+                ar_index: dao_evidence::ar_index(ar),
+            });
+            anchor = Some(DaoArAnchor {
+                block_number: block,
+                block_hash: format!("0x{}", hex::encode(&header.hash)),
+            });
+            day = day
+                .succ_opt()
+                .ok_or_else(|| anyhow::anyhow!("day after {day} out of range"))?;
+        }
+        Ok(DaoArHistoryResponse { anchor, days })
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(|e| ApiError::internal(format!("DAO AR history: {e:#}")))?;
+    state.mem_cache.set(&cache_key, &response, CHART_CACHE_TTL);
     ok(response)
 }
 

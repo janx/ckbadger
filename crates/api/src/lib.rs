@@ -95,6 +95,9 @@ pub struct AppState {
     pub mem_cache: InMemoryCache,
     /// `/pipeline`'s verified cellbase payments, bounded, by paying block hash.
     pub pipeline_pays: Arc<routes::PipelinePaysCache>,
+    /// `/addresses/{addr}/cells?class=dao&order=capacity`: each owner's
+    /// ordered DAO subset, per canonical tip (BA-34).
+    pub dao_capacity_memo: Arc<routes::DaoCapacityMemo>,
     pub activity_window: Arc<crate::cache::ActivityWindowCache>,
     /// Last asset cache warmup failure. `None` means warmup is still pending or last refresh succeeded.
     pub asset_cache_warmup_error: Arc<RwLock<Option<String>>>,
@@ -116,7 +119,7 @@ pub struct AppState {
     /// Upper bound on mirrored pool transactions (`[api] pool_max_tracked_txs`).
     pub pool_max_tracked_txs: std::num::NonZeroUsize,
     /// `/dao/evidence` for the current canonical tip (API memory only; DAO-17).
-    pub dao_evidence: Arc<cache::TipMemo<serde_json::Value>>,
+    pub dao_evidence: Arc<cache::TipMemo<routes::DaoEvidenceMemo>>,
 }
 
 impl AppState {
@@ -355,6 +358,7 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
         ckb_db_cleanup: config.ckb_db_cleanup,
         mem_cache,
         pipeline_pays: Arc::new(routes::PipelinePaysCache::new()),
+        dao_capacity_memo: Arc::new(routes::DaoCapacityMemo::new()),
         activity_window: Default::default(),
         asset_cache_warmup_error: Arc::new(RwLock::new(None)),
         background_tasks: Arc::new(RwLock::new(BackgroundTasksData::default())),

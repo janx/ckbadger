@@ -251,6 +251,9 @@ pub(crate) fn project_transactions(
                 &row.entry,
                 &header.hash,
                 None,
+                // CKB cellbase outputs carry no type script, so no asset feed
+                // lists a cellbase; one that did would fail on its `pays`.
+                None,
             )
         })
         .collect()

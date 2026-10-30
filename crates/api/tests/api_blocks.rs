@@ -3,7 +3,16 @@ use crate::common::*;
 /// Node-backed block routes now require actual serialized evidence. These
 /// fixtures retain each test's canonical hashes and economics while seeding
 /// the node's independent read-only database with matching transactions.
-fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
+fn attach_block_evidence(config: AppConfig, numbers: &[i64]) -> AppConfig {
+    attach_block_evidence_with_message(config, numbers, b"ckb 0.210.0")
+}
+
+/// [`attach_block_evidence`] with every cellbase witness carrying `message`.
+fn attach_block_evidence_with_message(
+    mut config: AppConfig,
+    numbers: &[i64],
+    message: &[u8],
+) -> AppConfig {
     use ckb_types::{core, packed, prelude::*};
     let mut blocks = Vec::new();
     for &number in numbers {
@@ -18,7 +27,7 @@ fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
             .build();
         let witness = packed::CellbaseWitness::new_builder()
             .lock(lock)
-            .message(ckb_types::bytes::Bytes::from_static(b"ckb 0.210.0").pack())
+            .message(ckb_types::bytes::Bytes::from(message.to_vec()).pack())
             .build();
         let cellbase = core::TransactionBuilder::default()
             .input(packed::CellInput::new_cellbase_input(number as u64))
@@ -41,6 +50,20 @@ fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
             parent.timestamp -= 10_000;
             parent.chain_time_ms = parent.timestamp;
             batch.put_block_header(number - 1, &parent);
+        }
+        // Every block below an indexed block is indexed: the block whose
+        // reward this one's cellbase pays (mainnet window, `number - 11`) too.
+        let target = number - 11;
+        if target > 0
+            && target != number - 1
+            && config.store.get_block_header(target).unwrap().is_none()
+        {
+            let mut paid = header.clone();
+            paid.hash = vec![0xEE; 32];
+            paid.hash[..8].copy_from_slice(&target.to_be_bytes());
+            paid.timestamp -= 110_000;
+            paid.chain_time_ms = paid.timestamp;
+            batch.put_block_header(target, &paid);
         }
         for (index, tx) in transactions.iter().enumerate() {
             batch.put_tx_index(
@@ -1293,4 +1316,270 @@ async fn block_uncle_detail_requires_the_canonical_block_at_its_height() {
             && message.contains("no canonical block indexed at uncle height 439"),
         "{message}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Lane R2b-a · block page read-path additions (BA-12, BA-13, BA-17, BA-19,
+// BA-41).
+// ---------------------------------------------------------------------------
+
+/// BA-12: the block page's cellbase row says which block's reward it pays —
+/// `#N − (farthest + 1)` on the consensus window — and a block too close to
+/// genesis to pay any reward says `null`.
+#[tokio::test]
+async fn block_names_the_block_its_cellbase_pays() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    seed_proposer_header(&store, 5, &[0x05; 32]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(attach_block_evidence(config, &[500, 5])).await;
+
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["cellbasePays"],
+        serde_json::json!({"number": 489, "hash": format!("0x{}", hex::encode([0x48; 32]))}),
+        "{detail}"
+    );
+    let (status, page) = get_json(&app, "/blocks?cursor=501&limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["data"][0]["cellbasePays"], detail["cellbasePays"]);
+
+    let (status, early) = get_json(&app, "/blocks/5").await;
+    assert_eq!(status, StatusCode::OK, "{early}");
+    assert!(early["cellbasePays"].is_null(), "{early}");
+}
+
+/// BA-13: the reward breakdown carries the block's whole secondary issuance
+/// beside the miner's share of it.
+#[tokio::test]
+async fn block_reward_breakdown_carries_the_whole_secondary_issuance() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    let finalizing = build_finalizing_block(511);
+    seed_finalizing_index(&store, &finalizing);
+    let server = MockServer::start().await;
+    mount_block_economic_state_rpc(
+        &server,
+        &[(
+            &format!("0x{}", hex::encode([0x50; 32])),
+            &format!("0x{}", hex::encode(finalizing.hash().raw_data())),
+        )],
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(attach_block_evidence(config, &[500])).await;
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    // The mock node reports `issuance.secondary` = 3 × the miner's share.
+    assert_eq!(
+        detail["rewardBreakdown"]["secondaryIssuance"],
+        (MOCK_MINER_REWARD.secondary * 3).to_string(),
+        "{detail}"
+    );
+    assert_eq!(
+        detail["rewardBreakdown"]["secondary"],
+        MOCK_MINER_REWARD.secondary.to_string()
+    );
+}
+
+/// BA-17: the miner client text is decoded once, without the node's 4-byte
+/// versionbits prefix (and its separating space) that used to show up as NUL
+/// padding.
+#[tokio::test]
+async fn block_miner_message_text_drops_the_versionbits_prefix() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let mut message = vec![0u8, 0, 0, 0, b' '];
+    message.extend_from_slice(b"0.210.0 (2592ddf 2026-09-17)");
+    let app = create_router(attach_block_evidence_with_message(config, &[500], &message)).await;
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["minerMessageText"], "0.210.0 (2592ddf 2026-09-17)",
+        "{detail}"
+    );
+    // The raw bytes stay available, prefix included.
+    assert_eq!(
+        detail["minerMessage"],
+        format!("0x{}", hex::encode(&message))
+    );
+}
+
+/// BA-41: an uncle serves its header's packed epoch as hex, as a canonical
+/// block's `rawHeader.epoch` does.
+#[tokio::test]
+async fn block_uncle_detail_serves_the_raw_epoch() {
+    let fixture = uncle_fixture(true).await;
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["rawEpoch"],
+        format!(
+            "{:#x}",
+            ckb_types::core::EpochNumberWithFraction::new(1, 5, 1800).full_value()
+        ),
+        "{json}"
+    );
+}
+
+/// The fixture for `/blocks/100/proposal-fees`: a node chain 90..=`top` and
+/// the store's canonical headers over it, with
+/// - block 100 proposing a, b, c (own) and d (through an uncle),
+/// - block 95 proposing b first,
+/// - a committed in 103, b in 104, d in 106, c never.
+async fn proposal_fee_fixture(top: u64) -> (axum::Router, [ckb_types::core::TransactionView; 4]) {
+    use ckb_types::{core, packed, prelude::*};
+    let [a, b, c, d]: [core::TransactionView; 4] = proposal_fixture_txs(4).try_into().unwrap();
+    let epoch = core::EpochNumberWithFraction::new(1, 0, 1800);
+    let fees: std::collections::HashMap<[u8; 32], i64> = [
+        (a.hash().unpack(), 10_000),
+        (b.hash().unpack(), 20_000),
+        (d.hash().unpack(), 40_001),
+    ]
+    .into();
+    let mut parent = packed::Byte32::zero();
+    let mut blocks = Vec::new();
+    for number in 90..=top {
+        let cellbase = core::TransactionBuilder::default()
+            .input(packed::CellInput::new_cellbase_input(number))
+            .build();
+        let mut builder = core::BlockBuilder::default()
+            .number(number.pack())
+            .epoch(epoch.pack())
+            .parent_hash(parent.clone())
+            .transaction(cellbase);
+        match number {
+            95 => builder = builder.proposal(b.proposal_short_id()),
+            100 => {
+                let uncle = core::BlockBuilder::default()
+                    .number(99u64.pack())
+                    .epoch(epoch.pack())
+                    .proposal(d.proposal_short_id())
+                    .build()
+                    .as_uncle();
+                builder = builder
+                    .proposal(a.proposal_short_id())
+                    .proposal(b.proposal_short_id())
+                    .proposal(c.proposal_short_id())
+                    .uncle(uncle);
+            }
+            103 => builder = builder.transaction(a.clone()),
+            104 => builder = builder.transaction(b.clone()),
+            106 => builder = builder.transaction(d.clone()),
+            _ => {}
+        }
+        let block = builder.build();
+        parent = block.hash();
+        blocks.push(block);
+    }
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for block in &blocks {
+        let number = block.number() as i64;
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: block.hash().raw_data().to_vec(),
+                parent_hash: block.parent_hash().raw_data().to_vec(),
+                timestamp: 1_700_000_000_000 + number * 10_000,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: block.transactions().len() as i32,
+                uncles_count: block.uncles().data().len() as i32,
+                proposals_count: block.data().proposals().len() as i32,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1_700_000_000_000 + number * 10_000,
+            },
+        );
+        for (index, tx) in block.transactions().iter().enumerate() {
+            let hash: [u8; 32] = tx.hash().unpack();
+            batch.put_tx_index(
+                number,
+                index as i32,
+                &TxIndexEntry {
+                    tx_hash: hash,
+                    is_cellbase: index == 0,
+                    timestamp: 1_700_000_000_000 + number * 10_000,
+                    inputs_count: tx.inputs().len() as i16,
+                    outputs_count: tx.outputs().len() as i16,
+                    fee: fees.get(&hash).copied().unwrap_or_default(),
+                    tx_size: tx.data().as_slice().len() as i32,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            batch.put_tx_hash_map(&hash, number, index as i32);
+        }
+    }
+    batch.commit().unwrap();
+    let chain = seed_ckb_chain(&blocks);
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+    (app, [a, b, c, d])
+}
+
+/// BA-13: "of 0.00031647 in fees of the 2 transactions it proposed, committed
+/// in #N" — the fees a block's 40% proposal reward is paid from: the
+/// transactions its proposal zone (own and uncle-borne) proposed FIRST in
+/// their commit window, each with the block that committed it.
+#[tokio::test]
+async fn block_proposal_fees_are_the_txs_it_proposed_first_and_where_committed() {
+    use ckb_types::prelude::*;
+    let (app, [a, _b, _c, d]) = proposal_fee_fixture(111).await;
+    let (status, json) = get_json(&app, "/blocks/100/proposal-fees").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let hex = |bytes: &[u8]| format!("0x{}", hex::encode(bytes));
+    assert_eq!(json["number"], 100, "{json}");
+    assert_eq!(
+        json["commitWindow"],
+        serde_json::json!({"from": 102, "to": 110})
+    );
+    assert_eq!(json["complete"], true, "{json}");
+    // b was proposed first by block 95, c never committed: neither counts.
+    assert_eq!(json["fees"], "50001", "{json}");
+    assert_eq!(json["transactionsCount"], 2, "{json}");
+    assert_eq!(json["committedIn"], serde_json::json!([103, 106]));
+    let rows = json["transactions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{json}");
+    assert_eq!(rows[0]["txHash"], hex(a.hash().as_slice()));
+    assert_eq!(rows[0]["committedIn"], 103);
+    assert_eq!(rows[0]["fee"], "10000");
+    assert!(rows[0]["uncle"].is_null());
+    assert_eq!(rows[1]["txHash"], hex(d.hash().as_slice()));
+    assert_eq!(rows[1]["committedIn"], 106);
+    assert_eq!(rows[1]["fee"], "40001");
+    assert_eq!(rows[1]["uncle"]["number"], 99);
+}
+
+/// Before the window's last block is indexed the set is not final: the
+/// response says so instead of presenting a partial sum as the basis.
+#[tokio::test]
+async fn block_proposal_fees_say_when_the_window_is_still_open() {
+    let (app, _) = proposal_fee_fixture(105).await;
+    let (status, json) = get_json(&app, "/blocks/100/proposal-fees").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["complete"], false, "{json}");
+    assert_eq!(json["fees"], "10000", "{json}");
+    assert_eq!(json["committedIn"], serde_json::json!([103]));
 }

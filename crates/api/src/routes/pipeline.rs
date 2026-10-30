@@ -51,7 +51,8 @@ use crate::pool::{HttpPoolSource, PoolSource, RawTxPool, TxPoolInfo};
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::routes::blocks::{fetch_block_economic_state, BlockEconomicState};
 use crate::routes::proposal_window::{
-    block_proposal_zone, earliest_proposal_in_window, resolve_committed_txs_with, ZoneProposal,
+    block_proposal_zone, cellbase_reward_target, earliest_proposal_in_window,
+    resolve_committed_txs_with, ZoneProposal,
 };
 use crate::routes::transactions::{
     tx_cycles_status, tx_fee_rate, tx_fee_rate_value, tx_serialized_size_in_block, TxCyclesStatus,
@@ -843,13 +844,12 @@ async fn resolve_pays(
     chain: &LoadedChain,
     block: &LoadedBlock,
 ) -> Result<Option<CellbasePays>, ApiRouteError> {
-    let target = block.number - (window.farthest() + 1);
-    if target <= GENESIS {
+    let Some(target) = cellbase_reward_target(window, block.number) else {
         // ckb `RewardVerifier`: without a finalization target the cellbase
         // creates no output.
         if !block.body.cellbase_capacities.is_empty() {
             return Err(ApiError::internal(format!(
-                "C6: block {} {} has no reward to pay (its target {target} would be genesis or \
+                "C6: block {} {} has no reward to pay (its target would be genesis or \
                  earlier), yet its cellbase has {} output(s)",
                 block.number,
                 hex(&block.hash),
@@ -857,7 +857,7 @@ async fn resolve_pays(
             )));
         }
         return Ok(None);
-    }
+    };
     if let Some(cached) = state.pipeline_pays.0.get(&block.hash) {
         return Ok(Some(cached));
     }

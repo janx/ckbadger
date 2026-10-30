@@ -31,6 +31,7 @@ fn tags_pass_filter(tags: u16, filter: Option<&str>) -> bool {
         Some("dao") => tags & TAG_DAO != 0,
         Some("type_call") => tags & TAG_TYPE_CALL != 0,
         Some("lock_call") => tags & TAG_LOCK_CALL != 0,
+        Some("script") => tags & (TAG_TYPE_CALL | TAG_LOCK_CALL) != 0,
         Some(proto) if proto.starts_with("protocol:") => tags & TAG_PROTOCOL != 0,
         Some(_) => false,
     }
@@ -329,7 +330,8 @@ impl CkbadgerStore {
     ///
     /// Optionally start after the given `(block_num, tx_idx)` cursor.
     /// An optional `filter` narrows results: "ckb", "token", "object",
-    /// "identity", "dao", "type_call", "lock_call", "protocol:X".
+    /// "identity", "dao", "type_call", "lock_call", "script" (type or lock
+    /// call), "protocol:X".
     /// Returns `Vec<TxActions>` for cursor construction via block_number/tx_index.
     pub fn list_activities(
         &self,
@@ -480,6 +482,9 @@ impl CkbadgerStore {
                     "dao" => tags & TAG_DAO != 0,
                     "type_call" => tags & TAG_TYPE_CALL != 0,
                     "lock_call" => tags & TAG_LOCK_CALL != 0,
+                    // Any script call: a type script OR a lock script ran
+                    // for this participant (BA-35's single "Script" chip).
+                    "script" => tags & (TAG_TYPE_CALL | TAG_LOCK_CALL) != 0,
                     proto if proto.starts_with("protocol:") => {
                         if tags & TAG_PROTOCOL == 0 {
                             return false;
@@ -656,6 +661,27 @@ mod tests {
             &unknown_lock,
             Some("token")
         ));
+    }
+
+    #[test]
+    fn test_matches_activity_filter_script_is_type_or_lock_call() {
+        let lock = vec![0xAA; 32];
+        for (tags, expected) in [
+            (TAG_TYPE_CALL, true),
+            (TAG_LOCK_CALL, true),
+            (TAG_TYPE_CALL | TAG_LOCK_CALL, true),
+            (TAG_TOKEN, false),
+            (0, false),
+        ] {
+            let mut actions = make_tx_actions(100, 0, 0xAA);
+            actions.participants[0].tags = tags;
+            assert_eq!(
+                CkbadgerStore::matches_activity_filter(&actions, &lock, Some("script")),
+                expected,
+                "tags {tags:#b}"
+            );
+            assert_eq!(tags_pass_filter(tags, Some("script")), expected);
+        }
     }
 
     #[test]

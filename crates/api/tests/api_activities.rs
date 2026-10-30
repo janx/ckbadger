@@ -2947,3 +2947,91 @@ async fn global_bucket_row_without_tx_actions_is_a_500_naming_the_position() {
         "{message}"
     );
 }
+
+/// BA-14: the block page lists a block's activities in block order. A
+/// block-scoped feed reads ascending with `order=asc` (cursors page forward);
+/// the default stays newest first, and `order` without `blockNumber` or with
+/// another value is refused.
+#[tokio::test]
+async fn block_feed_reads_in_block_order_when_asked() {
+    let store = test_store();
+    let lock = [0x12; 32];
+    for (hash, index) in [([0xa1; 32], 1), ([0xa2; 32], 2), ([0xa3; 32], 3)] {
+        seed_committed_activity(&store, &lock, &hash, 42, index, 100, 0);
+    }
+    seed_committed_activity(&store, &lock, &[0xb1; 32], 43, 1, 100, 0);
+    let app = create_router(test_config(store)).await;
+    let indexes = |json: &serde_json::Value| -> Vec<i64> {
+        json["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["txIndex"].as_i64().unwrap())
+            .collect()
+    };
+
+    let (status, first) = get_json(&app, "/activities?blockNumber=42&order=asc&limit=2").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(indexes(&first), vec![1, 2], "{first}");
+    assert_eq!(first["nextCursor"], "42:2", "{first}");
+    let (status, second) = get_json(
+        &app,
+        "/activities?blockNumber=42&order=asc&limit=2&cursor=42:2",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(indexes(&second), vec![3], "{second}");
+    assert!(second["nextCursor"].is_null(), "{second}");
+
+    let (status, default) = get_json(&app, "/activities?blockNumber=42").await;
+    assert_eq!(status, StatusCode::OK, "{default}");
+    assert_eq!(indexes(&default), vec![3, 2, 1]);
+    let (status, explicit) = get_json(&app, "/activities?blockNumber=42&order=desc").await;
+    assert_eq!(status, StatusCode::OK, "{explicit}");
+    assert_eq!(indexes(&explicit), vec![3, 2, 1]);
+
+    let (status, json) = get_json(&app, "/activities?order=asc").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    let (status, json) = get_json(&app, "/activities?blockNumber=42&order=sideways").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+}
+
+/// BA-35: the address page's single "Script" chip is `filter=script` — the
+/// address's activities that call a type script OR a lock script, read from
+/// the participant tag bitmap like every other address filter.
+#[tokio::test]
+async fn address_script_filter_is_type_calls_or_lock_calls() {
+    use ckbadger_store::types::{TAG_LOCK_CALL, TAG_TOKEN, TAG_TYPE_CALL};
+    let store = test_store();
+    let lock = [0x31; 32];
+    seed_committed_activity(&store, &lock, &[0xc1; 32], 50, 1, -10, TAG_TYPE_CALL);
+    seed_committed_activity(&store, &lock, &[0xc2; 32], 51, 1, -10, TAG_LOCK_CALL);
+    seed_committed_activity(&store, &lock, &[0xc3; 32], 52, 1, -10, 0);
+    seed_committed_activity(&store, &lock, &[0xc4; 32], 53, 1, -10, TAG_TOKEN);
+    seed_committed_activity(
+        &store,
+        &lock,
+        &[0xc5; 32],
+        54,
+        1,
+        -10,
+        TAG_TYPE_CALL | TAG_LOCK_CALL,
+    );
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/addresses/0x{}/activities?filter=script",
+            hex::encode(lock)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let blocks: Vec<i64> = json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["blockNumber"].as_i64().unwrap())
+        .collect();
+    assert_eq!(blocks, vec![54, 51, 50], "{json}");
+}
