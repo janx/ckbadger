@@ -1,3 +1,4 @@
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { ObjectMedia } from '@/components/asset/object-media';
 import type { SporeDetail } from '@/lib/api';
@@ -94,10 +95,11 @@ it('parses BTCFS inscription URIs strictly (OB-2)', () => {
     `btcfs://${txid}i99999999999999999999`,
   ])
     expect(parseBtcfsUri(uri)).toBeNull();
-  expect(bitcoinTxHref(txid)).toBe(`https://mempool.space/tx/${txid}`);
-  expect(() => bitcoinTxHref(`0x${txid}`)).toThrow('Invalid Bitcoin txid');
+  expect(bitcoinTxHref(txid, 'mainnet')).toBe(`https://mempool.space/tx/${txid}`);
+  expect(bitcoinTxHref(txid, 'testnet')).toBeNull();
+  expect(() => bitcoinTxHref(`0x${txid}`, 'mainnet')).toThrow('Invalid Bitcoin txid');
   // The type script hash is our API's own computed value: a bad one is our invariant violation.
-  expect(() => omigaDobHref('0x1234')).toThrow('Invalid spore type script hash');
+  expect(() => omigaDobHref('0x1234', 'mainnet')).toThrow('Invalid spore type script hash');
 });
 it('shows a malformed minted BTCFS reference as plain text, never a link or a crash', () => {
   // Anyone can mint spore content; a bad URI there must not take the object page down.
@@ -129,4 +131,30 @@ it('shows a malformed minted BTCFS reference as plain text, never a link or a cr
   expect(
     screen.getByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i1 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${txid}`);
+});
+it('reads the btcfs scheme case-insensitively, as the indexer classifies it (#8)', () => {
+  expect(parseBtcfsUri(`BTCFS://${txid.toUpperCase()}I3`)).toEqual({ txid, index: 3 });
+  expect(bitcoinTxHref(txid, 'mainnet')).toBe(`https://mempool.space/tx/${txid}`);
+  expect(omigaDobHref(object.typeScriptHash, 'testnet')).toBe(
+    `https://test.omiga.io/info/dobs/${object.typeScriptHash}`
+  );
+});
+it('follows the page network: no mainnet links from a testnet object (#8)', () => {
+  render(
+    <MemoryRouter initialEntries={['/testnet/objects/x']}>
+      <Routes>
+        <Route path="/:network/*" element={<ObjectMedia object={object} contentHex={null} />} />
+      </Routes>
+    </MemoryRouter>
+  );
+  // Which Bitcoin network testnet DOB inscriptions name is not established: no explorer link.
+  expect(screen.getByText(/Bitcoin tx 0bfb…5719 · inscription i0/)).toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /Bitcoin tx/ })).not.toBeInTheDocument();
+  expect(
+    screen.getByText(/Bitcoin network of testnet inscriptions is not established/)
+  ).toBeInTheDocument();
+  expect(screen.getByRole('link', { name: 'View on Omiga ↗' })).toHaveAttribute(
+    'href',
+    `https://test.omiga.io/info/dobs/${object.typeScriptHash}`
+  );
 });
