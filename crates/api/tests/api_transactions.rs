@@ -2971,3 +2971,146 @@ async fn r3_cycles_dispatch_rejects_inconsistent_deep_fork_status() {
         .contains("deep_fork_info is missing"));
     assert_eq!(std::fs::read_dir(requests.path()).unwrap().count(), 0);
 }
+
+fn detail_fixture_header(hash: [u8; 32], timestamp: i64) -> CachedBlockHeader {
+    CachedBlockHeader {
+        hash: hash.to_vec(),
+        parent_hash: vec![0; 32],
+        timestamp,
+        epoch_number: 1,
+        epoch_index: 0,
+        epoch_length: 1800,
+        dao: vec![0; 32],
+        transactions_count: 2,
+        uncles_count: 0,
+        proposals_count: 0,
+        compact_target: 0x1e083126,
+        miner_lock_hash: None,
+        cycles: None,
+        chain_time_ms: timestamp,
+    }
+}
+
+/// TX-33 / TX-35 (D4): the committed detail lists the header deps a
+/// transaction reads (a DAO withdrawal reads its deposit block) with their
+/// block numbers, and decodes the cellbase witness into the miner lock and
+/// the client message instead of an opaque blob.
+#[tokio::test]
+async fn committed_detail_lists_header_deps_and_decodes_cellbase_witness() {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let miner_lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x9b; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::from(vec![0x42; 20]).pack())
+        .build();
+    let message = b"0.210.0 (860c9bb 2026-09-21) ".to_vec();
+    let cellbase_witness = packed::CellbaseWitness::new_builder()
+        .lock(miner_lock.clone())
+        .message(Bytes::from(message.clone()).pack())
+        .build();
+    let output = |capacity: u64| {
+        packed::CellOutput::new_builder()
+            .capacity(capacity.pack())
+            .lock(miner_lock.clone())
+            .build()
+    };
+    let cellbase = TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(7))
+        .output(output(100_000_000_000))
+        .output_data(Bytes::new().pack())
+        .witness(cellbase_witness.as_bytes().pack())
+        .build();
+    let deposit_block_hash = [0x55; 32];
+    let reader = TransactionBuilder::default()
+        .header_dep(packed::Byte32::new(deposit_block_hash))
+        .output(output(100_00000000))
+        .output_data(Bytes::new().pack())
+        .build();
+    let block = BlockBuilder::default()
+        .number(7u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(cellbase.clone())
+        .transaction(reader.clone())
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(
+        5,
+        &detail_fixture_header(deposit_block_hash, 1_699_999_990_000),
+    );
+    batch.put_block_header(7, &detail_fixture_header(block_hash, 1_700_000_000_000));
+    for (index, tx, is_cellbase) in [(0, &cellbase, true), (1, &reader, false)] {
+        let tx_hash: [u8; 32] = tx.hash().unpack();
+        batch.put_tx_hash_map(&tx_hash, 7, index);
+        batch.put_tx_index(
+            7,
+            index,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase,
+                timestamp: 1_700_000_000_000,
+                inputs_count: if is_cellbase { 1 } else { 0 },
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, 7);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+
+    let reader_hash: [u8; 32] = reader.hash().unpack();
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(reader_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["headerDeps"],
+        serde_json::json!([{
+            "blockHash": format!("0x{}", hex::encode(deposit_block_hash)),
+            "blockNumber": 5,
+        }]),
+        "{json}"
+    );
+    assert!(json["cellbaseWitness"].is_null(), "{json}");
+
+    let cellbase_hash: [u8; 32] = cellbase.hash().unpack();
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(cellbase_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["headerDeps"], serde_json::json!([]), "{json}");
+    assert_eq!(
+        json["cellbaseWitness"],
+        serde_json::json!({
+            "lock": {
+                "codeHash": format!("0x{}", "9b".repeat(32)),
+                "hashType": "type",
+                "args": format!("0x{}", "42".repeat(20)),
+            },
+            "message": format!("0x{}", hex::encode(&message)),
+        }),
+        "{json}"
+    );
+    assert_eq!(json["witnessDetails"][0]["kind"], "cellbase", "{json}");
+}

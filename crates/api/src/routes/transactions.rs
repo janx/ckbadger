@@ -799,6 +799,68 @@ pub struct TransactionDetailResponse {
     /// the transaction creates none (or its witnesses are unavailable).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dotcell_names: Vec<DotCellNameWitnessResponse>,
+    /// Headers the transaction reads ("read, not consumed"): a DAO withdrawal
+    /// reads its deposit and request blocks. In `header_deps` order.
+    pub header_deps: Vec<HeaderDepResponse>,
+    /// A cellbase's decoded witness 0 (miner lock and client message); `null`
+    /// for every other transaction.
+    pub cellbase_witness: Option<super::transaction_structure::CellbaseWitnessResponse>,
+}
+
+/// One header dependency of a transaction.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderDepResponse {
+    pub block_hash: String,
+    /// The block's number in this store. Always set for a committed
+    /// transaction (its header deps are canonical); `null` only for an
+    /// uncommitted one whose header dep block is not indexed yet.
+    pub block_number: Option<i64>,
+}
+
+/// Resolve header deps (`0x` block hashes) to their block numbers. A
+/// committed transaction's header dep that is not a canonical block is an
+/// error; an uncommitted one's may not be indexed yet.
+fn header_deps_response(
+    store: &ckbadger_store::CkbadgerStore,
+    header_deps: &[String],
+    committed: bool,
+    tx: &str,
+) -> Result<Vec<HeaderDepResponse>, ApiRouteError> {
+    header_deps
+        .iter()
+        .map(|raw| {
+            let hash = decode_hex_bytes_with_context(raw, "header dep", tx, Some(32))?;
+            let block_number = store
+                .get_block_number_by_hash(&hash)
+                .map_err(|e| ApiError::internal(format!("{tx} header dep {raw}: {e}")))?;
+            if committed && block_number.is_none() {
+                return Err(ApiError::internal(format!(
+                    "committed transaction {tx} reads header {raw}, which is not an indexed canonical block"
+                )));
+            }
+            Ok(HeaderDepResponse {
+                block_hash: format!("0x{}", hex::encode(&hash)),
+                block_number,
+            })
+        })
+        .collect()
+}
+
+/// Witness 0 of a cellbase, decoded; `None` for any other transaction.
+fn cellbase_witness_response(
+    is_cellbase: bool,
+    witnesses: &[String],
+    tx: &str,
+) -> Result<Option<super::transaction_structure::CellbaseWitnessResponse>, ApiRouteError> {
+    if !is_cellbase {
+        return Ok(None);
+    }
+    let Some(raw) = witnesses.first() else {
+        return Ok(None);
+    };
+    let bytes = decode_hex_bytes_with_context(raw, "cellbase witness", tx, None)?;
+    Ok(super::transaction_structure::cellbase_witness(&bytes))
 }
 
 /// A `.cell` name created by a transaction, with the records its creating
@@ -1237,8 +1299,13 @@ async fn get_transaction_detail(
             inputs_used_capacity: Some(io.inputs_used_capacity.to_string()),
             outputs_used_capacity: Some(io.outputs_used_capacity.to_string()),
             script_groups,
-            witness_details: super::transaction_structure::witness_details(&io.witnesses)
-                .map_err(|e| ApiError::internal(e.to_string()))?,
+            witness_details: super::transaction_structure::witness_details(
+                &io.witnesses,
+                pool_is_cellbase,
+            )
+            .map_err(|e| ApiError::internal(e.to_string()))?,
+            header_deps: header_deps_response(&state.store, &rpc_tx.header_deps, false, &hash)?,
+            cellbase_witness: cellbase_witness_response(pool_is_cellbase, &io.witnesses, &hash)?,
             inputs: io.inputs,
             outputs: io.outputs,
             witnesses: io.witnesses,
@@ -1294,6 +1361,7 @@ async fn get_transaction_detail(
         witnesses_available,
         dotcell_names,
         outputs_data,
+        header_deps,
     ) = {
         let ckb_store = state.ckb_store.as_ref().ok_or_else(|| {
             ApiError::internal(format!(
@@ -1331,6 +1399,10 @@ async fn get_transaction_detail(
             .into_iter()
             .map(|data| data.raw_data())
             .collect();
+        let header_deps: Vec<String> = tx_view
+            .header_deps_iter()
+            .map(|hash| format!("0x{}", hex::encode(hash.raw_data())))
+            .collect();
         (
             inputs,
             outputs,
@@ -1342,6 +1414,7 @@ async fn get_transaction_detail(
             witnesses_available,
             dotcell_names,
             outputs_data,
+            header_deps,
         )
     };
 
@@ -1418,6 +1491,8 @@ async fn get_transaction_detail(
         ))
     })?;
 
+    let header_deps = header_deps_response(&state.store, &header_deps, true, &tx_hash_hex)?;
+    let cellbase_witness = cellbase_witness_response(is_cellbase, &witnesses, &tx_hash_hex)?;
     ok(TransactionDetailResponse {
         hash: tx_hash_hex,
         status: "committed".to_string(),
@@ -1443,8 +1518,10 @@ async fn get_transaction_detail(
         inputs_used_capacity: Some(inputs_occupied_capacity.to_string()),
         outputs_used_capacity: Some(outputs_occupied_capacity.to_string()),
         script_groups,
-        witness_details: super::transaction_structure::witness_details(&witnesses)
+        witness_details: super::transaction_structure::witness_details(&witnesses, is_cellbase)
             .map_err(|e| ApiError::internal(e.to_string()))?,
+        header_deps,
+        cellbase_witness,
         inputs,
         outputs,
         witnesses,
@@ -2860,6 +2937,8 @@ mod tests {
             witnesses: vec!["0x".to_string(), "0x1234".to_string()],
             witnesses_available: true,
             dotcell_names: vec![],
+            header_deps: vec![],
+            cellbase_witness: None,
         };
 
         let json = serde_json::to_value(&detail).unwrap();

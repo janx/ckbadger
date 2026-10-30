@@ -252,6 +252,29 @@ pub fn attach_content_witnesses<D: AsRef<[u8]>>(
 }
 
 fn cobuild_action_script_hashes(bytes: &[u8]) -> Option<Vec<String>> {
+    Some(
+        cobuild_actions(bytes)?
+            .into_iter()
+            .map(|action| action.script_hash)
+            .collect(),
+    )
+}
+
+/// One CoBuild `Action` of a witness's message: `script_info_hash`,
+/// `script_hash` and its raw `data` (the action itself, in the script's own
+/// schema; not decoded here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CobuildActionResponse {
+    pub script_info_hash: String,
+    pub script_hash: String,
+    pub data: String,
+}
+
+/// The actions of a CoBuild witness's message (`Message { actions:
+/// ActionVec }`, `Action { script_info_hash, script_hash, data: Bytes }`),
+/// `None` when the witness has no message or a malformed one.
+fn cobuild_actions(bytes: &[u8]) -> Option<Vec<CobuildActionResponse>> {
     let fields = cobuild_fields(bytes)?;
     let (_, start, end) = fields.iter().find(|(name, _, _)| name == "message")?;
     let message = bytes.get(*start..*end)?;
@@ -259,20 +282,49 @@ fn cobuild_action_script_hashes(bytes: &[u8]) -> Option<Vec<String>> {
     let (actions_start, actions_end) = message_fields[0];
     let actions = message.get(actions_start..actions_end)?;
     let rows = molecule_fields(actions, None)?;
-    let mut hashes = Vec::with_capacity(rows.len());
+    let mut out = Vec::with_capacity(rows.len());
     for &(start, end) in &rows {
         let action = actions.get(start..end)?;
         let fields = molecule_fields(action, Some(3))?;
-        let (hash_start, hash_end) = fields[1];
-        if hash_end - hash_start != 32 {
+        let hash = |(start, end): (usize, usize)| {
+            (end - start == 32).then(|| format!("0x{}", hex::encode(&action[start..end])))
+        };
+        let (data_start, data_end) = fields[2];
+        let data = action.get(data_start..data_end)?;
+        if !molecule_bytes(data) {
             return None;
         }
-        hashes.push(format!(
-            "0x{}",
-            hex::encode(action.get(hash_start..hash_end)?)
-        ));
+        out.push(CobuildActionResponse {
+            script_info_hash: hash(fields[0])?,
+            script_hash: hash(fields[1])?,
+            data: format!("0x{}", hex::encode(&data[4..])),
+        });
     }
-    Some(hashes)
+    Some(out)
+}
+
+/// A cellbase's witness, `CellbaseWitness { lock: Script, message: Bytes }`:
+/// the miner's lock and the client message it signed the block with.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellbaseWitnessResponse {
+    pub lock: ScriptResponse,
+    pub message: String,
+}
+
+/// Decode `bytes` as a `CellbaseWitness`; `None` when it is not one.
+pub fn cellbase_witness(bytes: &[u8]) -> Option<CellbaseWitnessResponse> {
+    let witness = packed::CellbaseWitness::from_slice(bytes).ok()?;
+    let lock = witness.lock();
+    let hash_type: u8 = lock.hash_type().into();
+    Some(CellbaseWitnessResponse {
+        lock: ScriptResponse {
+            code_hash: format!("0x{}", hex::encode(lock.code_hash().raw_data())),
+            hash_type: ckbadger_common::hash_type_label(hash_type)?.to_string(),
+            args: format!("0x{}", hex::encode(lock.args().raw_data())),
+        },
+        message: format!("0x{}", hex::encode(witness.message().raw_data())),
+    })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -425,6 +477,9 @@ pub struct WitnessResponse {
     pub size: usize,
     pub kind: String,
     pub fields: Vec<WitnessField>,
+    /// `cobuild` witnesses with a message: its actions, in message order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Vec<CobuildActionResponse>>,
 }
 
 fn word(bytes: &[u8], at: usize) -> Option<usize> {
@@ -565,15 +620,41 @@ fn ckbfs_fields(bytes: &[u8]) -> Option<Vec<(String, usize, usize)>> {
     Some(result)
 }
 
-pub fn witness_details(witnesses: &[String]) -> anyhow::Result<Vec<WitnessResponse>> {
+/// Every witness's byte layout. `is_cellbase` makes witness 0 a
+/// `CellbaseWitness` candidate (kind `cellbase`: lock, message).
+pub fn witness_details(
+    witnesses: &[String],
+    is_cellbase: bool,
+) -> anyhow::Result<Vec<WitnessResponse>> {
     witnesses
         .iter()
         .enumerate()
         .map(|(index, raw)| {
             let bytes = hex::decode(raw.trim_start_matches("0x"))?;
             let mut fields = Vec::new();
+            let mut actions = None;
+            let cellbase = (is_cellbase && index == 0)
+                .then(|| packed::CellbaseWitness::from_slice(&bytes).ok())
+                .flatten();
             let kind = if bytes.is_empty() {
                 "empty"
+            } else if let Some(witness) = cellbase {
+                let lock = witness.lock();
+                let lock_start = 12;
+                let lock_end = lock_start + lock.as_slice().len();
+                for (name, start, end) in [
+                    ("table header", 0, lock_start),
+                    ("lock", lock_start, lock_end),
+                    ("message", lock_end, bytes.len()),
+                ] {
+                    fields.push(WitnessField {
+                        name: name.into(),
+                        start,
+                        end,
+                        hex: format!("0x{}", hex::encode(&bytes[start..end])),
+                    });
+                }
+                "cellbase"
             } else if let Some(decoded) = ckbfs_fields(&bytes) {
                 fields.extend(decoded.into_iter().map(|(name, start, end)| WitnessField {
                     name,
@@ -589,6 +670,7 @@ pub fn witness_details(witnesses: &[String]) -> anyhow::Result<Vec<WitnessRespon
                     end,
                     hex: format!("0x{}", hex::encode(&bytes[start..end])),
                 }));
+                actions = cobuild_actions(&bytes);
                 "cobuild"
             } else if packed::WitnessArgs::from_slice(&bytes).is_ok() {
                 // Molecule verification above validates all table offsets and BytesOpt fields.
@@ -633,6 +715,7 @@ pub fn witness_details(witnesses: &[String]) -> anyhow::Result<Vec<WitnessRespon
                 size: bytes.len(),
                 kind: kind.into(),
                 fields,
+                actions,
             })
         })
         .collect()
@@ -647,7 +730,8 @@ mod tests {
             .set(Some([7u8; 65].pack()))
             .build();
         let bytes = packed::WitnessArgs::new_builder().lock(lock).build();
-        let rows = witness_details(&[format!("0x{}", hex::encode(bytes.as_slice()))]).unwrap();
+        let rows =
+            witness_details(&[format!("0x{}", hex::encode(bytes.as_slice()))], false).unwrap();
         assert_eq!(rows[0].kind, "witness_args");
         assert_eq!(rows[0].fields[1].name, "lock");
         assert_eq!(rows[0].fields[1].start, 16);
@@ -663,11 +747,11 @@ mod tests {
     }
     #[test]
     fn witness_decode_preserves_unknown_data_without_guessing() {
-        let rows = witness_details(&["0x".into(), "0x123456".into()]).unwrap();
+        let rows = witness_details(&["0x".into(), "0x123456".into()], false).unwrap();
         assert_eq!(rows[0].kind, "empty");
         assert_eq!(rows[1].kind, "opaque");
         assert_eq!(rows[1].fields[0].hex, "0x123456");
-        assert!(witness_details(&["0xz".into()]).is_err());
+        assert!(witness_details(&["0xz".into()], false).is_err());
     }
     fn table(fields: &[Vec<u8>]) -> Vec<u8> {
         let mut size = 4 + fields.len() * 4;
@@ -690,7 +774,7 @@ mod tests {
         let body = table(&[vec![0, 0, 0, 0], message.clone()]);
         let mut data = 0xff000001u32.to_le_bytes().to_vec();
         data.extend(body);
-        let rows = witness_details(&[format!("0x{}", hex::encode(&data))]).unwrap();
+        let rows = witness_details(&[format!("0x{}", hex::encode(&data))], false).unwrap();
         assert_eq!(rows[0].kind, "cobuild");
         assert_eq!(rows[0].fields[2].name, "seal");
         assert_eq!(rows[0].fields[2].hex, "0x00000000");
@@ -711,6 +795,36 @@ mod tests {
             cobuild_fields(&data).is_none(),
             "malformed message is not labelled CoBuild"
         );
+    }
+
+    /// TX-36: a CoBuild witness lists the actions of its message — each
+    /// action's script info hash, script hash and raw action data — as the
+    /// existing CoBuild parser validates them.
+    #[test]
+    fn cobuild_witness_lists_its_message_actions() {
+        let bytes = |b: &[u8]| {
+            let mut v = (b.len() as u32).to_le_bytes().to_vec();
+            v.extend(b);
+            v
+        };
+        let action = table(&[vec![0x11; 32], vec![0x30; 32], bytes(&[1, 0, 0, 0, 0xaa])]);
+        let message = table(&[table(&[action])]);
+        let body = table(&[vec![0, 0, 0, 0], message]);
+        let mut data = 0xff000001u32.to_le_bytes().to_vec();
+        data.extend(body);
+        let rows = witness_details(&[format!("0x{}", hex::encode(&data))], false).unwrap();
+        assert_eq!(rows[0].kind, "cobuild");
+        assert_eq!(
+            serde_json::to_value(&rows[0].actions).unwrap(),
+            serde_json::json!([{
+                "scriptInfoHash": format!("0x{}", "11".repeat(32)),
+                "scriptHash": format!("0x{}", "30".repeat(32)),
+                "data": "0x01000000aa",
+            }])
+        );
+        // Witnesses that are not CoBuild carry no action list.
+        let rows = witness_details(&["0x".into()], false).unwrap();
+        assert!(rows[0].actions.is_none());
     }
 
     #[test]
@@ -806,7 +920,7 @@ mod tests {
         data.push(3);
         data.extend([0u8; 44]);
         data.extend(b"hello");
-        let rows = witness_details(&[format!("0x{}", hex::encode(&data))]).unwrap();
+        let rows = witness_details(&[format!("0x{}", hex::encode(&data))], false).unwrap();
         assert_eq!(rows[0].kind, "ckbfs");
         assert_eq!(rows[0].fields.last().unwrap().start, 50);
         assert_eq!(rows[0].fields.last().unwrap().hex, "0x68656c6c6f");
@@ -1136,7 +1250,7 @@ mod tests {
         attach_content_witnesses(&mut groups, &witnesses, &data).unwrap();
         assert_eq!(type_group_witness(&groups, &ckbfs), Some(1));
         assert_eq!(type_group_witness(&groups, &spore), Some(2));
-        let rows = witness_details(&witnesses).unwrap();
+        let rows = witness_details(&witnesses, false).unwrap();
         assert_eq!(rows[1].kind, "ckbfs");
         assert_eq!(rows[2].kind, "cobuild");
     }
