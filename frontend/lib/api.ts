@@ -5018,4 +5018,13 @@ export const api = {
 
   getNetworkPeer: async (peerId: string): Promise<NetworkPeerDetail> =>
     fetchApi(`/network/peers/${encodeURIComponent(peerId)}`),
+
+  // ---- F2 group `fiber` ----
+  /**
+   * D7: one fork event by its fork point height and the first 8 hex digits of the first block it
+   * dropped (`/forks/<fork_point_height>/<orphan_hash_prefix8>`). Needs the backend route of the
+   * same shape; the response is the existing fork detail.
+   */
+  getForkAt: (forkPointNumber: number, orphanPrefix: string): Promise<ReorgDetail> =>
+    fetchApi(`/forks/${forkPointNumber}/${orphanPrefix}`),
 };

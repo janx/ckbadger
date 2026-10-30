@@ -31,6 +31,8 @@ import { buildMarkdownDocument, markdownList, markdownTable } from '@/lib/ai/mar
 import { CHART_PAGE_SLUGS, type ParsedMarkdownPage } from '@/lib/ai/markdown-route';
 import { resolveBuildVersion } from '@/lib/runtime-config';
 import { resolveActiveNetwork } from '@/lib/active-network';
+import { parseForkRoute } from '@/lib/fork-format';
+import { formatBlockNumber } from '@/lib/format-block';
 import { analyzeWitness, buildScriptGroupLens, inferWitnessInsights } from '@/lib/witness-analysis';
 
 const DEFAULT_LIMIT = 20;
@@ -1942,10 +1944,12 @@ export async function renderMarkdownPage(
       return { status: 200, body };
     }
     case 'fork_detail': {
-      const id = parsePositiveIntField('fork id', page.id);
-      const detail = await api.getForkDetail(id);
+      const route = parseForkRoute(page.height, page.orphan);
+      if (!route)
+        throw new MarkdownRenderError(400, `Invalid fork address: ${page.height}/${page.orphan}`);
+      const detail = await api.getForkAt(route.height, route.orphan);
       const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
-        `# Fork ${id}`,
+        `# Fork at ${formatBlockNumber(route.height)}`,
         '',
         renderForkDetail(detail),
       ]);

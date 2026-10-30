@@ -2,6 +2,8 @@ import { http, HttpResponse, ws } from 'msw';
 import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import vesselSnapshot from '@/__tests__/fixtures/vessels-api-producer/vessels-snapshot.json';
+// F2 group `fiber`: the D7 fork detail fixture
+import forkUncleDetail from '@/__tests__/fixtures/fork-api-producer/fork-uncle-detail.json';
 import {
   activitySummary24h,
   averageBlockTimeChart,
@@ -998,4 +1000,7 @@ export const handlers = [
         : [],
     });
   }),
+
+  // ---- F2 group `fiber`: the D7 fork address, answered with the producer's uncle fork ----
+  http.get(`${API_BASE}/forks/:height/:orphan`, () => HttpResponse.json(forkUncleDetail)),
 ];

@@ -97,7 +97,7 @@ const AddressDetailPage = lazyPage(() => import('@/app/address/[addr]/page'));
 const CellDetailPage = lazyPage(() => import('@/app/cell/[outpoint]/page'));
 const ScriptsPage = lazyPage(() => import('@/app/scripts/page'));
 const ForksPage = lazyPage(() => import('@/app/forks/page'));
-const ForkDetailPage = lazyPage(() => import('@/app/forks/[id]/page'));
+const ForkDetailPage = lazyPage(() => import('@/app/forks/[height]/[orphan]/page'));
 const ChartsPage = lazyPage(() => import('@/app/charts/page'));
 const MostUtilizedScriptsPage = lazyPage(() => import('@/app/charts/most-utilized-scripts/page'));
 const MostUtilizedAssetsPage = lazyPage(() => import('@/app/charts/most-utilized-assets/page'));
@@ -286,7 +286,7 @@ export function createAppRouter(): RouteObject[] {
       element: <ForksPage />,
     },
     {
-      path: 'forks/:id',
+      path: 'forks/:height/:orphan',
       element: <ForkDetailPage />,
     },
     {

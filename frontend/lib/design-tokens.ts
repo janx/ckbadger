@@ -87,3 +87,37 @@ export const DAO_ISSUANCE_COLORS = {
   compensation: CLASS_COLORS.dao,
   burnt: CLASS_COLORS.other,
 } as const;
+
+// ---- F2 group `fiber` (Fiber network, Fiber channel, Forks, Fork detail) ----
+/** Jade = open now / CKB locked now; grey ink = history; a dashed light line = forced. */
+export const FIBER_COLORS = {
+  open: '#2edba3',
+  openFill: 'rgba(46,219,163,.28)',
+  history: '#a0a8be',
+  historyFill: 'rgba(160,168,190,.3)',
+  forced: '#dee2ec',
+  nodeFill: '#141826',
+  nodeStroke: '#a0a8be',
+  label: '#a0a8be',
+  count: '#dee2ec',
+  halo: '#0c0e15',
+  note: '#7c849c',
+} as const;
+/** Uncles on chain are grey ink; this node's view and an uncle inclusion are jade. */
+export const FORK_COLORS = {
+  uncles: '#a0a8be',
+  nodeSwitches: '#2edba3',
+  uncleLink: '#2edba3',
+  dropped: '#dee2ec',
+  spine: '#343c50',
+  edge: '#4b5266',
+  tileFill: '#141826',
+  tileStroke: '#2c3348',
+  tileStrokeLit: '#dee2ec',
+  grid: '#161a25',
+  axis: '#1a1f30',
+  tick: '#7c849c',
+  ink: '#dee2ec',
+  dim: '#a0a8be',
+  halo: '#0c0e15',
+} as const;

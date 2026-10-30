@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ForksPage from '@/app/forks/page';
 import { api } from '@/lib/api';
@@ -16,30 +16,101 @@ vi.mock('@/components/layout/header', () => ({
   Header: () => <div data-testid="header">Header</div>,
 }));
 
-const list = () => listFixture as unknown as Awaited<ReturnType<typeof api.getForks>>;
+type List = Awaited<ReturnType<typeof api.getForks>>;
+const list = () => listFixture as unknown as List;
 const overview = () =>
   overviewFixture as unknown as Awaited<ReturnType<typeof api.getForkOverview>>;
+const table = () => screen.getByRole('table', { name: 'Branch switches on this node' });
 
 describe('ForksPage', () => {
   beforeEach(() => vi.clearAllMocks());
-  it('shows exact complete-day counts and current old-branch fate from producer JSON', async () => {
+
+  it('leads with the chain’s own record: uncle rate against the 2.5% target (FF-L1)', async () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
-    const title = await screen.findByRole('heading', { level: 1, name: 'Forks' });
-    expect(title).toHaveClass('text-[26px]');
-    await waitFor(() => expect(screen.getAllByText('included as uncle').length).toBeGreaterThan(0));
-    expect(screen.getAllByText(/Old: witness unavailable/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/\+50 ms/).length).toBeGreaterThan(0);
-    expect(screen.getByText('Uncles · 30 completed days')).toBeInTheDocument();
-    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: 'Forks' })).toHaveClass(
+      'text-[26px]'
+    );
+    expect(screen.getByText(/aiming at one in 40 blocks/)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(2));
+    expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
+      'Uncle rate · 3 days through 2026-10-22',
+      'This node switched branch',
+    ]);
+    expect(screen.getByText('250.00%')).toBeInTheDocument();
+    expect(screen.getByText('5 uncles in 2 blocks · target 2.50%')).toBeInTheDocument();
+    expect(screen.getByText('1 time')).toBeInTheDocument();
+    expect(screen.getByText('1 in these 3 days')).toBeInTheDocument();
+    expect(api.getForkOverview).toHaveBeenCalledWith(30);
+  });
+
+  it('draws the days as grey uncle bars with jade switches and says what they mean (FF-L2)', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    const { container } = render(<ForksPage />);
+    expect(
+      await screen.findByRole('heading', { name: 'The chain’s record and this node’s view' })
+    ).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelectorAll('[data-uncles]')).toHaveLength(3));
+    expect(container.querySelectorAll('[data-switches]')).toHaveLength(1);
+    expect(
+      screen.getByText(
+        /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\./
+      )
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/indexed chain time, node switches use this indexer's detection wall time/)
     ).toBeInTheDocument();
-    expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
-    expect(api.getForkOverview).toHaveBeenCalledWith(30);
-    expect(screen.getAllByText(/UTC\+8/).length).toBeGreaterThan(0);
   });
+
+  it('gives every switch a fork glyph, the miners, the gap and its fate, linked by D7 (FF-L3, FF-L4)', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(
+      within(table())
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toEqual([
+      'Seen (UTC+8)',
+      'Fork point',
+      'Shape',
+      'Dropped block’s miner vs winner’s',
+      'Found apart',
+      'What became of it',
+    ]);
+    const seen = within(table()).getByRole('link', { name: '2025-08-01 06:13:20' });
+    expect(seen).toHaveAttribute('href', '/mainnet/forks/10/17404795');
+    expect(within(table()).getByText('depth 1')).toBeInTheDocument();
+    expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
+    expect(within(table()).getByText('50 ms')).toBeInTheDocument();
+    expect(within(table()).getByText('uncle in #12 (+1)')).toBeInTheDocument();
+    expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
+    expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
+    expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
+
+  it('marks a fork one miner had against itself (FF-L3)', async () => {
+    const miner = `0x${'ab'.repeat(32)}`;
+    const event = list().data[0];
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: [
+        {
+          ...event,
+          preview: { ...event.preview!, oldMinerLockHash: miner, competingMinerLockHash: miner },
+        },
+      ],
+    });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(within(table()).getByText('same miner')).toBeInTheDocument();
+    expect(within(table()).getAllByText('0xababab…abab')).toHaveLength(2);
+  });
+
   it('distinguishes no node switches from an overview load failure', async () => {
     vi.mocked(api.getForks).mockResolvedValue({
       ...list(),
@@ -55,16 +126,18 @@ describe('ForksPage', () => {
     );
     expect(screen.getByText(/No branch switches observed by this node/)).toBeInTheDocument();
   });
-  it('labels a deep detection as no rollback instead of an adopted branch', async () => {
+
+  it('labels a deep detection as no rollback, without a route it cannot have', async () => {
     vi.mocked(api.getForks).mockResolvedValue({
       ...list(),
       data: [{ ...deepFixture.event, previewStatus: 'no_old_branch', preview: null }],
-    } as Awaited<ReturnType<typeof api.getForks>>);
+    } as List);
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
     await waitFor(() =>
-      expect(screen.getAllByText('No rollback at detection').length).toBeGreaterThan(0)
+      expect(within(table()).getByText('No rollback at detection')).toBeInTheDocument()
     );
-    expect(screen.getByText(/indexed #12 → node #13/)).toBeInTheDocument();
+    expect(within(table()).getByText('indexed #12 → node #13')).toBeInTheDocument();
+    expect(within(table()).queryByRole('link', { name: /^20\d\d-/ })).toBeNull();
   });
 });
