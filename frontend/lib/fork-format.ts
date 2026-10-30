@@ -22,8 +22,8 @@ export function forkDetailHref(forkPointNumber: number, orphanHash: string): str
 
 /**
  * A row's link (R2b-b): from the API's `firstOrphanHash`, never from the preview or the ms id;
- * null when the event has no D7 address. A recorded / traced status without a hash is a broken
- * contract.
+ * null when the event has no D7 address. contracts W5-2: a `recorded` event always has the hash,
+ * a `not_observed` one never.
  */
 export function forkEventHref(event: ReorgEvent): string | null {
   return forkRefHref(event);
@@ -33,32 +33,30 @@ export function forkEventHref(event: ReorgEvent): string | null {
 export function forkRefHref(
   ref: Pick<ForkEventRef, 'forkPointNumber' | 'firstOrphanHash' | 'firstOrphanStatus'>
 ): string | null {
+  const status = knownFirstOrphanStatus(ref.firstOrphanStatus);
   if (ref.firstOrphanHash === null) {
-    if (ref.firstOrphanStatus === 'recorded' || ref.firstOrphanStatus === 'traced')
-      throw new Error(
-        `fork #${ref.forkPointNumber} is ${ref.firstOrphanStatus} but has no first orphan hash`
-      );
+    if (status === 'recorded')
+      throw new Error(`fork #${ref.forkPointNumber} is recorded but has no first orphan hash`);
     return null;
   }
+  if (status !== 'recorded')
+    throw new Error(
+      `fork #${ref.forkPointNumber} is ${status} but names first orphan ${ref.firstOrphanHash}`
+    );
   return forkDetailHref(ref.forkPointNumber, ref.firstOrphanHash);
 }
 
-const MISSING_ADDRESS_WORDS: Record<
-  Exclude<ForkFirstOrphanStatus, 'recorded' | 'traced'>,
-  string
-> = {
-  not_observed: 'nothing was rolled back, so no detail page',
-  needs_node_reader: 'its first dropped block needs the node reader',
-  old_branch_unavailable: 'the node no longer has the dropped branch',
-};
+function knownFirstOrphanStatus(status: ForkFirstOrphanStatus): ForkFirstOrphanStatus {
+  if (status !== 'recorded' && status !== 'not_observed')
+    throw new Error(`Fork: unknown first orphan status ${status}`);
+  return status;
+}
 
-/** Why a switch has no D7 address, in plain words. */
+/** Why a switch has no D7 address, in plain words: only a deep detection has none. */
 export function missingAddressWords(status: ForkFirstOrphanStatus): string {
-  if (status === 'recorded' || status === 'traced')
+  if (knownFirstOrphanStatus(status) === 'recorded')
     throw new Error(`fork first orphan status ${status} has an address`);
-  const words = MISSING_ADDRESS_WORDS[status];
-  if (!words) throw new Error(`Fork: unknown first orphan status ${status}`);
-  return words;
+  return 'nothing was rolled back, so no detail page';
 }
 
 const NUMBER_WORDS = [

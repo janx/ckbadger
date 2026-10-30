@@ -52,6 +52,27 @@ describe('D7 fork address /forks/<fork_point_height>/<orphan_hash_prefix8>', () 
     ).rejects.toBeInstanceOf(MarkdownRenderError);
     getForkAt.mockRestore();
   });
+
+  // contracts W5-2: without the node reader the route answers the stored event, no evidence.
+  it('says in the markdown when the branch evidence needs the node store', async () => {
+    const getForkAt = vi.spyOn(api, 'getForkAt').mockResolvedValue({
+      ...uncleFixture,
+      evidenceStatus: 'node_reader_unavailable',
+      orphanedBlocks: [],
+      orphanedTransactions: [],
+      adoptedBranch: [],
+      canonicalBranch: [],
+      canonicalTipNumber: null,
+    } as never);
+    const page = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/forks/10/17404795'),
+      searchParams: new URLSearchParams(),
+      origin: 'https://explorer.example',
+    });
+    expect(page.body).toContain('| evidenceStatus | node_reader_unavailable |');
+    expect(page.body).toContain(`| firstOrphanHash | ${uncleFixture.event.firstOrphanHash} |`);
+    getForkAt.mockRestore();
+  });
 });
 
 describe('markdown forks list (R2b-b)', () => {

@@ -25,6 +25,7 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="h
 const stats = {
   ...daoStatistics,
   tipBlockNumber: 5,
+  anchor: { blockNumber: 5, blockHash: '0x' + '5'.repeat(64) },
   // Consistent with the evidence header at #5: S (500000000) = still owed + burnt.
   miningReward: '100000000',
   depositCompensation: '300000000',
@@ -135,7 +136,11 @@ describe('DaoPage', () => {
   });
 
   it('keeps capacity use visible at its statistics anchor when evidence has advanced', async () => {
-    vi.mocked(api.getDaoStatistics).mockResolvedValue({ ...stats, tipBlockNumber: 4 });
+    vi.mocked(api.getDaoStatistics).mockResolvedValue({
+      ...stats,
+      tipBlockNumber: 4,
+      anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
+    });
     render(<DaoPage />);
     expect(
       await screen.findByText('Current capacity use at statistics block #4')

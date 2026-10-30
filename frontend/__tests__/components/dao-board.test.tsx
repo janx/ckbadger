@@ -49,9 +49,11 @@ function stubCalculator() {
   );
 }
 
+const ANCHOR_5 = { blockNumber: 5, blockHash: '0x' + 'a5'.repeat(32) };
 const stats = {
   ...daoStatistics,
   tipBlockNumber: 5,
+  anchor: ANCHOR_5,
   // Secondary issuance at the evidence header's block #5, whose S (500000000) = owed + burnt.
   miningReward: '100000000',
   depositCompensation: '300000000',
@@ -575,8 +577,16 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent('ARbytes 8..161.0200000000000000 accumulated rate (genesis 1.0)');
     expect(t2).not.toHaveTextContent('10200000000000000 scaled rate');
     expect(t2).toHaveTextContent('Cbytes 0..810,000,000.00000000 CKB issued in total');
+    // contracts W5-3 (DAO-16): the identity names the block it holds at, number and hash.
     expect(t2).toHaveTextContent(
-      'At block #5, S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+      'At block #5 (0xa5a5a5a5...a5a5a5a5), S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+    );
+    expect(within(t2 as HTMLElement).getByRole('link', { name: '#5' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/5'
+    );
+    expect(within(t2 as HTMLElement).getByTitle(ANCHOR_5.blockHash)).toHaveTextContent(
+      '0xa5a5a5a5...a5a5a5a5'
     );
     expect(t2).toHaveTextContent(
       'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
@@ -596,18 +606,35 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     ).toThrow('DAO statistics at #5: S 500000001 is not still owed + burnt 500000000');
   });
 
+  it('fails when the statistics anchor is not the block the row was computed at', () => {
+    stubCalculator();
+    expect(() =>
+      render(
+        <DaoBoard
+          statistics={{ ...sameBlock, anchor: { ...ANCHOR_5, blockNumber: 4 } }}
+          evidence={evidence}
+        />
+      )
+    ).toThrow('DAO statistics at #5: anchor #4 is not the block the row was computed at');
+  });
+
   it('states the identity from the statistics row even when the header shown is another block', () => {
     stubCalculator();
     const { container } = render(
       <DaoBoard
-        statistics={{ ...sameBlock, tipBlockNumber: 4, tipSecondaryPool: '500000000' }}
+        statistics={{
+          ...sameBlock,
+          tipBlockNumber: 4,
+          anchor: { blockNumber: 4, blockHash: '0x' + 'b4'.repeat(32) },
+          tipSecondaryPool: '500000000',
+        }}
         evidence={evidence}
       />
     );
     const t2 = tier2(container);
     expect(t2).toHaveTextContent('The DAO field in every block header · #5');
     expect(t2).toHaveTextContent(
-      'At block #4, S (5.00000000 CKB) equals the compensation still owed'
+      'At block #4 (0xb4b4b4b4...b4b4b4b4), S (5.00000000 CKB) equals the compensation still owed'
     );
     expect(t2).not.toHaveTextContent('not shown across two blocks');
   });

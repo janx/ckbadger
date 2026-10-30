@@ -110,6 +110,16 @@ interface CursorPaginatedResponse<T> {
   pool?: PoolSummary;
 }
 
+/** One page of `/addresses/{addr}/activities` (contracts W5-1). */
+export interface AddressActivitiesPage extends CursorPaginatedResponse<Activity> {
+  /**
+   * Unfiltered pages only (no `filter`, or `all`), on every page: the address's exact committed
+   * activity count — its transactions minus its cellbases. Never `transactionsCount`, which counts
+   * the cellbases too. Filtered pages carry none.
+   */
+  total?: number;
+}
+
 /** How far a transaction still in the node's pool could be interpreted. */
 interface PoolInterpretation {
   status: 'complete' | 'partial';
@@ -430,6 +440,11 @@ interface OrphanedTransaction {
 
 interface ReorgDetail {
   event: ReorgEvent;
+  /**
+   * contracts W5-2: `node_reader_unavailable` — the event resolved from the store alone and every
+   * evidence list below is empty, `canonicalTipNumber` null.
+   */
+  evidenceStatus: ForkEvidenceStatus;
   orphanedBlocks: OrphanedBlock[];
   orphanedTransactions: OrphanedTransaction[];
   adoptedBranch: CanonicalBranchBlock[];
@@ -1978,6 +1993,11 @@ interface AddressDaoSummary {
 
 interface DaoStatistics {
   tipBlockNumber: number;
+  /**
+   * contracts W5-3 (DAO-16): the canonical block this row was computed at — `tipBlockNumber` and
+   * the hash the indexer persisted with the row (the API refuses a non-canonical one).
+   */
+  anchor: DaoAnchor;
   /** Exact block-0 burn-policy capacity from the persisted genesis baseline, shannons. */
   genesisBaselineBurnt: string;
   totalDeposited: string;
@@ -4171,15 +4191,21 @@ export const api = {
     );
   },
 
-  getAddressActivities: (
+  getAddressActivities: async (
     addr: string,
     params: CursorQueryParams & { filter?: string } = {}
-  ): Promise<CursorPaginatedResponse<Activity>> => {
+  ): Promise<AddressActivitiesPage> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
-    if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
-    return fetchApi(`/addresses/${addr}/activities?${query}`);
+    const filtered = !!params.filter && params.filter !== 'all';
+    if (filtered) query.set('filter', params.filter!);
+    const path = `/addresses/${addr}/activities`;
+    const page = await fetchApi<AddressActivitiesPage>(`${path}?${query}`);
+    // contracts W5-1: every unfiltered page declares the address's activity count.
+    if (!filtered && !Number.isSafeInteger(page.total))
+      throw new Error(`${path}: unfiltered page has no activity total (contracts W5-1)`);
+    return page;
   },
 
   getGlobalActivities: (
@@ -5259,12 +5285,13 @@ export const api = {
 };
 
 // ---- F2 group `fiber`: lane R2b-b fork contracts ----
-export type ForkFirstOrphanStatus =
-  | 'recorded'
-  | 'traced'
-  | 'not_observed'
-  | 'needs_node_reader'
-  | 'old_branch_unavailable';
+/**
+ * contracts W5-2: every automatic switch persists its first orphan (`recorded`, hash present);
+ * a deep detection rolls nothing back (`not_observed`, hash null, no D7 address).
+ */
+export type ForkFirstOrphanStatus = 'recorded' | 'not_observed';
+/** Whether the API read branch evidence from the node store (`node_reader_unavailable`: not open). */
+export type ForkEvidenceStatus = 'available' | 'node_reader_unavailable';
 /** Another fork event by its D7 address; a null hash means that event has no address. */
 export interface ForkEventRef {
   forkPointNumber: number;
@@ -5279,7 +5306,7 @@ export interface ForkNodeRecord {
   deepDetections: number;
   orphanedBlocks: number;
   orphanedTransactions: number;
-  evidenceStatus: 'available' | 'node_reader_unavailable';
+  evidenceStatus: ForkEvidenceStatus;
   orphanFates: {
     eventsWithEvidence: number;
     eventsOldBranchUnavailable: number;

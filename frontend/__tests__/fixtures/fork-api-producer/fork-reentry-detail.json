@@ -20,6 +20,7 @@
     }
   ],
   "canonicalTipNumber": 11,
+  "evidenceStatus": "available",
   "event": {
     "depth": 1,
     "detectedAt": "2025-07-31T22:13:20+00:00",
