@@ -835,12 +835,15 @@ export function ExactCkb({
   signed = true,
   tone = 'sign',
   wrap = false,
+  unit = true,
 }: {
   shannons: bigint;
   signed?: boolean;
   tone?: 'sign' | 'plain';
   /** Allow a line break before the decimal or unit, preserving every digit. */
   wrap?: boolean;
+  /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
+  unit?: boolean;
 }) {
   const parts = splitCkbAmount(shannons);
   const color =
@@ -871,7 +874,7 @@ export function ExactCkb({
           {parts.ghost}
         </span>
       </span>
-      <span className="text-text-dim whitespace-pre text-[11px]"> CKB</span>
+      {unit && <span className="text-text-dim whitespace-pre text-[11px]"> CKB</span>}
     </span>
   );
 }
