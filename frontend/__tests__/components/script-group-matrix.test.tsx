@@ -132,3 +132,20 @@ describe('ScriptGroupMatrix (TX-13, TX-21)', () => {
     ).toThrow('0xtx: script group lock:run:0xl1 references unknown cell in:7');
   });
 });
+
+describe('ScriptGroupMatrix column heads (visual pass)', () => {
+  it('keeps a long kind word on one line and names it in full on hover', () => {
+    render(
+      <ScriptGroupMatrix
+        txHash="0xtx"
+        inputs={[{ id: 'in:0', top: '.bit Time Index State', label: 'in #0', cap: '400' }]}
+        outputs={[]}
+        groups={[]}
+        lit={null}
+        onHover={() => {}}
+      />
+    );
+    const top = screen.getByTitle('.bit Time Index State');
+    expect(top).toHaveClass('truncate');
+  });
+});

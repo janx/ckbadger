@@ -65,6 +65,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
         capacity: '55499935881',
         commonKnowledgeSize: '94',
         status: 'live',
+        isChange: false,
         display: null,
         lock: {
           codeHash: LOCK_CODE_HASH,
@@ -141,6 +142,7 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
     witnessesAvailable: true,
     headerDeps: [],
     cellbaseWitness: null,
+    feePaidBy: [],
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
 
@@ -762,6 +764,7 @@ describe('TransactionDetailPage', () => {
         outPointIndex: 2,
         depType: 'dep_group',
         scriptHashes: ['0xinputlock'],
+        outputLockScriptHashes: [],
         resolvedCells: [
           {
             txHash: '0xmember',
@@ -769,6 +772,9 @@ describe('TransactionDetailPage', () => {
             dataHash: '0xdata',
             typeHash: null,
             scriptHashes: ['0xinputlock'],
+            outputLockScriptHashes: [],
+            codeSize: 52048,
+            scriptNames: ['Default Multisig'],
           },
         ],
       },

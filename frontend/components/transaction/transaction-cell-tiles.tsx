@@ -115,7 +115,8 @@ export function cellTiles(
       href: `/cell/${tx.hash}-${i}`,
       label: `output ${i}`,
       owner: owner(cell.address, `output ${i}`),
-      lockKind: lockKind(cell.lock?.codeHash),
+      // F2-tx (R2b-a 40, TX-22): the API marks change outputs; the tile says so beside the lock.
+      lockKind: changeMarked(lockKind(cell.lock?.codeHash), cell.isChange),
       kind: kindOf(cell),
       content: cell.display ? (
         <TransactionCellContent display={cell.display} cellHref={`/cell/${tx.hash}-${i}`} />
@@ -130,4 +131,10 @@ export function cellTiles(
       state: required(cell.status, tx.hash, `output ${i} status`),
     })),
   };
+}
+
+// F2-tx (TX-22): "Default Lock · change" (Main.dc.html out #2).
+function changeMarked(lockKind: string | null, isChange: boolean): string | null {
+  if (!isChange) return lockKind;
+  return lockKind ? `${lockKind} · change` : 'change';
 }

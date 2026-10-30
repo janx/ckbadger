@@ -29,6 +29,7 @@ vi.mock('@/lib/api', async () => {
       getTransactionCellDeps: vi.fn(),
       getTransactionLifecycle: vi.fn(),
       lookupScripts: vi.fn(),
+      getBlock: vi.fn(),
     },
     isWarmupPendingError: vi.fn(() => false),
     isNetworkInitializingError: vi.fn(() => false),
@@ -89,6 +90,7 @@ function committed(): TransactionDetail {
         lock: lockScript(`0x${'11'.repeat(20)}`),
         type: typeScript,
         address: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq',
+        lockArgsDecoded: { lock: 'secp256k1_blake160', pubkeyHash: `0x${'11'.repeat(20)}` },
       },
     ],
     outputs: [
@@ -96,6 +98,8 @@ function committed(): TransactionDetail {
         capacity: '55499935881',
         commonKnowledgeSize: '94',
         status: 'live',
+        isChange: true,
+        lockArgsDecoded: null,
         display: null,
         lock: lockScript(`0x${'22'.repeat(20)}`),
         type: typeScript,
@@ -151,7 +155,13 @@ function committed(): TransactionDetail {
         kind: 'cobuild',
         fields: [{ name: 'message', start: 0, end: 7, hex: '0x' }],
         actions: [
-          { scriptInfoHash: `0x${'44'.repeat(32)}`, scriptHash: '0xtypescript', data: '0x01' },
+          {
+            scriptInfoHash: `0x${'44'.repeat(32)}`,
+            scriptHash: '0xtypescript',
+            data: '0x01',
+            schema: 'spore',
+            name: 'TransferSpore',
+          },
         ],
       },
     ],
@@ -159,6 +169,13 @@ function committed(): TransactionDetail {
     witnessesAvailable: true,
     headerDeps: [],
     cellbaseWitness: null,
+    feePaidBy: [
+      {
+        lockHash: feedSamples.objectTransfer.participants[0].lockHash!,
+        address: feedSamples.objectTransfer.participants[0].address,
+        outflow: '52800064119',
+      },
+    ],
   } as TransactionDetail;
 }
 
@@ -202,6 +219,7 @@ beforeEach(() => {
       outPointIndex: 0,
       depType: 'dep_group',
       scriptHashes: ['0xinputlock'],
+      outputLockScriptHashes: [],
       resolvedCells: [
         {
           txHash: '0xmember',
@@ -209,8 +227,20 @@ beforeEach(() => {
           dataHash: '0xdata',
           typeHash: null,
           scriptHashes: ['0xinputlock'],
+          outputLockScriptHashes: [],
+          codeSize: 52048,
+          scriptNames: ['Default Lock'],
         },
-        { txHash: '0xother', index: 1, dataHash: '0xd2', typeHash: null, scriptHashes: [] },
+        {
+          txHash: '0xother',
+          index: 1,
+          dataHash: '0xd2',
+          typeHash: null,
+          scriptHashes: [],
+          outputLockScriptHashes: [],
+          codeSize: 1048576,
+          scriptNames: [],
+        },
       ],
     },
     {
@@ -218,14 +248,38 @@ beforeEach(() => {
       outPointIndex: 0,
       depType: 'code',
       scriptHashes: ['0xtypescript'],
-      resolvedCells: [],
+      outputLockScriptHashes: [],
+      resolvedCells: [
+        {
+          txHash: `0x96b198fb${'00'.repeat(26)}b69824`,
+          index: 0,
+          dataHash: '0xd3',
+          typeHash: null,
+          scriptHashes: ['0xtypescript'],
+          outputLockScriptHashes: [],
+          codeSize: 76752,
+          scriptNames: ['Spore'],
+        },
+      ],
     },
     {
       outPointTxHash: `0xd00a0222${'00'.repeat(26)}2c47f7`,
       outPointIndex: 0,
       depType: 'code',
       scriptHashes: [],
-      resolvedCells: [],
+      outputLockScriptHashes: ['0xoutputlock'],
+      resolvedCells: [
+        {
+          txHash: `0xd00a0222${'00'.repeat(26)}2c47f7`,
+          index: 0,
+          dataHash: '0xd4',
+          typeHash: '0xtt',
+          scriptHashes: [],
+          outputLockScriptHashes: ['0xoutputlock'],
+          codeSize: 122552,
+          scriptNames: [],
+        },
+      ],
     },
   ]);
   vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
@@ -246,11 +300,14 @@ describe('Transaction board, tier 1', () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
     render(<TransactionDetailPage />);
-    const h1 = await screen.findByRole('heading', { level: 1, name: /Object transfer/ }, SLOW);
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Object transfer' }, SLOW);
     expect(h1.previousElementSibling).toHaveTextContent('Transaction');
-    expect(await screen.findByTestId('tx-summary', {}, SLOW)).toHaveTextContent(
-      'Nervape 3x 0x51c7...96f2 moved from ckb1qzda...cjk9lz to ckb1qzda...shp3hr. The transaction paid a 0.00064119 CKB fee.'
+    expect(h1.querySelector('[data-class]')).toBeNull();
+    const summary = await screen.findByTestId('tx-summary', {}, SLOW);
+    expect(summary).toHaveTextContent(
+      'Nervape 3x 0x51c7...96f2 moved from ckb1qzda...cjk9lz to ckb1qzda...shp3hr. The sender paid a 0.00064119 CKB fee.'
     );
+    expect(summary.querySelector('[data-class="objects"]')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Copy transaction hash' }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(TX_HASH));
   });
@@ -263,6 +320,7 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('2026-10-22 22:43:55 UTC+8');
     expect(within(rail).getByRole('link', { name: '#101' })).toBeInTheDocument();
     expect(rail).toHaveTextContent('0.00064119 CKB');
+    expect(rail).toHaveTextContent('paid by ckb1qzda...cjk9lz');
   });
 
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
@@ -317,11 +375,24 @@ describe('Transaction board, tier 2', () => {
     }, SLOW);
     expect(dep0).toHaveTextContent('dep group');
     expect(dep0).toHaveTextContent('supplies code for Default Lock');
-    expect(dep0).toHaveTextContent('↳ 0xmember:0 · code for Default Lock');
-    expect(dep0).toHaveTextContent('↳ 0xother:1 · no script here names it');
-    expect(document.querySelector('#tx-dep-1')).toHaveTextContent('supplies code for Spore');
-    expect(document.querySelector('#tx-dep-2')).toHaveTextContent('not run here');
-    expect(document.querySelector('#tx-dep-2')).not.toHaveTextContent('dep_group');
+    expect(dep0).toHaveTextContent('↳ 0xmember:0 · Default Lock code, 52,048 B');
+    expect(dep0).toHaveTextContent('↳ 0xother:1 · 1,048,576 B no script here names');
+    expect(document.querySelector('#tx-dep-1')).toHaveTextContent(
+      'supplies code for Spore · 76,752 B'
+    );
+    const dep2 = document.querySelector('#tx-dep-2') as HTMLElement;
+    expect(dep2).toHaveTextContent('code of Default Lock · 122,552 B');
+    expect(dep2).toHaveTextContent('not run here');
+    expect(dep2).not.toHaveTextContent('dep_group');
+    fireEvent.mouseEnter(dep2);
+    expect(document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')).toHaveAttribute(
+      'data-lit',
+      'true'
+    );
+    expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
+    expect(
+      document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
+    ).toHaveTextContent('code 0xd00a0222...2c47f7:0 · not run here');
   });
 
   it('draws the proposal ruler and the exact capacity equation (TX-17, TX-19)', async () => {
@@ -351,7 +422,7 @@ describe('Transaction board, tier 2', () => {
       SLOW
     );
     expect(screen.getByTestId('tx-witness-item-1')).toHaveTextContent(
-      'message: 1 action for Spore'
+      'message: 1 action for Spore: TransferSpore'
     );
   });
 });
@@ -432,20 +503,27 @@ describe('Transaction variants (D4)', () => {
       ],
       witnesses: ['0x00'],
       cellbaseWitness: { lock: lockScript(`0x${'ab'.repeat(20)}`), message },
+      feePaidBy: [],
+      pays: { number: 89 },
     } as TransactionDetail);
+    vi.mocked(api.getBlock).mockResolvedValue({
+      number: 101,
+      minerMessage: message,
+      minerMessageText: '0.210.0 (860c9bb 2026-09-21)',
+    } as Awaited<ReturnType<typeof api.getBlock>>);
     render(<TransactionDetailPage />);
     expect(
       await screen.findByRole('heading', { level: 1, name: 'Cellbase' }, SLOW)
     ).toBeInTheDocument();
     expect(screen.getByTestId('tx-summary')).toHaveTextContent(
-      'The first transaction of block #101. It consumes no cell and creates the miner’s reward, 559.61739927 CKB.'
+      'The first transaction of block #101. It consumes no cell and pays the reward of block #89, 559.61739927 CKB.'
     );
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(
       () =>
         expect(screen.getByTestId('tx-witness-item-0')).toHaveTextContent(
-          'miner lock Default Lock(0xabab...abab) · message “0.210.0 (860c9bb 2026-09-21) ” + 8 bytes'
+          'miner lock Default Lock(0xabab...abab) · message “0.210.0 (860c9bb 2026-09-21)”'
         ),
       SLOW
     );
@@ -467,5 +545,53 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByTestId('tx-witness-item-0')).toBeInTheDocument();
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
     expect(screen.getByText('Pending since')).toBeInTheDocument();
+  });
+});
+
+describe('Transaction board, R2b-a fields', () => {
+  it('marks change outputs and reads decoded lock args (TX-22, TX-20)', async () => {
+    render(<TransactionDetailPage />);
+    const out = await screen.findByTestId('tx-io-output-0', {}, SLOW);
+    await waitFor(() => expect(out).toHaveTextContent('Default Lock · change'), SLOW);
+    expect(screen.getByTestId('tx-io-input-0')).not.toHaveTextContent('· change');
+    expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveTextContent(
+      'pubkey hash 0x111111...1111'
+    );
+  });
+
+  it('names the type scripts a plain script call ran (TX-11)', async () => {
+    vi.mocked(api.getTransactionActivity).mockResolvedValue({
+      ...feedSamples.objectTransfer,
+      txHash: TX_HASH,
+      typeCalls: [
+        {
+          typeCodeHash: '0xtime',
+          typeHashType: 'type',
+          typeArgs: '0x02',
+          scriptHash: '0xs1',
+          scriptName: '.bit Time Index State',
+        },
+        {
+          typeCodeHash: '0xinfo',
+          typeHashType: 'type',
+          typeArgs: '0x02',
+          scriptHash: '0xs2',
+          scriptName: '.bit Time Info',
+        },
+      ],
+      lockCalls: [],
+      participants: [
+        {
+          ...feedSamples.objectTransfer.participants[0],
+          ckbDelta: '-64119',
+          usedDelta: '0',
+          itemDeltas: [],
+        },
+      ],
+    });
+    render(<TransactionDetailPage />);
+    expect(await screen.findByTestId('tx-summary', {}, SLOW)).toHaveTextContent(
+      'It ran .bit Time Index State and .bit Time Info. ckb1qzda...cjk9lz paid a 0.00064119 CKB fee.'
+    );
   });
 });

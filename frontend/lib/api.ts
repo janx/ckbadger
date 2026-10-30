@@ -233,6 +233,8 @@ type TransactionActivityType =
 interface Transaction {
   value: string;
   outputCapacity?: string;
+  /** F2-tx (R2b-a 35): a cellbase's paid block (`null` for every other tx and blocks 0..=11). */
+  pays?: { number: number } | null;
   activity?: GlobalActivity | null;
   proposalOrigin?: {
     blockNumber: number;
@@ -539,11 +541,22 @@ export interface TransactionCellbaseWitness {
   lock: Script;
   message: string;
 }
-/** One CoBuild message action: whose script it is for and its raw data (name not decoded). */
+/** One CoBuild message action: whose script it is for and its raw data. */
 export interface CobuildAction {
   scriptInfoHash: string;
   scriptHash: string;
   data: string;
+  /** F2-tx (R2b-a 38): only for a Spore / Cluster action the API decoded. */
+  schema?: 'spore';
+  /** F2-tx (R2b-a 38): `MintSpore`, `TransferSpore`, … — present with `schema`. */
+  name?: string;
+}
+/** F2-tx (R2b-a 36): an input lock whose inputs hold more than the transaction returns to it. */
+export interface TransactionFeePayer {
+  lockHash: string;
+  address: string | null;
+  /** Shannons, > 0. */
+  outflow: string;
 }
 
 /** Per-cell semantics read from its payload and the canonical item indexes. */
@@ -639,6 +652,8 @@ interface TransactionDetail extends Omit<
     lock?: Script;
     type?: Script;
     address?: string;
+    /** F2-tx (R2b-a 39): the lock args through the API's one decoder; null for other families. */
+    lockArgsDecoded?: Record<string, ExactJson> | null;
   }>;
   outputs?: Array<{
     capacity: string;
@@ -651,6 +666,10 @@ interface TransactionDetail extends Omit<
     lock?: Script;
     type?: Script;
     address?: string;
+    /** F2-tx (R2b-a 40): the output's lock is an input lock and it has no type script. */
+    isChange: boolean;
+    /** F2-tx (R2b-a 39): see `inputs[].lockArgsDecoded`. */
+    lockArgsDecoded?: Record<string, ExactJson> | null;
   }>;
   scriptGroups?: TransactionScriptGroup[];
   witnessDetails?: TransactionWitness[];
@@ -666,6 +685,8 @@ interface TransactionDetail extends Omit<
   headerDeps: TransactionHeaderDep[];
   /** F2-tx (R9): a cellbase's decoded witness 0; null for every other transaction. */
   cellbaseWitness: TransactionCellbaseWitness | null;
+  /** F2-tx (R2b-a 36): input locks whose balance fell, largest outflow first; `[]` when none. */
+  feePaidBy: TransactionFeePayer[];
 }
 
 /** A `.cell` name a transaction creates, with the records its witness carries. */
@@ -930,12 +951,20 @@ interface CellDep {
   outPointIndex: number;
   depType: string;
   scriptHashes: string[];
+  /** F2-tx (R2b-a 37): output locks whose code this dep supplies (attached, not run here). */
+  outputLockScriptHashes: string[];
   resolvedCells: Array<{
     txHash: string;
     index: number;
     dataHash: string;
     typeHash: string | null;
     scriptHashes: string[];
+    /** F2-tx (R2b-a 37): see the dep-level field. */
+    outputLockScriptHashes: string[];
+    /** F2-tx (R2b-a 37): the member's data length, bytes. */
+    codeSize: number;
+    /** F2-tx (R2b-a 37): registry names of the references it supplies here. */
+    scriptNames: string[];
   }>;
 }
 
