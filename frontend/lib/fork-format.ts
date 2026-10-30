@@ -1,5 +1,6 @@
 import type { ForkOverview, OrphanedBlock, ReorgEvent } from '@/lib/api';
 import { formatPercent } from '@/lib/ckb-decimal';
+import { formatUtc8DateTime } from '@/lib/utils';
 
 /**
  * D7: a fork event lives at `/forks/<fork_point_height>/<orphan_hash_prefix8>`, the first
@@ -60,4 +61,12 @@ export function uncleRateFigure(
     return null;
   }
   return { rate: `${formatPercent(BigInt(uncles), BigInt(blocks))}%`, uncles, blocks };
+}
+
+/** A block header time on the site's UTC+8 clock with its milliseconds: `09:12:32.761`. */
+export function blockClock(timestamp: string): string {
+  const ms = Date.parse(timestamp);
+  if (!Number.isSafeInteger(ms) || ms < 0)
+    throw new Error(`Invalid block timestamp ${JSON.stringify(timestamp)}`);
+  return `${formatUtc8DateTime(ms).slice(11, 19)}.${String(ms % 1000).padStart(3, '0')}`;
 }

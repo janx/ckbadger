@@ -39,7 +39,9 @@ function sampleDynamicPath(routePath: string): string {
     .replace('[hash]', `0x${'f'.repeat(64)}`)
     .replace('[name]', 'secp256k1_blake160_sighash_all')
     .replace('[index]', '0')
-    .replace('[id]', routePath.startsWith('/forks/') ? '1' : '123');
+    .replace('[height]', '20617704')
+    .replace('[orphan]', 'a9bc1b75')
+    .replace('[id]', '123');
 }
 
 function collectMarkdownRoutes(): string[] {

@@ -67,3 +67,12 @@ describe('uncleRateFigure', () => {
     expect(uncleRateFigure({ days: [], unclesInWindow: 0 })).toBeNull();
   });
 });
+
+describe('blockClock', () => {
+  it('reads a block header time on the UTC+8 clock with its milliseconds', async () => {
+    const { blockClock } = await import('@/lib/fork-format');
+    expect(blockClock('2023-11-14T22:13:20.050+00:00')).toBe('06:13:20.050');
+    expect(blockClock('2026-10-02T01:12:32.761Z')).toBe('09:12:32.761');
+    expect(() => blockClock('yesterday')).toThrow('Invalid block timestamp');
+  });
+});
