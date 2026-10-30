@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 interface CursorPaginationProps {
@@ -13,6 +14,10 @@ interface CursorPaginationProps {
   onNext: () => void;
   onPrevious: () => void;
   className?: string;
+  /** F2 blocks: a list's own range sentence ("50 newest of 20,876,569") and button words. */
+  summary?: ReactNode;
+  previousLabel?: string;
+  nextLabel?: string;
 }
 
 export function CursorPagination({
@@ -26,6 +31,9 @@ export function CursorPagination({
   onNext,
   onPrevious,
   className,
+  summary,
+  previousLabel = 'Previous',
+  nextLabel = 'Next',
 }: CursorPaginationProps) {
   // An empty list has no pages: no pager, and never "Page 1 of 0" (FF-L5).
   if (total === 0 && !hasMore && !hasPrevious) return null;
@@ -38,7 +46,9 @@ export function CursorPagination({
   return (
     <div className={cn('flex w-full items-center justify-between', className)}>
       <span className="text-text-dim font-mono text-sm">
-        {canShowRange ? (
+        {summary !== undefined ? (
+          summary
+        ) : canShowRange ? (
           <>
             Showing {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()}
             {total !== undefined ? ` of ${total.toLocaleString()}` : ''} {totalLabel}
@@ -60,12 +70,12 @@ export function CursorPagination({
           disabled={!hasPrevious}
           className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Previous
+          {previousLabel}
         </button>
         {page !== undefined && (
           <span className="text-text-dim font-mono text-sm">
-            Page {page}
-            {totalPages !== undefined ? ` of ${totalPages}` : ''}
+            Page {page.toLocaleString('en-US')}
+            {totalPages !== undefined ? ` of ${totalPages.toLocaleString('en-US')}` : ''}
           </span>
         )}
         <button
@@ -74,7 +84,7 @@ export function CursorPagination({
           disabled={!hasMore}
           className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Next
+          {nextLabel}
         </button>
       </div>
     </div>

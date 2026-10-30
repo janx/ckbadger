@@ -70,3 +70,26 @@ describe('CursorPagination', () => {
     expect(screen.queryByText(/of 0/)).toBeNull();
   });
 });
+
+// F2-tx (TX-27): the Transactions board pages "Newer / Older →", and every count is grouped.
+describe('CursorPagination labels and grouping', () => {
+  it('takes board labels and groups the page count', () => {
+    render(
+      <CursorPagination
+        hasMore
+        hasPrevious={false}
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+        total={52789419}
+        page={1}
+        pageSize={50}
+        totalLabel="transactions"
+        previousLabel="Newer"
+        nextLabel="Older →"
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Newer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
+    expect(screen.getByText('Page 1 of 1,055,789')).toBeInTheDocument();
+  });
+});

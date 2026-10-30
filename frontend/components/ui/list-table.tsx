@@ -10,6 +10,8 @@ export interface ListColumn<T> {
   width?: string;
   numeric?: boolean;
   className?: string;
+  /** F2 blocks: a richer column header (e.g. a bar column's 0 … scale ticks); `label` stays the plain name. */
+  header?: ReactNode;
 }
 export interface ListTableProps<T> {
   label: string;
@@ -66,7 +68,7 @@ export function ListTable<T>({
                     c.numeric ? 'text-right' : 'text-left'
                   )}
                 >
-                  {c.label}
+                  {c.header ?? c.label}
                 </th>
               ))}
             </tr>
