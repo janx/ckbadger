@@ -29,6 +29,28 @@ impl CkbadgerStore {
         }
     }
 
+    /// Whether this outpoint carries the `.bit` AccountCell type script but
+    /// was never materialized as an account (see
+    /// `keys::stats_prefix::DOTBIT_UNINDEXED_OUTPOINT`). The marker value is
+    /// empty; any other value is corruption.
+    pub fn is_dotbit_unindexed_outpoint(
+        &self,
+        tx_hash: &[u8],
+        output_index: i16,
+    ) -> anyhow::Result<bool> {
+        let key = keys::encode_dotbit_unindexed_outpoint_key(tx_hash, output_index);
+        match self.get_cf(self.cf_stats_mnft(), &key)? {
+            Some(value) if !value.is_empty() => anyhow::bail!(
+                "unindexed .bit outpoint marker carries a value: tx_hash=0x{}, output_index={}, value_len={}",
+                bytes_to_hex(tx_hash),
+                output_index,
+                value.len()
+            ),
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+
     pub fn get_dotbit_account_ids_by_outpoints_batch(
         &self,
         outpoints: &[(&[u8], i16)],
@@ -222,6 +244,38 @@ mod tests {
         assert_eq!(dotbit_results[0].0, tx_b.to_vec());
         assert_eq!(dotbit_results[0].1, 5);
         assert_eq!(dotbit_results[0].2, dotbit_account_id.to_vec());
+    }
+
+    #[test]
+    fn test_dotbit_unindexed_outpoint_marker_roundtrip_is_separate_from_account_rows() {
+        let (_dir, store) = test_store();
+        let tx = [0xC3u8; 32];
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_dotbit_unindexed_outpoint(&tx, 0);
+        batch.commit().unwrap();
+
+        assert!(store.is_dotbit_unindexed_outpoint(&tx, 0).unwrap());
+        assert!(!store.is_dotbit_unindexed_outpoint(&tx, 1).unwrap());
+        // The marker is not an account row: account lookups do not see it.
+        assert_eq!(store.get_dotbit_account_id_by_outpoint(&tx, 0).unwrap(), None);
+        let outpoints: Vec<(&[u8], i16)> = vec![(&tx, 0)];
+        assert!(store
+            .get_dotbit_account_ids_by_outpoints_batch(&outpoints)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_dotbit_unindexed_outpoint_marker_with_a_value_is_corruption() {
+        let (_dir, store) = test_store();
+        let tx = [0xC4u8; 32];
+        let key = keys::encode_dotbit_unindexed_outpoint_key(&tx, 2);
+        store.put_cf(store.cf_stats_mnft(), &key, b"x").unwrap();
+
+        let err = store.is_dotbit_unindexed_outpoint(&tx, 2).unwrap_err();
+        assert!(err.to_string().contains("unindexed .bit outpoint marker"), "{err}");
+        assert!(err.to_string().contains(&hex::encode(tx)), "{err}");
     }
 
     #[test]

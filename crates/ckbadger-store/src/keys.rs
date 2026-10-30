@@ -831,6 +831,11 @@ pub mod stats_prefix {
     pub const ACTIVITY_DAILY_ADDR_SET: u8 = 0x23;
     /// Persistent address set for hourly unique address dedup across batches.
     pub const ACTIVITY_HOURLY_ADDR_SET: u8 = 0x24;
+    /// An output carrying the `.bit` AccountCell type script that the indexer
+    /// did not materialize as an account (the DAS root AccountCell with its
+    /// all-zero account id, data too short to name one, or a DAS witness
+    /// without its name). Suffix: outpoint. Value: empty.
+    pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
 }
 
 // Flat re-exports for convenience
@@ -871,6 +876,7 @@ pub const STATS_PREFIX_CELL_DISTRIBUTION: u8 = stats_prefix::CELL_DISTRIBUTION;
 pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
 pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
 pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
+pub const STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT: u8 = stats_prefix::DOTBIT_UNINDEXED_OUTPOINT;
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {
@@ -1157,6 +1163,21 @@ pub fn encode_dotbit_account_outpoint_key(
 
 pub fn decode_dotbit_account_outpoint_key(key: &[u8]) -> (Vec<u8>, i16) {
     decode_outpoint(&key[1..35])
+}
+
+/// Unindexed `.bit` AccountCell outpoint marker key: prefix(1B) + outpoint(34B).
+/// The positive record that lets a later consumption of the cell tell "never an
+/// account" apart from a lost `DOTBIT_ACCOUNT_OUTPOINT` row.
+pub const DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE: usize = 35;
+
+pub fn encode_dotbit_unindexed_outpoint_key(
+    tx_hash: &[u8],
+    output_index: i16,
+) -> [u8; DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE] {
+    let mut key = [0u8; DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE];
+    key[0] = STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT;
+    key[1..35].copy_from_slice(&encode_outpoint(tx_hash, output_index));
+    key
 }
 
 /// .bit outpoint reverse index key: prefix(1B) + account_id(20B) + outpoint(34B)
@@ -2770,6 +2791,19 @@ mod tests {
         let (decoded_tx_hash, decoded_output_index) = decode_dotbit_account_outpoint_key(&key);
         assert_eq!(decoded_tx_hash, tx_hash.to_vec());
         assert_eq!(decoded_output_index, 10);
+    }
+
+    #[test]
+    fn test_dotbit_unindexed_outpoint_key_structure() {
+        let tx_hash = [0xA7u8; 32];
+        let key = encode_dotbit_unindexed_outpoint_key(&tx_hash, 3);
+        assert_eq!(key.len(), DOTBIT_UNINDEXED_OUTPOINT_KEY_SIZE);
+        assert_eq!(key[0], STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT);
+        assert_eq!(&key[1..35], encode_outpoint(&tx_hash, 3).as_slice());
+        assert_ne!(
+            key[0], STATS_PREFIX_DOTBIT_ACCOUNT_OUTPOINT,
+            "the marker never shares the account outpoint family"
+        );
     }
 
     #[test]
