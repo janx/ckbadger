@@ -253,3 +253,63 @@ export function SequencingGel({ layout, subject, active, onActive }: SequencingG
     </div>
   );
 }
+
+/**
+ * The same gel turned on its side for a table row (seqgel.mini_gel, CollectionTxs/Collection
+ * boards): 16 faint lane stripes top to bottom (0–f), the DNA's hex digits left to right, each a
+ * short band in the lane of its value — it reads the DNA like the big gel does.
+ */
+export function MiniGel({
+  dna,
+  label,
+  ink,
+  width = 128,
+  height = 32,
+}: {
+  dna: string;
+  label: string;
+  ink: string;
+  width?: number;
+  height?: number;
+}) {
+  const hex = (dna.startsWith('0x') ? dna.slice(2) : dna).toLowerCase();
+  if (hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex))
+    throw new Error(`${label}: expected byte-aligned hexadecimal DNA`);
+  const n = hex.length;
+  const pitch = n ? (width - 4) / n : 0;
+  const lane = (height - 2) / 16;
+  return (
+    <svg
+      role="img"
+      aria-label={`${label}: ${n / 2} bytes, ${hex}`}
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      className="block max-w-full"
+    >
+      {Array.from({ length: 8 }, (_, i) => (
+        <rect
+          key={i}
+          x="0"
+          y={r(1 + i * 2 * lane)}
+          width={width}
+          height={r(lane)}
+          fill={GEL_COLORS.lane}
+          fillOpacity=".04"
+        />
+      ))}
+      {hex.split('').map((ch, i) => (
+        <rect
+          key={i}
+          data-nibble={i}
+          x={r(2 + i * pitch + pitch * 0.15)}
+          y={r(1 + parseInt(ch, 16) * lane)}
+          width={r(pitch * 0.7)}
+          height={r(lane)}
+          rx=".4"
+          fill={ink}
+        />
+      ))}
+    </svg>
+  );
+}

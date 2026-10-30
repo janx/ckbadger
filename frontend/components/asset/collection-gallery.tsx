@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type CollectionItem, type ItemStatusFilter } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { DnaStrip } from '@/components/ui/dna-strip';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { AppLink } from '@/components/ui/app-link';
@@ -12,101 +11,8 @@ import { AssetReadState } from '@/components/asset/detail-shell';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { formatStandard } from '@/components/activity-event-row';
 import { formatBlockNumber } from '@/lib/format-block';
-import { CompositionBadge } from '@/components/ui/composition-mark';
-export interface CollectionGalleryProps {
-  id: string;
-  traits: Record<string, string>;
-}
-export function CollectionGallery({ id, traits }: CollectionGalleryProps) {
-  const pages = useCursorPagination();
-  const query = useQuery({
-    queryKey: ['collection-gallery', id, traits, pages.cursor],
-    queryFn: () => api.getCollectionGallery(id, { limit: 24, cursor: pages.cursor, traits }),
-  });
-  return (
-    <section aria-label="Collection objects" className="space-y-4">
-      <h2 className="text-text-bright text-[15px]">Objects</h2>
-      <p className="text-text-dim text-[11px]">
-        Whole-collection trait filters · newest created first
-      </p>
-      {query.data ? (
-        <>
-          <AssetReadState label="gallery" error={query.error} retained />
-          <div className="grid min-w-0 grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
-            {query.data.data.map((item) => (
-              <article
-                key={item.sporeId}
-                className="border-base-border min-w-0 space-y-3 border-b py-4"
-              >
-                <AppLink href={`/objects/${item.sporeId}`} className="block min-w-0">
-                  <div className="text-text-bright break-words">
-                    {item.number !== null ? (
-                      `#${item.number}`
-                    ) : (
-                      <Hash
-                        hash={item.sporeId}
-                        startChars={6}
-                        endChars={4}
-                        copyable={false}
-                        className="text-[11px]"
-                      />
-                    )}
-                  </div>
-                  {item.dnaHex !== null ? (
-                    <DnaStrip dna={item.dnaHex} label={`${item.sporeId} DNA`} />
-                  ) : (
-                    <div className="text-text-dim py-3 text-[11px]">No DNA</div>
-                  )}
-                </AppLink>
-                {item.mediaProfile && <CompositionBadge tier={item.mediaProfile.tier} />}
-                <div className="text-text-dim text-[11px]">
-                  {item.isLive ? 'Live' : 'Melted'} · {item.decodeStatus}
-                  <span className="block break-all">
-                    {item.contentType} · {item.contentSize.toLocaleString('en-US')} bytes
-                  </span>
-                  <AppLink href={`/blocks/${item.createdAtBlock}`}>
-                    {formatBlockNumber(item.createdAtBlock)}
-                  </AppLink>
-                </div>
-                {item.ownerLockHash ? (
-                  <Address
-                    address={item.ownerAddress ?? item.ownerLockHash}
-                    startChars={8}
-                    endChars={4}
-                    className="text-[11px]"
-                  />
-                ) : (
-                  <span className="text-text-dim text-[11px]">No live owner</span>
-                )}
-                <dl className="space-y-1 text-[11px]">
-                  {item.traits.map((t, index) => (
-                    <div key={`${t.name}:${t.value}:${index}`} className="break-words">
-                      <dt className="text-text-dim inline">{t.name}: </dt>
-                      <dd className="inline">{t.value}</dd>
-                    </div>
-                  ))}
-                </dl>
-              </article>
-            ))}
-          </div>
-          {query.data.data.length === 0 && <p className="text-text-dim">No matching objects.</p>}
-          <CursorPagination
-            total={query.data.total}
-            totalLabel="objects"
-            pageSize={24}
-            page={pages.page}
-            hasMore={query.data.hasMore}
-            hasPrevious={pages.hasPrevious}
-            onNext={() => pages.goToNext(query.data!.nextCursor)}
-            onPrevious={pages.goToPrevious}
-          />
-        </>
-      ) : (
-        <AssetReadState label="gallery" error={query.error} loading={query.isLoading} />
-      )}
-    </section>
-  );
-}
+// F2 objects (round 2, OB-C3): the 24-card gallery was replaced by the Collection board's
+// Newest list (`collection-objects.tsx`).
 export interface CollectionItemsProps {
   id: string;
   kind: 'object' | 'identity';

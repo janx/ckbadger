@@ -2,7 +2,6 @@ import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
 import {
   ObjectGeneticsView,
   ObjectGeneticsEvidence,
-  CollectionGenes,
   CurrentPatternEvidence,
 } from '@/components/asset/genetics';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
@@ -15,65 +14,6 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { ObjectGenetics, ItemProtocol } from '@/lib/api';
 describe('Independent DOB evidence', () => {
-  it('wraps a full BTCFS trait value beside its exact count without changing the filter value', () => {
-    const value = 'btcfs://11b6303eb7d887d7ade459ac27959754cd55f9f9e50345ced8e1e8f47f4581fai0';
-    const select = vi.fn();
-    render(
-      <CollectionGenes
-        evidence={{
-          ...collectionInsightsProducer.genetics,
-          liveItems: 2777,
-          eligibleItems: 2777,
-          nonDobItems: 0,
-          decodedItems: 2777,
-          traits: [{ name: 'preview', values: [{ value, count: 199 }] }],
-        }}
-        selected={{}}
-        onSelect={select}
-      />
-    );
-    const button = screen.getByRole('button', { name: `${value} 199 / 2777` });
-    // break-words alone cannot shrink a flex item's automatic minimum width.
-    // Both constraints are needed to keep the full identifier and adjacent count visible.
-    expect(screen.getByText(value)).toHaveClass('min-w-0', 'break-words');
-    expect(button).toHaveAttribute('aria-pressed', 'false');
-    fireEvent.click(button);
-    expect(select).toHaveBeenLastCalledWith('preview', value);
-    fireEvent.focus(button);
-    expect(button.closest('[data-allele]')).not.toHaveClass('opacity-35');
-  });
-
-  it('keeps every variant of a long trait selectable behind "+N more" (OB-C1)', () => {
-    const values = Array.from({ length: 12 }, (_, i) => ({ value: `Colour ${i}`, count: 20 - i }));
-    const select = vi.fn();
-    render(
-      <CollectionGenes
-        evidence={{
-          ...collectionInsightsProducer.genetics,
-          liveItems: 300,
-          eligibleItems: 300,
-          nonDobItems: 0,
-          decodedItems: 300,
-          traits: [{ name: 'Background', values }],
-        }}
-        selected={{}}
-        onSelect={select}
-      />
-    );
-    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(8);
-    expect(screen.queryByText(/filter from the Objects list/)).not.toBeInTheDocument();
-    const more = screen.getByRole('button', { name: '+4 more Background variants' });
-    expect(more).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(more);
-    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(12);
-    fireEvent.click(screen.getByRole('button', { name: 'Colour 11 9 / 300' }));
-    expect(select).toHaveBeenLastCalledWith('Background', 'Colour 11');
-    fireEvent.click(screen.getByRole('button', { name: 'Show the top 8 Background variants' }));
-    expect(screen.queryByRole('button', { name: 'Colour 11 9 / 300' })).not.toBeInTheDocument();
-  });
-
-  // F2 objects (OB-8): the VM provenance and the declared ranges moved to the tier-2 DNA evidence;
-  // the gel keeps the number and the byte ↔ gene hover.
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';
@@ -150,33 +90,14 @@ describe('Independent DOB evidence', () => {
       'bytes disagree with DNA'
     );
   });
-  it('filters by complete collection frequencies and shows pending coverage explicitly', () => {
-    const select = vi.fn();
-    const { rerender } = render(
-      <CollectionGenes
-        evidence={collectionInsightsProducer.genetics}
-        selected={{}}
-        onSelect={select}
-      />
-    );
-    fireEvent.click(screen.getByRole('button', { name: 'Blue 4 / 8' }));
-    expect(select).toHaveBeenCalledWith('Face', 'Blue');
-    rerender(
-      <CollectionGenes
-        evidence={collectionInsightsPendingProducer.genetics}
-        selected={{}}
-        onSelect={select}
-      />
-    );
-    expect(screen.getByText(/await complete decoding/)).toBeInTheDocument();
-    expect(screen.queryByRole('button')).not.toBeInTheDocument();
-  });
   it('shows current binary and declared rules without converting exact offsets', () => {
     const pattern = structuredClone(objectGeneticsProducer.currentPattern);
     pattern.steps[0].description.genes[0].byteOffset = '18446744073709551615';
     render(<CurrentPatternEvidence pattern={pattern} />);
     expect(screen.getByText(/byte offset 18446744073709551615/)).toBeInTheDocument();
-    expect(screen.getByText(/options/)).toBeInTheDocument();
+    // F2 objects (OB-C12): the blueprint table names the rule and its value domain.
+    expect(screen.getAllByText(/options/).length).toBeGreaterThan(0);
+    expect(screen.getByText('2 options: Red, Blue')).toBeInTheDocument();
   });
 });
 describe('Per-version raw protocol and item context', () => {

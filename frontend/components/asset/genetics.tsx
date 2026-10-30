@@ -6,8 +6,14 @@ import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { COMPOSITION_BADGES, HUE_RAMP } from '@/lib/design-tokens';
-import { alleleLanes, geneOrder, genotypePoints, sequencingGenes } from '@/lib/dob-genes';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
+import {
+  alleleLanes,
+  geneOrder,
+  genotypePoints,
+  sequencingGenes,
+  traitDisplay,
+} from '@/lib/dob-genes';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
 
@@ -218,150 +224,28 @@ export function ObjectGeneticsEvidence({
     </section>
   );
 }
-/**
- * A trait shows its eight most frequent variants until opened, so one genome cannot push the
- * objects and holders off-screen; "+N more" opens every variant, each still a filter (OB-C1).
- */
-const TRAIT_VALUE_PREVIEW = 8;
-
-function TraitValueButtons({
-  trait,
-  eligibleItems,
-  color,
-  selected,
-  onSelect,
-  onFocus,
-  onBlur,
-}: {
-  trait: CollectionInsights['genetics']['traits'][number];
-  eligibleItems: number;
-  color: string;
-  selected: string | undefined;
-  onSelect: (value: string | null) => void;
-  onFocus: () => void;
-  onBlur: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ranked = [...trait.values].sort((a, b) =>
-    b.count === a.count ? a.value.localeCompare(b.value) : b.count - a.count
-  );
-  const preview = ranked.slice(0, TRAIT_VALUE_PREVIEW);
-  const selectedExtra =
-    selected && !preview.some((v) => v.value === selected)
-      ? ranked.find((v) => v.value === selected)
-      : undefined;
-  const visible = open
-    ? ranked
-    : selectedExtra
-      ? [...ranked.slice(0, TRAIT_VALUE_PREVIEW - 1), selectedExtra]
-      : preview;
-  const hidden = ranked.length - visible.length;
-  return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {visible.map((v) => {
-        if (!Number.isSafeInteger(v.count) || v.count < 0 || v.count > eligibleItems)
-          throw new Error(`Collection trait ${trait.name}: invalid count ${v.count}`);
-        return (
-          <button
-            key={v.value}
-            aria-pressed={selected === v.value}
-            onClick={() => onSelect(selected === v.value ? null : v.value)}
-            onFocus={onFocus}
-            onBlur={onBlur}
-            className="border-base-border relative min-w-0 border-b px-1 py-2 text-left"
-          >
-            <span
-              aria-hidden
-              className="absolute inset-y-0 left-0 opacity-15"
-              style={{
-                background: color,
-                width: `${eligibleItems ? (v.count / eligibleItems) * 100 : 0}%`,
-              }}
-            />
-            <span className="relative flex items-baseline justify-between gap-3">
-              <span className="min-w-0 break-words">{v.value}</span>
-              <span className="text-text-dim shrink-0 text-[11px]">
-                {v.count} / {eligibleItems}
-              </span>
-            </span>
-          </button>
-        );
-      })}
-      {ranked.length > TRAIT_VALUE_PREVIEW && (
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((current) => !current)}
-          className="text-text-dim hover:text-text-bright col-span-full justify-self-start text-[11px]"
-        >
-          {open
-            ? `Show the top ${TRAIT_VALUE_PREVIEW} ${trait.name} variants`
-            : `+${hidden} more ${trait.name} variant${hidden === 1 ? '' : 's'}`}
-        </button>
-      )}
-    </div>
-  );
+// F2 objects (round 2, OB-C1/C2): the per-variant button lists were replaced by the allele gel
+// (`ui/allele-gel.tsx`, `collection-objects.tsx`); a band click is the filter.
+/** "bytes 0–31" from the exact declared offset and length (never converted to a float). */
+function byteSpan(offset: string, length: string): string {
+  if (!/^(0|[1-9]\d*)$/.test(offset) || !/^(0|[1-9]\d*)$/.test(length))
+    throw new Error(`DOB blueprint: invalid byte range ${offset} + ${length}`);
+  const o = BigInt(offset),
+    l = BigInt(length);
+  if (l === BigInt(0)) return 'no bytes';
+  return l === BigInt(1) ? `byte ${o}` : `bytes ${o}–${o + l - BigInt(1)}`;
 }
-
-export interface CollectionGenesProps {
-  evidence: CollectionInsights['genetics'];
-  selected: Readonly<Record<string, string>>;
-  onSelect: (name: string, value: string | null) => void;
-}
-export function CollectionGenes({ evidence, selected, onSelect }: CollectionGenesProps) {
-  const [active, setActive] = useState<string | null>(null);
-  const total = evidence.decodedItems + evidence.pendingItems + evidence.failedItems;
-  if (
-    total !== evidence.eligibleItems ||
-    evidence.eligibleItems + evidence.nonDobItems !== evidence.liveItems
-  )
-    throw new Error('Collection genetics: live/eligible/decode coverage does not close');
-  if (evidence.complete && evidence.decodedItems !== evidence.eligibleItems)
-    throw new Error(
-      'Collection genetics: complete frequencies require every eligible item decoded'
-    );
-  if (!evidence.complete && evidence.traits.length)
-    throw new Error('Collection genetics: partial frequencies must not be presented as complete');
-  return (
-    <section aria-label="Collection allele frequencies" className="space-y-4">
-      <h2 className="text-text-bright text-[15px]">The collection genome</h2>
-      <p className="text-text-dim text-[11px]">
-        {evidence.decodedItems} decoded / {evidence.eligibleItems} DOB items ·{' '}
-        {evidence.pendingItems} pending · {evidence.failedItems} failed · {evidence.nonDobItems}{' '}
-        non-DOB items
-      </p>
-      {!evidence.complete ? (
-        <p role="status">Trait frequencies and filtering await complete decoding.</p>
-      ) : evidence.traits.length === 0 ? (
-        <p className="text-text-dim">No decoded traits.</p>
-      ) : (
-        <div className="space-y-5">
-          {evidence.traits.map((trait, index) => (
-            <div
-              key={trait.name}
-              data-allele={trait.name}
-              className={active && active !== trait.name ? 'opacity-35' : ''}
-              onMouseEnter={() => setActive(trait.name)}
-              onMouseLeave={() => setActive(null)}
-            >
-              <h3 className="mb-2 text-[13px]" style={{ color: HUE_RAMP[index % HUE_RAMP.length] }}>
-                {trait.name}
-              </h3>
-              <TraitValueButtons
-                trait={trait}
-                eligibleItems={evidence.eligibleItems}
-                color={HUE_RAMP[index % HUE_RAMP.length]}
-                selected={selected[trait.name]}
-                onSelect={(value) => onSelect(trait.name, value)}
-                onFocus={() => setActive(trait.name)}
-                onBlur={() => setActive(null)}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
+/** A gene's value domain in words: its options, its range, or how many arguments it takes. */
+function valueDomain(rule: string, args: unknown): string {
+  if (args === null || args === undefined) return '—';
+  if (!Array.isArray(args)) return 'see raw';
+  if (rule === 'options') {
+    const shown = args.slice(0, 3).map((a) => traitDisplay(String(a)));
+    return `${args.length} option${args.length === 1 ? '' : 's'}: ${shown.join(', ')}${args.length > 3 ? ', …' : ''}`;
+  }
+  if (rule === 'range' && args.length === 2 && args.every((a) => typeof a !== 'object'))
+    return `${String(args[0])}–${String(args[1])}`;
+  return `${args.length} argument${args.length === 1 ? '' : 's'}`;
 }
 export interface CurrentPatternEvidenceProps {
   pattern: CurrentPattern;
@@ -400,22 +284,43 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
               <p className="text-text-dim text-[11px]">
                 {step.description.format} · {step.description.rangePolicy}
               </p>
-              <dl className="space-y-3">
-                {step.description.genes.map((g) => (
-                  <div key={g.index} className="min-w-0">
-                    <dt>
-                      {g.name}{' '}
-                      <span className="text-text-dim text-[11px]">
-                        {g.typeTag} · byte offset {g.byteOffset} · length {g.byteLength}
-                      </span>
-                    </dt>
-                    <dd className="text-text-dim break-words text-[11px]">
-                      {g.rule} ·{' '}
-                      <code className="break-all">{JSON.stringify(g.ruleArguments)}</code>
-                    </dd>
-                  </div>
-                ))}
-              </dl>
+              {/* F2 objects (OB-C12): the blueprint as a table of genes and value domains. */}
+              <div className="min-w-0 overflow-x-auto">
+                <table aria-label="DOB blueprint" className="w-full min-w-[480px] text-[11px]">
+                  <thead className="text-text-dim text-left">
+                    <tr>
+                      <th className="py-1 pr-3 font-normal">Gene</th>
+                      <th className="py-1 pr-3 font-normal">Bytes</th>
+                      <th className="py-1 pr-3 font-normal">Rule</th>
+                      <th className="py-1 font-normal">Values</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {step.description.genes.map((g) => (
+                      <tr key={g.index} className="border-base-elevated border-t align-top">
+                        <th scope="row" className="text-text-bright py-1.5 pr-3 font-normal">
+                          {g.name}
+                        </th>
+                        <td className="text-text-dim py-1.5 pr-3">
+                          byte offset {g.byteOffset} · length {g.byteLength}
+                          <span className="block">{byteSpan(g.byteOffset, g.byteLength)}</span>
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
+                        </td>
+                        <td
+                          className="py-1.5 [overflow-wrap:anywhere]"
+                          title={
+                            g.ruleArguments === null ? undefined : JSON.stringify(g.ruleArguments)
+                          }
+                        >
+                          {valueDomain(g.rule, g.ruleArguments)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </article>

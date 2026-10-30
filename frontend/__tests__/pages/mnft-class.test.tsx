@@ -74,8 +74,10 @@ it('renders exact class counts and configured permissions, not legacy bit meanin
   render(<Page classId={mockClassId} />);
   await screen.findByRole('heading', { name: 'Test mNFT Class' });
   const facts = screen.getByRole('complementary', { name: 'Facts' });
-  expect(within(facts).getByText('Minted / created').nextElementSibling).toHaveTextContent('100');
-  expect(within(facts).getByText('Live').nextElementSibling).toHaveTextContent('80');
+  // F2 objects (OB-C8 rail on class pages): live objects, and how many of the minted are burned.
+  expect(within(facts).getByText('Objects').nextElementSibling).toHaveTextContent(
+    '80live · 20 of 100 burned'
+  );
   expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent('Claim');
   expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent('Forbidden');
   expect(screen.queryByText('transferable, burnable')).not.toBeInTheDocument();

@@ -27,8 +27,11 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
     'Inventory/Objects'
   );
   expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent('4,000');
-  await screen.findByRole('region', { name: 'Collection allele frequencies' });
-  expect(screen.getByRole('region', { name: 'Collection objects' })).toBeInTheDocument();
+  // F2 objects (OB-C1/C2/C3): the genome list and the 24-card gallery became one Objects section
+  // (allele gel + Newest list).
+  const objects = await screen.findByRole('region', { name: 'Objects' });
+  expect(within(objects).getByRole('img', { name: /allele gel/ })).toBeInTheDocument();
+  expect(await within(objects).findByRole('table', { name: 'Newest objects' })).toBeInTheDocument();
   expect(screen.getByRole('group', { name: 'History time range' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: 'Activities' })).toHaveAttribute('aria-selected', 'true');
   fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
@@ -42,10 +45,13 @@ it('keeps live, created and burned counts separate and never adds the cluster ce
   render(<ClusterPage clusterId={id} />);
   await screen.findByRole('heading', { name: 'Genes' });
   const facts = screen.getByRole('complementary', { name: 'Facts' });
-  expect(within(facts).getByText('Live').nextElementSibling).toHaveTextContent('8');
-  expect(within(facts).getByText('Minted / created').nextElementSibling).toHaveTextContent('8');
-  expect(within(facts).getByText('Inactive / burned').nextElementSibling).toHaveTextContent('0');
-  expect(within(facts).getByText('CKB held').nextElementSibling).toHaveTextContent('4,000');
+  // F2 objects (OB-C8): the board rail — live objects, "all live · none melted", CKB held.
+  expect(within(facts).getByText('Objects').nextElementSibling).toHaveTextContent(
+    '8all live · none melted'
+  );
+  expect(within(facts).getByText('CKB held in their cells').nextElementSibling).toHaveTextContent(
+    '4,000'
+  );
 });
 it('applies exact whole-collection trait filtering before pagination and resets the cursor', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue({
@@ -53,46 +59,43 @@ it('applies exact whole-collection trait filtering before pagination and resets 
     hasMore: true,
     nextCursor: 'older',
   });
-  render(<ClusterPage clusterId={id} />);
-  const gallery = await screen.findByRole('region', { name: 'Collection objects' });
-  fireEvent.click(await within(gallery).findByRole('button', { name: 'Next' }));
+  const { container } = render(<ClusterPage clusterId={id} />);
+  const objects = await screen.findByRole('region', { name: 'Objects' });
+  fireEvent.click(await within(objects).findByRole('button', { name: 'Next' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith(
       id,
       expect.objectContaining({ cursor: 'older' })
     )
   );
-  const genes = screen.getByRole('region', { name: 'Collection allele frequencies' });
-  fireEvent.click(within(genes).getByRole('button', { name: /Blue/ }));
+  // F2 objects (OB-C2): a band of the allele gel is the filter.
+  fireEvent.click(container.querySelector('[data-allele="Blue"]')!);
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith(id, {
-      limit: 24,
+      limit: 8,
       cursor: undefined,
       traits: { Face: 'Blue' },
     })
   );
-  fireEvent.click(within(genes).getByRole('button', { name: /Blue/ }));
-  expect(within(genes).getByRole('button', { name: /Blue/ })).toHaveAttribute(
-    'aria-pressed',
-    'false'
+  expect(within(objects).getByRole('button', { name: 'Previous' })).toBeDisabled();
+  fireEvent.click(within(objects).getByRole('button', { name: 'Clear Face = Blue' }));
+  await waitFor(() =>
+    expect(container.querySelector('[data-allele="Blue"]')).not.toHaveAttribute('stroke')
   );
-  expect(
-    within(screen.getByRole('region', { name: 'Collection objects' })).getByRole('button', {
-      name: 'Previous',
-    })
-  ).toBeDisabled();
 });
 it('does not present partial frequencies or offer filtering while decoding is incomplete', async () => {
   vi.mocked(api.getCollectionInsights).mockResolvedValue(collectionInsightsPendingProducer);
-  render(<ClusterPage clusterId={id} />);
-  const genes = await screen.findByRole('region', { name: 'Collection allele frequencies' });
-  expect(genes).toHaveTextContent('Trait frequencies and filtering await complete decoding.');
-  expect(within(genes).queryByRole('button')).not.toBeInTheDocument();
-  expect(api.getCollectionGallery).toHaveBeenCalledWith(id, {
-    limit: 24,
-    cursor: undefined,
-    traits: {},
-  });
+  const { container } = render(<ClusterPage clusterId={id} />);
+  const objects = await screen.findByRole('region', { name: 'Objects' });
+  expect(objects).toHaveTextContent('Allele frequencies and filtering await complete decoding');
+  expect(container.querySelector('[data-allele]')).toBeNull();
+  await waitFor(() =>
+    expect(api.getCollectionGallery).toHaveBeenCalledWith(id, {
+      limit: 8,
+      cursor: undefined,
+      traits: {},
+    })
+  );
 });
 it('shows unknown metadata without synthesizing a name, owner, or minted block', async () => {
   vi.mocked(api.getSporeCluster).mockResolvedValue({
@@ -125,7 +128,7 @@ it('handles empty gallery and holder sets without using collection totals as pag
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByText('No matching objects.')).toBeInTheDocument();
   expect(await screen.findByText('No current holders.')).toBeInTheDocument();
-  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent('Live8');
+  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent('Objects8');
 });
 it('links each gallery item and preserves DNA, metadata and explicit no-owner state', async () => {
   const item = collectionGalleryFilteredProducer.data[0];
@@ -133,7 +136,7 @@ it('links each gallery item and preserves DNA, metadata and explicit no-owner st
     emptyPage([{ ...item, ownerLockHash: null, ownerAddress: null }])
   );
   render(<ClusterPage clusterId={id} />);
-  const gallery = await screen.findByRole('region', { name: 'Collection objects' });
+  const gallery = await screen.findByRole('region', { name: 'Objects' });
   await within(gallery).findByText('No live owner');
   expect(gallery.querySelector(`a[href='/mainnet/objects/${item.sporeId}']`)).not.toBeNull();
   expect(
@@ -146,7 +149,7 @@ it('reports failed reads without substituting a fake collection', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent(
     'Could not load collection: Not found'
   );
-  expect(screen.queryByRole('region', { name: 'Collection objects' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('region', { name: 'Objects' })).not.toBeInTheDocument();
 });
 it('preserves prior gallery data while reporting a refetch error', async () => {
   const client = createTestQueryClient();
@@ -155,8 +158,8 @@ it('preserves prior gallery data while reporting a refetch error', async () => {
       <ClusterPage clusterId={id} />
     </QueryClientProvider>
   );
-  const gallery = await screen.findByRole('region', { name: 'Collection objects' });
-  await within(gallery).findAllByText('Blue');
+  const gallery = await screen.findByRole('region', { name: 'Objects' });
+  await within(gallery).findAllByText(/Genes #/);
   vi.mocked(api.getCollectionGallery).mockRejectedValue(new Error('view failed'));
   await act(async () => {
     await client.invalidateQueries({ queryKey: ['collection-gallery'] });
@@ -164,5 +167,5 @@ it('preserves prior gallery data while reporting a refetch error', async () => {
   expect(await within(gallery).findByRole('alert')).toHaveTextContent(
     'Showing previously loaded data.'
   );
-  expect(within(gallery).getAllByText('Blue').length).toBeGreaterThan(0);
+  expect(within(gallery).getAllByText(/Genes #/).length).toBeGreaterThan(0);
 });
