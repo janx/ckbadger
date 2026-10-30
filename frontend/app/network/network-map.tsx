@@ -9,51 +9,124 @@ import { formatUtc8Date } from '@/lib/utils';
 
 type Point = NetworkMap['points'][number];
 
-/** Map grid cell, in px: one dot per cell, so neighbours never overlap. */
-const CELL = 8;
 const DOT_R = 3.6;
 const RING_R = 6.2;
 
+/** Dot spacing inside a country cluster, and the map's latitude band (the Network board). */
+const SPACING = 9.2;
+const LAT_TOP = 72;
+const LAT_BOTTOM = -48;
+const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+
+export interface CountryLabel {
+  country: string;
+  count: number;
+  x: number;
+  y: number;
+}
+
 /**
- * Stable visual displacement only; the source coordinates remain in the readout. `columns` and
- * `rows` size the grid (default 90 × 45, a 720 × 360 map); each dot takes the free cell nearest
- * its GeoIP position.
+ * The Network board's layout: one cluster per country at the mean GeoIP position of its peers
+ * (lat 72…−48 band), clusters pushed apart until they and their labels no longer touch and pulled
+ * gently back to their place, peers on a sunflower inside — ringed first, then reachable. Visual
+ * displacement only: the readout keeps the source coordinates. Deterministic.
  */
-export function layoutMapPoints(
+export function layoutCountryClusters(
   points: Point[],
-  columns = 90,
-  rows = 45
-): Array<{ point: Point; x: number; y: number }> {
-  const occupied = new Set<string>();
-  return [...points]
-    .sort((a, b) => a.peerId.localeCompare(b.peerId))
-    .map((point) => {
-      const px = ((point.lon + 180) / 360) * columns * CELL;
-      const py = ((90 - point.lat) / 180) * rows * CELL;
-      const originColumn = Math.max(0, Math.min(columns - 1, Math.round((px - 4) / CELL)));
-      const originRow = Math.max(0, Math.min(rows - 1, Math.round((py - 4) / CELL)));
-      for (let radius = 0; radius < Math.max(columns, rows); radius++) {
-        for (let row = originRow - radius; row <= originRow + radius; row++) {
-          for (let column = originColumn - radius; column <= originColumn + radius; column++) {
-            if (
-              Math.max(Math.abs(column - originColumn), Math.abs(row - originRow)) !== radius ||
-              column < 0 ||
-              column >= columns ||
-              row < 0 ||
-              row >= rows
-            )
-              continue;
-            const key = column + ':' + row;
-            if (occupied.has(key)) continue;
-            occupied.add(key);
-            return { point, x: 4 + column * CELL, y: 4 + row * CELL };
-          }
+  width: number,
+  height: number
+): { dots: Array<{ point: Point; x: number; y: number }>; labels: CountryLabel[] } {
+  if (!(width > 0 && height > 0)) throw new Error(`invalid network map size ${width}×${height}`);
+  const proj = (lon: number, lat: number): [number, number] => [
+    ((lon + 180) / 360) * width,
+    ((LAT_TOP - Math.max(LAT_BOTTOM, Math.min(LAT_TOP, lat))) / (LAT_TOP - LAT_BOTTOM)) * height,
+  ];
+  const byCountry = new Map<string, Point[]>();
+  for (const point of points)
+    byCountry.set(point.country, [...(byCountry.get(point.country) ?? []), point]);
+  const countries = [...byCountry.keys()].sort();
+  const radius = (n: number) => SPACING * (0.6 + Math.sqrt(n) * 0.62);
+  const home = new Map(
+    countries.map((country) => {
+      const peers = byCountry.get(country)!;
+      return [
+        country,
+        proj(
+          peers.reduce((sum, p) => sum + p.lon, 0) / peers.length,
+          peers.reduce((sum, p) => sum + p.lat, 0) / peers.length
+        ),
+      ];
+    })
+  );
+  const centre = new Map(countries.map((country) => [country, [...home.get(country)!]]));
+  /** A cluster's footprint: its dots plus the label under it. */
+  const extent = (country: string) => {
+    const r = radius(byCountry.get(country)!.length);
+    const half = Math.max(r, (`${country} ${byCountry.get(country)!.length}`.length * 6.2) / 2);
+    return { r, half, below: r + 14 };
+  };
+  for (let round = 0; round < 400; round++) {
+    for (let i = 0; i < countries.length; i++)
+      for (let j = i + 1; j < countries.length; j++) {
+        const a = centre.get(countries[i])!;
+        const b = centre.get(countries[j])!;
+        const ea = extent(countries[i]);
+        const eb = extent(countries[j]);
+        const dx = b[0] - a[0];
+        const dy = b[1] - a[1];
+        const d = Math.hypot(dx, dy) || 0.01;
+        const need = Math.max(ea.r + eb.r, ea.half + eb.half) + 12;
+        if (d < need) {
+          const m = (need - d) / 2;
+          const ux = dx === 0 && dy === 0 ? 1 : dx / d;
+          const uy = dx === 0 && dy === 0 ? 0 : dy / d;
+          a[0] -= ux * m;
+          a[1] -= uy * m;
+          b[0] += ux * m;
+          b[1] += uy * m;
         }
       }
-      throw new Error(
-        `Network map cannot place peer ${point.peerId}: more than ${columns * rows} located peers`
-      );
+    for (const country of countries) {
+      const c = centre.get(country)!;
+      const [tx, ty] = home.get(country)!;
+      const e = extent(country);
+      c[0] += (tx - c[0]) * 0.02;
+      c[1] += (ty - c[1]) * 0.02;
+      c[0] = Math.max(e.half, Math.min(width - e.half, c[0]));
+      c[1] = Math.max(e.r, Math.min(height - e.below, c[1]));
+    }
+  }
+  const dots: Array<{ point: Point; x: number; y: number }> = [];
+  const labels: CountryLabel[] = [];
+  for (const country of countries) {
+    const [cx, cy] = centre.get(country)!;
+    const peers = [...byCountry.get(country)!].sort(
+      (a, b) =>
+        Number(b.localSessionObserved) - Number(a.localSessionObserved) ||
+        Number(b.reachable) - Number(a.reachable) ||
+        a.peerId.localeCompare(b.peerId)
+    );
+    peers.forEach((point, k) => {
+      const r = peers.length > 1 ? SPACING * 0.62 * Math.sqrt(k + 0.5) : 0;
+      dots.push({
+        point,
+        x: cx + r * Math.cos(k * GOLDEN_ANGLE),
+        y: cy + r * Math.sin(k * GOLDEN_ANGLE),
+      });
     });
+    labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + 11 });
+  }
+  dots.sort((a, b) => a.point.peerId.localeCompare(b.point.peerId));
+  return { dots, labels };
+}
+
+/** The dots alone, on the default 720 × 353 map (kept for callers that place only dots). */
+export function layoutMapPoints(
+  points: Point[],
+  width = 720,
+  height = Math.round(720 * 0.49)
+): Array<{ point: Point; x: number; y: number }> {
+  return layoutCountryClusters(points, width, height).dots;
 }
 
 /** A peer id is a 34-byte multihash: head…tail is enough to tell peers apart (CH-57). */
@@ -162,19 +235,14 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
   if (!Number.isSafeInteger(neverVerified) || neverVerified < 0)
     throw new Error(`invalid never-verified peer count ${neverVerified}`);
   const width = measured ?? 720;
-  const columns = Math.max(24, Math.floor(width / CELL));
-  const rows = Math.max(12, Math.round(columns / 2));
-  const height = rows * CELL;
+  // The board's map is about twice as wide as it is tall (880 × 430).
+  // On a phone the clusters need more room than the board's ratio leaves (390 shot).
+  const height = Math.max(220, Math.round(width * 0.49));
   const ready = !isLoading && !error && data ? data : null;
-  const layout = ready ? layoutMapPoints(ready.points, columns, rows) : [];
+  const placed = ready ? layoutCountryClusters(ready.points, width, height) : null;
+  const layout = placed?.dots ?? [];
   const selected = ready?.points.find((point) => point.peerId === selectedId) ?? null;
-  const clusters = new Map<string, { xs: number[]; bottom: number }>();
-  for (const { point, x, y } of layout) {
-    const cluster = clusters.get(point.country) ?? { xs: [], bottom: 0 };
-    cluster.xs.push(x);
-    cluster.bottom = Math.max(cluster.bottom, y);
-    clusters.set(point.country, cluster);
-  }
+  const countryLabels = placed?.labels ?? [];
   const reachable = ready?.points.filter((point) => point.reachable).length ?? 0;
   const ringed = ready?.points.filter((point) => point.localSessionObserved).length ?? 0;
   const perRow = Math.max(8, Math.floor(width / 14));
@@ -182,8 +250,8 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
     <figure className="m-0 min-w-0">
       {ready && (
         <p className="text-text-dim mb-3 text-[12px]">
-          {ready.located.toLocaleString()} verified nodes in {clusters.size} countries · ringed: the{' '}
-          {ringed} this node had a session with in the latest round
+          {ready.located.toLocaleString()} verified nodes in {countryLabels.length} countries ·
+          ringed: the {ringed} this node had a session with in the latest round
         </p>
       )}
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -226,12 +294,12 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                     stroke={k === 3 ? '#1a1f30' : '#121620'}
                   />
                 ))}
-                {[...clusters.entries()].map(([country, cluster]) => (
+                {countryLabels.map(({ country, count, x, y }) => (
                   <text
                     key={country}
                     data-country-label
-                    x={cluster.xs.reduce((sum, x) => sum + x, 0) / cluster.xs.length}
-                    y={cluster.bottom + 13}
+                    x={x}
+                    y={y}
                     textAnchor="middle"
                     fontSize="10"
                     fill="#7c849c"
@@ -239,7 +307,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                     strokeWidth="3"
                     paintOrder="stroke"
                   >
-                    {country} {cluster.xs.length}
+                    {country} {count}
                   </text>
                 ))}
                 {layout.map(({ point, x, y }) => (

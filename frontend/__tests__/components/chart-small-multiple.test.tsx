@@ -35,13 +35,14 @@ describe('ChartSmallMultiple', () => {
       'href',
       '/mainnet/charts/hash-rate'
     );
-    // The card headline is the design's two-decimal readout (CH-02: "91.34 PH/s"); the exact
-    // value stays in the title above.
+    // The card headline is the design's two-decimal readout (CH-02: "91.34"); the exact value stays
+    // in the title above. Like the board, the unit lives in the short subtitle ("daily, PH/s"), so
+    // the headline is the bare number (visual pass: units squeezed the titles to three lines).
     const readout = screen.getByRole('group', { name: 'Hash rate current readout' });
-    expect(readout).toHaveTextContent('900.72PH/s');
+    expect(readout).toHaveTextContent(/^900\.72$/);
     expect(readout).toHaveClass('overflow-x-auto');
     expect(screen.getByText('900.72')).toHaveClass('whitespace-nowrap');
-    expect(screen.getByText('PH/s')).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('daily, PH/s')).toBeInTheDocument();
   });
 
   it('distinguishes an empty response from an error and permits retry', async () => {
@@ -93,6 +94,7 @@ describe('ChartSmallMultiple', () => {
     expect(readout).toHaveTextContent('25.00%');
     expect(readout.parentElement).toHaveTextContent(/^top0/);
     expect(screen.getByText('%')).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('share of knowledge, top 5')).toBeInTheDocument();
   });
 
   it('names the leading miner in the short head…tail form on the card (CH-04)', async () => {

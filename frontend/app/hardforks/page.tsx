@@ -4,9 +4,9 @@ import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
-import { api, type HardforkHashTypeLaneF2 } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
-import { LANE_ORDER, VmLaneTimeline } from '@/components/hardforks/vm-lane-timeline';
+import { LANE_ORDER, VmLaneTimeline, dayStartMs } from '@/components/hardforks/vm-lane-timeline';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatExactDecimal } from '@/lib/exact-integer';
 
@@ -28,16 +28,30 @@ const RFC_TEXT: Record<string, string> = {
   '0049': 'CKB-VM version 2',
 };
 
-/** What each edition changed for scripts, in plain words (CH-42). */
-function editionStory(event: Edition, lanes: readonly HardforkHashTypeLaneF2[]): string {
-  const data2 = lanes.find((lane) => lane.hashType === 'data2');
+const DAY_MS = 86_400_000;
+
+/**
+ * What each edition changed for scripts, in plain words (CH-42), with the registry's facts: the
+ * first script registered under data1 and how long data2 has waited (R2b-b `hashTypes`, R11).
+ */
+function editionStory(event: Edition, timeline: Timeline, tipMs: number | null): string {
+  const data2 = timeline.hashTypeLanes!.find((lane) => lane.hashType === 'data2');
   if (!data2) throw new Error('hardfork timeline has no data2 lane');
-  if (event.id === 'mirana-2021')
-    return 'Added CKB-VM version 1 and the hash type data1 to pin it. Scripts named by type hash moved to VM1 at this epoch.';
+  const since = dayStartMs(event.activationDate);
+  if (event.id === 'mirana-2021') {
+    const first = timeline.scriptDeployments
+      .filter((deployment) => deployment.hashTypes!.includes('data1'))
+      .sort((a, b) => a.timestampMs - b.timestampMs)[0];
+    return `Added CKB-VM version 1 and the hash type data1 to pin it. Scripts named by type hash moved to VM1 at this epoch.${
+      first
+        ? ` The first known script pinned with data1 came ${Math.floor((first.timestampMs - since) / DAY_MS).toLocaleString()} days later: ${first.versionName}.`
+        : ''
+    }`;
+  }
   if (event.id === 'meepo-2024')
     return `Added CKB-VM version 2, with the Spawn syscalls (scripts can start and talk to other scripts), and the hash type data2. Scripts named by type hash moved to VM2. ${
       data2.knownVersions === 0
-        ? 'No script CKBadger knows uses data2 yet.'
+        ? `No script CKBadger knows uses data2 yet${tipMs === null ? '' : `, ${Math.floor((tipMs - since) / DAY_MS).toLocaleString()} days on`}.`
         : `${data2.knownVersions.toLocaleString()} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.`
     }`;
   return event.summary;
@@ -49,8 +63,15 @@ function joinWords(items: readonly string[]): string {
     : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
-function EditionCard({ event, timeline }: { event: Edition; timeline: Timeline }) {
-  const lanes = timeline.hashTypeLanes!;
+function EditionCard({
+  event,
+  timeline,
+  tipMs,
+}: {
+  event: Edition;
+  timeline: Timeline;
+  tipMs: number | null;
+}) {
   const rfcs = timeline.consensusFeatures.filter(
     (feature) => feature.activationEpoch === event.activationEpoch
   );
@@ -76,7 +97,9 @@ function EditionCard({ event, timeline }: { event: Edition; timeline: Timeline }
         )}
         {event.activationDate}
       </p>
-      <p className="text-text text-[13px] leading-relaxed">{editionStory(event, lanes)}</p>
+      <p className="text-text text-[13px] leading-relaxed">
+        {editionStory(event, timeline, tipMs)}
+      </p>
       {rfcs.length > 0 && (
         <div className="text-[12px]">
           {rfcs.map((feature) => (
@@ -157,6 +180,8 @@ export default function HardforksPage() {
   const lanes = data?.hashTypeLanes;
   const lanesValid =
     lanes !== undefined && lanes.map((lane) => lane.hashType).join() === LANE_ORDER.join();
+  // R2b-b: every deployment says which hash types it is registered under.
+  const unlaned = data?.scriptDeployments.find((deployment) => !deployment.hashTypes);
   const genesisFeatures =
     data?.consensusFeatures.filter((feature) => feature.activationEpoch === 0) ?? [];
   return (
@@ -200,7 +225,13 @@ export default function HardforksPage() {
               the live references per hash type cannot be shown.
             </p>
           )}
-          {data && mirana && meepo && lanesValid && (
+          {data && unlaned && (
+            <p role="alert" className="text-negative">
+              Script deployment {unlaned.versionHash} has no registered hash types; the versions
+              cannot be placed on their lanes.
+            </p>
+          )}
+          {data && mirana && meepo && lanesValid && !unlaned && (
             <>
               <DetailSection
                 title="Which VM runs a script, over time"
@@ -216,7 +247,7 @@ export default function HardforksPage() {
                   </p>
                 ) : span.genesisMs === null || span.tipMs === null ? (
                   <p className="text-text-dim text-[12px]">Loading the chain&apos;s time span…</p>
-                ) : span.tipMs <= dayStartGuard(meepo.activationDate) ? (
+                ) : span.tipMs <= dayStartMs(meepo.activationDate) ? (
                   <p className="text-text-dim text-[12px]">
                     The index has not reached the latest edition yet; the timeline draws once it
                     has.
@@ -245,7 +276,7 @@ export default function HardforksPage() {
               </DetailSection>
               <div className="grid min-w-0 items-start gap-12 md:grid-cols-2">
                 {events.map((event) => (
-                  <EditionCard key={event.id} event={event} timeline={data} />
+                  <EditionCard key={event.id} event={event} timeline={data} tipMs={span.tipMs} />
                 ))}
               </div>
               <DetailSection title="As this node's consensus states it">
@@ -281,11 +312,4 @@ export default function HardforksPage() {
       </main>
     </div>
   );
-}
-
-/** The start of an edition's activation day (UTC+8), for the "not reached yet" guard. */
-function dayStartGuard(day: string): number {
-  const ms = Date.parse(`${day}T00:00:00+08:00`);
-  if (!Number.isFinite(ms)) throw new Error(`Invalid hardfork activation date ${day}`);
-  return ms;
 }

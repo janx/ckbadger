@@ -11,6 +11,7 @@ import {
   chartModel,
   formatChartExact,
   formatChartReadout,
+  shortBucketLabel,
   type ChartHeadline,
   type ChartModel,
 } from '@/components/charts/chart-model';
@@ -71,7 +72,9 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   if (data) {
     try {
       model = chartModel(definition, data);
-      ticks = axisTicks(model.card?.points ?? model.points, style, style === 'bucket' ? 6 : 3);
+      ticks = axisTicks(model.card?.points ?? model.points, style, style === 'bucket' ? 6 : 3).map(
+        (tick) => (style === 'bucket' ? { ...tick, label: shortBucketLabel(tick.label) } : tick)
+      );
     } catch (cause) {
       model = null;
       modelError = cause instanceof Error ? cause.message : String(cause);
@@ -89,7 +92,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
           >
             {definition.title}
           </Link>
-          <div className="text-text-dim text-[11px]">{definition.subtitle}</div>
+          <div className="text-text-dim text-[11px]">{definition.cardSubtitle}</div>
         </div>
         {model?.latest && headline && (
           <div
@@ -106,7 +109,10 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
                 <span className="text-text-bright whitespace-nowrap text-[18px] font-medium tabular-nums">
                   {headline.display}
                 </span>
-                <span className="text-text-dim whitespace-nowrap text-[11px]">{headline.unit}</span>
+                {/* The unit is in the subtitle, as on the board; only a percentage keeps its sign. */}
+                {headline.unit === '%' && (
+                  <span className="text-text-dim whitespace-nowrap text-[11px]">%</span>
+                )}
               </div>
             </div>
           </div>

@@ -131,7 +131,14 @@ describe('HardforksPage', () => {
 
   it('shows the producer-backed script deployment mark and exact evidence links', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
-    getHardforksMock.mockResolvedValue({ ...producerDeployments, hashTypeLanes: lanes });
+    getHardforksMock.mockResolvedValue({
+      ...producerDeployments,
+      hashTypeLanes: lanes,
+      scriptDeployments: producerDeployments.scriptDeployments.map((d) => ({
+        ...d,
+        hashTypes: [],
+      })),
+    });
     render(<HardforksPage />);
 
     const mark = await screen.findByRole('button', { name: /Known Lock v2.*block #10/i });
@@ -254,7 +261,14 @@ describe('HardforksPage', () => {
 
   it('places deployments on the time axis without a scroll box, same names told apart (CH-40, CH-44)', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
-    getHardforksMock.mockResolvedValue({ ...producerDeployments, hashTypeLanes: lanes });
+    getHardforksMock.mockResolvedValue({
+      ...producerDeployments,
+      hashTypeLanes: lanes,
+      scriptDeployments: producerDeployments.scriptDeployments.map((d) => ({
+        ...d,
+        hashTypes: [],
+      })),
+    });
     render(<HardforksPage />);
     const marks = await screen.findByRole('list', {
       name: 'Known script-version deployment timeline',
@@ -273,5 +287,46 @@ describe('HardforksPage', () => {
     getHardforksMock.mockResolvedValue(withoutLanes);
     render(<HardforksPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/no hash-type lanes/);
+  });
+
+  it('dates the first data1 script and the wait for data2 from the deployments (CH-42, R2b-b)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    const base = producerDeployments.scriptDeployments[0];
+    getHardforksMock.mockResolvedValue({
+      ...mockTimeline,
+      scriptDeployments: [
+        {
+          ...base,
+          versionName: 'Omni Lock',
+          versionHash: `0x${'c'.repeat(64)}`,
+          timestampMs: Date.parse('2024-02-01T00:00:00+08:00'),
+          hashTypes: ['data1'],
+        },
+        {
+          ...base,
+          versionName: 'xUDT',
+          versionHash: `0x${'b'.repeat(64)}`,
+          timestampMs: Date.parse('2024-01-08T12:00:00+08:00'),
+          hashTypes: ['data1'],
+        },
+      ],
+    });
+    render(<HardforksPage />);
+    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana' });
+    expect(mirana).toHaveTextContent(
+      'The first known script pinned with data1 came 608 days later: xUDT.'
+    );
+    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo' });
+    // The days count waits for the tip block's header time.
+    await waitFor(() =>
+      expect(meepo).toHaveTextContent('No script CKBadger knows uses data2 yet, 486 days on.')
+    );
+  });
+
+  it('refuses deployments without their registered hash types', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue({ ...producerDeployments, hashTypeLanes: lanes });
+    render(<HardforksPage />);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/has no registered hash types/);
   });
 });

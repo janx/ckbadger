@@ -263,7 +263,12 @@ function DetailBody({
         unit={model.unit}
       />
       {model.peak && (
-        <Reading label={`peak, ${model.peak.label}`} raw={model.peak.raw} unit={model.unit} quiet />
+        <Reading
+          label={`peak, ${pointLabel(model.peak.label)}`}
+          raw={model.peak.raw}
+          unit={model.unit}
+          quiet
+        />
       )}
     </div>
   );
@@ -304,7 +309,16 @@ function DetailBody({
         facts={facts.length ? facts : undefined}
         tier2={method}
       >
-        <DetailSection title={distribution ? 'Distribution' : 'Full history'}>
+        <DetailSection
+          title={distribution ? 'Distribution' : 'Full history'}
+          actions={
+            model.kind !== 'ranked' && (
+              <span className="text-text-dim text-[12px]">
+                {points.length.toLocaleString()} {POINT_NOUN[style]}
+              </span>
+            )
+          }
+        >
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
             <div role="group" aria-label="Chart range" className="flex flex-wrap gap-1">
               {hasDatedHistory &&
@@ -373,6 +387,8 @@ function DetailBody({
               kind={model.kind}
               yScale={supportsLog && logScale ? 'log' : 'linear'}
               height={360}
+              // The page head already names the chart and reads it (visual pass).
+              hideCaption
               markers={markers}
               projectedAfter={range === 'all' ? model.projectedAfter : undefined}
               // A histogram reads its most common bucket, a model its today (CH-30, CH-03).
@@ -384,7 +400,7 @@ function DetailBody({
               formatValue={(value) => formatChartHover(value, model.unit)}
               // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
               xTicks={axisTicks(points, style, 8)}
-              pointDots={model.kind !== 'bars'}
+              pointDots
               slotBars={style === 'bucket' || style === 'month'}
               hideMarkerLegend
               yDomain={model.yDomain}
@@ -426,7 +442,7 @@ function DetailBody({
             </p>
             <Chart
               title={model.secondary.title}
-              subtitle={definition.subtitle}
+              subtitle={`${model.secondary.title} · ${secondaryPoints.length.toLocaleString()} ${POINT_NOUN[style]}`}
               data={secondaryPoints}
               series={model.secondary.series}
               unit={model.secondary.unit}
@@ -434,7 +450,7 @@ function DetailBody({
               height={220}
               formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
               xTicks={axisTicks(secondaryPoints, style, 8)}
-              pointDots={definition.visual !== 'bars'}
+              pointDots
               slotBars={style === 'bucket' || style === 'month'}
             />
           </DetailSection>

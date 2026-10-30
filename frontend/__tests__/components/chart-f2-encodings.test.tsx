@@ -168,4 +168,48 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(text(container)).toContain('Mirana');
     expect(queryByRole('link', { name: /Mirana/ })).toBeNull();
   });
+
+  it('drops an x tick whose label would collide with the one before it (visual pass)', () => {
+    stubChartWidth(200);
+    const near = ['a', 'b', 'c', 'd'].map((label, i) => ({
+      label,
+      values: { primary: String(i) },
+    }));
+    const { container } = render(
+      <Chart
+        title="Buckets"
+        subtitle="ticks"
+        data={near}
+        series={series}
+        unit="x"
+        xTicks={[
+          { index: 0, label: '10k-100k' },
+          { index: 1, label: '100k-1m' },
+          { index: 3, label: '>=1m' },
+        ]}
+        formatValue={(v) => v}
+      />
+    );
+    const ticks = [...container.querySelectorAll('[data-x-tick]')].map((n) => n.textContent);
+    expect(ticks).toEqual(['10k-100k', '>=1m']);
+  });
+
+  it('gives bars a hover dot and reading but no end dot (visual pass)', () => {
+    const { container } = render(
+      <Chart
+        title="Deposits"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="CKB"
+        kind="bars"
+        pointDots
+        formatValue={(v) => v}
+      />
+    );
+    expect(container.querySelector('[data-end-dot]')).toBeNull();
+    fireEvent.keyDown(container.querySelector('svg[role="img"]')!, { key: 'ArrowLeft' });
+    expect(container.querySelector('[data-hover-dot="primary"]')).not.toBeNull();
+    expect(container.querySelector('[data-hover-reading]')).toHaveTextContent('3 CKB');
+  });
 });

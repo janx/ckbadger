@@ -419,7 +419,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by crawler dial state"
-              className="border-base-border bg-base-bg text-text rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
             >
               <option value="">All crawler dial states</option>
               {STATE_OPTIONS.map((option) => (
@@ -439,7 +439,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by address observation"
-              className="border-base-border bg-base-bg text-text rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
             >
               <option value="">All address observations</option>
               {OBSERVATION_OPTIONS.map((option) => (
@@ -456,7 +456,7 @@ export function PeersTable() {
               }
               placeholder="Country"
               aria-label="Filter by country"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
             />
             <input
               type="text"
@@ -466,7 +466,7 @@ export function PeersTable() {
               }
               placeholder="Version"
               aria-label="Filter by version"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
             />
           </div>
 
