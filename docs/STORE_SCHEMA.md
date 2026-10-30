@@ -461,7 +461,7 @@ inline as Class C sealed aggregates:
   `TOKEN_HOURLY` and the token row — need an amount. Bulk (via `CellSemanticTag::{Sudt, Xudt}`)
   and live (`pipeline::token_daily_member`) apply the same rule (POSTMORTEM STATS-011).
   `TokenDailyDelta` (`owned_capacity_delta`, `owned_knowledge_delta`, `tx_count`, `minted`,
-  `burned`, `mint_count`, `burn_count`, `transfer_tx_count`; 128 bytes): `tx_count` is the number of transactions that day that
+  `burned`, `mint_count`, `burn_count`, `transfer_tx_count`, `live_cells_delta`; 136 bytes): `tx_count` is the number of transactions that day that
   created or consumed at least one such cell, one per transaction however many of its cells moved
   (live: `pipeline::add_token_daily_tx` → `TokenDailyChanges::add_tx`; bulk: `TokenOwner::apply_tx`).
   `transfer_tx_count` is the number of those transactions with at least one `token_transfers`
@@ -472,7 +472,15 @@ inline as Class C sealed aggregates:
   `TokenDailyDelta::add_transfer_tx` on both paths (live: the writer folds the records it persists
   into the parser's contributions before `update_token_daily_deltas_batch`; bulk:
   `TokenOwner::apply_tx`'s transfer loop); the day's signed supply change is `minted - burned`
-  (`TokenDailyDelta::apply_supply`). A day with a transaction keeps its row even when its capacity
+  (`TokenDailyDelta::apply_supply`). `live_cells_delta` is the day's net live cells of the token
+  (every member cell created `+1`, consumed `-1`, the same membership as the capacity deltas): live
+  `pipeline::add_token_daily_tx` folds it from the parser's per-cell members
+  (`token_daily_created` / `token_daily_consumed`), bulk `TokenOwner::record_daily_delta` on the
+  day entry it already updates for capacity. Its running sum (`token_live_cells_from_daily`) is the
+  token's live cell count, the one `cellsCount` `/tokens` and `/tokens/{hash}` serve — neither
+  reads the token's cells; `ckbadger verify` (`token_live_cells_consistency`) compares it with the
+  live cells behind `cell_by_type`. A running count below zero is an error naming the token and
+  the day. A day with a transaction keeps its row even when its capacity
   nets to zero, and `find_first_invalid_token_daily_delta` rejects a row with `tx_count == 0`, a
   running supply that a day's burns would take below zero, a record count without its amount (or the
   reverse), and a `transfer_tx_count` above `tx_count` or zero beside mint / burn records. Live rollback restores the whole row from its undo pre-image. The script,

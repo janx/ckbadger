@@ -459,13 +459,15 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
     }
 
     /// One transaction in `block` touched the cells of token `key`, changing
-    /// their capacity / knowledge by the given net amounts.
+    /// their capacity / knowledge and their live cell count (created minus
+    /// consumed member cells) by the given net amounts.
     pub fn add_tx(
         &mut self,
         block: i64,
         key: K,
         capacity_delta: i128,
         knowledge_delta: i128,
+        live_cells_delta: i64,
     ) -> anyhow::Result<()> {
         self.add(
             block,
@@ -474,6 +476,7 @@ impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
                 owned_capacity_delta: capacity_delta,
                 owned_knowledge_delta: knowledge_delta,
                 tx_count: 1,
+                live_cells_delta,
                 ..Default::default()
             },
         )
@@ -564,9 +567,9 @@ mod token_daily_changes_tests {
     #[test]
     fn add_tx_counts_one_transaction_per_call_and_keeps_blocks_apart() {
         let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
-        changes.add_tx(10, vec![0x22; 32], 100, 5).unwrap();
-        changes.add_tx(10, vec![0x22; 32], -100, -5).unwrap();
-        changes.add_tx(11, vec![0x22; 32], 7, 1).unwrap();
+        changes.add_tx(10, vec![0x22; 32], 100, 5, 1).unwrap();
+        changes.add_tx(10, vec![0x22; 32], -100, -5, -1).unwrap();
+        changes.add_tx(11, vec![0x22; 32], 7, 1, 1).unwrap();
         let remapped = changes
             .remap_keys(|block, id| Ok((id, if block == 10 { 20_260_922 } else { 20_260_923 })))
             .unwrap();
@@ -584,8 +587,8 @@ mod token_daily_changes_tests {
         );
         assert_eq!(blocks[1].1[&(vec![0x22; 32], 20_260_923)].tx_count, 1);
         let mut backwards = TokenDailyChanges::<UndatedEntityKey>::new();
-        backwards.add_tx(10, vec![1], 1, 1).unwrap();
-        let err = backwards.add_tx(9, vec![1], 1, 1).unwrap_err();
+        backwards.add_tx(10, vec![1], 1, 1, 1).unwrap();
+        let err = backwards.add_tx(9, vec![1], 1, 1, 1).unwrap_err();
         assert!(err.to_string().contains("ascending block order"), "{err}");
     }
 }

@@ -1558,6 +1558,13 @@ pub struct TokenDailyDelta {
     /// A subset of `tx_count`, which also counts transactions that only
     /// rewrite cells without moving an amount between locks.
     pub transfer_tx_count: u64,
+    /// Net live cells of this token that day: every member cell (the same
+    /// set as the capacity deltas, `token_daily_member`) a transaction
+    /// created adds one, every one it consumed subtracts one. The token's
+    /// live cell count is the running sum through the tip
+    /// ([`token_live_cells_from_daily`](crate::token_live_cells_from_daily)),
+    /// the one source `/tokens` and `/tokens/{hash}` serve as `cellsCount`.
+    pub live_cells_delta: i64,
 }
 
 /// One token transfer record's supply facts: `(is_mint, is_burn, amount)`.
@@ -1634,6 +1641,10 @@ impl TokenDailyDelta {
             .transfer_tx_count
             .checked_add(other.transfer_tx_count)
             .ok_or_else(|| overflow("transfer_tx_count"))?;
+        self.live_cells_delta = self
+            .live_cells_delta
+            .checked_add(other.live_cells_delta)
+            .ok_or_else(|| overflow("live_cells_delta"))?;
         Ok(())
     }
 

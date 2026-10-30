@@ -103,7 +103,7 @@ impl BatchWriter {
     ) -> Result<()> {
         let mut by_block = TokenDailyChanges::new();
         for (key, (capacity_delta, knowledge_delta)) in changes {
-            by_block.add_tx(1, key.clone(), *capacity_delta, *knowledge_delta)?;
+            by_block.add_tx(1, key.clone(), *capacity_delta, *knowledge_delta, 0)?;
         }
         let mut overlay = EntityStatsOverlay::new();
         let mut undo_seq = HashMap::new();
@@ -686,7 +686,7 @@ mod tests {
         // still names the family and the entity.
         assert!(
             err.to_string()
-                .contains("entity daily delta has 31 bytes, expected 128")
+                .contains("entity daily delta has 31 bytes, expected 136")
                 && err.to_string().contains("token_daily type_hash="),
             "got: {err}"
         );

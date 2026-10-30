@@ -248,9 +248,9 @@ struct DailyPair {
 /// Encoded width of a [`DailyPair`] row.
 const DAILY_PAIR_LEN: usize = 32;
 /// Encoded width of a `TokenDailyDelta` row: the pair, `tx_count: u64`, the
-/// two 32-byte supply sums, the two `u64` record counts and
-/// `transfer_tx_count: u64`.
-const TOKEN_DAILY_LEN: usize = 128;
+/// two 32-byte supply sums, the two `u64` record counts,
+/// `transfer_tx_count: u64` and `live_cells_delta: i64`.
+const TOKEN_DAILY_LEN: usize = 136;
 
 /// The previous row of a daily family, decoded only if it has exactly the
 /// family's width — bincode would otherwise read a wider row's prefix.
@@ -814,12 +814,12 @@ mod tests {
         let err =
             apply_token_daily(Some(&daily(1, 1)), &contribution(0, 0, 1), &ctx()).unwrap_err();
         assert!(
-            err.to_string().contains("has 32 bytes, expected 128"),
+            err.to_string().contains("has 32 bytes, expected 136"),
             "got: {err}"
         );
         let err = apply_daily_pair(Some(&token_day(1, 1, 1)), 0, 0, &ctx()).unwrap_err();
         assert!(
-            err.to_string().contains("has 128 bytes, expected 32"),
+            err.to_string().contains("has 136 bytes, expected 32"),
             "got: {err}"
         );
     }

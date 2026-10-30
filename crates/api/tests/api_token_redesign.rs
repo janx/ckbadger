@@ -150,6 +150,7 @@ fn fixture() -> Arc<CkbadgerStore> {
                 transfer_tx_count: 1,
                 minted: 100u128.into(),
                 mint_count: 1,
+                live_cells_delta: 1,
                 ..Default::default()
             },
         ),
@@ -322,55 +323,69 @@ async fn token_distribution_is_complete_not_a_top_holder_page() {
     assert_eq!(body["buckets"][1]["holdersCount"], 110);
 }
 
+/// IV-27: `cellsCount` is the token's persisted live cell count — the running
+/// sum of its daily rows' `live_cells_delta` — on the detail and on every
+/// `/tokens` row alike. A day that would take the count below zero is a 500
+/// naming the token and the day. The type index is not read per request:
+/// comparing it with this count is `ckbadger verify`'s
+/// `token_live_cells_consistency`, so a stale index row changes nothing here.
 #[tokio::test]
-async fn token_live_cell_count_includes_zero_amount_and_rejects_stale_type_index() {
+async fn token_cells_count_is_the_persisted_daily_count() {
     let store = fixture();
-    let cell = LiveCellInfo {
-        capacity: 100,
-        occupied_capacity: 80,
-        lock_script_hash: vec![0x32; 32],
-        lock_code_hash: vec![0x33; 32],
-        lock_hash_type: 1,
-        lock_args: vec![],
-        type_script_hash: Some(TOKEN.to_vec()),
-        type_code_hash: Some(vec![0x72; 32]),
-        type_hash_type: Some(1),
-        type_args: Some(vec![0x73; 32]),
-        data_size: 16,
-        udt_amount: Some(0),
-        data_hash: None,
-    };
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&[0x90; 32], 0, &cell, 2);
-    batch.put_cell_by_type(&TOKEN, 2, &[0x90; 32], 0);
-    batch.commit().unwrap();
-    let app = create_router(test_config(store.clone())).await;
-    let (status, body) = response_json(&app, &format!("/tokens/0x{}", hex::encode(TOKEN))).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["cellsCount"], 1);
-    let (_, list) = response_json(&app, "/tokens").await;
-    assert_eq!(list["data"][0]["cellsCount"], 1);
-    let mut batch = StoreBatch::new(&store);
+    // A stale index row (no live marker, no payload): never read per request.
     batch.put_cell_by_type(&TOKEN, 2, &[0x91; 32], 0);
     batch.commit().unwrap();
-    let (status, body) = response_json(&app, &format!("/tokens/0x{}", hex::encode(TOKEN))).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-    assert!(
-        body["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing live marker"),
-        "{body}"
-    );
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261012,
+            &TokenDailyDelta {
+                tx_count: 1,
+                live_cells_delta: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store.clone())).await;
+    let detail = format!("/tokens/0x{}", hex::encode(TOKEN));
+    let (status, body) = response_json(&app, &detail).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["cellsCount"], 3);
+    let (status, list) = response_json(&app, "/tokens").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["data"][0]["cellsCount"], 3);
+
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261013,
+            &TokenDailyDelta {
+                tx_count: 1,
+                live_cells_delta: -4,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    for path in [detail.as_str(), "/tokens"] {
+        let (status, body) = response_json(&app, path).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+        let message = body["message"].as_str().unwrap();
+        assert!(
+            message.contains(&format!("type_hash=0x{}", hex::encode(TOKEN)))
+                && message.contains("date=20261013"),
+            "{path}: {body}"
+        );
+    }
 }
 
-/// IV-27: the token detail (and every `/tokens` row) counts the token's live
-/// cells from the type index and still validates every index row against its
-/// live marker and immutable payload — but in batches, not two point reads per
-/// cell. Live (2026-10-30 full-chain store) the per-cell reads cost USDI's 785
-/// cells 0.28–0.45 s, RGB++'s 19,632 cells 5.3 s, and `/tokens?limit=20` 18 s.
+/// IV-27: the token detail and every `/tokens` row read the persisted count:
+/// a bounded number of point reads and the token's daily rows, never the type
+/// index, a live marker or a payload. Live (2026-10-30 full-chain store) the
+/// per-request cell walk cost USDI's 785 cells 0.28–0.45 s, RGB++'s 19,632
+/// cells 5.3 s, and `/tokens?limit=20` 18 s.
 #[tokio::test]
-async fn token_live_cell_count_reads_in_batches_not_per_cell() {
+async fn token_cells_count_reads_no_cells() {
     const CELLS: u16 = 1_500;
     let store = fixture();
     let cell = LiveCellInfo {
@@ -396,47 +411,52 @@ async fn token_live_cell_count_reads_in_batches_not_per_cell() {
         batch.put_cell_by_type(&TOKEN, 2, &tx, 0);
     }
     batch.commit().unwrap();
+    // The fixture's first day holds one live cell; this day the other 1,499.
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261012,
+            &TokenDailyDelta {
+                tx_count: 1,
+                live_cells_delta: i64::from(CELLS) - 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
     let app = create_router(test_config(store.clone())).await;
 
-    let detail = format!("/tokens/0x{}", hex::encode(TOKEN));
-    store.reset_read_call_counters();
-    let (status, body) = response_json(&app, &detail).await;
-    let (get_cf, multi_get) = store.read_call_counts();
-    eprintln!("{detail}: get_cf={get_cf} multi_get={multi_get}");
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["cellsCount"], CELLS);
-    // Two point reads per cell would be >= 3,000.
-    assert!(
-        get_cf + multi_get <= 100,
-        "{detail}: {get_cf} get_cf + {multi_get} multi_get for {CELLS} cells"
-    );
-
-    store.reset_read_call_counters();
-    let (status, list) = response_json(&app, "/tokens").await;
-    let (get_cf, multi_get) = store.read_call_counts();
-    eprintln!("/tokens: get_cf={get_cf} multi_get={multi_get}");
-    assert_eq!(status, StatusCode::OK, "{list}");
-    assert_eq!(list["data"][0]["cellsCount"], CELLS);
-    assert!(
-        get_cf + multi_get <= 100,
-        "/tokens: {get_cf} get_cf + {multi_get} multi_get for {CELLS} cells"
-    );
-
-    // An index row whose payload names another type is still a 500 naming
-    // the row, wherever it falls in a batch.
-    let mut stray = cell.clone();
-    stray.type_script_hash = Some(vec![0x55; 32]);
-    let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&[0x92; 32], 1, &stray, 2);
-    batch.put_cell_by_type(&TOKEN, 2, &[0x92; 32], 1);
-    batch.commit().unwrap();
-    let (status, body) = response_json(&app, &detail).await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
-    let message = body["message"].as_str().unwrap();
-    assert!(
-        message.contains("index/payload mismatch") && message.contains(&"92".repeat(32)),
-        "{body}"
-    );
+    for path in [
+        format!("/tokens/0x{}", hex::encode(TOKEN)),
+        "/tokens".into(),
+    ] {
+        store.reset_read_call_counters();
+        let (status, body) = response_json(&app, &path).await;
+        let (get_cf, multi_get) = store.read_call_counts();
+        let cell_rows =
+            ["cell_by_type", "live_cells", "cells"].map(|cf| (cf, store.iterated_rows(cf)));
+        eprintln!("{path}: get_cf={get_cf} multi_get={multi_get} iterated={cell_rows:?}");
+        assert_eq!(status, StatusCode::OK, "{path}: {body}");
+        let count = if path == "/tokens" {
+            &body["data"][0]["cellsCount"]
+        } else {
+            &body["cellsCount"]
+        };
+        assert_eq!(count, CELLS, "{path}");
+        assert_eq!(
+            cell_rows,
+            [("cell_by_type", 0), ("live_cells", 0), ("cells", 0)],
+            "{path} walked cells"
+        );
+        assert_eq!(multi_get, 0, "{path}: cell payload batches");
+        assert!(
+            get_cf <= 20,
+            "{path}: {get_cf} point reads for {CELLS} cells"
+        );
+        assert!(
+            store.iterated_rows("stats_token") <= 10,
+            "{path}: daily rows read"
+        );
+    }
 }
 
 #[tokio::test]

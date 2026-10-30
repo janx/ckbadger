@@ -4576,6 +4576,160 @@ impl Check for ParticipantRowsConsistency {
     }
 }
 
+// ── Token live cell count ──────────────────────────────────────────────────
+
+/// A token's persisted live cell count (`cellsCount`: the running sum of its
+/// `TokenDailyDelta.live_cells_delta` rows, IV-27) equals the live cells the
+/// API lists behind the token's type index (`/cells/live?type_script_hash=`,
+/// each listed row checked to carry that type script).
+///
+/// The API no longer walks a token's cells per request; this check is where
+/// the persisted count and the type index meet. A live cell missing from the
+/// index, or a count that drifted from the cells, is a finding naming the
+/// token. Tokens whose count exceeds the per-token budget are named in the
+/// pass detail as not sampled, never counted as verified.
+pub struct TokenLiveCellsConsistency;
+
+const TOKEN_LIVE_CELLS_SAMPLE_CAP: usize = 20;
+const TOKEN_LIVE_CELLS_MAX_PER_TOKEN: i64 = 25_000;
+const TOKEN_LIVE_CELLS_MAX_TOTAL: i64 = 60_000;
+const TOKEN_LIVE_CELLS_PAGE_LIMIT: usize = 100;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenCellsCountRecord {
+    type_script_hash: String,
+    cells_count: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TypedCellRecord {
+    tx_hash: String,
+    output_index: i32,
+    type_script_hash: Option<String>,
+}
+
+/// The token's live cells as `/cells/live` lists them by its type index, or
+/// the details of every listed row that does not carry the token's type.
+fn token_listed_live_cells(ctx: &CheckContext, token: &str) -> anyhow::Result<(i64, Vec<String>)> {
+    let rows: Vec<TypedCellRecord> = all_cursor_pages(
+        ctx,
+        &format!("cells/live?type_script_hash={token}&limit={TOKEN_LIVE_CELLS_PAGE_LIMIT}"),
+    )?;
+    let mut details = vec![];
+    for row in &rows {
+        if row.type_script_hash.as_deref().map(normalize_hex_key) != Some(normalize_hex_key(token))
+        {
+            details.push(format!(
+                "type index lists cell {}:{} whose type script hash is {:?}",
+                row.tx_hash, row.output_index, row.type_script_hash
+            ));
+        }
+    }
+    let count = i64::try_from(rows.len())
+        .map_err(|_| anyhow::anyhow!("listed live cell count overflow: token={token}"))?;
+    Ok((count, details))
+}
+
+impl Check for TokenLiveCellsConsistency {
+    fn name(&self) -> &'static str {
+        "token_live_cells_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Each sampled token's persisted live cell count equals the live cells behind its type index"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(TOKEN_LIVE_CELLS_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "token_live_cells_consistency was run with --sample-count 0: an empty sample \
+                 verifies nothing"
+            );
+        }
+        let tokens: CursorPage<TokenCellsCountRecord> = api_get(ctx, "tokens?limit=100")?;
+        let mut findings = vec![];
+        let mut checked = 0u64;
+        let mut scanned_cells = 0i64;
+        let mut not_sampled = vec![];
+        for token in &tokens.data {
+            if checked as usize >= ctx.sample_count.min(TOKEN_LIVE_CELLS_SAMPLE_CAP) {
+                break;
+            }
+            let hash = token.type_script_hash.as_str();
+            let listed_count = token
+                .cells_count
+                .ok_or_else(|| anyhow::anyhow!("/tokens row {hash} has no cellsCount"))?;
+            let detail: TokenCellsCountRecord = api_get(ctx, &format!("tokens/{hash}"))?;
+            let stored = detail
+                .cells_count
+                .ok_or_else(|| anyhow::anyhow!("/tokens/{hash} has no cellsCount"))?;
+            let mut details = vec![];
+            if stored != listed_count {
+                details.push(format!(
+                    "detail cellsCount={stored} != /tokens row cellsCount={listed_count}"
+                ));
+            }
+            if stored > TOKEN_LIVE_CELLS_MAX_PER_TOKEN
+                || scanned_cells + stored > TOKEN_LIVE_CELLS_MAX_TOTAL
+            {
+                not_sampled.push(format!("{hash} ({stored} cells)"));
+                if !details.is_empty() {
+                    findings.push(Finding {
+                        entity: format!("token={hash}"),
+                        details,
+                    });
+                }
+                continue;
+            }
+            let (indexed, mut row_details) = token_listed_live_cells(ctx, hash)?;
+            scanned_cells += indexed;
+            details.append(&mut row_details);
+            if indexed != stored {
+                details.push(format!(
+                    "persisted cellsCount={stored} != live cells behind the type index={indexed}"
+                ));
+            }
+            if !details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("token={hash}"),
+                    details,
+                });
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if checked == 0 && not_sampled.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                0,
+                "no tokens to sample".to_string(),
+            ));
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled tokens, {scanned_cells} live cells listed");
+        if !not_sampled.is_empty() {
+            detail.push_str(&format!(
+                "; over the {TOKEN_LIVE_CELLS_MAX_PER_TOKEN}-cell / {TOKEN_LIVE_CELLS_MAX_TOTAL}-total budget, not sampled: {}",
+                not_sampled.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 // ── Global activity bucket index ───────────────────────────────────────────
 
 /// `CF_TX_ACTIONS_BY_BUCKET` agrees with the classification of the
@@ -5531,6 +5685,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
         Box::new(GlobalActivityBucketIndexConsistency),
+        Box::new(TokenLiveCellsConsistency),
         Box::new(AddressCellbaseCountConsistency),
         Box::new(DotCellRingIntegrity),
         Box::new(DotCellIdIsLabelHash),
@@ -5734,7 +5889,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 38);
+        assert_eq!(checks.len(), 39);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -5759,6 +5914,7 @@ mod tests {
         assert!(names.contains(&"dao_status_index_matches_deposits"));
         assert!(names.contains(&"participant_rows_consistency"));
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
+        assert!(names.contains(&"token_live_cells_consistency"));
         assert!(names.contains(&"address_cellbase_count_consistency"));
         assert!(names.contains(&"dotcell_ring_integrity"));
         assert!(names.contains(&"dotcell_id_is_label_hash"));
@@ -5821,7 +5977,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 31);
+        assert_eq!(sampling_count, 32);
     }
 
     #[test]
@@ -8458,6 +8614,119 @@ mod tests {
             calls.load(Ordering::SeqCst),
             0,
             "a miner above the bound is never paged in full"
+        );
+    }
+
+    // ── token_live_cells_consistency ──────────────────────────────────────
+
+    /// Serves `/cells/live?type_script_hash=…` for one token: `cells` rows of
+    /// `(tx byte, type script hash)`, paged by `limit` with an index cursor.
+    struct FakeTypeIndex {
+        cells: Vec<(u8, String)>,
+    }
+
+    impl Respond for FakeTypeIndex {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let query: HashMap<String, String> = request.url.query_pairs().into_owned().collect();
+            let limit: usize = query["limit"].parse().unwrap();
+            let start: usize = query.get("cursor").map_or(0, |c| c.parse().unwrap());
+            let page: Vec<serde_json::Value> = self
+                .cells
+                .iter()
+                .skip(start)
+                .take(limit)
+                .map(|(tx, type_hash)| {
+                    json!({ "txHash": format!("0x{}", hex::encode([*tx; 32])), "outputIndex": 0,
+                            "capacity": "100", "typeScriptHash": type_hash })
+                })
+                .collect();
+            let next = (start + limit < self.cells.len()).then(|| (start + limit).to_string());
+            ResponseTemplate::new(200).set_body_json(json!({ "data": page, "nextCursor": next }))
+        }
+    }
+
+    /// One token whose persisted count is `stored` and whose type index lists
+    /// `cells` (count, then any row whose type differs).
+    fn run_token_live_cells_check(stored: i64, cells: Vec<(u8, String)>) -> CompletedCheck {
+        let token = format!("0x{}", "71".repeat(32));
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let server = runtime.block_on(MockServer::start());
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/tokens"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [{ "typeScriptHash": token, "cellsCount": stored }],
+                    "nextCursor": null
+                })))
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v1/tokens/{token}")))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({ "typeScriptHash": token, "cellsCount": stored })),
+                )
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path("/api/v1/cells/live"))
+                .and(query_param("type_script_hash", token.as_str()))
+                .respond_with(FakeTypeIndex { cells })
+                .mount(&server)
+                .await;
+        });
+        execute_check(
+            registered_check("token_live_cells_consistency").as_ref(),
+            &mock_ctx(&server),
+            &ProgressReporter::new(None),
+        )
+    }
+
+    fn token_cells(count: u8) -> Vec<(u8, String)> {
+        (0..count)
+            .map(|tx| (tx, format!("0x{}", "71".repeat(32))))
+            .collect()
+    }
+
+    #[test]
+    fn token_live_cells_check_passes_when_the_count_matches_the_type_index() {
+        // 250 cells span three pages of the listing.
+        let completed = run_token_live_cells_check(250, token_cells(250));
+        let result = completed.result.expect("a completed run has a result");
+        assert_eq!(completed.status, CheckStatus::Pass, "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+    }
+
+    #[test]
+    fn token_live_cells_check_fails_naming_the_token_on_a_drifted_count_or_a_foreign_row() {
+        let token = format!("0x{}", "71".repeat(32));
+        // The persisted count says 3; the index lists two of the token's cells.
+        let completed = run_token_live_cells_check(3, token_cells(2));
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.expect("result").findings;
+        assert_eq!(findings[0].entity, format!("token={token}"));
+        assert!(
+            findings[0]
+                .details
+                .iter()
+                .any(|d| d == "persisted cellsCount=3 != live cells behind the type index=2"),
+            "{:?}",
+            findings[0].details
+        );
+
+        // A listed row whose payload carries another type script.
+        let mut cells = token_cells(2);
+        cells[1].1 = format!("0x{}", "55".repeat(32));
+        let completed = run_token_live_cells_check(2, cells);
+        assert_eq!(completed.status, CheckStatus::Fail);
+        let findings = completed.result.expect("result").findings;
+        assert!(
+            findings[0]
+                .details
+                .iter()
+                .any(|d| d.starts_with("type index lists cell 0x0101") && d.contains("5555")),
+            "{:?}",
+            findings[0].details
         );
     }
 

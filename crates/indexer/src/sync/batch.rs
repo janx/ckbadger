@@ -7006,7 +7006,7 @@ mod tests {
         ) -> Result<TokenDailyChanges<UndatedEntityKey>> {
             let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
             for tx_data in all_tx_data {
-                let mut members: Vec<(Vec<u8>, i128, i128)> = Vec::new();
+                let mut members: Vec<crate::sync::pipeline::TokenDailyMember> = Vec::new();
                 for cell in &tx_data.cells {
                     if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
                         cell.type_script_hash.as_deref(),
@@ -7018,10 +7018,10 @@ mod tests {
                             cell.type_args.as_ref().map(|args| args.len()),
                             cell.data_size,
                         );
-                        members.push((
-                            type_hash.to_vec(),
-                            i128::from(cell.capacity),
-                            i128::from(occupied),
+                        members.push(crate::sync::pipeline::token_daily_created(
+                            type_hash,
+                            cell.capacity,
+                            occupied,
                         ));
                     }
                 }
@@ -7049,10 +7049,10 @@ mod tests {
                             info.type_code_hash.as_deref(),
                             info.type_hash_type,
                         ) {
-                            members.push((
-                                type_hash.to_vec(),
-                                -i128::from(info.capacity),
-                                -i128::from(info.occupied_capacity),
+                            members.push(crate::sync::pipeline::token_daily_consumed(
+                                type_hash,
+                                info.capacity,
+                                info.occupied_capacity,
                             ));
                         }
                     }
@@ -7651,6 +7651,7 @@ mod tests {
                     type_script_hash.clone(),
                     20_000_000_000,
                     14_300_000_000,
+                    1,
                 )
                 .unwrap();
 
@@ -10770,6 +10771,114 @@ mod tests {
                 .is_none());
         }
 
+        /// [`blocks`] plus 103: B spends the owner-mode cell into a plain
+        /// CKB cell, so the token loses one live cell and moves no amount.
+        fn live_cell_blocks() -> Vec<BlockResponseWithCycles> {
+            let retire = TransactionView {
+                hash: format!("0x{}", hex::encode([0xf4u8; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xf2, 1)],
+                outputs: vec![CellOutput {
+                    capacity: format!("0x{:x}", 149_00000000u64),
+                    lock: lock_script_b(),
+                    type_: None,
+                }],
+                outputs_data: vec!["0x".to_string()],
+                witnesses: vec![],
+            };
+            let mut blocks = blocks();
+            blocks.push(block(
+                103,
+                AR_DEPOSIT,
+                vec![cellbase_tx(0xc3, 100_000_000), retire],
+            ));
+            blocks
+        }
+
+        /// IV-27: `TokenDailyDelta.live_cells_delta` — every member cell
+        /// created +1, consumed −1 — is identical on the live writer and in
+        /// bulk build, its running sum is the token's live cells (the cells of
+        /// the type script in the live set, and the `cell_by_type` rows on the
+        /// live store), and a shallow rollback restores the count. The mint
+        /// creates two token cells (one owner-mode), the transfer moves both,
+        /// 103 retires the owner-mode cell: 2, 2, 1.
+        #[tokio::test]
+        async fn token_daily_live_cells_match_the_live_set_on_both_paths_and_roll_back() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = live_cell_blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+            let bulk_rows = token_daily_rows(&bulk.token_rows);
+            assert_eq!(bulk_rows.len(), 1, "all four blocks share one day");
+            let live_set_cells = bulk
+                .live_cells
+                .keys()
+                .filter(|outpoint| {
+                    bulk.cell_payloads[*outpoint].type_script_hash.as_deref()
+                        == Some(type_hash.as_slice())
+                })
+                .count() as i64;
+            assert_eq!(live_set_cells, 1, "only B's amount cell is live");
+            assert_eq!(bulk_rows[0].live_cells_delta, live_set_cells, "bulk");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            let mut counts = Vec::new();
+            for b in &blocks[1..] {
+                write_live_blocks_with_parser_token_daily(&indexer, vec![b.clone()])
+                    .await
+                    .unwrap();
+                counts.push(store.token_live_cells_count(&type_hash).unwrap());
+            }
+            assert_eq!(counts, vec![2, 2, 1], "live count after 101, 102, 103");
+            let live_rows = token_daily_rows(
+                &crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap(),
+            );
+            assert_eq!(live_rows, bulk_rows, "live and bulk TOKEN_DAILY rows");
+            let indexed = store
+                .prefix_iterator_cf(store.cf_cell_by_type(), &type_hash)
+                .count() as i64;
+            assert_eq!(store.token_live_cells_count(&type_hash).unwrap(), indexed);
+
+            // Shallow rollback of 103: the undo pre-image puts the retired
+            // owner-mode cell back into the count. The append-only payloads
+            // are untouched: rollback never deletes a `cells` row.
+            let payloads = |store: &CkbadgerStore| {
+                store
+                    .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
+                    .map(|row| row.unwrap())
+                    .collect::<Vec<_>>()
+            };
+            let payloads_before = payloads(store.as_ref());
+            indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 103, 103)
+                .unwrap();
+            assert_eq!(
+                payloads(store.as_ref()),
+                payloads_before,
+                "CF_CELLS untouched"
+            );
+            assert_eq!(store.token_live_cells_count(&type_hash).unwrap(), 2);
+            let indexed = store
+                .prefix_iterator_cf(store.cf_cell_by_type(), &type_hash)
+                .count() as i64;
+            assert_eq!(indexed, 2, "rollback restores the type index too");
+            assert!(store
+                .find_first_invalid_token_daily_delta()
+                .unwrap()
+                .is_none());
+        }
+
         #[tokio::test]
         async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
             let _guard =
@@ -10873,7 +10982,7 @@ mod tests {
             let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
             for &block in blocks {
                 changes
-                    .add_tx(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000)
+                    .add_tx(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000, 1)
                     .unwrap();
             }
             changes

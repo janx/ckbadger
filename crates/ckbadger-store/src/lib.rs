@@ -98,6 +98,7 @@ pub use store::{
     CF_TX_ACTIONS, CF_TX_ACTIONS_BY_BUCKET, CF_TX_HASH_MAP, CF_TX_INDEX, DOMAIN_CFS, NETWORK_CFS,
 };
 pub use sync_ops::HeartbeatTick;
+pub use token_ops::token_live_cells_from_daily;
 pub use tx_ops::TxCyclesWrite;
 pub use types::*;
 pub use undo_log_ops::UndoRollbackResult;

@@ -1776,12 +1776,15 @@ pub fn commit_token_daily_blocks(
     // Each entry is one transaction touching the token's cells.
     let mut changes = TokenDailyChanges::<EntityDateKey>::new();
     for (block, type_hash, capacity, knowledge) in blocks {
+        // One member cell per transaction: created when the capacity rises,
+        // consumed when it falls.
         changes
             .add_tx(
                 *block,
                 (type_hash.to_vec(), WRITER_FIXTURE_DATE),
                 *capacity,
                 *knowledge,
+                i64::try_from(capacity.signum()).unwrap(),
             )
             .unwrap();
     }

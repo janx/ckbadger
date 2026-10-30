@@ -841,6 +841,21 @@ struct ReadCallCounters {
     multi_get_cf: std::sync::atomic::AtomicU64,
     put_cf: std::sync::atomic::AtomicU64,
     write_batch: std::sync::atomic::AtomicU64,
+    /// Rows each column family's iterators yielded, by CF name, so a test can
+    /// prove a read path never walks a CF (an activity walk, a cell walk).
+    iterated_rows: Mutex<std::collections::HashMap<&'static str, u64>>,
+}
+
+#[cfg(any(test, feature = "read-call-counters"))]
+impl ReadCallCounters {
+    fn count_iterated_row(&self, cf_name: &'static str) {
+        *self
+            .iterated_rows
+            .lock()
+            .expect("iterated-row counter poisoned")
+            .entry(cf_name)
+            .or_insert(0) += 1;
+    }
 }
 
 impl CkbadgerStore {
@@ -1765,6 +1780,38 @@ impl CkbadgerStore {
     pub fn reset_read_call_counters(&self) {
         self.read_calls.get_cf.store(0, Ordering::Relaxed);
         self.read_calls.multi_get_cf.store(0, Ordering::Relaxed);
+        self.read_calls
+            .iterated_rows
+            .lock()
+            .expect("iterated-row counter poisoned")
+            .clear();
+    }
+
+    /// Rows yielded by `iterator_cf` / `prefix_iterator_cf` since the last
+    /// reset, for one column family (`0` when it was never iterated).
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn iterated_rows(&self, cf_name: &str) -> u64 {
+        self.read_calls
+            .iterated_rows
+            .lock()
+            .expect("iterated-row counter poisoned")
+            .get(cf_name)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// The name of the column family `cf` is a handle of (test counters only).
+    #[cfg(any(test, feature = "read-call-counters"))]
+    fn cf_name_of(&self, cf: &ColumnFamily) -> &'static str {
+        Self::cfs_for_class(self.store_class)
+            .iter()
+            .copied()
+            .find(|name| {
+                self.db
+                    .cf_handle(name)
+                    .is_some_and(|handle| std::ptr::eq(handle, cf))
+            })
+            .expect("iterated column family handle belongs to this store")
     }
 
     /// `(get_cf calls, multi_get_cf calls)` since the last reset.
@@ -2186,7 +2233,12 @@ impl CkbadgerStore {
         cf: &ColumnFamily,
         mode: IteratorMode,
     ) -> impl Iterator<Item = KvResult> + '_ {
-        self.db.iterator_cf(cf, mode)
+        #[cfg(any(test, feature = "read-call-counters"))]
+        let cf_name = self.cf_name_of(cf);
+        self.db.iterator_cf(cf, mode).inspect(move |_row| {
+            #[cfg(any(test, feature = "read-call-counters"))]
+            self.read_calls.count_iterated_row(cf_name);
+        })
     }
 
     pub(crate) fn snapshot(&self) -> rocksdb::Snapshot<'_> {
@@ -2208,11 +2260,17 @@ impl CkbadgerStore {
         opts.set_total_order_seek(true);
         let mode = IteratorMode::From(prefix, rocksdb::Direction::Forward);
         let prefix_vec = prefix.to_vec();
+        #[cfg(any(test, feature = "read-call-counters"))]
+        let cf_name = self.cf_name_of(cf);
         self.db
             .iterator_cf_opt(cf, opts, mode)
             .take_while(move |item| match item {
                 Ok((key, _)) => key.starts_with(&prefix_vec),
                 Err(_) => true,
+            })
+            .inspect(move |_row| {
+                #[cfg(any(test, feature = "read-call-counters"))]
+                self.read_calls.count_iterated_row(cf_name);
             })
     }
 
