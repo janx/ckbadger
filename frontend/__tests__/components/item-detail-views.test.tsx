@@ -4,7 +4,7 @@ import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { api } from '@/lib/api';
-import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { mockItemReads, dotcellItem } from '@/__tests__/utils/item-read-fixtures';
 import {
   sporeDetailProducer,
   clusterDetailProducer,
@@ -117,16 +117,23 @@ it('separates physical cell ownership from protocol-named .cell parties', async 
       isLive
       createdAtBlock={p.versions[0].cell.blockNumber}
       error={null}
+      dotcell={dotcellItem()}
     />
   );
   const facts = await screen.findByRole('complementary', { name: 'Facts' });
   await screen.findByRole('heading', { name: 'Cell versions' });
-  expect(within(facts).getByText('Physical cell owner')).toBeInTheDocument();
+  // F2 identities (round 2, ID-DC4 / ID-DC7): the rail names the protocol owner and manager;
+  // the physical lock every name shares is tier-2 evidence, explained there.
+  expect(facts).toHaveTextContent(p.versions[0].decoded.owner.hashPrefix);
+  expect(facts).toHaveTextContent(p.versions[0].decoded.manager.hashPrefix);
   expect(
     facts.querySelector(`a[href='/mainnet/address/${p.versions[0].cell.ownerAddress}']`)
+  ).toBeNull();
+  const cell = screen.getByRole('region', { name: 'Name cell' });
+  expect(
+    cell.querySelector(`a[href='/mainnet/address/${p.versions[0].cell.ownerAddress}']`)
   ).not.toBeNull();
-  expect(screen.getByText('Named owner')).toBeInTheDocument();
-  expect(screen.getByText('Named manager')).toBeInTheDocument();
+  expect(cell).toHaveTextContent('ownership is the owner field in the data');
 });
 it("titles collection feed rows from the API's collectionContext, never the tx's first item (OB-C13)", async () => {
   render(<CollectionDetail id={clusterDetailProducer.clusterId} kind="spore" />);

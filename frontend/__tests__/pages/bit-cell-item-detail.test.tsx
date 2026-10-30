@@ -24,7 +24,9 @@ afterEach(() => vi.restoreAllMocks());
 it('renders exact canonical protocol, whole cell history and raw bytes for bit-cell', async () => {
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
-  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent('cell data');
+  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
+    /[Cc]ell data · \d+ bytes/
+  );
   expect(api.getBitCellItemDetail).toHaveBeenCalledWith(evidence.itemId);
   expect(api.getItemProtocol).toHaveBeenCalledWith('bit-cell', evidence.itemId);
   const link = screen
@@ -55,8 +57,8 @@ it('keeps recycled identity history while showing no live capacity', async () =>
   };
   vi.mocked(api.getItemCellVersions).mockResolvedValue(cells);
   render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
-  expect(await screen.findByText('No live cell')).toBeInTheDocument();
+  expect(await screen.findByText('Inactive')).toBeInTheDocument();
+  expect(await screen.findByText('no live cell')).toBeInTheDocument();
   expect(screen.getAllByText('0').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Raw item evidence')).toBeInTheDocument();
 });
@@ -154,4 +156,25 @@ it('reports missing identity and unavailable raw evidence without inventing a do
       a.textContent?.includes('missing local cell bytes')
     )
   ).toBe(true);
+});
+
+// ── F2 identities (round 2): IdentityBitCell — an expired .bit Cell is not a "Live cell" (ID-BC1) ──
+it('shows an expired .bit Cell as expired, grey and dashed, while its cell remains', async () => {
+  const expired = structuredClone(evidence);
+  expired.versions[0].decoded.expiredAt = String(Date.parse('2026-04-24T04:57:22Z') / 1000);
+  vi.mocked(api.getItemProtocol).mockResolvedValue(expired);
+  render(<Page identityId={evidence.itemId} />);
+  await screen.findByRole('heading', { name: 'Expired on 2026-04-24' }, { timeout: 4000 });
+  const badge = document.querySelector('[data-identity-state]')!;
+  expect(badge).toHaveTextContent('Expired');
+  expect(badge).toHaveAttribute('data-identity-state', 'expired');
+  expect(badge).toHaveClass('border-dashed');
+  expect(screen.queryByText('Live cell')).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 1 }).parentElement).toHaveTextContent('.bit Cell');
+  expect(screen.getByTestId('identity-summary')).toHaveTextContent("The name's its term ended on");
+  expect(screen.getByLabelText('Facts')).toHaveTextContent('Expired');
+  // The cell itself is still live and holds CKB.
+  expect(screen.getByRole('region', { name: 'CKB held in its cell' })).toHaveTextContent(
+    'pay for its bytes'
+  );
 });

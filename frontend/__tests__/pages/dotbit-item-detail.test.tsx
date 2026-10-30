@@ -24,7 +24,9 @@ afterEach(() => vi.restoreAllMocks());
 it('renders exact canonical protocol, whole cell history and raw bytes for dotbit', async () => {
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
-  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent('cell data');
+  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
+    /[Cc]ell data · \d+ bytes/
+  );
   expect(api.getDotbitItemDetail).toHaveBeenCalledWith(evidence.itemId);
   expect(api.getItemProtocol).toHaveBeenCalledWith('dotbit', evidence.itemId);
   const link = screen
@@ -55,8 +57,8 @@ it('keeps recycled identity history while showing no live capacity', async () =>
   };
   vi.mocked(api.getItemCellVersions).mockResolvedValue(cells);
   render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
-  expect(await screen.findByText('No live cell')).toBeInTheDocument();
+  expect(await screen.findByText('Recycled')).toBeInTheDocument();
+  expect(await screen.findByText('no live cell')).toBeInTheDocument();
   expect(screen.getAllByText('0').length).toBeGreaterThan(0);
   expect(screen.getByLabelText('Raw item evidence')).toBeInTheDocument();
 });
@@ -160,4 +162,44 @@ it('keeps a failed identity source distinct from an absent identity', async () =
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('alert')).toHaveTextContent('identity index mismatch');
   expect(screen.queryByText('An unanswered name.')).not.toBeInTheDocument();
+});
+
+// ── F2 identities (round 2): the IdentityBit board's tier 1 (ID-C5/C6/C7/C10, ID-B1/B2/B4) ──
+it('reads like the .bit board: badge, summary, held-until bar, domain facts, internals in tier 2', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  const facts = await screen.findByRole('complementary', { name: 'Facts' }, { timeout: 4000 });
+  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.bit');
+  expect(
+    screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
+  ).toHaveTextContent('.bit');
+  expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
+    'Inventory/Identities/.bit'
+  );
+  expect(screen.getByText('Live')).toHaveAttribute('data-identity-state', 'live');
+  expect(screen.getByText('Pure CKB')).toBeInTheDocument();
+  expect(screen.getByTestId('identity-summary')).toHaveTextContent(
+    'Its owner has never changed. 1 record is set.'
+  );
+  expect(screen.getByRole('heading', { name: 'Held until 2030-03-18' })).toBeInTheDocument();
+  expect(Array.from(facts.querySelectorAll('dt')).map((dt) => dt.textContent)).toEqual([
+    'Owner',
+    'Expires',
+    'Registered',
+    'Records',
+    'CKB held in its cell',
+  ]);
+  // The record is named by its coin (ID-DC1 rule, shared by .bit).
+  expect(screen.getByRole('region', { name: 'What alice.bit points to' })).toHaveTextContent(
+    'Ethereum'
+  );
+  // Raw status / witness version / lock args are tier 2 only (ID-B1, ID-B2).
+  const tier1 = document.querySelector('[data-tier="1"]')!;
+  expect(tier1).not.toHaveTextContent(/witness version|account status|algorithm \d/);
+  expect(
+    screen.getByRole('region', { name: 'Account data, from the witness' }).closest('[data-tier]')
+  ).toHaveAttribute('data-tier', '2');
+  // No second heading repeating the name (ID-B4); no raw Unix seconds in tier 1 (ID-C7) — the
+  // decoded JSON in tier 2 keeps them as the evidence they are.
+  expect(screen.queryByRole('heading', { level: 2, name: 'alice.bit' })).not.toBeInTheDocument();
+  expect(tier1).not.toHaveTextContent(/Unix|1900000000/);
 });
