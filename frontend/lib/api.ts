@@ -1990,6 +1990,11 @@ interface AddressDaoSummary {
 
 interface DaoStatistics {
   tipBlockNumber: number;
+  /**
+   * contracts W5-3 (DAO-16): the canonical block this row was computed at — `tipBlockNumber` and
+   * the hash the indexer persisted with the row (the API refuses a non-canonical one).
+   */
+  anchor: DaoAnchor;
   /** Exact block-0 burn-policy capacity from the persisted genesis baseline, shannons. */
   genesisBaselineBurnt: string;
   totalDeposited: string;

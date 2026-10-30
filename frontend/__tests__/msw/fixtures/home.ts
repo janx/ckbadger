@@ -149,6 +149,11 @@ export const txStats: TxStatsResponse = {
 
 export const daoStatistics: DaoStatistics = {
   tipBlockNumber: 20835366,
+  // contracts W5-3: the block the singleton row was computed at.
+  anchor: {
+    blockNumber: 20835366,
+    blockHash: '0x6d0e35a3c5b4f0a27e1c9d8b7a6f5e4d3c2b1a09f8e7d6c5b4a3928170615243',
+  },
   genesisBaselineBurnt: '840000000000000000',
   totalDeposited: '812889561643799700',
   totalDepositedCkb: '8128895616.437997',

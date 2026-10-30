@@ -10,7 +10,7 @@ import { DaoHistory } from '@/components/dao/dao-history';
 import { DaoGrows } from '@/components/dao/dao-grows';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
-import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
+import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -802,6 +802,20 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
   );
 }
 
+/** contracts W5-3: the block the statistics row was computed at; it must be the row's own tip. */
+function statisticsAnchor(statistics: DaoStatistics): DaoStatistics['anchor'] {
+  const { anchor } = statistics;
+  if (!anchor || anchor.blockNumber !== statistics.tipBlockNumber)
+    throw new Error(
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: anchor ${anchor ? formatBlockNumber(anchor.blockNumber) : 'missing'} is not the block the row was computed at`
+    );
+  if (!/^0x[0-9a-f]{64}$/.test(anchor.blockHash))
+    throw new Error(
+      `DAO statistics anchor ${formatBlockNumber(anchor.blockNumber)}: ${anchor.blockHash} is not a block hash`
+    );
+  return anchor;
+}
+
 /**
  * Tier 2 (board V63): the header's DAO field read in CKB with AR as its exact rate, and the DAO
  * script's rules. S = still owed + burnt is stated only when the statistics and the header are the
@@ -816,7 +830,9 @@ function RawEvidence({
 }) {
   const header = evidence.header;
   // DAO-16 (R2b-a 44): S, still owed and burnt from ONE statistics row at ONE block, so the
-  // identity is stated whatever block the header table below comes from.
+  // identity is stated whatever block the header table below comes from; contracts W5-3: that
+  // block, number and hash, is the row's own `anchor`.
+  const anchor = statisticsAnchor(statistics);
   const statsS = parseShannons(statistics.tipSecondaryPool, 'tipSecondaryPool');
   const owed = parseShannons(statistics.unclaimedCompensation, 'unclaimedCompensation');
   const burnt = parseShannons(statistics.burnt, 'burnt');
@@ -882,7 +898,10 @@ function RawEvidence({
           {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
           capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
           %. Compensation freezes at the withdrawal request AR. At block{' '}
-          {formatBlockNumber(statistics.tipBlockNumber)}, S (
+          <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
+            {formatBlockNumber(anchor.blockNumber)}
+          </Link>{' '}
+          (<span title={anchor.blockHash}>{truncateHash(anchor.blockHash)}</span>), S (
           <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
           <Amount value={owed.toString()} />) plus the burnt share (
           <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it
