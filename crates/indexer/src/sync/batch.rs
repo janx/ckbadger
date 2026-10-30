@@ -12242,13 +12242,19 @@ mod tests {
             for bucket in [
                 GlobalBucket::Dao,
                 GlobalBucket::Token,
-                GlobalBucket::Protocol,
+                GlobalBucket::Identity,
             ] {
                 assert!(
                     buckets.contains(&bucket),
                     "fixture covers {bucket:?}: {buckets:?}"
                 );
             }
+            // The fixture's only protocol actions are `.cell` ones, which are
+            // identity actions.
+            assert!(
+                !buckets.contains(&GlobalBucket::Protocol),
+                ".cell transactions classify as Identity: {buckets:?}"
+            );
             assert_eq!(bulk.tx_actions_by_bucket, expected, "bulk bucket rows");
 
             let open_live = || {

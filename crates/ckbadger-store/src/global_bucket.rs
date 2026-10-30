@@ -75,14 +75,14 @@ impl GlobalBucket {
 /// therefore claim that class's bucket ahead of the generic `Protocol` bucket.
 ///
 /// `dao`: a DAO deposit or withdrawal is an action on DAO cells.
-/// `dotbit`: every `dotbit:*` action is about one `.bit` account (its
-/// `metadata.accountId`); before those actions were persisted, `.bit`
-/// registrations, transfers and recycles already classified as `Identity`
-/// through their item deltas, and the action names must not move them out.
+/// `dotbit`, `dotcell`: every `.bit` / `.cell` action is about one name (an
+/// identity standard of this site), so those transactions sit in Identity —
+/// including in-place edits and renewals that move no item — rather than in
+/// the generic Protocol bucket, which the Transactions page cannot filter.
 fn protocol_item_bucket(protocol: &str) -> Option<GlobalBucket> {
     match protocol {
         "dao" => Some(GlobalBucket::Dao),
-        "dotbit" => Some(GlobalBucket::Identity),
+        "dotbit" | "dotcell" => Some(GlobalBucket::Identity),
         _ => None,
     }
 }
@@ -90,10 +90,10 @@ fn protocol_item_bucket(protocol: &str) -> Option<GlobalBucket> {
 /// The global bucket of a transaction, or `None` for a cellbase, which is
 /// never indexed by bucket (it has no `CF_TX_ACTIONS` row either).
 ///
-/// Order of precedence: item-action protocols (`dao`, `dotbit`), any other
-/// protocol action, then the participants' aggregate tags (DAO, token,
-/// object, identity), then script calls; a transaction with none of those is
-/// a plain CKB transfer.
+/// Order of precedence: item-action protocols (`dao`, then `dotbit` /
+/// `dotcell`), any other protocol action, then the participants' aggregate
+/// tags (DAO, token, object, identity), then script calls; a transaction with
+/// none of those is a plain CKB transfer.
 pub fn classify_global_bucket(actions: &TxActions) -> Option<GlobalBucket> {
     if actions.is_cellbase {
         return None;
@@ -260,11 +260,6 @@ mod tests {
                 Some(GlobalBucket::Protocol),
             ),
             (
-                "dotcell actions stay in the protocol bucket",
-                actions(&[TAG_IDENTITY | TAG_PROTOCOL], &["dotcell"]),
-                Some(GlobalBucket::Protocol),
-            ),
-            (
                 "token",
                 actions(&[0, TAG_TOKEN | TAG_OBJECT], &[]),
                 Some(GlobalBucket::Token),
@@ -313,26 +308,41 @@ mod tests {
         }
     }
 
-    /// `dotbit:*` actions are about one `.bit` account each, so they classify
-    /// the transaction as Identity — where the same `.bit` transactions sat
-    /// through their item deltas before the action names were persisted — and
-    /// not as a generic protocol. DAO still takes precedence.
+    /// The identity-standard protocols — `.bit` (`dotbit:*`) and `.cell`
+    /// (`dotcell:*`) — classify a transaction as Identity, not as a generic
+    /// protocol: their actions are about one name each. This is the one
+    /// deliberate departure from the pre-move classifier, which put every
+    /// `.cell` transaction in Protocol (the legacy oracle says "protocol" for
+    /// both fixtures below). DAO still takes precedence; any other protocol
+    /// beside an identity action does not.
     #[test]
-    fn dotbit_actions_classify_as_identity_not_protocol() {
-        assert_eq!(
-            classify_global_bucket(&actions(&[TAG_IDENTITY | TAG_PROTOCOL], &["dotbit"])),
-            Some(GlobalBucket::Identity)
-        );
-        // An in-place `.bit` edit moves no item, so no TAG_IDENTITY: the action
-        // alone decides.
-        assert_eq!(
-            classify_global_bucket(&actions(&[TAG_PROTOCOL], &["dotbit"])),
-            Some(GlobalBucket::Identity)
-        );
-        assert_eq!(
-            classify_global_bucket(&actions(&[TAG_PROTOCOL], &["dotbit", "dao"])),
-            Some(GlobalBucket::Dao)
-        );
+    fn identity_protocol_actions_classify_as_identity_not_protocol() {
+        for protocol in ["dotbit", "dotcell"] {
+            let with_item = actions(&[TAG_IDENTITY | TAG_PROTOCOL], &[protocol]);
+            assert_eq!(legacy_api_classify(&with_item), "protocol", "{protocol}");
+            assert_eq!(
+                classify_global_bucket(&with_item),
+                Some(GlobalBucket::Identity),
+                "{protocol}"
+            );
+            // An in-place edit moves no item, so no TAG_IDENTITY: the action
+            // alone decides.
+            assert_eq!(
+                classify_global_bucket(&actions(&[TAG_PROTOCOL], &[protocol])),
+                Some(GlobalBucket::Identity),
+                "{protocol}"
+            );
+            assert_eq!(
+                classify_global_bucket(&actions(&[TAG_PROTOCOL], &[protocol, "rgbpp"])),
+                Some(GlobalBucket::Identity),
+                "{protocol} + another protocol"
+            );
+            assert_eq!(
+                classify_global_bucket(&actions(&[TAG_PROTOCOL], &[protocol, "dao"])),
+                Some(GlobalBucket::Dao),
+                "{protocol} + dao"
+            );
+        }
     }
 
     #[test]
