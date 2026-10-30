@@ -1433,3 +1433,153 @@ async fn block_uncle_detail_serves_the_raw_epoch() {
         "{json}"
     );
 }
+
+/// The fixture for `/blocks/100/proposal-fees`: a node chain 90..=`top` and
+/// the store's canonical headers over it, with
+/// - block 100 proposing a, b, c (own) and d (through an uncle),
+/// - block 95 proposing b first,
+/// - a committed in 103, b in 104, d in 106, c never.
+async fn proposal_fee_fixture(top: u64) -> (axum::Router, [ckb_types::core::TransactionView; 4]) {
+    use ckb_types::{core, packed, prelude::*};
+    let [a, b, c, d]: [core::TransactionView; 4] = proposal_fixture_txs(4).try_into().unwrap();
+    let epoch = core::EpochNumberWithFraction::new(1, 0, 1800);
+    let fees: std::collections::HashMap<[u8; 32], i64> = [
+        (a.hash().unpack(), 10_000),
+        (b.hash().unpack(), 20_000),
+        (d.hash().unpack(), 40_001),
+    ]
+    .into();
+    let mut parent = packed::Byte32::zero();
+    let mut blocks = Vec::new();
+    for number in 90..=top {
+        let cellbase = core::TransactionBuilder::default()
+            .input(packed::CellInput::new_cellbase_input(number))
+            .build();
+        let mut builder = core::BlockBuilder::default()
+            .number(number.pack())
+            .epoch(epoch.pack())
+            .parent_hash(parent.clone())
+            .transaction(cellbase);
+        match number {
+            95 => builder = builder.proposal(b.proposal_short_id()),
+            100 => {
+                let uncle = core::BlockBuilder::default()
+                    .number(99u64.pack())
+                    .epoch(epoch.pack())
+                    .proposal(d.proposal_short_id())
+                    .build()
+                    .as_uncle();
+                builder = builder
+                    .proposal(a.proposal_short_id())
+                    .proposal(b.proposal_short_id())
+                    .proposal(c.proposal_short_id())
+                    .uncle(uncle);
+            }
+            103 => builder = builder.transaction(a.clone()),
+            104 => builder = builder.transaction(b.clone()),
+            106 => builder = builder.transaction(d.clone()),
+            _ => {}
+        }
+        let block = builder.build();
+        parent = block.hash();
+        blocks.push(block);
+    }
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for block in &blocks {
+        let number = block.number() as i64;
+        batch.put_block_header(
+            number,
+            &CachedBlockHeader {
+                hash: block.hash().raw_data().to_vec(),
+                parent_hash: block.parent_hash().raw_data().to_vec(),
+                timestamp: 1_700_000_000_000 + number * 10_000,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: block.transactions().len() as i32,
+                uncles_count: block.uncles().data().len() as i32,
+                proposals_count: block.data().proposals().len() as i32,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1_700_000_000_000 + number * 10_000,
+            },
+        );
+        for (index, tx) in block.transactions().iter().enumerate() {
+            let hash: [u8; 32] = tx.hash().unpack();
+            batch.put_tx_index(
+                number,
+                index as i32,
+                &TxIndexEntry {
+                    tx_hash: hash,
+                    is_cellbase: index == 0,
+                    timestamp: 1_700_000_000_000 + number * 10_000,
+                    inputs_count: tx.inputs().len() as i16,
+                    outputs_count: tx.outputs().len() as i16,
+                    fee: fees.get(&hash).copied().unwrap_or_default(),
+                    tx_size: tx.data().as_slice().len() as i32,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            batch.put_tx_hash_map(&hash, number, index as i32);
+        }
+    }
+    batch.commit().unwrap();
+    let chain = seed_ckb_chain(&blocks);
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    let app = create_router(config).await;
+    (app, [a, b, c, d])
+}
+
+/// BA-13: "of 0.00031647 in fees of the 2 transactions it proposed, committed
+/// in #N" — the fees a block's 40% proposal reward is paid from: the
+/// transactions its proposal zone (own and uncle-borne) proposed FIRST in
+/// their commit window, each with the block that committed it.
+#[tokio::test]
+async fn block_proposal_fees_are_the_txs_it_proposed_first_and_where_committed() {
+    use ckb_types::prelude::*;
+    let (app, [a, _b, _c, d]) = proposal_fee_fixture(111).await;
+    let (status, json) = get_json(&app, "/blocks/100/proposal-fees").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let hex = |bytes: &[u8]| format!("0x{}", hex::encode(bytes));
+    assert_eq!(json["number"], 100, "{json}");
+    assert_eq!(
+        json["commitWindow"],
+        serde_json::json!({"from": 102, "to": 110})
+    );
+    assert_eq!(json["complete"], true, "{json}");
+    // b was proposed first by block 95, c never committed: neither counts.
+    assert_eq!(json["fees"], "50001", "{json}");
+    assert_eq!(json["transactionsCount"], 2, "{json}");
+    assert_eq!(json["committedIn"], serde_json::json!([103, 106]));
+    let rows = json["transactions"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{json}");
+    assert_eq!(rows[0]["txHash"], hex(a.hash().as_slice()));
+    assert_eq!(rows[0]["committedIn"], 103);
+    assert_eq!(rows[0]["fee"], "10000");
+    assert!(rows[0]["uncle"].is_null());
+    assert_eq!(rows[1]["txHash"], hex(d.hash().as_slice()));
+    assert_eq!(rows[1]["committedIn"], 106);
+    assert_eq!(rows[1]["fee"], "40001");
+    assert_eq!(rows[1]["uncle"]["number"], 99);
+}
+
+/// Before the window's last block is indexed the set is not final: the
+/// response says so instead of presenting a partial sum as the basis.
+#[tokio::test]
+async fn block_proposal_fees_say_when_the_window_is_still_open() {
+    let (app, _) = proposal_fee_fixture(105).await;
+    let (status, json) = get_json(&app, "/blocks/100/proposal-fees").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["complete"], false, "{json}");
+    assert_eq!(json["fees"], "10000", "{json}");
+    assert_eq!(json["committedIn"], serde_json::json!([103]));
+}

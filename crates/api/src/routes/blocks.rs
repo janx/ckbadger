@@ -20,7 +20,8 @@ use crate::response::{
 };
 use crate::routes::hardforks::HardforkResourceResponse;
 use crate::routes::proposal_window::{
-    block_proposal_zone, cellbase_reward_target, resolve_committed_txs,
+    block_proposal_zone, cellbase_reward_target, earliest_proposal_in_window,
+    resolve_committed_txs, resolve_committed_txs_with, ZoneProposal,
 };
 use crate::routes::transactions::tx_serialized_size_in_block;
 use crate::utils::exact_fee::{mean_rate, FeeRate};
@@ -35,6 +36,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/blocks/{id}", get(get_block))
         .route("/blocks/{id}/fee-stats", get(get_block_fee_stats))
         .route("/blocks/{id}/proposals", get(get_block_proposals))
+        .route("/blocks/{id}/proposal-fees", get(get_block_proposal_fees))
         .route("/blocks/{id}/uncles/{index}", get(get_block_uncle))
 }
 
@@ -1615,6 +1617,217 @@ async fn get_block_proposals(
         .collect::<Result<Vec<_>, ApiRouteError>>()?;
 
     ok(proposals)
+}
+
+/// `/blocks/{id}/proposal-fees`: the fees a block's proposal reward is paid
+/// from (BA-13) — every transaction its proposal zone (own proposals and
+/// those of the uncles it embeds, [`block_proposal_zone`]) proposed FIRST in
+/// its commitment window, with the block that committed it.
+///
+/// CKB pays a block's proposers `proposer_reward_ratio` (40%) of each such
+/// fee (ckb `RewardCalculator::proposal_reward`): the commit is found by the
+/// shared [`resolve_committed_txs_with`] rule, and it counts only when this
+/// block is [`earliest_proposal_in_window`] for it. Fees are the indexer's
+/// per-transaction fees. The set is final once the window's last block
+/// (`number + farthest`) is indexed; before that `complete` is `false` and
+/// the rows are those committed so far.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalFeesResponse {
+    pub number: i64,
+    pub hash: String,
+    pub commit_window: CommitWindowResponse,
+    pub complete: bool,
+    /// Sum of `transactions[].fee`, shannons.
+    pub fees: String,
+    pub transactions_count: usize,
+    /// The distinct blocks that committed them, ascending.
+    pub committed_in: Vec<i64>,
+    pub transactions: Vec<ProposalFeeTransaction>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitWindowResponse {
+    pub from: i64,
+    pub to: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProposalFeeTransaction {
+    pub proposal_id: String,
+    pub tx_hash: String,
+    pub committed_in: i64,
+    pub fee: String,
+    /// The embedded uncle that carried the proposal; `null` for the block's own.
+    pub uncle: Option<ProposalUncle>,
+}
+
+async fn get_block_proposal_fees(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> ApiResult<ProposalFeesResponse> {
+    let (block_num, header) = resolve_canonical_block(&state, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Block not found"))?;
+    let node = state.ckb_store.clone().ok_or_else(|| {
+        ApiError::internal(format!(
+            "block {block_num} proposal fees are read from the node DB; configure ckb_db_path"
+        ))
+    })?;
+    let window = state.consensus().await?.tx_proposal_window;
+    let store = state.store.clone();
+    let fees = tokio::task::spawn_blocking(move || {
+        read_proposal_fees(&node, &store, window, block_num, &header)
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("block {block_num} proposal fees task: {e}")))??;
+    ok(fees)
+}
+
+fn read_proposal_fees(
+    node: &CkbChainReader,
+    store: &ckbadger_store::CkbadgerStore,
+    window: ProposalWindow,
+    block_num: i64,
+    header: &ckbadger_store::CachedBlockHeader,
+) -> Result<ProposalFeesResponse, ApiRouteError> {
+    let context = format!(
+        "block {block_num} 0x{} proposal fees",
+        hex::encode(&header.hash)
+    );
+    let error = |detail: String| ApiError::internal(format!("{context}: {detail}"));
+    let tip = store
+        .get_sync_tip_block()
+        .map_err(|e| error(e.to_string()))?
+        .ok_or_else(|| error("indexed block exists without a canonical tip".into()))?
+        .0;
+    // A window block the store has indexed must be the node's block at that
+    // height; one above the store's tip is not indexed yet (window still open).
+    let canonical_block = |number: i64| -> Result<Option<ckb_types::core::BlockView>, String> {
+        if number > tip {
+            return Ok(None);
+        }
+        let indexed = store
+            .get_block_header(number)
+            .map_err(|e| format!("block {number} header read: {e}"))?
+            .ok_or_else(|| format!("no canonical header at block {number} below tip {tip}"))?;
+        let block = node
+            .get_block_by_number(number as u64)
+            .ok_or_else(|| format!("canonical block {number} is not in the node DB"))?;
+        if block.hash().as_slice() != indexed.hash.as_slice() {
+            return Err(format!(
+                "node block {number} 0x{} is not the indexed canonical block 0x{}",
+                hex::encode(block.hash().as_slice()),
+                hex::encode(&indexed.hash)
+            ));
+        }
+        Ok(Some(block))
+    };
+    let block = canonical_block(block_num)
+        .map_err(error)?
+        .ok_or_else(|| error(format!("block is above the canonical tip {tip}")))?;
+    let zone = block_proposal_zone(&block);
+    let short_ids: Vec<Vec<u8>> = zone.iter().map(|p| p.short_id.clone()).collect();
+    let commitments = resolve_committed_txs_with(window, block_num, &short_ids, |number| {
+        canonical_block(number).map(|block| {
+            block.map(|block| {
+                block
+                    .transactions()
+                    .iter()
+                    .map(|tx| tx.hash().unpack())
+                    .collect::<Vec<[u8; 32]>>()
+            })
+        })
+    })
+    .map_err(error)?;
+    let mut zones: HashMap<i64, Vec<ZoneProposal>> = HashMap::from([(block_num, zone.clone())]);
+    let mut transactions = Vec::new();
+    let mut total = 0u128;
+    let mut committed_in = std::collections::BTreeSet::new();
+    for (proposal, commitment) in zone.into_iter().zip(commitments) {
+        let Some((tx_hash, commit_block)) = commitment else {
+            continue;
+        };
+        let hit = earliest_proposal_in_window(window, commit_block, &proposal.short_id, |n| {
+            if let Some(zone) = zones.get(&n) {
+                return Ok(Some(zone.clone()));
+            }
+            let zone = canonical_block(n)?
+                .map(|block| block_proposal_zone(&block))
+                .ok_or_else(|| format!("proposal-window block {n} is above the canonical tip"))?;
+            zones.insert(n, zone.clone());
+            Ok(Some(zone))
+        })
+        .map_err(error)?
+        .ok_or_else(|| {
+            error(format!(
+                "tx 0x{} committed in {commit_block} has no proposal in its window, yet this \
+                 block proposed it",
+                hex::encode(&tx_hash)
+            ))
+        })?;
+        if hit.block_number != block_num {
+            // An earlier block in the commit's window proposed it first: its
+            // proposers, not this block's, are paid for it.
+            continue;
+        }
+        let (located, index) = store
+            .get_tx_location(&tx_hash)
+            .map_err(|e| error(e.to_string()))?
+            .ok_or_else(|| {
+                error(format!(
+                    "committed tx 0x{} is not in the transaction index",
+                    hex::encode(&tx_hash)
+                ))
+            })?;
+        if located != commit_block {
+            return Err(error(format!(
+                "tx 0x{} is indexed at block {located}, the node commits it in {commit_block}",
+                hex::encode(&tx_hash)
+            )));
+        }
+        let entry = store
+            .get_tx_index(located, index)
+            .map_err(|e| error(e.to_string()))?
+            .ok_or_else(|| error(format!("tx index row {located}:{index} missing")))?;
+        let fee = u128::try_from(entry.fee).map_err(|_| {
+            error(format!(
+                "tx 0x{} has negative fee {}",
+                hex::encode(&tx_hash),
+                entry.fee
+            ))
+        })?;
+        total = total
+            .checked_add(fee)
+            .ok_or_else(|| error("fee sum overflow".into()))?;
+        committed_in.insert(commit_block);
+        transactions.push(ProposalFeeTransaction {
+            proposal_id: format_hash(&proposal.short_id),
+            tx_hash: format_hash(&tx_hash),
+            committed_in: commit_block,
+            fee: fee.to_string(),
+            uncle: proposal.uncle.map(|uncle| ProposalUncle {
+                number: uncle.number,
+                hash: format_hash(&uncle.hash),
+            }),
+        });
+    }
+    let commit_range = window.commit_range(block_num);
+    Ok(ProposalFeesResponse {
+        number: block_num,
+        hash: format_hash(&header.hash),
+        commit_window: CommitWindowResponse {
+            from: *commit_range.start(),
+            to: *commit_range.end(),
+        },
+        complete: *commit_range.end() <= tip,
+        fees: total.to_string(),
+        transactions_count: transactions.len(),
+        committed_in: committed_in.into_iter().collect(),
+        transactions,
+    })
 }
 
 #[cfg(test)]
