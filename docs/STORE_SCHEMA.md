@@ -132,6 +132,12 @@ bytes and the id alone cannot say which standard it belongs to. `ItemKind::tag()
 kind → participant-tag mapping. The value is bincode, so this is a layout change covered by a
 re-sync, not migrated.
 
+`TxActions.protocol_actions` carries one `dotbit` action per `.bit` account a DAS transaction's
+`ActionData` is about (`db/writer/dotbit_detector.rs`): `{ protocol: "dotbit", action: <ActionData
+action verbatim>, metadata: { accountId: "0x<20-byte id>" } }`. Subjects are the accounts only created
+or only consumed (registration, recycle) or, when every account is on both sides, all of them (renew,
+edit, transfer, …); ring neighbours whose `next` was rewritten are not subjects.
+
 ### `tx_actions_by_bucket`: the global activity filter index
 
 `ckbadger_store::classify_global_bucket(&TxActions)` is the one classification behind every
@@ -424,6 +430,13 @@ inline as Class C sealed aggregates:
   too short for a u128 amount included); the amount facets — holders, supply, transfer counts,
   `TOKEN_HOURLY` and the token row — need an amount. Bulk (via `CellSemanticTag::{Sudt, Xudt}`)
   and live (`pipeline::token_daily_member`) apply the same rule (POSTMORTEM STATS-011).
+  `TokenDailyDelta { owned_capacity_delta, owned_knowledge_delta, tx_count }` (40 bytes): `tx_count`
+  is the number of transactions that day that created or consumed at least one such cell, one per
+  transaction however many of its cells moved (live: `pipeline::add_token_daily_tx` →
+  `TokenDailyChanges::add_tx`; bulk: `TokenOwner::apply_tx`). A day with a transaction keeps its row
+  even when its capacity nets to zero, and `find_first_invalid_token_daily_delta` rejects a row with
+  `tx_count == 0`. The script, cluster, spore and object daily rows keep the 32-byte pair codec
+  (`apply_daily_pair`); each codec rejects the other's width.
 
 ### stats_hodl Key Prefixes
 
