@@ -208,22 +208,8 @@ fn display(store: &CkbadgerStore, cell: &ParsedCell, indexed: bool) -> Result<Op
         if let Some(collection_id) = collection_id {
             result.collection_id = Some(format!("0x{}", hex::encode(&collection_id)));
             if standard == ObjectStandard::Spore {
-                let collection = store.get_spore(&collection_id)?;
-                ensure!(
-                    !indexed || collection.is_some(),
-                    "missing indexed collection metadata {} for object {}",
-                    hex::encode(&collection_id),
-                    result.id
-                );
-                if let Some(collection) = collection {
-                    ensure!(
-                        collection.standard == ObjectStandard::SporeCluster
-                            && matches!(collection.extra, ObjectExtra::SporeCluster),
-                        "object {} collection is not a Spore cluster",
-                        result.id
-                    );
-                    result.collection_name = collection.name;
-                }
+                result.collection_name =
+                    spore_cluster_name(store, &collection_id, indexed, &result.id)?;
             }
             // mNFT class names/renderers can change. A token cell only proves
             // its class id; the latest class row is not historical evidence.
@@ -285,6 +271,130 @@ fn display(store: &CkbadgerStore, cell: &ParsedCell, indexed: bool) -> Result<Op
     // Other identity names come from this outpoint's bytes. did:ckb deliberately
     // supplies no name because its mutable document is not indexed as a name.
     Ok(Some(result))
+}
+
+/// The name of the Spore cluster `cluster_id` that object `object` belongs
+/// to: the cluster row's (immutable) name. `required` makes a missing cluster
+/// row an error (an indexed object's cluster is always indexed).
+fn spore_cluster_name(
+    store: &CkbadgerStore,
+    cluster_id: &[u8],
+    required: bool,
+    object: &str,
+) -> Result<Option<String>> {
+    let collection = store.get_spore(cluster_id)?;
+    ensure!(
+        !required || collection.is_some(),
+        "missing indexed collection metadata {} for object {object}",
+        hex::encode(cluster_id),
+    );
+    let Some(collection) = collection else {
+        return Ok(None);
+    };
+    ensure!(
+        collection.standard == ObjectStandard::SporeCluster
+            && matches!(collection.extra, ObjectExtra::SporeCluster),
+        "object {object} collection is not a Spore cluster",
+    );
+    Ok(collection.name)
+}
+
+/// A collection named by an item delta.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by activities.rs convert_item_delta once lane W wires ItemDeltaResponse::Object to it (R12)"
+    )
+)]
+pub struct DeltaCollection {
+    pub id: String,
+    pub name: Option<String>,
+}
+
+/// What an object item delta names besides its id (TX-12, TX-29): its
+/// collection, its asset class and its composition tier — the facts its
+/// transaction tile ([`CellDisplay`]) shows, by the same rules: a spore's
+/// cluster name and media tier are immutable evidence; an m-NFT token proves
+/// only its class id (the class row's name and tier can change).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by activities.rs convert_item_delta once lane W wires ItemDeltaResponse::Object to it (R12)"
+    )
+)]
+pub struct ObjectDeltaContext {
+    pub collection: Option<DeltaCollection>,
+    /// The site's asset class (`dao | token | object | identity`): always
+    /// `object` for an object item.
+    pub class: &'static str,
+    /// `CompositionTier::as_str` (`pure_ckb | btc_ckb | decentralized_mixture |
+    /// centralized_mixture | unknown | decode_pending`); `None` for m-NFT.
+    pub composition: Option<&'static str>,
+}
+
+/// [`ObjectDeltaContext`] of the object `object_id` (a spore or an m-NFT
+/// token), read from its indexed row. An id that is neither is an error.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by activities.rs convert_item_delta once lane W wires ItemDeltaResponse::Object to it (R12)"
+    )
+)]
+pub fn object_delta_context(store: &CkbadgerStore, object_id: &[u8]) -> Result<ObjectDeltaContext> {
+    let id = format!("0x{}", hex::encode(object_id));
+    if let Some(entry) = store.get_spore(object_id)? {
+        ensure!(
+            entry.standard == ObjectStandard::Spore,
+            "object item delta {id} names a {:?} row, not a spore",
+            entry.standard
+        );
+        let ObjectExtra::Spore { media_profile, .. } = &entry.extra else {
+            anyhow::bail!("spore {id} has payload variant {:?}", entry.extra);
+        };
+        let cluster = entry
+            .collection_id
+            .as_deref()
+            .with_context(|| format!("spore {id} has no collection (not even Sole Spores)"))?;
+        return Ok(ObjectDeltaContext {
+            collection: Some(DeltaCollection {
+                id: format!("0x{}", hex::encode(cluster)),
+                name: if cluster == ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION {
+                    None
+                } else {
+                    spore_cluster_name(store, cluster, true, &id)?
+                },
+            }),
+            class: "object",
+            composition: Some(media_profile.tier.as_str()),
+        });
+    }
+    if let Some(entry) = store.get_mnft(object_id)? {
+        ensure!(
+            entry.standard == ObjectStandard::MnftToken
+                && matches!(entry.extra, ObjectExtra::MnftToken { .. }),
+            "object item delta {id} names a {:?} m-NFT row, not a token",
+            entry.standard
+        );
+        let class = entry
+            .collection_id
+            .with_context(|| format!("m-NFT token {id} has no class"))?;
+        return Ok(ObjectDeltaContext {
+            collection: Some(DeltaCollection {
+                id: format!("0x{}", hex::encode(&class)),
+                name: None,
+            }),
+            class: "object",
+            composition: None,
+        });
+    }
+    anyhow::bail!("object item delta {id} names no indexed spore or m-NFT token")
 }
 
 /// The common Molecule prefix in CKBFS RFC.md / RFC.v3.md is index,
@@ -530,6 +640,100 @@ mod tests {
                 && item.composition_tier.is_none()
         );
     }
+    /// TX-12 / TX-29: an object item delta names its collection, asset class
+    /// and composition tier — the facts its transaction tile shows — read
+    /// from the spore and cluster rows.
+    #[test]
+    fn object_delta_context_names_collection_class_and_composition() {
+        use ckbadger_store::{
+            types::{CompositionTier, ObjectEntry, SporeMediaProfile},
+            StoreBatch,
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let cluster = vec![0x86; 32];
+        let spore = vec![0x51; 32];
+        let token = [vec![0x3c; 24], vec![0, 0, 0, 7]].concat();
+        let entry =
+            |standard, collection_id: Option<Vec<u8>>, name: Option<&str>, extra| ObjectEntry {
+                standard,
+                collection_id,
+                token_id: None,
+                owner_lock_hash: None,
+                name: name.map(str::to_string),
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0; 32],
+                extra,
+            };
+        let mut batch = StoreBatch::new(&store);
+        batch.put_spore(
+            &cluster,
+            &entry(
+                ObjectStandard::SporeCluster,
+                None,
+                Some("Nervape"),
+                ObjectExtra::SporeCluster,
+            ),
+        );
+        batch.put_spore(
+            &spore,
+            &entry(
+                ObjectStandard::Spore,
+                Some(cluster.clone()),
+                None,
+                ObjectExtra::Spore {
+                    content_type: "application/vnd.cell.dob@v1".into(),
+                    content_length: 10,
+                    media_profile: SporeMediaProfile {
+                        tier: CompositionTier::BtcCkb,
+                        ..Default::default()
+                    },
+                },
+            ),
+        );
+        batch.put_mnft(
+            &token,
+            &entry(
+                ObjectStandard::MnftToken,
+                Some(token[..24].to_vec()),
+                None,
+                ObjectExtra::MnftToken {
+                    token_index: 7,
+                    characteristic: vec![0; 8],
+                    configure: 0,
+                    state: 0,
+                },
+            ),
+        );
+        batch.commit().unwrap();
+
+        assert_eq!(
+            serde_json::to_value(object_delta_context(&store, &spore).unwrap()).unwrap(),
+            serde_json::json!({
+                "collection": {"id": format!("0x{}", "86".repeat(32)), "name": "Nervape"},
+                "class": "object",
+                "composition": "btc_ckb",
+            })
+        );
+        // An m-NFT token names its class; the class's mutable current name and
+        // tier are not evidence about this item (the tile's rule).
+        assert_eq!(
+            serde_json::to_value(object_delta_context(&store, &token).unwrap()).unwrap(),
+            serde_json::json!({
+                "collection": {"id": format!("0x{}", "3c".repeat(24)), "name": null},
+                "class": "object",
+                "composition": null,
+            })
+        );
+        // An object delta naming no indexed object is an error, not a blank.
+        let error = object_delta_context(&store, &[0x99; 32])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("0x9999"), "{error}");
+    }
+
     #[test]
     fn historical_mnft_does_not_borrow_mutable_current_class_metadata() {
         use ckbadger_store::{
