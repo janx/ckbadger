@@ -265,6 +265,8 @@ describe('DaoBoard', () => {
           burnt: '0',
           totalCompensationPaid: '0',
           unclaimedCompensation: '0',
+          // nothing issued yet: the statistics row's S is 0 too
+          tipSecondaryPool: '0',
         }}
         evidence={{ ...evidence, header: { ...evidence.header, s: '0' } }}
       />
