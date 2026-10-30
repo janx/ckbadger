@@ -1251,30 +1251,55 @@ pub(crate) fn normalize_identity_activity_action_filter(
     }
 }
 
-type CanonicalNftActivityLocation = (i64, i32, Vec<u8>);
-type CanonicalNftActivityLocationMap = HashMap<Vec<u8>, CanonicalNftActivityLocation>;
+/// A transaction's canonical `(block, tx index, block hash)`.
+type CanonicalTxLocation = (i64, i32, Vec<u8>);
 
-fn canonical_nft_collection_activity_locations(
+/// Every collection activity row must name a canonical transaction at the
+/// row's own position: `docs/prompts/REORG_HANDLING.md` has rollback delete a
+/// rolled-back block's collection rows directly, so a row whose transaction is
+/// unknown, or sits elsewhere, or in a block whose canonical hash differs, is
+/// a rollback bug. It is an error naming the row, never a row skipped.
+fn ensure_canonical_collection_activity_rows(
     store: &CkbadgerStore,
+    collection_id: &[u8],
     rows: &[(i64, i32, ObjectCollectionActivityEntry)],
-) -> anyhow::Result<CanonicalNftActivityLocationMap> {
+) -> anyhow::Result<()> {
     if rows.is_empty() {
-        return Ok(HashMap::new());
+        return Ok(());
     }
     let tx_hashes: Vec<Vec<u8>> = rows
         .iter()
         .map(|(_, _, entry)| entry.tx_hash.clone())
         .collect();
-    let tx_batch = store.get_canonical_tx_identities_by_hash_batch(&tx_hashes)?;
-    let mut out = HashMap::with_capacity(tx_batch.len());
-    for (tx_hash, tx_row_opt) in tx_batch {
-        if let Some((block_number, tx_index, block_hash)) = tx_row_opt {
-            out.insert(tx_hash, (block_number, tx_index, block_hash));
+    let canonical: HashMap<Vec<u8>, Option<CanonicalTxLocation>> = store
+        .get_canonical_tx_identities_by_hash_batch(&tx_hashes)?
+        .into_iter()
+        .collect();
+    for (block_number, tx_index, entry) in rows {
+        let location = canonical.get(&entry.tx_hash).cloned().flatten();
+        if location.as_ref() != Some(&(*block_number, *tx_index, entry.block_hash.clone())) {
+            anyhow::bail!(
+                "collection activity row is not canonical: collection=0x{} block={} tx_index={} tx=0x{} block_hash=0x{}; canonical location of the tx: {}; rollback must delete a rolled-back block's collection rows (REORG_HANDLING.md) — fix the rollback, then purge and re-sync",
+                hex::encode(collection_id),
+                block_number,
+                tx_index,
+                hex::encode(&entry.tx_hash),
+                hex::encode(&entry.block_hash),
+                match location {
+                    Some((block, index, hash)) => format!(
+                        "block={block} tx_index={index} block_hash=0x{}",
+                        hex::encode(hash)
+                    ),
+                    None => "none".to_string(),
+                }
+            );
         }
     }
-    Ok(out)
+    Ok(())
 }
 
+/// One page of a collection's activity rows, newest first, after `cursor`.
+/// Every row is checked canonical ([`ensure_canonical_collection_activity_rows`]).
 pub(crate) fn list_canonical_nft_collection_activities_page(
     store: &CkbadgerStore,
     _append_only_store: &CkbadgerStore,
@@ -1286,55 +1311,13 @@ pub(crate) fn list_canonical_nft_collection_activities_page(
     if limit == 0 {
         return Ok(Vec::new());
     }
-
-    let scan_limit = NFT_ACTIVITY_SCAN_CHUNK_SIZE.max(limit);
-    let mut out = Vec::with_capacity(limit);
-    let mut scan_cursor = cursor;
-    let identity = is_identity_sentinel(collection_id);
-
-    loop {
-        let rows = if identity {
-            store.list_identity_collection_activities(
-                collection_id,
-                scan_limit,
-                scan_cursor,
-                action_filter,
-            )?
-        } else {
-            store.list_object_collection_activities(
-                collection_id,
-                scan_limit,
-                scan_cursor,
-                action_filter,
-            )?
-        };
-        if rows.is_empty() {
-            break;
-        }
-        let rows_len = rows.len();
-        let canonical_locations = canonical_nft_collection_activity_locations(store, &rows)?;
-        let mut last_seen = None;
-        for (block_number, tx_index, entry) in rows {
-            last_seen = Some((block_number, tx_index));
-            if canonical_locations.get(&entry.tx_hash)
-                == Some(&(block_number, tx_index, entry.block_hash.clone()))
-            {
-                out.push((block_number, tx_index, entry));
-                if out.len() >= limit {
-                    return Ok(out);
-                }
-            }
-        }
-        if rows_len < scan_limit {
-            break;
-        }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        scan_cursor = Some(last_seen_cursor);
-    }
-
-    Ok(out)
+    let rows = if is_identity_sentinel(collection_id) {
+        store.list_identity_collection_activities(collection_id, limit, cursor, action_filter)?
+    } else {
+        store.list_object_collection_activities(collection_id, limit, cursor, action_filter)?
+    };
+    ensure_canonical_collection_activity_rows(store, collection_id, &rows)?;
+    Ok(rows)
 }
 
 /// Holder buckets of a collection's live items: how many holders own 1, 2,
@@ -1551,57 +1534,35 @@ fn completed_week_calendar(
 
 pub(crate) fn count_canonical_nft_collection_activities(
     store: &CkbadgerStore,
-    _append_only_store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
     collection_id: &[u8],
 ) -> anyhow::Result<i64> {
     let mut total = 0i64;
     let mut cursor = None;
-    let identity = is_identity_sentinel(collection_id);
-
     loop {
-        let rows = if identity {
-            store.list_identity_collection_activities(
-                collection_id,
-                NFT_ACTIVITY_SCAN_CHUNK_SIZE,
-                cursor,
-                None,
-            )?
-        } else {
-            store.list_object_collection_activities(
-                collection_id,
-                NFT_ACTIVITY_SCAN_CHUNK_SIZE,
-                cursor,
-                None,
-            )?
-        };
-        if rows.is_empty() {
-            break;
-        }
+        let rows = list_canonical_nft_collection_activities_page(
+            store,
+            append_only_store,
+            collection_id,
+            NFT_ACTIVITY_SCAN_CHUNK_SIZE,
+            cursor,
+            None,
+        )?;
         let rows_len = rows.len();
-        let canonical_locations = canonical_nft_collection_activity_locations(store, &rows)?;
-        let mut last_seen = None;
-        for (block_number, tx_index, entry) in rows {
-            last_seen = Some((block_number, tx_index));
-            if canonical_locations.get(&entry.tx_hash)
-                == Some(&(block_number, tx_index, entry.block_hash.clone()))
-            {
-                total = total.checked_add(1).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "canonical object collection activity count overflow: collection_id=0x{}",
-                        hex::encode(collection_id)
-                    )
-                })?;
-            }
-        }
+        total = total.checked_add(i64::try_from(rows_len)?).ok_or_else(|| {
+            anyhow::anyhow!(
+                "canonical object collection activity count overflow: collection_id=0x{}",
+                hex::encode(collection_id)
+            )
+        })?;
+        let Some((block, index, _)) = rows.last() else {
+            break;
+        };
         if rows_len < NFT_ACTIVITY_SCAN_CHUNK_SIZE {
             break;
         }
-        let Some(last_seen_cursor) = last_seen else {
-            break;
-        };
-        cursor = Some(last_seen_cursor);
+        cursor = Some((*block, *index));
     }
-
     Ok(total)
 }
 
@@ -4565,7 +4526,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_activity_helpers_filter_orphaned_append_history() {
+    fn test_collection_activity_helpers_fail_on_a_row_whose_tx_is_not_canonical() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xAB; 32];
@@ -4642,6 +4603,47 @@ mod tests {
         domain_batch.put_block_header(10, &make_header(0x10));
         domain_batch.commit().unwrap();
 
+        // Per REORG_HANDLING.md rollback deletes a rolled-back block's
+        // collection rows, so a row whose transaction is not canonical is a
+        // rollback bug: the feed and the count name it instead of hiding it.
+        for error in [
+            list_canonical_nft_collection_activities_page(
+                &domain,
+                &domain,
+                &collection_id,
+                3,
+                None,
+                None,
+            )
+            .map(|_| ())
+            .unwrap_err(),
+            count_canonical_nft_collection_activities(&domain, &domain, &collection_id)
+                .map(|_| ())
+                .unwrap_err(),
+        ] {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
+                    && message.contains("block=30")
+                    && message.contains(&format!("tx=0x{}", hex::encode(&stale_tx)))
+                    && message.contains("not canonical"),
+                "{message}"
+            );
+        }
+
+        // The rows that are canonical list and count as before.
+        domain
+            .delete_cf(
+                domain.cf_object_collection_activities(),
+                &ckbadger_store::keys::encode_object_collection_activity_key(
+                    &collection_id,
+                    30,
+                    0,
+                    &[0x30; 32],
+                    &stale_tx,
+                ),
+            )
+            .unwrap();
         let listed = list_canonical_nft_collection_activities_page(
             &domain,
             &domain,
@@ -4687,7 +4689,7 @@ mod tests {
     }
 
     #[test]
-    fn test_collection_activity_helpers_filter_competing_block_hash_history() {
+    fn test_collection_activity_helpers_fail_on_a_competing_block_hash_row() {
         let root = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
         let collection_id = [0xAC; 32];
@@ -4732,22 +4734,32 @@ mod tests {
         domain_batch.put_block_header(20, &make_header(0xBB));
         domain_batch.commit().unwrap();
 
-        let listed = list_canonical_nft_collection_activities_page(
-            &domain,
-            &domain,
-            &collection_id,
-            10,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].2.tx_hash, tx_hash);
-        assert_eq!(listed[0].2.block_hash, vec![0xBB; 32]);
-
-        let count =
-            count_canonical_nft_collection_activities(&domain, &domain, &collection_id).unwrap();
-        assert_eq!(count, 1);
+        // The 0xAA row names a block hash that is not the canonical header at
+        // block 20: an abandoned branch's row that rollback should have deleted.
+        for error in [
+            list_canonical_nft_collection_activities_page(
+                &domain,
+                &domain,
+                &collection_id,
+                10,
+                None,
+                None,
+            )
+            .map(|_| ())
+            .unwrap_err(),
+            count_canonical_nft_collection_activities(&domain, &domain, &collection_id)
+                .map(|_| ())
+                .unwrap_err(),
+        ] {
+            let message = format!("{error:#}");
+            assert!(
+                message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
+                    && message.contains("block=20")
+                    && message.contains(&format!("tx=0x{}", hex::encode(&tx_hash)))
+                    && message.contains(&format!("block_hash=0x{}", hex::encode([0xAA; 32]))),
+                "{message}"
+            );
+        }
     }
 
     #[test]

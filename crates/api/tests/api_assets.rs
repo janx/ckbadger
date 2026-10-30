@@ -5345,7 +5345,7 @@ fn regression_cluster_metadata() -> ObjectEntry {
 }
 
 #[tokio::test]
-async fn regression_spore_collection_activity_count_matches_canonical_surfaces() {
+async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows() {
     let store = test_store();
     let id = [0xc1; 32];
     store
@@ -5443,8 +5443,45 @@ async fn regression_spore_collection_activity_count_matches_canonical_surfaces()
         );
     }
     batch.commit().unwrap();
+    // Rollback deletes a rolled-back block's collection rows
+    // (REORG_HANDLING.md), so the reverted row (3) and the competing-branch
+    // row (4) are rollback bugs: every surface that counts or lists the
+    // collection's rows names the first one instead of skipping it.
+    let id_hex = format!("0x{}", hex::encode(id));
+    let app = create_router(test_config(store.clone())).await;
+    for path in [
+        "/assets?type=object".to_string(),
+        format!("/spore/clusters/{id_hex}/activity-feed?limit=1"),
+        format!("/assets/objects/{id_hex}/activity-feed?limit=1"),
+    ] {
+        let (status, json) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {json}");
+        let message = json["message"].as_str().unwrap();
+        assert!(
+            message.contains("collection activity row is not canonical")
+                && message.contains(&format!("collection={id_hex}"))
+                && message.contains("block=4")
+                && message.contains(&format!("tx=0x{}", hex::encode([0x22; 32])))
+                && message.contains("canonical location of the tx: block=2"),
+            "{path}: {json}"
+        );
+    }
+    for (block, tx, block_hash) in [(3, [0x23; 32], [0xbc; 32]), (4, [0x22; 32], [0xbd; 32])] {
+        store
+            .delete_cf(
+                store.cf_object_collection_activities(),
+                &ckbadger_store::keys::encode_object_collection_activity_key(
+                    &id,
+                    block,
+                    0,
+                    &block_hash,
+                    &tx,
+                ),
+            )
+            .unwrap();
+    }
     let app = create_router(test_config(store)).await;
-    let id = format!("0x{}", hex::encode(id));
+    let id = id_hex;
     let (status, inventory) = get_json(&app, "/assets?type=object").await;
     assert_eq!(status, StatusCode::OK, "{inventory}");
     let row = inventory["data"]
