@@ -235,6 +235,46 @@ async fn test_activity_protocol_actions_carry_registry_display_names() {
     );
 }
 
+/// W2: the `dotbit` actions the indexer persists (one per account, each with
+/// `metadata.accountId`) project through the registry with their display
+/// name and the account id intact, on the address feed and on the global
+/// Identity bucket, where every `.bit` transaction is indexed.
+#[tokio::test]
+async fn dotbit_protocol_actions_project_with_their_registry_name() {
+    let lock_hash = vec![0x25; 32];
+    let account_id = "0x2d2ed79a32f078c511108765a384a183e14990e9";
+    let mut actions = make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 0, 0);
+    actions.protocol_actions = vec![ProtocolAction::new(
+        "dotbit",
+        "renew_account",
+        serde_json::json!({ "accountId": account_id }),
+    )];
+    for participant in &mut actions.participants {
+        participant.tags |= ckbadger_store::types::TAG_PROTOCOL;
+    }
+
+    let json = address_activities_json(&lock_hash, &actions).await;
+    let action = &json["data"][0]["protocolActions"][0];
+    assert_eq!(action["protocol"], "dotbit", "{json}");
+    assert_eq!(action["protocolName"], ".bit", "{json}");
+    assert_eq!(action["action"], "renew_account", "{json}");
+    assert_eq!(action["metadata"]["accountId"], account_id, "{json}");
+
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_actions(&actions);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, global) = fetch_json(app, "/api/v1/activities?filter=identity&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{global}");
+    let rows = global["data"].as_array().expect("data array");
+    assert_eq!(rows.len(), 1, "{global}");
+    assert_eq!(
+        rows[0]["protocolActions"][0]["protocolName"], ".bit",
+        "{global}"
+    );
+}
+
 /// A protocol id with no registry entry is an invariant violation — the
 /// response fails naming it rather than showing the raw id.
 #[tokio::test]
@@ -2426,5 +2466,222 @@ async fn block_and_direct_cellbase_activity_derive_the_exact_paid_outputs() {
     assert!(
         global["data"].as_array().unwrap().is_empty(),
         "global activity semantics still exclude cellbase"
+    );
+}
+
+// ── R0: global bucket filters read CF_TX_ACTIONS_BY_BUCKET ──────────────
+
+/// `count` one-transaction blocks from `first_block` up, each tx at index 1.
+/// Every block whose offset is a multiple of `object_every` carries an object
+/// item tag; the rest are plain CKB transfers. Returns the object blocks.
+fn seed_sparse_object_chain(
+    store: &Arc<CkbadgerStore>,
+    first_block: i64,
+    count: i64,
+    object_every: i64,
+) -> Vec<i64> {
+    use ckbadger_store::types::TAG_OBJECT;
+    let mut object_blocks = Vec::new();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for offset in 0..count {
+        let block = first_block + offset;
+        let mut tx_hash = [0u8; 32];
+        tx_hash[..8].copy_from_slice(&block.to_be_bytes());
+        tx_hash[31] = 0x0b;
+        let block_hash = vec![(block % 251) as u8; 32];
+        let is_object = offset % object_every == 0;
+        if is_object {
+            object_blocks.push(block);
+            // The transaction list sums each listed tx's output payloads.
+            batch.put_cell(
+                &tx_hash,
+                0,
+                &ckbadger_store::types::LiveCellInfo {
+                    capacity: 100_00000000,
+                    lock_script_hash: vec![0x11; 32],
+                    lock_code_hash: vec![0x22; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![0x33; 20],
+                    type_script_hash: None,
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 61_00000000,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+                block,
+            );
+        }
+        let tags = if is_object { TAG_OBJECT } else { 0 };
+        batch.put_block_header(
+            block,
+            &CachedBlockHeader {
+                hash: block_hash.clone(),
+                parent_hash: vec![0u8; 32],
+                timestamp: 1_700_000_000_000 + block,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1,
+                dao: vec![0; 32],
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1_700_000_000_000 + block,
+            },
+        );
+        batch.put_tx_hash_map(&tx_hash, block, 1);
+        batch.put_tx_index(
+            block,
+            1,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000 + block,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_tx_actions(&make_test_tx_actions(
+            &[0x11; 32],
+            &tx_hash,
+            &block_hash,
+            block,
+            1,
+            7,
+            tags,
+        ));
+    }
+    batch.commit().unwrap();
+    store
+        .update_sync_status(|status| {
+            status.tip_block_number = first_block + count - 1;
+        })
+        .unwrap();
+    object_blocks.reverse();
+    object_blocks
+}
+
+/// Pages a cursor-paginated JSON listing until it runs out; returns every
+/// row's `blockNumber`, and how many pages it took.
+async fn page_block_numbers(app: &axum::Router, first_uri: &str) -> (Vec<i64>, usize) {
+    let mut blocks = Vec::new();
+    let mut uri = first_uri.to_string();
+    let mut pages = 0;
+    loop {
+        let (status, json) = fetch_json(app.clone(), &uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {json}");
+        pages += 1;
+        for row in json["data"].as_array().expect("data array") {
+            let block = row["blockNumber"]
+                .as_i64()
+                .or_else(|| row["blockNumber"].as_str().and_then(|s| s.parse().ok()))
+                .expect("blockNumber");
+            blocks.push(block);
+        }
+        match json["nextCursor"].as_str() {
+            Some(cursor) => uri = format!("{first_uri}&cursor={cursor}"),
+            None => break,
+        }
+        assert!(pages < 100, "runaway paging on {first_uri}");
+    }
+    (blocks, pages)
+}
+
+/// TX-24 / TX-28 / DAO-19: a sparse bucket (3 object txs among 3,000) pages
+/// with no duplicates and no gaps on both listings, and a page costs reads in
+/// proportion to its size — not to the transactions between bucket rows.
+#[tokio::test]
+async fn global_bucket_filter_pages_a_sparse_bucket_with_bounded_reads() {
+    let store = test_store();
+    let expected = seed_sparse_object_chain(&store, 1_000, 3_000, 1_000);
+    assert_eq!(expected, vec![3_000, 2_000, 1_000]);
+    let app = create_router(test_config(store.clone())).await;
+
+    for first_uri in [
+        "/api/v1/activities?filter=object&limit=2",
+        "/api/v1/transactions?activity_type=object&limit=2",
+    ] {
+        store.reset_read_call_counters();
+        let started = std::time::Instant::now();
+        let (blocks, pages) = page_block_numbers(&app, first_uri).await;
+        let elapsed = started.elapsed();
+        let (get_cf, multi_get) = store.read_call_counts();
+        eprintln!(
+            "{first_uri}: {pages} pages, {} rows, get_cf={get_cf}, multi_get={multi_get}, elapsed={elapsed:?}",
+            blocks.len()
+        );
+        assert_eq!(blocks, expected, "{first_uri}: no duplicates, no gaps");
+        assert_eq!(pages, 2, "{first_uri}: limit 2 over 3 rows");
+        // 3 rows served over 2 pages. The pre-index scan issued two point reads
+        // (tx location + tx index) for every one of the ~3,000 rows it walked.
+        assert!(
+            get_cf + multi_get <= 40,
+            "{first_uri}: {get_cf} get_cf + {multi_get} multi_get for 3 rows"
+        );
+    }
+}
+
+/// The bucket path loads only the `TxActions` rows its bucket names: the
+/// rows of every other bucket are unreadable here and the page still serves.
+#[tokio::test]
+async fn global_bucket_filter_never_reads_other_buckets_tx_actions() {
+    let store = test_store();
+    let expected = seed_sparse_object_chain(&store, 50, 600, 200);
+    for block in 50..650 {
+        if expected.contains(&block) {
+            continue;
+        }
+        let mut tx_hash = [0u8; 32];
+        tx_hash[..8].copy_from_slice(&block.to_be_bytes());
+        tx_hash[31] = 0x0b;
+        store
+            .put_cf(
+                store.cf_tx_actions(),
+                &ckbadger_store::keys::encode_tx_actions_key(block, 1, &tx_hash),
+                b"not a TxActions payload",
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (blocks, _) = page_block_numbers(&app, "/api/v1/activities?filter=object&limit=2").await;
+    assert_eq!(blocks, expected);
+    let (blocks, _) =
+        page_block_numbers(&app, "/api/v1/transactions?activity_type=object&limit=2").await;
+    assert_eq!(blocks, expected);
+}
+
+/// A bucket row whose `TxActions` row is gone is an index invariant
+/// violation: the listing fails naming the position, it does not skip it.
+#[tokio::test]
+async fn global_bucket_row_without_tx_actions_is_a_500_naming_the_position() {
+    let store = test_store();
+    seed_sparse_object_chain(&store, 10, 3, 1);
+    store
+        .put_cf(
+            store.cf_tx_actions_by_bucket(),
+            &ckbadger_store::keys::encode_tx_actions_by_bucket_key(
+                ckbadger_store::GlobalBucket::Object,
+                20,
+                4,
+            ),
+            b"",
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, json) = fetch_json(app, "/api/v1/activities?filter=object&limit=10").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json.to_string();
+    assert!(
+        message.contains("bucket=object, block_num=20, tx_idx=4"),
+        "{message}"
     );
 }

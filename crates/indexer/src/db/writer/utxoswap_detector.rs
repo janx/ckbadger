@@ -264,6 +264,7 @@ mod tests {
             block_number: 5000,
             timestamp: 1_700_200_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -308,6 +309,7 @@ mod tests {
             block_number: 6000,
             timestamp: 1_700_300_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -378,6 +380,7 @@ mod tests {
             block_number: 6001,
             timestamp: 1_700_300_001,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: inputs.iter().map(|i| i.view()).collect(),
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -445,6 +448,7 @@ mod tests {
             block_number: 6002,
             timestamp: 1_700_300_002,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: inputs.iter().map(|i| i.view()).collect(),
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -500,6 +504,7 @@ mod tests {
             block_number: 6001,
             timestamp: 1_700_300_010,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![intent_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -553,6 +558,7 @@ mod tests {
             block_number: 6002,
             timestamp: 1_700_300_020,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -616,6 +622,7 @@ mod tests {
             block_number: 6003,
             timestamp: 1_700_300_030,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![intent_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -722,6 +729,7 @@ mod tests {
             block_number: 14_046_271,
             timestamp: 1_700_400_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -812,6 +820,7 @@ mod tests {
             block_number: 20_003_047,
             timestamp: 1_700_400_010,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![intent_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -896,6 +905,7 @@ mod tests {
             block_number: 6004,
             timestamp: 1_700_300_040,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };

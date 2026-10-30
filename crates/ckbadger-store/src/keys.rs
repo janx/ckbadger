@@ -1739,6 +1739,52 @@ pub fn decode_tx_actions_key(key: &[u8]) -> (i64, i32, Vec<u8>) {
     (block_num, tx_idx, tx_hash)
 }
 
+/// Global activity bucket index key:
+/// bucket(1B) + block_num_desc(8B BE) + tx_idx_desc(4B BE). Value is empty.
+pub const TX_ACTIONS_BY_BUCKET_KEY_SIZE: usize = 13;
+
+pub fn encode_tx_actions_by_bucket_key(
+    bucket: crate::global_bucket::GlobalBucket,
+    block_num: i64,
+    tx_idx: i32,
+) -> [u8; TX_ACTIONS_BY_BUCKET_KEY_SIZE] {
+    let mut key = [0u8; TX_ACTIONS_BY_BUCKET_KEY_SIZE];
+    key[0] = bucket.as_byte();
+    key[1..9].copy_from_slice(&encode_desc_block_num(block_num));
+    key[9..13].copy_from_slice(&encode_desc_tx_idx(tx_idx));
+    key
+}
+
+/// `(bucket, block_num, tx_idx)` of a bucket index key. A key of the wrong
+/// width or with an unknown bucket byte is a corrupt row.
+pub fn decode_tx_actions_by_bucket_key(
+    key: &[u8],
+) -> anyhow::Result<(crate::global_bucket::GlobalBucket, i64, i32)> {
+    if key.len() != TX_ACTIONS_BY_BUCKET_KEY_SIZE {
+        anyhow::bail!(
+            "decode_tx_actions_by_bucket_key: expected {} bytes, got {} (key=0x{})",
+            TX_ACTIONS_BY_BUCKET_KEY_SIZE,
+            key.len(),
+            crate::bytes_to_hex(key)
+        );
+    }
+    let bucket = crate::global_bucket::GlobalBucket::from_byte(key[0])?;
+    Ok((
+        bucket,
+        decode_desc_block_num(&key[1..9]),
+        decode_desc_tx_idx(&key[9..13]),
+    ))
+}
+
+/// The 12-byte `block_num_desc + tx_idx_desc` prefix every `CF_TX_ACTIONS` key
+/// of one transaction position starts with.
+pub fn encode_tx_actions_position_prefix(block_num: i64, tx_idx: i32) -> [u8; 12] {
+    let mut prefix = [0u8; 12];
+    prefix[..8].copy_from_slice(&encode_desc_block_num(block_num));
+    prefix[8..].copy_from_slice(&encode_desc_tx_idx(tx_idx));
+    prefix
+}
+
 /// DAO-by-block index key: deposit_block_desc(8B BE) + outpoint(34B) = 42 bytes
 pub const DAO_BY_BLOCK_KEY_SIZE: usize = 42;
 /// DAO-by-lock index key: lock_hash(32B) + deposit_block_desc(8B BE) + outpoint(34B) = 74 bytes
@@ -2926,6 +2972,64 @@ mod tests {
         assert!(k1 < k2);
         assert!(k2 < k3);
         assert!(k3 < k4);
+    }
+
+    // ---- Global activity bucket key ----
+
+    #[test]
+    fn test_tx_actions_by_bucket_key_roundtrip() {
+        use crate::global_bucket::GlobalBucket;
+        for bucket in GlobalBucket::ALL {
+            let key = encode_tx_actions_by_bucket_key(bucket, 20_617_704, 13);
+            assert_eq!(key.len(), TX_ACTIONS_BY_BUCKET_KEY_SIZE);
+            assert_eq!(key[0], bucket.as_byte());
+            assert_eq!(
+                decode_tx_actions_by_bucket_key(&key).unwrap(),
+                (bucket, 20_617_704, 13)
+            );
+        }
+        // The position part is exactly the CF_TX_ACTIONS position prefix.
+        let key = encode_tx_actions_by_bucket_key(GlobalBucket::Dao, 7, 2);
+        assert_eq!(key[1..], encode_tx_actions_position_prefix(7, 2));
+        assert_eq!(
+            encode_tx_actions_key(7, 2, &[0x55; 32])[..12],
+            encode_tx_actions_position_prefix(7, 2)
+        );
+    }
+
+    #[test]
+    fn test_tx_actions_by_bucket_key_sorts_bucket_then_newest_first() {
+        use crate::global_bucket::GlobalBucket;
+        let token_new = encode_tx_actions_by_bucket_key(GlobalBucket::Token, 300, 0);
+        let token_mid_hi = encode_tx_actions_by_bucket_key(GlobalBucket::Token, 200, 5);
+        let token_mid_lo = encode_tx_actions_by_bucket_key(GlobalBucket::Token, 200, 1);
+        let token_old = encode_tx_actions_by_bucket_key(GlobalBucket::Token, 0, 0);
+        let dao_oldest = encode_tx_actions_by_bucket_key(GlobalBucket::Dao, 0, 0);
+        let object_newest = encode_tx_actions_by_bucket_key(GlobalBucket::Object, 900, 9);
+        assert!(dao_oldest < token_new);
+        assert!(token_new < token_mid_hi);
+        assert!(token_mid_hi < token_mid_lo);
+        assert!(token_mid_lo < token_old);
+        assert!(token_old < object_newest);
+    }
+
+    #[test]
+    fn test_tx_actions_by_bucket_key_rejects_corrupt_rows() {
+        use crate::global_bucket::GlobalBucket;
+        let key = encode_tx_actions_by_bucket_key(GlobalBucket::Ckb, 1, 0);
+        let err = decode_tx_actions_by_bucket_key(&key[..12]).unwrap_err();
+        assert!(
+            err.to_string().contains("expected 13 bytes, got 12"),
+            "{err}"
+        );
+        let mut unknown = key;
+        unknown[0] = 9;
+        let err = decode_tx_actions_by_bucket_key(&unknown).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown global activity bucket byte: 9"),
+            "{err}"
+        );
     }
 
     #[test]

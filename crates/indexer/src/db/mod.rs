@@ -8,7 +8,9 @@ pub use writer::activities::{
     InputCellView, NamedParticipant, OutputCellView, OwnerAccum, ParticipantIo, ProtocolDetector,
     TxView,
 };
-pub use writer::entity_stats::{apply_daily_pair, apply_hourly_increment, EntityStatsOverlay};
+pub use writer::entity_stats::{
+    apply_daily_pair, apply_hourly_increment, apply_token_daily, EntityStatsOverlay,
+};
 pub use writer::participant_rows::{addr_tx_rows, standalone_prefixes};
 pub use writer::{BatchWriter, DaoConsumedRow, ReorgResult};
 

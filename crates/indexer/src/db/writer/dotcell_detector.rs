@@ -1053,6 +1053,7 @@ mod tests {
                 block_number: 1,
                 timestamp: 1_700_000_000_000,
                 is_cellbase: false,
+                dotbit_action: None,
                 inputs: self.inputs.iter().map(OwnedCell::input_view).collect(),
                 outputs: self.outputs.iter().map(OwnedCell::output_view).collect(),
             }

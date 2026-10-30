@@ -45,8 +45,8 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction, TxData, UndatedEntityKey,
-    UndatedScriptKey,
+    AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction, TokenDailyChanges,
+    TxData, UndatedEntityKey, UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -198,6 +198,46 @@ pub(crate) fn token_daily_member<'a>(
 ) -> Option<&'a [u8]> {
     UdtParser::is_udt_code_hash_bytes(type_code_hash?, type_hash_type?)?;
     type_script_hash
+}
+
+/// One transaction's `TOKEN_DAILY` contribution: the member cells it created
+/// (positive) and consumed (negative), summed per token, and ONE transaction
+/// for every token among them however many of its cells the transaction moved.
+///
+/// The one accumulation the live parser stage uses (the writer's fixtures call
+/// it too); bulk build counts the same set in `TokenOwner::apply_tx`.
+pub(crate) fn add_token_daily_tx(
+    changes: &mut TokenDailyChanges<UndatedEntityKey>,
+    block: i64,
+    members: &[(Vec<u8>, i128, i128)],
+) -> Result<()> {
+    let mut per_token: Vec<(&[u8], i128, i128)> = Vec::new();
+    for (type_hash, capacity, knowledge) in members {
+        match per_token
+            .iter_mut()
+            .find(|(seen, _, _)| *seen == type_hash.as_slice())
+        {
+            Some(entry) => {
+                entry.1 = entry.1.checked_add(*capacity).ok_or_else(|| {
+                    anyhow!(
+                        "token daily capacity overflow in one tx: block={block}, token=0x{}",
+                        hex::encode(type_hash)
+                    )
+                })?;
+                entry.2 = entry.2.checked_add(*knowledge).ok_or_else(|| {
+                    anyhow!(
+                        "token daily knowledge overflow in one tx: block={block}, token=0x{}",
+                        hex::encode(type_hash)
+                    )
+                })?;
+            }
+            None => per_token.push((type_hash, *capacity, *knowledge)),
+        }
+    }
+    for (type_hash, capacity, knowledge) in per_token {
+        changes.add_tx(block, type_hash.to_vec(), capacity, knowledge)?;
+    }
+    Ok(())
 }
 
 /// Classify a cell's type script into a semantic tag.
@@ -824,7 +864,7 @@ impl Indexer {
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
             script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
-            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+            token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
             spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
             spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
@@ -1629,7 +1669,7 @@ impl Indexer {
                 // middle of one. Flattening them loses the block identity the
                 // undo log needs to restore a key's end-of-block-N value.
                 let mut script_daily_changes = EntityDailyChanges::<UndatedScriptKey>::new();
-                let mut token_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
+                let mut token_daily_changes = TokenDailyChanges::<UndatedEntityKey>::new();
                 let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
                 let mut spore_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
                 let mut cluster_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
@@ -1731,6 +1771,10 @@ impl Indexer {
                         );
                     }
 
+                    // This tx's TOKEN_DAILY member cells, outputs then inputs;
+                    // `add_token_daily_tx` turns them into one contribution
+                    // (and one transaction) per token once both sides are seen.
+                    let mut tx_token_daily_members: Vec<(Vec<u8>, i128, i128)> = Vec::new();
                     // script_usage_changes - outputs
                     for cell in &tx_data.cells {
                         let lock_key = (cell.lock_code_hash.clone(), false);
@@ -1848,13 +1892,11 @@ impl Indexer {
                             cell.type_code_hash.as_deref(),
                             cell.type_hash_type,
                         ) {
-                            accumulate_daily!(
-                                token_daily_changes,
-                                tx_data.block_number,
+                            tx_token_daily_members.push((
                                 type_script_hash.to_vec(),
                                 i128::from(cell.capacity),
-                                i128::from(cell_occupied)
-                            );
+                                i128::from(cell_occupied),
+                            ));
                         }
                         if let (Some(type_script_hash), Some(type_code_hash), Some(type_args)) = (
                             cell.type_script_hash.as_ref(),
@@ -2059,13 +2101,11 @@ impl Indexer {
                                     info.type_code_hash.as_deref(),
                                     info.type_hash_type,
                                 ) {
-                                    accumulate_daily!(
-                                        token_daily_changes,
-                                        tx_data.block_number,
+                                    tx_token_daily_members.push((
                                         type_script_hash.to_vec(),
                                         -i128::from(info.capacity),
-                                        -i128::from(info.occupied_capacity)
-                                    );
+                                        -i128::from(info.occupied_capacity),
+                                    ));
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
                                     (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
@@ -2138,6 +2178,24 @@ impl Indexer {
                                 }
                             }
                         }
+                    }
+
+                    if let Err(e) = add_token_daily_tx(
+                        &mut token_daily_changes,
+                        tx_data.block_number,
+                        &tx_token_daily_members,
+                    ) {
+                        record_worker_exit_reason(
+                            &parser_exit_reason_for_parser,
+                            format!(
+                                "failed to accumulate token daily changes for range {}-{}: tx=0x{}: {}",
+                                start_block,
+                                end_block,
+                                hex::encode(tx_data.hash),
+                                e
+                            ),
+                        );
+                        return;
                     }
 
                     // address_balance_changes - outputs + merge

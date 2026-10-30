@@ -827,6 +827,7 @@ mod status_model_tests {
             "spore_owner_roundtrip",
             "object_asset_collection_consistency",
             "participant_rows_consistency",
+            "global_activity_bucket_index_consistency",
             "dotcell_records_hash_parity",
         ];
         let mut declared = declared;

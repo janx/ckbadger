@@ -22,7 +22,7 @@ pub use ckbadger_api::{
 pub use ckbadger_common::{BackgroundTaskKind, BackgroundTaskState};
 pub use ckbadger_indexer::db::{BatchWriter, EntityStatsOverlay};
 pub use ckbadger_indexer::label_import::run_label_import_bundled;
-pub use ckbadger_indexer::sync::types::{EntityDailyChanges, EntityDateKey};
+pub use ckbadger_indexer::sync::types::{EntityDailyChanges, EntityDateKey, TokenDailyChanges};
 pub use ckbadger_store::batch::StoreBatch;
 pub use ckbadger_store::types::{
     AddrTxValue, AssetAction, CachedBlockHeader, ClusterAggregate, ClusterDailyDelta,
@@ -1720,10 +1720,11 @@ pub fn commit_token_daily_blocks(
     let mut overlay = EntityStatsOverlay::new();
     let mut undo_seq: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
 
-    let mut changes = EntityDailyChanges::<EntityDateKey>::new();
+    // Each entry is one transaction touching the token's cells.
+    let mut changes = TokenDailyChanges::<EntityDateKey>::new();
     for (block, type_hash, capacity, knowledge) in blocks {
         changes
-            .add(
+            .add_tx(
                 *block,
                 (type_hash.to_vec(), WRITER_FIXTURE_DATE),
                 *capacity,

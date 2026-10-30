@@ -1,5 +1,6 @@
 //! Activity query operations.
 
+use crate::global_bucket::{classify_global_bucket, GlobalBucket};
 use crate::keys;
 use crate::store::*;
 use crate::types::*;
@@ -138,6 +139,156 @@ impl CkbadgerStore {
         }
 
         Ok(results)
+    }
+
+    /// Positions `(block_num, tx_idx)` of one global activity bucket, newest
+    /// first, strictly older than `cursor` when one is given.
+    ///
+    /// `CF_TX_ACTIONS_BY_BUCKET` is maintained by the indexer on both sync
+    /// paths and deleted above the fork point on rollback, so every row names a
+    /// canonical transaction; readers do not re-check canonicity.
+    pub fn list_tx_actions_by_bucket(
+        &self,
+        bucket: GlobalBucket,
+        cursor: Option<(i64, i32)>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<(i64, i32)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        // Seeking to `key ‖ 0x00` lands on the first key strictly after the
+        // cursor's own key, so the cursor row itself is never returned.
+        let start: Vec<u8> = match cursor {
+            Some((block_num, tx_idx)) => {
+                let mut seek =
+                    keys::encode_tx_actions_by_bucket_key(bucket, block_num, tx_idx).to_vec();
+                seek.push(0);
+                seek
+            }
+            None => vec![bucket.as_byte()],
+        };
+        let iter = self.iterator_cf(
+            self.cf_tx_actions_by_bucket(),
+            rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+        );
+        let mut positions = Vec::with_capacity(limit);
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate tx_actions_by_bucket: bucket={}, cursor={:?}: {}",
+                    bucket.as_filter(),
+                    cursor,
+                    e
+                )
+            })?;
+            if key.first() != Some(&bucket.as_byte()) {
+                break;
+            }
+            let (_, block_num, tx_idx) = keys::decode_tx_actions_by_bucket_key(&key)?;
+            positions.push((block_num, tx_idx));
+            if positions.len() >= limit {
+                break;
+            }
+        }
+        Ok(positions)
+    }
+
+    /// The `TxActions` row at one transaction position, found by its 12-byte
+    /// position prefix. Two rows at one position is a broken rollback, never a
+    /// choice to make here.
+    pub fn get_tx_actions_at(
+        &self,
+        block_num: i64,
+        tx_idx: i32,
+    ) -> anyhow::Result<Option<TxActions>> {
+        let prefix = keys::encode_tx_actions_position_prefix(block_num, tx_idx);
+        let mut iter = self.prefix_iterator_cf(self.cf_tx_actions(), &prefix);
+        let Some(first) = iter.next() else {
+            return Ok(None);
+        };
+        let (key, value) = first.map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read tx actions at block_num={}, tx_idx={}: {}",
+                block_num,
+                tx_idx,
+                e
+            )
+        })?;
+        if key.len() != keys::TX_ACTIONS_KEY_SIZE {
+            anyhow::bail!(
+                "tx actions key at block_num={}, tx_idx={} has {} bytes, expected {}",
+                block_num,
+                tx_idx,
+                key.len(),
+                keys::TX_ACTIONS_KEY_SIZE
+            );
+        }
+        if let Some(second) = iter.next() {
+            let (second_key, _) = second.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to read tx actions at block_num={}, tx_idx={}: {}",
+                    block_num,
+                    tx_idx,
+                    e
+                )
+            })?;
+            anyhow::bail!(
+                "two tx actions rows at one position: block_num={}, tx_idx={}, keys=0x{} and 0x{}",
+                block_num,
+                tx_idx,
+                bytes_to_hex(&key),
+                bytes_to_hex(&second_key)
+            );
+        }
+        let (_, _, tx_hash_from_key) = keys::decode_tx_actions_key(&key);
+        let actions: TxActions = bincode::deserialize(&value).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to deserialize tx actions at block_num={}, tx_idx={}, tx_hash=0x{}: {}",
+                block_num,
+                tx_idx,
+                bytes_to_hex(&tx_hash_from_key),
+                e
+            )
+        })?;
+        validate_tx_actions_identity(&actions, block_num, tx_idx, &tx_hash_from_key)?;
+        Ok(Some(actions))
+    }
+
+    /// One page of a global activity bucket with each row's `TxActions`
+    /// loaded: newest first, strictly older than `cursor`. A bucket row whose
+    /// `TxActions` is missing, or that does not classify into this bucket, is
+    /// an index invariant violation and fails with its position.
+    pub fn list_tx_actions_page_by_bucket(
+        &self,
+        bucket: GlobalBucket,
+        cursor: Option<(i64, i32)>,
+        limit: usize,
+    ) -> anyhow::Result<Vec<TxActions>> {
+        self.list_tx_actions_by_bucket(bucket, cursor, limit)?
+            .into_iter()
+            .map(|(block_num, tx_idx)| {
+                let actions = self.get_tx_actions_at(block_num, tx_idx)?.ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "tx_actions_by_bucket row has no tx actions: bucket={}, block_num={}, tx_idx={}",
+                        bucket.as_filter(),
+                        block_num,
+                        tx_idx
+                    )
+                })?;
+                let classified = classify_global_bucket(&actions);
+                if classified != Some(bucket) {
+                    anyhow::bail!(
+                        "tx_actions_by_bucket row disagrees with its tx actions: bucket={}, classified={:?}, block_num={}, tx_idx={}, tx_hash=0x{}",
+                        bucket.as_filter(),
+                        classified.map(GlobalBucket::as_filter),
+                        block_num,
+                        tx_idx,
+                        bytes_to_hex(&actions.tx_hash)
+                    );
+                }
+                Ok(actions)
+            })
+            .collect()
     }
 
     /// Return up to 64 most recent non-cellbase TxActions.
@@ -654,5 +805,239 @@ mod prefix_participant_filter_tests {
             &lock,
             Some("token")
         ));
+    }
+}
+
+/// `CF_TX_ACTIONS_BY_BUCKET`: the global activity bucket index.
+#[cfg(test)]
+mod global_bucket_tests {
+    use super::*;
+    use crate::batch::StoreBatch;
+    use tempfile::TempDir;
+
+    fn bucket_fixture(block_num: i64, tx_idx: i32, tags: u16) -> TxActions {
+        let mut tx_hash = vec![0u8; 32];
+        tx_hash[..8].copy_from_slice(&block_num.to_be_bytes());
+        tx_hash[8..12].copy_from_slice(&tx_idx.to_be_bytes());
+        TxActions {
+            tx_hash,
+            block_hash: vec![0xBB; 32],
+            block_number: block_num,
+            tx_index: tx_idx,
+            timestamp: 1_700_000_000 + block_num,
+            is_cellbase: false,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([0xAA; 32]),
+                ckb_delta: 100,
+                used_delta: 0,
+                item_deltas: vec![],
+                tags,
+                roles: 0,
+            }],
+        }
+    }
+
+    fn bucket_rows(store: &CkbadgerStore) -> Vec<(GlobalBucket, i64, i32)> {
+        store
+            .iterator_cf(
+                store.cf_tx_actions_by_bucket(),
+                rocksdb::IteratorMode::Start,
+            )
+            .map(|item| {
+                let (key, value) = item.unwrap();
+                assert!(value.is_empty(), "bucket rows carry no value");
+                keys::decode_tx_actions_by_bucket_key(&key).unwrap()
+            })
+            .collect()
+    }
+
+    /// The live writer puts a transaction through `StoreBatch::put_tx_actions`;
+    /// that one call must also put its bucket row, in the same domain batch,
+    /// and nothing for a cellbase.
+    #[test]
+    fn put_tx_actions_writes_its_bucket_row_in_the_same_domain_batch() {
+        let dir = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(dir.path().join("domain")).unwrap();
+        let append = CkbadgerStore::open_append_only(dir.path().join("append-only")).unwrap();
+
+        let token = bucket_fixture(100, 2, TAG_TOKEN);
+        let mut cellbase = bucket_fixture(100, 0, 0);
+        cellbase.is_cellbase = true;
+        let mut batch = StoreBatch::new(&domain);
+        batch.put_tx_actions(&token);
+        batch.put_tx_actions(&cellbase);
+        assert_eq!(batch.len(), 3, "two TxActions rows + one bucket row");
+        // `into_write_batch` refuses a batch carrying append-only operations.
+        domain.write_batch(batch.into_write_batch()).unwrap();
+
+        assert_eq!(bucket_rows(&domain), vec![(GlobalBucket::Token, 100, 2)]);
+        assert!(
+            append
+                .iterator_cf(append.cf_cells(), rocksdb::IteratorMode::Start)
+                .next()
+                .is_none(),
+            "the bucket write path never touches the append-only store"
+        );
+    }
+
+    #[test]
+    fn tx_actions_by_bucket_is_a_domain_cf_never_append_only() {
+        assert!(DOMAIN_CFS.contains(&CF_TX_ACTIONS_BY_BUCKET));
+        assert!(!APPEND_CFS.contains(&CF_TX_ACTIONS_BY_BUCKET));
+        assert!(!crate::store::is_append_only_cf_name(
+            CF_TX_ACTIONS_BY_BUCKET
+        ));
+        let dir = TempDir::new().unwrap();
+        let append = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        assert!(!append.has_cf(CF_TX_ACTIONS_BY_BUCKET));
+    }
+
+    #[test]
+    fn list_tx_actions_by_bucket_pages_one_bucket_newest_first() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        for (block, tx, tags) in [
+            (300, 1, TAG_OBJECT),
+            (300, 4, TAG_TOKEN),
+            (250, 2, TAG_OBJECT),
+            (250, 9, TAG_OBJECT),
+            (100, 1, 0),
+            (90, 3, TAG_OBJECT),
+            (80, 1, TAG_DAO),
+        ] {
+            batch.put_tx_actions(&bucket_fixture(block, tx, tags));
+        }
+        batch.commit().unwrap();
+
+        let all = store
+            .list_tx_actions_by_bucket(GlobalBucket::Object, None, 10)
+            .unwrap();
+        assert_eq!(all, vec![(300, 1), (250, 9), (250, 2), (90, 3)]);
+
+        let page1 = store
+            .list_tx_actions_by_bucket(GlobalBucket::Object, None, 2)
+            .unwrap();
+        assert_eq!(page1, vec![(300, 1), (250, 9)]);
+        let page2 = store
+            .list_tx_actions_by_bucket(GlobalBucket::Object, page1.last().copied(), 2)
+            .unwrap();
+        assert_eq!(page2, vec![(250, 2), (90, 3)], "strictly after the cursor");
+        let page3 = store
+            .list_tx_actions_by_bucket(GlobalBucket::Object, page2.last().copied(), 2)
+            .unwrap();
+        assert!(
+            page3.is_empty(),
+            "never runs into the next bucket: {page3:?}"
+        );
+
+        // A cursor that is not itself a row still pages from below it.
+        assert_eq!(
+            store
+                .list_tx_actions_by_bucket(GlobalBucket::Object, Some((260, 0)), 10)
+                .unwrap(),
+            vec![(250, 9), (250, 2), (90, 3)]
+        );
+        assert_eq!(
+            store
+                .list_tx_actions_by_bucket(GlobalBucket::Ckb, None, 10)
+                .unwrap(),
+            vec![(100, 1)]
+        );
+        assert_eq!(
+            store
+                .list_tx_actions_by_bucket(GlobalBucket::Dao, None, 10)
+                .unwrap(),
+            vec![(80, 1)],
+            "the last bucket row before an empty bucket"
+        );
+
+        let loaded = store
+            .list_tx_actions_page_by_bucket(GlobalBucket::Object, Some((300, 1)), 2)
+            .unwrap();
+        assert_eq!(
+            loaded
+                .iter()
+                .map(|a| (a.block_number, a.tx_index))
+                .collect::<Vec<_>>(),
+            vec![(250, 9), (250, 2)]
+        );
+    }
+
+    #[test]
+    fn get_tx_actions_at_finds_one_row_and_rejects_two() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        assert!(store.get_tx_actions_at(5, 1).unwrap().is_none());
+
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&bucket_fixture(5, 1, 0));
+        batch.put_tx_actions(&bucket_fixture(5, 2, 0));
+        batch.commit().unwrap();
+        let got = store.get_tx_actions_at(5, 1).unwrap().expect("row at 5:1");
+        assert_eq!((got.block_number, got.tx_index), (5, 1));
+
+        // A second transaction hash at the same position: what a rollback that
+        // forgot a row would leave behind.
+        let mut stale = bucket_fixture(5, 1, 0);
+        stale.tx_hash = vec![0xEE; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&stale);
+        batch.commit().unwrap();
+        let err = store.get_tx_actions_at(5, 1).unwrap_err().to_string();
+        assert!(
+            err.contains("two tx actions rows at one position: block_num=5, tx_idx=1"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn bucket_page_fails_with_position_on_a_row_without_tx_actions() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        store
+            .put_cf(
+                store.cf_tx_actions_by_bucket(),
+                &keys::encode_tx_actions_by_bucket_key(GlobalBucket::Token, 77, 3),
+                &[],
+            )
+            .unwrap();
+        let err = store
+            .list_tx_actions_page_by_bucket(GlobalBucket::Token, None, 10)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "tx_actions_by_bucket row has no tx actions: bucket=token, block_num=77, tx_idx=3"
+            ),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn bucket_page_fails_when_the_row_disagrees_with_its_tx_actions() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch.put_tx_actions(&bucket_fixture(12, 0, TAG_TOKEN));
+        batch.commit().unwrap();
+        store
+            .put_cf(
+                store.cf_tx_actions_by_bucket(),
+                &keys::encode_tx_actions_by_bucket_key(GlobalBucket::Object, 12, 0),
+                &[],
+            )
+            .unwrap();
+        let err = store
+            .list_tx_actions_page_by_bucket(GlobalBucket::Object, None, 10)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("bucket=object, classified=Some(\"token\"), block_num=12, tx_idx=0"),
+            "{err}"
+        );
     }
 }

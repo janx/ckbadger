@@ -468,7 +468,7 @@ to the runtime-status part alone: sync progress and memory stats are still stage
 id cannot make the indexer look dead to every reader.
 
 The sweep behind `get_memory_stats()` reads ~8 RocksDB properties across every column family of
-**both** chain stores — `ckbadger_store::ALL_CFS`, the 63 domain CFs plus the append-only `cells`
+**both** chain stores — `ckbadger_store::ALL_CFS`, the 64 domain CFs plus the append-only `cells`
 (the 3 network-store CFs belong to the crawler's store and are not swept). Live sync resamples it
 every 30 s (`MEMORY_STATS_LIVE_SAMPLE_INTERVAL`), while `SYNC_PROGRESS` — what the TUI and API
 read — keeps the 3-second cadence. Bulk sync still samples every tick: its perf heartbeat and

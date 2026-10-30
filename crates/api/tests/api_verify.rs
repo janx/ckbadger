@@ -73,6 +73,7 @@ fn seed_token(store: &Arc<CkbadgerStore>, type_hash: &[u8], rows: &[(u32, i128, 
                 &TokenDailyDelta {
                     owned_capacity_delta: *capacity,
                     owned_knowledge_delta: *knowledge,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -1015,6 +1016,7 @@ async fn indexed_calendar_and_entities_share_the_secondary_view_without_writes()
             &TokenDailyDelta {
                 owned_capacity_delta: 20,
                 owned_knowledge_delta: 10,
+                tx_count: 1,
             },
         )
         .unwrap();
@@ -1067,6 +1069,7 @@ async fn indexed_calendar_shares_the_response_byte_budget_with_daily_rows() {
                     &TokenDailyDelta {
                         owned_capacity_delta: 10i128.pow(33),
                         owned_knowledge_delta: 5 * 10i128.pow(32),
+                        tx_count: 1,
                     },
                 )
                 .unwrap();

@@ -142,6 +142,7 @@ fn fixture() -> Arc<CkbadgerStore> {
             &TokenDailyDelta {
                 owned_capacity_delta: 1000,
                 owned_knowledge_delta: 600,
+                tx_count: 1,
             },
         )
         .unwrap();

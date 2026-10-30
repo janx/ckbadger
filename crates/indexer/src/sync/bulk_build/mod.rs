@@ -36,8 +36,8 @@ use ckbadger_store::{
     CF_BLOCK_HASH_INDEX, CF_BLOCK_HEADERS, CF_CELLS, CF_CELL_BY_DATA_HASH, CF_CELL_BY_LOCK,
     CF_CELL_BY_LOCK_CODE, CF_CELL_BY_TYPE, CF_CELL_BY_TYPE_CODE, CF_CONSUMED_CELLS,
     CF_IDENTITY_COLLECTION_ACTIVITIES, CF_LIVE_CELLS, CF_LOCK_SCRIPTS,
-    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS, CF_TX_HASH_MAP,
-    CF_TX_INDEX,
+    CF_OBJECT_COLLECTION_ACTIVITIES, CF_STATS_CHAIN, CF_STATS_HODL, CF_TX_ACTIONS,
+    CF_TX_ACTIONS_BY_BUCKET, CF_TX_HASH_MAP, CF_TX_INDEX,
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
@@ -3348,6 +3348,9 @@ pub struct BulkArtifactSnapshot {
     pub addr_txs_by_prefix:
         BTreeMap<([u8; 20], i64, i32, Vec<u8>), ckbadger_store::types::AddrTxValue>,
     pub addr_prefix_stats: HashMap<[u8; 20], ckbadger_store::types::AddrPrefixStats>,
+    /// `CF_TX_ACTIONS_BY_BUCKET` keys, raw, in key order. Compared
+    /// byte-for-byte against the live write path's rows.
+    pub tx_actions_by_bucket: Vec<Vec<u8>>,
     /// Every row a `.cell` name touches, raw. Compared byte-for-byte against
     /// the live write path's rows.
     pub dotcell: DotCellArtifacts,
@@ -3833,6 +3836,19 @@ fn collect_bulk_artifact_snapshot(
         cell_by_data_hash,
     ) = collect_cell_snapshot(domain_store, append_store)?;
     let (addr_txs, addr_txs_by_prefix, addr_prefix_stats) = collect_addr_tx_snapshot(domain_store)?;
+    let mut tx_actions_by_bucket = Vec::new();
+    for row in domain_store.iterator_cf(domain_store.cf_tx_actions_by_bucket(), IteratorMode::Start)
+    {
+        let (key, value) = row?;
+        if !value.is_empty() {
+            bail!(
+                "tx_actions_by_bucket row carries a value: key=0x{} value_len={}",
+                hex::encode(&key),
+                value.len()
+            );
+        }
+        tx_actions_by_bucket.push(key.to_vec());
+    }
     let dotcell = collect_dotcell_artifacts(domain_store)?;
     let token_rows = collect_token_raw_rows(domain_store)?;
     let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
@@ -3857,6 +3873,7 @@ fn collect_bulk_artifact_snapshot(
         addr_txs,
         addr_txs_by_prefix,
         addr_prefix_stats,
+        tx_actions_by_bucket,
         dotcell,
         token_rows,
         stats_dao_rows,
@@ -4269,16 +4286,20 @@ pub(in crate::sync) fn build_tx_actions_list_for_bulk(
 
     let tx_views = block_txs
         .iter()
+        .zip(block_resolved)
         .zip(block_inputs)
         .zip(block_outputs)
         .map(
-            |((tx, inputs), outputs)| crate::db::writer::activities::TxView {
+            |(((tx, resolved_tx), inputs), outputs)| crate::db::writer::activities::TxView {
                 tx_hash: &tx.hash,
                 block_hash: &tx.block_hash,
                 tx_index: tx.tx_index,
                 block_number: tx.block_number,
                 timestamp: tx.timestamp_ms,
                 is_cellbase: tx.is_cellbase,
+                // Parsed once from the witnesses into the tx's facts, the same
+                // value the bulk `.bit` collection feed reads.
+                dotbit_action: resolved_tx.dotbit_action.as_deref(),
                 inputs,
                 outputs,
             },
@@ -4536,6 +4557,18 @@ fn build_history_rows_for_block(
                 &tx_actions.tx_hash,
             );
             rows.push_serialized(CF_TX_ACTIONS, &tx_actions_key, tx_actions)?;
+            // Its global bucket row, derived by the same function the live
+            // writer's `StoreBatch::put_tx_actions` uses, into the same rows.
+            let bucket_key =
+                ckbadger_store::tx_actions_bucket_key(tx_actions).ok_or_else(|| {
+                    anyhow!(
+                        "non-cellbase tx has no global bucket: block={} tx_index={} tx=0x{}",
+                        tx_actions.block_number,
+                        tx_actions.tx_index,
+                        hex::encode(&tx_actions.tx_hash)
+                    )
+                })?;
+            rows.push_raw(CF_TX_ACTIONS_BY_BUCKET, &bucket_key, &[])?;
         }
 
         // The `.cell` collection feed, derived from the `dotcell:*` actions

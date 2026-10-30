@@ -205,6 +205,7 @@ pub(super) mod cells;
 mod chain;
 pub(crate) mod dao;
 pub(crate) mod dotbit;
+pub(crate) mod dotbit_detector;
 pub(crate) mod dotcell;
 pub(crate) mod dotcell_detector;
 pub mod entity_stats;

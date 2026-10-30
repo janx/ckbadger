@@ -49,8 +49,8 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
     AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
-    EntityDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey, UnresolvedLocalProbeSummary,
-    UnresolvedRpcProbeSummary,
+    EntityDailyChanges, TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey,
+    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
@@ -475,6 +475,8 @@ struct ActivityInputIndexes<'a> {
     /// The `.cell` name each consumed name cell carried, captured by the
     /// consume path. An input reaches the activity builder without its data.
     dotcell_inputs: &'a HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData>,
+    /// The DAS ActionData action of each transaction that carries one.
+    das_actions: &'a HashMap<[u8; 32], String>,
 }
 
 /// One transaction as the live activity builder sees it: inputs resolved
@@ -486,6 +488,7 @@ fn build_live_activity_tx_view<'a>(
     timestamp_ms: i64,
     indexes: ActivityInputIndexes<'a>,
 ) -> Result<crate::db::writer::activities::TxView<'a>> {
+    let dotbit_action = indexes.das_actions.get(&tx_data.hash).map(String::as_str);
     let inputs = build_activity_input_views(tx_data, block_number, indexes)?;
     let outputs = tx_data
         .cells
@@ -512,6 +515,7 @@ fn build_live_activity_tx_view<'a>(
         block_number,
         timestamp: timestamp_ms,
         is_cellbase: tx_data.is_cellbase,
+        dotbit_action,
         inputs,
         outputs,
     })
@@ -1686,7 +1690,7 @@ impl Indexer {
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
-        token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+        token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
         spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
@@ -2449,6 +2453,10 @@ impl Indexer {
         let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
             HashMap::new();
 
+        // DAS ActionData actions of every non-cellbase tx in the batch, parsed
+        // once from its witnesses: the `.bit` collection feed below and the
+        // activity builder's `dotbit:*` actions both read them from here.
+        let mut das_action_cache: HashMap<[u8; 32], String> = HashMap::new();
         // Dotbit account IDs resolved during consume, needed later by activity builder.
         let mut resolved_dotbit_ids: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
         // Consumed AccountCells whose creation recorded them as never an account.
@@ -2490,9 +2498,6 @@ impl Indexer {
             let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
             let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
                 HashMap::new();
-            // Cache DAS actions for all non-cellbase txs so consumption-only
-            // txs can look up their action (not just txs with .bit outputs).
-            let mut das_action_cache: HashMap<[u8; 32], String> = HashMap::new();
 
             // --- Pre-pass: collect all input outpoints for batch DB lookup ---
             let bulk_sync_active = self.is_bulk_sync_active();
@@ -3279,6 +3284,7 @@ impl Indexer {
                                 dotbit_unindexed: &resolved_dotbit_unindexed,
                                 bit_cell_identity_ids: &resolved_bit_cell_ids,
                                 dotcell_inputs: &resolved_dotcell_inputs,
+                                das_actions: &das_action_cache,
                             },
                         )
                     })
@@ -4562,6 +4568,10 @@ impl Indexer {
 mod tests {
     use super::*;
 
+    /// No transaction of a hand-built activity view carries a DAS action.
+    static NO_DAS_ACTIONS: std::sync::LazyLock<HashMap<[u8; 32], String>> =
+        std::sync::LazyLock::new(HashMap::new);
+
     #[test]
     fn bulk_completion_rate_has_no_fabricated_zero_without_duration() {
         assert_eq!(Indexer::bulk_completion_blocks_per_second(100, None), None);
@@ -4951,6 +4961,7 @@ mod tests {
                 dotbit_unindexed: &HashSet::new(),
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         ) {
             Ok(_) => panic!("missing input cell info should fail fast"),
@@ -5007,6 +5018,7 @@ mod tests {
                 dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )
         .expect("input lookup should fall back to same-batch cell cache");
@@ -5065,6 +5077,7 @@ mod tests {
                 dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &empty_dotbit,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )
         .unwrap();
@@ -5116,6 +5129,7 @@ mod tests {
                 dotbit_unindexed: &empty_dotbit_unindexed,
                 bit_cell_identity_ids: &bit_cell_ids,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )
         .unwrap();
@@ -5218,6 +5232,7 @@ mod tests {
                 dotbit_unindexed: &dotbit_unindexed,
                 bit_cell_identity_ids: &empty_bit_cell,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         )?;
         crate::db::writer::activities::build_tx_actions_for_block_with_io(&[view], &[])
@@ -5425,6 +5440,101 @@ mod tests {
         assert!(live.iter().all(|(_, deltas)| deltas.is_empty()), "{live:?}");
     }
 
+    /// ID-X-N1: the DAS root AccountCell (all-zero id, `expired_at` =
+    /// u64::MAX; 15 re-creations on mainnet) is ring infrastructure, not an
+    /// account. Both sync paths skip it and say so at debug; a cell whose
+    /// data genuinely names no account still warns.
+    #[test]
+    fn das_root_account_cell_logs_at_debug_and_short_account_data_still_warns() {
+        use crate::label_import::test_log_capture::capture_logs;
+        use crate::sync::bulk_build::facts::{parse_protocol_facts, CellSemanticTag};
+        // The root's molecule-free cell data, built here: witness hash (32),
+        // all-zero id (20), next = 0xff…ff (20), expired_at = u64::MAX (8).
+        let mut root = vec![0x5Au8; 32];
+        root.extend_from_slice(&[0u8; 20]);
+        root.extend_from_slice(&[0xFF; 20]);
+        root.extend_from_slice(&u64::MAX.to_le_bytes());
+        assert!(crate::parser::dotbit::DotbitParser::is_das_root_account_cell(&root));
+        let real_root = crate::rpc::parse_hex_to_bytes(
+            crate::parser::dotbit::fixtures::MAINNET_ROOT_ACCOUNT_CELL_DATA,
+        );
+        assert!(crate::parser::dotbit::DotbitParser::is_das_root_account_cell(&real_root));
+        let short = vec![0x11u8; 40];
+        assert!(!crate::parser::dotbit::DotbitParser::is_das_root_account_cell(&short));
+
+        let tx_with = |data: &[u8]| crate::rpc::TransactionView {
+            hash: format!("0x{}", hex::encode(DOTBIT_PARITY_TX)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![crate::rpc::CellOutput {
+                capacity: "0x6fc23ac00".to_string(),
+                lock: crate::rpc::Script {
+                    code_hash: format!("0x{}", "10".repeat(32)),
+                    hash_type: "type".to_string(),
+                    args: "0x".to_string(),
+                },
+                type_: Some(crate::rpc::Script {
+                    code_hash: crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
+                    hash_type: "type".to_string(),
+                    args: "0x".to_string(),
+                }),
+            }],
+            outputs_data: vec![format!("0x{}", hex::encode(data))],
+            witnesses: vec![],
+        };
+        let parsed_with = |data: &[u8]| crate::parser::cell::ParsedCell {
+            capacity: 300_00000000,
+            lock_code_hash: DOTBIT_PARITY_LOCK_CODE_HASH.to_vec(),
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            lock_script_hash: vec![0xA1; 32],
+            type_code_hash: Some(dotbit_account_code_hash()),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            data_hash: [0x13; 32],
+            data_size: i32::try_from(data.len()).unwrap(),
+            data: data.to_vec(),
+        };
+        let both_paths = |data: &[u8]| {
+            let live = crate::parser::DotbitParser::parse_account_outputs(&tx_with(data)).unwrap();
+            assert_eq!(live.unindexed_output_indices, vec![0]);
+            let bulk = parse_protocol_facts(
+                &parsed_with(data),
+                CellSemanticTag::Dotbit,
+                &crate::parser::dotbit::DotbitWitnessBundle::default(),
+                None,
+                &DOTBIT_PARITY_TX,
+                0,
+            )
+            .unwrap();
+            assert!(bulk.is_none());
+        };
+
+        let (_, warnings) = capture_logs(tracing::Level::WARN, || both_paths(&root));
+        assert!(
+            warnings.is_empty(),
+            "the DAS root must not warn: {warnings}"
+        );
+        let (_, debug) = capture_logs(tracing::Level::DEBUG, || both_paths(&root));
+        assert_eq!(
+            debug
+                .matches("DAS root AccountCell, not an account")
+                .count(),
+            2,
+            "live and bulk each say what the cell is: {debug}"
+        );
+
+        let (_, warnings) = capture_logs(tracing::Level::WARN, || both_paths(&short));
+        assert_eq!(
+            warnings.matches("unparseable DotBit AccountCell").count(),
+            2,
+            "a genuine parse failure warns on both paths: {warnings}"
+        );
+    }
+
     /// Round-2 review #3: an AccountCell whose DAS witness lacks its name was
     /// counted +1 when created (the activity builder reads the id from data)
     /// but recorded as never an account, so its consumption counted nothing.
@@ -5568,6 +5678,7 @@ mod tests {
                 dotbit_unindexed: &HashSet::new(),
                 bit_cell_identity_ids: &empty_ids,
                 dotcell_inputs: &empty_dotcell,
+                das_actions: &NO_DAS_ACTIONS,
             },
         ) {
             Ok(_) => panic!("an unclassified consumed AccountCell must fail fast"),
@@ -6796,7 +6907,7 @@ mod tests {
             indexer: &Indexer,
             block: BlockResponseWithCycles,
         ) -> Result<()> {
-            write_live_block_with_entity_changes(indexer, block, EntityDailyChanges::new())
+            write_live_block_with_entity_changes(indexer, block, TokenDailyChanges::new())
                 .await
                 .map(|_metrics| ())
         }
@@ -6810,7 +6921,7 @@ mod tests {
         pub(super) async fn write_live_block_with_entity_changes(
             indexer: &Indexer,
             block: BlockResponseWithCycles,
-            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+            token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             write_live_blocks_with_entity_changes(indexer, vec![block], token_daily_changes).await
         }
@@ -6820,7 +6931,7 @@ mod tests {
         pub(super) async fn write_live_blocks_with_entity_changes(
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
-            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+            token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             write_live_blocks_inner(
                 indexer,
@@ -6848,19 +6959,22 @@ mod tests {
         }
 
         enum FixtureTokenDaily {
-            Given(EntityDailyChanges<UndatedEntityKey>),
+            Given(TokenDailyChanges<UndatedEntityKey>),
             FromCells,
         }
 
         /// The parser stage's `TOKEN_DAILY` accumulation: every member cell a
-        /// transaction creates adds, every member cell it consumes subtracts.
+        /// transaction creates adds, every member cell it consumes subtracts,
+        /// and `pipeline::add_token_daily_tx` — the parser's own function —
+        /// turns each transaction's members into one contribution per token.
         fn token_daily_from_cells(
             all_tx_data: &[TxData],
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        ) -> Result<EntityDailyChanges<UndatedEntityKey>> {
-            let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
+        ) -> Result<TokenDailyChanges<UndatedEntityKey>> {
+            let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
             for tx_data in all_tx_data {
+                let mut members: Vec<(Vec<u8>, i128, i128)> = Vec::new();
                 for cell in &tx_data.cells {
                     if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
                         cell.type_script_hash.as_deref(),
@@ -6872,48 +6986,50 @@ mod tests {
                             cell.type_args.as_ref().map(|args| args.len()),
                             cell.data_size,
                         );
-                        changes.add(
-                            tx_data.block_number,
+                        members.push((
                             type_hash.to_vec(),
                             i128::from(cell.capacity),
                             i128::from(occupied),
-                        )?;
+                        ));
                     }
                 }
-                if tx_data.is_cellbase {
-                    continue;
-                }
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "fixture token daily",
-                        )?,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key))
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "fixture input cell missing: outpoint=0x{}:{}",
-                                hex::encode(&key.0),
-                                key.1
-                            )
-                        })?;
-                    if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
-                        info.type_script_hash.as_deref(),
-                        info.type_code_hash.as_deref(),
-                        info.type_hash_type,
-                    ) {
-                        changes.add(
-                            tx_data.block_number,
-                            type_hash.to_vec(),
-                            -i128::from(info.capacity),
-                            -i128::from(info.occupied_capacity),
-                        )?;
+                if !tx_data.is_cellbase {
+                    for input in &tx_data.inputs {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "fixture token daily",
+                            )?,
+                        );
+                        let info = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key))
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "fixture input cell missing: outpoint=0x{}:{}",
+                                    hex::encode(&key.0),
+                                    key.1
+                                )
+                            })?;
+                        if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
+                            info.type_script_hash.as_deref(),
+                            info.type_code_hash.as_deref(),
+                            info.type_hash_type,
+                        ) {
+                            members.push((
+                                type_hash.to_vec(),
+                                -i128::from(info.capacity),
+                                -i128::from(info.occupied_capacity),
+                            ));
+                        }
                     }
                 }
+                crate::sync::pipeline::add_token_daily_tx(
+                    &mut changes,
+                    tx_data.block_number,
+                    &members,
+                )?;
             }
             Ok(changes)
         }
@@ -7236,7 +7352,7 @@ mod tests {
             let error = write_live_block_with_entity_changes(
                 &indexer,
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap_err();
@@ -7261,7 +7377,7 @@ mod tests {
             let metrics = write_live_block_with_entity_changes(
                 &indexer,
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -7349,7 +7465,7 @@ mod tests {
                     AR_DEPOSIT,
                     vec![cellbase_tx(0xc0, FUNDING_CAPACITY)],
                 )],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -7363,7 +7479,7 @@ mod tests {
                     block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, FUNDING_CAPACITY)]),
                     block(103, AR_DEPOSIT, vec![cellbase_tx(0xc3, FUNDING_CAPACITY)]),
                 ],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -7496,9 +7612,9 @@ mod tests {
                 witnesses: vec![],
             };
 
-            let mut token_daily = EntityDailyChanges::<UndatedEntityKey>::new();
+            let mut token_daily = TokenDailyChanges::<UndatedEntityKey>::new();
             token_daily
-                .add(
+                .add_tx(
                     101,
                     type_script_hash.clone(),
                     20_000_000_000,
@@ -7887,7 +8003,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &indexer,
                 vec![block_102, completion_block(expected_fee)],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -8298,7 +8414,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &batch_indexer,
                 blocks.clone(),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -8437,7 +8553,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &batch_indexer,
                 blocks[2..].to_vec(),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -9084,7 +9200,7 @@ mod tests {
                         ],
                     ),
                 ],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -10269,6 +10385,61 @@ mod tests {
                 .collect()
         }
 
+        /// W3: `TokenDailyDelta.tx_count` is the number of transactions that
+        /// day that created or consumed a cell of the token — the mint (two
+        /// token cells) and the transfer (two in, two out) are one each —
+        /// identically on the live writer and in bulk build, and a shallow
+        /// rollback of the transfer's block takes its count back out.
+        #[tokio::test]
+        async fn token_daily_counts_each_transaction_once_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            let day = ckbadger_store::keys::timestamp_ms_to_date(1_700_000_101_000);
+            let daily_key = ckbadger_store::keys::encode_token_daily_key(&type_hash, day).to_vec();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+            let bulk_rows = token_daily_rows(&bulk.token_rows);
+            assert_eq!(bulk_rows.len(), 1, "all three blocks share one day");
+            assert_eq!(bulk_rows[0].tx_count, 2, "bulk: mint + transfer");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                .await
+                .unwrap();
+            let after_mint: TokenDailyDelta =
+                bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
+            assert_eq!(after_mint.tx_count, 1, "live: the mint");
+            write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[2].clone()])
+                .await
+                .unwrap();
+            let live_rows = token_daily_rows(
+                &crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap(),
+            );
+            assert_eq!(live_rows, bulk_rows, "live and bulk TOKEN_DAILY rows");
+
+            // Shallow rollback of block 102: the undo pre-image restores the
+            // end-of-block-101 row, count included.
+            indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 102, 102)
+                .unwrap();
+            let rolled_back: TokenDailyDelta =
+                bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
+            assert_eq!(rolled_back, after_mint);
+            assert!(store
+                .find_first_invalid_token_daily_delta()
+                .unwrap()
+                .is_none());
+        }
+
         #[tokio::test]
         async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
             let _guard =
@@ -10368,11 +10539,11 @@ mod tests {
             range.map(cellbase_block).collect()
         }
 
-        fn token_changes_at(blocks: &[u64]) -> EntityDailyChanges<UndatedEntityKey> {
-            let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
+        fn token_changes_at(blocks: &[u64]) -> TokenDailyChanges<UndatedEntityKey> {
+            let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
             for &block in blocks {
                 changes
-                    .add(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000)
+                    .add_tx(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000)
                     .unwrap();
             }
             changes
@@ -10410,7 +10581,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &indexer,
                 blocks(100..=1100),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -10464,7 +10635,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &indexer,
                 blocks(2601..=2601),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -11067,6 +11238,242 @@ mod tests {
                 *snapshot.addr_prefix_stats.get(&NAMED_PREFIX).unwrap(),
                 "prefix counters must match"
             );
+        }
+    }
+
+    /// W2: `.bit` ActionData names persisted as `dotbit:*` protocol actions,
+    /// identically by live sync and bulk build, through the real write paths.
+    mod dotbit_protocol_actions_parity {
+        use super::live_dao_fee::{
+            block, cellbase_tx, indexer_for_live_write_test, lock_script, lock_script_b,
+            write_live_block, FUNDING_CAPACITY,
+        };
+        use super::*;
+        use crate::parser::dotbit::fixtures::{account_cell_data, das_action_witness};
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+        use crate::sync::materialize_bulk_artifacts_for_test;
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const ACCOUNT_CAPACITY: u64 = 1000_00000000;
+        /// valar.bit (`0x2d2ed79a…90e9`) and the neighbour recycled beside it.
+        const VALAR: [u8; 20] = [
+            0x2d, 0x2e, 0xd7, 0x9a, 0x32, 0xf0, 0x78, 0xc5, 0x11, 0x10, 0x87, 0x65, 0xa3, 0x84,
+            0xa1, 0x83, 0xe1, 0x49, 0x90, 0xe9,
+        ];
+        const NEIGHBOUR: [u8; 20] = [
+            0x2d, 0x30, 0x36, 0x4d, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9,
+        ];
+
+        fn account_type() -> Script {
+            Script {
+                code_hash: crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
+                hash_type: "type".to_string(),
+                args: "0x".to_string(),
+            }
+        }
+
+        fn account_output(lock: Script) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{ACCOUNT_CAPACITY:x}"),
+                lock,
+                type_: Some(account_type()),
+            }
+        }
+
+        fn input(tx_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([tx_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn das_tx(
+            hash_byte: u8,
+            action: &str,
+            inputs: Vec<CellInput>,
+            outputs: Vec<(CellOutput, [u8; 20], u64)>,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs,
+                outputs_data: outputs
+                    .iter()
+                    .map(|(_, id, expiry)| account_cell_data(*id, [0xFF; 20], *expiry))
+                    .collect(),
+                outputs: outputs.into_iter().map(|(output, _, _)| output).collect(),
+                witnesses: vec![das_action_witness(action)],
+            }
+        }
+
+        /// valar.bit's history in five DAS transactions: registered beside a
+        /// neighbour, renewed, its records edited, transferred, then its
+        /// neighbour recycled — which rewrites valar's cell without being
+        /// about valar.
+        fn dotbit_blocks() -> Vec<BlockResponseWithCycles> {
+            vec![
+                block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(
+                    101,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc1, 100_000_000),
+                        das_tx(
+                            0xb1,
+                            "confirm_proposal",
+                            vec![input(0xc0, 0)],
+                            vec![
+                                (account_output(lock_script()), VALAR, 1_000),
+                                (account_output(lock_script_b()), NEIGHBOUR, 1_000),
+                            ],
+                        ),
+                    ],
+                ),
+                block(
+                    102,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc2, 100_000_000),
+                        das_tx(
+                            0xb2,
+                            "renew_account",
+                            vec![input(0xb1, 0)],
+                            vec![(account_output(lock_script()), VALAR, 2_000)],
+                        ),
+                        das_tx(
+                            0xb3,
+                            "edit_records",
+                            vec![input(0xb2, 0)],
+                            vec![(account_output(lock_script()), VALAR, 2_000)],
+                        ),
+                    ],
+                ),
+                block(
+                    103,
+                    AR,
+                    vec![
+                        cellbase_tx(0xc3, 100_000_000),
+                        das_tx(
+                            0xb4,
+                            "transfer_account",
+                            vec![input(0xb3, 0)],
+                            vec![(account_output(lock_script_b()), VALAR, 2_000)],
+                        ),
+                        das_tx(
+                            0xb5,
+                            "recycle_expired_account",
+                            vec![input(0xb4, 0), input(0xb1, 1)],
+                            vec![(account_output(lock_script_b()), VALAR, 2_000)],
+                        ),
+                    ],
+                ),
+            ]
+        }
+
+        /// `(protocol, action, metadata)` of every protocol action, per tx.
+        type ActionRows = BTreeMap<Vec<u8>, Vec<(String, String, serde_json::Value)>>;
+
+        fn rows_of(
+            actions: &ckbadger_store::types::TxActions,
+        ) -> Vec<(String, String, serde_json::Value)> {
+            actions
+                .protocol_actions
+                .iter()
+                .map(|a| {
+                    (
+                        a.protocol.clone(),
+                        a.action.clone(),
+                        a.metadata_value().unwrap(),
+                    )
+                })
+                .collect()
+        }
+
+        fn expected() -> ActionRows {
+            let id =
+                |id: [u8; 20]| serde_json::json!({ "accountId": format!("0x{}", hex::encode(id)) });
+            let row = |action: &str, account: [u8; 20]| {
+                ("dotbit".to_string(), action.to_string(), id(account))
+            };
+            BTreeMap::from([
+                (
+                    vec![0xb1; 32],
+                    vec![
+                        row("confirm_proposal", VALAR),
+                        row("confirm_proposal", NEIGHBOUR),
+                    ],
+                ),
+                (vec![0xb2; 32], vec![row("renew_account", VALAR)]),
+                (vec![0xb3; 32], vec![row("edit_records", VALAR)]),
+                (vec![0xb4; 32], vec![row("transfer_account", VALAR)]),
+                (
+                    vec![0xb5; 32],
+                    vec![row("recycle_expired_account", NEIGHBOUR)],
+                ),
+            ])
+        }
+
+        #[tokio::test]
+        async fn live_and_bulk_persist_identical_dotbit_protocol_actions() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotbit_blocks();
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+            let mut live: ActionRows = BTreeMap::new();
+            for (tx_hash, _) in expected() {
+                let (block_num, tx_idx) = store.get_tx_location(&tx_hash).unwrap().unwrap();
+                let actions = store
+                    .get_tx_actions(block_num, tx_idx, &tx_hash)
+                    .unwrap()
+                    .expect("live TxActions row");
+                live.insert(tx_hash, rows_of(&actions));
+            }
+
+            let snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            // `tx_actions_map` is keyed by the raw CF_TX_ACTIONS key.
+            let bulk_by_hash: HashMap<Vec<u8>, &ckbadger_store::types::TxActions> = snapshot
+                .tx_actions_map
+                .values()
+                .map(|actions| (actions.tx_hash.clone(), actions))
+                .collect();
+            let bulk: ActionRows = expected()
+                .into_keys()
+                .map(|tx_hash| {
+                    let actions = bulk_by_hash.get(&tx_hash).expect("bulk TxActions row");
+                    (tx_hash, rows_of(actions))
+                })
+                .collect();
+
+            assert_eq!(live, expected(), "live dotbit protocol actions");
+            assert_eq!(
+                bulk, live,
+                "bulk and live must persist identical protocol actions"
+            );
+            // Every `.bit` transaction now carries an Identity bucket row.
+            for tx_hash in expected().into_keys() {
+                let actions = bulk_by_hash[&tx_hash];
+                assert_eq!(
+                    ckbadger_store::classify_global_bucket(actions),
+                    Some(ckbadger_store::GlobalBucket::Identity),
+                    "tx 0x{}",
+                    hex::encode(&tx_hash)
+                );
+            }
         }
     }
 
@@ -11777,6 +12184,143 @@ mod tests {
             .await
             .expect("live replay after shallow fork");
             assert_stats_dao_rows_eq(stats_dao_rows(&multi), &expected, "bulk vs rollback/replay");
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+        }
+
+        fn bucket_rows(store: &CkbadgerStore) -> Vec<Vec<u8>> {
+            store
+                .iterator_cf(
+                    store.cf_tx_actions_by_bucket(),
+                    rocksdb::IteratorMode::Start,
+                )
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    assert!(value.is_empty(), "bucket rows carry no value");
+                    key.to_vec()
+                })
+                .collect()
+        }
+
+        /// `CF_TX_ACTIONS_BY_BUCKET`: bulk materialization, a block-at-a-time
+        /// live sync, a multi-block live batch, and a rollback + replay of the
+        /// last two blocks must all hold byte-identical rows — one per
+        /// non-cellbase transaction, keyed by `classify_global_bucket` of that
+        /// transaction's own `TxActions` row — while the append-only store is
+        /// never touched by the rollback.
+        #[tokio::test]
+        async fn bulk_live_batch_shapes_and_replay_write_identical_bucket_rows() {
+            use ckbadger_store::GlobalBucket;
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = continuous_chain_with_dao_token_and_name();
+            let bulk = crate::sync::materialize_bulk_artifacts_with_latest_dao_for_test(&blocks)
+                .expect("continuous genesis bulk build");
+
+            // Expected rows straight from the TxActions rows bulk persisted.
+            let mut expected: Vec<Vec<u8>> = bulk
+                .tx_actions_map
+                .values()
+                .filter_map(|actions| {
+                    ckbadger_store::tx_actions_bucket_key(actions).map(|k| k.to_vec())
+                })
+                .collect();
+            expected.sort();
+            let non_cellbase = bulk
+                .tx_actions_map
+                .values()
+                .filter(|a| !a.is_cellbase)
+                .count();
+            assert_eq!(expected.len(), non_cellbase);
+            let buckets: std::collections::BTreeSet<GlobalBucket> = expected
+                .iter()
+                .map(|k| {
+                    ckbadger_store::keys::decode_tx_actions_by_bucket_key(k)
+                        .unwrap()
+                        .0
+                })
+                .collect();
+            for bucket in [
+                GlobalBucket::Dao,
+                GlobalBucket::Token,
+                GlobalBucket::Identity,
+            ] {
+                assert!(
+                    buckets.contains(&bucket),
+                    "fixture covers {bucket:?}: {buckets:?}"
+                );
+            }
+            // The fixture's only protocol actions are `.cell` ones, which are
+            // identity actions.
+            assert!(
+                !buckets.contains(&GlobalBucket::Protocol),
+                ".cell transactions classify as Identity: {buckets:?}"
+            );
+            assert_eq!(bulk.tx_actions_by_bucket, expected, "bulk bucket rows");
+
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer =
+                    super::live_dao_fee::indexer_for_genesis_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for block in blocks.clone() {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![block],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+            assert_eq!(bucket_rows(&single), expected, "bulk vs single live");
+            assert_eq!(bucket_rows(&multi), expected, "bulk vs multi live");
+
+            let immutable_before = cell_payload_rows(&multi);
+            multi_indexer
+                .writer
+                .cleanup_batch_range(multi.as_ref(), 2, 3)
+                .unwrap();
+            let surviving: Vec<Vec<u8>> = expected
+                .iter()
+                .filter(|k| {
+                    ckbadger_store::keys::decode_tx_actions_by_bucket_key(k)
+                        .unwrap()
+                        .1
+                        < 2
+                })
+                .cloned()
+                .collect();
+            assert!(surviving.len() < expected.len());
+            assert_eq!(
+                bucket_rows(&multi),
+                surviving,
+                "rollback to block 1 deletes exactly the bucket rows of blocks 2 and 3"
+            );
+            assert_eq!(cell_payload_rows(&multi), immutable_before);
+            multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
+            multi_indexer
+                .reconcile_cell_dist_tracker_with_tip(1)
+                .unwrap();
+            multi_indexer.cell_cache.clear();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks[2..].to_vec(),
+            )
+            .await
+            .expect("live replay after shallow fork");
+            assert_eq!(bucket_rows(&multi), expected, "bulk vs rollback/replay");
             assert_eq!(cell_payload_rows(&multi), immutable_before);
         }
 

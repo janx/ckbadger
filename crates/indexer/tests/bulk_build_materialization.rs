@@ -976,7 +976,17 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 15);
+    // 15 history rows plus the one `tx_actions_by_bucket` row of the single
+    // non-cellbase transaction (the cellbase gets none).
+    assert_eq!(snapshot.report.streamed_history_rows, 16);
+    assert_eq!(
+        snapshot
+            .tx_actions_by_bucket
+            .iter()
+            .map(|key| keys::decode_tx_actions_by_bucket_key(key).unwrap())
+            .collect::<Vec<_>>(),
+        vec![(ckbadger_store::GlobalBucket::Ckb, 14_000_321, 1)]
+    );
     assert!(snapshot.report.final_snapshot_rows > 0);
 
     let header = snapshot
@@ -1030,7 +1040,8 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    assert_eq!(snapshot.report.streamed_history_rows, 15);
+    // Includes the consume tx's one `tx_actions_by_bucket` row.
+    assert_eq!(snapshot.report.streamed_history_rows, 16);
     assert_eq!(snapshot.cell_payloads.len(), 2);
     assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
     assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));

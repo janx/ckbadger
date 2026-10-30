@@ -554,11 +554,10 @@ pub(crate) fn parse_protocol_facts(
         }
         CellSemanticTag::Dotbit => {
             let Some(mut account) = DotbitParser::parse_account_parsed_cell(cell) else {
-                warn!(
-                    tx = hex::encode(tx_hash),
+                crate::parser::dotbit::log_unindexed_account_cell(
+                    &format!("0x{}", hex::encode(tx_hash)),
                     output_index,
-                    data_len = cell.data.len(),
-                    "skipping unparseable DotBit AccountCell in protocol facts"
+                    &cell.data,
                 );
                 return Ok(None);
             };

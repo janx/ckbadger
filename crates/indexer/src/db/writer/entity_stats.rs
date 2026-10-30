@@ -237,52 +237,130 @@ impl SharedEntityStatsOverlay {
     }
 }
 
+/// The two-`i128` daily shape the script, cluster, spore and object families
+/// share (pinned by `daily_pair_codec_is_identical_across_families`).
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct DailyPair {
+    owned_capacity_delta: i128,
+    owned_knowledge_delta: i128,
+}
+
+/// Encoded width of a [`DailyPair`] row.
+const DAILY_PAIR_LEN: usize = 32;
+/// Encoded width of a `TokenDailyDelta` row: the pair plus `tx_count: u64`.
+const TOKEN_DAILY_LEN: usize = 40;
+
+/// The previous row of a daily family, decoded only if it has exactly the
+/// family's width — bincode would otherwise read a wider row's prefix.
+fn decode_daily<T: serde::de::DeserializeOwned + Default>(
+    prev: Option<&[u8]>,
+    width: usize,
+    ctx: &dyn Fn() -> String,
+) -> Result<T> {
+    match prev {
+        Some(bytes) if bytes.len() != width => bail!(
+            "entity daily delta has {} bytes, expected {}: {}",
+            bytes.len(),
+            width,
+            ctx()
+        ),
+        Some(bytes) => bincode::deserialize(bytes).map_err(|e| {
+            anyhow::anyhow!("failed to deserialize entity daily delta: {}, {}", ctx(), e)
+        }),
+        None => Ok(T::default()),
+    }
+}
+
+fn add_daily_i128(
+    current: i128,
+    delta: i128,
+    field: &str,
+    ctx: &dyn Fn() -> String,
+) -> Result<i128> {
+    current.checked_add(delta).ok_or_else(|| {
+        anyhow::anyhow!(
+            "entity daily {field} delta overflow: {}, current={}, delta={}",
+            ctx(),
+            current,
+            delta
+        )
+    })
+}
+
 /// Apply a `(capacity, knowledge)` daily delta on top of the previous encoded
 /// value.
 ///
-/// All five daily families serialise the identical two-`i128` shape (pinned by
-/// `daily_pair_codec_is_identical_across_families`), so one codec serves them
-/// all. Both fields zero collapses the row to `None`, matching every existing
-/// daily writer.
+/// The script, cluster, spore and object families serialise the identical
+/// two-`i128` shape, so one codec serves them all. Both fields zero collapses
+/// the row to `None`, matching every existing daily writer. Token days carry a
+/// transaction count as well and go through [`apply_token_daily`].
 pub fn apply_daily_pair(
     prev: Option<&[u8]>,
     capacity_delta: i128,
     knowledge_delta: i128,
     ctx: &dyn Fn() -> String,
 ) -> Result<Option<Vec<u8>>> {
-    let mut current: TokenDailyDelta = match prev {
-        Some(bytes) => bincode::deserialize(bytes).map_err(|e| {
-            anyhow::anyhow!("failed to deserialize entity daily delta: {}, {}", ctx(), e)
-        })?,
-        None => TokenDailyDelta::default(),
-    };
-    current.owned_capacity_delta = current
-        .owned_capacity_delta
-        .checked_add(capacity_delta)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "entity daily capacity delta overflow: {}, current={}, delta={}",
-                ctx(),
-                current.owned_capacity_delta,
-                capacity_delta
-            )
-        })?;
-    current.owned_knowledge_delta = current
-        .owned_knowledge_delta
-        .checked_add(knowledge_delta)
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "entity daily knowledge delta overflow: {}, current={}, delta={}",
-                ctx(),
-                current.owned_knowledge_delta,
-                knowledge_delta
-            )
-        })?;
+    let mut current: DailyPair = decode_daily(prev, DAILY_PAIR_LEN, ctx)?;
+    current.owned_capacity_delta = add_daily_i128(
+        current.owned_capacity_delta,
+        capacity_delta,
+        "capacity",
+        ctx,
+    )?;
+    current.owned_knowledge_delta = add_daily_i128(
+        current.owned_knowledge_delta,
+        knowledge_delta,
+        "knowledge",
+        ctx,
+    )?;
     if current.owned_capacity_delta == 0 && current.owned_knowledge_delta == 0 {
         return Ok(None);
     }
     Ok(Some(bincode::serialize(&current).map_err(|e| {
         anyhow::anyhow!("failed to serialize entity daily delta: {}, {}", ctx(), e)
+    })?))
+}
+
+/// Apply one block's contribution to a token day: the capacity/knowledge
+/// deltas and the number of transactions that touched the token's cells.
+///
+/// The row survives while any of the three is non-zero; a contribution always
+/// carries at least one transaction (`TokenDailyChanges::add_tx`), so a token
+/// day that saw a transaction keeps its row even when its capacity nets to
+/// zero.
+pub fn apply_token_daily(
+    prev: Option<&[u8]>,
+    capacity_delta: i128,
+    knowledge_delta: i128,
+    tx_count: u64,
+    ctx: &dyn Fn() -> String,
+) -> Result<Option<Vec<u8>>> {
+    let mut current: TokenDailyDelta = decode_daily(prev, TOKEN_DAILY_LEN, ctx)?;
+    current.owned_capacity_delta = add_daily_i128(
+        current.owned_capacity_delta,
+        capacity_delta,
+        "capacity",
+        ctx,
+    )?;
+    current.owned_knowledge_delta = add_daily_i128(
+        current.owned_knowledge_delta,
+        knowledge_delta,
+        "knowledge",
+        ctx,
+    )?;
+    current.tx_count = current.tx_count.checked_add(tx_count).ok_or_else(|| {
+        anyhow::anyhow!(
+            "token daily tx_count overflow: {}, current={}, delta={}",
+            ctx(),
+            current.tx_count,
+            tx_count
+        )
+    })?;
+    if current == TokenDailyDelta::default() {
+        return Ok(None);
+    }
+    Ok(Some(bincode::serialize(&current).map_err(|e| {
+        anyhow::anyhow!("failed to serialize token daily delta: {}, {}", ctx(), e)
     })?))
 }
 
@@ -352,7 +430,7 @@ mod tests {
     }
 
     fn daily(cap: i128, know: i128) -> Vec<u8> {
-        bincode::serialize(&TokenDailyDelta {
+        bincode::serialize(&DailyPair {
             owned_capacity_delta: cap,
             owned_knowledge_delta: know,
         })
@@ -633,11 +711,12 @@ mod tests {
     fn daily_pair_codec_is_identical_across_families() {
         let cap = -1_234_567_890_123_456_789i128;
         let know = 9_876_543_210i128;
-        let token = bincode::serialize(&TokenDailyDelta {
+        let pair = bincode::serialize(&DailyPair {
             owned_capacity_delta: cap,
             owned_knowledge_delta: know,
         })
         .unwrap();
+        assert_eq!(pair.len(), DAILY_PAIR_LEN);
         for (label, bytes) in [
             (
                 "script",
@@ -673,11 +752,58 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                bytes, token,
-                "{label} daily delta must encode identically to token's — \
-                 `apply_daily_pair` is the single codec for all five families"
+                bytes, pair,
+                "{label} daily delta must encode as the shared pair — \
+                 `apply_daily_pair` is the single codec for the four pair families"
             );
         }
+        // Token days are the pair followed by the transaction count.
+        let token = bincode::serialize(&TokenDailyDelta {
+            owned_capacity_delta: cap,
+            owned_knowledge_delta: know,
+            tx_count: 7,
+        })
+        .unwrap();
+        assert_eq!(token.len(), TOKEN_DAILY_LEN);
+        assert_eq!(token[..DAILY_PAIR_LEN], pair[..]);
+        assert_eq!(token[DAILY_PAIR_LEN..], 7u64.to_le_bytes());
+    }
+
+    fn token_day(cap: i128, know: i128, tx_count: u64) -> Vec<u8> {
+        bincode::serialize(&TokenDailyDelta {
+            owned_capacity_delta: cap,
+            owned_knowledge_delta: know,
+            tx_count,
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn token_daily_accumulates_transactions_and_keeps_a_zero_capacity_day() {
+        let first = apply_token_daily(None, 300, 100, 1, &ctx()).unwrap();
+        assert_eq!(first, Some(token_day(300, 100, 1)));
+        // A transaction that moves token cells without changing their total
+        // capacity still counts, and the day keeps its row.
+        let second = apply_token_daily(first.as_deref(), -300, -100, 1, &ctx()).unwrap();
+        assert_eq!(second, Some(token_day(0, 0, 2)));
+        let err = apply_token_daily(Some(&token_day(0, 0, u64::MAX)), 0, 0, 1, &ctx()).unwrap_err();
+        assert!(err.to_string().contains("tx_count overflow"), "got: {err}");
+    }
+
+    /// A pair-width row under a token key (or the reverse) is corrupt, not a
+    /// prefix to read.
+    #[test]
+    fn daily_codecs_reject_the_other_familys_width() {
+        let err = apply_token_daily(Some(&daily(1, 1)), 0, 0, 1, &ctx()).unwrap_err();
+        assert!(
+            err.to_string().contains("has 32 bytes, expected 40"),
+            "got: {err}"
+        );
+        let err = apply_daily_pair(Some(&token_day(1, 1, 1)), 0, 0, &ctx()).unwrap_err();
+        assert!(
+            err.to_string().contains("has 40 bytes, expected 32"),
+            "got: {err}"
+        );
     }
 
     #[test]

@@ -233,6 +233,10 @@ pub struct ResolvedPoolTx {
     pub inputs: Vec<ResolvedInput>,
     pub outputs: Vec<ResolvedCell>,
     pub witnesses: Vec<String>,
+    /// The DAS ActionData action in `witnesses`, parsed by the indexer's own
+    /// parser so a pending `.bit` transaction gets the same `dotbit:*`
+    /// actions it will get once committed.
+    pub dotbit_action: Option<String>,
     pub is_cellbase: bool,
 }
 
@@ -322,6 +326,7 @@ impl ResolvedPoolTx {
             block_number: 0,
             timestamp: timestamp_ms,
             is_cellbase: self.is_cellbase,
+            dotbit_action: self.dotbit_action.as_deref(),
             inputs,
             outputs,
         })
@@ -644,6 +649,7 @@ pub fn resolve_pool_tx(
         inputs,
         outputs,
         witnesses: tx.witnesses.clone(),
+        dotbit_action: ckbadger_indexer::parser::DotbitParser::parse_das_action(&tx.witnesses),
         is_cellbase,
     })
 }

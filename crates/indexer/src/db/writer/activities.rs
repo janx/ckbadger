@@ -200,6 +200,11 @@ pub struct TxView<'a> {
     pub block_number: i64,
     pub timestamp: i64,
     pub is_cellbase: bool,
+    /// The action string of the transaction's DAS `ActionData` witness
+    /// (`DotbitParser::parse_das_action`), verbatim; `None` for a transaction
+    /// that carries none. Every path that builds a `TxView` parses it from the
+    /// same witnesses: live sync, bulk facts, and the tx-pool mirror.
+    pub dotbit_action: Option<&'a str>,
     pub inputs: Vec<InputCellView<'a>>,
     pub outputs: Vec<OutputCellView<'a>>,
 }
@@ -458,6 +463,7 @@ pub fn production_detectors(is_mainnet: bool) -> Vec<Box<dyn ProtocolDetector>> 
         Box::new(super::stablepp_detector::StableppDetector::new(is_mainnet)),
         Box::new(super::utxoswap_detector::UtxoSwapDetector::new(is_mainnet)),
         Box::new(super::dotcell_detector::DotCellDetector::new()),
+        Box::new(super::dotbit_detector::DotbitDetector::new()),
     ]
 }
 
@@ -1552,6 +1558,7 @@ pub(crate) mod test_fixtures {
                 block_number: 7,
                 timestamp: 0,
                 is_cellbase: self.is_cellbase,
+                dotbit_action: None,
                 inputs: self.inputs.iter().map(|i| i.view()).collect(),
                 outputs: self.outputs.iter().map(|o| o.view()).collect(),
             }
@@ -1645,6 +1652,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: vec![],
         };
@@ -1675,6 +1683,7 @@ mod tests {
             block_number: 1001,
             timestamp: 1_700_000_010,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![bob_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -1708,6 +1717,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -1737,6 +1747,7 @@ mod tests {
             block_number: 500,
             timestamp: 1_700_000_000,
             is_cellbase: true,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -1771,6 +1782,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -1804,6 +1816,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -1827,6 +1840,7 @@ mod tests {
             block_number: 100,
             timestamp: 1_700_000_000,
             is_cellbase: true,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs1.iter().map(|o| o.view()).collect(),
         };
@@ -1841,6 +1855,7 @@ mod tests {
             block_number: 100,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs2.iter().map(|o| o.view()).collect(),
         };
@@ -1892,6 +1907,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -1949,6 +1965,7 @@ mod tests {
             block_number: 4_743_232,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2005,6 +2022,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2052,6 +2070,7 @@ mod tests {
             block_number: 123,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2113,6 +2132,7 @@ mod tests {
             block_number: 5_867_661,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2156,6 +2176,7 @@ mod tests {
             block_number: 4_872_342,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2192,6 +2213,7 @@ mod tests {
             block_number: 124,
             timestamp: 1_700_000_100,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2236,6 +2258,7 @@ mod tests {
             block_number: 125,
             timestamp: 1_700_000_200,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2276,6 +2299,7 @@ mod tests {
             block_number: 200,
             timestamp: 1_700_000_200,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![dao_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2337,6 +2361,7 @@ mod tests {
             block_number: 19_841_165,
             timestamp: 1_700_300_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2397,6 +2422,7 @@ mod tests {
             block_number: 19_841_200,
             timestamp: 1_700_300_100,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2449,6 +2475,7 @@ mod tests {
             block_number: 19_841_300,
             timestamp: 1_700_300_200,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: inputs.iter().map(|i| i.view()).collect(),
             outputs: vec![],
         };
@@ -2538,6 +2565,7 @@ mod tests {
             block_number: 3001,
             timestamp: 1_700_400_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2600,6 +2628,7 @@ mod tests {
             block_number: 3000,
             timestamp: 1_700_400_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2654,6 +2683,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2697,6 +2727,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2752,6 +2783,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![udt_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2942,6 +2974,7 @@ mod tests {
             block_number: 2000,
             timestamp: 1_700_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -2987,6 +3020,7 @@ mod tests {
             block_number: 2000,
             timestamp: 1_700_100_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -3029,6 +3063,7 @@ mod tests {
             block_number: 2001,
             timestamp: 1_700_100_010,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![alice_input_owned.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -3141,6 +3176,7 @@ mod tests {
             block_number: 5000,
             timestamp: 1_700_200_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -3211,6 +3247,7 @@ mod tests {
             block_number: 5001,
             timestamp: 1_700_200_010,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -3275,6 +3312,7 @@ mod tests {
             block_number: 5002,
             timestamp: 1_700_200_020,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: outputs.iter().map(|o| o.view()).collect(),
         };
@@ -3348,6 +3386,7 @@ mod tests {
             block_number: 1000,
             timestamp: 1_700_100_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input],
             outputs: vec![output],
         };
@@ -3562,6 +3601,7 @@ mod tests {
             block_number: 100,
             timestamp: 1_700_000_000_000,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![InputCellView {
                 previous_tx_hash: &tx_hash,
                 previous_output_index: 0,
@@ -3619,6 +3659,7 @@ mod tests {
             block_number: 7,
             timestamp: 0,
             is_cellbase: false,
+            dotbit_action: None,
             inputs: vec![input.view()],
             outputs: vec![output.view()],
         }

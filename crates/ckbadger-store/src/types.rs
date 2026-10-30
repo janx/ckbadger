@@ -1448,12 +1448,17 @@ pub struct ScriptDailyDelta {
     pub owned_knowledge_delta: i128,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct TokenDailyDelta {
     /// Net live capacity change in shannons for this token's cells on a day.
     pub owned_capacity_delta: i128,
     /// Net live used capacity change in shannons for this token's cells on a day.
     pub owned_knowledge_delta: i128,
+    /// Canonical transactions that day that created or consumed at least one
+    /// cell of this token (any sUDT/xUDT-typed cell, `token_daily_member`).
+    /// Every row has at least one: a token day only exists because a
+    /// transaction touched the token's cells.
+    pub tx_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

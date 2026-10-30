@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (67 total: 63 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (68 total: 64 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 63 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 64 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -65,6 +65,7 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 | `dotcell_name_by_owner`          | owner_hash20 (20B) + name_id (20B) = 40B                                      | empty                                                                          | The `.cell` names a 20-byte owner prefix holds: address pages, holder counts, and the sale-state join                                                                                                                                                      |
 | `dotcell_ring`                   | namespace_args (20B)                                                          | DotCellRingRoot                                                                | One row per `.cell` namespace: the uniqueness ring's root cell, so verify can walk the ring without scanning. A network runs exactly one namespace                                                                                                         |
 | `activities`                     | block_num_desc + tx_idx_desc + tx_hash (44B)                                  | TxActions                                                                      | One canonical per-tx activity record; TX-level protocol/type/lock actions stored once plus sorted participant deltas                                                                                                                                       |
+| `tx_actions_by_bucket`           | bucket(1) + block_num_desc(8) + tx_idx_desc(4) = 13B                          | empty                                                                          | Global activity bucket index: one row per non-cellbase `activities` row, keyed by `classify_global_bucket` (`Dao=1 … Ckb=7`). Serves filtered `/activities` and `/transactions` pages without scanning; see the note below                                 |
 | `pending_proposals`              | proposal_id (10B hex string)                                                  | CachedProposal (JSON)                                                          | Ephemeral pending proposal cache (live sync only)                                                                                                                                                                                                          |
 | `fiber_channels`                 | channel_id (32B blake2b of funding outpoint)                                  | FiberChannel                                                                   | Fiber Network channel registry; funding lock args are descriptive and are not unique                                                                                                                                                                       |
 | `fiber_channel_by_commitment`    | commitment_hash                                                               | channel_id (32B)                                                               | Fiber channel index by commitment                                                                                                                                                                                                                          |
@@ -130,6 +131,33 @@ the standard the builder emitted it for, because `.cell`, `.bit` and short did:c
 bytes and the id alone cannot say which standard it belongs to. `ItemKind::tag()` is the one
 kind → participant-tag mapping. The value is bincode, so this is a layout change covered by a
 re-sync, not migrated.
+
+`TxActions.protocol_actions` carries one `dotbit` action per `.bit` account a DAS transaction's
+`ActionData` is about (`db/writer/dotbit_detector.rs`): `{ protocol: "dotbit", action: <ActionData
+action verbatim>, metadata: { accountId: "0x<20-byte id>" } }`. Subjects are the accounts only created
+or only consumed (registration, recycle) or, when every account is on both sides, all of them (renew,
+edit, transfer, …); ring neighbours whose `next` was rewritten are not subjects.
+
+### `tx_actions_by_bucket`: the global activity filter index
+
+`ckbadger_store::classify_global_bucket(&TxActions)` is the one classification behind every
+global activity filter (`dao`, `token`, `object`, `identity`, `protocol`, `script`, `ckb`); its
+enum discriminant is the key's first byte. Precedence: item-action protocols claim their
+class (`dao` actions → Dao, `dotbit` and `dotcell` actions → Identity), then any other protocol action →
+Protocol, then the participants' aggregate tags (DAO, token, object, identity), then type/lock
+script calls → Script, else Ckb. Cellbase has no row (it has no `activities` row either).
+
+- **Write.** `StoreBatch::put_tx_actions` puts the bucket row in the same batch as the
+  `activities` row (live sync), and bulk build pushes it beside the `activities` row in
+  `build_history_rows_for_block` (Class A). Both derive the key through `tx_actions_bucket_key`.
+- **Read.** `list_tx_actions_page_by_bucket` seeks the bucket from the cursor and loads each
+  row's `TxActions` by its 12-byte position prefix. A row without `TxActions`, or one whose
+  `TxActions` classifies elsewhere, is an error naming the position. Rows are canonical by
+  construction, so the read does no per-row canonicity lookups.
+- **Rollback.** Stage 8b' deletes each bucket's leading range above the fork point and requires
+  the count to equal the non-cellbase `activities` rows stage 8b deleted; a difference aborts the
+  rollback. No undo pre-image.
+- **Verify.** `global_activity_bucket_index_consistency` (S32, `docs/TESTING.md`).
 
 ### `addr_txs` value: a closed transaction type
 
@@ -402,6 +430,13 @@ inline as Class C sealed aggregates:
   too short for a u128 amount included); the amount facets — holders, supply, transfer counts,
   `TOKEN_HOURLY` and the token row — need an amount. Bulk (via `CellSemanticTag::{Sudt, Xudt}`)
   and live (`pipeline::token_daily_member`) apply the same rule (POSTMORTEM STATS-011).
+  `TokenDailyDelta { owned_capacity_delta, owned_knowledge_delta, tx_count }` (40 bytes): `tx_count`
+  is the number of transactions that day that created or consumed at least one such cell, one per
+  transaction however many of its cells moved (live: `pipeline::add_token_daily_tx` →
+  `TokenDailyChanges::add_tx`; bulk: `TokenOwner::apply_tx`). A day with a transaction keeps its row
+  even when its capacity nets to zero, and `find_first_invalid_token_daily_delta` rejects a row with
+  `tx_count == 0`. The script, cluster, spore and object daily rows keep the 32-byte pair codec
+  (`apply_daily_pair`); each codec rejects the other's width.
 
 ### stats_hodl Key Prefixes
 
@@ -601,7 +636,7 @@ Memory sizing is per network rather than a fixed host-wide peak:
 ### Live Write Buffers and Flush Frequency
 
 `atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
-**whole** database, so the smallest per-CF buffer decides how often all 63 CFs flush together.
+**whole** database, so the smallest per-CF buffer decides how often all 64 CFs flush together.
 
 - Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
   (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)
