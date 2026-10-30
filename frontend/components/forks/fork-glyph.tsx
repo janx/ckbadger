@@ -3,6 +3,7 @@
 import { useId } from 'react';
 import type { OrphanedBlock } from '@/lib/api';
 import { FORK_COLORS } from '@/lib/design-tokens';
+import { formatBlockNumber } from '@/lib/format-block';
 
 const XS = [6, 56, 106, 156];
 
@@ -23,10 +24,10 @@ export function ForkGlyph({
 }) {
   const marker = useId().replace(/:/g, '');
   if (!Number.isSafeInteger(depth) || depth < 1)
-    throw new Error(`Fork #${forkPoint}: invalid depth ${depth}`);
+    throw new Error(`Fork ${formatBlockNumber(forkPoint)}: invalid depth ${depth}`);
   if (uncleIn !== null && uncleIn < forkPoint + 2)
     throw new Error(
-      `Fork #${forkPoint}: uncle inclusion #${uncleIn} is not after the dropped block`
+      `Fork ${formatBlockNumber(forkPoint)}: uncle inclusion ${formatBlockNumber(uncleIn)} is not after the dropped block`
     );
   const dropped = Math.min(depth, 3);
   const cameBack = fate === 'canonical_now';
