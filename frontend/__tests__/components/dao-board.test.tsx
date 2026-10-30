@@ -610,3 +610,17 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     expect(ticks).toContain('1.01');
   });
 });
+
+describe('DaoBoard tier-1 rhythm (board V63)', () => {
+  it('keeps tier-1 sections 48 px apart with no rule between them', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
+    expect(issuance).not.toHaveClass('border-t');
+    expect(issuance.parentElement).toHaveClass('space-y-12');
+    expect(within(issuance).getByRole('heading', { level: 2 })).toHaveClass(
+      'text-[15px]',
+      'font-medium'
+    );
+  });
+});
