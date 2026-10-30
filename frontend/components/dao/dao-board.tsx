@@ -67,10 +67,6 @@ function formatAr(raw: string): string {
   return formatAccumulatedRate(BigInt(raw));
 }
 
-function Note({ children }: { children: ReactNode }) {
-  return <span className="text-text-dim font-mono text-[11px]">{children}</span>;
-}
-
 function Section({ title, note, children }: { title: string; note?: string; children: ReactNode }) {
   return (
     <section className="border-base-border border-t pt-5" aria-label={title}>
@@ -772,53 +768,104 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
   );
 }
 
-function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
+/**
+ * Tier 2 (board V63): the header's DAO field read in CKB with AR as its exact rate, and the DAO
+ * script's rules. S = still owed + burnt is stated only when the statistics and the header are the
+ * same block; across two blocks it would compare two different states (DAO-16).
+ */
+function RawEvidence({
+  evidence,
+  statistics,
+}: {
+  evidence: DaoEvidence;
+  statistics: DaoStatistics;
+}) {
+  const header = evidence.header;
+  const s = parseShannons(header.s, 'DAO header S');
+  const sameBlock = statistics.tipBlockNumber === header.blockNumber;
+  const owedPlusBurnt =
+    parseShannons(statistics.unclaimedCompensation, 'unclaimedCompensation') +
+    parseShannons(statistics.burnt, 'burnt');
+  // Same height, different S: the two reads disagree (a reorg between them, or a wrong aggregate).
+  // Said in place with the numbers, never smoothed over and never claimed as the identity.
+  const identity = !sameBlock ? 'other-block' : owedPlusBurnt === s ? 'holds' : 'differs';
   const fields = [
-    { key: 'C', bytes: '0–7', value: evidence.header.c, note: 'total issuance' },
-    { key: 'AR', bytes: '8–15', value: evidence.header.ar, note: 'accumulated rate × 10¹⁶' },
+    {
+      key: 'C',
+      bytes: '0..8',
+      value: (
+        <>
+          <Amount value={header.c} /> CKB issued in total
+        </>
+      ),
+    },
+    {
+      key: 'AR',
+      bytes: '8..16',
+      value: <>{formatAr(header.ar)} accumulated rate (genesis 1.0)</>,
+    },
     {
       key: 'S',
-      bytes: '16–23',
-      value: evidence.header.s,
-      note: 'compensation still owed to live deposits + the burnt share',
+      bytes: '16..24',
+      value: (
+        <>
+          <Amount value={header.s} /> CKB: compensation still owed to live deposits + the burnt
+          share, which no cell can ever claim
+        </>
+      ),
     },
-    { key: 'U', bytes: '24–31', value: evidence.header.u, note: 'protocol occupied capacity' },
+    {
+      key: 'U',
+      bytes: '24..32',
+      value: (
+        <>
+          <Amount value={header.u} /> CKB occupied (incl. genesis virtual occupied)
+        </>
+      ),
+    },
   ];
   return (
-    <DetailTier2>
+    <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
       <DetailSection
-        title={`The DAO field in block ${formatBlockNumber(evidence.header.blockNumber)}`}
-        actions={<Note>32 raw header bytes · four little-endian u64 fields</Note>}
+        title={`The DAO field in every block header · ${formatBlockNumber(header.blockNumber)}`}
       >
-        <div className="grid gap-2 md:grid-cols-4">
+        <div className="text-[12px]">
           {fields.map((field) => (
-            <div key={field.key} className="border-base-border border-l pl-3">
-              <div className="font-mono text-[15px] text-[#f2c55c]">
-                {field.key} <span className="text-text-dim text-[11px]">bytes {field.bytes}</span>
-              </div>
-              <div className="text-text-bright break-all font-mono text-[12px]">
-                {field.value}{' '}
-                <span className="text-text-dim">
-                  {field.key === 'AR' ? 'scaled rate' : 'shannons'}
-                </span>
-              </div>
-              {field.key !== 'AR' && (
-                <div className="text-text-bright text-[12px]">
-                  <Amount value={field.value} /> CKB
-                </div>
-              )}
-              <div className="text-text-dim text-[11px]">{field.note}</div>
+            <div
+              key={field.key}
+              className="border-base-elevated grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+            >
+              <span className="text-text-bright">{field.key}</span>
+              <span className="text-text-dim">bytes {field.bytes}</span>
+              <span className="min-w-0">{field.value}</span>
             </div>
           ))}
         </div>
-        <div className="text-text-dim mt-4 break-all font-mono text-[11px]">
-          {evidence.header.daoHex}
-        </div>
+        <div className="text-text-dim mt-3 break-all font-mono text-[11px]">{header.daoHex}</div>
         <p className="text-text-dim mt-3 text-[12px] leading-relaxed">
           Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
           {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
           capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
-          %. Compensation freezes at the withdrawal request AR.
+          %. Compensation freezes at the withdrawal request AR.{' '}
+          {identity === 'holds' ? (
+            <>
+              At block {formatBlockNumber(header.blockNumber)}, S equals the compensation still owed
+              plus the burnt share to the shannon: S only counts the burnt share, it does not hold
+              it for anyone. Compensation paid + still owed equals the depositors’ share.
+            </>
+          ) : identity === 'differs' ? (
+            <span role="alert" className="text-negative">
+              DAO header S at {formatBlockNumber(header.blockNumber)} is {s.toString()} shannons,
+              but still owed + burnt is {owedPlusBurnt.toString()}: the two reads disagree at one
+              height.
+            </span>
+          ) : (
+            <>
+              This S is block {formatBlockNumber(header.blockNumber)}’s and the statistics above are
+              block {formatBlockNumber(statistics.tipBlockNumber)}’s, so S = still owed + burnt is
+              not shown across two blocks.
+            </>
+          )}
         </p>
         {evidence.ar.year365 && (
           <div className="text-text-dim mt-2 font-mono text-[11px]">
@@ -833,24 +880,47 @@ function RawEvidence({ evidence }: { evidence: DaoEvidence }) {
           </div>
         )}
         <Link
-          href={`/blocks/${evidence.header.blockNumber}`}
-          className="mt-2 inline-block text-[12px] text-[#f2c55c] hover:underline"
+          href={`/blocks/${header.blockNumber}`}
+          className="text-text hover:text-text-bright mt-2 inline-block text-[12px] hover:underline"
         >
           Open source block →
         </Link>
       </DetailSection>
-      <DetailSection title="The DAO script" actions={<Note>type script · genesis deployment</Note>}>
-        <Link
-          href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
-          className="text-text-bright break-all font-mono text-[12px] hover:text-[#f2c55c] hover:underline"
-        >
-          0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e
-        </Link>
-        <p className="text-text-dim mt-2 text-[12px]">
-          Eight zero data bytes mark a deposit. A withdrawal request stores its deposit block number
-          as little-endian u64. A completed withdrawal cites the deposit and request headers and an
-          absolute epoch <code>since</code> at its required cycle boundary.
-        </p>
+      <DetailSection title="The DAO script">
+        <dl className="flex flex-col gap-2.5 text-[12px]">
+          <div>
+            <dt className="text-text-dim">Type script · type</dt>
+            <dd className="mt-0.5">
+              <Link
+                href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
+                className="text-text-bright break-all font-mono hover:underline"
+              >
+                0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e
+              </Link>
+            </dd>
+            <dd className="text-text-dim mt-0.5">
+              deployed in the genesis block; its code cell can never be spent
+            </dd>
+          </div>
+          <div>
+            <dt className="text-text-dim">Cell data, 8 bytes</dt>
+            <dd className="mt-0.5">
+              0 for a deposit · the deposit&apos;s block number (u64 LE) for a withdrawal request
+            </dd>
+          </div>
+          <div>
+            <dt className="text-text-dim">Withdrawing</dt>
+            <dd className="mt-0.5 leading-relaxed">
+              header deps: the deposit block and the request block · input since: the epoch where
+              the cycle ends · paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) +
+              occupied
+            </dd>
+          </div>
+          <div>
+            <dt className="text-text-dim">A standard deposit cell</dt>
+            <dd className="mt-0.5">102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8</dd>
+          </div>
+        </dl>
       </DetailSection>
     </DetailTier2>
   );
@@ -889,7 +959,7 @@ export function DaoBoard({
         <Owners evidence={evidence} />
         <DaoSources />
       </div>
-      <RawEvidence evidence={evidence} />
+      <RawEvidence evidence={evidence} statistics={statistics} />
     </div>
   );
 }

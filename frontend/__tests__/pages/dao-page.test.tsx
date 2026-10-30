@@ -24,6 +24,12 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="h
 const stats = {
   ...daoStatistics,
   tipBlockNumber: 5,
+  // Consistent with the evidence header at #5: S (500000000) = still owed + burnt.
+  miningReward: '100000000',
+  depositCompensation: '300000000',
+  totalCompensationPaid: '100000000',
+  unclaimedCompensation: '200000000',
+  burnt: '300000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   daoFreeCapacity: '40000000000',

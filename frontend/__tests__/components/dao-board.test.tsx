@@ -35,6 +35,12 @@ function stubCalculator() {
 const stats = {
   ...daoStatistics,
   tipBlockNumber: 5,
+  // Secondary issuance at the evidence header's block #5, whose S (500000000) = owed + burnt.
+  miningReward: '100000000',
+  depositCompensation: '300000000',
+  totalCompensationPaid: '100000000',
+  unclaimedCompensation: '200000000',
+  burnt: '300000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   // Free capacity in DAO counts frozen phase-1 cells; the depositors' weight does not, but adds
@@ -240,7 +246,7 @@ describe('DaoBoard', () => {
     expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
     const headings = Array.from(tier2.querySelectorAll('h2'));
     expect(headings.map((h) => h.textContent)).toEqual([
-      'The DAO field in block #5',
+      'The DAO field in every block header · #5',
       'The DAO script',
     ]);
     for (const h of headings) expect(h).toHaveClass('text-[13px]', 'text-[#a0a8be]');
@@ -257,7 +263,7 @@ describe('DaoBoard', () => {
           totalCompensationPaid: '0',
           unclaimedCompensation: '0',
         }}
-        evidence={evidence}
+        evidence={{ ...evidence, header: { ...evidence.header, s: '0' } }}
       />
     );
     expect(screen.getByText(/allocation shares are undefined/)).toBeInTheDocument();
@@ -506,5 +512,60 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     ).toHaveTextContent('300.00000000');
     // No "All N depositors" link: the API has no ranked list of every depositor (needs backend).
     expect(within(who()).queryByRole('link', { name: /depositors →/ })).toBeNull();
+  });
+});
+
+describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
+  // Statistics at the header's block #5, whose S (500000000) = still owed + burnt.
+  const sameBlock = {
+    ...stats,
+    miningReward: '100000000',
+    depositCompensation: '300000000',
+    totalCompensationPaid: '100000000',
+    unclaimedCompensation: '200000000',
+    burnt: '300000000',
+  };
+  const tier2 = (container: HTMLElement) => container.querySelector('[data-tier="2"]')!;
+
+  it('reads the header field as CKB and AR as a rate, and proves S at one block', () => {
+    stubCalculator();
+    const { container } = render(<DaoBoard statistics={sameBlock} evidence={evidence} />);
+    const t2 = tier2(container);
+    expect(t2).toHaveTextContent('ARbytes 8..161.0200000000000000 accumulated rate (genesis 1.0)');
+    expect(t2).not.toHaveTextContent('10200000000000000 scaled rate');
+    expect(t2).toHaveTextContent('Cbytes 0..810,000,000.00000000 CKB issued in total');
+    expect(t2).toHaveTextContent(
+      'At block #5, S equals the compensation still owed plus the burnt share to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
+    );
+    expect(t2).toHaveTextContent(
+      'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
+    );
+    expect(t2).toHaveTextContent('102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8');
+  });
+
+  it('says in place when the header S disagrees with still owed + burnt at one height', () => {
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard
+        statistics={{ ...sameBlock, burnt: '300000001', miningReward: '99999999' }}
+        evidence={evidence}
+      />
+    );
+    expect(within(tier2(container) as HTMLElement).getByRole('alert')).toHaveTextContent(
+      'DAO header S at #5 is 500000000 shannons, but still owed + burnt is 500000001'
+    );
+    expect(tier2(container)).not.toHaveTextContent('to the shannon');
+  });
+
+  it('does not claim the S identity across two different blocks', () => {
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard statistics={{ ...sameBlock, tipBlockNumber: 4 }} evidence={evidence} />
+    );
+    const t2 = tier2(container);
+    expect(t2).not.toHaveTextContent('to the shannon');
+    expect(t2).toHaveTextContent(
+      'This S is block #5’s and the statistics above are block #4’s, so S = still owed + burnt is not shown across two blocks.'
+    );
   });
 });
