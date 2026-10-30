@@ -98,6 +98,8 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
             </>,
           ],
           ['witness version', String(d.witnessVersion)],
+          // R2b-b-17: rows only for fields the API serves; "0" is a time never set.
+          ...witnessTimes(d),
           ['records', `${d.records.length} ${d.records.length === 1 ? 'entry' : 'entries'}`],
           ['owner', `algorithm ${d.owner.algorithm} · ${d.owner.argsHex}`],
           [
@@ -128,6 +130,44 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
       </p>
     </Tier2Section>
   );
+}
+
+function witnessTime(value: string | null): ReactNode {
+  if (value === null) return <Dim>not in this witness version</Dim>;
+  if (value === '0') return <Dim>never</Dim>;
+  return formatUtc8DateTime(Number(value) * 1000);
+}
+
+function witnessTimes(d: Of<'dotbit'>['versions'][number]['decoded']): [string, ReactNode][] {
+  const rows: [string, ReactNode][] = [];
+  if (typeof d.updatedAt === 'string') rows.push(['updated_at', witnessTime(d.updatedAt)]);
+  for (const [key, value] of [
+    ['last_transfer_account_at', d.lastTransferAccountAt],
+    ['last_edit_manager_at', d.lastEditManagerAt],
+    ['last_edit_records_at', d.lastEditRecordsAt],
+  ] as const)
+    if (value !== undefined) rows.push([key, witnessTime(value)]);
+  if (d.enableSubAccount !== undefined)
+    rows.push([
+      'enable_sub_account',
+      d.enableSubAccount === null ? (
+        <Dim>not in this witness version</Dim>
+      ) : (
+        String(d.enableSubAccount)
+      ),
+    ]);
+  if (d.renewSubAccountPrice !== undefined)
+    rows.push([
+      'renew_sub_account_price',
+      d.renewSubAccountPrice === null ? (
+        <Dim>not in this witness version</Dim>
+      ) : (
+        <>
+          {BigInt(d.renewSubAccountPrice).toLocaleString('en-US')} <Dim>· raw</Dim>
+        </>
+      ),
+    ]);
+  return rows;
 }
 
 /** The `.bit` account a `.bit Cell` names, as it is now (ID-BC2: its state at minting is not served). */

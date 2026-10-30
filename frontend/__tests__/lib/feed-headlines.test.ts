@@ -189,3 +189,33 @@ describe('identity standards word their coarse item action (ID-C1)', () => {
     expect(itemFeedHeadline(self('renew'), null, TX, did).text).toBe('Identity renew');
   });
 });
+
+// F2 identities (round 2, visual pass): R2b-b versionDiff states whether the owner changed.
+describe('identity rows read the API version diff (ID-C1)', () => {
+  const row = (action: string, protocolActions: string[], ownerChanged: boolean | null) =>
+    ({
+      itemId: '0x' + '11'.repeat(20),
+      action,
+      protocolActions,
+      ringRelink: null,
+      actedOn: 'self',
+      createdCell: null,
+      consumedCell: null,
+      versionDiff: { ownerChanged, dataChanged: true },
+    }) as ItemFeedContext;
+  it("says a .bit transfer kept its owner, and a .bit Cell update was its owner's", async () => {
+    const { IDENTITY_ACTION_WORDS } = await import('@/lib/feed-headlines');
+    const bit = { kind: 'identity' as const, protocol: 'dotbit' as const };
+    expect(
+      itemFeedHeadline(row('update', ['dotbit:transfer_account'], false), null, TX, bit).text
+    ).toBe('Transferred to the same owner');
+    expect(
+      itemFeedHeadline(row('update', ['dotbit:transfer_account'], true), null, TX, bit).text
+    ).toBe('Transferred');
+    const bitCell = { kind: 'identity' as const, actionWords: IDENTITY_ACTION_WORDS.bit_cell };
+    expect(itemFeedHeadline(row('update', [], false), null, TX, bitCell).text).toBe(
+      'Updated by its owner'
+    );
+    expect(itemFeedHeadline(row('update', [], null), null, TX, bitCell).text).toBe('Updated');
+  });
+});

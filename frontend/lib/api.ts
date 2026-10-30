@@ -1502,6 +1502,11 @@ export interface ItemFeedContext {
   ringRelink: ItemRingRelink | null;
   /** Whose action this row is (contracts §5.1, ID-C1 / ID-C4): a neighbour's row is dimmed. */
   actedOn: 'self' | 'neighbour';
+  /**
+   * F2 identities (round 2) — R2b-b-19: what changed between the consumed and created version;
+   * null without both. `ownerChanged` is null for `.cell` (its owner lives in the data).
+   */
+  versionDiff?: { ownerChanged: boolean | null; dataChanged: boolean } | null;
   createdCell: ItemCellVersion | null;
   consumedCell: ItemCellVersion | null;
 }
@@ -1538,6 +1543,14 @@ export interface DotbitProtocol {
   witnessVersion: number;
   registeredAt: string;
   status: number;
+  // F2 identities (round 2) — R2b-b-17 witness fields; seconds as decimal strings ("0" = never),
+  // null where the witness version lacks the field (optional: older captured fixtures predate it).
+  updatedAt?: string | null;
+  lastTransferAccountAt?: string | null;
+  lastEditManagerAt?: string | null;
+  lastEditRecordsAt?: string | null;
+  enableSubAccount?: number | null;
+  renewSubAccountPrice?: string | null;
   owner: { algorithm: number; argsHex: string };
   manager: { algorithm: number; argsHex: string };
   records: {
@@ -2126,6 +2139,8 @@ interface CollectionItem {
   ownerAddress: string | null;
   /** `.cell` rows only: the owner prefix in the name's data (`ownerLockHash` is what it resolves to). */
   ownerHashPrefix?: string;
+  /** did:ckb rows only (R2b-b-22): the DID string, the protocol view's one encoder. */
+  did?: string;
   isLive: boolean;
   createdAtBlock: number;
   expiredAt?: number | null;

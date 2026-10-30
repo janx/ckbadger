@@ -171,3 +171,14 @@ it('opens with what the standard is, not its route alias or a placeholder (ID-CO
   expect(header).toHaveTextContent('Pure CKB');
   expect(header).toHaveTextContent('Each .bit name and everything about it live in one CKB cell.');
 });
+
+it('titles a did:ckb row by its DID when it has no name (ID-COL-3, R2b-b-22)', async () => {
+  const item = identityItem('did');
+  vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(
+    emptyPage([{ ...item, name: null, did: 'did:ckb:3hbpv2xjwz7q2jzobspfhddznczzrjtl' }])
+  );
+  render(<Page collectionId="did" />);
+  expect(
+    await screen.findByRole('link', { name: 'did:ckb:3hbpv2xjwz7q2jzobspfhddznczzrjtl' })
+  ).toHaveAttribute('href', `/mainnet/identities/did/${item.nftId}`);
+});
