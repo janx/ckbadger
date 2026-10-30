@@ -260,6 +260,40 @@ pub struct SporeDetailResponse {
     pub owned_capacity: String,
     /// The occupied part of `owned_capacity` (common knowledge), in shannons.
     pub owned_knowledge: String,
+    /// Script hash of the spore cell's own type script (code hash, hash type,
+    /// args = spore id) — the live cell's, or a melted spore's last cell's.
+    pub type_script_hash: String,
+}
+
+/// The type script hash of a spore's cell, from the cell's stored script.
+/// Deployments differ, so it is never rebuilt from a known code hash.
+fn spore_cell_type_script_hash(
+    spore_id: &[u8],
+    version: &super::asset_history::CanonicalCellVersion,
+) -> Result<String, ApiRouteError> {
+    let context = || {
+        format!(
+            "spore 0x{} cell {}:{}",
+            hex::encode(spore_id),
+            version.response.tx_hash,
+            version.response.output_index
+        )
+    };
+    let cell = &version.cell;
+    let (Some(args), Some(hash)) = (&cell.type_args, &cell.type_script_hash) else {
+        return Err(ApiError::internal(format!(
+            "{} has no type script",
+            context()
+        )));
+    };
+    if args.as_slice() != spore_id {
+        return Err(ApiError::internal(format!(
+            "{} type args 0x{} differ from the spore id",
+            context(),
+            hex::encode(args)
+        )));
+    }
+    Ok(format!("0x{}", hex::encode(hash)))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1253,45 +1287,48 @@ async fn get_spore(
                 .map_err(|e| ApiError::internal(e.to_string()))?
                 .flatten()
                 .map(|resolved| resolved.address);
-            if entry.is_live {
-                let mut live = None;
-                for (tx_hash, output_index) in state
-                    .store
-                    .list_spore_outpoints_by_spore_id(&id)
-                    .map_err(|e| ApiError::internal(e.to_string()))?
-                {
-                    let key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
-                    if let Some(marker) = state
-                        .store
-                        .get_cf(state.store.cf_live_cells(), &key)
-                        .map_err(|e| ApiError::internal(e.to_string()))?
-                    {
-                        if marker.len() != 8 {
-                            return Err(ApiError::internal(format!(
-                                "spore {} has invalid live marker at 0x{}:{}",
-                                spore_id,
-                                hex::encode(&tx_hash),
-                                output_index
-                            )));
-                        }
-                        if live.replace((tx_hash, output_index)).is_some() {
-                            return Err(ApiError::internal(format!(
-                                "spore {} has multiple live outpoints",
-                                spore_id
-                            )));
-                        }
-                    }
-                }
-                let (tx_hash, output_index) = live.ok_or_else(|| {
-                    ApiError::internal(format!("live spore {} has no live outpoint", spore_id))
-                })?;
-                spore.tx_hash = format!("0x{}", hex::encode(tx_hash));
-                spore.output_index = Some(i32::from(output_index));
+            // The spore's canonical cell history: the live cell (if any) and
+            // the last cell, whose type script names the spore on chain.
+            let versions = {
+                let state = state.clone();
+                let id = id.clone();
+                tokio::task::spawn_blocking(move || {
+                    super::asset_history::canonical_versions(
+                        &state,
+                        &id,
+                        NftLifecycleStandard::Spore,
+                    )
+                })
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .map_err(|e| ApiError::internal(format!("spore {spore_id} cell history: {e:#}")))?
+            };
+            let last = versions.last().ok_or_else(|| {
+                ApiError::internal(format!("spore {spore_id} has no canonical cell"))
+            })?;
+            if last.response.is_live != entry.is_live
+                || versions[..versions.len() - 1]
+                    .iter()
+                    .any(|version| version.response.is_live)
+            {
+                return Err(ApiError::internal(format!(
+                    "spore {spore_id} is_live={} but its last canonical cell {}:{} is_live={}",
+                    entry.is_live,
+                    last.response.tx_hash,
+                    last.response.output_index,
+                    last.response.is_live
+                )));
             }
+            if entry.is_live {
+                spore.tx_hash = last.response.tx_hash.clone();
+                spore.output_index = Some(i32::from(last.response.output_index));
+            }
+            let type_script_hash = spore_cell_type_script_hash(&id, last)?;
             ok(SporeDetailResponse {
                 spore,
                 owned_capacity: owned_capacity.to_string(),
                 owned_knowledge: owned_knowledge.to_string(),
+                type_script_hash,
             })
         }
         None => Err(ApiError::not_found("Spore not found")),
