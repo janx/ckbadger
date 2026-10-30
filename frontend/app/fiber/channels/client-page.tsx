@@ -77,9 +77,15 @@ function heroFigures(summary: FiberNetwork['summary']): TopicFigure[] {
     {
       label: 'Channels ever',
       value: summary.totalChannels.toLocaleString('en-US'),
-      sub: summary.firstOpenTimestamp
-        ? `since ${formatUtc8Date(summary.firstOpenTimestamp)}`
-        : 'none yet',
+      sub: [
+        summary.firstOpenTimestamp
+          ? `since ${formatUtc8Date(summary.firstOpenTimestamp)}`
+          : 'none yet',
+        ...summary.channelsByToken.map(
+          (token) =>
+            `${token.channels.toLocaleString('en-US')} in ${token.symbol ?? `${token.udtTypeHash.slice(0, 10)}…`}`
+        ),
+      ].join(' · '),
     },
     {
       label: 'Parties',
@@ -111,6 +117,7 @@ export default function FiberChannelsPage() {
         limit: DEFAULT_PAGE_SIZE,
         cursor: pagination.cursor,
         state: stateFilter === 'all' ? undefined : stateFilter,
+        sort: 'capacity',
       }),
   });
   const summary = network.data?.summary;
@@ -135,9 +142,12 @@ export default function FiberChannelsPage() {
         )}
         {network.data && <FiberNetworkGraph network={network.data} />}
         <section aria-labelledby="fiber-channels-heading" className="flex min-w-0 flex-col gap-2.5">
-          <h2 id="fiber-channels-heading" className="text-text-bright text-[15px] font-medium">
-            Channels
-          </h2>
+          <div className="flex flex-wrap items-baseline justify-between gap-4">
+            <h2 id="fiber-channels-heading" className="text-text-bright text-[15px] font-medium">
+              Channels
+            </h2>
+            <span className="text-text-dim text-[12px]">sorted by capacity</span>
+          </div>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="State">
             {filters.map((filter) => {
               const on = stateFilter === filter.value;
@@ -251,6 +261,7 @@ export default function FiberChannelsPage() {
               {(channels.data.hasMore || pagination.hasPrevious) && (
                 <CursorPagination
                   className="pt-1"
+                  total={channels.data.total}
                   totalLabel="channels"
                   pageSize={DEFAULT_PAGE_SIZE}
                   page={pagination.page}
