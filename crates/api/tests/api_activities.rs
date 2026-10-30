@@ -235,6 +235,46 @@ async fn test_activity_protocol_actions_carry_registry_display_names() {
     );
 }
 
+/// W2: the `dotbit` actions the indexer persists (one per account, each with
+/// `metadata.accountId`) project through the registry with their display
+/// name and the account id intact, on the address feed and on the global
+/// Identity bucket, where every `.bit` transaction is indexed.
+#[tokio::test]
+async fn dotbit_protocol_actions_project_with_their_registry_name() {
+    let lock_hash = vec![0x25; 32];
+    let account_id = "0x2d2ed79a32f078c511108765a384a183e14990e9";
+    let mut actions = make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 0, 0);
+    actions.protocol_actions = vec![ProtocolAction::new(
+        "dotbit",
+        "renew_account",
+        serde_json::json!({ "accountId": account_id }),
+    )];
+    for participant in &mut actions.participants {
+        participant.tags |= ckbadger_store::types::TAG_PROTOCOL;
+    }
+
+    let json = address_activities_json(&lock_hash, &actions).await;
+    let action = &json["data"][0]["protocolActions"][0];
+    assert_eq!(action["protocol"], "dotbit", "{json}");
+    assert_eq!(action["protocolName"], ".bit", "{json}");
+    assert_eq!(action["action"], "renew_account", "{json}");
+    assert_eq!(action["metadata"]["accountId"], account_id, "{json}");
+
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_tx_actions(&actions);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, global) = fetch_json(app, "/api/v1/activities?filter=identity&limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{global}");
+    let rows = global["data"].as_array().expect("data array");
+    assert_eq!(rows.len(), 1, "{global}");
+    assert_eq!(
+        rows[0]["protocolActions"][0]["protocolName"], ".bit",
+        "{global}"
+    );
+}
+
 /// A protocol id with no registry entry is an invariant violation — the
 /// response fails naming it rather than showing the raw id.
 #[tokio::test]
