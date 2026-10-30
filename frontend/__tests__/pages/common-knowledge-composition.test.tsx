@@ -31,9 +31,10 @@ describe('CommonKnowledgeCompositionPage', () => {
     });
     render(<CommonKnowledgeCompositionPage />);
     expect(await screen.findByText('Knowledge by kind')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /All charts/ })).toHaveAttribute(
+    // F2 charts (CH-26): a breadcrumb to the chart's own section replaces "← All charts".
+    expect(screen.getByRole('link', { name: 'Charts / Common knowledge' })).toHaveAttribute(
       'href',
-      '/mainnet/charts'
+      '/mainnet/charts#common-knowledge'
     );
     await waitFor(() => expect(chartMock).toHaveBeenCalled());
     expect(chartMock.mock.calls[0][0]).toMatchObject({

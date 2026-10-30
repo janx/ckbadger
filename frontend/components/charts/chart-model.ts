@@ -50,7 +50,14 @@ export interface ChartModel {
   latest: { label: string; raw: string; display: string } | null;
   /** Exact, signed change between the final two returned points. */
   delta: string | null;
-  rankedRows?: { label: string; value: string; share: string; href?: string; identity?: string }[];
+  rankedRows?: {
+    label: string;
+    value: string;
+    share: string;
+    href?: string;
+    identity?: string;
+    assetClass?: AssetClass;
+  }[];
   /** Card preview of a ranking: the top five plus an exact "Others" for every remaining rank. */
   rankedPreview?: { rows: RankedPreviewRow[]; summaryLabel: string | undefined };
   /** Exact signed day-over-day change in occupied CKB, when the source is knowledge size. */

@@ -32,9 +32,10 @@ describe('TotalSupplyPage', () => {
     });
     render(<TotalSupplyPage />);
     expect(await screen.findByText('Supply')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /All charts/ })).toHaveAttribute(
+    // F2 charts (CH-26): a breadcrumb to the chart's own section replaces "← All charts".
+    expect(screen.getByRole('link', { name: 'Charts / Nervos DAO & economics' })).toHaveAttribute(
       'href',
-      '/mainnet/charts'
+      '/mainnet/charts#nervos-dao-economics'
     );
     await waitFor(() => expect(chartMock).toHaveBeenCalled());
     expect(chartMock.mock.calls[0][0]).toMatchObject({
@@ -49,7 +50,10 @@ describe('TotalSupplyPage', () => {
         { label: 'Nervos DAO', color: '#f2c55c' },
       ],
     });
-    expect(screen.getByText(/100.00000003 CKB/)).toBeInTheDocument();
+    // The head reading (CH-21): CKB stays exact, every digit.
+    expect(screen.getByRole('group', { name: 'Supply readings' })).toHaveTextContent(
+      '2026-02-23100.00000003CKB'
+    );
     expect(screen.getByText('/charts/total-supply')).toBeInTheDocument();
   });
 });

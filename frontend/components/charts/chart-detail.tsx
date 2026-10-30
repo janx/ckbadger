@@ -7,15 +7,20 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { Chart, type ChartMarker, type ChartPoint } from '@/components/ui/chart';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
+import { ClassMark } from '@/components/ui/class-mark';
 import {
   CHART_BY_SLUG,
   chartApiPath,
+  chartSectionId,
   type ChartDefinition,
 } from '@/components/charts/chart-catalogue';
 import {
+  axisStyle,
+  axisTicks,
   chartModel,
   formatChartExact,
   formatChartHover,
+  formatEpochLabel,
   type ChartModel,
 } from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
@@ -62,7 +67,10 @@ export function chartHardforkMarkers(
         event.activationEpoch > Number(points.at(-1)!.label)
       : eventKey < points[0].label || eventKey > points.at(-1)!.label;
     if (first < 0 || outside) return [];
-    return [{ index: first, label: event.shortName, plotLabel: '◆', href: '/hardforks' }];
+    // Named in the plot, like the board; the evidence links the hardforks page (CH-23).
+    return [
+      { index: first, label: event.shortName, plotLabel: event.shortName, href: '/hardforks' },
+    ];
   });
 }
 
@@ -78,6 +86,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
             <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 text-xs">
               <span className="text-text-bright min-w-0 break-all">
                 {index + 1}.{' '}
+                {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
                 {row.href ? (
                   <Link href={row.href} className="text-jade hover:underline">
                     {row.label}
@@ -101,6 +110,42 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
   );
 }
 
+/** How the chart's points are counted under its title (CH-36). */
+const POINT_NOUN = {
+  date: 'days',
+  month: 'cohorts',
+  epoch: 'epochs',
+  'model-year': 'model samples',
+  bucket: 'buckets',
+} as const;
+
+/** One big reading of the chart head: a small label over a rounded value, exact on hover. */
+function Reading({
+  label,
+  raw,
+  unit,
+  quiet = false,
+}: {
+  label: string;
+  raw: string;
+  unit: string;
+  quiet?: boolean;
+}) {
+  return (
+    <div className="flex flex-col items-end" title={`${formatChartExact(raw, unit)} ${unit}`}>
+      <span className="text-text-dim text-[11px]">{label}</span>
+      <span className="flex items-baseline gap-1">
+        <span
+          className={`text-[22px] font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
+        >
+          {formatChartHover(raw, unit)}
+        </span>
+        <span className="text-text-dim text-[11px]">{unit}</span>
+      </span>
+    </div>
+  );
+}
+
 function DetailBody({
   definition,
   model,
@@ -113,12 +158,19 @@ function DetailBody({
   const network = useActiveNetwork();
   const [range, setRange] = useState<ChartRange>('all');
   const [logScale, setLogScale] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const points = useMemo(() => rangePoints(model.points, range), [model.points, range]);
   const secondaryPoints = useMemo(
     () => (model.secondary ? rangePoints(model.secondary.points, range) : []),
     [model.secondary, range]
   );
   const markers = chartHardforkMarkers(definition, points, events);
+  // Every activated hardfork the full history crosses, linked from the evidence (CH-23).
+  const crossed = chartHardforkMarkers(definition, model.points, events).flatMap((marker) =>
+    events.filter((event) => event.shortName === marker.label)
+  );
+  const style = axisStyle(definition);
+  const distribution = definition.visual === 'ranked' || style === 'bucket';
   const hasDatedHistory =
     (model.points.length > 0 &&
       model.points.every((point) => /^\d{4}-\d{2}-\d{2}$/.test(point.label))) ||
@@ -142,13 +194,15 @@ function DetailBody({
     seriesLabels: model.series.map((series) => series.label),
   });
   if (!description) throw new Error(`${definition.slug}: no calculation description`);
+  const pointLabel = (label: string) =>
+    style === 'epoch' ? `#${formatEpochLabel(label, definition.slug)}` : label;
   // Method and evidence are the quieter developer tier, after related charts (CH-20).
   const method = (
     <DetailSection title="How it is computed / Evidence">
       <div className="grid min-w-0 gap-4 text-xs md:grid-cols-2">
         <div className="border-base-border min-w-0 border-t pt-3">
           <div className="text-text-dim mb-2">Calculation scope</div>
-          <p className="text-text-bright leading-6">{description.overview}</p>
+          <p className="text-text-bright max-w-[62ch] leading-6">{description.overview}</p>
           <ul className="text-text-dim mt-3 space-y-2">
             {description.legendItems.map((item) => (
               <li key={item.label}>
@@ -163,14 +217,25 @@ function DetailBody({
             Values come from the local index of canonical chain {definition.source}. The chart
             returns observations at its own recorded dates or buckets; gaps are not interpolated.
           </p>
-          <Link
-            href={definition.evidenceHref}
-            className="text-jade mt-3 inline-block hover:underline"
-          >
-            Explore {definition.evidenceLabel} →
-          </Link>
+          <div className="mt-3 flex flex-col gap-1">
+            <Link href={definition.evidenceHref} className="text-jade hover:underline">
+              Explore {definition.evidenceLabel} →
+            </Link>
+            {crossed.length > 0 && (
+              <Link href="/hardforks" className="text-jade hover:underline">
+                Hardforks:{' '}
+                {crossed
+                  .map(
+                    (event) =>
+                      `${event.shortName}, epoch ${formatEpochLabel(String(event.activationEpoch), definition.slug)}`
+                  )
+                  .join(' · ')}{' '}
+                →
+              </Link>
+            )}
+          </div>
           <div className="text-text-dim mt-2">
-            Source:{' '}
+            Raw series:{' '}
             <a
               href={`${apiBaseFor(network)}${chartApiPath(definition)}`}
               className="text-jade break-all hover:underline"
@@ -182,155 +247,228 @@ function DetailBody({
       </div>
     </DetailSection>
   );
-  return (
-    <DetailLayout
-      title={definition.title}
-      identity={`${definition.section} · ${definition.subtitle}`}
-      facts={
-        model.latest
-          ? [
-              {
-                label: model.summaryLabel ?? 'Latest returned',
-                value: `${model.latest.label} · ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`,
-              },
-              ...(model.delta
-                ? [
-                    {
-                      label: 'Last change',
-                      value: `${formatChartExact(model.delta, model.unit)} ${model.unit}`,
-                    },
-                  ]
-                : []),
-              ...(model.coverage ? [{ label: 'Coverage', value: model.coverage }] : []),
-              ...(model.contextFacts ?? []),
-            ]
-          : undefined
-      }
-      tier2={method}
+  // The head reads the latest value and the API's peak, rates at the board's two decimals (CH-02,
+  // CH-21); a semantic summary (leader, protocol total) stays a fact under it.
+  const readings = model.latest && (
+    <div
+      role="group"
+      aria-label={`${definition.title} readings`}
+      className="flex flex-wrap items-baseline justify-end gap-7"
     >
-      <DetailSection
-        title={definition.visual === 'ranked' ? 'Distribution' : 'Full history'}
-        actions={
-          <Link href="/charts" className="text-text-dim hover:text-jade text-xs">
-            ← All charts
-          </Link>
+      <Reading
+        label={
+          style === 'bucket' ? `most common, ${model.latest.label}` : pointLabel(model.latest.label)
         }
+        raw={model.latest.raw}
+        unit={model.unit}
+      />
+      {model.peak && (
+        <Reading label={`peak, ${model.peak.label}`} raw={model.peak.raw} unit={model.unit} quiet />
+      )}
+    </div>
+  );
+  const facts = [
+    ...(model.latest && model.summaryLabel
+      ? [
+          {
+            label: model.summaryLabel,
+            value: `${pointLabel(model.latest.label)} · ${formatChartHover(model.latest.raw, model.unit)} ${model.unit}`,
+          },
+        ]
+      : []),
+    ...(model.delta
+      ? [
+          {
+            label: 'Last change',
+            value: `${formatChartHover(model.delta, model.unit)} ${model.unit}`,
+          },
+        ]
+      : []),
+    ...(model.coverage ? [{ label: 'Coverage', value: model.coverage }] : []),
+    ...(model.contextFacts ?? []),
+  ];
+  return (
+    <>
+      <nav aria-label="Breadcrumb" className="mb-3 text-[12px]">
+        <Link
+          href={`/charts#${chartSectionId(definition.section)}`}
+          className="text-text-dim hover:text-jade"
+        >
+          Charts / {definition.section}
+        </Link>
+      </nav>
+      <DetailLayout
+        title={definition.title}
+        identity={definition.subtitle}
+        actions={readings}
+        facts={facts.length ? facts : undefined}
+        tier2={method}
       >
-        {(hasDatedHistory || supportsLog) && (
-          <div role="group" aria-label="Chart range" className="mb-4 flex flex-wrap gap-1">
-            {hasDatedHistory &&
-              (['30d', '90d', '1y', 'all'] as const).map((option) => (
+        <DetailSection title={distribution ? 'Distribution' : 'Full history'}>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <div role="group" aria-label="Chart range" className="flex flex-wrap gap-1">
+              {hasDatedHistory &&
+                (
+                  [
+                    ['30d', '30 d'],
+                    ['90d', '90 d'],
+                    ['1y', '1 y'],
+                    ['all', 'All'],
+                  ] as const
+                ).map(([option, label]) => (
+                  <button
+                    key={option}
+                    type="button"
+                    aria-pressed={range === option}
+                    onClick={() => setRange(option)}
+                    className={`rounded border px-3 py-1 text-xs ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+            </div>
+            <div className="flex gap-1">
+              {supportsLog && (
                 <button
-                  key={option}
                   type="button"
-                  aria-pressed={range === option}
-                  onClick={() => setRange(option)}
-                  className={`rounded border px-3 py-1 text-xs ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
+                  aria-pressed={logScale}
+                  onClick={() => setLogScale((current) => !current)}
+                  className={`rounded border px-3 py-1 text-xs ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
                 >
-                  {option.toUpperCase()}
+                  Log scale
                 </button>
-              ))}
-            {supportsLog && (
-              <button
-                type="button"
-                aria-pressed={logScale}
-                onClick={() => setLogScale((current) => !current)}
-                className={`rounded border px-3 py-1 text-xs ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
-              >
-                Log scale
-              </button>
-            )}
+              )}
+              {model.kind !== 'ranked' && (
+                <button
+                  type="button"
+                  aria-label="How to read and zoom this chart"
+                  aria-expanded={helpOpen}
+                  onClick={() => setHelpOpen((open) => !open)}
+                  className="border-base-border text-text-dim hover:text-text-bright rounded border px-2 py-1 text-xs"
+                >
+                  ?
+                </button>
+              )}
+            </div>
           </div>
-        )}
-        {model.latest === null ? (
-          <p className="text-text-dim py-8 text-xs">No indexed observations for this chart.</p>
-        ) : model.kind === 'ranked' ? (
-          <RankedDetail model={model} definition={definition} />
-        ) : (
-          <Chart
-            title={definition.title}
-            subtitle={`${definition.subtitle} · ${points.length} returned observations`}
-            data={points}
-            series={model.series}
-            unit={model.unit}
-            kind={model.kind}
-            yScale={supportsLog && logScale ? 'log' : 'linear'}
-            height={360}
-            markers={markers}
-            projectedAfter={range === 'all' ? model.projectedAfter : undefined}
-            reading={model.today}
-            formatValue={(value) => formatChartHover(value, model.unit)}
-          />
-        )}
-      </DetailSection>
-      {model.historicalShares?.map((history) => (
-        <DetailSection key={history.title} title={history.title}>
-          <p className="text-text-dim mb-3 text-xs">
-            {history.title === 'Occupied common knowledge'
-              ? 'Exact occupied CKB in live cells attributed to each script or asset.'
-              : 'Full live cell capacity attributed to each script or asset. This is a different scope from occupied common knowledge.'}
-          </p>
-          {history.points.length ? (
-            <Chart
-              title={history.title}
-              subtitle={`${definition.subtitle} · ${history.points.length} returned dates`}
-              data={rangePoints(history.points, range)}
-              series={history.series}
-              unit={history.unit}
-              kind="stacked"
-              height={260}
-              formatValue={(value) => formatChartHover(value, history.unit)}
-            />
+          {helpOpen && (
+            <p className="text-text-dim mb-4 max-w-[62ch] text-xs leading-5">
+              Hover the chart for one {style === 'date' ? 'day' : 'point'}&apos;s value, or focus it
+              and use ← and → to step through; Esc returns to the latest reading.
+              {hasDatedHistory && ' 30 d, 90 d and 1 y zoom to the most recent days.'}
+              {supportsLog && ' Log scale spreads a series that grew by orders of magnitude.'}
+            </p>
+          )}
+          {model.latest === null ? (
+            <p className="text-text-dim py-8 text-xs">No indexed observations for this chart.</p>
+          ) : model.kind === 'ranked' ? (
+            <RankedDetail model={model} definition={definition} />
           ) : (
-            <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
+            <Chart
+              title={definition.title}
+              subtitle={`${definition.subtitle} · ${points.length} ${POINT_NOUN[style]}`}
+              data={points}
+              series={model.series}
+              unit={model.unit}
+              kind={model.kind}
+              yScale={supportsLog && logScale ? 'log' : 'linear'}
+              height={360}
+              markers={markers}
+              projectedAfter={range === 'all' ? model.projectedAfter : undefined}
+              // A histogram reads its most common bucket, a model its today (CH-30, CH-03).
+              reading={
+                style === 'bucket'
+                  ? { label: model.latest.label, values: { primary: model.latest.raw } }
+                  : model.today
+              }
+              formatValue={(value) => formatChartHover(value, model.unit)}
+              // F2 charts: the board's detail grammar (CH-12, CH-15, CH-22, CH-23, CH-24, CH-35).
+              xTicks={axisTicks(points, style, 8)}
+              pointDots={model.kind !== 'bars'}
+              slotBars={style === 'bucket' || style === 'month'}
+              hideMarkerLegend
+              yDomain={model.yDomain}
+              referenceLines={model.referenceLines}
+              formatLabel={(label) => (style === 'epoch' ? `epoch ${pointLabel(label)}` : label)}
+            />
           )}
         </DetailSection>
-      ))}
-      {model.secondary && model.secondary.points.length > 0 && (
-        <DetailSection title={model.secondary.title}>
-          <p className="text-text-dim mb-3 text-xs">
-            Separate scale: {model.secondary.unit}. These values are never combined with{' '}
-            {model.unit}.
-          </p>
-          <Chart
-            title={model.secondary.title}
-            subtitle={definition.subtitle}
-            data={secondaryPoints}
-            series={model.secondary.series}
-            unit={model.secondary.unit}
-            kind={definition.visual === 'bars' ? 'bars' : 'line'}
-            height={220}
-            formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
-          />
+        {model.historicalShares?.map((history) => (
+          <DetailSection key={history.title} title={history.title}>
+            <p className="text-text-dim mb-3 text-xs">
+              {history.title === 'Occupied common knowledge'
+                ? 'Exact occupied CKB in live cells attributed to each script or asset.'
+                : 'Full live cell capacity attributed to each script or asset. This is a different scope from occupied common knowledge.'}
+            </p>
+            {history.points.length ? (
+              <Chart
+                title={history.title}
+                subtitle={`${definition.subtitle} · ${history.points.length} returned dates`}
+                data={rangePoints(history.points, range)}
+                series={history.series}
+                unit={history.unit}
+                kind="stacked"
+                height={260}
+                formatValue={(value) => formatChartHover(value, history.unit)}
+                xTicks={axisTicks(rangePoints(history.points, range), 'date', 8)}
+                pointDots
+              />
+            ) : (
+              <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
+            )}
+          </DetailSection>
+        ))}
+        {model.secondary && model.secondary.points.length > 0 && (
+          <DetailSection title={model.secondary.title}>
+            <p className="text-text-dim mb-3 text-xs">
+              Separate scale: {model.secondary.unit}. These values are never combined with{' '}
+              {model.unit}.
+            </p>
+            <Chart
+              title={model.secondary.title}
+              subtitle={definition.subtitle}
+              data={secondaryPoints}
+              series={model.secondary.series}
+              unit={model.secondary.unit}
+              kind={definition.visual === 'bars' ? 'bars' : 'line'}
+              height={220}
+              formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
+              xTicks={axisTicks(secondaryPoints, style, 8)}
+              pointDots={definition.visual !== 'bars'}
+              slotBars={style === 'bucket' || style === 'month'}
+            />
+          </DetailSection>
+        )}
+        {model.dailyFlow && model.dailyFlow.points.length > 0 && (
+          <DetailSection title={model.dailyFlow.title}>
+            <p className="text-text-dim mb-3 text-xs">
+              Exact signed change in occupied CKB from the preceding returned day.
+            </p>
+            <Chart
+              title={model.dailyFlow.title}
+              subtitle="Daily change in common knowledge"
+              data={rangePoints(model.dailyFlow.points, range)}
+              series={model.dailyFlow.series}
+              unit={model.dailyFlow.unit}
+              kind="line"
+              height={220}
+              formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
+              xTicks={axisTicks(rangePoints(model.dailyFlow.points, range), 'date', 8)}
+              pointDots
+            />
+          </DetailSection>
+        )}
+        <DetailSection title="Related charts">
+          <div className="grid min-w-0 gap-x-10 gap-y-8 sm:grid-cols-2 xl:grid-cols-4">
+            {definition.related.map((slug) => {
+              const related = CHART_BY_SLUG.get(slug);
+              if (!related) throw new Error(`${definition.slug}: unknown related chart ${slug}`);
+              return <ChartSmallMultiple key={slug} definition={related} />;
+            })}
+          </div>
         </DetailSection>
-      )}
-      {model.dailyFlow && model.dailyFlow.points.length > 0 && (
-        <DetailSection title={model.dailyFlow.title}>
-          <p className="text-text-dim mb-3 text-xs">
-            Exact signed change in occupied CKB from the preceding returned day.
-          </p>
-          <Chart
-            title={model.dailyFlow.title}
-            subtitle="Daily change in common knowledge"
-            data={rangePoints(model.dailyFlow.points, range)}
-            series={model.dailyFlow.series}
-            unit={model.dailyFlow.unit}
-            kind="line"
-            height={220}
-            formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
-          />
-        </DetailSection>
-      )}
-      <DetailSection title="Related charts">
-        <div className="grid min-w-0 gap-x-10 gap-y-8 sm:grid-cols-2 xl:grid-cols-4">
-          {definition.related.map((slug) => {
-            const related = CHART_BY_SLUG.get(slug);
-            if (!related) throw new Error(`${definition.slug}: unknown related chart ${slug}`);
-            return <ChartSmallMultiple key={slug} definition={related} />;
-          })}
-        </div>
-      </DetailSection>
-    </DetailLayout>
+      </DetailLayout>
+    </>
   );
 }
 

@@ -38,6 +38,7 @@ export interface ChartDefinition {
   secondaryUnit?: string;
   secondaryLabel?: string;
   primaryField?: 'value' | 'value2';
+  /** Four related charts, as on the ChartDetail board (CH-28). */
   related: readonly string[];
 }
 
@@ -64,7 +65,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Transactions',
     queryKey: 'chart-transaction-count',
     fetch: api.getTransactionCountChart,
-    related: ['activity-volume', 'ckb-volume'],
+    related: ['active-addresses', 'activity-volume', 'ckb-volume', 'average-block-time'],
   },
   {
     slug: 'active-addresses',
@@ -79,7 +80,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Address activity',
     queryKey: 'chart-active-addresses',
     fetch: api.getActiveAddressesChart,
-    related: ['activity-volume', 'address-cohort-retention'],
+    related: ['transaction-count', 'activity-volume', 'address-cohort-retention', 'hodl-wave'],
   },
   {
     slug: 'ckb-volume',
@@ -94,7 +95,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Activities',
     queryKey: 'chart-ckb-volume',
     fetch: api.getCkbVolumeChart,
-    related: ['activity-volume', 'capacity-turnover-ratio'],
+    related: ['transaction-count', 'activity-volume', 'capacity-turnover-ratio', 'hodl-wave'],
   },
   {
     slug: 'activity-volume',
@@ -109,7 +110,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Activities',
     queryKey: 'chart-activity-volume',
     fetch: api.getActivityVolumeChart,
-    related: ['activity-type-breakdown', 'transaction-count'],
+    related: ['activity-type-breakdown', 'transaction-count', 'active-addresses', 'ckb-volume'],
   },
   {
     slug: 'activity-type-breakdown',
@@ -124,7 +125,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Activities',
     queryKey: 'chart-activity-type-breakdown',
     fetch: api.getActivityTypeBreakdownChart,
-    related: ['activity-volume', 'active-addresses'],
+    related: ['activity-volume', 'transaction-count', 'active-addresses', 'daily-deposit'],
   },
   {
     slug: 'cell-count',
@@ -139,7 +140,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-cell-count',
     fetch: api.getCellCountChart,
-    related: ['transaction-count', 'knowledge-size'],
+    related: [
+      'knowledge-size',
+      'cell-size-distribution',
+      'transaction-count',
+      'common-knowledge-composition',
+    ],
   },
   {
     slug: 'hodl-wave',
@@ -154,7 +160,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Address activity',
     queryKey: 'chart-hodl-wave',
     fetch: api.getHodlWaveChart,
-    related: ['active-addresses', 'total-supply'],
+    related: [
+      'active-addresses',
+      'ckb-volume',
+      'capacity-turnover-ratio',
+      'address-cohort-retention',
+    ],
   },
   {
     slug: 'total-supply',
@@ -169,7 +180,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Supply and DAO',
     queryKey: 'chart-total-supply',
     fetch: api.getTotalSupplyChart,
-    related: ['inflation-rate', 'secondary-issuance'],
+    related: ['secondary-issuance', 'inflation-rate', 'total-deposit', 'nominal-apc'],
   },
   {
     slug: 'total-deposit',
@@ -186,7 +197,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     fetch: api.getDaoTotalDepositChart,
     secondaryUnit: 'depositors',
     secondaryLabel: 'Current depositors',
-    related: ['daily-deposit', 'circulation-ratio'],
+    related: ['daily-deposit', 'circulation-ratio', 'nominal-apc', 'total-supply'],
   },
   {
     slug: 'daily-deposit',
@@ -203,7 +214,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     fetch: api.getDaoDailyDepositChart,
     secondaryUnit: 'deposits',
     secondaryLabel: 'Deposit count',
-    related: ['total-deposit', 'circulation-ratio'],
+    related: ['total-deposit', 'circulation-ratio', 'nominal-apc', 'activity-type-breakdown'],
   },
   {
     slug: 'nominal-apc',
@@ -218,7 +229,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Nervos DAO',
     queryKey: 'chart-nominal-apc',
     fetch: api.getNominalApcChart,
-    related: ['total-deposit', 'secondary-issuance'],
+    related: ['total-deposit', 'secondary-issuance', 'inflation-rate', 'total-supply'],
   },
   {
     slug: 'inflation-rate',
@@ -233,7 +244,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Supply and DAO',
     queryKey: 'chart-inflation-rate',
     fetch: api.getInflationRateChart,
-    related: ['total-supply', 'secondary-issuance'],
+    related: ['total-supply', 'secondary-issuance', 'nominal-apc', 'total-deposit'],
   },
   {
     slug: 'secondary-issuance',
@@ -248,7 +259,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Supply and DAO',
     queryKey: 'chart-secondary-issuance',
     fetch: api.getSecondaryIssuanceChart,
-    related: ['total-supply', 'nominal-apc'],
+    related: ['total-supply', 'nominal-apc', 'inflation-rate', 'total-deposit'],
   },
   {
     slug: 'circulation-ratio',
@@ -263,7 +274,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Nervos DAO',
     queryKey: 'dao-chart-circulation-ratio',
     fetch: api.getDaoCirculationRatioChart,
-    related: ['total-deposit', 'daily-deposit'],
+    related: ['total-deposit', 'daily-deposit', 'total-supply', 'nominal-apc'],
     supplemental: true,
   },
   {
@@ -281,7 +292,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     fetch: api.getKnowledgeSizeChart,
     secondaryUnit: '%',
     secondaryLabel: 'Utilization',
-    related: ['common-knowledge-composition', 'capacity-turnover-ratio'],
+    related: [
+      'common-knowledge-composition',
+      'cell-count',
+      'cell-size-distribution',
+      'capacity-turnover-ratio',
+    ],
   },
   {
     slug: 'common-knowledge-composition',
@@ -296,7 +312,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-common-knowledge-composition',
     fetch: api.getCommonKnowledgeCompositionChart,
-    related: ['knowledge-size', 'cell-size-distribution'],
+    related: [
+      'knowledge-size',
+      'most-utilized-scripts',
+      'most-utilized-assets',
+      'cell-size-distribution',
+    ],
   },
   {
     slug: 'most-utilized-scripts',
@@ -311,7 +332,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Scripts',
     queryKey: 'chart-most-utilized-scripts',
     fetch: api.getMostUtilizedScriptsChart,
-    related: ['most-utilized-assets', 'common-knowledge-composition'],
+    related: [
+      'most-utilized-assets',
+      'common-knowledge-composition',
+      'knowledge-size',
+      'cell-size-distribution',
+    ],
   },
   {
     slug: 'most-utilized-assets',
@@ -326,7 +352,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Inventory',
     queryKey: 'chart-most-utilized-assets',
     fetch: api.getMostUtilizedAssetsChart,
-    related: ['most-utilized-scripts', 'common-knowledge-composition'],
+    related: [
+      'most-utilized-scripts',
+      'common-knowledge-composition',
+      'knowledge-size',
+      'hodl-wave',
+    ],
   },
   {
     slug: 'cell-size-distribution',
@@ -343,7 +374,12 @@ export const CHARTS: readonly ChartDefinition[] = [
     fetch: api.getCellSizeDistributionChart,
     secondaryUnit: 'CKB',
     secondaryLabel: 'Common knowledge',
-    related: ['knowledge-size', 'cell-count'],
+    related: [
+      'knowledge-size',
+      'cell-count',
+      'common-knowledge-composition',
+      'most-utilized-scripts',
+    ],
   },
   {
     slug: 'capacity-turnover-ratio',
@@ -359,7 +395,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     queryKey: 'chart-capacity-turnover-ratio',
     fetch: api.getCapacityTurnoverRatioChart,
     primaryField: 'value2',
-    related: ['knowledge-size', 'transaction-count'],
+    related: ['knowledge-size', 'ckb-volume', 'hodl-wave', 'transaction-count'],
   },
   {
     slug: 'address-cohort-retention',
@@ -376,7 +412,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     fetch: api.getAddressCohortRetentionChart,
     secondaryUnit: 'CKB',
     secondaryLabel: 'Common knowledge',
-    related: ['active-addresses', 'knowledge-size'],
+    related: ['active-addresses', 'hodl-wave', 'knowledge-size', 'common-knowledge-composition'],
   },
   {
     slug: 'hash-rate',
@@ -391,7 +427,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-hash-rate',
     fetch: api.getHashRateChart,
-    related: ['difficulty', 'uncle-rate'],
+    related: ['difficulty', 'uncle-rate', 'average-block-time', 'epoch-time-length'],
   },
   {
     slug: 'difficulty',
@@ -406,7 +442,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-difficulty',
     fetch: api.getDifficultyChart,
-    related: ['hash-rate', 'uncle-rate'],
+    related: ['hash-rate', 'uncle-rate', 'average-block-time', 'epoch-time-length'],
   },
   {
     slug: 'uncle-rate',
@@ -421,7 +457,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-uncle-rate',
     fetch: api.getUncleRateChart,
-    related: ['hash-rate', 'difficulty'],
+    related: ['hash-rate', 'difficulty', 'block-time-distribution', 'miner-address-distribution'],
   },
   {
     slug: 'miner-address-distribution',
@@ -436,7 +472,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-miner-address-distribution',
     fetch: api.getMinerAddressDistributionChart,
-    related: ['hash-rate', 'difficulty'],
+    related: ['hash-rate', 'difficulty', 'uncle-rate', 'average-block-time'],
   },
   {
     slug: 'average-block-time',
@@ -451,7 +487,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-average-block-time',
     fetch: api.getAverageBlockTimeChart,
-    related: ['block-time-distribution', 'epoch-time-length'],
+    related: ['block-time-distribution', 'epoch-time-length', 'hash-rate', 'difficulty'],
   },
   {
     slug: 'epoch-time-length',
@@ -468,7 +504,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     fetch: api.getEpochTimeLengthChart,
     secondaryUnit: 'blocks',
     secondaryLabel: 'Epoch blocks',
-    related: ['epoch-time-distribution', 'average-block-time'],
+    related: ['epoch-time-distribution', 'average-block-time', 'difficulty', 'hash-rate'],
   },
   {
     slug: 'block-time-distribution',
@@ -483,7 +519,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-block-time-distribution',
     fetch: api.getBlockTimeDistributionChart,
-    related: ['average-block-time', 'epoch-time-distribution'],
+    related: ['average-block-time', 'epoch-time-distribution', 'uncle-rate', 'hash-rate'],
   },
   {
     slug: 'epoch-time-distribution',
@@ -498,7 +534,7 @@ export const CHARTS: readonly ChartDefinition[] = [
     evidenceLabel: 'Blocks',
     queryKey: 'chart-epoch-time-distribution',
     fetch: api.getEpochTimeDistributionChart,
-    related: ['epoch-time-length', 'block-time-distribution'],
+    related: ['epoch-time-length', 'block-time-distribution', 'average-block-time', 'difficulty'],
   },
 ] as const;
 

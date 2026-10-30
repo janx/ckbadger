@@ -10,6 +10,8 @@ vi.mock('@/lib/api', () => ({
     getHashRateChart: vi.fn(),
     getNominalApcChart: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
+    getEpochTimeDistributionChart: vi.fn(),
+    getEpochTimeLengthChart: vi.fn(),
     getNetworkStats: vi.fn(),
     getHardforks: vi.fn(),
   },
@@ -20,25 +22,26 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }
 vi.mock('@/components/charts/chart-small-multiple', () => ({
   ChartSmallMultiple: () => <div>Related preview</div>,
 }));
+// F2 charts: every prop the detail hands the shared Chart, for the encoding assertions.
+const chartProps = vi.hoisted(() => [] as Record<string, unknown>[]);
 vi.mock('@/components/ui/chart', () => ({
-  Chart: ({
-    title,
-    data,
-    yScale,
-    reading,
-  }: {
-    title: string;
-    data: unknown[];
-    yScale?: string;
-    reading?: unknown;
-  }) => (
-    <div
-      role="img"
-      aria-label={`${title}: ${data.length} points, ${yScale ?? 'linear'}`}
-      data-reading={reading === undefined ? 'last-point' : JSON.stringify(reading)}
-    />
-  ),
+  Chart: (props: { title: string; data: unknown[]; yScale?: string; reading?: unknown }) => {
+    chartProps.push(props);
+    const { title, data, yScale, reading } = props;
+    return (
+      <div
+        role="img"
+        aria-label={`${title}: ${data.length} points, ${yScale ?? 'linear'}`}
+        data-reading={reading === undefined ? 'last-point' : JSON.stringify(reading)}
+      />
+    );
+  },
 }));
+const lastChart = (title: string) => {
+  const props = chartProps.filter((entry) => entry.title === title).at(-1);
+  if (!props) throw new Error(`no chart ${title}`);
+  return props;
+};
 
 const response = {
   title: 'Hash rate',
@@ -52,6 +55,7 @@ const response = {
 describe('shared chart detail', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    chartProps.length = 0;
     vi.mocked(api.getNetworkStats).mockResolvedValue({
       syncStatus: { chartDataMayBeIncomplete: false },
     } as Awaited<ReturnType<typeof api.getNetworkStats>>);
@@ -94,19 +98,21 @@ describe('shared chart detail', () => {
     expect(
       await screen.findByRole('img', { name: 'Hash rate: 2 points, linear' })
     ).toBeInTheDocument();
-    expect(screen.getByText(/9.007199254740993 PH\/s/)).toBeInTheDocument();
+    // The head rounds a rate like the board (9.01); the exact value is its hover title.
+    expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01PH/s');
     expect(screen.getByText('/charts/hash-rate')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Explore Blocks →' })).toHaveAttribute(
       'href',
       '/mainnet/blocks'
     );
-    fireEvent.click(screen.getByRole('button', { name: '30D' }));
+    fireEvent.click(screen.getByRole('button', { name: '30 d' }));
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, linear' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Log scale' }));
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, log' })).toBeInTheDocument();
   });
 
-  it('prints the latest value and last change exactly, thousands grouped (CH-02)', async () => {
+  // CH-02 residual (round 2): rates read at two decimals, thousands grouped; exact on hover.
+  it('rounds rate readings like the board, grouped, exact on hover (CH-02)', async () => {
     vi.mocked(api.getHashRateChart).mockResolvedValue({
       ...response,
       data: [
@@ -115,8 +121,10 @@ describe('shared chart detail', () => {
       ],
     });
     render(<ChartDetail slug="hash-rate" />);
-    expect(await screen.findByText('2024-02-10 · 1,234.567890123456789 PH/s')).toBeInTheDocument();
-    expect(screen.getByText('+1,233.567890123456789 PH/s')).toBeInTheDocument();
+    const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
+    expect(readings).toHaveTextContent('2024-02-101,234.57PH/s');
+    expect(screen.getByTitle('1,234.567890123456789 PH/s')).toBeInTheDocument();
+    expect(screen.getByText('+1,233.57 PH/s')).toBeInTheDocument();
   });
 
   it('puts related charts before the quieter method and evidence tier (CH-20, #11)', async () => {
@@ -192,5 +200,144 @@ describe('shared chart detail', () => {
       'href',
       `/mainnet/address/${address}`
     );
+  });
+
+  // --- F2 charts group: the ChartDetail board ---
+  const mirana = {
+    id: 'mirana-2021',
+    name: 'CKB Edition Mirana',
+    shortName: 'Mirana',
+    editionYear: 2021,
+    activationEpoch: 5414,
+    activationDate: '2022-05-10',
+    activationBlock: 7087867,
+    status: 'activated' as const,
+    summary: '',
+    resources: [],
+  };
+  const meepo = {
+    ...mirana,
+    id: 'meepo-2024',
+    name: 'CKB Edition Meepo',
+    shortName: 'Meepo',
+    activationEpoch: 12293,
+    activationDate: '2025-07-01',
+    activationBlock: 16595590,
+  };
+  const hashRate = {
+    title: 'Hash rate',
+    yAxisLabel: 'H/s',
+    data: [
+      { date: '2021-12-31', value: '1000000000000000' },
+      { date: '2022-06-01', value: '465311292444713720' },
+      { date: '2024-12-27', value: '465311292444713720' },
+      { date: '2026-10-29', value: '91340000000000000' },
+    ],
+    peak: { date: '2022-06-01', value: '465311292444713720' },
+    peak2: null,
+  };
+
+  it('heads the chart with the latest reading and the API peak at two decimals (CH-21, CH-02)', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
+    render(<ChartDetail slug="hash-rate" />);
+    const readings = await screen.findByRole('group', { name: 'Hash rate readings' });
+    expect(readings).toHaveTextContent('2026-10-2991.34PH/s');
+    expect(readings).toHaveTextContent('peak, 2022-06-01465.31PH/s');
+    // The exact values stay one hover away.
+    expect(screen.getByTitle('465.31129244471372 PH/s')).toBeInTheDocument();
+  });
+
+  it('leads with a breadcrumb to its section, plain range labels and a help button (CH-26)', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
+    render(<ChartDetail slug="hash-rate" />);
+    const crumb = await screen.findByRole('link', { name: 'Charts / Proof of work' });
+    expect(crumb).toHaveAttribute('href', '/mainnet/charts#proof-of-work');
+    expect(screen.queryByRole('link', { name: /All charts/ })).toBeNull();
+    for (const name of ['30 d', '90 d', '1 y', 'All'])
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
+    const help = screen.getByRole('button', { name: 'How to read and zoom this chart' });
+    expect(help).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(help);
+    expect(help).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByText(/use ← and → to step through/)).toBeInTheDocument();
+  });
+
+  it('draws year ticks, dots and named hardforks, linked from the evidence (CH-22, CH-23, CH-24)', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
+    vi.mocked(api.getHardforks).mockResolvedValue({ events: [mirana, meepo] } as unknown as Awaited<
+      ReturnType<typeof api.getHardforks>
+    >);
+    render(<ChartDetail slug="hash-rate" />);
+    await screen.findByRole('link', {
+      name: 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293 →',
+    });
+    const props = lastChart('Hash rate');
+    expect(props.xTicks).toEqual([
+      { index: 1, label: '2022' },
+      { index: 2, label: '2024' },
+      { index: 3, label: '2026' },
+    ]);
+    expect(props.pointDots).toBe(true);
+    expect(props.hideMarkerLegend).toBe(true);
+    expect(props.markers).toEqual([
+      { index: 1, label: 'Mirana', plotLabel: 'Mirana', href: '/hardforks' },
+      { index: 3, label: 'Meepo', plotLabel: 'Meepo', href: '/hardforks' },
+    ]);
+    expect(
+      screen.getByRole('link', { name: 'Hardforks: Mirana, epoch 5,414 · Meepo, epoch 12,293 →' })
+    ).toHaveAttribute('href', '/mainnet/hardforks');
+  });
+
+  it('says how hash rate is computed, per complete UTC+8 day (CH-27)', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
+    render(<ChartDetail slug="hash-rate" />);
+    expect(
+      await screen.findByText(
+        /For each complete UTC\+8 day: the sum of the difficulty of that day's blocks, divided by the sum of their intervals in seconds/
+      )
+    ).toBeInTheDocument();
+  });
+
+  it('shows four related charts, like the board (CH-28)', async () => {
+    vi.mocked(api.getHashRateChart).mockResolvedValue(hashRate);
+    render(<ChartDetail slug="hash-rate" />);
+    await screen.findByRole('heading', { name: 'Related charts' });
+    expect(screen.getAllByText('Related preview')).toHaveLength(4);
+  });
+
+  it('reads a distribution at its most common bucket under a Distribution title (CH-30, CH-36)', async () => {
+    vi.mocked(api.getEpochTimeDistributionChart).mockResolvedValue({
+      title: 'Epoch durations',
+      yAxisLabel: 'Epochs',
+      data: [
+        { date: '3.98', value: '10' },
+        { date: '4.02', value: '622' },
+        { date: '50.50', value: '1' },
+      ],
+    });
+    render(<ChartDetail slug="epoch-time-distribution" />);
+    expect(await screen.findByRole('heading', { name: 'Distribution' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Full history' })).toBeNull();
+    const props = lastChart('Epoch durations');
+    expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
+    expect(props.subtitle).toBe('Completed epochs by hours taken · 3 buckets');
+    expect(props.slotBars).toBe(true);
+  });
+
+  it('prints epoch numbers with thousands groups (CH-35)', async () => {
+    vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      title: 'Epoch length',
+      yAxisLabel: 'Hours',
+      y2AxisLabel: 'Blocks',
+      data: [
+        { date: '15201', value: '4.1', value2: '1800' },
+        { date: '15202', value: '4.29', value2: '1800' },
+      ],
+    });
+    render(<ChartDetail slug="epoch-time-length" />);
+    const readings = await screen.findByRole('group', { name: 'Epoch length readings' });
+    expect(readings).toHaveTextContent('#15,2024.29hours');
+    const props = lastChart('Epoch length') as { formatLabel: (label: string) => string };
+    expect(props.formatLabel('15202')).toBe('epoch #15,202');
   });
 });

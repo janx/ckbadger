@@ -365,7 +365,8 @@ describe('28 chart variants', () => {
       resources: [],
     };
     expect(chartHardforkMarkers(chart, points, [event])).toEqual([
-      { index: 1, label: 'F', plotLabel: '◆', href: '/hardforks' },
+      // Named in the plot like the board, not a bare ◆ (CH-23).
+      { index: 1, label: 'F', plotLabel: 'F', href: '/hardforks' },
     ]);
   });
 
