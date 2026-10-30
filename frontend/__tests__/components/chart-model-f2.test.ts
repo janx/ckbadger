@@ -331,6 +331,15 @@ describe('axis ticks (CH-24, CH-09, CH-35)', () => {
     ]);
   });
 
+  it('labels a span inside one month by day (CH-58: three days of crawler history)', () => {
+    const points = days(['2026-10-27', '2026-10-28', '2026-10-29']);
+    expect(axisTicks(points, 'date', 6)).toEqual([
+      { index: 0, label: '10-27' },
+      { index: 1, label: '10-28' },
+      { index: 2, label: '10-29' },
+    ]);
+  });
+
   it('labels epochs with thousands groups and every bucket of a short distribution', () => {
     const epochs = days(Array.from({ length: 15203 }, (_, i) => String(i)));
     expect(axisTicks(epochs, 'epoch', 4).map((t) => t.label)).toEqual([

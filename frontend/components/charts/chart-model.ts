@@ -1215,7 +1215,14 @@ export function axisTicks(
         : [];
     });
   const years = starts(4);
-  return thin(years.length >= 2 || style === 'month' ? years : starts(7), max);
+  if (years.length >= 2 || style === 'month') return thin(years, max);
+  const months = starts(7);
+  if (months.length >= 2) return thin(months, max);
+  // Inside one or two months: the days themselves, month-day (CH-58).
+  return thin(
+    points.map((point, index) => ({ index, label: point.label.slice(5) })),
+    max
+  );
 }
 
 function tickLabel(style: 'epoch' | 'model-year', value: number): string {
