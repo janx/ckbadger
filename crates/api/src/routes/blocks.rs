@@ -125,6 +125,8 @@ pub struct BlockMetricsResponse {
     pub max_block_bytes: u64,
     pub max_block_cycles: String,
     pub miner_message_text: Option<String>,
+    /// The block's molecule-serialized size in bytes (`block.data()` as the
+    /// node stores it) — the "Block bytes" of the block page (BA-19).
     pub size: usize,
     pub user_transactions_size: usize,
     pub overhead_size: usize,
