@@ -134,11 +134,14 @@ impl DotbitParser {
             return Some(data_or_resolved_id.to_vec());
         }
 
-        // Live sync often leaves input `data` empty. The account id still sits
-        // on the type script args; prefer it before requiring full cell bytes.
-        if let Some(args) = type_args {
-            if args.len() == ACCOUNT_ID_LEN && !args.iter().all(|&byte| byte == 0) {
-                return Some(args.to_vec());
+        // Inputs without raw cell bytes or a 20-byte pre-resolved id fall back
+        // to the 20-byte account id on type_args. Non-empty cell data must
+        // still pass `parse_identity_cell_data` below.
+        if data_or_resolved_id.is_empty() {
+            if let Some(args) = type_args {
+                if args.len() == ACCOUNT_ID_LEN && !args.iter().all(|&byte| byte == 0) {
+                    return Some(args.to_vec());
+                }
             }
         }
 
@@ -851,6 +854,14 @@ mod tests {
 
         let resolved = DotbitParser::resolve_account_id(&code_hash, Some(&account_id), &[]);
         assert_eq!(resolved, Some(account_id.to_vec()));
+
+        // Non-empty truncated cell data (< 52 bytes) is rejected even when
+        // 20-byte type_args is present.
+        let truncated = [0xAA; 12];
+        assert_eq!(
+            DotbitParser::resolve_account_id(&code_hash, Some(&account_id), &truncated),
+            None
+        );
     }
 
     #[test]

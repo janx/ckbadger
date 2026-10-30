@@ -581,7 +581,7 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
                 ..Default::default()
             });
         family.family_id = family_id.to_string();
-        if version.name.is_some() {
+        if !version.registered_references.is_empty() {
             let state = family_label_state
                 .entry(family_id.to_string())
                 .or_insert((false, false));
@@ -3628,18 +3628,6 @@ mod tests {
             )
             .unwrap();
         store
-            .put_script_version(
-                &unlabeled,
-                &ckbadger_store::ScriptVersionInfo {
-                    version_hash: unlabeled.clone(),
-                    family_id: Some(family_id.to_string()),
-                    // Chain observation without label import: default deprecated=false.
-                    deprecated: false,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-        store
             .put_script_reference_to_version_direct(1, &labeled_ref, &labeled)
             .unwrap();
         store
@@ -3674,6 +3662,47 @@ mod tests {
             )
             .unwrap();
 
+        // Discover `unlabeled` via Type ID lineage from `labeled_ref`, which
+        // copies `name: Some("PW Lock")` and `family_id: Some("pw-lock")` while
+        // leaving `registered_references` empty and `deprecated: false`.
+        let observed = [TypeIdCodeChange {
+            reference_hash: labeled_ref.clone(),
+            version_hash: Some(unlabeled.clone()),
+            block_number: 10,
+        }];
+        let mut ref_info_map = HashMap::new();
+        ref_info_map.insert(
+            (labeled_ref.clone(), 1),
+            ScriptReferenceInfo {
+                reference_hash: labeled_ref.clone(),
+                hash_type: 1,
+                lock_cells_count: 1,
+                lock_live_cells_count: 1,
+                lock_capacity_sum: 100,
+                lock_owned_capacity_sum: 100,
+                ..Default::default()
+            },
+        );
+        let rollup = build_script_reference_rollup_state_with_lineage(
+            &store,
+            vec![((labeled_ref.clone(), 1), Some(labeled.clone()))],
+            ref_info_map,
+            &observed,
+        )
+        .unwrap();
+        let (_, unlabeled_info) = rollup
+            .versions
+            .iter()
+            .find(|(h, _)| h == &unlabeled)
+            .unwrap();
+        assert_eq!(unlabeled_info.name.as_deref(), Some("PW Lock"));
+        assert!(unlabeled_info.registered_references.is_empty());
+        assert!(!unlabeled_info.deprecated);
+
+        // Persist the lineage-discovered version and run the full materializer.
+        store
+            .put_script_version(&unlabeled, unlabeled_info)
+            .unwrap();
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(

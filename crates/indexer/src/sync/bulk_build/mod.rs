@@ -4230,7 +4230,10 @@ fn build_tx_actions_list_for_bulk(
                             Some(facts::CellProtocolFacts::DotCell(dotcell)) => Some(&dotcell.name),
                             _ => None,
                         },
-                        data: &[],
+                        data: match input.protocol_facts.as_ref() {
+                            Some(facts::CellProtocolFacts::Dotbit(dotbit)) => &dotbit.account_id,
+                            _ => &[],
+                        },
                         is_dao_withdraw_request,
                         dao_compensation,
                     })

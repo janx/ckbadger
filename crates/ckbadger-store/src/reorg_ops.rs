@@ -5340,8 +5340,12 @@ impl CkbadgerStore {
 
         for (collection_id, agg) in &mut object_collection_aggs {
             agg.holders_count = object_owner_totals.get(collection_id).copied().unwrap_or(0);
+            // `object_activity_totals` is keyed by the 32-byte zero-padded id
+            // decoded from `CF_OBJECT_COLLECTION_ACTIVITIES`, whereas
+            // `object_collection_aggs` is keyed by raw m-NFT class_id (24 bytes).
+            let padded_collection_id = keys::pad_id_32(collection_id);
             agg.activities_count = object_activity_totals
-                .get(collection_id)
+                .get(padded_collection_id.as_slice())
                 .copied()
                 .unwrap_or(0);
             let encoded = bincode::serialize(agg).map_err(|e| {
@@ -7806,8 +7810,8 @@ mod tests {
     fn test_rollback_rebuilds_object_collection_aggregate_with_canonical_activity_count_only() {
         let dir = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let class_id = vec![0x44; 32];
-        let object_id = vec![0x55; 32];
+        let class_id = vec![0x44; 24];
+        let object_id = vec![0x55; 28];
 
         let header0 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -7921,8 +7925,8 @@ mod tests {
         // blocks that are being deleted in the same write batch.
         let dir = tempfile::tempdir().unwrap();
         let domain = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let class_id = vec![0x44; 32];
-        let object_id = vec![0x55; 32];
+        let class_id = vec![0x44; 24];
+        let object_id = vec![0x55; 28];
 
         let header0 = CachedBlockHeader {
             hash: vec![0x01; 32],

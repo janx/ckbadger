@@ -177,7 +177,16 @@ pub fn attach_content_witnesses(
     groups: &mut [ScriptGroupResponse],
     witnesses: &[String],
 ) -> anyhow::Result<()> {
+    for group in groups.iter_mut() {
+        if group
+            .witness_index
+            .is_some_and(|index| index >= witnesses.len())
+        {
+            group.witness_index = None;
+        }
+    }
     let mut ckbfs_indices = Vec::new();
+    let mut ckbfs_continuation_indices = std::collections::BTreeSet::new();
     for (index, raw) in witnesses.iter().enumerate() {
         let bytes = hex::decode(raw.trim_start_matches("0x"))?;
         if cobuild_fields(&bytes).is_some() {
@@ -192,24 +201,41 @@ pub fn attach_content_witnesses(
             }
         } else if ckbfs_fields(&bytes).is_some() {
             ckbfs_indices.push(index);
+            if bytes.get(5) == Some(&3) && bytes.len() >= 50 {
+                let next_index =
+                    u32::from_le_bytes(bytes[46..50].try_into().expect("4-byte slice")) as usize;
+                if next_index != 0 {
+                    ckbfs_continuation_indices.insert(next_index);
+                }
+            }
         }
     }
     if ckbfs_indices.is_empty() {
         return Ok(());
     }
+    let head_ckbfs_indices: Vec<usize> = ckbfs_indices
+        .iter()
+        .copied()
+        .filter(|index| !ckbfs_continuation_indices.contains(index))
+        .collect();
+    let assigned_indices = if head_ckbfs_indices.is_empty() {
+        &ckbfs_indices
+    } else {
+        &head_ckbfs_indices
+    };
     let mut ckbfs_groups: Vec<&mut ScriptGroupResponse> = groups
         .iter_mut()
         .filter(|group| {
             group.kind == "type" && cell_type(Some(&group.script)).ok().as_deref() == Some("ckbfs")
         })
         .collect();
-    anyhow::ensure!(
-        ckbfs_groups.len() <= ckbfs_indices.len(),
-        "CKBFS type groups ({}) exceed CKBFS witnesses ({})",
-        ckbfs_groups.len(),
-        ckbfs_indices.len()
-    );
-    for (group, &index) in ckbfs_groups.iter_mut().zip(&ckbfs_indices) {
+    if ckbfs_groups.len() > assigned_indices.len() {
+        // Output-only CKBFS groups (publishes) have no input WitnessArgs and
+        // require a CKBFS content witness, whereas input+output CKBFS groups
+        // may be plain ownership transfers without a CKBFS witness.
+        ckbfs_groups.sort_by_key(|group| !group.input_indices.is_empty());
+    }
+    for (group, &index) in ckbfs_groups.iter_mut().zip(assigned_indices) {
         group.witness_index = Some(index);
     }
     Ok(())
@@ -863,5 +889,110 @@ mod tests {
             .all(|group| !group.ran && group.witness_index.is_none() && group.cycles.is_none()));
         assert_eq!(cell_type(None).unwrap(), "plain");
         assert_eq!(cell_type(Some(&groups[0].script)).unwrap(), "typed");
+    }
+
+    #[test]
+    fn ckbfs_witness_attachment_handles_chains_transfers_and_missing_witnesses() {
+        let ckbfs_code_hash = "0x31e6376287d223b8c0410d562fb422f04d1d617b2947596a14c3d2efb7218d3a";
+        let lock = ScriptResponse {
+            code_hash: format!("0x{}", "11".repeat(32)),
+            hash_type: "type".into(),
+            args: "0x".into(),
+        };
+        let transferred_ckbfs = ScriptResponse {
+            code_hash: ckbfs_code_hash.into(),
+            hash_type: "data1".into(),
+            args: format!("0x{}", "aa".repeat(32)),
+        };
+        let published_ckbfs = ScriptResponse {
+            code_hash: ckbfs_code_hash.into(),
+            hash_type: "data1".into(),
+            args: format!("0x{}", "bb".repeat(32)),
+        };
+        let second_lock = ScriptResponse {
+            code_hash: format!("0x{}", "22".repeat(32)),
+            hash_type: "type".into(),
+            args: "0x".into(),
+        };
+        let input0 = TransactionInputResponse {
+            display: None,
+            previous_output: None,
+            since: "0x0".into(),
+            capacity: Some("100".into()),
+            used_capacity: Some("74".into()),
+            lock: Some(lock.clone()),
+            r#type: Some(transferred_ckbfs.clone()),
+            address: None,
+            cell_type: Some("ckbfs".into()),
+        };
+        let input1 = TransactionInputResponse {
+            display: None,
+            previous_output: None,
+            since: "0x0".into(),
+            capacity: Some("100".into()),
+            used_capacity: Some("74".into()),
+            lock: Some(second_lock.clone()),
+            r#type: None,
+            address: None,
+            cell_type: Some("plain".into()),
+        };
+        let output0 = TransactionOutputResponse {
+            display: None,
+            capacity: "99".into(),
+            used_capacity: "74".into(),
+            virtual_used_capacity: None,
+            cell_type: Some("ckbfs".into()),
+            lock: Some(lock.clone()),
+            r#type: Some(transferred_ckbfs.clone()),
+            address: None,
+            status: None,
+            consumed_by_tx: None,
+        };
+        let output1 = TransactionOutputResponse {
+            display: None,
+            capacity: "99".into(),
+            used_capacity: "74".into(),
+            virtual_used_capacity: None,
+            cell_type: Some("ckbfs".into()),
+            lock: Some(lock),
+            r#type: Some(published_ckbfs.clone()),
+            address: None,
+            status: None,
+            consumed_by_tx: None,
+        };
+        let mut groups = script_groups(&[input0, input1], &[output0, output1]).unwrap();
+        // Empty witness list clears out-of-bounds default input witness indices.
+        let mut no_witness_groups = groups.clone();
+        attach_content_witnesses(&mut no_witness_groups, &[]).unwrap();
+        assert!(no_witness_groups.iter().all(|g| g.witness_index.is_none()));
+
+        // Witness 1 is a v3 CKBFS head witness chaining to continuation witness 2.
+        let mut head = b"CKBFS".to_vec();
+        head.push(3);
+        head.extend([0u8; 40]);
+        head.extend(2u32.to_le_bytes()); // nextWitnessIndex = 2
+        head.extend(b"part1");
+        let mut cont = b"CKBFS".to_vec();
+        cont.push(3);
+        cont.extend([0u8; 44]);
+        cont.extend(b"part2");
+        let witnesses = vec![
+            "0x10000000100000001000000010000000".into(),
+            format!("0x{}", hex::encode(&head)),
+            format!("0x{}", hex::encode(&cont)),
+        ];
+        attach_content_witnesses(&mut groups, &witnesses).unwrap();
+        let transfer_hash = script_hash(&transferred_ckbfs).unwrap();
+        let publish_hash = script_hash(&published_ckbfs).unwrap();
+        let transfer_group = groups
+            .iter()
+            .find(|g| g.kind == "type" && g.script_hash == transfer_hash)
+            .unwrap();
+        let publish_group = groups
+            .iter()
+            .find(|g| g.kind == "type" && g.script_hash == publish_hash)
+            .unwrap();
+        assert_eq!(publish_group.witness_index, Some(1));
+        assert_eq!(transfer_group.witness_index, Some(0));
     }
 }

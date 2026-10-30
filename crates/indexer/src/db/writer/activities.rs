@@ -1270,10 +1270,12 @@ fn classify_output<'a>(
             }
         }
         Some(AssetKind::Dotbit) => {
-            if let Some(account_id) =
-                DotbitParser::resolve_account_id(type_code_hash, type_args, cell_data)
-            {
-                accum.dotbit_outputs.push(account_id);
+            if !cell_data.is_empty() {
+                if let Some(account_id) =
+                    DotbitParser::resolve_account_id(type_code_hash, type_args, cell_data)
+                {
+                    accum.dotbit_outputs.push(account_id);
+                }
             }
         }
         Some(AssetKind::BitCell) => {

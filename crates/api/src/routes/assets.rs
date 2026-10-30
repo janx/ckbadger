@@ -142,13 +142,9 @@ pub(super) fn get_collection_aggregate(
             }));
     }
     if let Some(agg) = store.get_mnft_collection_aggregate(collection_id)? {
-        // Same single path as Spore clusters: count from
-        // CF_OBJECT_COLLECTION_ACTIVITIES. Persisted MnftCollectionAggregate
-        // activities_count stayed 0 after full genesis rebuilds while the
-        // activity CF was correct (IV-08 / OB-K1).
         return Ok(Some(ResolvedCollection {
             source: ObjectCollectionSource::Mnft,
-            activities: CollectionActivityCount::CanonicalHistory,
+            activities: CollectionActivityCount::Persisted(agg.activities_count),
             aggregate: agg.into(),
         }));
     }

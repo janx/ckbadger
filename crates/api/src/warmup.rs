@@ -937,16 +937,7 @@ fn build_asset_caches_sync(
             holders_count: agg.holders_count,
             transfers_count: agg.total_count,
             live_count: Some(agg.live_count),
-            // Count from the activity CF — same path as Spore / collection detail
-            // (IV-08: persisted MnftCollectionAggregate.activities_count is stale).
-            activities_count: Some(
-                crate::routes::assets::count_nft_collection_activities_cached(
-                    &state.store,
-                    &state.append_only_store,
-                    &state.mem_cache,
-                    collection_id_bytes,
-                )?,
-            ),
+            activities_count: Some(agg.activities_count),
             transfers_24h,
             decimals: None,
             total_supply: Some(agg.total_count.to_string()),
