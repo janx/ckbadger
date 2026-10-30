@@ -14,7 +14,7 @@ use crate::cache::CacheInvalidator;
 use crate::sync::types::UndoSeqScope;
 use crate::sync::undo::SharedUndoSeq;
 
-pub use dotcell_detector::dotcell_asset_action;
+pub use dotcell_detector::{dotcell_asset_action, DOTCELL_RING_RELINK_ACTION};
 
 #[derive(Clone)]
 pub struct BatchWriter {
