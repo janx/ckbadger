@@ -63,11 +63,10 @@ function ScopedCollectionHolders({ load, queryKey, distribution }: CollectionHol
     holderKey(holder);
     count(holder.itemCount, 'holder item count');
   }
-  // One holder scope: a listed page cannot hold more holders than the full distribution counts.
-  if (distribution && holders.data && BigInt(holders.data.data.length) > totalHolders)
-    throw new Error(
-      `Collection holder distribution counts ${totalHolders} holders but the list returned ${holders.data.data.length}`
-    );
+  // The list (server-cached up to 30 s) and the distribution are separate reads: when a page
+  // lists more holders than the distribution counts, say so and show both (#6).
+  const readsDiffer =
+    !!distribution && !!holders.data && BigInt(holders.data.data.length) > totalHolders;
   const columns: ListColumn<CollectionHolder>[] = [
     {
       key: 'rank',
@@ -179,6 +178,13 @@ function ScopedCollectionHolders({ load, queryKey, distribution }: CollectionHol
               Full collection: <AssetCount value={totalHolders.toString()} /> holders ·{' '}
               <AssetCount value={totalItems.toString()} /> items
             </p>
+            {readsDiffer && (
+              <p role="note" className="text-text-dim mb-2 text-[11px]">
+                The holder list ({holders.data!.data.length.toLocaleString('en-US')} shown) and the
+                distribution ({totalHolders.toLocaleString('en-US')} holder
+                {totalHolders === BigInt(1) ? '' : 's'}) were read at different moments.
+              </p>
+            )}
             <ListTable
               label="Holders by how many items they hold"
               columns={bucketColumns}

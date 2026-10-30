@@ -1,4 +1,3 @@
-import { Component, type ReactNode } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   act,
@@ -147,27 +146,23 @@ describe('Collection holders', () => {
     }
   });
 
-  it('fails fast when the distribution counts fewer holders than the list returned (#3)', async () => {
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+  it('shows both reads when the cached list and the distribution disagree, without crashing (#6)', async () => {
+    // The holder list is served from a 30 s cache; the distribution is read fresh. A holder that
+    // merged in between is timing, not a broken invariant.
     const load = vi.fn().mockResolvedValue(page([named, resolved]));
-    class Boundary extends Component<{ children: ReactNode }, { message: string | null }> {
-      state = { message: null as string | null };
-      static getDerivedStateFromError(e: Error) {
-        return { message: e.message };
-      }
-      render() {
-        return this.state.message ? <p role="alert">{this.state.message}</p> : this.props.children;
-      }
-    }
     render(
-      <Boundary>
-        <CollectionHolders load={load} queryKey="stub" distribution={[]} />
-      </Boundary>
+      <CollectionHolders
+        load={load}
+        queryKey="moving"
+        distribution={[{ holders: 1, items: 8, range: '6+' }]}
+      />
     );
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'distribution counts 0 holders but the list returned 2'
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(within(table).getAllByRole('row')).toHaveLength(3);
+    expect(screen.getByText('Full collection: 1 holders · 8 items')).toBeInTheDocument();
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'The holder list (2 shown) and the distribution (1 holder) were read at different moments.'
     );
-    error.mockRestore();
   });
 
   it('lets an empty distribution with no listed holders read as genuinely no holders', async () => {

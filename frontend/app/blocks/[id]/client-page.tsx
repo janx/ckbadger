@@ -147,12 +147,9 @@ export default function BlockDetailPage() {
     dao: block.rawHeader.dao,
   };
   const dao = decodeDaoHeader(block.rawHeader.dao, `Block ${block.number}`);
-  const uncleIndex = (hash: string) => {
-    const index = block.uncles.findIndex((uncle) => uncle.hash === hash);
-    if (index < 0)
-      throw new Error(`Block ${block.number}: proposal carried by unknown uncle ${hash}`);
-    return index;
-  };
+  // Proposals are a second read: an uncle this block read does not list (a reorg between the
+  // two) is shown as text, not linked by a guessed position (#6).
+  const uncleIndex = (hash: string) => block.uncles.findIndex((uncle) => uncle.hash === hash);
   const sizeScale = resourceScale([block.size]);
   const parentElapsedMs =
     block.parentTimestamp === null
@@ -362,17 +359,22 @@ export default function BlockDetailPage() {
                         <p className="flex flex-wrap gap-2">
                           <span className="text-gold">●</span>
                           {proposal.proposalId}
-                          {proposal.uncle && (
-                            <Link
-                              href={getUncleDetailHref(
-                                block.number,
-                                uncleIndex(proposal.uncle.hash)
-                              )}
-                              className="text-text-dim"
-                            >
-                              uncle #{proposal.uncle.number.toLocaleString('en-US')}
-                            </Link>
-                          )}
+                          {proposal.uncle &&
+                            (uncleIndex(proposal.uncle.hash) >= 0 ? (
+                              <Link
+                                href={getUncleDetailHref(
+                                  block.number,
+                                  uncleIndex(proposal.uncle.hash)
+                                )}
+                                className="text-text-dim"
+                              >
+                                uncle #{proposal.uncle.number.toLocaleString('en-US')}
+                              </Link>
+                            ) : (
+                              <span className="text-text-dim">
+                                uncle #{proposal.uncle.number.toLocaleString('en-US')}
+                              </span>
+                            ))}
                         </p>
                         {proposal.committedTxHash ? (
                           <p>
