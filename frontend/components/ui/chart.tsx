@@ -26,6 +26,12 @@ export interface ChartMarker {
   plotLabel?: string;
   href: string;
 }
+/** A stretch of the shared time axis with no observation: shaded, labelled, never bridged. */
+export interface ChartGap {
+  from: number;
+  to: number;
+  label: string;
+}
 export interface ChartProps {
   title: string;
   subtitle: string;
@@ -46,6 +52,8 @@ export interface ChartProps {
   activeIndex?: number | null;
   onActiveIndexChange?: (index: number | null) => void;
   xDomain?: readonly [number, number];
+  /** Requires `xDomain`; series lines and areas break across each gap instead of joining it. */
+  gaps?: readonly ChartGap[];
   plotLeft?: number;
   hideCaption?: boolean;
   hideXAxis?: boolean;
@@ -66,6 +74,7 @@ export function Chart({
   activeIndex: controlledActive,
   onActiveIndexChange,
   xDomain,
+  gaps = [],
   plotLeft,
   hideCaption = false,
   hideXAxis = false,
@@ -88,6 +97,18 @@ export function Chart({
       ))
   )
     throw new Error(`${title}: invalid shared time axis`);
+  if (
+    gaps.length &&
+    (!xDomain ||
+      gaps.some(
+        (gap) =>
+          !(gap.from < gap.to) ||
+          gap.from < xDomain[0] ||
+          gap.to > xDomain[1] ||
+          data.some((p) => p.x! > gap.from && p.x! < gap.to)
+      ))
+  )
+    throw new Error(`${title}: gaps must lie on the shared time axis between observations`);
   if (!series.length) throw new Error(`${title}: chart needs at least one series`);
   if (new Set(series.map((s) => s.key)).size !== series.length)
     throw new Error(`${title}: duplicate chart series`);
@@ -156,6 +177,13 @@ export function Chart({
     (((yScale === 'log' ? Math.log10(v) : v) - (lo as number)) /
       ((hi as number) - (lo as number))) *
       (bottom - top);
+  // Index runs between gaps: a series is never drawn across a stretch with no observation.
+  const runs = data.reduce<number[][]>((all, point, i) => {
+    const broken = i > 0 && gaps.some((gap) => data[i - 1].x! <= gap.from && point.x! >= gap.to);
+    if (i === 0 || broken) all.push([i]);
+    else all[all.length - 1].push(i);
+    return all;
+  }, []);
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
   return (
@@ -254,6 +282,34 @@ export function Chart({
                   </text>
                 </g>
               ))}
+              {gaps.map((gap) => {
+                const toX = (t: number) =>
+                  left + ((t - xDomain![0]) / (xDomain![1] - xDomain![0])) * (right - left);
+                const gapLeft = toX(gap.from),
+                  gapRight = toX(gap.to);
+                return (
+                  <g key={`${gap.from}:${gap.to}`} data-chart-gap={gap.label}>
+                    <rect
+                      x={gapLeft}
+                      y={top}
+                      width={Math.max(0, gapRight - gapLeft)}
+                      height={bottom - top}
+                      fill="#10131c"
+                    />
+                    {gapRight - gapLeft > 120 && (
+                      <text
+                        x={(gapLeft + gapRight) / 2}
+                        y={(top + bottom) / 2}
+                        textAnchor="middle"
+                        fill="#7c849c"
+                        fontSize="10"
+                      >
+                        {gap.label}
+                      </text>
+                    )}
+                  </g>
+                );
+              })}
               {series.map((s, si) => {
                 const upper = values.map((row) =>
                   kind === 'stacked' ? row.slice(0, si + 1).reduce((sum, v) => sum + v, 0) : row[si]
@@ -261,7 +317,11 @@ export function Chart({
                 const lower = values.map((row) =>
                   kind === 'stacked' ? row.slice(0, si).reduce((sum, v) => sum + v, 0) : 0
                 );
-                const line = upper.map((v, i) => `${i ? 'L' : 'M'}${x(i)},${y(v)}`).join(' ');
+                const line = runs
+                  .map((run) =>
+                    run.map((i, k) => `${k ? 'L' : 'M'}${x(i)},${y(upper[i])}`).join(' ')
+                  )
+                  .join(' ');
                 if (kind === 'bars')
                   return (
                     <g key={s.key}>
@@ -281,20 +341,27 @@ export function Chart({
                   <g key={s.key}>
                     {(kind === 'area' || kind === 'stacked') && (
                       <path
-                        d={`${line} ${lower
-                          .map((_, index) => {
-                            const i = lower.length - 1 - index;
-                            return `L${x(i)},${y(lower[i])}`;
-                          })
-                          .join(' ')} Z`}
+                        d={runs
+                          .map(
+                            (run) =>
+                              `${run.map((i, k) => `${k ? 'L' : 'M'}${x(i)},${y(upper[i])}`).join(' ')} ${[
+                                ...run,
+                              ]
+                                .reverse()
+                                .map((i) => `L${x(i)},${y(lower[i])}`)
+                                .join(' ')} Z`
+                          )
+                          .join(' ')}
                         fill={color(si)}
                         fillOpacity={kind === 'stacked' ? 0.6 : 0.12}
                       />
                     )}
                     <path d={line} fill="none" stroke={color(si)} strokeWidth="1.5" />
-                    {data.length === 1 && (
-                      <circle cx={x(0)} cy={y(upper[0])} r="2" fill={color(si)} />
-                    )}
+                    {runs
+                      .filter((run) => run.length === 1)
+                      .map(([i]) => (
+                        <circle key={i} cx={x(i)} cy={y(upper[i])} r="2" fill={color(si)} />
+                      ))}
                   </g>
                 );
               })}

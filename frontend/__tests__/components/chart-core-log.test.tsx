@@ -64,3 +64,63 @@ describe('shared Chart logarithmic geometry', () => {
     ).toThrow(/Bad stack: logarithmic scale requires a positive line series/);
   });
 });
+
+describe('shared Chart gaps', () => {
+  beforeEach(() => stubChartWidth(480));
+  const timed = [
+    { label: 'd1', x: 1, values: { value: '5' } },
+    { label: 'd2', x: 2, values: { value: '6' } },
+    { label: 'd5', x: 5, values: { value: '7' } },
+  ];
+
+  it('shades a gap and never bridges a series across it', () => {
+    const { container } = render(
+      <Chart
+        title="Peers"
+        subtitle="Daily"
+        data={timed}
+        series={series}
+        unit="peers"
+        xDomain={[1, 5]}
+        gaps={[{ from: 2, to: 5, label: 'no rounds 3 – 4' }]}
+        formatValue={(v) => v}
+      />
+    );
+    expect(container.querySelector('[data-chart-gap="no rounds 3 – 4"] rect')).not.toBeNull();
+    const line = container.querySelector('path[fill="none"]')!.getAttribute('d')!;
+    expect(line.match(/M/g)).toHaveLength(2);
+    expect(container.querySelectorAll('circle')).toHaveLength(1);
+  });
+
+  it('rejects a gap that hides an observation or has no time axis', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <Chart
+          title="Peers"
+          subtitle="Daily"
+          data={timed}
+          series={series}
+          unit="peers"
+          xDomain={[1, 5]}
+          gaps={[{ from: 1, to: 5, label: 'bad' }]}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow('gaps must lie on the shared time axis');
+    expect(() =>
+      render(
+        <Chart
+          title="Peers"
+          subtitle="Daily"
+          data={timed}
+          series={series}
+          unit="peers"
+          gaps={[{ from: 2, to: 5, label: 'bad' }]}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow('gaps must lie on the shared time axis');
+    error.mockRestore();
+  });
+});
