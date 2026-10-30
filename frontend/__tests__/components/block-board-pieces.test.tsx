@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakdown';
-import { BlockTransactionsTable } from '@/components/blocks/block-transactions-table';
+import {
+  BLOCK_TXS_MIN_WIDTH,
+  BlockTransactionsTable,
+} from '@/components/blocks/block-transactions-table';
 import { positionSentence } from '@/components/blocks/block-position';
 import { BlocksLimitsFootnote, ScaleHeader } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
@@ -113,6 +116,11 @@ describe('BlockTransactionsTable', () => {
     expect(() =>
       wrap(<BlockTransactionsTable transactions={[tx(0, { blockNumber: 8 })]} blockNumber={7} />)
     ).toThrow('is not in block 7');
+  });
+  it('fits the block page main column at 1440 (visual pass: the Cycles column was cut off)', () => {
+    wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
+    expect(BLOCK_TXS_MIN_WIDTH).toBeLessThanOrEqual(968);
+    expect(screen.getByRole('table').style.minWidth).toBe(`${BLOCK_TXS_MIN_WIDTH}px`);
   });
   it('writes "+distance" beside the proposing block', () => {
     wrap(
