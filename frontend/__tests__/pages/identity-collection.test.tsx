@@ -182,3 +182,21 @@ it('titles a did:ckb row by its DID when it has no name (ID-COL-3, R2b-b-22)', a
     await screen.findByRole('link', { name: 'did:ckb:3hbpv2xjwz7q2jzobspfhddznczzrjtl' })
   ).toHaveAttribute('href', `/mainnet/identities/did/${item.nftId}`);
 });
+
+it('counts PDS identities in the singular for one (visual pass)', async () => {
+  vi.mocked(api.getIdentityCollection).mockResolvedValue({
+    collectionId: 'did:ckb',
+    standard: 'did_ckb',
+    name: 'did:ckb',
+    totalCount: 2,
+    liveCount: 2,
+    holdersCount: 1,
+    activitiesCount: 3,
+    ownedCapacity: '100000000000',
+    ownedKnowledge: '20400000000',
+  });
+  render(<Page collectionId="did:ckb" />);
+  const pds = await screen.findByRole('region', { name: 'PDS distribution' });
+  expect(await within(pds).findByText('1 identity')).toBeInTheDocument();
+  expect(pds).not.toHaveTextContent('1 identities');
+});

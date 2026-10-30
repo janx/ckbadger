@@ -119,7 +119,7 @@ function termNote(term: Extract<IdentityTerm, { kind: 'term' }>, kind: IdentityK
   const renewals = n ? `${n} renewal${n === 1 ? '' : 's'}` : 'not renewed';
   if (term.graceEnd !== undefined)
     return `${renewals} · then ${termDays(term.graceEnd, term.expiresAt)} days of grace, to ${formatUtc8Date(term.graceEnd)}`;
-  return `paid ${kind === 'bit-cell' ? 'from minting' : 'at registration'} · ${renewals}`;
+  return `${kind === 'bit-cell' ? 'held from minting' : 'paid at registration'} · ${renewals}`;
 }
 
 export function CanonicalIdentityDetail({
