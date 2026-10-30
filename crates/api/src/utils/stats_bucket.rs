@@ -20,6 +20,9 @@ pub struct ChainTime {
     tip_timestamp_ms: i64,
     chain_time_ms: i64,
     complete_day_boundary_hash: [u8; 32],
+    /// The first block of the incomplete day; known once [`Self::load`]
+    /// located it, `None` for a clock built from a header alone.
+    complete_day_boundary_block: Option<i64>,
 }
 
 impl ChainTime {
@@ -67,6 +70,7 @@ impl ChainTime {
                     boundary_header.hash.len()
                 ))
             })?;
+        chain.complete_day_boundary_block = Some(boundary_block);
         Ok(Some(chain))
     }
 
@@ -84,6 +88,7 @@ impl ChainTime {
             tip_timestamp_ms,
             chain_time_ms,
             complete_day_boundary_hash: tip_hash,
+            complete_day_boundary_block: None,
         })
     }
 
@@ -119,6 +124,14 @@ impl ChainTime {
 
     pub fn chain_time_ms(&self) -> i64 {
         self.chain_time_ms
+    }
+
+    /// The first block of the incomplete (tip) day: every block before it
+    /// belongs to a complete day.
+    pub fn complete_day_boundary_block(&self) -> Result<i64, ApiRouteError> {
+        self.complete_day_boundary_block.ok_or_else(|| {
+            ApiError::internal("chain time was built without locating its complete-day boundary")
+        })
     }
 
     /// The tip block's UTC+8 stats day.

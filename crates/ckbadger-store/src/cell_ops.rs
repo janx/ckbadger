@@ -66,6 +66,48 @@ impl CkbadgerStore {
         }
     }
 
+    /// Every output payload of transaction `tx_hash` (`outputs_count`
+    /// outputs) in one batched read, in output order. A missing payload is
+    /// `None` at its index; the caller decides what that means.
+    pub fn get_tx_output_payloads(
+        &self,
+        tx_hash: &[u8],
+        outputs_count: i16,
+    ) -> anyhow::Result<Vec<Option<LiveCellInfo>>> {
+        anyhow::ensure!(
+            outputs_count >= 0,
+            "negative outputs count {outputs_count} for tx 0x{}",
+            bytes_to_hex(tx_hash)
+        );
+        let keys: Vec<[u8; keys::OUTPOINT_KEY_SIZE]> = (0..outputs_count)
+            .map(|index| keys::encode_outpoint(tx_hash, index))
+            .collect();
+        let cf = self.cf_cells();
+        let values =
+            self.multi_get_cf_sorted(keys.iter().map(|key| (cf, key.as_slice())).collect());
+        values
+            .into_iter()
+            .zip(&keys)
+            .map(|(value, key)| match value {
+                Ok(Some(value)) => bincode::deserialize::<LiveCellInfo>(&value)
+                    .map(Some)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
+                            bytes_to_hex(key),
+                            e
+                        )
+                    }),
+                Ok(None) => Ok(None),
+                Err(e) => Err(anyhow::anyhow!(
+                    "rocksdb multi_get failed for cell payload: outpoint=0x{}, error={}",
+                    bytes_to_hex(key),
+                    e
+                )),
+            })
+            .collect()
+    }
+
     pub fn get_live_cell_by_outpoint_key(
         &self,
         outpoint_key: &[u8],
@@ -877,6 +919,35 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         }
+    }
+
+    #[test]
+    fn tx_output_payloads_are_one_batched_read_in_output_order() {
+        let (_dir, store) = test_store();
+        let tx = [0x42; 32];
+        insert_cell(
+            &store,
+            &tx,
+            0,
+            &[0x01; 32],
+            &make_cell(100, 61, &[0x01; 32]),
+        );
+        insert_cell(
+            &store,
+            &tx,
+            2,
+            &[0x01; 32],
+            &make_cell(300, 61, &[0x01; 32]),
+        );
+        store.reset_read_call_counters();
+        let payloads = store.get_tx_output_payloads(&tx, 3).unwrap();
+        assert_eq!(store.read_call_counts(), (0, 1));
+        let capacities: Vec<_> = payloads
+            .iter()
+            .map(|p| p.as_ref().map(|c| c.capacity))
+            .collect();
+        assert_eq!(capacities, [Some(100), None, Some(300)]);
+        assert!(store.get_tx_output_payloads(&tx, -1).is_err());
     }
 
     fn insert_cell(

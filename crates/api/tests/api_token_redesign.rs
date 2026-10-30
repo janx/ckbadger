@@ -282,11 +282,11 @@ async fn token_history_rejects_missing_headers_and_supply_disagreement() {
         .unwrap();
     let (status, body) = response_json(&app, &path).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    // The history's chain clock (the complete-day boundary search) is the
+    // first reader of block 1's header; either reader names the block.
+    let message = body["message"].as_str().unwrap();
     assert!(
-        body["message"]
-            .as_str()
-            .unwrap()
-            .contains("missing header block=1"),
+        message.contains("missing") && message.contains("header") && message.contains("block=1"),
         "{body}"
     );
 }
@@ -523,5 +523,254 @@ async fn token_history_accepts_same_day_mint_burn_with_deleted_zero_net_capacity
         serde_json::json!([{
             "date":"2026-10-01", "supply":"0", "capacity":"0", "occupiedCapacity":"0"
         }])
+    );
+}
+
+/// A token whose history spans `blocks` (at most 40) blocks, four per UTC+8
+/// day from 2026-10-01: block 1 mints 1,000 to `0x32…`, every later block
+/// moves one unit to `0x33…`. The indexed chain is 48 blocks long whatever
+/// `blocks` is, so two fixtures differ only in their transfers.
+fn long_history_fixture(blocks: i64) -> Arc<CkbadgerStore> {
+    assert!(blocks <= 40);
+    let store = test_store();
+    store
+        .put_token_direct(
+            &TOKEN,
+            &TokenInfo {
+                type_code_hash: vec![0x72; 32],
+                hash_type: 1,
+                type_args: vec![0x73; 32],
+                standard: "sudt".into(),
+                name: Some("Token".into()),
+                symbol: Some("TOK".into()),
+                decimals: Some(0),
+                max_supply: None,
+                first_seen_block: 1,
+                icon_url: None,
+                description: None,
+                transfers_count: blocks,
+            },
+        )
+        .unwrap();
+    let start = utc_ms("2026-09-30T16:00:00Z");
+    let tip = 48;
+    let headers: Vec<(i64, i64)> = (0..=tip)
+        .map(|block| (block, start + block * 6 * 3_600_000))
+        .collect();
+    seed_block_headers_at(&store, &headers);
+    let mut batch = StoreBatch::new(&store);
+    for block in 1..=blocks {
+        let hash = long_history_tx(block);
+        let timestamp = store.get_block_header(block).unwrap().unwrap().timestamp;
+        batch.put_tx_hash_map(&hash, block, 1);
+        batch.put_tx_index(
+            block,
+            1,
+            &TxIndexEntry {
+                tx_hash: hash,
+                is_cellbase: false,
+                timestamp,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 10,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_token_transfer(
+            &TOKEN,
+            block,
+            0,
+            &TokenTransferRecord {
+                tx_hash: hash.to_vec(),
+                block_number: block,
+                from_lock_hash: (block > 1).then(|| vec![0x32; 32]),
+                to_lock_hash: vec![if block == 1 { 0x32 } else { 0x33 }; 32],
+                amount: if block == 1 { 1_000 } else { 1 },
+                is_mint: block == 1,
+                is_burn: false,
+                timestamp,
+            },
+        );
+    }
+    let moved = u128::try_from(blocks - 1).unwrap();
+    batch.put_token_holder(&TOKEN, &[0x32; 32], 1_000 - moved);
+    batch.put_token_holder(&TOKEN, &[0x33; 32], moved);
+    batch.commit().unwrap();
+    store
+        .put_token_daily_delta(
+            &TOKEN,
+            20261001,
+            &TokenDailyDelta {
+                owned_capacity_delta: 1_000,
+                owned_knowledge_delta: 600,
+            },
+        )
+        .unwrap();
+    store
+}
+
+fn long_history_tx(block: i64) -> [u8; 32] {
+    let mut hash = [0x5a; 32];
+    hash[..8].copy_from_slice(&block.to_be_bytes());
+    hash
+}
+
+/// IV-27: `/history` read one block header per transfer block (4–13 s for
+/// USDI). Header reads are batched, so a history's point reads do not grow
+/// with the number of blocks its transfers span.
+#[tokio::test]
+async fn token_history_reads_no_header_per_transfer_block() {
+    let path = format!("/tokens/0x{}/history", hex::encode(TOKEN));
+    let mut reads = Vec::new();
+    for blocks in [20, 40] {
+        let store = long_history_fixture(blocks);
+        let app = router_from_state(test_app_state(test_config(store.clone())));
+        store.reset_read_call_counters();
+        let (status, body) = response_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["transfersCount"], blocks, "{body}");
+        reads.push((blocks, store.read_call_counts()));
+    }
+    assert_eq!(
+        reads[0].1 .0, reads[1].1 .0,
+        "get_cf point reads grew with transfer blocks: {reads:?}"
+    );
+}
+
+/// IV-27: complete days are computed once per complete-day boundary and
+/// served from memory; only the incomplete day is read live.
+#[tokio::test]
+async fn token_history_serves_complete_days_from_memory() {
+    let store = long_history_fixture(40);
+    let app = router_from_state(test_app_state(test_config(store.clone())));
+    let path = format!("/tokens/0x{}/history", hex::encode(TOKEN));
+    store.reset_read_call_counters();
+    let (status, first) = response_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let cold = store.read_call_counts();
+    store.reset_read_call_counters();
+    let (_, second) = response_json(&app, &path).await;
+    let warm = store.read_call_counts();
+    assert_eq!(first, second);
+    assert!(
+        cold.1 > 0,
+        "the cold build batch-reads the transfers: {cold:?}"
+    );
+    assert_eq!(
+        warm.1, 0,
+        "the warm read must not walk the complete days again: cold={cold:?} warm={warm:?}"
+    );
+
+    // A transfer later on the incomplete day is read live on top of the
+    // cached complete days.
+    let tip = store.get_sync_tip_block().unwrap().unwrap();
+    let block = tip.0 + 1;
+    let mut header = tip.1.clone();
+    header.timestamp += 60_000;
+    header.chain_time_ms += 60_000;
+    header.hash = vec![0xee; 32];
+    let hash = long_history_tx(block);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_block_header(block, &header);
+    batch.put_tx_hash_map(&hash, block, 1);
+    batch.put_tx_index(
+        block,
+        1,
+        &TxIndexEntry {
+            tx_hash: hash,
+            is_cellbase: false,
+            timestamp: header.timestamp,
+            inputs_count: 1,
+            outputs_count: 1,
+            fee: 10,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_token_transfer(
+        &TOKEN,
+        block,
+        0,
+        &TokenTransferRecord {
+            tx_hash: hash.to_vec(),
+            block_number: block,
+            from_lock_hash: Some(vec![0x32; 32]),
+            to_lock_hash: vec![0x33; 32],
+            amount: 1,
+            is_mint: false,
+            is_burn: false,
+            timestamp: header.timestamp,
+        },
+    );
+    batch.put_token_holder(&TOKEN, &[0x32; 32], 1_000 - 40);
+    batch.put_token_holder(&TOKEN, &[0x33; 32], 40);
+    batch.commit().unwrap();
+    let (status, third) = response_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{third}");
+    assert_eq!(third["transfersCount"], 41, "{third}");
+    assert_eq!(third["completeThrough"], first["completeThrough"]);
+    assert_eq!(third["daily"], first["daily"]);
+    assert_eq!(third["weekly"], first["weekly"]);
+    assert_eq!(third["anchor"]["blockNumber"], block);
+}
+
+/// IV-27: a Transactions-tab row summed its output capacity with one point
+/// read per output. The row reads its outputs in one batch, so a page's point
+/// reads do not grow with how many outputs its transactions have.
+#[tokio::test]
+async fn token_transactions_rows_read_outputs_in_one_batch() {
+    let mut reads = Vec::new();
+    for outputs in [2i16, 12] {
+        let store = fixture();
+        let mut batch = StoreBatch::new(&store);
+        for block in 0..3 {
+            let hash = [0x81 + block as u8; 32];
+            let mut entry = store.get_tx_index(block, 2).unwrap().unwrap();
+            entry.outputs_count = outputs;
+            batch.put_tx_index(block, 2, &entry);
+            for index in 0..outputs {
+                batch.put_cell_payload_by_outpoint(
+                    &hash,
+                    index,
+                    &LiveCellInfo {
+                        capacity: 100,
+                        occupied_capacity: 61,
+                        lock_script_hash: vec![0x32; 32],
+                        lock_code_hash: vec![0x33; 32],
+                        lock_hash_type: 1,
+                        lock_args: vec![],
+                        type_script_hash: None,
+                        type_code_hash: None,
+                        type_hash_type: None,
+                        type_args: None,
+                        data_size: 0,
+                        udt_amount: None,
+                        data_hash: None,
+                    },
+                );
+            }
+        }
+        batch.commit().unwrap();
+        let app = router_from_state(test_app_state(test_config(store.clone())));
+        store.reset_read_call_counters();
+        let (status, body) = response_json(
+            &app,
+            &format!("/tokens/0x{}/transactions?limit=3", hex::encode(TOKEN)),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            body["data"][0]["outputCapacity"],
+            (100 * i64::from(outputs)).to_string(),
+            "{body}"
+        );
+        reads.push((outputs, store.read_call_counts()));
+    }
+    assert_eq!(
+        reads[0].1 .0, reads[1].1 .0,
+        "get_cf point reads grew with outputs per transaction: {reads:?}"
     );
 }

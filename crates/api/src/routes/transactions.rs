@@ -254,19 +254,19 @@ pub(crate) fn transaction_response(
         .map_err(|error| ApiError::internal(error.to_string()))?;
         (actions.ckb_moved().to_string(), Some(activity))
     };
+    // One batched read of every output payload, not one point read each.
+    let payloads = state
+        .append_only_store
+        .get_tx_output_payloads(&entry.tx_hash, entry.outputs_count)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
     let mut output_capacity = 0u128;
-    for output in 0..entry.outputs_count {
-        let key = ckbadger_store::keys::encode_outpoint(&entry.tx_hash, output);
-        let cell = state
-            .append_only_store
-            .get_cell_by_outpoint_key(&key)
-            .map_err(|error| ApiError::internal(error.to_string()))?
-            .ok_or_else(|| {
-                ApiError::internal(format!(
-                    "missing canonical output payload 0x{}:{output}",
-                    hex::encode(entry.tx_hash)
-                ))
-            })?;
+    for (output, cell) in payloads.into_iter().enumerate() {
+        let cell = cell.ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing canonical output payload 0x{}:{output}",
+                hex::encode(entry.tx_hash)
+            ))
+        })?;
         let capacity = u128::try_from(cell.capacity)
             .map_err(|_| ApiError::internal("negative output capacity"))?;
         output_capacity = output_capacity
