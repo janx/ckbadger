@@ -16,6 +16,7 @@ vi.mock('@/lib/api', () => ({
     getDaoCirculationRatioChart: vi.fn(),
     getGlobalActivities: vi.fn(),
     getTransactions: vi.fn(),
+    calculateDaoCompensation: vi.fn(),
   },
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="header" /> }));
@@ -23,6 +24,12 @@ vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="h
 const stats = {
   ...daoStatistics,
   tipBlockNumber: 5,
+  // Consistent with the evidence header at #5: S (500000000) = still owed + burnt.
+  miningReward: '100000000',
+  depositCompensation: '300000000',
+  totalCompensationPaid: '100000000',
+  unclaimedCompensation: '200000000',
+  burnt: '300000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   daoFreeCapacity: '40000000000',
@@ -35,6 +42,8 @@ const history = {
   title: 'Total Deposit',
   yAxisLabel: 'CKB',
   y2AxisLabel: 'Current depositors',
+  peak: { date: '2024-01-15', value: '500' },
+  peak2: { date: '2024-01-15', value: '2' },
 };
 const ratio = { data: [{ date: '2024-01-15', value: '1.25' }], title: 'Ratio', yAxisLabel: '%' };
 
@@ -51,6 +60,19 @@ describe('DaoPage', () => {
       nextCursor: null,
       limit: 12,
     });
+    vi.mocked(api.calculateDaoCompensation).mockImplementation(
+      async (capacity: string, depositBlock: number, withdrawBlock?: number) => ({
+        capacity,
+        capacityCkb: '10000',
+        depositBlock,
+        withdrawBlock: withdrawBlock!,
+        estimatedCompensation: '20000000000',
+        estimatedCompensationCkb: '200',
+        totalWithdrawable: '1020000000000',
+        totalWithdrawableCkb: '10200',
+        apc: null,
+      })
+    );
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [],
       hasMore: false,
@@ -67,9 +89,9 @@ describe('DaoPage', () => {
     ).toBeInTheDocument();
     expect(screen.getByText(/at indexed epoch 185\+2\/4/)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      'DAO epoch lock met: 400.00000000 CKB in 1 withdrawal-request cells'
+      '400.00000000 CKB in 1 cell is past its window and can be claimed now'
     );
-    expect(screen.getByText(/Current depositors: 2/)).toBeInTheDocument();
+    expect(screen.getByLabelText('History reading')).toHaveTextContent('depositors2');
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(

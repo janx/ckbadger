@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoSources } from '@/components/dao/dao-sources';
 import { api } from '@/lib/api';
@@ -97,7 +97,7 @@ describe('DaoSources', () => {
 
   it('uses the DAO transaction filter on the Transactions tab', async () => {
     render(<DaoSources />);
-    fireEvent.click(screen.getByRole('button', { name: 'transactions' }));
+    fireEvent.click(screen.getByRole('tab', { name: /transactions/i }));
     await waitFor(() =>
       expect(api.getTransactions).toHaveBeenCalledWith({
         activityType: 'dao',
@@ -120,8 +120,9 @@ describe('DaoSources', () => {
     expect(container.querySelector('table')).toBeNull();
     // Raw milliseconds never reach the page (DAO-1).
     expect(screen.queryByText(/1793268770452/)).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'transactions' }));
-    const table = await screen.findByRole('table', { name: 'Committed transactions' });
+    fireEvent.click(screen.getByRole('tab', { name: /transactions/i }));
+    // The DaoTxs board's own table (DAO-13), on the shared ListTable.
+    const table = await screen.findByRole('table', { name: 'DAO transactions' });
     // Same protocol-action name as the Activities tab.
     expect(table).toHaveTextContent(/withdraw request/i);
   });
@@ -131,5 +132,87 @@ describe('DaoSources', () => {
     render(<DaoSources />);
     expect(await screen.findByRole('alert')).toHaveTextContent('canonical index missing');
     expect(screen.queryByRole('link', { name: '#123' })).not.toBeInTheDocument();
+  });
+});
+
+// ---- F2 group dao (round-2 fix) ----
+describe('DaoSources board columns (DAO-13, DAO-22)', () => {
+  const completion = {
+    ...transaction,
+    hash: '0x' + 'c'.repeat(64),
+    blockNumber: 20874429,
+    timestamp: '2026-10-30T03:40:00.000+00:00',
+    activity: {
+      ...activity,
+      txHash: '0x' + 'c'.repeat(64),
+      blockNumber: 20874429,
+      participants: [
+        {
+          address:
+            'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqfzyg3zyg3zyg3zyg3zyg3zyg3zyg3zygssd2hqn',
+          lockHash: '0x' + 'd'.repeat(64),
+          lockHashPrefix: null,
+          roles: [],
+          ckbDelta: '781583043832627',
+          usedDelta: '0',
+          itemDeltas: [],
+          tags: 16,
+        },
+      ],
+      protocolActions: [
+        {
+          protocol: 'dao',
+          protocolName: 'Nervos DAO',
+          action: 'withdraw_complete',
+          metadata: { capacity: '781583043832627', compensation: '2572859558410' },
+        },
+      ],
+    },
+  };
+
+  beforeEach(() => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [transaction, completion],
+      limit: 12,
+      total: null,
+      hasMore: false,
+      nextCursor: null,
+    } as any);
+  });
+
+  it('gives the Transactions tab the board columns: step, deposit, compensation, parties', async () => {
+    render(<DaoSources />);
+    fireEvent.click(screen.getByRole('tab', { name: /transactions/i }));
+    const table = await screen.findByRole('table', { name: 'DAO transactions' });
+    expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).toEqual([
+      'Transaction',
+      'Block · UTC+8',
+      'DAO step',
+      'Deposit',
+      'Compensation',
+      'Parties',
+    ]);
+    const rows = table.querySelectorAll('tbody tr');
+    expect(rows[0]).toHaveTextContent('DAO Withdraw Request');
+    expect(rows[0]).toHaveTextContent('26,050.00000000');
+    expect(rows[1]).toHaveTextContent('#20,874,429 · 2026-10-30 11:40');
+    expect(rows[1]).toHaveTextContent('7,815,830.43832627');
+    const comp = rows[1].querySelector('[data-role="compensation"]')!;
+    expect(comp).toHaveTextContent('25,728.5955841');
+    expect(comp).toHaveClass('text-gold');
+    // Gold reaches the digits: nothing inside sets its own text colour (self-check: it was grey).
+    expect(comp.querySelector('[class*="text-text"]')).toBeNull();
+    expect(rows[1].lastElementChild).toHaveTextContent('1');
+  });
+
+  it('marks the tabs as tabs and lets the note wrap below them on phones', () => {
+    render(<DaoSources />);
+    const tabs = screen.getByRole('tablist', { name: 'What happened' });
+    expect(within(tabs).getByRole('tab', { name: /activities/i })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    );
+    const note = screen.getByText('deposits, withdrawal requests and withdrawals · newest first');
+    expect(note).toHaveClass('basis-full', 'sm:basis-auto');
   });
 });

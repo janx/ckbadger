@@ -75,3 +75,15 @@ export const REWARD_COLORS = {
   committed: '#a0a8be',
   proposal: CLASS_COLORS.dao,
 } as const;
+
+// ---- F2 group dao (round-2 fix) ----
+/**
+ * Nervos DAO secondary-issuance partition (board V63): the whole issuance a quiet slate, miners
+ * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
+ */
+export const DAO_ISSUANCE_COLORS = {
+  total: '#4b5266',
+  miners: '#a0a8be',
+  compensation: CLASS_COLORS.dao,
+  burnt: CLASS_COLORS.other,
+} as const;
