@@ -16,7 +16,7 @@ use crate::response::{
 };
 use crate::routes::identities::{dotcell_record_response, DotCellRecordResponse};
 use crate::routes::proposal_window::{
-    block_proposal_zone, earliest_proposal_in_window, ZoneProposal,
+    block_proposal_zone, cellbase_reward_target, earliest_proposal_in_window, ZoneProposal,
 };
 use crate::routes::tx_lookup::{fetch_transaction_lookup, pending_transaction_resource_error};
 use crate::utils::{
@@ -136,6 +136,31 @@ pub struct TransactionResponse {
     pub cycles_status: String,
     pub is_cellbase: bool,
     pub timestamp: String,
+    /// For a cellbase, the block whose reward it pays (TX-23 / TX-25, the same
+    /// rule as the block page's `cellbasePays`); `null` for every other
+    /// transaction and for cellbases too close to genesis to pay any reward.
+    pub pays: Option<CellbasePaysResponse>,
+}
+
+/// The block a cellbase pays the reward of: its own block number minus the
+/// finalization delay ([`cellbase_reward_target`]) — read-time arithmetic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CellbasePaysResponse {
+    pub number: i64,
+}
+
+/// `pays` of a transaction at `block`: `None` unless it is a cellbase that
+/// pays a reward.
+fn cellbase_pays_response(
+    is_cellbase: bool,
+    window: ProposalWindow,
+    block: i64,
+) -> Option<CellbasePaysResponse> {
+    if !is_cellbase {
+        return None;
+    }
+    cellbase_reward_target(window, block).map(|number| CellbasePaysResponse { number })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -229,6 +254,8 @@ fn required_tx_timestamp(
         })
 }
 
+/// `reward_window` is the consensus proposal window, which a cellbase row needs
+/// for its `pays`; a cellbase row without it is an error, never a `null`.
 pub(crate) fn transaction_response(
     state: &AppState,
     block: i64,
@@ -236,6 +263,7 @@ pub(crate) fn transaction_response(
     entry: &ckbadger_store::TxIndexEntry,
     block_hash: &[u8],
     window: Option<ProposalWindow>,
+    reward_window: Option<ProposalWindow>,
 ) -> Result<TransactionResponse, ApiRouteError> {
     let (value, activity) = if entry.is_cellbase {
         ("0".into(), None)
@@ -297,7 +325,20 @@ pub(crate) fn transaction_response(
         entry.is_cellbase || block == 0,
         &entry.tx_hash,
     )?;
+    let pays = if entry.is_cellbase {
+        let window = reward_window.ok_or_else(|| {
+            ApiError::internal(format!(
+                "cellbase row 0x{} at block {block} was built without the consensus window \
+                 its `pays` needs",
+                hex::encode(entry.tx_hash)
+            ))
+        })?;
+        cellbase_pays_response(true, window, block)
+    } else {
+        None
+    };
     Ok(TransactionResponse {
+        pays,
         value,
         activity,
         output_capacity: output_capacity.to_string(),
@@ -381,6 +422,8 @@ async fn list_transactions(
     let limit = params.limit.clamp(1, 100);
     let activity_filter =
         transaction_activity_filter(params.activity_type.as_deref())?.map(str::to_owned);
+    // Cellbase rows name the block whose reward they pay (`pays`).
+    let reward_window = state.consensus().await?.tx_proposal_window;
 
     // Validate before any store access: `get_block_header` encodes the number
     // into a store key, and a negative one trips an assert that aborts the
@@ -442,7 +485,15 @@ async fn list_transactions(
             let rows = page
                 .into_iter()
                 .map(|(block, hash, index, entry)| {
-                    transaction_response(&state, block, index, &entry, &hash, None)
+                    transaction_response(
+                        &state,
+                        block,
+                        index,
+                        &entry,
+                        &hash,
+                        None,
+                        Some(reward_window),
+                    )
                 })
                 .collect::<Result<_, _>>()?;
             return ok(CursorPaginatedResponse::without_total(
@@ -572,6 +623,7 @@ async fn list_transactions(
                     &entry,
                     &block_hash,
                     Some(window),
+                    Some(window),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -653,7 +705,15 @@ async fn list_transactions(
             .into_iter()
             .map(
                 |(block_num, block_hash, tx_idx, entry)| -> Result<_, ApiRouteError> {
-                    transaction_response(&state, block_num, tx_idx, &entry, &block_hash, None)
+                    transaction_response(
+                        &state,
+                        block_num,
+                        tx_idx,
+                        &entry,
+                        &block_hash,
+                        None,
+                        Some(reward_window),
+                    )
                 },
             )
             .collect::<Result<_, _>>()?;
@@ -679,6 +739,7 @@ async fn get_transaction(
     match tx_result {
         Some((block_num, tx_idx, entry)) => {
             let block_hash = required_tx_block_hash(&state, block_num)?;
+            let reward_window = state.consensus().await?.tx_proposal_window;
             ok(transaction_response(
                 &state,
                 block_num,
@@ -686,6 +747,7 @@ async fn get_transaction(
                 &entry,
                 &block_hash,
                 None,
+                Some(reward_window),
             )?)
         }
         None => {
@@ -738,6 +800,10 @@ pub struct TransactionOutputResponse {
     pub address: Option<String>,
     pub status: Option<String>,
     pub consumed_by_tx: Option<String>,
+    /// Change (TX-22): this output's lock is a lock of the transaction's own
+    /// inputs and it carries no type script. Decided once, in
+    /// [`settle_fee_payers_and_change`].
+    pub is_change: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -805,6 +871,95 @@ pub struct TransactionDetailResponse {
     /// A cellbase's decoded witness 0 (miner lock and client message); `null`
     /// for every other transaction.
     pub cellbase_witness: Option<super::transaction_structure::CellbaseWitnessResponse>,
+    /// For a cellbase, the block whose reward it pays (TX-23); `null` otherwise.
+    pub pays: Option<CellbasePaysResponse>,
+    /// Who paid the fee (TX-18): every input lock whose inputs hold more than
+    /// the transaction returns to it, largest outflow first. Empty when no
+    /// lock's balance fell — a cellbase, or a DAO withdrawal whose fee comes
+    /// out of its compensation.
+    pub fee_paid_by: Vec<FeePayerResponse>,
+}
+
+/// One lock that paid (part of) a transaction's fee.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeePayerResponse {
+    pub lock_hash: String,
+    pub address: Option<String>,
+    /// Its inputs' capacity minus its outputs' capacity in this transaction,
+    /// shannons (> 0).
+    pub outflow: String,
+}
+
+/// The one rule for TX-18's fee payer and TX-22's change, over a detail's own
+/// resolved inputs and outputs. A lock's net flow is its outputs' capacity
+/// minus its inputs'; the payers are the locks whose net flow is negative.
+/// An output is change when its lock is an input lock and it has no type
+/// script. The cellbase's null input spends no cell (no lock, no capacity);
+/// any other input without both is an error.
+fn settle_fee_payers_and_change(
+    inputs: &[TransactionInputResponse],
+    outputs: &mut [TransactionOutputResponse],
+    tx: &str,
+) -> Result<Vec<FeePayerResponse>, ApiRouteError> {
+    let error = |detail: String| ApiError::internal(format!("transaction {tx}: {detail}"));
+    let capacity = |raw: &str, what: &str| -> Result<u128, ApiRouteError> {
+        raw.parse::<u128>()
+            .map_err(|_| error(format!("{what} capacity {raw:?} is not a shannon amount")))
+    };
+    // lock hash -> (inputs, outputs, address)
+    let mut flows: std::collections::BTreeMap<String, (u128, u128, Option<String>)> =
+        std::collections::BTreeMap::new();
+    for (index, input) in inputs.iter().enumerate() {
+        match (&input.lock, &input.capacity) {
+            (Some(lock), Some(raw)) => {
+                let hash = super::transaction_structure::script_hash(lock)
+                    .map_err(|e| error(format!("input {index} lock hash: {e}")))?;
+                let flow = flows.entry(hash).or_insert((0, 0, input.address.clone()));
+                flow.0 = flow
+                    .0
+                    .checked_add(capacity(raw, &format!("input {index}"))?)
+                    .ok_or_else(|| error("input capacity overflow".into()))?;
+            }
+            (None, None) => {}
+            _ => {
+                return Err(error(format!(
+                    "input {index} is resolved without both its lock and its capacity"
+                )))
+            }
+        }
+    }
+    for (index, output) in outputs.iter_mut().enumerate() {
+        let lock = output
+            .lock
+            .as_ref()
+            .ok_or_else(|| error(format!("output {index} has no lock")))?;
+        let hash = super::transaction_structure::script_hash(lock)
+            .map_err(|e| error(format!("output {index} lock hash: {e}")))?;
+        let value = capacity(&output.capacity, &format!("output {index}"))?;
+        output.is_change = false;
+        if let Some(flow) = flows.get_mut(&hash) {
+            flow.1 = flow
+                .1
+                .checked_add(value)
+                .ok_or_else(|| error("output capacity overflow".into()))?;
+            output.is_change = output.r#type.is_none();
+        }
+    }
+    let mut payers: Vec<(u128, String, Option<String>)> = flows
+        .into_iter()
+        .filter(|(_, (spent, returned, _))| spent > returned)
+        .map(|(hash, (spent, returned, address))| (spent - returned, hash, address))
+        .collect();
+    payers.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    Ok(payers
+        .into_iter()
+        .map(|(outflow, lock_hash, address)| FeePayerResponse {
+            lock_hash,
+            address,
+            outflow: outflow.to_string(),
+        })
+        .collect())
 }
 
 /// One header dependency of a transaction.
@@ -1271,7 +1426,19 @@ async fn get_transaction_detail(
                 "uncommitted transaction {hash} content witnesses: {e:#}"
             ))
         })?;
+        let fee_paid_by = settle_fee_payers_and_change(&io.inputs, &mut io.outputs, &hash)?;
+        // A cellbase is never pending; one the node has committed and this
+        // store has not indexed yet still names the block it pays.
+        let pays = match (pool_is_cellbase, tx_lookup.block_number) {
+            (true, Some(number)) => {
+                let window = state.consensus().await?.tx_proposal_window;
+                cellbase_pays_response(true, window, number)
+            }
+            _ => None,
+        };
         return ok(TransactionDetailResponse {
+            pays,
+            fee_paid_by,
             hash: format!("0x{}", hex::encode(&hash_bytes)),
             status: tx_lookup.status_str().to_string(),
             pool_status: Some(pool_status),
@@ -1493,7 +1660,16 @@ async fn get_transaction_detail(
 
     let header_deps = header_deps_response(&state.store, &header_deps, true, &tx_hash_hex)?;
     let cellbase_witness = cellbase_witness_response(is_cellbase, &witnesses, &tx_hash_hex)?;
+    let fee_paid_by = settle_fee_payers_and_change(&inputs, &mut outputs, &tx_hash_hex)?;
+    let pays = if is_cellbase {
+        let window = state.consensus().await?.tx_proposal_window;
+        cellbase_pays_response(true, window, block_number)
+    } else {
+        None
+    };
     ok(TransactionDetailResponse {
+        pays,
+        fee_paid_by,
         hash: tx_hash_hex,
         status: "committed".to_string(),
         // A transaction the local store has indexed is no longer provisional.
@@ -1750,6 +1926,7 @@ fn build_inputs_outputs_from_pool_tx(
                 display: None,
                 status: Some("pending".into()),
                 consumed_by_tx: None,
+                is_change: false,
                 capacity: cell.capacity.to_string(),
                 used_capacity: occupied.to_string(),
                 virtual_used_capacity: virtual_occupied_capacity,
@@ -2139,6 +2316,7 @@ fn build_inputs_outputs_from_ckb(
                     display,
                     status: None,
                     consumed_by_tx: None,
+                    is_change: false,
                     capacity: cap.to_string(),
                     used_capacity: occ.to_string(),
                     virtual_used_capacity: virtual_occupied_capacity,
@@ -2746,6 +2924,7 @@ mod tests {
     #[test]
     fn test_transaction_response_serialization() {
         let resp = TransactionResponse {
+            pays: None,
             output_capacity: "0".into(),
             activity: None,
             proposal_origin: None,
@@ -2908,6 +3087,8 @@ mod tests {
     #[test]
     fn test_transaction_detail_response_serializes_witness_fields() {
         let detail = TransactionDetailResponse {
+            pays: None,
+            fee_paid_by: vec![],
             hash: "0xabc".to_string(),
             status: "committed".to_string(),
             pool_status: None,

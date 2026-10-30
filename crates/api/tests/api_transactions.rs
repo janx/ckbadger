@@ -3114,3 +3114,239 @@ async fn committed_detail_lists_header_deps_and_decodes_cellbase_witness() {
     );
     assert_eq!(json["witnessDetails"][0]["kind"], "cellbase", "{json}");
 }
+
+// ---------------------------------------------------------------------------
+// Lane R2b-a · transaction page read-path additions (TX-18, TX-22, TX-23,
+// TX-25).
+// ---------------------------------------------------------------------------
+
+/// Block 500 on the node and in the store: a cellbase and one plain
+/// transaction (block 500's cellbase pays block 489's reward on the mainnet
+/// window).
+async fn cellbase_pays_fixture() -> (axum::Router, [u8; 32], [u8; 32]) {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x9b; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::from(vec![0x42; 20]).pack())
+        .build();
+    let output = packed::CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack())
+        .lock(lock.clone())
+        .build();
+    let cellbase = TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(500))
+        .output(output.clone())
+        .output_data(Bytes::new().pack())
+        .witness(
+            packed::CellbaseWitness::new_builder()
+                .lock(lock)
+                .build()
+                .as_bytes()
+                .pack(),
+        )
+        .build();
+    let plain = TransactionBuilder::default()
+        .output(output)
+        .output_data(Bytes::new().pack())
+        .build();
+    let block = BlockBuilder::default()
+        .number(500u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(cellbase.clone())
+        .transaction(plain.clone())
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(500, &detail_fixture_header(block_hash, 1_700_000_000_000));
+    let mut hashes = [[0u8; 32]; 2];
+    for (index, tx, is_cellbase) in [(0, &cellbase, true), (1, &plain, false)] {
+        let tx_hash: [u8; 32] = tx.hash().unpack();
+        hashes[index as usize] = tx_hash;
+        batch.put_tx_hash_map(&tx_hash, 500, index);
+        batch.put_tx_index(
+            500,
+            index,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase,
+                timestamp: 1_700_000_000_000,
+                inputs_count: if is_cellbase { 1 } else { 0 },
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_000_000_000,
+                lock_script_hash: vec![0x77; 32],
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x42; 20],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 6_100_000_000,
+                udt_amount: None,
+                data_hash: None,
+            },
+            500,
+        );
+    }
+    batch.put_tx_actions(&make_test_tx_actions(
+        &[0x77; 32],
+        &hashes[1],
+        &block_hash,
+        500,
+        1,
+        0,
+        0,
+    ));
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    (app, hashes[0], hashes[1])
+}
+
+/// TX-23 / TX-25: a cellbase row and the cellbase's detail say which block's
+/// reward it pays (`#N − 11` on mainnet: read-time arithmetic on the
+/// consensus window, the block page's rule), on every transaction surface;
+/// any other transaction's `pays` is `null`.
+#[tokio::test]
+async fn cellbase_rows_and_detail_name_the_block_they_pay() {
+    let (app, cellbase, plain) = cellbase_pays_fixture().await;
+    let pays = serde_json::json!({"number": 489});
+    let (status, json) =
+        get_json(&app, &format!("/transactions/0x{}", hex::encode(cellbase))).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["pays"], pays, "{json}");
+    let (status, json) = get_json(&app, &format!("/transactions/0x{}", hex::encode(plain))).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert!(json["pays"].is_null(), "{json}");
+
+    let (status, page) = get_json(&app, "/transactions?activity_type=cellbase").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["data"][0]["pays"], pays, "{page}");
+    let (status, latest) = get_json(&app, "/transactions?limit=5").await;
+    assert_eq!(status, StatusCode::OK, "{latest}");
+    let row = latest["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["isCellbase"] == true)
+        .unwrap_or_else(|| panic!("the cellbase row: {latest}"));
+    assert_eq!(row["pays"], pays, "{latest}");
+
+    let (status, detail) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(cellbase)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["pays"], pays, "{detail}");
+    let (status, detail) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(plain)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert!(detail["pays"].is_null(), "{detail}");
+}
+
+/// TX-18 / TX-22: one rule each, decided in the API. The fee is paid by the
+/// lock(s) whose inputs exceed what the transaction returns to them (net
+/// outflow, largest first); an output is change when its lock is an input
+/// lock of the same transaction and it carries no type script.
+#[tokio::test]
+async fn detail_names_the_fee_payer_and_flags_change_outputs() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    let lock = |args: &str| {
+        serde_json::json!({
+            "code_hash": TEST_SECP_LOCK_CODE_HASH,
+            "hash_type": "type",
+            "args": args,
+        })
+    };
+    let (a, b, c) = (
+        format!("0x{}", "33".repeat(20)),
+        format!("0x{}", "44".repeat(20)),
+        format!("0x{}", "55".repeat(20)),
+    );
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &parent,
+            &[(&format!("0x{}", "ee".repeat(32)), 0)],
+            vec![
+                serde_json::json!({"capacity": "0x174876e800", "lock": lock(&a), "type": null}),
+                serde_json::json!({"capacity": "0x2540be400", "lock": lock(&b), "type": null}),
+            ],
+            vec!["0x".into(), "0x".into()],
+            "committed",
+            Some((0x1000, &format!("0x{}", "cc".repeat(32)))),
+        ),
+    )
+    .await;
+    // 1,000 CKB (a) + 100 CKB (b) in; 600 CKB to c, 399.99999 CKB back to a,
+    // 100 CKB to b under a type script: a pays the 0.00001 CKB fee.
+    let hash = pending_tx_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &hash,
+            &[(&parent, 0), (&parent, 1)],
+            vec![
+                serde_json::json!({"capacity": "0xdf8475800", "lock": lock(&c), "type": null}),
+                serde_json::json!({"capacity": "0x9502f8c18", "lock": lock(&a), "type": null}),
+                serde_json::json!({
+                    "capacity": "0x2540be400",
+                    "lock": lock(&b),
+                    "type": {"code_hash": format!("0x{}", "99".repeat(32)), "hash_type": "type", "args": "0x"},
+                }),
+            ],
+            vec!["0x".into(), "0x".into(), "0x".into()],
+            "pending",
+            None,
+        ),
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["fee"], "1000", "{json}");
+    let payers = json["feePaidBy"].as_array().expect("feePaidBy");
+    assert_eq!(payers.len(), 1, "{json}");
+    assert_eq!(payers[0]["address"], json["inputs"][0]["address"], "{json}");
+    assert_eq!(payers[0]["outflow"], "60000001000", "{json}");
+    let flags: Vec<bool> = json["outputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|output| output["isChange"].as_bool().expect("isChange"))
+        .collect();
+    assert_eq!(flags, vec![false, true, false], "{json}");
+}

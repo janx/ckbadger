@@ -1008,6 +1008,7 @@ mod tests {
             address: None,
             status: None,
             consumed_by_tx: None,
+            is_change: false,
         };
         let mut groups = script_groups(&[input.clone(), input], &[output]).unwrap();
         assert_eq!(groups.len(), 3);
@@ -1098,6 +1099,7 @@ mod tests {
             address: None,
             status: None,
             consumed_by_tx: None,
+            is_change: false,
         }
     }
     fn hex_bytes(raw: &str) -> Vec<u8> {
