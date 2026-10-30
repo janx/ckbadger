@@ -11,6 +11,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { formatObserverTimeUtc8 } from '@/lib/fork-time';
+import { formatExactDecimal } from '@/lib/exact-integer';
 
 const eventLink = (event: ReorgEvent) => `/forks/${event.id}`;
 const hash = (value: string) => <span className="break-all font-mono">{value}</span>;
@@ -77,6 +78,7 @@ export default function ForksPage() {
                     ]}
                     unit="events"
                     kind="bars"
+                    formatValue={(value) => formatExactDecimal(value, 'daily fork events')}
                   />
                 ) : (
                   <p>No completed fork days are indexed.</p>

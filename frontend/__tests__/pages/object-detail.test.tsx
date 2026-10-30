@@ -120,7 +120,7 @@ it('presents BTCFS as link-only media even when a decoded image URL exists', asy
       tier: 'btc_ckb',
       sources: [
         {
-          uri: 'btcfs://abc123i0',
+          uri: `btcfs://${'0bfb'.padEnd(60, '0')}5719i0`,
           scheme: 'btcfs',
           sourceLocation: 'DNA',
           dependencyTier: 'btc_ckb',
@@ -130,9 +130,12 @@ it('presents BTCFS as link-only media even when a decoded image URL exists', asy
     },
   });
   const { container } = render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByRole('link', { name: 'Open the inscription ↗' })).toHaveAttribute(
+  expect(
+    await screen.findByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗' })
+  ).toHaveAttribute('href', `https://mempool.space/tx/${'0bfb'.padEnd(60, '0')}5719`);
+  expect(screen.getByRole('link', { name: 'View on Omiga ↗' })).toHaveAttribute(
     'href',
-    'btcfs://abc123i0'
+    `https://omiga.io/info/dobs/${sporeDetailProducer.typeScriptHash}`
   );
   expect(container.querySelector('img')).toBeNull();
 });

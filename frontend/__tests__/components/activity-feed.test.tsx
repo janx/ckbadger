@@ -23,6 +23,7 @@ function tx(i: number): Transaction {
     outputsCount: 3,
     value: '7000000000',
     fee: '10000',
+    txSize: null,
     cycles: null,
     cyclesStatus: 'pending',
     isCellbase: false,

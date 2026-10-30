@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from '@/components/ui/link';
+import { formatUtcClock } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 
 interface Props {
@@ -16,7 +17,7 @@ function utcTimestamp(timestampMs: number): string {
   ) {
     throw new Error(`Invalid indexed script deployment timestamp: ${timestampMs}`);
   }
-  return new Date(timestampMs).toISOString();
+  return formatUtcClock(timestampMs);
 }
 
 export function ScriptDeploymentTimeline({ deployments }: Props) {

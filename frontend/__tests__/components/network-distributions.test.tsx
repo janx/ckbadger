@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { server } from '../msw/server';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { NetworkDistributions } from '@/app/network/distributions';
 import { mergePeerCounts, NetworkTrends } from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
@@ -84,19 +85,55 @@ describe('NetworkTrends', () => {
         });
       })
     );
-    render(<NetworkTrends />);
+    stubChartWidth(900);
+    const { container } = render(<NetworkTrends />);
+    // CH-50: the shared chart, a shaded gap the series never bridge, and the gap note only
+    // because a gap exists.
     expect(
-      await screen.findByRole('list', {
-        name: /Daily verified peer observations and missing days/i,
-      })
+      await screen.findByRole('img', { name: 'Verified and reachable peers, peers' })
     ).toBeInTheDocument();
-    expect(
-      screen.getByRole('listitem', { name: /no retained round observation/i })
-    ).toBeInTheDocument();
+    expect(container.querySelector('[data-chart-gap="no rounds 01-12"]')).not.toBeNull();
+    const verifiedLine = container.querySelectorAll('path[fill="none"]')[1].getAttribute('d')!;
+    expect(verifiedLine.match(/M/g)).toHaveLength(2);
+    expect(screen.getByText(/Shaded days have no retained round observation/)).toBeInTheDocument();
     expect(screen.getByText(/Rounds per day are unavailable/i)).toBeInTheDocument();
   });
 
-  it('derives a disjoint reachable/unavailable stack from paired verified histories', () => {
+  it('draws gapless history on the shared chart without the shaded-day note (CH-50)', async () => {
+    const days = [1751328000, 1751414400];
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric') ?? '';
+        return HttpResponse.json({
+          metric,
+          granularity: 'day',
+          dailyCoverage: days.map((ts) => ({
+            ts,
+            hasRetainedObservation: true,
+            roundsPerDay: null,
+          })),
+          coverageFrom: days[0],
+          coverageTo: days[1],
+          roundCountAvailability: 'notRecorded',
+          points: days.map((ts) => ({
+            ts,
+            scalar: metric === 'reachablePeers' ? 63 : 80,
+            buckets: [],
+          })),
+        });
+      })
+    );
+    stubChartWidth(900);
+    const { container } = render(<NetworkTrends />);
+    expect(
+      await screen.findByRole('img', { name: 'Verified and reachable peers, peers' })
+    ).toBeInTheDocument();
+    expect(container.querySelector('[data-chart-gap]')).toBeNull();
+    expect(screen.queryByText(/Shaded days/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: /missing days/i })).not.toBeInTheDocument();
+  });
+
+  it('pairs verified and reachable histories day by day on one time axis', () => {
     const merged = mergePeerCounts(
       {
         metric: 'verifiedPeers',
@@ -118,10 +155,13 @@ describe('NetworkTrends', () => {
       }
     );
 
+    // CH-50: the design draws the verified total as a line over the reachable area, on one
+    // shared time axis, so the merged point carries both totals and its day.
     expect(merged.error).toBeNull();
-    expect(merged.data[0].values).toEqual({
-      sameNetworkReachable: '60',
-      verifiedUnavailable: '40',
+    expect(merged.data[0]).toEqual({
+      label: '2025-07-01',
+      x: 1751328000,
+      values: { reachable: '60', verified: '100' },
     });
   });
 
@@ -189,7 +229,7 @@ describe('NetworkTrends', () => {
 
     expect(await screen.findByText('Retained verification state (daily)')).toBeInTheDocument();
     expect((await screen.findAllByText('Same-network reachable')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Verified unavailable').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Verified (retained)').length).toBeGreaterThan(0);
     // Historical totals were not persisted, so these are exact retained counts rather than shares.
     expect(screen.getAllByText(/0.114.0 4 · 0.113.0 2/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/United States 3 · Germany 2/).length).toBeGreaterThan(0);

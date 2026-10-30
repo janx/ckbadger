@@ -11,13 +11,16 @@ function secondsDate(value: string) {
   return formatUtc8Date((BigInt(value) * BigInt(1000)).toString());
 }
 
-/** Prefer human label; fall back to the protocol key (ID-DC1: empty labels). */
+/**
+ * A record's name: the registry's human label when it has one, otherwise the protocol key the
+ * owner wrote (ID-DC1). Keys are owner-written witness data, so an empty one is shown as exactly
+ * that rather than given an invented name or allowed to take the page down.
+ */
 export function recordKeyLabel(label: string, key: string): string {
   const named = label.trim();
   if (named) return named;
   const protocolKey = key.trim();
-  if (protocolKey) return protocolKey;
-  return 'record';
+  return protocolKey || '(empty key)';
 }
 
 /** Keep binary profile blobs out of tier 1 (ID-DC2). */

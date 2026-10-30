@@ -54,6 +54,18 @@ describe('Address v3 components', () => {
       'Not computed'
     );
   });
+  it('counts a cellbase as 0 inputs, not its placeholder input (BA-11)', () => {
+    render(
+      <AddressTransactions
+        rows={[
+          { ...addressTransactionsFixture[0], isCellbase: true, inputsCount: 1, outputsCount: 1 },
+        ]}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Address transactions' });
+    expect(table).toHaveTextContent('0 → 1');
+    expect(table).not.toHaveTextContent('1 → 1');
+  });
   it('renders the participant position and a sent headline without claiming a burn', () => {
     render(
       <AddressActivity

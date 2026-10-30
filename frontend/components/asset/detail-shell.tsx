@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Header } from '@/components/layout/header';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
+import { DetailTier2 } from '@/components/ui/detail-layout';
 import type { AssetClass } from '@/lib/design-tokens';
 
 export interface AssetDetailShellProps {
@@ -80,11 +81,7 @@ export function AssetDetailShell({
           )}
         </div>
         {feed && <div className="mt-12 min-w-0">{feed}</div>}
-        {tier2 && (
-          <div data-tier="2" className="mt-[72px] min-w-0 space-y-8">
-            {tier2}
-          </div>
-        )}
+        {tier2 && <DetailTier2>{tier2}</DetailTier2>}
       </main>
     </div>
   );

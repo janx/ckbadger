@@ -2,7 +2,7 @@
 
 import Link from '@/components/ui/link';
 import { TransactionEvidence } from '@/components/cell/cell-transactions';
-import type { FiberChannelDetail, FiberChannelEvidence } from '@/lib/api';
+import type { FiberChannelDetail, FiberChannelEvidence, FiberEpochDelay } from '@/lib/api';
 import { formatCkbAmount } from '@/lib/utils';
 
 interface Props {
@@ -11,6 +11,21 @@ interface Props {
   evidenceError?: string;
 }
 const short = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-8)}`;
+/**
+ * A decoded `since` epoch delay, e.g. "relative · 1 + 0/1 epochs". The decode comes from our API;
+ * a fraction outside its epoch is a broken invariant there, reported with the raw u64.
+ */
+export function formatEpochDelay(delay: FiberEpochDelay, raw: string): string {
+  const { relative, epochs, index, length } = delay;
+  if (
+    ![epochs, index, length].every((n) => Number.isSafeInteger(n) && n >= 0) ||
+    length === 0 ||
+    index >= length
+  )
+    throw new Error(`Fiber delay ${raw}: invalid decoded epoch ${JSON.stringify(delay)}`);
+  return `${relative ? 'relative' : 'absolute'} · ${epochs.toLocaleString('en-US')} + ${index}/${length} epoch${epochs === 1 && index === 0 ? '' : 's'}`;
+}
+
 function observedDuration(ms: string | null): string {
   if (ms === null) return '—';
   const value = BigInt(ms);
@@ -287,12 +302,12 @@ export function FiberChannelBoard({ channel, evidence, evidenceError }: Props) {
                 </span>
                 <span className="text-text-dim">Pubkey hash</span>
                 <span className="text-text-bright break-all font-mono">{tracked.pubkeyHash}</span>
-                <span className="text-text-dim">Delay since</span>
-                <span className="text-text-bright break-all font-mono">
-                  {tracked.delayEpochDecoded
-                    ? `${tracked.delayEpochDecoded.relative ? 'relative' : 'absolute'} · ${tracked.delayEpochDecoded.epochs} epochs · index ${tracked.delayEpochDecoded.index}/${tracked.delayEpochDecoded.length}`
-                    : tracked.delayEpoch}
+                <span className="text-text-dim">Delay</span>
+                <span className="text-text-bright break-all">
+                  {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
                 </span>
+                <span className="text-text-dim">Delay since · exact u64</span>
+                <span className="text-text-bright break-all font-mono">{tracked.delayEpoch}</span>
                 <span className="text-text-dim">Version · exact u64</span>
                 <span className="text-text-bright break-all font-mono">{tracked.version}</span>
                 <span className="text-text-dim">Settlement hash / flag</span>

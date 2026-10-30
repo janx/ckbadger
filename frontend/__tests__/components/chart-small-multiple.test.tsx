@@ -35,10 +35,12 @@ describe('ChartSmallMultiple', () => {
       'href',
       '/mainnet/charts/hash-rate'
     );
+    // The card headline is the design's two-decimal readout (CH-02: "91.34 PH/s"); the exact
+    // value stays in the title above.
     const readout = screen.getByRole('group', { name: 'Hash rate current readout' });
-    expect(readout).toHaveTextContent('900.7199254740993PH/s');
+    expect(readout).toHaveTextContent('900.72PH/s');
     expect(readout).toHaveClass('overflow-x-auto');
-    expect(screen.getByText('900.7199254740993')).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('900.72')).toHaveClass('whitespace-nowrap');
     expect(screen.getByText('PH/s')).toHaveClass('whitespace-nowrap');
   });
 
@@ -89,5 +91,39 @@ describe('ChartSmallMultiple', () => {
     const readout = screen.getByRole('group', { name: 'Scripts current readout' });
     expect(readout).toHaveTextContent('7.00CKB');
     expect(screen.getByText('CKB')).toHaveClass('whitespace-nowrap');
+  });
+
+  it('names the leading miner in the short head…tail form on the card (CH-04)', async () => {
+    const miners = CHART_BY_SLUG.get('miner-address-distribution')!;
+    const address = `ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq${'x'.repeat(30)}93hhsj`;
+    render(
+      <ChartSmallMultiple
+        definition={{
+          ...miners,
+          fetch: async () => ({
+            title: 'Miners',
+            windowDays: 7,
+            totalBlocks: 10,
+            fromDate: '2026-10-21',
+            toDate: '2026-10-27',
+            data: [
+              {
+                minerLockHash: `0x${'a'.repeat(64)}`,
+                address,
+                minerName: null,
+                blocksMined: 6,
+                percentage: '60.0000',
+              },
+            ],
+          }),
+        }}
+      />
+    );
+    expect(
+      await screen.findByText('Leading miner: ckb1qzda0c…93hhsj (60.0000%)')
+    ).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(address))).not.toBeInTheDocument();
+    const list = screen.getByRole('list', { name: 'Miners ranked preview' });
+    expect(list).toHaveTextContent('Others40.0000%');
   });
 });

@@ -20,7 +20,6 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
   return {
     hash: TX_HASH,
     status: 'committed',
-    pendingSince: null,
     blockNumber: 18661531,
     blockHash: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     index: 0,
@@ -143,23 +142,30 @@ function createCommittedTransactionDetail(): Awaited<ReturnType<typeof api.getTr
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
 }
 
+/** The keys the API omits (never nulls) for a transaction it has not indexed (TX-06). */
+const UNINDEXED_KEYS = [
+  'blockNumber',
+  'blockHash',
+  'index',
+  'timestamp',
+  'confirmations',
+  'inputsCapacity',
+  'outputsCapacity',
+  'inputsCommonKnowledgeSize',
+  'outputsCommonKnowledgeSize',
+] as const;
+
 function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTransactionDetail>> {
-  // Match the API wire shape for pending txs: `skip_serializing_if` omits
-  // blockNumber (undefined), not JSON null — that previously crashed the page.
+  // Match the API wire shape for pending txs: `skip_serializing_if` omits these keys
+  // (undefined), not JSON null — that previously crashed the page.
   const detail = {
     ...createCommittedTransactionDetail(),
     status: 'pending',
     pendingSince: '2026-03-12T12:00:00Z',
-    blockHash: null,
-    index: null,
-    timestamp: null,
-    confirmations: null,
-    inputsCapacity: null,
-    outputsCapacity: null,
-    inputsCommonKnowledgeSize: null,
-    outputsCommonKnowledgeSize: null,
+    feeRate: null,
+    txSize: null,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
-  delete (detail as { blockNumber?: number | null }).blockNumber;
+  for (const key of UNINDEXED_KEYS) delete detail[key];
   return detail;
 }
 
@@ -171,17 +177,15 @@ function createPendingTransactionDetail(): Awaited<ReturnType<typeof api.getTran
 function createCommittedAwaitingIndexTransactionDetail(): Awaited<
   ReturnType<typeof api.getTransactionDetail>
 > {
-  return {
+  const detail = {
     ...createCommittedTransactionDetail(),
     status: 'committed',
     poolStatus: 'committed_awaiting_index',
-    pendingSince: null,
     blockNumber: 123,
     blockHash: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
-    index: null,
-    timestamp: null,
-    confirmations: null,
   } as Awaited<ReturnType<typeof api.getTransactionDetail>>;
+  for (const key of ['index', 'timestamp', 'confirmations'] as const) delete detail[key];
+  return detail;
 }
 
 vi.mock('@/lib/api', async () => {

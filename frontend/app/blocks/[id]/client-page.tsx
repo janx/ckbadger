@@ -15,7 +15,8 @@ import { TransactionTable } from '@/components/transaction/transaction-table';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
 import { BlockPosition } from '@/components/blocks/block-position';
 import { decodeDaoHeader } from '@/lib/dao-header';
-import { formatScaledInteger } from '@/lib/exact-integer';
+import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
+import { getUncleDetailHref } from '@/lib/detail-routes';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
@@ -146,6 +147,12 @@ export default function BlockDetailPage() {
     dao: block.rawHeader.dao,
   };
   const dao = decodeDaoHeader(block.rawHeader.dao, `Block ${block.number}`);
+  const uncleIndex = (hash: string) => {
+    const index = block.uncles.findIndex((uncle) => uncle.hash === hash);
+    if (index < 0)
+      throw new Error(`Block ${block.number}: proposal carried by unknown uncle ${hash}`);
+    return index;
+  };
   const sizeScale = resourceScale([block.size]);
   const parentElapsedMs =
     block.parentTimestamp === null
@@ -314,15 +321,15 @@ export default function BlockDetailPage() {
               </DetailSection>
               <div className="grid gap-8 md:grid-cols-2">
                 <DetailSection title={`Uncles (${block.unclesCount})`}>
-                  {block.uncles.map((uncle) => (
+                  {block.uncles.map((uncle, index) => (
                     <article
                       key={uncle.hash}
                       className="border-base-border-subtle space-y-2 border-b py-3 text-xs"
                     >
-                      <p className="text-text-bright">
+                      <Link href={getUncleDetailHref(block.number, index)}>
                         #{uncle.number.toLocaleString('en-US')} ·{' '}
-                        <Hash hash={uncle.hash} copyable />
-                      </p>
+                        <Hash hash={uncle.hash} copyable={false} />
+                      </Link>
                       <p className="text-text-dim">
                         {new Date(uncle.timestamp).toUTCString()} · {uncle.proposalIds.length}{' '}
                         proposals
@@ -356,9 +363,15 @@ export default function BlockDetailPage() {
                           <span className="text-gold">●</span>
                           {proposal.proposalId}
                           {proposal.uncle && (
-                            <span className="text-text-dim">
+                            <Link
+                              href={getUncleDetailHref(
+                                block.number,
+                                uncleIndex(proposal.uncle.hash)
+                              )}
+                              className="text-text-dim"
+                            >
                               uncle #{proposal.uncle.number.toLocaleString('en-US')}
-                            </span>
+                            </Link>
                           )}
                         </p>
                         {proposal.committedTxHash ? (
@@ -401,30 +414,7 @@ export default function BlockDetailPage() {
                   <dt className="text-text-dim">{key}</dt>
                   <dd className="break-all">
                     {key === 'parentHash' ? <Link href={`/blocks/${value}`}>{value}</Link> : value}
-                    {key === 'dao' && (
-                      <div className="mt-2 space-y-2" aria-label="Decoded DAO header">
-                        <p>
-                          <span className="text-text-dim">C · total issued </span>
-                          <ExactCkb shannons={dao.C} signed={false} tone="plain" />
-                        </p>
-                        <p>
-                          <span className="text-text-dim">AR · accumulated rate </span>
-                          {formatScaledInteger(dao.AR, BigInt('10000000000000000'), 16)}
-                        </p>
-                        <p>
-                          <span className="text-text-dim">S · unissued secondary pool </span>
-                          <ExactCkb shannons={dao.S} signed={false} tone="plain" />
-                        </p>
-                        <p>
-                          <span className="text-text-dim">U · protocol occupied </span>
-                          <ExactCkb shannons={dao.U} signed={false} tone="plain" />
-                        </p>
-                        <p className="text-text-dim">
-                          U includes genesis virtual occupied capacity. These are the four
-                          little-endian u64 header fields.
-                        </p>
-                      </div>
-                    )}
+                    {key === 'dao' && <DaoHeaderFields dao={dao} />}
                   </dd>
                 </div>
               ))}

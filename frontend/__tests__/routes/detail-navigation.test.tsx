@@ -31,6 +31,10 @@ vi.mock('@/app/identities/bit-cell/[identityId]/client-page', () => ({
   ),
 }));
 
+vi.mock('@/app/blocks/[id]/uncles/[index]/client-page', () => ({
+  default: () => <div>uncle detail page</div>,
+}));
+
 vi.mock('@/app/identities/dotcell/[identityId]/client-page', () => ({
   default: ({ identityId }: { identityId: string }) => <div>.cell name detail {identityId}</div>,
 }));
@@ -137,5 +141,15 @@ describe('detail navigation', () => {
     expect(
       await screen.findByText(`.cell name detail ${nameId}`, {}, { timeout: 3000 })
     ).toBeInTheDocument();
+  });
+
+  it('routes an uncle link to the uncle page under its including block (BA-10)', async () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/blocks/8775638/uncles/0']}>
+        <RouterHarness />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText('uncle detail page', {}, { timeout: 3000 })).toBeInTheDocument();
   });
 });

@@ -2,9 +2,10 @@
 
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, NetworkHistory, StackedAreaDataPoint, StackedAreaSeries } from '@/lib/api';
-import { StackedAreaChart } from '@/components/ui/stacked-area-chart';
-import { getChartPaletteColor } from '@/lib/chart-colors';
+import { api, type NetworkHistory } from '@/lib/api';
+import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/components/ui/chart';
+import { DATA_COLOR } from '@/lib/design-tokens';
+import { formatExactDecimal } from '@/lib/exact-integer';
 
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
@@ -19,7 +20,7 @@ function formatDay(ts: number): string {
 export function mergePeerCounts(
   verified: NetworkHistory | undefined,
   reachable: NetworkHistory | undefined
-): { data: StackedAreaDataPoint[]; error: string | null } {
+): { data: ChartPoint[]; error: string | null } {
   if (!verified || !reachable) return { data: [], error: null };
 
   const reachableByTs = new Map<number, number>();
@@ -34,7 +35,7 @@ export function mergePeerCounts(
   }
 
   const verifiedTimestamps = new Set<number>();
-  const data: StackedAreaDataPoint[] = [];
+  const data: ChartPoint[] = [];
   for (const point of [...verified.points].sort((left, right) => left.ts - right.ts)) {
     if (verifiedTimestamps.has(point.ts)) {
       return {
@@ -57,12 +58,11 @@ export function mergePeerCounts(
       };
     }
     reachableByTs.delete(point.ts);
+    // Verified is the whole retained set; reachable is the part answering now (CH-50).
     data.push({
-      date: formatDay(point.ts),
-      values: {
-        sameNetworkReachable: String(reachableCount),
-        verifiedUnavailable: String(point.scalar - reachableCount),
-      },
+      label: formatDay(point.ts),
+      x: point.ts,
+      values: { reachable: String(reachableCount), verified: String(point.scalar) },
     });
   }
   const unmatchedReachableTimestamp = reachableByTs.keys().next().value;
@@ -75,17 +75,36 @@ export function mergePeerCounts(
   return { data, error: null };
 }
 
-function ChartLegend({ series }: { series: StackedAreaSeries[] }) {
-  return (
-    <div className="mt-4 flex flex-wrap items-center justify-center gap-4">
-      {series.map((s) => (
-        <div key={s.key} className="flex items-center gap-2">
-          <span className="h-3 w-3 rounded" style={{ backgroundColor: s.color }} />
-          <span className="text-text-dim font-mono text-xs">{s.label}</span>
-        </div>
-      ))}
-    </div>
-  );
+/**
+ * Each run of days without a retained observation becomes one shaded gap, from the last observed
+ * day before it to the first observed day after it (or the coverage edge), so lines never bridge it.
+ */
+export function peerGaps(
+  coverage: NetworkHistory['dailyCoverage'],
+  points: readonly ChartPoint[]
+): ChartGap[] {
+  const observed = new Set(points.map((point) => point.x));
+  for (const day of coverage)
+    if (day.hasRetainedObservation !== observed.has(day.ts))
+      throw new Error(`peer coverage disagrees with its point at ${formatDay(day.ts)}`);
+  const gaps: ChartGap[] = [];
+  for (let i = 0; i < coverage.length; i++) {
+    if (coverage[i].hasRetainedObservation) continue;
+    let j = i;
+    while (j + 1 < coverage.length && !coverage[j + 1].hasRetainedObservation) j++;
+    const from = i > 0 ? coverage[i - 1].ts : coverage[i].ts;
+    const to = j + 1 < coverage.length ? coverage[j + 1].ts : coverage[j].ts;
+    const first = formatDay(coverage[i].ts).slice(5),
+      last = formatDay(coverage[j].ts).slice(5);
+    if (from < to)
+      gaps.push({
+        from,
+        to,
+        label: first === last ? `no rounds ${first}` : `no rounds ${first} – ${last}`,
+      });
+    i = j;
+  }
+  return gaps;
 }
 
 function TrendPanel({ title, children }: { title: string; children: ReactNode }) {
@@ -178,26 +197,13 @@ export function NetworkTrends() {
     refetchInterval: 60000,
   });
 
-  const peerSeries: StackedAreaSeries[] = [
-    {
-      key: 'sameNetworkReachable',
-      label: 'Same-network reachable',
-      color: getChartPaletteColor(2),
-    },
-    {
-      key: 'verifiedUnavailable',
-      label: 'Verified unavailable',
-      color: getChartPaletteColor(0),
-    },
+  const peerSeries: ChartSeries[] = [
+    { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
+    { key: 'verified', label: 'Verified (retained)', color: '#dee2ec' },
   ];
   const peerCounts = mergePeerCounts(verifiedPeers.data, reachablePeers.data);
   const coverage = verifiedPeers.data?.dailyCoverage ?? [];
-  const hasGap = coverage.some((day) => !day.hasRetainedObservation);
-  const countsByDay = new Map(peerCounts.data.map((point) => [point.date, point.values]));
-  const maxVerified = Math.max(
-    1,
-    ...(verifiedPeers.data?.points ?? []).map((point) => point.scalar)
-  );
+  const gaps = peerGaps(coverage, peerCounts.data);
   const peerHistoryError =
     verifiedPeers.isError || reachablePeers.isError
       ? 'Failed to load verified peer history.'
@@ -227,71 +233,23 @@ export function NetworkTrends() {
           </p>
         ) : (
           <>
-            {hasGap ? (
-              <div
-                role="list"
-                aria-label="Daily verified peer observations and missing days"
-                className="border-base-border-subtle flex h-56 min-w-0 gap-px overflow-x-auto border-b"
-              >
-                {coverage.map((day) => {
-                  const date = formatDay(day.ts);
-                  const values = countsByDay.get(date);
-                  if (day.hasRetainedObservation && !values)
-                    throw new Error('coverage has no peer point at ' + date);
-                  const reachable = values ? Number(values.sameNetworkReachable) : 0;
-                  const unavailable = values ? Number(values.verifiedUnavailable) : 0;
-                  return (
-                    <div
-                      role="listitem"
-                      key={day.ts}
-                      title={
-                        values
-                          ? date +
-                            ': ' +
-                            reachable +
-                            ' reachable, ' +
-                            unavailable +
-                            ' verified unavailable'
-                          : date + ': no retained round observation'
-                      }
-                      aria-label={
-                        values
-                          ? date +
-                            ': ' +
-                            reachable +
-                            ' reachable, ' +
-                            unavailable +
-                            ' verified unavailable'
-                          : date + ': no retained round observation'
-                      }
-                      className={
-                        'flex min-w-[8px] flex-1 flex-col justify-end ' +
-                        (values ? '' : 'bg-base-elevated')
-                      }
-                    >
-                      {values && (
-                        <>
-                          <div
-                            className="bg-aqua"
-                            style={{ height: (unavailable / maxVerified) * 100 + '%' }}
-                          />
-                          <div
-                            className="bg-jade"
-                            style={{ height: (reachable / maxVerified) * 100 + '%' }}
-                          />
-                        </>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <StackedAreaChart data={peerCounts.data} series={peerSeries} height={260} />
-            )}
-            <ChartLegend series={peerSeries} />
+            <Chart
+              title="Verified and reachable peers"
+              subtitle="Retained peers per completed UTC day"
+              data={peerCounts.data}
+              series={peerSeries}
+              unit="peers"
+              kind="area"
+              height={240}
+              xDomain={
+                coverage.length > 1 ? [coverage[0].ts, coverage[coverage.length - 1].ts] : undefined
+              }
+              gaps={gaps}
+              formatValue={(value) => formatExactDecimal(value, 'peer count')}
+            />
             <p className="text-text-dim mt-2 text-[11px]">
-              Shaded days have no retained round observation. Rounds per day are unavailable because
-              the crawler did not record counts.
+              {gaps.length > 0 && 'Shaded days have no retained round observation. '}
+              Rounds per day are unavailable because the crawler did not record counts.
             </p>
           </>
         )}

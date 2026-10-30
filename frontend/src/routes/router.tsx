@@ -90,6 +90,7 @@ const InventoryObjectsPage = lazyPage(() => import('@/app/inventory/objects/page
 const InventoryIdentitiesPage = lazyPage(() => import('@/app/inventory/identities/page'));
 const BlocksPage = lazyPage(() => import('@/app/blocks/page'));
 const BlockDetailPage = lazyPage(() => import('@/app/blocks/[id]/page'));
+const UncleDetailPage = lazyPage(() => import('@/app/blocks/[id]/uncles/[index]/page'));
 const TransactionsPage = lazyPage(() => import('@/app/transactions/page'));
 const TransactionDetailPage = lazyPage(() => import('@/app/tx/[hash]/page'));
 const AddressDetailPage = lazyPage(() => import('@/app/address/[addr]/page'));
@@ -255,6 +256,10 @@ export function createAppRouter(): RouteObject[] {
     {
       path: 'blocks/:id',
       element: <BlockDetailPage />,
+    },
+    {
+      path: 'blocks/:id/uncles/:index',
+      element: <UncleDetailPage />,
     },
     {
       path: 'transactions',

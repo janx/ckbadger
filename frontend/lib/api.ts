@@ -192,6 +192,34 @@ interface Block {
   version: number;
 }
 
+/**
+ * `/blocks/{id}/uncles/{index}`: one uncle as its including block recorded it. `index` is its
+ * position in that block's uncles list; the canonical block at the uncle's height is named
+ * beside it. The DAO field carries the raw 32 bytes and the four decoded u64 fields.
+ */
+interface BlockUncle {
+  number: number;
+  hash: string;
+  parentHash: string;
+  timestamp: string;
+  /** `index/length` within the epoch, as on `Block`. */
+  epoch: string;
+  epochNumber: number;
+  epochIndex: number;
+  epochLength: number;
+  compactTarget: string;
+  difficulty: string;
+  nonce: string;
+  version: number;
+  transactionsRoot: string;
+  proposalsHash: string;
+  extraHash: string;
+  dao: { raw: string; c: string; ar: string; s: string; u: string };
+  proposalIds: string[];
+  includedBy: { number: number; hash: string; index: number };
+  canonicalAtHeight: { number: number; hash: string };
+}
+
 interface HardforkActivation {
   id: string;
   name: string;
@@ -226,7 +254,8 @@ interface Transaction {
   inputsCount: number;
   outputsCount: number;
   fee: string;
-  txSize?: number;
+  /** Serialized size in a block; null while unknown. */
+  txSize: number | null;
   cycles: number | null;
   cyclesStatus: 'complete' | 'pending' | 'failed';
   isCellbase: boolean;
@@ -554,7 +583,7 @@ interface PoolTransactionsResponse {
 
 interface TransactionDetail extends Omit<
   Transaction,
-  'blockNumber' | 'blockHash' | 'index' | 'timestamp' | 'value'
+  'blockNumber' | 'blockHash' | 'index' | 'timestamp' | 'value' | 'txSize'
 > {
   status: TransactionStatus;
   /**
@@ -564,20 +593,23 @@ interface TransactionDetail extends Omit<
    * and `index` not yet known). Absent once the store has it.
    */
   poolStatus?: PoolStatus;
-  pendingSince: string | null;
-  blockNumber: number | null;
-  blockHash: string | null;
-  index: number | null;
-  feeRate?: string;
-  txSize?: number;
+  // The API omits each of these keys (never sends null) while the store has not indexed the
+  // transaction; `committed_awaiting_index` already has `blockNumber`/`blockHash` (TX-06).
+  pendingSince?: string;
+  blockNumber?: number;
+  blockHash?: string;
+  index?: number;
+  /** Null while the serialized size is unknown. */
+  feeRate: string | null;
+  txSize: number | null;
   cycles: number | null;
   cyclesStatus: 'complete' | 'pending' | 'failed';
-  timestamp: string | null;
-  confirmations: number | null;
-  inputsCapacity: string | null;
-  outputsCapacity: string | null;
-  inputsCommonKnowledgeSize: string | null;
-  outputsCommonKnowledgeSize: string | null;
+  timestamp?: string;
+  confirmations?: number;
+  inputsCapacity?: string;
+  outputsCapacity?: string;
+  inputsCommonKnowledgeSize?: string;
+  outputsCommonKnowledgeSize?: string;
   inputs?: Array<{
     previousOutput?: {
       txHash: string;
@@ -1961,6 +1993,8 @@ interface SporeNft {
 
 /** `/spore/objects/{id}`: a spore plus the exact capacity its cell owns (lists carry neither). */
 interface SporeDetail extends SporeNft {
+  /** Hash of the spore cell's type script (0x + 64 hex): the key DOB marketplaces use. */
+  typeScriptHash: string;
   /** Shannons the spore's cell holds; `"0"` once melted. */
   ownedCapacity: string;
   /** The occupied part of `ownedCapacity` (common knowledge), in shannons. */
@@ -3005,7 +3039,8 @@ interface FiberChannel {
    * with BigInt, never Number.
    */
   delayEpoch: string | null;
-  delayEpochDecoded?: { relative: boolean; epochs: number; index: number; length: number } | null;
+  /** `delayEpoch` decoded; null exactly when `delayEpoch` is null. */
+  delayEpochDecoded: FiberEpochDelay | null;
   settlementBlock: number | null;
   settlementTimestamp: string | null;
   settlementTxHash: string | null;
@@ -3100,10 +3135,20 @@ interface FiberCellEvidence {
   consumedByTx: string | null;
 }
 
+/** A `since` epoch delay: relative or absolute, `epochs + index/length` epochs. */
+interface FiberEpochDelay {
+  relative: boolean;
+  epochs: number;
+  index: number;
+  length: number;
+}
+
 interface FiberCommitmentEvidence extends FiberCellEvidence {
   pubkeyHash: string;
+  /** The commitment lock's `since`-encoded delay as an exact u64 decimal string. */
   delayEpoch: string;
-  delayEpochDecoded?: { relative: boolean; epochs: number; index: number; length: number } | null;
+  /** `delayEpoch` decoded by the channel's one since-epoch decoder. */
+  delayEpochDecoded: FiberEpochDelay;
   version: string;
   settlementHash: string | null;
   settlementFlag: number | null;
@@ -3176,6 +3221,7 @@ export type {
   PoolTransaction,
   PoolTransactionsResponse,
   Block,
+  BlockUncle,
   NetworkStats,
   SyncStatus,
   Address,
@@ -3323,6 +3369,7 @@ export type {
   FiberPair,
   FiberParty,
   FiberChannelEvidence,
+  FiberEpochDelay,
   FiberChannelState,
   FiberChannelQueryParams,
 };
@@ -3694,6 +3741,10 @@ export const api = {
 
   getBlockProposals: (id: string | number): Promise<BlockProposal[]> => {
     return fetchApi(`/blocks/${id}/proposals`);
+  },
+
+  getBlockUncle: (id: string | number, index: number): Promise<BlockUncle> => {
+    return fetchApi(`/blocks/${id}/uncles/${index}`);
   },
 
   getTransactions: (

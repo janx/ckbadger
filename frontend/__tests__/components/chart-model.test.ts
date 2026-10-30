@@ -7,7 +7,12 @@ import {
   type ChartDefinition,
   type ChartPayload,
 } from '@/components/charts/chart-catalogue';
-import { chartModel, chartUnitValue, formatChartReadout } from '@/components/charts/chart-model';
+import {
+  chartModel,
+  chartUnitValue,
+  formatChartExact,
+  formatChartReadout,
+} from '@/components/charts/chart-model';
 import { chartHardforkMarkers, rangePoints } from '@/components/charts/chart-detail';
 import supplyProducer from '@/__tests__/fixtures/chart-api-producer/total-supply.json';
 import secondaryProducer from '@/__tests__/fixtures/chart-api-producer/secondary-issuance.json';
@@ -126,11 +131,144 @@ describe('28 chart variants', () => {
     expect(chartUnitValue('0.025', 'fraction-percent', 'uncle fraction')).toBe('2.5');
   });
 
-  it('compacts chart card/detail readouts without trailing .00 on whole counts', () => {
+  it('rounds card readouts the way the design shows them, never faking an exact value (CH-02)', () => {
     expect(formatChartReadout('600', 'addresses')).toBe('600');
+    expect(formatChartReadout('622', 'epochs')).toBe('622');
+    expect(formatChartReadout('1234', 'transactions')).toBe('1.23K');
     expect(formatChartReadout('9007199254.740993', 'CKB')).toBe('9.01B');
     expect(formatChartReadout('-1234.5', 'CKB')).toBe('-1.23K');
-    expect(formatChartReadout('12.5', '%')).toBe('12.5');
+    // Rates and durations at two decimals, as charts.json shows them (91.34 PH/s, 1.34%).
+    expect(formatChartReadout('12.5', '%')).toBe('12.50');
+    expect(formatChartReadout('93.685105781336746', 'PH/s')).toBe('93.69');
+    expect(formatChartReadout('815.691763309692958', 'P')).toBe('815.69');
+    expect(formatChartReadout('+1.114235248953059', 'PH/s')).toBe('+1.11');
+    expect(formatChartReadout('+208801027.17121727', 'CKB')).toBe('+208.80M');
+    // A non-whole amount keeps its two decimals: "99" would read as an exact whole value.
+    expect(formatChartReadout('99.00000001', 'CKB')).toBe('99.00');
+    expect(formatChartReadout('600.5', 'addresses')).toBe('600.50');
+  });
+
+  it('previews the top five ranks plus an exact Others for every remaining rank (CH-01)', () => {
+    // 30.000 / 10.005 ×4 / 29.980: rounded shares would leave 29.96 for Others.
+    const amounts = ['30000', '10005', '10005', '10005', '10005', '9994', '9993', '9993'];
+    const keys = amounts.map((_, i) => `s${i}`);
+    const share = {
+      title: 'Used',
+      series: keys.map((key) => ({ key, label: key, color: '#a' })),
+      data: [
+        {
+          date: '2024-01-03',
+          values: Object.fromEntries(keys.map((key, i) => [key, `${amounts[i]}000`])),
+        },
+      ],
+    };
+    const model = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, {
+      title: 'Used',
+      usedShare: share,
+      capacityShare: share,
+    });
+    expect(model.rankedPreview?.rows.map((row) => `${row.label} ${row.share}`)).toEqual([
+      's0 30.00%',
+      's1 10.01%',
+      's2 10.01%',
+      's3 10.01%',
+      's4 10.01%',
+      'Others 29.98%',
+    ]);
+    // The API's own remainder bucket is ranks beyond its named list, not the card's Others.
+    const withBucket = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, utilized);
+    expect(withBucket.rankedRows?.map((row) => row.label)).toEqual([
+      'Alpha',
+      'Others beyond the top 1',
+    ]);
+    expect(withBucket.rankedPreview?.rows.map((row) => `${row.label} ${row.share}`)).toEqual([
+      'Alpha 50.00%',
+      'Others 50.00%',
+    ]);
+  });
+
+  it('never fabricates an Others share when nothing remains or the total is zero (CH-01)', () => {
+    const zero = {
+      title: 'Used',
+      series: [{ key: 'a', label: 'A', color: '#a' }],
+      data: [{ date: '2024-01-03', values: { a: '0' } }],
+    };
+    const model = chartModel(CHART_BY_SLUG.get('most-utilized-scripts')!, {
+      title: 'Used',
+      usedShare: zero,
+      capacityShare: zero,
+    });
+    expect(model.rankedPreview?.rows).toEqual([{ label: 'A', title: 'A', share: '—' }]);
+    const single = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+      ...miners,
+      totalBlocks: 50,
+    });
+    expect(single.rankedPreview?.rows.map((row) => row.label)).toEqual(['Pool']);
+  });
+
+  it('adds the exact miner remainder and keeps miner identities distinguishable (CH-01, CH-04)', () => {
+    const prefix = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
+    const rows = ['93hhsj', 'p909qk', 'aaaaaa', 'bbbbbb', 'cccccc', 'dddddd'].map((tail, i) => ({
+      minerLockHash: `0x${String(i).repeat(64)}`,
+      address: `${prefix}${'x'.repeat(30)}${tail}`,
+      minerName: null,
+      blocksMined: [41743, 20000, 2000, 1000, 611, 1123][i],
+      percentage: '0',
+    }));
+    const model = chartModel(CHART_BY_SLUG.get('miner-address-distribution')!, {
+      ...miners,
+      totalBlocks: 66477,
+      data: rows,
+    });
+    const preview = model.rankedPreview!;
+    expect(preview.rows.map((row) => row.label)).toEqual([
+      'ckb1qzda0c…93hhsj',
+      'ckb1qzda0c…p909qk',
+      'ckb1qzda0c…aaaaaa',
+      'ckb1qzda0c…bbbbbb',
+      'ckb1qzda0c…cccccc',
+      'Others',
+    ]);
+    // 1,123 of 66,477 blocks, floored at four decimals like the API's own percentages.
+    expect(preview.rows.at(-1)?.share).toBe('1.6893%');
+    expect(preview.rows[0].title).toBe(rows[0].address);
+    expect(preview.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
+    expect(model.summaryLabel).toBe(`Leading miner: ${rows[0].address} (0%)`);
+  });
+
+  it('summarises nominal APC at its single current sample and rejects a missing one (CH-03)', () => {
+    const definition = CHART_BY_SLUG.get('nominal-apc')!;
+    const timeline = (markers: string[]) => ({
+      title: 'Nominal APC',
+      yAxisLabel: 'Nominal APC (%)',
+      y2AxisLabel: 'nominal-apc-timeline',
+      data: markers.map((marker, i) => ({
+        date: String(i * 3.25),
+        value: ['4.2', '3.1', '2.3297', '1.9', '1.5881'][i],
+        value2: marker,
+      })),
+    });
+    const model = chartModel(definition, timeline(['past', 'past', 'current', 'future', 'future']));
+    expect(model.latest).toEqual({ label: 'year 6.5', raw: '2.3297', display: '2.33' });
+    expect(model.summaryLabel).toBe('Today');
+    expect(model.projectedAfter).toBe(2);
+    expect(model.delta).toBeNull();
+    expect(model.series).toHaveLength(1);
+    expect(() =>
+      chartModel(definition, timeline(['past', 'past', 'past', 'past', 'past']))
+    ).toThrow('no current sample');
+    expect(() =>
+      chartModel(definition, timeline(['past', 'current', 'current', 'future', 'future']))
+    ).toThrow('second current sample');
+    expect(() =>
+      chartModel(definition, timeline(['past', 'future', 'current', 'future', 'future']))
+    ).toThrow('out of timeline order');
+  });
+
+  it('prints exact chart values with every digit and thousands groups', () => {
+    expect(formatChartExact('65053585849.85425816', 'CKB')).toBe('65,053,585,849.85425816');
+    expect(formatChartExact('93.685105781336746', 'PH/s')).toBe('93.685105781336746');
+    expect(formatChartExact('+208801027.17121727', 'CKB')).toBe('+208,801,027.17121727');
   });
 
   it('keeps physical units separate and does not fill sparse dates', () => {

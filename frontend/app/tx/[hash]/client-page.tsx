@@ -737,14 +737,14 @@ export default function TransactionDetailPage() {
                     →{' '}
                   </>
                 )}
-                {typeof tx.blockNumber === 'number' ? (
+                {tx.blockNumber !== undefined ? (
                   <Link href={`/blocks/${tx.blockNumber}`}>
                     #{tx.blockNumber.toLocaleString('en-US')}
                   </Link>
                 ) : (
                   <PendingValue />
                 )}
-                {typeof tx.index === 'number' && lifecycle?.commitmentWindow && (
+                {tx.index !== undefined && lifecycle?.commitmentWindow && (
                   <span className="text-text-dim">
                     {' '}
                     · position {tx.index}
@@ -760,11 +760,7 @@ export default function TransactionDetailPage() {
             <div>
               <dt className="text-text-dim">Size · cycles</dt>
               <dd className="mt-2">
-                {tx.txSize === undefined ? (
-                  <PendingValue />
-                ) : (
-                  <>{tx.txSize.toLocaleString('en-US')} B</>
-                )}{' '}
+                {tx.txSize === null ? <PendingValue /> : <>{tx.txSize.toLocaleString('en-US')} B</>}{' '}
                 ·{' '}
                 {hasCycles && cycles !== null ? (
                   cycles.toLocaleString('en-US')
@@ -784,7 +780,7 @@ export default function TransactionDetailPage() {
                     Paused: indexer is on a deep fork
                   </span>
                 )}
-                {tx.feeRate !== undefined && (
+                {tx.feeRate !== null && (
                   <span className="text-text-dim mt-1 block">
                     fee rate{' '}
                     {exactUnsignedInteger(tx.feeRate, `${hash}: fee rate`).toLocaleString('en-US')}{' '}
@@ -952,7 +948,7 @@ export default function TransactionDetailPage() {
         <div>
           <dt className="text-text-dim">Block</dt>
           <dd className="text-text-bright mt-1">
-            {typeof tx.blockNumber === 'number' ? (
+            {tx.blockNumber !== undefined ? (
               <Link href={`/blocks/${tx.blockNumber}`}>
                 #{tx.blockNumber.toLocaleString('en-US')}
               </Link>

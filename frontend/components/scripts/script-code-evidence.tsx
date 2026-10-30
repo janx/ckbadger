@@ -9,6 +9,7 @@ import type {
   StackedAreaChartResponse,
 } from '@/lib/api';
 import { formatCkbAmount, formatCkbCompact, truncateHash } from '@/lib/utils';
+import { formatExactDecimal } from '@/lib/exact-integer';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Fixed bytecode',
@@ -296,7 +297,7 @@ export function ScriptCapacityEvidenceChart({
         height={240}
         plotLeft={88}
         markers={chartMarkers}
-        formatValue={(value) => value}
+        formatValue={(value) => formatExactDecimal(value, 'script cell capacity')}
       />
       {chart.data.length > 0 && (
         <div

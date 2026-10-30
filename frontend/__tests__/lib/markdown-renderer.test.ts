@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseMarkdownSourcePath } from '@/lib/ai/markdown-route';
 import { MarkdownRenderError, renderMarkdownPage } from '@/lib/ai/markdown-renderer';
 import { api } from '@/lib/api';
+import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -28,6 +29,7 @@ vi.mock('@/lib/api', () => ({
     getNetworkSummary: vi.fn(),
     getFiberChannels: vi.fn(),
     getFiberChannel: vi.fn(),
+    getBlockUncle: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
@@ -50,6 +52,7 @@ describe('renderMarkdownPage', () => {
       closeTxHash: null,
       commitmentTxHash: null,
       delayEpoch: null,
+      delayEpochDecoded: null,
       settlementBlock: null,
       settlementTimestamp: null,
       settlementTxHash: null,
@@ -1048,7 +1051,6 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash,
       status: 'committed',
-      pendingSince: null,
       blockNumber: 100,
       blockHash: `0x${'2'.repeat(64)}`,
       index: 0,
@@ -1110,5 +1112,70 @@ describe('renderMarkdownPage', () => {
     });
     expect(unavailable.body).toContain('| witnessesCount | — |');
     expect(unavailable.body).toContain('| witnessesAvailable | false |');
+  });
+
+  it('says a pending tx is not indexed instead of printing undefined (TX-06)', async () => {
+    const hash = `0x${'3'.repeat(64)}`;
+    // The API omits every unindexed key; it never sends null for them.
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      hash,
+      status: 'pending',
+      pendingSince: '2026-03-12T12:00:00Z',
+      inputsCount: 1,
+      outputsCount: 1,
+      fee: '1000',
+      feeRate: null,
+      txSize: null,
+      cycles: null,
+      cyclesStatus: 'pending',
+      isCellbase: false,
+      inputs: [],
+      outputs: [],
+      scriptGroups: [],
+      witnessDetails: [],
+      witnesses: [],
+      witnessesAvailable: false,
+    } as any);
+    vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
+      hash,
+      phase: 'pending',
+      proposalId: '0x03',
+      proposedIn: null,
+      committedIn: null,
+      commitmentDistance: null,
+      commitmentWindow: null,
+      isCellbase: false,
+      confirmations: 0,
+    } as any);
+    vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(`/tx/${hash}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(result.body).toContain('| status | pending |');
+    expect(result.body).toContain('| blockNumber | not indexed |');
+    expect(result.body).toContain('| confirmations | not indexed |');
+    expect(result.body).not.toContain('undefined');
+  });
+
+  it('renders an uncle through its including block (BA-10)', async () => {
+    vi.mocked(api.getBlockUncle).mockResolvedValue(blockUncle);
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/blocks/8775638/uncles/0'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(api.getBlockUncle).toHaveBeenCalledWith('8775638', 0);
+    expect(result.status).toBe(200);
+    expect(result.body).toContain('# Uncle 8775637');
+    expect(result.body).toContain('included by block 8775638 as its uncle 0');
+    expect(result.body).toContain(`| canonicalAtHeight | ${blockUncle.canonicalAtHeight.hash} |`);
+    const bad = await renderMarkdownPage({
+      page: parseMarkdownSourcePath('/blocks/8775638/uncles/x'),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(bad.status).toBe(404);
   });
 });

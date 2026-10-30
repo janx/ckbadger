@@ -26,7 +26,7 @@ const stats = {
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   daoFreeCapacity: '40000000000',
-  depositorAllocationWeight: '40000000000',
+  depositorAllocationWeight: '45000000000',
   tipTotalIssuance: '1000000000000000',
   tipProtocolOccupiedCapacity: '100000000',
 };
@@ -74,7 +74,7 @@ describe('DaoPage', () => {
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
       'href',
-      '/mainnet/block/5'
+      '/mainnet/blocks/5'
     );
   });
 
@@ -102,7 +102,7 @@ describe('DaoPage', () => {
     ).toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: 'Verify statistics anchor block #4 →' })
-    ).toHaveAttribute('href', '/mainnet/block/4');
+    ).toHaveAttribute('href', '/mainnet/blocks/4');
   });
 
   it('shows a canonical history error without an endless loading message', async () => {

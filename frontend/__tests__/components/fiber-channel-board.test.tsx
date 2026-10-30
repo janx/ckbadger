@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '../utils/test-utils';
-import { FiberChannelBoard, observedDuration } from '@/components/fiber/fiber-channel-board';
+import {
+  FiberChannelBoard,
+  formatEpochDelay,
+  observedDuration,
+} from '@/components/fiber/fiber-channel-board';
 import forceClosed from '../fixtures/fiber-force-closed.json';
 import type { FiberChannelDetail, FiberChannelEvidence } from '@/lib/api';
 import producerDetail from '../fixtures/fiber-open-detail.json';
@@ -37,6 +41,7 @@ const evidence: FiberChannelEvidence = {
     consumedByTx: null,
     pubkeyHash: `0x${'44'.repeat(20)}`,
     delayEpoch: forceClosed.delayEpoch!,
+    delayEpochDecoded: forceClosed.delayEpochDecoded!,
     version: '9007199254740993',
     settlementHash: `0x${'66'.repeat(20)}`,
     settlementFlag: 1,
@@ -96,6 +101,22 @@ describe('FiberChannelBoard', () => {
       screen.getByRole('link', { name: `${evidence.currentCommitment!.txHash}:1` })
     ).toHaveAttribute('href', `/mainnet/cell/${evidence.currentCommitment!.txHash}-1`);
     expect(screen.getByText(/not a proven channel balance or payment/)).toBeInTheDocument();
+  });
+
+  it('reads the commitment delay decoded, keeping the exact u64 as labelled evidence (FF-C1)', () => {
+    render(<FiberChannelBoard channel={forceClosed as FiberChannelDetail} evidence={evidence} />);
+    expect(screen.getByText('Delay').nextElementSibling).toHaveTextContent(
+      'relative · 1 + 0/1 epoch'
+    );
+    expect(screen.getByText('Delay since · exact u64').nextElementSibling).toHaveTextContent(
+      '11529216145580097537'
+    );
+    expect(formatEpochDelay({ relative: false, epochs: 180, index: 3, length: 10 }, 'x')).toBe(
+      'absolute · 180 + 3/10 epochs'
+    );
+    expect(() =>
+      formatEpochDelay({ relative: true, epochs: 1, index: 2, length: 2 }, '11529216145580097537')
+    ).toThrow('Fiber delay 11529216145580097537: invalid decoded epoch');
   });
 
   it('formats a lifetime above JS safe integer without losing precision', () => {

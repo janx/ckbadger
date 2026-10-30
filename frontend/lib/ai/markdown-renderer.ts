@@ -538,11 +538,13 @@ function renderTxSummary(tx: TransactionDetail, lifecycle: TransactionLifecycle 
     ['field', 'value'],
     [
       ['hash', tx.hash],
-      ['blockNumber', tx.blockNumber],
-      ['index', tx.index],
-      ['timestamp', tx.timestamp],
+      ['status', tx.poolStatus ?? tx.status],
+      // Absent keys are a transaction this explorer has not indexed yet, said as such.
+      ['blockNumber', tx.blockNumber ?? 'not indexed'],
+      ['index', tx.index ?? 'not indexed'],
+      ['timestamp', tx.timestamp ?? 'not indexed'],
       ['isCellbase', tx.isCellbase],
-      ['confirmations', tx.confirmations],
+      ['confirmations', tx.confirmations ?? 'not indexed'],
       ['inputsCount', tx.inputsCount],
       ['outputsCount', tx.outputsCount],
       ['fee', tx.fee],
@@ -832,6 +834,58 @@ export async function renderMarkdownPage(
             ['nextCursor', blocks.nextCursor ?? '-'],
           ]
         ),
+      ]);
+      return { status: 200, body };
+    }
+    case 'uncle_detail': {
+      if (!/^(0|[1-9]\d*)$/.test(page.index))
+        return {
+          status: 404,
+          body: buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+            '# Unknown Uncle',
+            '',
+            `\`${page.index}\` is not a position in a block's uncle list.`,
+          ]),
+        };
+      const uncle = await api.getBlockUncle(page.id, Number(page.index));
+      const body = buildMarkdownDocument(buildMeta(page.pathname, page.kind, origin), [
+        `# Uncle ${uncle.number}`,
+        '',
+        `Uncle at height ${uncle.number}, included by block ${uncle.includedBy.number} as its uncle ${uncle.includedBy.index}; block ${uncle.number} on the canonical chain is ${uncle.canonicalAtHeight.hash}.`,
+        '',
+        '## Header',
+        '',
+        markdownTable(
+          ['field', 'value'],
+          [
+            ['number', uncle.number],
+            ['hash', uncle.hash],
+            ['parentHash', uncle.parentHash],
+            ['timestamp', uncle.timestamp],
+            ['epochNumber', uncle.epochNumber],
+            ['epochIndex', uncle.epochIndex],
+            ['epochLength', uncle.epochLength],
+            ['compactTarget', uncle.compactTarget],
+            ['difficulty', uncle.difficulty],
+            ['nonce', uncle.nonce],
+            ['version', uncle.version],
+            ['transactionsRoot', uncle.transactionsRoot],
+            ['proposalsHash', uncle.proposalsHash],
+            ['extraHash', uncle.extraHash],
+            ['dao', uncle.dao.raw],
+            ['includedBy', `${uncle.includedBy.number} (${uncle.includedBy.hash})`],
+            ['canonicalAtHeight', uncle.canonicalAtHeight.hash],
+          ]
+        ),
+        '',
+        '## Proposals',
+        '',
+        uncle.proposalIds.length
+          ? markdownTable(
+              ['proposalId'],
+              uncle.proposalIds.map((id) => [id])
+            )
+          : 'This uncle proposed nothing.',
       ]);
       return { status: 200, body };
     }

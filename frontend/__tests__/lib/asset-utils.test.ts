@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeAssetId,
   parseActivityCursor,
-  formatActivityTimestamp,
   normalizeActivityAction,
   formatCompositionTier,
   formatExpiry,
@@ -38,27 +37,6 @@ describe('parseActivityCursor', () => {
 
   it('returns trimmed cursor', () => {
     expect(parseActivityCursor('500:0')).toBe('500:0');
-  });
-});
-
-describe('formatActivityTimestamp', () => {
-  it('parses millisecond-level numeric timestamps', () => {
-    const result = formatActivityTimestamp('1700000300000');
-    expect(result).toContain('2023');
-  });
-
-  it('parses second-level numeric timestamps', () => {
-    const result = formatActivityTimestamp('1700000300');
-    expect(result).toContain('2023');
-  });
-
-  it('parses ISO date strings', () => {
-    const result = formatActivityTimestamp('2023-01-01T00:00:00.000Z');
-    expect(result).toContain('2023');
-  });
-
-  it('returns input unchanged for non-parseable values', () => {
-    expect(formatActivityTimestamp('not-a-date')).toBe('not-a-date');
   });
 });
 

@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
 import { BlockContents } from '@/components/blocks/block-visual';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
+import { getUncleDetailHref } from '@/lib/detail-routes';
 
 interface BlockPositionProps {
   block: Pick<
@@ -164,7 +165,7 @@ export function BlockPosition({
             )}
           </div>
         ))}
-        {block.uncles.map((uncle) => (
+        {block.uncles.map((uncle, index) => (
           <div
             key={uncle.hash}
             className="border-base-border-subtle min-w-0 space-y-2 border-t border-dashed pt-3 text-xs"
@@ -173,9 +174,9 @@ export function BlockPosition({
             <Link href={`/blocks/${uncle.parentHash}`} className="block break-all">
               Parent {uncle.parentHash}
             </Link>
-            <p className="text-text-bright block break-all">
+            <Link href={getUncleDetailHref(block.number, index)} className="block break-all">
               Uncle #{uncle.number.toLocaleString('en-US')} · {uncle.hash}
-            </p>
+            </Link>
             <p className="text-text-dim">
               Included by{' '}
               <Link href={`/blocks/${block.hash}`}>#{block.number.toLocaleString('en-US')}</Link>
@@ -313,7 +314,10 @@ export function BlockPosition({
                     {uncle.parentHash.slice(0, 12)}…{uncle.parentHash.slice(-6)}
                   </text>
                 </Link>
-                <g aria-label={`Included uncle #${uncle.number.toLocaleString('en-US')}`}>
+                <Link
+                  href={getUncleDetailHref(block.number, index)}
+                  aria-label={`Included uncle #${uncle.number.toLocaleString('en-US')}`}
+                >
                   <rect
                     x={uncleX}
                     y={top}
@@ -330,7 +334,7 @@ export function BlockPosition({
                   <text x={uncleX + 10} y={top + 41} fill="#7c849c" fontSize="11">
                     {uncle.hash.slice(0, 12)}…{uncle.hash.slice(-6)}
                   </text>
-                </g>
+                </Link>
               </g>
             );
           })}

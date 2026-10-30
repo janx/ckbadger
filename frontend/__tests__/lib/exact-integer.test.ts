@@ -7,6 +7,7 @@ import {
   exactDecimalRatio,
   exactSignedDecimalRatio,
   formatCompactRatio,
+  formatExactDecimal,
   formatExactShare,
 } from '@/lib/exact-integer';
 
@@ -43,6 +44,14 @@ describe('exact integer display', () => {
     }
   });
 
+  it('groups an exact decimal without rounding any digit', () => {
+    expect(formatExactDecimal('65053585849.85425816', 'supply')).toBe('65,053,585,849.85425816');
+    expect(formatExactDecimal('+208801027.17121727', 'delta')).toBe('+208,801,027.17121727');
+    expect(formatExactDecimal('-30.00000000', 'flow')).toBe('-30.00000000');
+    expect(formatExactDecimal('0', 'zero')).toBe('0');
+    expect(() => formatExactDecimal('1e3', 'bad')).toThrow('bad');
+  });
+
   it('rounds a decimal ratio at the display boundary without floating point', () => {
     expect(formatDecimal('0.125', 1, 100)).toBe('12.5');
     expect(formatDecimal('0.126499999999999999', 2, 100)).toBe('12.65');
@@ -56,7 +65,9 @@ describe('exact integer display', () => {
     ]);
     expect(() => exactDecimalRatio('-30.00000000', 'unsigned')).toThrow('unsigned');
     expect(formatCompactRatio(BigInt(1005), BigInt(1000))).toBe('1.01');
-    expect(formatCompactRatio(BigInt(600), BigInt(1))).toBe('600');
+    // Two fixed decimals: a non-whole amount that rounds to ".00" must not look exact (CH-02).
+    expect(formatCompactRatio(BigInt(600), BigInt(1))).toBe('600.00');
+    expect(formatCompactRatio(BigInt(9900000001), BigInt(100000000))).toBe('99.00');
     expect(formatCompactRatio(BigInt('9007199254740993'), BigInt(1))).toBe('9.01P');
     expect(
       formatExactShare(

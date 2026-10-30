@@ -13,7 +13,7 @@ import {
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { formatObserverTimeUtc8 } from '@/lib/fork-time';
-import { formatCkbAmount } from '@/lib/utils';
+import { formatCkbAmount, formatUtcClock } from '@/lib/utils';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 
@@ -45,7 +45,12 @@ const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false)
         render: (block) =>
           block.minerLockHash ? fullHash(block.minerLockHash) : 'Miner witness unavailable',
       },
-      { key: 'time', label: 'Header time', minWidth: 180, render: (block) => block.timestamp },
+      {
+        key: 'time',
+        label: 'Header time',
+        minWidth: 180,
+        render: (block) => formatUtcClock(block.timestamp),
+      },
     ]}
     mobileRow={(block) => (
       <div className="min-w-0 space-y-1 text-xs">
@@ -54,7 +59,7 @@ const blockRows = (label: string, rows: CanonicalBranchBlock[], current = false)
         <div>
           Miner: {block.minerLockHash ? fullHash(block.minerLockHash) : 'witness unavailable'}
         </div>
-        <div>{block.timestamp}</div>
+        <div>{formatUtcClock(block.timestamp)}</div>
       </div>
     )}
   />

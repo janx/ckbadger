@@ -122,7 +122,10 @@ export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGene
     </section>
   );
 }
-/** Cap per-trait buttons so one genome cannot push Objects/holders off-screen (OB-C1). */
+/**
+ * A trait shows its eight most frequent variants until opened, so one genome cannot push the
+ * objects and holders off-screen; "+N more" opens every variant, each still a filter (OB-C1).
+ */
 const TRAIT_VALUE_PREVIEW = 8;
 
 function TraitValueButtons({
@@ -142,16 +145,20 @@ function TraitValueButtons({
   onFocus: () => void;
   onBlur: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const ranked = [...trait.values].sort((a, b) =>
     b.count === a.count ? a.value.localeCompare(b.value) : b.count - a.count
   );
+  const preview = ranked.slice(0, TRAIT_VALUE_PREVIEW);
   const selectedExtra =
-    selected && !ranked.slice(0, TRAIT_VALUE_PREVIEW).some((v) => v.value === selected)
+    selected && !preview.some((v) => v.value === selected)
       ? ranked.find((v) => v.value === selected)
       : undefined;
-  const visible = selectedExtra
-    ? [...ranked.slice(0, TRAIT_VALUE_PREVIEW - 1), selectedExtra]
-    : ranked.slice(0, TRAIT_VALUE_PREVIEW);
+  const visible = open
+    ? ranked
+    : selectedExtra
+      ? [...ranked.slice(0, TRAIT_VALUE_PREVIEW - 1), selectedExtra]
+      : preview;
   const hidden = ranked.length - visible.length;
   return (
     <div className="grid gap-2 sm:grid-cols-2">
@@ -184,11 +191,17 @@ function TraitValueButtons({
           </button>
         );
       })}
-      {hidden > 0 && (
-        <p className="text-text-dim col-span-full text-[11px]">
-          {hidden} more {trait.name} variant{hidden === 1 ? '' : 's'} not shown · filter from the
-          Objects list when needed
-        </p>
+      {ranked.length > TRAIT_VALUE_PREVIEW && (
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((current) => !current)}
+          className="text-text-dim hover:text-text-bright col-span-full justify-self-start text-[11px]"
+        >
+          {open
+            ? `Show the top ${TRAIT_VALUE_PREVIEW} ${trait.name} variants`
+            : `+${hidden} more ${trait.name} variant${hidden === 1 ? '' : 's'}`}
+        </button>
       )}
     </div>
   );

@@ -115,6 +115,10 @@ describe('CellDetailPage', () => {
     expect((await screen.findAllByText('Spent')).length).toBeGreaterThan(0);
     expect(screen.getByText(/input #2/)).toBeInTheDocument();
     expect(screen.getByText(/30 s on chain/)).toBeInTheDocument();
+    // Created / Spent times read as UTC clock, never raw ISO (#16, SC-C1 row).
+    expect(screen.getByText('2024-01-01 00:00:00 UTC')).toBeInTheDocument();
+    expect(screen.getByText('2024-01-02 00:00:00 UTC')).toBeInTheDocument();
+    expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
   });
   it('shows DAO lifecycle only for DAO cells', async () => {
@@ -125,14 +129,17 @@ describe('CellDetailPage', () => {
         daoStatus: 'deposited',
         depositBlockNumber: 123,
         depositTimestamp: '2024-01-01T00:00:00Z',
-        compensation: '123456789',
-        compensationCkb: '1.23456789',
+        compensation: '1234523456789',
+        compensationCkb: '12345.23456789',
       },
     } as Cell);
     view();
     expect(await screen.findByText('Nervos DAO')).toBeInTheDocument();
     expect(screen.getByText(/deposited/)).toBeInTheDocument();
-    expect(screen.getByText(/compensation 1\.23456789 CKB/)).toBeInTheDocument();
+    // Exact CKB in the site's one amount form, thousands grouped (SC-C3, #16).
+    expect(screen.getByText(/deposited/).closest('p')).toHaveTextContent(
+      'compensation 12,345.23456789 CKB'
+    );
     expect(screen.queryByText(/shannons/)).not.toBeInTheDocument();
   });
   it('links script code hash with its exact hash type, not the script instance hash', async () => {

@@ -120,6 +120,11 @@ describe('MnftItemDetailPage', () => {
       'href',
       '/mainnet/inventory/objects'
     );
+    // OB-M1: /inventory is not a route; the Inventory crumb opens the objects inventory.
+    expect(screen.getByRole('link', { name: /^Inventory$/ })).toHaveAttribute(
+      'href',
+      '/mainnet/inventory/objects'
+    );
     expect(screen.getByText(/State 0x03 · claimed · locked/)).toBeInTheDocument();
     expect(screen.getByText(/Issued in/)).toHaveTextContent('Issuer A');
     expect(screen.getByRole('link', { name: 'Open the class →' })).toHaveAttribute(

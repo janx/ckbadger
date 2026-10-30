@@ -161,6 +161,30 @@ export const collectionInsightsProducer = {
   ],
   weeklyActivity: [],
 } satisfies CollectionInsights;
+/** `/assets/objects/{class id}/insights` for an m-NFT class: real holder buckets, no DOB items. */
+export const mnftCollectionInsightsProducer = {
+  calendarAnchor: null,
+  calendarSource: 'indexedChainTimeUtc8',
+  completeThrough: null,
+  currentPattern: { status: 'notDob', steps: [] },
+  genetics: {
+    complete: true,
+    decodedItems: 0,
+    eligibleItems: 0,
+    failedItems: 0,
+    liveItems: 8,
+    nonDobItems: 8,
+    pendingItems: 0,
+    traits: [],
+  },
+  holderDistribution: [
+    { holders: 0, items: 0, range: '1' },
+    { holders: 1, items: 2, range: '2' },
+    { holders: 0, items: 0, range: '3\u20135' },
+    { holders: 1, items: 6, range: '6+' },
+  ],
+  weeklyActivity: [],
+} satisfies CollectionInsights;
 export const collectionInsightsPendingProducer = {
   calendarAnchor: null,
   calendarSource: 'indexedChainTimeUtc8',
@@ -562,6 +586,8 @@ export const sporeDetailProducer = {
   ownerLockHash: '0x5e917826cb528fa25e9de839dbed4358e230de466bae590758efb7d481f8ab6c',
   sporeId: '0x0202020202020202020202020202020202020202020202020202020202020202',
   txHash: '0x476dac1106cc14a9bf59b6d3517bc04bf93cec42ae633bb731bc1757b933b7f9',
+  // The Nervape 3x spore's type script hash, as /spore/objects/{id} reports it.
+  typeScriptHash: '0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998',
 } satisfies SporeDetail;
 export const sporeCellVersionsProducer = {
   data: [

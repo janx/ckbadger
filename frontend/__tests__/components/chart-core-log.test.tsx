@@ -21,6 +21,7 @@ describe('shared Chart logarithmic geometry', () => {
         series={series}
         unit="CKB"
         yScale="log"
+        formatValue={(v) => v}
       />
     );
     const svg = screen.getByRole('img', { name: 'Capacity, CKB' });
@@ -43,6 +44,7 @@ describe('shared Chart logarithmic geometry', () => {
           series={series}
           unit="CKB"
           yScale="log"
+          formatValue={(v) => v}
         />
       )
     ).toThrow(/Bad log: logarithmic scale requires a positive line series/);
@@ -56,8 +58,113 @@ describe('shared Chart logarithmic geometry', () => {
           unit="CKB"
           kind="stacked"
           yScale="log"
+          formatValue={(v) => v}
         />
       )
     ).toThrow(/Bad stack: logarithmic scale requires a positive line series/);
+  });
+});
+
+describe('shared Chart gaps', () => {
+  beforeEach(() => stubChartWidth(480));
+  const timed = [
+    { label: 'd1', x: 1, values: { value: '5' } },
+    { label: 'd2', x: 2, values: { value: '6' } },
+    { label: 'd5', x: 5, values: { value: '7' } },
+  ];
+
+  it('shades a gap and never bridges a series across it', () => {
+    const { container } = render(
+      <Chart
+        title="Peers"
+        subtitle="Daily"
+        data={timed}
+        series={series}
+        unit="peers"
+        xDomain={[1, 5]}
+        gaps={[{ from: 2, to: 5, label: 'no rounds 3 – 4' }]}
+        formatValue={(v) => v}
+      />
+    );
+    expect(container.querySelector('[data-chart-gap="no rounds 3 – 4"] rect')).not.toBeNull();
+    const line = container.querySelector('path[fill="none"]')!.getAttribute('d')!;
+    expect(line.match(/M/g)).toHaveLength(2);
+    expect(container.querySelectorAll('circle')).toHaveLength(1);
+  });
+
+  it('rejects a gap that hides an observation or has no time axis', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <Chart
+          title="Peers"
+          subtitle="Daily"
+          data={timed}
+          series={series}
+          unit="peers"
+          xDomain={[1, 5]}
+          gaps={[{ from: 1, to: 5, label: 'bad' }]}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow('gaps must lie on the shared time axis');
+    expect(() =>
+      render(
+        <Chart
+          title="Peers"
+          subtitle="Daily"
+          data={timed}
+          series={series}
+          unit="peers"
+          gaps={[{ from: 2, to: 5, label: 'bad' }]}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow('gaps must lie on the shared time axis');
+    error.mockRestore();
+  });
+});
+
+describe('shared Chart projection', () => {
+  beforeEach(() => stubChartWidth(480));
+  const model = ['4.2', '3.1', '2.3', '1.9', '1.6'].map((value, i) => ({
+    label: String(i),
+    values: { value },
+  }));
+
+  it('draws a model solid up to today and dashed ahead (CH-03)', () => {
+    const { container } = render(
+      <Chart
+        title="Nominal APC"
+        subtitle="Model"
+        data={model}
+        series={series}
+        unit="%"
+        projectedAfter={2}
+        formatValue={(v) => v}
+      />
+    );
+    const ahead = container.querySelector('path[data-projected]')!;
+    expect(ahead).toHaveAttribute('stroke-dasharray', '4 3');
+    expect(ahead.getAttribute('d')!.match(/[ML]/g)).toHaveLength(3);
+    expect(container.querySelectorAll('path[fill="none"]:not([data-projected])')).toHaveLength(1);
+  });
+
+  it('rejects a projection outside the returned points', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() =>
+      render(
+        <Chart
+          title="Nominal APC"
+          subtitle="Model"
+          data={model}
+          series={series}
+          unit="%"
+          projectedAfter={5}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow('projection must start at a returned point');
+    error.mockRestore();
   });
 });

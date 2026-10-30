@@ -42,6 +42,35 @@ describe('Independent DOB evidence', () => {
     expect(button.closest('[data-allele]')).not.toHaveClass('opacity-35');
   });
 
+  it('keeps every variant of a long trait selectable behind "+N more" (OB-C1)', () => {
+    const values = Array.from({ length: 12 }, (_, i) => ({ value: `Colour ${i}`, count: 20 - i }));
+    const select = vi.fn();
+    render(
+      <CollectionGenes
+        evidence={{
+          ...collectionInsightsProducer.genetics,
+          liveItems: 300,
+          eligibleItems: 300,
+          nonDobItems: 0,
+          decodedItems: 300,
+          traits: [{ name: 'Background', values }],
+        }}
+        selected={{}}
+        onSelect={select}
+      />
+    );
+    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(8);
+    expect(screen.queryByText(/filter from the Objects list/)).not.toBeInTheDocument();
+    const more = screen.getByRole('button', { name: '+4 more Background variants' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(more);
+    expect(screen.getAllByRole('button', { pressed: false })).toHaveLength(12);
+    fireEvent.click(screen.getByRole('button', { name: 'Colour 11 9 / 300' }));
+    expect(select).toHaveBeenLastCalledWith('Background', 'Colour 11');
+    fireEvent.click(screen.getByRole('button', { name: 'Show the top 8 Background variants' }));
+    expect(screen.queryByRole('button', { name: 'Colour 11 9 / 300' })).not.toBeInTheDocument();
+  });
+
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';

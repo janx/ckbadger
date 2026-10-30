@@ -1,4 +1,4 @@
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { TokenDistributionView } from '@/components/asset/token-holders';
 import type { TokenDistribution } from '@/lib/api';
 const distribution: TokenDistribution = {
@@ -31,6 +31,12 @@ describe('Token distribution', () => {
     expect(screen.getByRole('table', { name: 'Holders by balance' })).toHaveTextContent(
       '100,000,000 (raw)'
     );
+  });
+  it('keeps each range bound on one line so a number never breaks mid-digits (IV-13)', () => {
+    render(<TokenDistributionView distribution={distribution} symbol="T" />);
+    const table = screen.getByRole('table', { name: 'Holders by balance' });
+    const bound = within(table).getAllByText((_, el) => el?.textContent === '1.00000000')[0];
+    expect(bound.closest('.whitespace-nowrap')).not.toBeNull();
   });
   it('rejects missing holders and mismatched aggregate supply', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});

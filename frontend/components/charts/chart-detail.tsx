@@ -12,7 +12,12 @@ import {
   chartApiPath,
   type ChartDefinition,
 } from '@/components/charts/chart-catalogue';
-import { chartModel, formatChartReadout, type ChartModel } from '@/components/charts/chart-model';
+import {
+  chartModel,
+  formatChartExact,
+  formatChartHover,
+  type ChartModel,
+} from '@/components/charts/chart-model';
 import { getChartDescription } from '@/components/charts/chart-calculation-descriptions';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -83,7 +88,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
                 {row.identity && <span className="text-text-dim ml-2">({row.identity})</span>}
               </span>
               <span className="shrink-0 tabular-nums">
-                {formatChartReadout(row.value, model.unit)} {model.unit} · {row.share}
+                {formatChartExact(row.value, model.unit)} {model.unit} · {row.share}
               </span>
             </div>
             <div className="bg-base-elevated mt-1 h-1 rounded">
@@ -137,6 +142,46 @@ function DetailBody({
     seriesLabels: model.series.map((series) => series.label),
   });
   if (!description) throw new Error(`${definition.slug}: no calculation description`);
+  // Method and evidence are the quieter developer tier, after related charts (CH-20).
+  const method = (
+    <DetailSection title="How it is computed / Evidence">
+      <div className="grid min-w-0 gap-4 text-xs md:grid-cols-2">
+        <div className="border-base-border min-w-0 border-t pt-3">
+          <div className="text-text-dim mb-2">Calculation scope</div>
+          <p className="text-text-bright leading-6">{description.overview}</p>
+          <ul className="text-text-dim mt-3 space-y-2">
+            {description.legendItems.map((item) => (
+              <li key={item.label}>
+                <span className="text-text-bright">{item.label}:</span> {item.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="border-base-border min-w-0 border-t pt-3">
+          <div className="text-text-dim mb-2">Evidence path</div>
+          <p className="leading-6">
+            Values come from the local index of canonical chain {definition.source}. The chart
+            returns observations at its own recorded dates or buckets; gaps are not interpolated.
+          </p>
+          <Link
+            href={definition.evidenceHref}
+            className="text-jade mt-3 inline-block hover:underline"
+          >
+            Explore {definition.evidenceLabel} →
+          </Link>
+          <div className="text-text-dim mt-2">
+            Source:{' '}
+            <a
+              href={`${apiBaseFor(network)}${chartApiPath(definition)}`}
+              className="text-jade break-all hover:underline"
+            >
+              <code>{chartApiPath(definition)}</code>
+            </a>
+          </div>
+        </div>
+      </div>
+    </DetailSection>
+  );
   return (
     <DetailLayout
       title={definition.title}
@@ -146,16 +191,22 @@ function DetailBody({
           ? [
               {
                 label: model.summaryLabel ?? 'Latest returned',
-                value: `${model.latest.label} · ${model.latest.display} ${model.unit}`,
+                value: `${model.latest.label} · ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`,
               },
               ...(model.delta
-                ? [{ label: 'Last change', value: `${model.delta} ${model.unit}` }]
+                ? [
+                    {
+                      label: 'Last change',
+                      value: `${formatChartExact(model.delta, model.unit)} ${model.unit}`,
+                    },
+                  ]
                 : []),
               ...(model.coverage ? [{ label: 'Coverage', value: model.coverage }] : []),
               ...(model.contextFacts ?? []),
             ]
           : undefined
       }
+      tier2={method}
     >
       <DetailSection
         title={definition.visual === 'ranked' ? 'Distribution' : 'Full history'}
@@ -206,7 +257,8 @@ function DetailBody({
             yScale={supportsLog && logScale ? 'log' : 'linear'}
             height={360}
             markers={markers}
-            formatValue={(value) => formatChartReadout(value, model.unit)}
+            projectedAfter={range === 'all' ? model.projectedAfter : undefined}
+            formatValue={(value) => formatChartHover(value, model.unit)}
           />
         )}
       </DetailSection>
@@ -226,7 +278,7 @@ function DetailBody({
               unit={history.unit}
               kind="stacked"
               height={260}
-              formatValue={(value) => formatChartReadout(value, history.unit)}
+              formatValue={(value) => formatChartHover(value, history.unit)}
             />
           ) : (
             <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
@@ -247,7 +299,7 @@ function DetailBody({
             unit={model.secondary.unit}
             kind={definition.visual === 'bars' ? 'bars' : 'line'}
             height={220}
-            formatValue={(value) => formatChartReadout(value, model.secondary!.unit)}
+            formatValue={(value) => formatChartHover(value, model.secondary!.unit)}
           />
         </DetailSection>
       )}
@@ -264,47 +316,10 @@ function DetailBody({
             unit={model.dailyFlow.unit}
             kind="line"
             height={220}
-            formatValue={(value) => formatChartReadout(value, model.dailyFlow!.unit)}
+            formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
           />
         </DetailSection>
       )}
-      <DetailSection title="How it is computed / Evidence">
-        <div className="grid min-w-0 gap-4 text-xs md:grid-cols-2">
-          <div className="border-base-border min-w-0 border-t pt-3">
-            <div className="text-text-dim mb-2">Calculation scope</div>
-            <p className="text-text-bright leading-6">{description.overview}</p>
-            <ul className="text-text-dim mt-3 space-y-2">
-              {description.legendItems.map((item) => (
-                <li key={item.label}>
-                  <span className="text-text-bright">{item.label}:</span> {item.description}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="border-base-border min-w-0 border-t pt-3">
-            <div className="text-text-dim mb-2">Evidence path</div>
-            <p className="leading-6">
-              Values come from the local index of canonical chain {definition.source}. The chart
-              returns observations at its own recorded dates or buckets; gaps are not interpolated.
-            </p>
-            <Link
-              href={definition.evidenceHref}
-              className="text-jade mt-3 inline-block hover:underline"
-            >
-              Explore {definition.evidenceLabel} →
-            </Link>
-            <div className="text-text-dim mt-2">
-              Source:{' '}
-              <a
-                href={`${apiBaseFor(network)}${chartApiPath(definition)}`}
-                className="text-jade break-all hover:underline"
-              >
-                <code>{chartApiPath(definition)}</code>
-              </a>
-            </div>
-          </div>
-        </div>
-      </DetailSection>
       <DetailSection title="Related charts">
         <div className="grid min-w-0 gap-x-10 gap-y-8 sm:grid-cols-2 xl:grid-cols-4">
           {definition.related.map((slug) => {

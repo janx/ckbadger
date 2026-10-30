@@ -15,23 +15,6 @@ export function parseActivityCursor(raw: string | null): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/**
- * Flexible timestamp parsing for activity records.
- * Handles numeric (seconds or milliseconds), ISO strings, and pass-through.
- */
-export function formatActivityTimestamp(timestamp: string): string {
-  const numeric = Number(timestamp);
-  if (Number.isFinite(numeric) && numeric > 0) {
-    const milliseconds = numeric >= 1_000_000_000_000 ? numeric : numeric * 1000;
-    return new Date(milliseconds).toLocaleString();
-  }
-  const parsed = Date.parse(timestamp);
-  if (Number.isFinite(parsed)) {
-    return new Date(parsed).toLocaleString();
-  }
-  return timestamp;
-}
-
 /** Normalize action labels: "burn" → "recycled" for identity-type assets. */
 export function normalizeActivityAction(action: string): string {
   if (action.toLowerCase() === 'burn') {

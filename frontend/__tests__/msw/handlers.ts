@@ -1,5 +1,6 @@
 import { http, HttpResponse, ws } from 'msw';
 import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
+import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
 import vesselSnapshot from '@/__tests__/fixtures/vessels-api-producer/vessels-snapshot.json';
 import {
   activitySummary24h,
@@ -89,6 +90,15 @@ export const handlers = [
       nextCursor: '999998',
     });
   }),
+
+  http.get(`${API_BASE}/blocks/:id/uncles/:index`, ({ params }) =>
+    params.id === String(blockUncle.includedBy.number) && params.index === '0'
+      ? HttpResponse.json(blockUncle)
+      : HttpResponse.json(
+          { error: 'not_found', message: `block ${params.id} has no uncle ${params.index}` },
+          { status: 404 }
+        )
+  ),
 
   http.get(`${API_BASE}/blocks/:id`, ({ params }) => {
     const { id } = params;
@@ -476,6 +486,7 @@ export const handlers = [
       ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xws',
       isLive: true,
       createdAtBlock: 100000,
+      typeScriptHash: '0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998',
       ownedCapacity: '14500000000',
       ownedKnowledge: '14300000000',
       mediaProfile: {

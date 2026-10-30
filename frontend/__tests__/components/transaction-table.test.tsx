@@ -109,7 +109,7 @@ describe('TransactionTable', () => {
   it('renders a pending replay explicitly and rejects missing byte evidence', () => {
     render(<TransactionTable transactions={[{ ...tx, cycles: null, cyclesStatus: 'pending' }]} />);
     expect(screen.getAllByText('Not yet run')).toHaveLength(2);
-    expect(() => TransactionTable({ transactions: [{ ...tx, txSize: undefined }] })).toThrow(
+    expect(() => TransactionTable({ transactions: [{ ...tx, txSize: null }] })).toThrow(
       'exact serialized size'
     );
   });

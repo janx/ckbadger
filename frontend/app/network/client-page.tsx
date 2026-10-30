@@ -12,7 +12,7 @@ import { NetworkTrends } from '@/app/network/trends';
 import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
 import { NetworkMapView } from '@/app/network/network-map';
-import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
@@ -198,14 +198,14 @@ function PeersDashboard({
       <NetworkDistributions />
       <NetworkTrends />
       <MaxMindAttribution />
-      <div className="mt-[72px] space-y-8" data-tier="2">
+      <DetailTier2>
         <DetailSection title="Who advertised whom">
           <AdvertisementGraph roundId={lastRound.roundId} />
         </DetailSection>
         <DetailSection title="Peer evidence">
           <PeersTable />
         </DetailSection>
-      </div>
+      </DetailTier2>
     </DetailLayout>
   );
 }

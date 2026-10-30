@@ -1,4 +1,4 @@
-import type { ItemProtocol, BitCellProtocol } from '@/lib/api';
+import type { ItemProtocol, BitCellProtocol, DotCellRecord } from '@/lib/api';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import {
   IdentityDocument,
@@ -60,6 +60,35 @@ it('preserves .cell unresolved named prefixes and protocol records without fake 
   expect(rights).toHaveTextContent(dotcellProtocolProducer.versions[0].decoded.owner.hashPrefix);
   expect(within(rights).queryByRole('link')).not.toBeInTheDocument();
   expect(rights).toHaveTextContent("separate from the physical cell's lock owner");
+});
+it('names .cell records by their protocol key and keeps binary values to one line (ID-DC1/2)', () => {
+  const protocol = structuredClone(dotcellProtocolProducer);
+  const webp = `0x52494646${'d0'.repeat(400)}57454250`;
+  (protocol.versions.at(-1)!.decoded as { records: DotCellRecord[] }).records = [
+    {
+      key: 'address.0',
+      label: '',
+      valueHex: '0x31',
+      valueUtf8: '1',
+      ttl: 300,
+      decodedAddress: null,
+    },
+    {
+      key: 'profile.cover',
+      label: '',
+      valueHex: webp,
+      valueUtf8: null,
+      ttl: 300,
+      decodedAddress: null,
+    },
+    { key: '', label: '', valueHex: '0x00', valueUtf8: null, ttl: 300, decodedAddress: null },
+  ];
+  render(<IdentityDocument protocol={protocol} />);
+  const records = screen.getByRole('region', { name: 'Name records' });
+  const keys = Array.from(records.querySelectorAll('dt')).map((dt) => dt.textContent);
+  expect(keys).toEqual(['address.0', 'profile.cover', '(empty key)']);
+  expect(records).toHaveTextContent('0x52494646d0d0d0d0d0…57454250');
+  expect(records).not.toHaveTextContent('d0'.repeat(40));
 });
 it('links only a uniquely resolved named party', () => {
   render(
