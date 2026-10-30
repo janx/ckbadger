@@ -17,6 +17,7 @@ vi.mock('@/lib/api', () => ({
     getGlobalActivities: vi.fn(),
     getTransactions: vi.fn(),
     calculateDaoCompensation: vi.fn(),
+    getDaoArHistory: vi.fn(),
   },
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div data-testid="header" /> }));
@@ -60,6 +61,23 @@ describe('DaoPage', () => {
       hasMore: false,
       nextCursor: null,
       limit: 12,
+    });
+    vi.mocked(api.getDaoArHistory).mockResolvedValue({
+      anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
+      days: [
+        {
+          date: '2024-01-14',
+          blockNumber: 3,
+          ar: '10100000000000000',
+          arIndex: '1.0100000000000000',
+        },
+        {
+          date: '2024-01-15',
+          blockNumber: 4,
+          ar: '10150000000000000',
+          arIndex: '1.0150000000000000',
+        },
+      ],
     });
     vi.mocked(api.calculateDaoCompensation).mockImplementation(
       async (capacity: string, depositBlock: number, withdrawBlock?: number) => ({

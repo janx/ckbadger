@@ -12,18 +12,33 @@ vi.mock('@/components/dao/dao-sources', () => ({
 }));
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>();
-  return { ...actual, api: { ...actual.api, calculateDaoCompensation: vi.fn() } };
+  return {
+    ...actual,
+    api: { ...actual.api, calculateDaoCompensation: vi.fn(), getDaoArHistory: vi.fn() },
+  };
 });
+
+/** R2b-a 43: AR at the close of four complete days; the evidence tip (#5) has AR 1.02. */
+const AR_DAYS = [
+  { date: '2019-11-16', blockNumber: 1, ar: '10000000000000000', arIndex: '1.0000000000000000' },
+  { date: '2019-11-17', blockNumber: 2, ar: '10050000000000000', arIndex: '1.0050000000000000' },
+  { date: '2019-11-18', blockNumber: 3, ar: '10100000000000000', arIndex: '1.0100000000000000' },
+  { date: '2019-11-19', blockNumber: 4, ar: '10150000000000000', arIndex: '1.0150000000000000' },
+];
 
 /** The API calculator for 10,000 CKB: compensation = 100 CKB per 0.01 of AR gained (fixture). */
 function stubCalculator() {
+  vi.mocked(api.getDaoArHistory).mockResolvedValue({
+    anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
+    days: AR_DAYS,
+  });
   vi.mocked(api.calculateDaoCompensation).mockImplementation(
     async (capacity: string, depositBlock: number, withdrawBlock?: number) => ({
       capacity,
       capacityCkb: '10000',
       depositBlock,
       withdrawBlock: withdrawBlock!,
-      estimatedCompensation: depositBlock === 0 ? '20000000000' : '9801980198',
+      estimatedCompensation: depositBlock === 1 ? '20000000000' : '9801980198',
       estimatedCompensationCkb: '',
       totalWithdrawable: '',
       totalWithdrawableCkb: '',
@@ -409,30 +424,36 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
   afterEach(() => vi.restoreAllMocks());
   const grows = () => screen.getByRole('region', { name: 'How a deposit grows' });
 
-  it("reads what 10,000 CKB deposited on a date is owed, from the API's calculator", async () => {
+  it("reads what 10,000 CKB deposited on a day is owed, from the API's calculator", async () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const reading = within(grows()).getByLabelText('Deposit reading');
-    expect(
-      await within(reading).findByText((_, el) => el?.getAttribute('data-role') === 'owed')
-    ).toHaveTextContent('+200.00000000 CKB compensation');
-    expect(reading).toHaveTextContent(
-      '10,000 CKB deposited on 1970-01-01 is owed +200.00000000 CKB compensation · 2.0000% on its free capacity, by #5'
+    const reading = await within(grows()).findByLabelText('Deposit reading');
+    await waitFor(() =>
+      expect(
+        within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
+      ).toHaveTextContent('+200.00000000 CKB compensation')
     );
-    // One compensation path: the API's calculator, deposit block → the evidence tip.
-    expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 0, 5);
+    // R2b-a 43: the calculator says which free capacity it assumed (board: "its 9,898 free CKB").
+    expect(reading).toHaveTextContent(
+      '10,000 CKB deposited on 2019-11-16 is owed +200.00000000 CKB compensation · 2.0000% on its 9,898 free CKB, by #5'
+    );
+    // One compensation path: the API's calculator, the day's closing block → the evidence tip.
+    expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 1, 5);
     expect(grows()).not.toHaveTextContent(/interest|earned/i);
   });
 
-  it('plots AR by date, moves the reading along it, and bars each whole year', async () => {
+  it('plots AR for every complete day, moves the reading to any day, and bars each whole year', async () => {
     stubChartWidth(600);
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const chart = within(grows()).getByRole('img', { name: /^AR by date/ });
+    const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
+    // one point per complete day (the x axis prints the first and last)
+    expect(chart).toHaveTextContent('2019-11-16');
+    expect(chart).toHaveTextContent('2019-11-19');
     fireEvent.keyDown(chart, { key: 'ArrowLeft' });
     const reading = within(grows()).getByLabelText('Deposit reading');
-    expect(reading).toHaveTextContent('10,000 CKB deposited on 1971-01-01');
-    expect(reading).toHaveTextContent('0.9901% on its free capacity');
+    expect(reading).toHaveTextContent('10,000 CKB deposited on 2019-11-18');
+    expect(reading).toHaveTextContent('0.9901% on its');
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
@@ -445,6 +466,18 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // Anniversary to anniversary only: the year in progress (to the tip) is not a bar.
     expect(years.querySelectorAll('[data-year]')).toHaveLength(1);
     expect(years).toHaveTextContent('1.00%from 1970-01');
+  });
+
+  it('refuses a daily AR series with a missing day', async () => {
+    stubCalculator();
+    vi.mocked(api.getDaoArHistory).mockResolvedValue({
+      anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
+      days: [AR_DAYS[0], AR_DAYS[2], AR_DAYS[3]],
+    });
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(await within(grows()).findByRole('alert')).toHaveTextContent(
+      'DAO AR history skips from 2019-11-16 to 2019-11-18'
+    );
   });
 
   it('keeps the AR anchors and the observed span out of tier 1 (DAO-9)', () => {
@@ -602,19 +635,19 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     expect(amount).toHaveClass('text-[24px]', 'sm:text-[30px]');
   });
 
-  it('draws AR around its own range, not from zero', () => {
+  it('draws AR around its own range, not from zero', async () => {
     stubChartWidth(600);
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const chart = within(screen.getByRole('region', { name: 'How a deposit grows' })).getByRole(
-      'img',
-      { name: /^AR by date/ }
-    );
+    const chart = await within(
+      screen.getByRole('region', { name: 'How a deposit grows' })
+    ).findByRole('img', { name: /^AR by date/ });
     const ticks = Array.from(chart.querySelectorAll('text[text-anchor="end"]')).map((t) =>
       t.textContent!.trim()
     );
     expect(ticks[0]).not.toBe('0');
-    expect(ticks).toContain('1.01');
+    // the daily series spans 1.000 … 1.015
+    expect(ticks).toContain('1.010');
   });
 });
 
