@@ -525,6 +525,27 @@ interface TransactionWitness {
   actions?: CobuildAction[];
 }
 
+// F2-tx (round 2): R9 transaction detail completions (contracts.md R9; TX-33, TX-35, TX-36), read
+// by `TransactionDetail.headerDeps` / `.cellbaseWitness` and `TransactionWitness.actions`.
+
+/** A header the transaction reads, "read, not consumed" (a DAO withdrawal reads two). */
+export interface TransactionHeaderDep {
+  blockHash: string;
+  /** Always set for a committed transaction; null only while an uncommitted one's block is unindexed. */
+  blockNumber: number | null;
+}
+/** A cellbase's witness 0: the miner's lock and the client message, raw bytes. */
+export interface TransactionCellbaseWitness {
+  lock: Script;
+  message: string;
+}
+/** One CoBuild message action: whose script it is for and its raw data (name not decoded). */
+export interface CobuildAction {
+  scriptInfoHash: string;
+  scriptHash: string;
+  data: string;
+}
+
 /** Per-cell semantics read from its payload and the canonical item indexes. */
 interface TransactionCellDisplay {
   kind: 'token' | 'object' | 'identity' | 'file';
@@ -4951,26 +4972,3 @@ export const api = {
   getNetworkPeer: async (peerId: string): Promise<NetworkPeerDetail> =>
     fetchApi(`/network/peers/${encodeURIComponent(peerId)}`),
 };
-
-// ---------------------------------------------------------------------------
-// F2-tx (round 2): R9 transaction detail completions (contracts.md R9; TX-33, TX-35, TX-36), read
-// by `TransactionDetail.headerDeps` / `.cellbaseWitness` and `TransactionWitness.actions` above.
-// ---------------------------------------------------------------------------
-
-/** A header the transaction reads, "read, not consumed" (a DAO withdrawal reads two). */
-export interface TransactionHeaderDep {
-  blockHash: string;
-  /** Always set for a committed transaction; null only while an uncommitted one's block is unindexed. */
-  blockNumber: number | null;
-}
-/** A cellbase's witness 0: the miner's lock and the client message, raw bytes. */
-export interface TransactionCellbaseWitness {
-  lock: Script;
-  message: string;
-}
-/** One CoBuild message action: whose script it is for and its raw data (name not decoded). */
-export interface CobuildAction {
-  scriptInfoHash: string;
-  scriptHash: string;
-  data: string;
-}

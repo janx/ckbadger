@@ -614,7 +614,10 @@ function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   );
 }
 
-const CONTINUITY_STROKE = { file: '#a0a8be', objects: CLASS_COLORS.objects } as const;
+/** The continuity this page draws: a file cell (grey) or an object / identity (its class colour). */
+type PageContinuity = TxContinuity & { kind: 'file' | 'objects' | 'identities' };
+const continuityStroke = (kind: PageContinuity['kind']) =>
+  kind === 'file' ? '#a0a8be' : CLASS_COLORS[kind];
 
 export default function TransactionDetailPage() {
   const { hash } = useParams() as { hash: string };
@@ -793,7 +796,7 @@ export default function TransactionDetailPage() {
   const ran = groups.filter((g) => g.ran).length;
 
   // ---- continuity (same object / same file cell continues) ----
-  const continuity: TxContinuity[] = tiles
+  const continuity: PageContinuity[] = tiles
     ? groups.flatMap((g) => {
         if (g.kind !== 'type' || g.inputIndices.length !== 1 || g.outputIndices.length !== 1)
           return [];
@@ -811,13 +814,18 @@ export default function TransactionDetailPage() {
         )
           return [];
         const file = inputDisplay?.kind === 'file' && outputDisplay?.kind === 'file';
-        if (!file && !['objects', 'identities'].includes(kind)) return [];
+        const linkKind: PageContinuity['kind'] | null = file
+          ? 'file'
+          : kind === 'objects' || kind === 'identities'
+            ? kind
+            : null;
+        if (linkKind === null) return [];
         return [
           {
             from: `in:${inputIndex}`,
             to: `out:${outputIndex}`,
-            label: `same ${file ? 'file cell' : kind === 'objects' ? 'object' : 'identity'} continues`,
-            kind: file ? ('file' as const) : kind,
+            label: `same ${linkKind === 'file' ? 'file cell' : linkKind === 'objects' ? 'object' : 'identity'} continues`,
+            kind: linkKind,
           },
         ];
       })
@@ -1188,13 +1196,7 @@ export default function TransactionDetailPage() {
                         <svg aria-hidden="true" width="22" height="6" className="shrink-0">
                           <path
                             d="M0 3h22"
-                            stroke={
-                              l.links[0].kind === 'file'
-                                ? CONTINUITY_STROKE.file
-                                : l.links[0].kind
-                                  ? CLASS_COLORS[l.links[0].kind]
-                                  : CONTINUITY_STROKE.objects
-                            }
+                            stroke={continuityStroke(l.links[0].kind)}
                             strokeWidth="1.3"
                             strokeDasharray="4 3"
                           />
