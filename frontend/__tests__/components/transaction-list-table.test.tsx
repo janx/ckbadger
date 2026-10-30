@@ -114,4 +114,23 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
       backgroundColor: 'rgb(58, 66, 88)',
     });
   });
+
+  // Carried over from the retired TransactionTable: a replay not yet run is never a zero bar, and
+  // missing byte or cycle evidence fails loudly instead of drawing a guess.
+  it('says a pending replay is not yet run and rejects missing size or cycle evidence', () => {
+    render(
+      <TransactionListTable
+        transactions={[{ ...transfer, cycles: null, cyclesStatus: 'pending' }]}
+      />
+    );
+    const row = within(screen.getByRole('table')).getAllByRole('row')[1];
+    expect(row).toHaveTextContent('not yet run');
+    expect(screen.queryByRole('img', { name: /^Cycles/ })).not.toBeInTheDocument();
+    expect(() => TransactionListTable({ transactions: [{ ...transfer, txSize: null }] })).toThrow(
+      'exact serialized size'
+    );
+    expect(() => TransactionListTable({ transactions: [{ ...transfer, cycles: null }] })).toThrow(
+      'inconsistent cycle evidence'
+    );
+  });
 });
