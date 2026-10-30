@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help build build-full release check test lint verify bench bench-json bench-baseline stress
+.PHONY: help build build-full release check test lint verify bench bench-json bench-baseline stress sweep sweep-apply
 
 help:
 	@echo "Available targets:"
@@ -15,6 +15,8 @@ help:
 	@echo "  make bench-json Run benchmark with JSON output"
 	@echo "  make bench-baseline  Save benchmark baseline to bench-baseline.json"
 	@echo "  make stress     Run stress test (requires running API)"
+	@echo "  make sweep      Dry-run cargo build-output cleanup (main checkout + worktrees)"
+	@echo "  make sweep-apply  Remove what make sweep reports"
 
 build:
 	cargo build -p ckbadger
@@ -50,3 +52,9 @@ bench-baseline:
 
 stress:
 	cargo run -p ckbadger-bench -- stress --output-dir test_outputs/stress $(STRESS_ARGS)
+
+sweep:
+	scripts/sweep-targets.sh
+
+sweep-apply:
+	scripts/sweep-targets.sh --apply

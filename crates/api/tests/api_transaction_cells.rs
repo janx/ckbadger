@@ -1,4 +1,4 @@
-mod common;
+use crate::common::*;
 use ckb_types::{
     bytes::Bytes,
     core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
@@ -8,7 +8,6 @@ use ckb_types::{
 use ckbadger_store::types::{
     CompositionTier, ObjectEntry, ObjectExtra, ObjectStandard, SporeMediaProfile, TokenInfo,
 };
-use common::*;
 
 fn table(fields: &[Vec<u8>]) -> Vec<u8> {
     let mut offset = 4 * (fields.len() + 1);

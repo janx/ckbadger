@@ -10,8 +10,7 @@
 //! Each test below seeds one real live cell and asserts against it, rather than
 //! asserting a status code that an empty store would satisfy either way.
 
-mod common;
-use common::*;
+use crate::common::*;
 
 use ckbadger_store::{keys, LiveCellInfo, StoreBatch};
 

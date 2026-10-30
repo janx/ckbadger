@@ -123,4 +123,11 @@ strip = true
 
 [profile.dev]
 opt-level = 0
-debug = true
+# Line tables keep file:line in panics and backtraces at a fraction of full
+# debuginfo's size; every test binary links it all. Override for a debugger
+# session with CARGO_PROFILE_DEV_DEBUG=true.
+debug = "line-tables-only"
+
+# Dependencies (rocksdb's C++ included) carry no debuginfo.
+[profile.dev.package."*"]
+debug = false

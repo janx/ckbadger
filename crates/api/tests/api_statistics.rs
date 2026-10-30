@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 async fn mock_indexed_node_tip(config: &mut AppConfig) -> MockServer {
     let tip = config.store.get_sync_tip_block().unwrap().unwrap().0;

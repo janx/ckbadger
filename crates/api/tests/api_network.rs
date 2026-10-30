@@ -1,14 +1,12 @@
-mod common;
-
 use std::sync::Arc;
 
+use crate::common::*;
 use axum::http::StatusCode;
 use ckbadger_store::{
     ActiveCandidateProbe, ActiveCrawl, AddressObservationHistogram, CompletedPeerOutcomes,
     DirectSessionEvidence, DirectSessionObservation, DirectSessionObservationSummary, LatestStatus,
     LocalObserverEvidence, LocalObserverProtocol, SessionInitiator,
 };
-use common::*;
 
 fn export_d7_fixture(name: &str, value: &serde_json::Value) {
     if let Ok(dir) = std::env::var("D7_FIXTURE_DIR") {

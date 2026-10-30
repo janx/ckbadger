@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 fn write_dao_fixture(name: &str, value: &serde_json::Value) {
     if let Ok(dir) = std::env::var("D6_FIXTURE_DIR") {

@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 fn fixture_data_hash(data: &[u8]) -> Vec<u8> {
     let mut hasher = ckb_hash::new_blake2b();

@@ -1,6 +1,5 @@
-mod common;
+use crate::common::*;
 use ckbadger_store::TxCyclesWrite;
-use common::*;
 
 #[tokio::test]
 async fn block_transaction_list_requires_node_proposal_evidence() {

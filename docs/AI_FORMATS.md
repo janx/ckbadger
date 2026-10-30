@@ -156,7 +156,7 @@ when the reverse proxy is on another host. Forwarded headers from remote peers a
 
 ```bash
 pnpm --dir frontend build
-cargo test -p ckbadger-api --test api_frontend_formats
+cargo test -p ckbadger-api --test integration api_frontend_formats::
 cargo build --release -p ckbadger
 python3 scripts/test_frontend_release.py --binary target/release/ckbadger
 ```

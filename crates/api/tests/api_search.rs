@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 /// A valid mainnet address that no fixture seeds. Used to assert what search
 /// answers for an address the chain has never seen.

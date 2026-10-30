@@ -9,8 +9,7 @@
 //!
 //! Each family below probes 31-byte (short) and 33-byte (long) hex.
 
-mod common;
-use common::*;
+use crate::common::*;
 
 /// 31-byte hex — one byte short of a script/transaction hash.
 fn short_hash_hex() -> String {

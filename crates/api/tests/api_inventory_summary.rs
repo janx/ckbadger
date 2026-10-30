@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 #[tokio::test]
 async fn inventory_summary_and_pending_filter_use_full_collection_scope() {

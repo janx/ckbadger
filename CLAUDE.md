@@ -112,7 +112,9 @@ cargo test                               # Run all tests
 cargo test --lib                         # Unit tests only (fast)
 cargo test test_name                     # Single test (partial match)
 cargo test -p ckbadger-indexer           # Tests in one crate
+cargo test -p ckbadger-api --test integration api_tokens::  # One integration-test file
 cargo test -- --nocapture                # With stdout
+scripts/sweep-targets.sh [--apply]       # Reclaim cargo build output (dry run without --apply)
 
 # Frontend development
 pnpm dev                                 # Dev server (:3000)
@@ -134,6 +136,7 @@ make check                               # cargo check && cargo clippy
 make test                                # All tests (Rust + frontend)
 make lint                                # Frontend lint + type-check
 make verify                              # Run verify --depth fast
+make sweep                               # Dry-run scripts/sweep-targets.sh (make sweep-apply removes)
 ```
 
 ## Performance Notes
@@ -247,6 +250,8 @@ ckbadger verify --list-checks             # List all checks
 | New hook/util function | Add test in `frontend/__tests__/hooks/` or `frontend/__tests__/lib/` |
 | Bug fix                | Add regression test that reproduces the bug FIRST, then fix          |
 | Refactoring            | Run existing tests BEFORE and AFTER to ensure no regression          |
+
+**Integration-test layout**: each crate's `tests/*.rs` files are modules of one `tests/integration.rs` binary (`autotests = false`; every test binary links the whole dependency graph). Declare a new test file there; `every_test_file_is_declared` fails until you do. `crates/api/tests/api_pipeline.rs` stays its own binary because it asserts the process-wide read-view pin count.
 
 **Verification**: New code passes `cargo test`/`pnpm test`. Bug fixes have regression tests. New functions have at least one happy-path test.
 
@@ -368,7 +373,7 @@ const DAO_CODE_HASH: &str = "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d
 | LLM discovery    | `frontend/public/llms.txt`, `frontend/public/llms-full.txt`                                                                                                                              |
 | UI components    | `frontend/components/ui/`                                                                                                                                                                |
 | Pages            | `frontend/app/` (dynamic routes split: `page.tsx` wrapper + `client-page.tsx`)                                                                                                           |
-| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` (shared helpers in `crates/api/tests/common/mod.rs`)                                                                     |
+| Tests (Rust)     | Inline `#[cfg(test)]`, per-resource `crates/api/tests/api_*.rs` in one `tests/integration.rs` binary (shared helpers in `crates/api/tests/common/mod.rs`)                                |
 | Tests (Frontend) | `frontend/__tests__/**/*.test.{ts,tsx}`, `frontend/__tests__/msw/handlers.ts`                                                                                                            |
 | CI               | `.github/workflows/ci.yml`                                                                                                                                                               |
 

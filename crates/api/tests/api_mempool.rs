@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 async fn mount_pool(server: &MockServer, pending: serde_json::Value) {
     Mock::given(method("POST"))

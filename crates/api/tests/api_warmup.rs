@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 /// Regression test for the "API down for a long time after restart" bug.
 ///

@@ -1,13 +1,11 @@
 //! Producer/consumer coverage for the recorded-calendar verification contract.
 //! The real API supplies indexed dates; the mock node supplies independent cells.
 
-mod common;
-
+use crate::common::*;
 use ckbadger_indexer::verify::{
     checks::{Check, CheckContext, EntitySelector, ProgressReporter},
     entity_history::{EntityBudget, EntityCapacityHistoryMatchesChain},
 };
-use common::*;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use wiremock::{Request as MockRequest, Respond};

@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 /// Node-backed block routes now require actual serialized evidence. These
 /// fixtures retain each test's canonical hashes and economics while seeding

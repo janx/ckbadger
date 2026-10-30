@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 fn capture_producer(name: &str, value: &serde_json::Value) {
     if let Some(dir) = std::env::var_os("CKBADGER_D4_PRODUCER_DIR") {

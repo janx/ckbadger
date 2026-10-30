@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 #[tokio::test]
 async fn test_assets_nft_includes_spore_cluster_name_when_aggregate_name_missing() {

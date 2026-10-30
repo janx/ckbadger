@@ -1,6 +1,4 @@
-mod common;
-
-use common::*;
+use crate::common::*;
 
 // ---------------------------------------------------------------------------
 // `/graph/proposals/{block_number}` must render the block's WHOLE proposal

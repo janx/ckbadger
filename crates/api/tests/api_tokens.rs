@@ -1,6 +1,5 @@
-mod common;
+use crate::common::*;
 use ckbadger_common::TokenBalance;
-use common::*;
 
 #[tokio::test]
 async fn test_tokens_list_empty_db() {

@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 fn cell(data_size: i32) -> LiveCellInfo {
     let occupied = i64::from(8 + 33 + data_size) * 100_000_000;

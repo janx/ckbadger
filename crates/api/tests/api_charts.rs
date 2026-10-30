@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 #[tokio::test]
 async fn supply_and_secondary_history_exclude_in_progress_tip_day() {

@@ -1,10 +1,8 @@
-mod common;
-
+use crate::common::*;
 use ckbadger_indexer::verify::{
     api_checks::{AssetTopHoldersAddressConsistency, ObjectAssetCollectionConsistency},
     checks::{Check, CheckContext, ProgressReporter},
 };
-use common::*;
 
 /// Exercise the public verifier against the real router/serializer, so mocks cannot
 /// accidentally require a token-only field on object collections again.

@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 fn put_canonical_script_tx(
     batch: &mut StoreBatch<'_>,

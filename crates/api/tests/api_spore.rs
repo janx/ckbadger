@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 #[tokio::test]
 async fn test_spore_list_empty_db() {

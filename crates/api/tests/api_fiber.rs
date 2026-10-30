@@ -1,5 +1,4 @@
-mod common;
-use common::*;
+use crate::common::*;
 
 use ckbadger_store::types::{FiberChannel, FiberChannelState};
 

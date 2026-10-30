@@ -3,10 +3,23 @@ name = "ckbadger-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Every test binary links the whole dependency graph, so tests/*.rs are modules
+# of as few binaries as possible instead of one binary each.
+autotests = false
 
 [lib]
 name = "ckbadger_api"
 path = "src/lib.rs"
+
+[[test]]
+name = "integration"
+path = "tests/integration.rs"
+
+# Asserts the process-wide read-view pin count, so no other module's requests
+# may share its process.
+[[test]]
+name = "api_pipeline"
+path = "tests/api_pipeline.rs"
 
 [dependencies]
 ckbadger-common = { path = "../common" }

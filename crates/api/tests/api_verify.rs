@@ -5,9 +5,7 @@
 //! the sync state that makes them meaningful. It never computes a new user
 //! statistic, never calls the node, and never writes.
 
-mod common;
-
-use common::*;
+use crate::common::*;
 
 const ROUTE: &str = "/api/v1/verify/entity-statistics";
 

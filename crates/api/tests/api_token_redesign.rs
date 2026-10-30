@@ -1,6 +1,5 @@
-mod common;
+use crate::common::*;
 use ckbadger_store::{ItemDelta, ItemKind, ParticipantDelta, ParticipantId, TokenTransferRecord};
-use common::*;
 
 const TOKEN: [u8; 32] = [0x71; 32];
 

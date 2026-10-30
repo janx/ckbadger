@@ -1,6 +1,5 @@
-mod common;
+use crate::common::*;
 use ckbadger_store::types::ReorgEventKind;
-use common::*;
 
 fn emit_fixture(name: &str, json: &serde_json::Value) {
     if let Ok(dir) = std::env::var("CKBADGER_FORK_FIXTURE_DIR") {

@@ -1,4 +1,4 @@
-mod common;
+use crate::common::*;
 use ckb_types::{
     bytes::Bytes,
     core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
@@ -7,7 +7,6 @@ use ckb_types::{
 };
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::types::AddressBalance;
-use common::*;
 
 fn script(protocol: ProtocolScript, args: &[u8]) -> packed::Script {
     let hash = PROTOCOL_REGISTRY

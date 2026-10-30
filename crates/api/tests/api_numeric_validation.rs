@@ -18,8 +18,7 @@
 //! and `Option`-returning cursor parsers combined with `.and_then(...)` turned
 //! a corrupt cursor into "no cursor" and paginated forever on page 1.
 
-mod common;
-use common::*;
+use crate::common::*;
 
 /// A well-formed 32-byte hash, so a rejection can only be about the *other*
 /// component of the path or query.
