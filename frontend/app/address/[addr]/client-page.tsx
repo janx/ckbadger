@@ -39,8 +39,8 @@ const activityFilters = [
   ['object', 'Object'],
   ['identity', 'Identity'],
   ['dao', 'DAO'],
-  ['type_call', 'Script calls (type)'],
-  ['lock_call', 'Script calls (lock)'],
+  // R2b-a 8 (BA-35): one "Script" chip — a type call or a lock call, as the Address board.
+  ['script', 'Script'],
   ['protocol:rgbpp', 'RGB++'],
 ] as const;
 type ActivityFilter = (typeof activityFilters)[number][0];
@@ -382,70 +382,73 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               {tab === 'cells' && cells.data && (
                 <AddressStaleNotice error={cells.error} label="live cells" />
               )}
-              <div
-                role="group"
-                aria-label="History views"
-                className="border-base-border-subtle flex flex-wrap gap-x-6 gap-y-1 border-b"
-              >
-                {(
-                  [
-                    ['activities', 'Activities'],
-                    ['transactions', 'Transactions'],
-                    ['cells', 'Live cells'],
-                  ] as const
-                ).map(([id, label]) => (
-                  <button
-                    key={id}
-                    type="button"
-                    aria-pressed={tab === id}
-                    onClick={() => setTab(id)}
-                    className={cn(
-                      'flex h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
-                      tab === id
-                        ? 'border-jade text-text-bright'
-                        : 'text-text-dim border-transparent'
-                    )}
-                  >
-                    {label}
-                    {id === 'transactions' && (
-                      <span className="text-text-dim text-xs font-normal">
-                        {a.transactionsCount.toLocaleString('en-US')}
-                      </span>
-                    )}
-                    {id === 'cells' && holdings.data && (
-                      <span className="text-text-dim text-xs font-normal">
-                        {holdings.data.liveCellsCount.toLocaleString('en-US')}
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-              {tab === 'activities' && (
+              {/* The Address board: views on the left, activity filters on the right of one row. */}
+              <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
                 <div
                   role="group"
-                  aria-label="Filter activity"
-                  className="my-4 flex flex-wrap gap-2"
+                  aria-label="History views"
+                  className="flex flex-wrap gap-x-6 gap-y-1"
                 >
-                  {activityFilters.map(([value, label]) => (
+                  {(
+                    [
+                      ['activities', 'Activities'],
+                      ['transactions', 'Transactions'],
+                      ['cells', 'Live cells'],
+                    ] as const
+                  ).map(([id, label]) => (
                     <button
-                      key={value}
-                      aria-pressed={filter === value}
-                      onClick={() => {
-                        setFilter(value);
-                        activityPage.reset();
-                      }}
+                      key={id}
+                      type="button"
+                      aria-pressed={tab === id}
+                      onClick={() => setTab(id)}
                       className={cn(
-                        'rounded border px-2.5 py-1.5 text-xs',
-                        filter === value
-                          ? 'border-base-border bg-base-elevated text-text-bright'
-                          : 'border-base-border-subtle text-text-dim'
+                        'flex h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
+                        tab === id
+                          ? 'border-jade text-text-bright'
+                          : 'text-text-dim border-transparent'
                       )}
                     >
                       {label}
+                      {id === 'transactions' && (
+                        <span className="text-text-dim text-xs font-normal">
+                          {a.transactionsCount.toLocaleString('en-US')}
+                        </span>
+                      )}
+                      {id === 'cells' && holdings.data && (
+                        <span className="text-text-dim text-xs font-normal">
+                          {holdings.data.liveCellsCount.toLocaleString('en-US')}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
-              )}
+                {tab === 'activities' && (
+                  <div
+                    role="group"
+                    aria-label="Filter activity"
+                    className="flex flex-wrap gap-1 py-1.5"
+                  >
+                    {activityFilters.map(([value, label]) => (
+                      <button
+                        key={value}
+                        aria-pressed={filter === value}
+                        onClick={() => {
+                          setFilter(value);
+                          activityPage.reset();
+                        }}
+                        className={cn(
+                          'rounded border px-2.5 py-1.5 text-xs',
+                          filter === value
+                            ? 'border-base-border bg-base-elevated text-text-bright'
+                            : 'border-base-border-subtle text-text-dim'
+                        )}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {tab === 'cells' && (
                 <div
                   role="group"

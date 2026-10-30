@@ -441,7 +441,8 @@ describe('Address v3', () => {
     await loaded();
     expect(screen.getByRole('button', { name: 'Activities' })).toHaveTextContent(/^Activities$/);
   });
-  it('uses separate type and lock script-call filters and resets activity cursor', async () => {
+  // F2 blocks (BA-35, R2b-a filter=script): one "Script" chip, as the Address board.
+  it('uses one script-call filter and resets the activity cursor', async () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.filter === 'all'
         ? { ...pageFixture(addressActivitiesFixture), hasMore: true, nextCursor: 'next-act' }
@@ -458,19 +459,17 @@ describe('Address v3', () => {
         filter: 'all',
       })
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Script calls (type)' }));
-    expect(
-      await screen.findByText('No Script calls (type) activities on this page.')
-    ).toBeInTheDocument();
+    const chips = within(screen.getByRole('group', { name: 'Filter activity' }))
+      .getAllByRole('button')
+      .map((b) => b.textContent);
+    expect(chips).toEqual(['All', 'CKB', 'Token', 'Object', 'Identity', 'DAO', 'Script', 'RGB++']);
+    fireEvent.click(screen.getByRole('button', { name: 'Script' }));
+    expect(await screen.findByText('No Script activities on this page.')).toBeInTheDocument();
     expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
       limit: 50,
       cursor: undefined,
-      filter: 'type_call',
+      filter: 'script',
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Script calls (lock)' }));
-    expect(
-      await screen.findByText('No Script calls (lock) activities on this page.')
-    ).toBeInTheDocument();
   });
   it('resets filters, tab and cursors when the route changes', async () => {
     const { rerender } = render(<AddressDetailPage />);
@@ -886,7 +885,7 @@ describe('Address board · F2 blocks', () => {
         p?.class === 'identity'
           ? addressIdentitiesFixture
           : p?.class === 'dao'
-            ? [...addressDaoCellsFixture].reverse()
+            ? addressDaoCellsFixture // R2b-a 9: the API answers largest first
             : addressObjectsFixture,
         p?.class === 'identity' ? 1 : 14
       )
@@ -952,6 +951,8 @@ describe('Address board · F2 blocks', () => {
     ).toEqual(['dao', 'tokens', 'objects']);
     expect(table).toHaveTextContent('2026-02-21');
     expect(table).not.toHaveTextContent(/ago/);
+    // Visual pass: the headers carry the unit ("This address, CKB", "Fee, CKB"), rows the number.
+    expect(table.querySelector('tbody')).not.toHaveTextContent('CKB');
   });
 
   it('names the DAO block "Nervos DAO deposits" and its first figure "Deposited" (BA-37)', async () => {
@@ -976,5 +977,51 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const identities = await section(/Identities$/);
     expect(identities).toHaveTextContent(/1 cell · 227\.99993047 CKB held/);
+  });
+
+  // F2 blocks visual pass + R2b-a order=capacity (BA-34).
+  it('asks for DAO cells largest first and keeps the API order', async () => {
+    vi.mocked(api.getAddressCells).mockImplementation(async (_addr, p) =>
+      pageFixture(
+        p?.class === 'identity'
+          ? addressIdentitiesFixture
+          : p?.class === 'dao'
+            ? [...addressDaoCellsFixture].reverse()
+            : addressObjectsFixture,
+        p?.class === 'identity' ? 1 : 14
+      )
+    );
+    render(<AddressDetailPage />);
+    const dao = await section(/Nervos DAO deposits$/);
+    await waitFor(() => expect(dao.querySelectorAll('[data-dao-cell]').length).toBe(5));
+    expect(api.getAddressCells).toHaveBeenCalledWith(addressHash, {
+      class: 'dao',
+      order: 'capacity',
+      limit: 50,
+      cursor: undefined,
+    });
+    expect(
+      Array.from(dao.querySelectorAll('[data-dao-cell] [data-ckb-amount]')).map(
+        (amount) => amount.textContent?.match(/^([\d,]+)\.0+ CKB$/)?.[1]
+      )
+    ).toEqual(['50,000', '200,000', '600,000', '3,500,000', '5,240,000']);
+  });
+
+  it('puts the activity filters on the tab row, as the board', async () => {
+    render(<AddressDetailPage />);
+    await loaded();
+    const tabs = screen.getByRole('group', { name: 'History views' });
+    const row = tabs.parentElement!;
+    expect(row).not.toHaveAttribute('aria-label', 'History');
+    expect(row).toHaveClass('justify-between');
+    expect(row).toContainElement(screen.getByRole('group', { name: 'Filter activity' }));
+  });
+
+  it('writes the class headers as the board: "9 kinds in 15 cells", "14 in 7 collections"', async () => {
+    render(<AddressDetailPage />);
+    expect(await section(/Tokens$/)).toHaveTextContent(
+      /9 kinds in 15 cells · 21,507\.60266154 CKB held/
+    );
+    expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093\.0+ CKB held/);
   });
 });

@@ -301,7 +301,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   });
   const deposits = useQuery({
     queryKey: ['address-holdings-cells', addr, 'dao', daoPage.cursor],
-    queryFn: () => api.getAddressCells(addr, { class: 'dao', limit: 50, cursor: daoPage.cursor }),
+    // R2b-a 9 (BA-34): largest deposit first, ordered and paged by the API.
+    queryFn: () =>
+      api.getAddressCells(addr, {
+        class: 'dao',
+        order: 'capacity',
+        limit: 50,
+        cursor: daoPage.cursor,
+      }),
     enabled: holdings.holdings.dao > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
@@ -334,6 +341,19 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     ) !== occupied
   )
     throw new Error('Address class occupied capacities do not equal total');
+  // The Address board's class headers: "5 cells · X CKB held", "9 kinds in 15 cells · X CKB held",
+  // "14 in 7 collections · X CKB held" (an object is its own cell).
+  const held = (kind: AddressCellClass) => (
+    <>
+      <ExactCkb
+        shannons={BigInt(holdings.classes[kind].capacity)}
+        signed={false}
+        tone="plain"
+        wrap
+      />{' '}
+      held
+    </>
+  );
   const summary = (kind: AddressCellClass) => (
     <>
       {formatCount(holdings.classes[kind].cellCount, 'cell')} ·{' '}
@@ -509,17 +529,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               {deposits.data && <AddressStaleNotice error={deposits.error} label="DAO holdings" />}
               {deposits.data ? (
                 <>
-                  {(deposits.data.hasMore || daoPage.hasPrevious
-                    ? deposits.data.data
-                    : // The whole set is on this page: largest amount first (BA-34).
-                      [...deposits.data.data].sort((a, b) =>
-                        BigInt(b.capacity) > BigInt(a.capacity)
-                          ? 1
-                          : BigInt(b.capacity) < BigInt(a.capacity)
-                            ? -1
-                            : 0
-                      )
-                  ).map((cell) => {
+                  {deposits.data.data.map((cell) => {
                     const d = cell.dao;
                     if (!d)
                       throw new Error(
@@ -589,7 +599,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           kind="token"
           summary={
             <>
-              {holdings.holdings.token} kinds · {summary('token')}
+              {holdings.holdings.token.toLocaleString('en-US')} kinds in{' '}
+              {formatCount(holdings.classes.token.cellCount, 'cell')} · {held('token')}
             </>
           }
           active={active}
@@ -651,8 +662,8 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           kind="object"
           summary={
             <>
-              {holdings.holdings.object} in {holdings.objectCollections.length} collections ·{' '}
-              {summary('object')}
+              {holdings.holdings.object.toLocaleString('en-US')} in{' '}
+              {formatCount(holdings.objectCollections.length, 'collection')} · {held('object')}
             </>
           }
           active={active}

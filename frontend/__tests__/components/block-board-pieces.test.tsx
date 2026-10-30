@@ -23,6 +23,7 @@ const rewardBlock = {
     secondary: '3286129910',
     committed: '3036000',
     proposal: '12658',
+    secondaryIssuance: '41691483025',
   },
   rewardPaidAtBlock: 20_827_943,
   rewardFinalizesAt: 20_827_943,

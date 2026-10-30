@@ -170,7 +170,12 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
               </div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">epoch</dt>
-                <dd>{epoch}</dd>
+                {/* R2b-a 6 (BA-41): the packed header epoch, read as number · index / length. */}
+                <dd>
+                  <span className="break-all">{uncle.rawEpoch}</span>
+                  <span className="text-text-dim"> = </span>
+                  <span>{epoch}</span>
+                </dd>
               </div>
               {header.map(([key, value]) => (
                 <div key={key} className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">

@@ -30,4 +30,6 @@ export const blockUncle: BlockUncle = {
   // F2 blocks (R10): the canonical #8,775,637 shares the uncle's parent; the uncle came 92 ms later.
   sameParentAs: 8_775_637,
   msAfterSibling: 92,
+  // F2 blocks (R2b-a 6): the header's packed epoch (5,414 · 1 / 1,800).
+  rawEpoch: '0x7080001001526',
 };

@@ -130,4 +130,14 @@ describe('Uncle detail page', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('sibling facts disagree');
     spy.mockRestore();
   });
+
+  it('shows the packed epoch with its reading in the header (BA-41, R2b-a rawEpoch)', async () => {
+    params.current = { id: '8775638', index: '0' };
+    render(<UncleDetailPage />);
+    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    expect(screen.getByText('0x7080001001526')).toBeInTheDocument();
+    expect(screen.getByText('0x7080001001526').parentElement).toHaveTextContent(
+      '0x7080001001526 = 5,414 · 1 / 1,800'
+    );
+  });
 });

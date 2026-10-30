@@ -2,7 +2,7 @@ import Link from '@/components/ui/link';
 import { Address } from '@/components/ui/address';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
-import type { Block } from '@/lib/api';
+import type { Block, BlockProposalFees } from '@/lib/api';
 import { REWARD_COLORS } from '@/lib/design-tokens';
 import { formatScaledInteger } from '@/lib/exact-integer';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
@@ -28,12 +28,43 @@ function plainCkb(shannons: bigint): string {
   return `${integer}${fraction}`;
 }
 
+const heights = (numbers: readonly number[]) => {
+  const names = numbers.map(formatBlockNumber);
+  return names.length < 3
+    ? names.join(' and ')
+    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+};
+
+/** What the 40% proposal share is paid from, as `/blocks/{id}/proposal-fees` reports it (R2b-a 2). */
+function proposalNote(fees: BlockProposalFees | undefined, error: Error | null): string {
+  const rule =
+    'of the fees of the transactions this block proposed first, once a later block commits them';
+  if (error) return `${rule} (the fee basis could not be read: ${error.message})`;
+  if (!fees) return rule;
+  const window = `its window runs to ${formatBlockNumber(fees.commitWindow.to)}`;
+  if (fees.transactionsCount === 0)
+    return fees.complete
+      ? `no transaction it proposed first was committed in its window, ${formatBlockNumber(fees.commitWindow.from)} to ${formatBlockNumber(fees.commitWindow.to)}`
+      : `none of the transactions it proposed first is committed yet; ${window}`;
+  const basis = `of ${plainCkb(parseShannons(fees.fees, `block ${fees.number} proposal fees`))} in fees of the ${formatCount(fees.transactionsCount, 'transaction')} it proposed, committed in ${heights(fees.committedIn)}`;
+  return fees.complete ? basis : `${basis} so far; ${window}`;
+}
+
 /**
  * The Block board's reward: the exact total and its payee, one share bar, and each share with
  * what this block did to earn it. Every amount is the API's `rewardBreakdown` (the node's
  * `get_block_economic_state`); the parts must add up to `miningReward`.
  */
-export function RewardBreakdown({ block }: { block: RewardBlock }) {
+export function RewardBreakdown({
+  block,
+  proposalFees,
+  proposalFeesError = null,
+}: {
+  block: RewardBlock;
+  /** `/blocks/{id}/proposal-fees`; undefined while it is read. */
+  proposalFees?: BlockProposalFees;
+  proposalFeesError?: Error | null;
+}) {
   const context = `Block ${block.number} reward`;
   if (!block.rewardBreakdown || block.miningReward === null) {
     return (
@@ -74,14 +105,20 @@ export function RewardBreakdown({ block }: { block: RewardBlock }) {
   if (parts.reduce((sum, p) => sum + p.value, BigInt(0)) !== total)
     throw new Error(`${context}: the four shares do not add up to ${block.miningReward}`);
   if (block.transactionsCount < 1) throw new Error(`${context}: a block always holds its cellbase`);
+  const secondaryIssuance = parseShannons(
+    block.rewardBreakdown.secondaryIssuance,
+    `${context} secondary issuance`
+  );
+  if (parts[1].value > secondaryIssuance)
+    throw new Error(`${context}: the miners' share exceeds the block's secondary issuance`);
+  if (proposalFees && proposalFees.number !== block.number)
+    throw new Error(`${context}: proposal fees answered for block ${proposalFees.number}`);
   const committedTxs = block.transactionsCount - 1;
   const notes: Record<(typeof parts)[number]['key'], string> = {
     primary: 'the whole primary issuance of this block',
-    secondary:
-      "the miners' share of this block's secondary issuance; the rest goes to DAO depositors or is burnt",
+    secondary: `the miners' share of this block's ${plainCkb(secondaryIssuance)} secondary issuance; the rest goes to DAO depositors or is burnt`,
     committed: `of ${plainCkb(fees)} in fees of the ${formatCount(committedTxs, 'transaction')} committed here`,
-    proposal:
-      'of the fees of the transactions this block proposed first, once a later block commits them',
+    proposal: proposalNote(proposalFees, proposalFeesError),
   };
   const share = (value: bigint) =>
     total === BigInt(0) ? '0.00' : formatScaledInteger(value * BigInt(100), total, 2);

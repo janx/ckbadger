@@ -345,6 +345,7 @@ export function BlockPosition({
                       transactionSizes={contents.transactionSizes}
                       proposalsCount={contents.proposalsCount}
                       unclesCount={contents.unclesCount}
+                      showCount={false}
                     />
                   </foreignObject>
                 )}
@@ -360,13 +361,13 @@ export function BlockPosition({
                 <g key={uncle.hash} data-uncle-hash={uncle.hash}>
                   <path
                     data-uncle-fork-from={from}
-                    d={`M${x(from) + tileWidth} ${tileTop + 44}C${x(from) + tileWidth + 25} ${tileTop + 44} ${uncleX - 25} ${top + 28} ${uncleX} ${top + 28}`}
+                    d={`M${x(from) + tileWidth} ${tileTop + 44}C${x(from) + tileWidth + 25} ${tileTop + 44} ${uncleX - 25} ${top + 36} ${uncleX} ${top + 36}`}
                     stroke="#2c3348"
                     strokeWidth="1.5"
                     fill="none"
                   />
                   <path
-                    d={`M${currentX + tileWidth / 2} ${tileBottom}C${currentX + tileWidth / 2} ${top + 28} ${uncleX + tileWidth + 36} ${top + 28} ${uncleX + tileWidth} ${top + 28}`}
+                    d={`M${currentX + tileWidth / 2} ${tileBottom}C${currentX + tileWidth / 2} ${top + 36} ${uncleX + tileWidth + 36} ${top + 36} ${uncleX + tileWidth} ${top + 36}`}
                     fill="none"
                     stroke="#7c849c"
                     strokeDasharray="3 3"
@@ -379,17 +380,19 @@ export function BlockPosition({
                       x={uncleX + 0.5}
                       y={top + 0.5}
                       width={tileWidth - 1}
-                      height="57"
+                      height="71"
                       rx="6"
                       fill="none"
                       stroke="#4b5266"
                       strokeDasharray="3 3"
                     />
-                    <text x={uncleX + 10} y={top + 21} fill="#a0a8be" fontSize="11">
+                    <text x={uncleX + 10} y={top + 20} fill="#a0a8be" fontSize="11">
                       uncle {formatBlockNumber(uncle.number)}
                     </text>
-                    <text x={uncleX + 10} y={top + 41} fill="#7c849c" fontSize="11">
-                      {uncle.hash.slice(0, 6)}…{uncle.hash.slice(-4)} ·{' '}
+                    <text x={uncleX + 10} y={top + 39} fill="#7c849c" fontSize="11">
+                      {uncle.hash.slice(0, 6)}…{uncle.hash.slice(-4)}
+                    </text>
+                    <text data-uncle-time x={uncleX + 10} y={top + 58} fill="#7c849c" fontSize="11">
                       {formatUtc8Time(uncle.timestamp)}
                     </text>
                   </Link>

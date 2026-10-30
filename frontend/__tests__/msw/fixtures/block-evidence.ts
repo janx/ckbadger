@@ -15,7 +15,11 @@ export const blockEvidence = {
     secondary: '900000000',
     committed: '60000000',
     proposal: '40000000',
+    // F2 blocks (R2b-a 2)
+    secondaryIssuance: '9000000000',
   },
+  // F2 blocks (R2b-a 1): this cellbase pays block #8,775,627's reward.
+  cellbasePays: { number: 8775627, hash: `0x${'77'.repeat(32)}` },
   rewardPaidAtBlock: 8775649,
   rewardFinalizesAt: 8775649,
   confirmations: 12,

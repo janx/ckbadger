@@ -196,11 +196,9 @@ describe('BlocksPage · Blocks v3 board', () => {
 
   it('states the fullest block and the most work against the consensus limits (BA-02)', async () => {
     render(<BlocksPage />);
-    expect(
-      await screen.findByText(
-        'Size and cycles · Fullest of these 2: 3,917 bytes, 0.66% of the 597,000-byte limit · most work: 6,831,940 cycles, 0.20% of the 3,500,000,000-cycle limit'
-      )
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/^Size and cycles · Fullest of these 2/)).toHaveTextContent(
+      /^Size and cycles · Fullest of these 2: 3,917 bytes, 0\.66% of the 597,000-byte limit · most work: 6,831,940 cycles, 0\.20% of the 3,500,000,000-cycle limit$/
+    );
   });
 
   it('draws one gold dot per proposal (BA-03)', async () => {
@@ -223,5 +221,33 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(screen.getByRole('button', { name: 'Newer' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Older →' })).toBeEnabled();
     expect(screen.queryByText(/Page 1 of/)).not.toBeInTheDocument();
+  });
+
+  // F2 blocks visual pass (2026-10-30, live 1440 / 390): one-line rows and compact cards.
+  it('writes the hash beside the height and keeps the glyph with its count on one line', async () => {
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const [first] = Array.from(table.querySelectorAll('tbody tr'));
+    const [blockCell, , contentsCell] = Array.from(first.querySelectorAll('td'));
+    expect(blockCell.firstElementChild!.firstElementChild).toHaveClass('whitespace-nowrap');
+    expect(blockCell).toHaveTextContent(/^#20,828,894 0x/);
+    expect(contentsCell.querySelector('[data-contents-line]')).toHaveClass('whitespace-nowrap');
+  });
+
+  it('reads the footnote figures in bright ink', async () => {
+    render(<BlocksPage />);
+    const note = await screen.findByText(/^Size and cycles · Fullest of these 2/);
+    expect(within(note).getByText('3,917')).toHaveClass('text-text-bright');
+    expect(within(note).getByText('6,831,940')).toHaveClass('text-text-bright');
+  });
+
+  it('gives each block a compact card at narrow widths: height, age, glyph, miner, reward, bars', async () => {
+    render(<BlocksPage />);
+    const cards = await screen.findAllByTestId('block-row-mobile');
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveTextContent('#20,828,894');
+    expect(cards[0].querySelectorAll('[data-aligned-bar]')).toHaveLength(2);
+    expect(within(cards[0]).getByRole('img', { name: /4 proposals/ })).toBeInTheDocument();
+    expect(cards[1]).toHaveTextContent('in #20,828,904');
   });
 });
