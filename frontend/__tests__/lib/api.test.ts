@@ -1806,5 +1806,29 @@ describe('api', () => {
       expect(page.pool).toBeUndefined();
       expect(page.data.every((row) => row.poolStatus === undefined)).toBe(true);
     });
+
+    // contracts W5-1 (BA-35): every unfiltered page declares the exact committed activity count.
+    it('reads the activity total on every unfiltered page and none on a filtered one', async () => {
+      const lock = '0x' + '11'.repeat(32);
+      expect((await api.getAddressActivities(lock, { limit: 50 })).total).toBe(1);
+      expect((await api.getAddressActivities(lock, { limit: 50, filter: 'all' })).total).toBe(1);
+      expect((await api.getAddressActivities(lock, { limit: 50, cursor: '12345:0' })).total).toBe(
+        1
+      );
+      expect(
+        (await api.getAddressActivities(lock, { limit: 50, filter: 'dao' })).total
+      ).toBeUndefined();
+    });
+
+    it('refuses an unfiltered page without its activity total', async () => {
+      server.use(
+        http.get('/api/:network/v1/addresses/:addr/activities', () =>
+          HttpResponse.json({ data: [], limit: 50, hasMore: false, nextCursor: null })
+        )
+      );
+      await expect(api.getAddressActivities('0x' + '11'.repeat(32), { limit: 50 })).rejects.toThrow(
+        `/addresses/0x${'11'.repeat(32)}/activities: unfiltered page has no activity total (contracts W5-1)`
+      );
+    });
   });
 });

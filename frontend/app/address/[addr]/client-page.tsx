@@ -44,6 +44,15 @@ const activityFilters = [
   ['protocol:rgbpp', 'RGB++'],
 ] as const;
 type ActivityFilter = (typeof activityFilters)[number][0];
+/** One address activity page; the list and the tab count share it, so they share its cache entry. */
+const activityPageQuery = (
+  lockHash: string | undefined,
+  cursor: string | undefined,
+  filter: ActivityFilter
+) => ({
+  queryKey: ['address-activities', lockHash, cursor, filter] as const,
+  queryFn: () => api.getAddressActivities(lockHash!, { limit: 50, cursor, filter }),
+});
 export default function AddressDetailPage() {
   const params = useParams();
   const addr = params.addr as string;
@@ -114,15 +123,20 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     refetchInterval: 60000,
   });
   const activities = useQuery({
-    queryKey: ['address-activities', lockHash, activityPage.cursor, filter],
-    queryFn: () =>
-      api.getAddressActivities(lockHash!, { limit: 50, cursor: activityPage.cursor, filter }),
+    ...activityPageQuery(lockHash, activityPage.cursor, filter),
     enabled: !!lockHash && tab === 'activities',
     placeholderData: keepPreviousData,
     refetchInterval: poolRefetchInterval({
       isPageOne: !activityPage.cursor,
       isActiveTab: tab === 'activities',
     }),
+  });
+  // contracts W5-1 (BA-35): the Activities tab counts the address's activities — the `total` of
+  // the unfiltered first page (its transactions minus its cellbases), whatever filter is on.
+  const activitiesCount = useQuery({
+    ...activityPageQuery(lockHash, undefined, 'all'),
+    enabled: !!lockHash,
+    select: (page) => page.total,
   });
   const transactions = useQuery({
     queryKey: ['address-transactions', lockHash, txPage.cursor],
@@ -409,6 +423,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       )}
                     >
                       {label}
+                      {id === 'activities' && activitiesCount.data !== undefined && (
+                        <span className="text-text-dim text-xs font-normal">
+                          {activitiesCount.data.toLocaleString('en-US')}
+                        </span>
+                      )}
                       {id === 'transactions' && (
                         <span className="text-text-dim text-xs font-normal">
                           {a.transactionsCount.toLocaleString('en-US')}
@@ -504,6 +523,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       currentCount={
                         activities.data.data.filter((row) => row.poolStatus === undefined).length
                       }
+                      total={activities.data.total}
                       label="activities"
                     />
                   </>

@@ -110,6 +110,16 @@ interface CursorPaginatedResponse<T> {
   pool?: PoolSummary;
 }
 
+/** One page of `/addresses/{addr}/activities` (contracts W5-1). */
+export interface AddressActivitiesPage extends CursorPaginatedResponse<Activity> {
+  /**
+   * Unfiltered pages only (no `filter`, or `all`), on every page: the address's exact committed
+   * activity count — its transactions minus its cellbases. Never `transactionsCount`, which counts
+   * the cellbases too. Filtered pages carry none.
+   */
+  total?: number;
+}
+
 /** How far a transaction still in the node's pool could be interpreted. */
 interface PoolInterpretation {
   status: 'complete' | 'partial';
@@ -4168,15 +4178,21 @@ export const api = {
     );
   },
 
-  getAddressActivities: (
+  getAddressActivities: async (
     addr: string,
     params: CursorQueryParams & { filter?: string } = {}
-  ): Promise<CursorPaginatedResponse<Activity>> => {
+  ): Promise<AddressActivitiesPage> => {
     const query = new URLSearchParams();
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
-    if (params.filter && params.filter !== 'all') query.set('filter', params.filter);
-    return fetchApi(`/addresses/${addr}/activities?${query}`);
+    const filtered = !!params.filter && params.filter !== 'all';
+    if (filtered) query.set('filter', params.filter!);
+    const path = `/addresses/${addr}/activities`;
+    const page = await fetchApi<AddressActivitiesPage>(`${path}?${query}`);
+    // contracts W5-1: every unfiltered page declares the address's activity count.
+    if (!filtered && !Number.isSafeInteger(page.total))
+      throw new Error(`${path}: unfiltered page has no activity total (contracts W5-1)`);
+    return page;
   },
 
   getGlobalActivities: (

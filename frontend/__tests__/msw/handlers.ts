@@ -299,9 +299,13 @@ export const handlers = [
   }),
 
   // Page one of an address activity feed: one unconfirmed row above one
-  // committed row, exactly the shape the API serves.
+  // committed row, exactly the shape the API serves. Unfiltered pages declare
+  // the address's committed activity count (`total`, contracts W5-1); filtered
+  // pages carry none.
   http.get(`${API_BASE}/addresses/:addr/activities`, ({ request }) => {
-    const cursor = new URL(request.url).searchParams.get('cursor');
+    const params = new URL(request.url).searchParams;
+    const cursor = params.get('cursor');
+    const total = params.has('filter') ? {} : { total: 1 };
     const committed = {
       txHash: `0x${'c1'.repeat(32)}`,
       blockNumber: 12345,
@@ -321,6 +325,7 @@ export const handlers = [
     if (cursor) {
       return HttpResponse.json({
         data: [committed],
+        ...total,
         limit: 50,
         hasMore: false,
         nextCursor: null,
@@ -357,6 +362,7 @@ export const handlers = [
         },
         committed,
       ],
+      ...total,
       limit: 50,
       hasMore: false,
       nextCursor: null,

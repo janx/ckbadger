@@ -436,10 +436,27 @@ describe('Address v3', () => {
     );
     expect(await within(history).findAllByText(/valar.bit/)).not.toHaveLength(0);
   });
-  it('never uses transaction count as the activities count', async () => {
+  // contracts W5-1 (BA-35): the tab counts activities — the unfiltered `total`, i.e. the
+  // address's transactions minus its cellbases — never `transactionsCount` (1,021 here).
+  it('counts the Activities tab from the unfiltered activity total, never the transaction count', async () => {
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
+      p?.filter === 'all'
+        ? { ...pageFixture(addressActivitiesFixture, 1682), hasMore: true, nextCursor: 'next' }
+        : pageFixture([])
+    );
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByRole('button', { name: 'Activities' })).toHaveTextContent(/^Activities$/);
+    const activitiesTab = () => screen.getByRole('button', { name: /^Activities/ });
+    await waitFor(() => expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/));
+    expect(activitiesTab()).not.toHaveTextContent('1,021');
+    expect(await screen.findByText('Showing 1-1 of 1,682 activities')).toBeInTheDocument();
+    // A filtered page declares no total; the tab keeps the address's count, the range has none.
+    fireEvent.click(screen.getByRole('button', { name: 'DAO' }));
+    expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
+    expect(screen.getByText('Showing 0-0 activities')).toBeInTheDocument();
+    expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
+    await tab('Transactions');
+    expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
   });
   // F2 blocks (BA-35, R2b-a filter=script): one "Script" chip, as the Address board.
   it('uses one script-call filter and resets the activity cursor', async () => {
