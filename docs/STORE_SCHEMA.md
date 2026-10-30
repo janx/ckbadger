@@ -235,14 +235,16 @@ pruned — they are removed only when replayed. Bulk build records no undo entri
 
 ### Protocol history and Type ID lineage
 
-`.bit` AccountCell outputs that name no account — the DAS root AccountCell (all-zero account
-id; it is re-created on mainnet), data too short to name one, or an account whose name the DAS
-witness does not carry — get no `DOTBIT_ACCOUNT_OUTPOINT` row. They get an empty
+`.bit` AccountCell outputs whose data names no account — the DAS root AccountCell (all-zero
+account id; it is re-created on mainnet) or data too short to name one — get no
+`DOTBIT_ACCOUNT_OUTPOINT` row. An account whose name the DAS witness does not carry is still an
+account (indexed under its id), because the activity builder counts identities from the data
+alone. They get an empty
 `STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT` row (domain `stats_mnft`, key prefix `0x25` + outpoint)
 instead, written by live sync with a `DotBit` undo pre-image and by bulk build from the cell's
 missing protocol facts. Consuming an AccountCell that has neither row is a lost index row and
-stops the live batch; consuming one with the marker moves no `.bit` identity on either sync path
-(the root and too-short cells moved none when they were created either).
+stops the live batch; consuming one with the marker moves no `.bit` identity on either sync path,
+exactly as its creation moved none.
 
 Identity output history rows keep the same keys in domain `stats_spore` (did:ckb / .bit Cell)
 and `stats_mnft` (.bit AccountCell). Their value is now one `AssetAction` byte: mint 0, transfer 1,

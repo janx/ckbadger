@@ -468,8 +468,8 @@ struct ActivityInputIndexes<'a> {
     dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
     dotbit_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
     /// Consumed `.bit` AccountCells the consume pass found recorded as never
-    /// indexed (the DAS root AccountCell, data naming no account, a name the
-    /// DAS witness did not carry).
+    /// indexed: their data named no account (the DAS root AccountCell, data
+    /// too short to name one).
     dotbit_unindexed: &'a HashSet<(Vec<u8>, i16)>,
     bit_cell_identity_ids: &'a HashMap<(Vec<u8>, i16), Vec<u8>>,
     /// The `.cell` name each consumed name cell carried, captured by the
@@ -5420,6 +5420,98 @@ mod tests {
 
         assert_eq!(bulk, live);
         assert!(live.iter().all(|(_, deltas)| deltas.is_empty()), "{live:?}");
+    }
+
+    /// Round-2 review #3: an AccountCell whose DAS witness lacks its name was
+    /// counted +1 when created (the activity builder reads the id from data)
+    /// but recorded as never an account, so its consumption counted nothing.
+    /// Both partitions now index it, so creation and consumption move the same
+    /// identity on both sync paths.
+    #[test]
+    fn nameless_dotbit_account_is_an_identity_on_both_sides_in_bulk_and_live() {
+        use crate::parser::dotbit::fixtures::MAINNET_ACCOUNT_CELL_DATA;
+        use crate::sync::bulk_build::facts::{parse_protocol_facts, CellProtocolFacts, CellSemanticTag};
+        let data_hex = MAINNET_ACCOUNT_CELL_DATA;
+        let type_script = crate::rpc::Script {
+            code_hash: crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        let lock = crate::rpc::Script {
+            code_hash: format!("0x{}", "10".repeat(32)),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        };
+        let tx = crate::rpc::TransactionView {
+            hash: format!("0x{}", hex::encode(DOTBIT_PARITY_TX)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![],
+            outputs: vec![crate::rpc::CellOutput {
+                capacity: "0x6fc23ac00".to_string(),
+                lock,
+                type_: Some(type_script),
+            }],
+            outputs_data: vec![data_hex.to_string()],
+            // No DAS witness: the name is unknown.
+            witnesses: vec![],
+        };
+
+        // Live: the partition indexes it, so CF_DOTBIT_OUTPOINT carries its id.
+        let live = crate::parser::DotbitParser::parse_account_outputs(&tx).unwrap();
+        assert!(live.unindexed_output_indices.is_empty(), "{live:?}");
+        assert_eq!(live.accounts.len(), 1);
+        let live_id: [u8; 20] = live.accounts[0].account.account_id.clone().try_into().unwrap();
+
+        // Bulk: the cell's protocol facts carry the same id.
+        let parsed = crate::parser::cell::ParsedCell {
+            capacity: 300_00000000,
+            lock_code_hash: DOTBIT_PARITY_LOCK_CODE_HASH.to_vec(),
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            lock_script_hash: vec![0xA1; 32],
+            type_code_hash: Some(dotbit_account_code_hash()),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            type_script_hash: Some(DOTBIT_PARITY_TYPE_SCRIPT_HASH.to_vec()),
+            data_hash: [0x13; 32],
+            data_size: 94,
+            data: crate::rpc::parse_hex_to_bytes(data_hex),
+        };
+        let bulk_id = match parse_protocol_facts(
+            &parsed,
+            CellSemanticTag::Dotbit,
+            &crate::parser::dotbit::DotbitWitnessBundle::default(),
+            None,
+            &DOTBIT_PARITY_TX,
+            0,
+        )
+        .unwrap()
+        {
+            Some(CellProtocolFacts::Dotbit(dotbit)) => dotbit.account_id,
+            other => panic!("bulk must index the nameless account: {other:?}"),
+        };
+        assert_eq!(bulk_id, live_id);
+
+        // Consumed by its owner and handed to someone else: −1 / +1 on both
+        // paths, with the id each path indexed at creation.
+        let cell = |owner: [u8; 32], account_id: [u8; 20]| DotbitParityCell {
+            owner,
+            data: crate::rpc::parse_hex_to_bytes(data_hex),
+            account_id: Some(account_id),
+        };
+        let live_deltas = dotbit_item_deltas(
+            &live_dotbit_parity_actions(&cell([0xA1; 32], live_id), &cell([0xA2; 32], live_id))
+                .unwrap(),
+        );
+        let bulk_deltas = dotbit_item_deltas(
+            &bulk_dotbit_parity_actions(&cell([0xA1; 32], bulk_id), &cell([0xA2; 32], bulk_id))
+                .unwrap(),
+        );
+        assert_eq!(bulk_deltas, live_deltas);
+        let moved: Vec<_> = live_deltas.iter().filter(|(_, d)| !d.is_empty()).collect();
+        assert_eq!(moved.len(), 2, "sender −1 and recipient +1: {live_deltas:?}");
     }
 
     /// A consumed AccountCell with neither its indexed id nor an unindexed

@@ -570,13 +570,14 @@ pub(crate) fn parse_protocol_facts(
             }
 
             if account.account.is_none() {
+                // Same rule as live `parse_account_outputs`: the data names the
+                // account, so it is an identity; only its name is unknown.
                 warn!(
                     tx = hex::encode(tx_hash),
                     output_index,
                     account_id = hex::encode(&account.account_id),
-                    "skipping DotBit cell: account name missing in DAS witness"
+                    "indexing DotBit account without a name: name missing in DAS witness"
                 );
-                return Ok(None);
             }
 
             Ok(Some(CellProtocolFacts::Dotbit(DotbitProtocolFacts {
@@ -604,6 +605,75 @@ pub(crate) fn parse_protocol_facts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mainnet_account_cell(data_hex: &str) -> ParsedCell {
+        let data = crate::rpc::parse_hex_to_bytes(data_hex);
+        ParsedCell {
+            capacity: 300_00000000,
+            lock_code_hash: vec![0; 32],
+            lock_hash_type: 1,
+            lock_args: Vec::new(),
+            lock_script_hash: vec![0x11; 32],
+            type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
+                crate::parser::dotbit::DOTBIT_ACCOUNT_CELL_TYPE_ID,
+            )),
+            type_hash_type: Some(1),
+            type_args: Some(Vec::new()),
+            type_script_hash: Some(vec![0x22; 32]),
+            data_hash: [0; 32],
+            data_size: i32::try_from(data.len()).unwrap(),
+            data,
+        }
+    }
+
+    /// Bulk keeps the same identity rule as the activity builder: an
+    /// AccountCell whose data names an account gets `.bit` facts (and so its
+    /// id travels to its consumption) even when the DAS witness lacks its
+    /// name; one whose data names none (the root AccountCell) gets none.
+    #[test]
+    fn dotbit_facts_follow_the_activity_identity_rule_not_the_witness_name() {
+        use crate::parser::dotbit::fixtures::{
+            MAINNET_ACCOUNT_CELL_DATA, MAINNET_ACCOUNT_CELL_ID, MAINNET_ROOT_ACCOUNT_CELL_DATA,
+        };
+        let nameless = mainnet_account_cell(MAINNET_ACCOUNT_CELL_DATA);
+        let facts = parse_protocol_facts(
+            &nameless,
+            CellSemanticTag::Dotbit,
+            &DotbitWitnessBundle::default(),
+            None,
+            &[0x7b; 32],
+            0,
+        )
+        .unwrap();
+        let expected_id = crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_ID);
+        match facts {
+            Some(CellProtocolFacts::Dotbit(dotbit)) => {
+                assert_eq!(dotbit.account_id.to_vec(), expected_id);
+                assert_eq!(dotbit.account, None, "the witness carried no name");
+            }
+            other => panic!("a nameless account is still an account: {other:?}"),
+        }
+        assert_eq!(
+            DotbitParser::parse_account_id_from_data(
+                nameless.type_code_hash.as_deref().unwrap(),
+                nameless.type_args.as_deref(),
+                &nameless.data,
+            ),
+            Some(expected_id)
+        );
+
+        let root = mainnet_account_cell(MAINNET_ROOT_ACCOUNT_CELL_DATA);
+        assert!(parse_protocol_facts(
+            &root,
+            CellSemanticTag::Dotbit,
+            &DotbitWitnessBundle::default(),
+            None,
+            &[0x7c; 32],
+            0,
+        )
+        .unwrap()
+        .is_none());
+    }
 
     #[test]
     fn malformed_bit_cell_fails_protocol_fact_parsing_with_context() {

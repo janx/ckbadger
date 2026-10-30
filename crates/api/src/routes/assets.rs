@@ -1984,25 +1984,93 @@ fn asset_action_name(action: ckbadger_store::AssetAction) -> &'static str {
     }
 }
 
+/// What one lifecycle transaction means for one item. Computed once, here, and
+/// shared by the lifecycle action list and every item feed row's
+/// `itemContext`, so readers never re-derive it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NftLifecycleRow {
+    pub(super) tx_hash: Vec<u8>,
+    /// The collection-level action name ("mint", "transfer", "update", ...).
+    pub(super) action: &'static str,
+    /// The item's own protocol actions in this transaction, in protocol
+    /// (output) order: for `.cell`, every `dotcell` action whose `metadata.id`
+    /// is this name (a buy and re-list in one tx is two). No other item
+    /// standard writes item-naming protocol actions, so it is empty for them.
+    pub(super) protocol_actions: Vec<String>,
+    /// Set only when the transaction rewrote this name's cell as a ring
+    /// neighbour and the name has no own action in it.
+    pub(super) ring_relink: Option<RingRelink>,
+}
+
+/// Why a `.cell` name's cell was rewritten as a ring neighbour.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct RingRelink {
+    /// `register`, `register_subname` or `recycle` — the action whose
+    /// `metadata.relinked` names this name — or `unattributed` for a rewrite
+    /// the indexer recorded as `ring_relink`.
+    pub(super) by: String,
+    /// The registered or recycled name's id; `None` for `unattributed`.
+    pub(super) by_id: Option<String>,
+}
+
+/// The meaning of one `.cell` lifecycle transaction for one name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DotcellLifecycle {
+    asset_action: ckbadger_store::AssetAction,
+    protocol_actions: Vec<String>,
+    ring_relink: Option<RingRelink>,
+}
+
+/// The one coarse action of a row whose item took several own protocol
+/// actions in one transaction (a `.cell` buy and re-list, a cancel and
+/// re-list): the most consequential step, by the fixed precedence
+/// Mint > Recycle > Burn > Transfer > Renew > Update. So buy + list is a
+/// transfer, cancel_sale + list an update, takeover + list a mint. This is the
+/// only place the precedence is decided.
+fn coarse_asset_action(
+    actions: &[ckbadger_store::AssetAction],
+) -> Option<ckbadger_store::AssetAction> {
+    use ckbadger_store::AssetAction::*;
+    let rank = |action: &ckbadger_store::AssetAction| match action {
+        Mint => 0,
+        Recycle => 1,
+        Burn => 2,
+        Transfer => 3,
+        Renew => 4,
+        Update => 5,
+    };
+    actions.iter().copied().min_by_key(rank)
+}
+
 /// What one lifecycle transaction of a `.cell` name means for that name, from
 /// the canonical `dotcell:*` actions alone:
 ///
-/// - its own action (`metadata.id` is this name) maps through
-///   `dotcell_asset_action`;
-/// - otherwise the transaction rewrote only this name's ring `next` pointer,
-///   which emits no action of its own: the registration (or removal) that did
-///   it names this name in `metadata.relinked`, and the row is an `Update`;
-/// - a transaction that consumed or created this name's cell with neither is
-///   one the indexer did not explain, and is an error — never classified from
-///   whether the cell was created or consumed.
+/// - its own actions (`metadata.id` is this name; never `ring_relink`), in
+///   protocol order, take precedence; each maps through `dotcell_asset_action`
+///   and the row's coarse action is `coarse_asset_action` of them;
+/// - otherwise the transaction rewrote only this name's ring `next` pointer
+///   and the row is an `Update`: either a `register` / `register_subname` /
+///   `recycle` names this name in `metadata.relinked` (when both a
+///   registration and a recycle relinked it, `by` is the registration — the
+///   name it now points at), or the indexer recorded the rewrite as an
+///   unattributed `ring_relink` naming it in `metadata.id`;
+/// - a transaction that consumed or created this name's cell with none of
+///   these is one the indexer did not record, and is an error — never
+///   classified from whether the cell was created or consumed. So is a
+///   contradiction: own actions together with a `ring_relink` (which the
+///   indexer writes only for a next-only rewrite), or a relink reference from
+///   an action that cannot relink.
 fn dotcell_lifecycle_action(
     item_id: &[u8],
     tx_hash: &[u8],
     protocol_actions: &[ckbadger_store::types::ProtocolAction],
-) -> Result<ckbadger_store::AssetAction, ApiRouteError> {
+) -> Result<DotcellLifecycle, ApiRouteError> {
+    use ckbadger_indexer::db::DOTCELL_RING_RELINK_ACTION;
     let item_id = format!("0x{}", hex::encode(item_id));
     let mut own_actions = Vec::new();
-    let mut relinked_by = Vec::new();
+    let mut relinked_by: Vec<(&str, String)> = Vec::new();
+    let mut unattributed = false;
     for action in protocol_actions
         .iter()
         .filter(|action| action.protocol == "dotcell")
@@ -2010,26 +2078,72 @@ fn dotcell_lifecycle_action(
         let metadata = action
             .metadata_value()
             .map_err(|e| ApiError::internal(e.to_string()))?;
-        if metadata["id"].as_str() == Some(item_id.as_str()) {
-            own_actions.push(
-                ckbadger_indexer::db::dotcell_asset_action(&action.action)
-                    .map_err(|e| ApiError::internal(e.to_string()))?,
-            );
+        let names_item = metadata["id"].as_str() == Some(item_id.as_str());
+        if action.action == DOTCELL_RING_RELINK_ACTION {
+            unattributed |= names_item;
+        } else if names_item {
+            own_actions.push(action.action.as_str());
         } else if metadata["relinked"].as_str() == Some(item_id.as_str()) {
-            relinked_by.push(action.action.as_str());
+            if !matches!(
+                action.action.as_str(),
+                "register" | "register_subname" | "recycle"
+            ) {
+                return Err(ApiError::internal(format!(
+                    ".cell action {:?} in 0x{} relinks {item_id}; only register, register_subname and recycle relink a neighbour",
+                    action.action,
+                    hex::encode(tx_hash)
+                )));
+            }
+            let by_id = metadata["id"].as_str().ok_or_else(|| {
+                ApiError::internal(format!(
+                    ".cell {} relinking {item_id} in 0x{} has no id",
+                    action.action,
+                    hex::encode(tx_hash)
+                ))
+            })?;
+            relinked_by.push((action.action.as_str(), by_id.to_string()));
         }
     }
-    match (own_actions.as_slice(), relinked_by.as_slice()) {
-        ([action], _) => Ok(*action),
-        ([], [_, ..]) => Ok(ckbadger_store::AssetAction::Update),
-        ([], []) => Err(ApiError::internal(format!(
-            ".cell lifecycle transaction 0x{} touched {item_id} without a dotcell action naming it or relinking it",
+    let ring_relink = |by: &str, by_id: Option<String>| DotcellLifecycle {
+        asset_action: ckbadger_store::AssetAction::Update,
+        protocol_actions: Vec::new(),
+        ring_relink: Some(RingRelink {
+            by: by.to_string(),
+            by_id,
+        }),
+    };
+    if !own_actions.is_empty() && unattributed {
+        return Err(ApiError::internal(format!(
+            ".cell transaction 0x{} records both own actions {own_actions:?} and an unattributed ring relink for {item_id}",
             hex::encode(tx_hash)
-        ))),
-        (_, _) => Err(ApiError::internal(format!(
-            "multiple .cell actions for {item_id} in 0x{}",
-            hex::encode(tx_hash)
-        ))),
+        )));
+    }
+    let asset_actions = own_actions
+        .iter()
+        .map(|action| {
+            ckbadger_indexer::db::dotcell_asset_action(action)
+                .map_err(|e| ApiError::internal(e.to_string()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    match coarse_asset_action(&asset_actions) {
+        Some(asset_action) => Ok(DotcellLifecycle {
+            asset_action,
+            protocol_actions: own_actions.iter().map(|a| (*a).to_string()).collect(),
+            ring_relink: None,
+        }),
+        None => {
+            let registration = relinked_by
+                .iter()
+                .find(|(by, _)| *by == "register" || *by == "register_subname");
+            match (registration.or(relinked_by.first()), unattributed) {
+                (Some((by, by_id)), _) => Ok(ring_relink(by, Some(by_id.clone()))),
+                (None, true) => Ok(ring_relink("unattributed", None)),
+                (None, false) => Err(ApiError::internal(format!(
+                    ".cell lifecycle transaction 0x{} touched {item_id} without a dotcell action naming it, relinking it or recording its ring relink",
+                    hex::encode(tx_hash)
+                ))),
+            }
+        }
     }
 }
 
@@ -2037,7 +2151,7 @@ pub(super) fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
     standard: NftLifecycleStandard,
-) -> Result<Vec<(Vec<u8>, String)>, ApiRouteError> {
+) -> Result<Vec<NftLifecycleRow>, ApiRouteError> {
     let outpoints = match standard {
         NftLifecycleStandard::MnftToken => state
             .store
@@ -2110,7 +2224,7 @@ pub(super) fn collect_nft_item_lifecycle_actions(
 
     let mut rows = Vec::with_capacity(lifecycle_txs.len());
     for tx_hash in lifecycle_txs {
-        let exact = if matches!(standard, NftLifecycleStandard::DotCell) {
+        if matches!(standard, NftLifecycleStandard::DotCell) {
             let (block, index) = state
                 .store
                 .get_tx_location(&tx_hash)
@@ -2131,16 +2245,25 @@ pub(super) fn collect_nft_item_lifecycle_actions(
                         hex::encode(&tx_hash)
                     ))
                 })?;
-            Some(dotcell_lifecycle_action(
-                nft_id_bytes,
-                &tx_hash,
-                &actions.protocol_actions,
-            )?)
-        } else {
-            exact_created.get(&tx_hash).copied()
-        };
-        if let Some(action) = exact {
-            rows.push((tx_hash, asset_action_name(action).to_string()));
+            let meaning =
+                dotcell_lifecycle_action(nft_id_bytes, &tx_hash, &actions.protocol_actions)?;
+            rows.push(NftLifecycleRow {
+                tx_hash,
+                action: asset_action_name(meaning.asset_action),
+                protocol_actions: meaning.protocol_actions,
+                ring_relink: meaning.ring_relink,
+            });
+            continue;
+        }
+        // No other item standard writes item-naming protocol actions, so its
+        // rows carry neither a protocol action nor a ring relink.
+        if let Some(action) = exact_created.get(&tx_hash).copied() {
+            rows.push(NftLifecycleRow {
+                tx_hash,
+                action: asset_action_name(action),
+                protocol_actions: Vec::new(),
+                ring_relink: None,
+            });
             continue;
         }
         // Standards without a recorded action for this transaction. `.cell`
@@ -2161,7 +2284,12 @@ pub(super) fn collect_nft_item_lifecycle_actions(
                 )))
             }
         };
-        rows.push((tx_hash, action.to_string()));
+        rows.push(NftLifecycleRow {
+            tx_hash,
+            action,
+            protocol_actions: Vec::new(),
+            ring_relink: None,
+        });
     }
 
     Ok(rows)
@@ -2179,7 +2307,7 @@ pub(super) fn build_nft_item_activities_response(
         collect_nft_item_lifecycle_actions(state, nft_id_bytes, lifecycle_standard)?;
     let tx_hashes: Vec<Vec<u8>> = lifecycle_rows
         .iter()
-        .map(|(tx_hash, _)| tx_hash.clone())
+        .map(|row| row.tx_hash.clone())
         .collect();
     let tx_batch_rows = state
         .store
@@ -2199,7 +2327,10 @@ pub(super) fn build_nft_item_activities_response(
     }
 
     let mut rows = Vec::with_capacity(lifecycle_rows.len());
-    for (tx_hash, action) in lifecycle_rows {
+    for NftLifecycleRow {
+        tx_hash, action, ..
+    } in lifecycle_rows
+    {
         if action_filter
             .map(|filter| filter != action)
             .unwrap_or(false)
@@ -2220,7 +2351,7 @@ pub(super) fn build_nft_item_activities_response(
             block_number,
             tx_index,
             timestamp: tx_entry.timestamp.to_string(),
-            actions: vec![action],
+            actions: vec![action.to_string()],
         });
     }
 
@@ -3680,47 +3811,207 @@ mod tests {
         ProtocolAction::new("dotcell", action, metadata)
     }
 
-    /// A registration rewrites its ring predecessor's cell (only `next`
-    /// changes) and names it in `metadata.relinked`; on the predecessor's own
-    /// history that transaction is an `Update`, not a transfer.
-    #[test]
-    fn dotcell_lifecycle_maps_a_relinked_neighbour_to_update() {
-        let neighbour = [0xC1u8; 20];
-        let actions = vec![dotcell_action(
-            "register",
-            serde_json::json!({
-                "id": "0x62d71147ac82b83c8531126cacb0d2f072bfd94a",
-                "relinked": format!("0x{}", hex::encode(neighbour)),
+    fn hex_id(id: [u8; 20]) -> String {
+        format!("0x{}", hex::encode(id))
+    }
+
+    fn relink(by: &str, by_id: Option<String>) -> DotcellLifecycle {
+        DotcellLifecycle {
+            asset_action: AssetAction::Update,
+            protocol_actions: Vec::new(),
+            ring_relink: Some(RingRelink {
+                by: by.to_string(),
+                by_id,
             }),
+        }
+    }
+
+    /// A registration, a sub-name registration or a recycle rewrites its ring
+    /// predecessor's cell (only `next` changes) and names it in
+    /// `metadata.relinked`; on the predecessor's history that transaction is
+    /// an `Update` relinked by that action, never a transfer.
+    #[test]
+    fn dotcell_lifecycle_names_the_action_that_relinked_a_neighbour() {
+        let neighbour = [0xC1u8; 20];
+        let moved = "0x62d71147ac82b83c8531126cacb0d2f072bfd94a";
+        for by in ["register", "register_subname", "recycle"] {
+            let actions = vec![dotcell_action(
+                by,
+                serde_json::json!({ "id": moved, "relinked": hex_id(neighbour) }),
+            )];
+            assert_eq!(
+                dotcell_lifecycle_action(&neighbour, &[0xAB; 32], &actions).unwrap(),
+                relink(by, Some(moved.to_string())),
+                "{by}"
+            );
+        }
+    }
+
+    /// An unattributed rewrite the indexer recorded as `ring_relink` is an
+    /// exact `unattributed` relink, not the name's own action.
+    #[test]
+    fn dotcell_lifecycle_maps_a_recorded_ring_relink_to_unattributed() {
+        let neighbour = [0xC4u8; 20];
+        let actions = vec![dotcell_action(
+            ckbadger_indexer::db::DOTCELL_RING_RELINK_ACTION,
+            serde_json::json!({ "id": hex_id(neighbour), "changes": ["next"] }),
         )];
         assert_eq!(
             dotcell_lifecycle_action(&neighbour, &[0xAB; 32], &actions).unwrap(),
-            AssetAction::Update
+            relink("unattributed", None)
         );
     }
 
+    /// The item's own action wins over any relink reference; when both a
+    /// registration and a recycle relinked it, `by` is the registration.
     #[test]
-    fn dotcell_lifecycle_uses_the_items_own_action() {
+    fn dotcell_lifecycle_precedence() {
         let item = [0xC2u8; 20];
         let actions = vec![
             dotcell_action(
-                "transfer",
-                serde_json::json!({ "id": format!("0x{}", hex::encode(item)) }),
+                "register",
+                serde_json::json!({ "id": "0x01", "relinked": hex_id(item) }),
+            ),
+            dotcell_action("edit_records", serde_json::json!({ "id": hex_id(item) })),
+        ];
+        assert_eq!(
+            dotcell_lifecycle_action(&item, &[0xAB; 32], &actions).unwrap(),
+            DotcellLifecycle {
+                asset_action: AssetAction::Update,
+                protocol_actions: vec!["edit_records".to_string()],
+                ring_relink: None,
+            }
+        );
+        let actions = vec![
+            dotcell_action(
+                "recycle",
+                serde_json::json!({ "id": "0x02", "relinked": hex_id(item) }),
             ),
             dotcell_action(
                 "register",
-                serde_json::json!({ "id": "0x01", "relinked": "0x02" }),
+                serde_json::json!({ "id": "0x03", "relinked": hex_id(item) }),
             ),
         ];
         assert_eq!(
             dotcell_lifecycle_action(&item, &[0xAB; 32], &actions).unwrap(),
+            relink("register", Some("0x03".to_string()))
+        );
+        let actions = vec![dotcell_action(
+            "transfer",
+            serde_json::json!({ "id": hex_id(item) }),
+        )];
+        assert_eq!(
+            dotcell_lifecycle_action(&item, &[0xAB; 32], &actions)
+                .unwrap()
+                .asset_action,
             AssetAction::Transfer
         );
     }
 
-    /// A transaction that touched the name's cell with no action naming it and
-    /// no relink reference is unexplained: an error with the item and tx, never
-    /// a created/consumed guess.
+    /// No real transaction buys and re-lists one name yet; this one is built
+    /// from the real testnet buy (T7) and list (T6) of `cartaoprova3695`, in
+    /// the order the indexer emits a buy-and-relist: buy, then list. Both are
+    /// the name's own actions, and the row is a transfer — not a 500.
+    #[test]
+    fn dotcell_lifecycle_buy_and_relist_is_both_own_actions_and_a_transfer() {
+        let item = [
+            0xac, 0x48, 0x5e, 0xeb, 0xad, 0x1a, 0x64, 0x2c, 0xc7, 0x59, 0x55, 0x9e, 0x02, 0x78,
+            0x27, 0x91, 0xad, 0x3a, 0xe8, 0x9c,
+        ];
+        let actions = vec![
+            dotcell_action(
+                "buy",
+                serde_json::json!({
+                    "label": "cartaoprova3695",
+                    "name": "cartaoprova3695.cell",
+                    "id": hex_id(item),
+                    "changes": ["owner"],
+                    "from": "0xcb736f437a28b77ecb038cc147c2171ed83fc371",
+                    "to": "0x58e6c6f873af57732daae458be3c56c2c847b141",
+                    "buyer": "0x58e6c6f873af57732daae458be3c56c2c847b141",
+                    "price": "10000000000",
+                }),
+            ),
+            dotcell_action(
+                "list",
+                serde_json::json!({
+                    "label": "cartaoprova3695",
+                    "name": "cartaoprova3695.cell",
+                    "id": hex_id(item),
+                    "changes": ["owner"],
+                    "from": "0x9d602bfc26415da790c79526703cbbc1e9267cbe",
+                    "to": "0xcb736f437a28b77ecb038cc147c2171ed83fc371",
+                    "price": "10000000000",
+                }),
+            ),
+        ];
+        assert_eq!(
+            dotcell_lifecycle_action(&item, &[0xAB; 32], &actions).unwrap(),
+            DotcellLifecycle {
+                asset_action: AssetAction::Transfer,
+                protocol_actions: vec!["buy".to_string(), "list".to_string()],
+                ring_relink: None,
+            }
+        );
+    }
+
+    /// The coarse action of several own actions follows the one documented
+    /// precedence, whatever their order.
+    #[test]
+    fn coarse_asset_action_precedence() {
+        use AssetAction::*;
+        let order = [Mint, Recycle, Burn, Transfer, Renew, Update];
+        for (i, winner) in order.iter().enumerate() {
+            let mut actions = order[i..].to_vec();
+            actions.reverse();
+            assert_eq!(coarse_asset_action(&actions), Some(*winner), "{actions:?}");
+        }
+        assert_eq!(coarse_asset_action(&[]), None);
+        // cancel_sale + list (re-pricing) and takeover + list.
+        let item = [0xC5u8; 20];
+        let own = |actions: &[&str]| {
+            actions
+                .iter()
+                .map(|a| dotcell_action(a, serde_json::json!({ "id": hex_id(item) })))
+                .collect::<Vec<_>>()
+        };
+        for (actions, expected) in [
+            (own(&["cancel_sale", "list"]), Update),
+            (own(&["takeover", "list"]), Mint),
+            (own(&["buy", "list"]), Transfer),
+        ] {
+            assert_eq!(
+                dotcell_lifecycle_action(&item, &[0xAB; 32], &actions)
+                    .unwrap()
+                    .asset_action,
+                expected
+            );
+        }
+    }
+
+    /// Own actions together with an unattributed ring relink for the same name
+    /// contradict each other (the indexer writes `ring_relink` only for a
+    /// next-only rewrite): an error naming both.
+    #[test]
+    fn dotcell_lifecycle_rejects_own_actions_with_a_ring_relink() {
+        let item = [0xC6u8; 20];
+        let actions = vec![
+            dotcell_action("edit_records", serde_json::json!({ "id": hex_id(item) })),
+            dotcell_action(
+                ckbadger_indexer::db::DOTCELL_RING_RELINK_ACTION,
+                serde_json::json!({ "id": hex_id(item) }),
+            ),
+        ];
+        let (_, body) = dotcell_lifecycle_action(&item, &[0xAE; 32], &actions).unwrap_err();
+        let message = serde_json::to_string(&body.0).unwrap();
+        assert!(message.contains("edit_records"), "{message}");
+        assert!(message.contains(&hex::encode(item)), "{message}");
+    }
+
+    /// A transaction that touched the name's cell with no action naming it, no
+    /// relink reference and no recorded ring relink is unexplained: an error
+    /// with the item and tx, never a created/consumed guess. So is a relink
+    /// reference from an action that cannot relink.
     #[test]
     fn dotcell_lifecycle_rejects_an_unexplained_transaction() {
         let item = [0xC3u8; 20];
@@ -3734,8 +4025,13 @@ mod tests {
         let message = serde_json::to_string(&body.0).unwrap();
         assert!(message.contains(&hex::encode(item)), "{message}");
         assert!(message.contains(&hex::encode(tx_hash)), "{message}");
-
         assert!(dotcell_lifecycle_action(&item, &tx_hash, &[]).is_err());
+
+        let actions = vec![dotcell_action(
+            "transfer",
+            serde_json::json!({ "id": "0x01", "relinked": hex_id(item) }),
+        )];
+        assert!(dotcell_lifecycle_action(&item, &tx_hash, &actions).is_err());
     }
 
     #[test]

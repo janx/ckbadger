@@ -1873,6 +1873,41 @@ mod tests {
         assert_eq!(agg.holders_count, 1, "same owner should count as 1 holder");
     }
 
+    /// The unindexed-AccountCell marker is written with a `DotBit` undo
+    /// pre-image: undo replay past its block removes it, and a marker written
+    /// at or below the fork point survives.
+    #[test]
+    fn test_dotbit_unindexed_marker_is_undone_by_rollback_and_survivor_stays() {
+        let (domain, append) = test_split_stores();
+        let writer = BatchWriter::new(domain.clone(), append.clone());
+        let state =
+            writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let survivor_tx = [0xE1u8; 32];
+        let rolled_back_tx = [0xE2u8; 32];
+
+        let mut batch = StoreBatch::new(domain.as_ref());
+        writer
+            .insert_dotbit_unindexed_outpoint(&survivor_tx, 0, 100, &mut batch, &state)
+            .unwrap();
+        writer
+            .insert_dotbit_unindexed_outpoint(&rolled_back_tx, 1, 200, &mut batch, &state)
+            .unwrap();
+        batch.commit().unwrap();
+        assert!(domain.is_dotbit_unindexed_outpoint(&survivor_tx, 0).unwrap());
+        assert!(domain.is_dotbit_unindexed_outpoint(&rolled_back_tx, 1).unwrap());
+
+        domain.rollback_via_undo_log(append.as_ref(), 150).unwrap();
+
+        assert!(
+            domain.is_dotbit_unindexed_outpoint(&survivor_tx, 0).unwrap(),
+            "a marker at or below the fork point survives"
+        );
+        assert!(
+            !domain.is_dotbit_unindexed_outpoint(&rolled_back_tx, 1).unwrap(),
+            "a rolled-back marker is removed by its undo pre-image"
+        );
+    }
+
     #[test]
     fn test_dotbit_reorg_restores_consumed_state_after_reactivation() {
         let (domain, append) = test_split_stores();

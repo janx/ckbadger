@@ -69,8 +69,8 @@ pub(crate) struct ObjectOwner {
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
     dotbit_outpoints_by_account: BTreeMap<Vec<u8>, u8>,
     /// `DOTBIT_UNINDEXED_OUTPOINT` keys: AccountCell-typed outputs whose
-    /// protocol facts named no account (the DAS root AccountCell, data naming
-    /// no account, a name the DAS witness did not carry). Live sync consumes
+    /// protocol facts named no account (the DAS root AccountCell, data too
+    /// short to name one). Live sync consumes
     /// these after the handoff and must find them recorded.
     dotbit_unindexed_outpoints: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,

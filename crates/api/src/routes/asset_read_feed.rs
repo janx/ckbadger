@@ -32,14 +32,16 @@ fn item_feed(
 ) -> ApiResult<Value> {
     let id = asset_history::parse_item_id(raw, standard)?;
     let versions = asset_history::checked_versions(state, &id, standard)?;
-    let actions = assets::collect_nft_item_lifecycle_actions(state, &id, standard)?;
-    let action_map: HashMap<_, _> = actions
+    let lifecycle = assets::collect_nft_item_lifecycle_actions(state, &id, standard)?;
+    let lifecycle_by_tx: HashMap<_, _> = lifecycle
         .iter()
-        .map(|(hash, action)| (format!("0x{}", hex::encode(hash)), action))
+        .map(|row| (format!("0x{}", hex::encode(&row.tx_hash)), row))
         .collect();
-    let scope =
-        asset_feed::canonical_scope(&state.store, actions.iter().map(|(hash, _)| hash.clone()))
-            .map_err(|e| ApiError::internal(format!("item=0x{}: {e:#}", hex::encode(&id))))?;
+    let scope = asset_feed::canonical_scope(
+        &state.store,
+        lifecycle.iter().map(|row| row.tx_hash.clone()),
+    )
+    .map_err(|e| ApiError::internal(format!("item=0x{}: {e:#}", hex::encode(&id))))?;
     let mut result = if transactions {
         serde_json::to_value(
             asset_feed::transactions(state, scope, params.limit, params.cursor.as_deref())?.0,
@@ -54,7 +56,7 @@ fn item_feed(
         let hash = row[if transactions { "hash" } else { "txHash" }]
             .as_str()
             .ok_or_else(|| ApiError::internal("canonical asset feed transaction hash missing"))?;
-        let action = action_map
+        let meaning = lifecycle_by_tx
             .get(hash)
             .ok_or_else(|| ApiError::internal("canonical item feed action missing"))?;
         let created: Vec<_> = versions
@@ -73,7 +75,18 @@ fn item_feed(
                 hex::encode(&id)
             )));
         }
-        row["itemContext"] = json!({"itemId":format!("0x{}",hex::encode(&id)),"action":action,"createdCell":created.first(),"consumedCell":consumed.first()});
+        // The row's meaning for this item is the lifecycle computation's,
+        // never re-derived: `protocolActions` (the item's own actions, in
+        // protocol order) and `ringRelink` (why a `.cell` neighbour's cell was
+        // rewritten).
+        row["itemContext"] = json!({
+            "itemId": format!("0x{}", hex::encode(&id)),
+            "action": meaning.action,
+            "protocolActions": meaning.protocol_actions,
+            "ringRelink": meaning.ring_relink,
+            "createdCell": created.first(),
+            "consumedCell": consumed.first(),
+        });
     }
     ok(result)
 }

@@ -12,4 +12,4 @@ pub use writer::entity_stats::{apply_daily_pair, apply_hourly_increment, EntityS
 pub use writer::participant_rows::{addr_tx_rows, standalone_prefixes};
 pub use writer::{BatchWriter, DaoConsumedRow, ReorgResult};
 
-pub use writer::dotcell_asset_action;
+pub use writer::{dotcell_asset_action, DOTCELL_RING_RELINK_ACTION};

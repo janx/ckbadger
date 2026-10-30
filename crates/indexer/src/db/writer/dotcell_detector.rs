@@ -91,10 +91,22 @@ pub(crate) enum DotCellTransitionKind {
     },
     /// Re-created byte-identical.
     Touch,
-    /// A ring neighbour whose only change is its `next` pointer. Registration
+    /// A ring neighbour whose only change is its `next` pointer, named as
+    /// `relinked` by the registration or recycle that moved it. Ring
     /// infrastructure, suppressed everywhere.
     RingLink,
+    /// A ring neighbour whose only change is its `next` pointer and that no
+    /// registration or recycle in the transaction names — an ambiguous or
+    /// unmodelled ring rewrite. Recorded as its own `ring_relink` action so
+    /// the name's history can say exactly what happened; it moves no identity
+    /// and has no collection feed entry, like an attributed relink.
+    UnattributedRingLink,
 }
+
+/// The `dotcell` action recorded for an [`DotCellTransitionKind::UnattributedRingLink`].
+/// It names the relinked neighbour in `metadata.id`, but it is not that name's
+/// own action: readers classify it as an unattributed ring relink.
+pub const DOTCELL_RING_RELINK_ACTION: &str = "ring_relink";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DotCellTransition {
@@ -209,8 +221,8 @@ pub(crate) fn is_expired_takeover(
 /// Cells contracts are closed source (spec 2026-09-23 §0 and Non-Goals), so
 /// that one transaction cannot relink two neighbours to (or away from) the
 /// same successor is observed, not a guarantee: such a successor is left
-/// unattributed and logged rather than stopping the sync, and its neighbours
-/// surface through [`unattributed_ring_links`].
+/// unattributed rather than stopping the sync, and its neighbours become
+/// [`DotCellTransitionKind::UnattributedRingLink`].
 struct RingRelinks {
     /// New `next` → the neighbour that now points there.
     into_new_next: HashMap<[u8; 20], [u8; 20]>,
@@ -280,9 +292,9 @@ impl RingRelinks {
 /// The `RingLink` neighbours no `register` / `register_subname` / `recycle`
 /// in the same transaction names as `relinked`. Every next-only rewrite the
 /// protocol is known to make is attributed, so a non-empty result is a ring
-/// change ckbadger does not model: it is logged here, and the item's lifecycle
-/// API refuses to classify the transaction rather than guessing.
-pub(crate) fn unattributed_ring_links(transitions: &[DotCellTransition]) -> Vec<[u8; 20]> {
+/// change ckbadger does not model; classification turns each into an
+/// [`DotCellTransitionKind::UnattributedRingLink`].
+fn unattributed_ring_links(transitions: &[DotCellTransition]) -> Vec<[u8; 20]> {
     let attributed: HashSet<[u8; 20]> = transitions
         .iter()
         .filter_map(|t| match &t.kind {
@@ -459,12 +471,14 @@ pub(crate) fn classify_dotcell_transitions(tx: &TxView<'_>) -> Result<Vec<DotCel
         };
         out.push(transition);
     }
-    for id in unattributed_ring_links(&out) {
+    let unattributed: HashSet<[u8; 20]> = unattributed_ring_links(&out).into_iter().collect();
+    for transition in out.iter_mut().filter(|t| unattributed.contains(&t.id)) {
         warn!(
             tx = %hex0x(tx.tx_hash),
-            neighbour = %hex0x(&id),
-            ".cell ring neighbour relinked with no registration or recycle naming it"
+            neighbour = %hex0x(&transition.id),
+            ".cell ring neighbour relinked with no registration or recycle naming it; recorded as ring_relink"
         );
+        transition.kind = DotCellTransitionKind::UnattributedRingLink;
     }
     Ok(out)
 }
@@ -551,6 +565,7 @@ pub(crate) fn action_name(kind: &DotCellTransitionKind) -> Option<&'static str> 
     use DotCellTransitionKind::*;
     Some(match kind {
         RingRoot | RingLink => return None,
+        UnattributedRingLink => DOTCELL_RING_RELINK_ACTION,
         Register {
             parent_id: Some(_), ..
         } => "register_subname",
@@ -575,7 +590,8 @@ pub(crate) fn action_name(kind: &DotCellTransitionKind) -> Option<&'static str> 
 /// The action strings are a closed set `action_name` produces, so an unknown
 /// one is an invariant violation — a transition kind that gained no mapping —
 /// and must stop the batch rather than quietly cost the collection one feed
-/// entry.
+/// entry. [`DOTCELL_RING_RELINK_ACTION`] has no collection action: it is ring
+/// infrastructure, and every reader handles it before calling this.
 pub fn dotcell_asset_action(action: &str) -> Result<AssetAction> {
     Ok(match action {
         "register" | "register_subname" | "takeover" => AssetAction::Mint,
@@ -671,6 +687,7 @@ pub(crate) fn protocol_actions_for(transitions: &[DotCellTransition]) -> Vec<Pro
                     }
                 }
                 EditRecords | Touch => {}
+                UnattributedRingLink => {}
                 RingRoot | RingLink => unreachable!("filtered out by action_name"),
             }
             Some(ProtocolAction::new(PROTOCOL, action, meta))
@@ -733,7 +750,13 @@ pub(crate) fn named_participants_for(transitions: &[DotCellTransition]) -> Vec<N
                 push(*buyer20, vec![delta(&t.id, false)], OWNER_TO);
             }
             Recycle { owner20, .. } => push(*owner20, vec![delta(&t.id, true)], OWNER_FROM),
-            RingRoot | RingLink | Renew { .. } | EditRecords | EditManager { .. } | Touch => {}
+            RingRoot
+            | RingLink
+            | UnattributedRingLink
+            | Renew { .. }
+            | EditRecords
+            | EditManager { .. }
+            | Touch => {}
         }
         if let Some(manager) = t.manager_changed_to {
             push(manager, Vec::new(), MANAGER_TO);
@@ -775,7 +798,12 @@ pub(crate) fn build_dotcell_tx_activity_entry(
     timestamp_ms: i64,
 ) -> Result<Option<ObjectCollectionActivityEntry>> {
     let mut asset_actions: Vec<AssetAction> = Vec::new();
-    for action in actions.iter().filter(|a| a.protocol == "dotcell") {
+    // An unattributed ring relink is ring infrastructure: no collection entry,
+    // exactly like the attributed relink it stands in for.
+    for action in actions
+        .iter()
+        .filter(|a| a.protocol == "dotcell" && a.action != DOTCELL_RING_RELINK_ACTION)
+    {
         let asset_action = dotcell_asset_action(&action.action)
             .map_err(|e| anyhow!("tx 0x{}: {e}", hex::encode(tx_hash)))?;
         if !asset_actions.contains(&asset_action) {
@@ -1700,7 +1728,7 @@ mod tests {
     /// Two neighbours pointing at the same new successor in one tx is a ring
     /// shape the closed-source contract is only observed, not known, to
     /// forbid. The sync must not stop: the registration names neither, and
-    /// both neighbours surface as unattributed.
+    /// each neighbour is recorded as its own `ring_relink` (no feed entry).
     #[test]
     fn two_neighbours_relinked_to_one_successor_are_attributed_to_neither() {
         let owner = [0x44u8; 20];
@@ -1726,15 +1754,36 @@ mod tests {
             "{:?}",
             register.kind
         );
-        let mut unattributed = unattributed_ring_links(&ts);
+        let mut unattributed: Vec<[u8; 20]> = ts
+            .iter()
+            .filter(|t| t.kind == DotCellTransitionKind::UnattributedRingLink)
+            .map(|t| t.id)
+            .collect();
         unattributed.sort();
         let mut expected = vec![DotCellParser::derive_id("one"), DotCellParser::derive_id("two")];
         expected.sort();
         assert_eq!(unattributed, expected);
+
+        let actions = protocol_actions_for(&ts);
+        let mut relinked: Vec<String> = actions
+            .iter()
+            .filter(|a| a.action == DOTCELL_RING_RELINK_ACTION)
+            .map(|a| a.metadata.to_value().unwrap()["id"].as_str().unwrap().to_string())
+            .collect();
+        relinked.sort();
+        let mut expected_ids: Vec<String> = expected.iter().map(|id| hex0x(id)).collect();
+        expected_ids.sort();
+        assert_eq!(relinked, expected_ids);
+        // The feed entry is the registration's Mint alone.
+        let entry = build_dotcell_tx_activity_entry(&actions, &[0xAA; 32], &[0xBB; 32], 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(entry.actions, vec![AssetAction::Mint]);
     }
 
     /// A neighbour relinked with no registration or recycle in the tx is a
-    /// ring change ckbadger does not model: reported, not attributed.
+    /// ring change ckbadger does not model: recorded exactly as a
+    /// `ring_relink` naming it, with no participants and no feed entry.
     #[test]
     fn a_relink_without_registration_or_recycle_is_unattributed() {
         let owner = [0x44u8; 20];
@@ -1746,10 +1795,21 @@ mod tests {
         };
         let owned = synthetic_tx(vec![p([0x01; 20], true)], vec![p([0x02; 20], false)]);
         let ts = classify_dotcell_transitions(&owned.view()).unwrap();
-        assert_eq!(ts[0].kind, DotCellTransitionKind::RingLink);
-        assert_eq!(
-            unattributed_ring_links(&ts),
-            vec![DotCellParser::derive_id("lone")]
+        assert_eq!(ts[0].kind, DotCellTransitionKind::UnattributedRingLink);
+        let actions = protocol_actions_for(&ts);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].protocol, "dotcell");
+        assert_eq!(actions[0].action, DOTCELL_RING_RELINK_ACTION);
+        let metadata = actions[0].metadata.to_value().unwrap();
+        assert_eq!(metadata["id"], hex0x(&DotCellParser::derive_id("lone")));
+        assert_eq!(metadata["changes"], serde_json::json!(["next"]));
+        assert!(metadata.get("relinked").is_none());
+        assert!(named_participants_for(&ts).is_empty());
+        assert!(
+            build_dotcell_tx_activity_entry(&actions, &[0xAA; 32], &[0xBB; 32], 1)
+                .unwrap()
+                .is_none(),
+            "ring infrastructure has no collection feed entry"
         );
     }
 
@@ -1783,8 +1843,13 @@ mod tests {
                 .filter(|t| matches!(t.kind, DotCellTransitionKind::RingLink))
                 .count();
             assert!(
-                unattributed_ring_links(&ts).is_empty(),
+                !ts.iter()
+                    .any(|t| t.kind == DotCellTransitionKind::UnattributedRingLink),
                 "{name}: unattributed ring links in {ts:?}"
+            );
+            assert!(
+                unattributed_ring_links(&ts).is_empty(),
+                "{name}: every remaining RingLink is named by a relinked"
             );
         }
         assert!(ring_links >= 2, "the fixtures exercise real relinks");
@@ -2306,6 +2371,9 @@ mod tests {
         // not a transaction to file with one feed entry missing.
         let err = dotcell_asset_action("not_a_dotcell_action").unwrap_err();
         assert!(err.to_string().contains("not_a_dotcell_action"), "{err}");
+        // A ring relink is no collection event at all; its readers handle it
+        // before asking for a collection action.
+        assert!(dotcell_asset_action(DOTCELL_RING_RELINK_ACTION).is_err());
     }
 
     #[test]
