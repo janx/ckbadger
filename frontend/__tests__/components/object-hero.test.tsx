@@ -93,3 +93,39 @@ it('lists readable traits only and reports hover', () => {
   fireEvent.mouseEnter(list.querySelector('[data-trait="Color"]')!);
   expect(onActive).toHaveBeenCalledWith('Color');
 });
+
+// F2 objects (OB-14): tier 2 shows what the decoder produced, not only the DNA bytes.
+import { ObjectGeneticsEvidence } from '@/components/asset/genetics';
+import { nervape3xGenetics } from '@/__tests__/fixtures/objects/nervape3x';
+it('lists the decoder output beside the DNA evidence (OB-14)', () => {
+  render(
+    <ObjectGeneticsEvidence
+      evidence={nervape3xGenetics}
+      subject="Nervape 3x"
+      decoded={{
+        status: 'decoded',
+        sporeId: '0x51c7',
+        contentType: 'dob/0',
+        dnaHex: nervape3xGenetics.dnaHex,
+        traits: nervape3xGenetics.cachedVmTraits.traits,
+        media: [
+          {
+            mediaType: 'application/json',
+            role: null,
+            size: 379,
+            hash: '968c587811f54682910668c41573198061a8fc923457eb63ba8559f0e97af74e',
+            step: 0,
+            url: '/spore/objects/0x51c7/media/968c5878',
+          },
+        ],
+        issues: [],
+      }}
+    />
+  );
+  const out = screen.getByRole('list', { name: 'Decoder output' });
+  expect(out).toHaveTextContent('application/json · 379 bytes · step 1');
+  expect(screen.getByRole('link', { name: /Open the decoded file/ })).toHaveAttribute(
+    'href',
+    expect.stringContaining('/spore/objects/0x51c7/media/968c5878')
+  );
+});

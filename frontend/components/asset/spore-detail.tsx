@@ -266,7 +266,13 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       }
       tier2={
         <>
-          {genetics.data && <ObjectGeneticsEvidence evidence={genetics.data} subject={title} />}
+          {genetics.data && (
+            <ObjectGeneticsEvidence
+              evidence={genetics.data}
+              subject={title}
+              decoded={decoded.data}
+            />
+          )}
           {data ? (
             <>
               <AssetReadState label="raw object data" error={protocol.error} retained />

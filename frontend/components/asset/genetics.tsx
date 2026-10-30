@@ -1,6 +1,12 @@
 'use client';
 import { useState, type CSSProperties } from 'react';
-import type { CollectionInsights, CurrentPattern, ObjectGenetics } from '@/lib/api';
+import type {
+  CollectionInsights,
+  CurrentPattern,
+  ObjectGenetics,
+  SporeDobDecoded,
+} from '@/lib/api';
+import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { AlleleGel } from '@/components/ui/allele-gel';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
@@ -167,9 +173,12 @@ export function ObjectGeneticsView({
 export function ObjectGeneticsEvidence({
   evidence,
   subject,
+  decoded,
 }: {
   evidence: ObjectGenetics;
   subject: string;
+  /** F2 objects (OB-14): the decoder's own output files, from `/spore/objects/{id}/decode`. */
+  decoded?: SporeDobDecoded;
 }) {
   const { dnaHex, cachedVmTraits: cached } = evidence;
   const layout = dnaHex === null ? null : sequencingGenes(evidence, subject);
@@ -210,6 +219,28 @@ export function ObjectGeneticsEvidence({
             </div>
           ))}
         </dl>
+      )}
+      {decoded && decoded.media.length > 0 && (
+        <ul aria-label="Decoder output" className="space-y-1 text-[11px]">
+          {decoded.media.map((m) => (
+            <li key={`${m.hash}:${m.step ?? 'x'}`} className="break-all">
+              <span className="text-text">
+                {m.mediaType} · {m.size.toLocaleString('en-US')} bytes
+                {m.step !== null ? ` · step ${m.step + 1}` : ''}
+                {m.role ? ` · ${m.role}` : ''}
+              </span>{' '}
+              <span className="text-text-dim">sha256 {m.hash.slice(0, 12)}…</span>{' '}
+              <a
+                href={`${apiBaseFor(resolveActiveNetwork())}${m.url}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-aqua"
+              >
+                Open the decoded file ↗
+              </a>
+            </li>
+          ))}
+        </ul>
       )}
       {cached.traits.length > 0 && (
         <dl aria-label="Cached VM traits" className="grid gap-2 text-[11px] sm:grid-cols-2">
