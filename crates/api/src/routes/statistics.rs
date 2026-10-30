@@ -3596,14 +3596,18 @@ async fn get_total_supply_chart(
     ok(response)
 }
 
-/// Quarter-year samples of the nominal APC model, years 0 through 20 since genesis.
-const NOMINAL_APC_LAST_QUARTER: i64 = 80;
+/// The model is continuous in years since genesis; the chart samples it every
+/// quarter. Which samples it shows is a display choice, not an invariant: at
+/// least years 0 through 20, and always one halving era (16 quarters) past
+/// the tip's quarter, so a tip of any age has its "current" sample and a
+/// projection after it.
+const NOMINAL_APC_MIN_LAST_QUARTER: i64 = 80;
+const NOMINAL_APC_FUTURE_QUARTERS: i64 = 16;
 /// One quarter of a mean Gregorian year (365.25 days), in ms. The model is
 /// continuous in years since genesis; the tip's quarter is exact integer math.
 const NOMINAL_APC_QUARTER_MS: i64 = 36_525 * 86_400_000 / 400;
 
 /// The quarterly sample holding the indexed tip: `floor(elapsed / quarter)`.
-/// A tip beyond the model's sampled range is an error, not a clamped marker.
 fn nominal_apc_tip_quarter(
     tip_chain_time_ms: i64,
     genesis_chain_time_ms: i64,
@@ -3616,14 +3620,19 @@ fn nominal_apc_tip_quarter(
                 "nominal APC: tip chain time {tip_chain_time_ms} precedes genesis {genesis_chain_time_ms}"
             ))
         })?;
-    let quarter = elapsed_ms / NOMINAL_APC_QUARTER_MS;
-    if quarter > NOMINAL_APC_LAST_QUARTER {
-        return Err(ApiError::internal(format!(
-            "nominal APC: tip chain time {tip_chain_time_ms} is {elapsed_ms} ms after genesis, \
-             quarter {quarter} beyond the model's last sampled quarter {NOMINAL_APC_LAST_QUARTER}"
-        )));
-    }
-    Ok(quarter)
+    Ok(elapsed_ms / NOMINAL_APC_QUARTER_MS)
+}
+
+/// The last sampled quarter for a tip in `tip_quarter`.
+fn nominal_apc_last_quarter(tip_quarter: i64) -> Result<i64, ApiRouteError> {
+    let projected = tip_quarter
+        .checked_add(NOMINAL_APC_FUTURE_QUARTERS)
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "nominal APC: projection past tip quarter {tip_quarter} overflows"
+            ))
+        })?;
+    Ok(std::cmp::max(NOMINAL_APC_MIN_LAST_QUARTER, projected))
 }
 
 async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<ChartResponse> {
@@ -3643,7 +3652,8 @@ async fn get_nominal_apc_chart(State(state): State<Arc<AppState>>) -> ApiResult<
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::internal("missing genesis header for nominal APC"))?;
     let current_quarter = nominal_apc_tip_quarter(chain.chain_time_ms(), genesis.chain_time_ms)?;
-    let data: Vec<ChartDataPoint> = (0..=NOMINAL_APC_LAST_QUARTER)
+    let last_quarter = nominal_apc_last_quarter(current_quarter)?;
+    let data: Vec<ChartDataPoint> = (0..=last_quarter)
         .map(|i| {
             let year = i as f64 * 0.25;
             let apc = calculate_nominal_apc(year, genesis_supply_ckb);

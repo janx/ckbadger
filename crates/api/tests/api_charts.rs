@@ -1536,14 +1536,26 @@ async fn nominal_apc_without_indexed_tip_is_initializing_not_year_zero() {
     );
 }
 
+/// Round-2 #10: year 20 was where the chart stopped sampling, not where the
+/// model ends. A tip beyond it extends the samples one halving era past the
+/// tip — never an error, never a clamped marker.
 #[tokio::test]
-async fn nominal_apc_tip_beyond_model_range_is_an_error_not_clamped() {
-    let app = create_router(test_config(nominal_apc_store(81 * QUARTER_MS))).await;
+async fn nominal_apc_tip_beyond_year_twenty_extends_the_sampled_range() {
+    // Quarter 93 (23.25 y) holds the tip.
+    let app = create_router(test_config(nominal_apc_store(93 * QUARTER_MS + 1))).await;
     let (status, json) = get_json(&app, "/charts/nominal-apc").await;
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
-    let message = json["message"].as_str().unwrap();
-    assert!(
-        message.contains("quarter 81") && message.contains("last sampled quarter 80"),
-        "{message}"
-    );
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let points = json["data"].as_array().unwrap();
+    assert_eq!(points.len(), 93 + 16 + 1);
+    assert_eq!(points.last().unwrap()["date"], "27.25");
+    let current: Vec<usize> = points
+        .iter()
+        .enumerate()
+        .filter(|(_, point)| point["value2"] == "current")
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(current, vec![93]);
+    assert_eq!(points[93]["date"], "23.25");
+    assert_eq!(points[92]["value2"], "past");
+    assert_eq!(points[94]["value2"], "future");
 }

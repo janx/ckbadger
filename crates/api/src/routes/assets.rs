@@ -1323,18 +1323,100 @@ pub(crate) fn collection_holder_distribution(
         .collect())
 }
 
-/// Exact completed-week mint/transfer/burn counts from the collection activity CF.
-/// The one weekly calendar of Spore cluster insights and object-collection
-/// insights (OB-K2): both handlers call this function.
+/// One completed week of a collection's activity history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct CollectionWeekResponse {
+    week_start: String,
+    mint_transactions: u64,
+    transfer_transactions: u64,
+    burn_transactions: u64,
+}
+
+/// A collection's completed-week calendar. It counts only rows of weeks that
+/// ended before the tip's day, so it is a function of completed days alone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CompletedWeekCalendar {
+    weekly: Vec<CollectionWeekResponse>,
+    complete_through: Option<String>,
+}
+
+/// Bounds memory only: the key, not the TTL, keeps a cached calendar exact.
+const COLLECTION_WEEKLY_CACHE_TTL: Duration = Duration::from_secs(3600);
+
+/// The calendar's cache key: the collection plus the chain's last complete
+/// day and the first block of its incomplete day. A new day, or a fork that
+/// rewrites any completed day, changes the key.
+fn collection_weekly_cache_key(
+    collection_id: &[u8],
+    chain: Option<crate::utils::stats_bucket::ChainTime>,
+) -> anyhow::Result<String> {
+    crate::utils::stats_bucket::complete_days_cache_key(
+        &format!(
+            "assets:collection_weekly:v1:0x{}",
+            hex::encode(collection_id)
+        ),
+        chain,
+    )
+    .map_err(|(_, error)| anyhow::anyhow!(error.0.message))
+}
+
+/// Exact completed-week mint/transfer/burn counts from the collection activity
+/// CF — the one weekly calendar of Spore cluster insights and object-collection
+/// insights (OB-K2): both handlers call this function. A calendar computed by
+/// [`completed_week_calendar`] is reused for every request with the same
+/// complete-day key; `calendarAnchor`, the tip the request read, is per request.
 pub(crate) fn nft_collection_weekly_activity(
     store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
+    mem_cache: &InMemoryCache,
     collection_id: &[u8],
-) -> anyhow::Result<(Vec<serde_json::Value>, Option<String>, serde_json::Value)> {
+) -> anyhow::Result<(
+    Vec<CollectionWeekResponse>,
+    Option<String>,
+    serde_json::Value,
+)> {
+    let chain = crate::utils::stats_bucket::ChainTime::load(store)
+        .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
+    let anchor = match chain {
+        Some(chain) => {
+            let tip = chain.tip_number();
+            let header = store
+                .get_block_header(tip)?
+                .ok_or_else(|| anyhow::anyhow!("calendar anchor block {tip} missing"))?;
+            serde_json::json!({
+                "blockNumber": tip,
+                "blockHash": format!("0x{}", hex::encode(&header.hash)),
+                "chainTime": header.chain_time_ms.to_string(),
+            })
+        }
+        None => serde_json::Value::Null,
+    };
+    let key = collection_weekly_cache_key(collection_id, chain)?;
+    let calendar = match mem_cache.get::<CompletedWeekCalendar>(&key) {
+        Some(calendar) => calendar,
+        None => {
+            let calendar = completed_week_calendar(store, append_only_store, collection_id, chain)?;
+            mem_cache.set(&key, &calendar, COLLECTION_WEEKLY_CACHE_TTL);
+            calendar
+        }
+    };
+    Ok((calendar.weekly, calendar.complete_through, anchor))
+}
+
+/// Scan a collection's canonical activity rows into completed weeks (Monday
+/// starts, UTC+8 stats days) ending before the week of `chain`'s tip, with
+/// quiet weeks filled as zero rows.
+fn completed_week_calendar(
+    store: &CkbadgerStore,
+    append_only_store: &CkbadgerStore,
+    collection_id: &[u8],
+    chain: Option<crate::utils::stats_bucket::ChainTime>,
+) -> anyhow::Result<CompletedWeekCalendar> {
     use chrono::Datelike;
     let mut weeks: BTreeMap<String, [u64; 3]> = BTreeMap::new();
     // Rows arrive grouped by block, and one block often carries several
-    // collection transactions: read each block header once per request.
+    // collection transactions: read each block header once per scan.
     let mut week_of_block: HashMap<i64, chrono::NaiveDate> = HashMap::new();
     let mut cursor = None;
     loop {
@@ -1375,20 +1457,8 @@ pub(crate) fn nft_collection_weekly_activity(
             }
         }
     }
-    let (complete_through, calendar_anchor) =
-        if let Some((tip, header)) = store.get_sync_tip_block()? {
-            let tip_hash: [u8; 32] = header
-                .hash
-                .as_slice()
-                .try_into()
-                .map_err(|_| anyhow::anyhow!("calendar anchor hash width"))?;
-            let chain = crate::utils::stats_bucket::ChainTime::from_header(
-                tip,
-                header.timestamp,
-                header.chain_time_ms,
-                tip_hash,
-            )
-            .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
+    let complete_through = match chain {
+        Some(chain) => {
             let day = chain
                 .tip_day()
                 .map_err(|(_, error)| anyhow::anyhow!(error.0.message))?;
@@ -1407,33 +1477,28 @@ pub(crate) fn nft_collection_weekly_activity(
                         .ok_or_else(|| anyhow::anyhow!("weekly range overflow"))?;
                 }
             }
-            (
-                Some(last_sunday.to_string()),
-                serde_json::json!({
-                    "blockNumber": tip,
-                    "blockHash": format!("0x{}", hex::encode(header.hash)),
-                    "chainTime": header.chain_time_ms.to_string(),
-                }),
-            )
-        } else {
+            Some(last_sunday.to_string())
+        }
+        None => {
             anyhow::ensure!(
                 weeks.is_empty(),
                 "collection activity calendar has no canonical tip"
             );
-            (None, serde_json::Value::Null)
-        };
-    let weekly = weeks
-        .into_iter()
-        .map(|(week, n)| {
-            serde_json::json!({
-                "weekStart": week,
-                "mintTransactions": n[0],
-                "transferTransactions": n[1],
-                "burnTransactions": n[2],
+            None
+        }
+    };
+    Ok(CompletedWeekCalendar {
+        weekly: weeks
+            .into_iter()
+            .map(|(week_start, n)| CollectionWeekResponse {
+                week_start,
+                mint_transactions: n[0],
+                transfer_transactions: n[1],
+                burn_transactions: n[2],
             })
-        })
-        .collect();
-    Ok((weekly, complete_through, calendar_anchor))
+            .collect(),
+        complete_through,
+    })
 }
 
 pub(crate) fn count_canonical_nft_collection_activities(
@@ -3698,6 +3763,7 @@ fn non_dob_collection_insights(
     let (weekly, complete_through, calendar_anchor) = nft_collection_weekly_activity(
         state.store.as_ref(),
         state.append_only_store.as_ref(),
+        &state.mem_cache,
         collection_id,
     )?;
     Ok(serde_json::json!({
@@ -4489,5 +4555,160 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("zero live items"));
+    }
+
+    /// Block `number` at `at` (UTC), plus one collection transaction in it.
+    fn seed_weekly_block(
+        store: &CkbadgerStore,
+        collection: &[u8],
+        number: i64,
+        at: &str,
+        activity: Option<(u8, AssetAction)>,
+    ) {
+        let ms = chrono::DateTime::parse_from_rfc3339(at)
+            .unwrap()
+            .timestamp_millis();
+        let mut batch = StoreBatch::new(store);
+        if store.get_block_header(number).unwrap().is_none() {
+            batch.put_block_header(
+                number,
+                &CachedBlockHeader {
+                    hash: vec![number as u8 + 1; 32],
+                    parent_hash: vec![0; 32],
+                    timestamp: ms,
+                    epoch_number: 1,
+                    epoch_index: 0,
+                    epoch_length: 1800,
+                    dao: vec![0; 32],
+                    transactions_count: 1,
+                    uncles_count: 0,
+                    proposals_count: 0,
+                    compact_target: 0,
+                    miner_lock_hash: None,
+                    cycles: None,
+                    chain_time_ms: ms,
+                },
+            );
+        }
+        if let Some((tx_byte, action)) = activity {
+            let tx_hash = [tx_byte; 32];
+            let tx_index = i32::from(tx_byte);
+            batch.put_tx_hash_map(&tx_hash, number, tx_index);
+            batch.put_tx_index(
+                number,
+                tx_index,
+                &TxIndexEntry {
+                    tx_hash,
+                    is_cellbase: false,
+                    timestamp: ms,
+                    inputs_count: 1,
+                    outputs_count: 1,
+                    fee: 0,
+                    tx_size: 200,
+                    cycles: None,
+                    semantic_tags: 0,
+                },
+            );
+            batch.put_object_collection_activity(
+                collection,
+                number,
+                tx_index,
+                &ObjectCollectionActivityEntry {
+                    tx_hash: tx_hash.to_vec(),
+                    block_hash: vec![number as u8 + 1; 32],
+                    timestamp_ms: ms,
+                    actions: vec![action],
+                },
+            );
+        }
+        batch.commit().unwrap();
+    }
+
+    /// Round-2 #12: the weekly scan runs once per complete-day key. A cached
+    /// calendar equals a fresh scan, later blocks of the same day reuse it (the
+    /// anchor still names the request's tip), and a new day changes the key.
+    #[test]
+    fn weekly_calendar_is_cached_per_complete_day_and_equals_a_fresh_scan() {
+        use crate::utils::stats_bucket::ChainTime;
+        let root = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(root.path().join("domain")).unwrap();
+        let collection = [0x6e; 32];
+        seed_weekly_block(
+            &store,
+            &collection,
+            0,
+            "2026-10-05T02:00:00Z",
+            Some((1, AssetAction::Mint)),
+        );
+        seed_weekly_block(
+            &store,
+            &collection,
+            1,
+            "2026-10-06T02:00:00Z",
+            Some((2, AssetAction::Transfer)),
+        );
+        seed_weekly_block(&store, &collection, 2, "2026-10-13T02:00:00Z", None);
+        seed_weekly_block(&store, &collection, 3, "2026-10-20T02:00:00Z", None);
+        let cache = InMemoryCache::new();
+
+        let (weekly, through, anchor) =
+            nft_collection_weekly_activity(&store, &store, &cache, &collection).unwrap();
+        let chain = ChainTime::load(&store).unwrap();
+        let key = collection_weekly_cache_key(&collection, chain).unwrap();
+        let fresh = completed_week_calendar(&store, &store, &collection, chain).unwrap();
+        let served = CompletedWeekCalendar {
+            weekly,
+            complete_through: through,
+        };
+        assert_eq!(served, fresh);
+        assert_eq!(
+            cache.get::<CompletedWeekCalendar>(&key),
+            Some(fresh.clone())
+        );
+        assert_eq!(fresh.complete_through.as_deref(), Some("2026-10-18"));
+        assert_eq!(fresh.weekly.len(), 2);
+        assert_eq!(fresh.weekly[0].mint_transactions, 1);
+        assert_eq!(fresh.weekly[0].transfer_transactions, 1);
+        assert_eq!(anchor["blockNumber"], 3);
+
+        // A row written into a completed week without a new block (only a
+        // test can do this) shows that a same-key request is a cache hit.
+        seed_weekly_block(
+            &store,
+            &collection,
+            2,
+            "2026-10-13T02:00:00Z",
+            Some((3, AssetAction::Burn)),
+        );
+        let rescanned = completed_week_calendar(&store, &store, &collection, chain).unwrap();
+        assert_eq!(rescanned.weekly[1].burn_transactions, 1);
+
+        // Another block on the tip's day: same complete days, same key.
+        seed_weekly_block(&store, &collection, 4, "2026-10-20T03:00:00Z", None);
+        let chain = ChainTime::load(&store).unwrap();
+        assert_eq!(
+            collection_weekly_cache_key(&collection, chain).unwrap(),
+            key
+        );
+        let (weekly, through, anchor) =
+            nft_collection_weekly_activity(&store, &store, &cache, &collection).unwrap();
+        assert_eq!(weekly, fresh.weekly);
+        assert_eq!(through, fresh.complete_through);
+        assert_eq!(anchor["blockNumber"], 4);
+
+        // The next day completes the 20th: a new key and a fresh scan.
+        seed_weekly_block(&store, &collection, 5, "2026-10-21T02:00:00Z", None);
+        let chain = ChainTime::load(&store).unwrap();
+        assert_ne!(
+            collection_weekly_cache_key(&collection, chain).unwrap(),
+            key
+        );
+        let (weekly, through, anchor) =
+            nft_collection_weekly_activity(&store, &store, &cache, &collection).unwrap();
+        let fresh = completed_week_calendar(&store, &store, &collection, chain).unwrap();
+        assert_eq!(weekly, fresh.weekly);
+        assert_eq!(through, fresh.complete_through);
+        assert_eq!(weekly[1].burn_transactions, 1);
+        assert_eq!(anchor["blockNumber"], 5);
     }
 }
