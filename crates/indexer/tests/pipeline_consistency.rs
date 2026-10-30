@@ -531,6 +531,7 @@ fn make_addr_delta(
         live_delta,
         total_delta,
         tx_delta,
+        cellbase_tx_delta: 0,
         used_delta,
         first_seen_block: block_num,
         first_seen_tx: tx_hash.to_vec(),

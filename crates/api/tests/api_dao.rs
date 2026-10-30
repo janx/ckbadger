@@ -489,6 +489,7 @@ async fn test_dao_stats_serves_the_indexer_singleton() {
 
     let latest = ckbadger_store::DaoLatestStatistics {
         tip_block_number: 10,
+        tip_block_hash: [0xAA; 32],
         total_deposited: 123_00000000,
         total_depositors: 7,
         active_deposits: 9,
@@ -621,8 +622,11 @@ async fn test_dao_stats_serves_singleton_and_reports_its_as_of_block() {
         })
         .unwrap();
 
+    // The singleton trails the sync tip by one block: its own block is canonical.
+    seed_tip_header(&store, 9);
     let stale = ckbadger_store::DaoLatestStatistics {
         tip_block_number: 9,
+        tip_block_hash: [0xA5; 32],
         total_deposited: 999_00000000,
         total_depositors: 999,
         active_deposits: 999,
@@ -741,6 +745,7 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
 
     let mut latest = ckbadger_store::DaoLatestStatistics {
         tip_block_number: 10,
+        tip_block_hash: [0xA5; 32],
         total_deposited: 200_00000000,
         total_depositors: 1,
         active_deposits: 1,
@@ -778,6 +783,7 @@ async fn test_dao_stats_follows_singleton_without_stale_cache() {
 
     // The indexer advances the singleton (as it does after every batch commit
     // and after every rollback).
+    seed_tip_header(&store, 11);
     latest.tip_block_number = 11;
     latest.total_deposited = 500_00000000;
     store
@@ -1850,6 +1856,8 @@ async fn test_daily_deposit_chart_includes_first_snapshot_day() {
 fn r2b_dao_latest(tip: i64, baseline: Option<i64>) -> ckbadger_store::DaoLatestStatistics {
     ckbadger_store::DaoLatestStatistics {
         tip_block_number: tip,
+        // `seed_tip_header`'s hash: the caller seeds the header at `tip`.
+        tip_block_hash: [0xA5; 32],
         total_deposited: 200_00000000,
         total_depositors: 1,
         active_deposits: 1,
@@ -1926,6 +1934,7 @@ fn r2b_put_dao_tx(store: &Arc<CkbadgerStore>, block: i64, index: i32, actions: &
 async fn dao_statistics_count_24h_deposits_and_requests_and_carry_their_own_s() {
     let store = test_store();
     seed_genesis_baseline(&store);
+    seed_tip_header(&store, 20);
     seed_tip_header(&store, 21);
     r2b_put_dao_latest(&store, &r2b_dao_latest(20, Some(17)));
     r2b_put_dao_tx(&store, 17, 1, &["deposit"]); // the baseline block: before the window
@@ -1959,6 +1968,41 @@ async fn dao_statistics_count_24h_deposits_and_requests_and_carry_their_own_s() 
     assert_eq!(status, StatusCode::OK, "{json}");
     assert!(json["deposits24h"].is_null(), "{json}");
     assert!(json["withdrawalRequests24h"].is_null(), "{json}");
+}
+
+/// DAO-16 (W5): the statistics name the block they were computed at by number
+/// AND hash, and that block must still be canonical: a row computed on a branch
+/// a rollback has since abandoned is a 500 naming the block, never served as
+/// current.
+#[tokio::test]
+async fn dao_statistics_anchor_is_the_canonical_block_the_row_was_computed_at() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_tip_header(&store, 20);
+    let mut latest = r2b_dao_latest(20, None);
+    latest.tip_block_hash = [0xA5; 32];
+    r2b_put_dao_latest(&store, &latest);
+    let app = create_router(test_config(store.clone())).await;
+    let (status, json) = get_json(&app, "/dao/statistics").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["anchor"],
+        serde_json::json!({"blockNumber": 20, "blockHash": format!("0x{}", "a5".repeat(32))}),
+        "{json}"
+    );
+    assert_eq!(json["tipBlockNumber"], 20);
+
+    // The same height now holds another block: the row describes an orphan.
+    latest.tip_block_hash = [0xEE; 32];
+    r2b_put_dao_latest(&store, &latest);
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(&app, "/dao/statistics").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("block 20") && message.contains(&"ee".repeat(32)),
+        "{json}"
+    );
 }
 
 /// DAO-12: every current depositor, ranked by phase-0 capacity, paged — the

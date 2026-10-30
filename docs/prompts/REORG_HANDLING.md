@@ -38,7 +38,8 @@ On mismatch, it walks backward to find the fork point.
 
 For reorgs up to 36 blocks deep, the indexer:
 
-1. Records a reorg event in `CF_SYNC_META` (`reorg:<timestamp_ms>`)
+1. Records a reorg event in `CF_SYNC_META` (`reorg:<timestamp_ms>`), including the first block it
+   drops (`first_orphan_hash`, read from the stored headers before the rollback)
 2. Calls `rollback_to_block(fork_point)` for atomic multi-CF rollback
 3. Removes rolled-back entries from all domain CFs: `block_headers`, `tx_index`, `live_cells`, `token_transfers`, `activities`, `addr_txs`, collection activity CFs, mutable aggregates, etc.
 4. Activity/addr_txs/collection activity entries are directly deleted via range scan (no ghost entries, no canonical filtering needed)
@@ -80,10 +81,16 @@ automatic switches and deep-fork detections. Each row carries its D7 address fac
 
 Returns one event's detail: the fork point height plus the first 8 lowercase hex digits of the first
 block the switch dropped (height `fork_point + 1` on the abandoned branch). Exactly one event may
-match; two matches, or an event at the same fork point whose first orphan cannot be resolved, is an
-error naming the events. A one-block switch records its first orphan (its old tip); a deeper switch
-is traced from the recorded old tip on the node store. A deep detection rolled nothing back, so it has
-no address. The old millisecond route `/forks/{id}` is removed.
+match; two matches are an error naming both events. Every automatic switch persists its first orphan
+(`ReorgEvent.first_orphan_hash`): `execute_reorg` reads it from the indexer's own headers before the
+rollback deletes them, after proving the branch links — its parent is the fork point hash, each later
+header's parent is the header below, and the header at the old tip is the recorded old tip hash; a
+break is an error before anything is rolled back. So every row's address resolves from the store
+alone, without the node reader (`firstOrphanStatus` is `recorded`). A deep detection rolled nothing
+back, so it has no address (`not_observed`). Without the node reader the detail is the persisted
+event with `evidenceStatus: "node_reader_unavailable"` and empty branch evidence; with it, the node's
+old branch must start at the persisted first orphan. The old millisecond route `/forks/{id}` is
+removed.
 
 ### `GET /api/v1/forks/recent`
 

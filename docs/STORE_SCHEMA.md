@@ -37,7 +37,7 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 | `cell_by_data_hash`              | blake2b(cell_data) + outpoint                                                 | empty                                                                          | Cell index by data hash (code cell resolution)                                                                                                                                                                                                             |
 | `tx_index`                       | block_number + tx_index                                                       | TxIndexEntry { tx_hash: [u8; 32], fee, size, counts, cycles, tags, timestamp } | Domain transaction order and canonical hash pointer; written by the indexer in live and bulk paths                                                                                                                                                         |
 | `tx_hash_map`                    | tx_hash (32B)                                                                 | block_number + tx_index                                                        | Reverse lookup: tx_hash -> position                                                                                                                                                                                                                        |
-| `addr_balance`                   | lock_script_hash (32B)                                                        | AddressBalance                                                                 | Address balance and cell counts                                                                                                                                                                                                                            |
+| `addr_balance`                   | lock_script_hash (32B)                                                        | AddressBalance                                                                 | Address balance, cell counts, `txs_count` and `cellbase_txs_count` (the cellbase txs among them; activity total = `address_tx_count - cellbase_txs_count`)                                                                                                 |
 | `addr_txs`                       | lock_hash + block + tx_index + tx_hash                                        | AddrTxValue                                                                    | Address transaction thin index with capacity change, tx flags, and participant activity tags                                                                                                                                                               |
 | `addr_txs_by_prefix`             | lock_hash_prefix(20) + block_num_desc(8) + tx_idx_desc(4) + tx_hash(32) = 64B | AddrTxValue                                                                    | Same thin index for a party a protocol NAMED by its 20-byte lock-hash prefix and that holds no cell in the transaction                                                                                                                                     |
 | `addr_prefix_stats`              | lock_hash_prefix(20)                                                          | AddrPrefixStats                                                                | How many transactions named this prefix without it holding a cell; added to `addr_balance.txs_count` by `address_tx_count`                                                                                                                                 |
@@ -252,6 +252,16 @@ pre-image cannot do this: a live batch spans many blocks, the pre-image is recor
 and a fork point on a later block of the same batch would never replay it while still deleting the
 rows written after it.
 
+**`addr_balance.cellbase_txs_count`** (W5) counts the cellbase transactions among `txs_count`.
+Both forward paths increment it through `AddressBalance::cellbase_tx_increment` — bulk inside the
+address reducer's existing row update, live in the parser's `fold_tx_address_deltas` — and
+rollback reverses it like `txs_count`, by the deleted `addr_txs` rows at tx position 0 (a block's
+cellbase), failing if it would leave `0..=txs_count`. Cellbase rows are the only `addr_txs` rows
+without a `CF_TX_ACTIONS` row, so `CkbadgerStore::address_activity_count`
+(`address_tx_count - cellbase_txs_count`) is the one definition of an address's activity count,
+served as `total` on the unfiltered `/addresses/{addr}/activities`. The `AddressBalance` bincode
+layout changed and requires a genesis re-sync.
+
 **Bounded window.** Only the `EntityStats` scope is pruned during normal sync. Every live commit
 advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
 `crates/indexer/src/sync/batch.rs`) and deletes the `EntityStats` entries it leaves behind, staged
@@ -345,7 +355,12 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   fork-point check remains a strict invariant. Interruption and `superseded_by_tip_hash` may
   coexist; deep events always have interruption false. A crash after rollback but before the
   new event is written can still lose that new observation; this change does not journal it.
-  The `ReorgEvent` bincode layout changed and requires a genesis re-sync.
+  Every event that rolled blocks back records `first_orphan_hash` (`Option<[u8; 32]>`): the first
+  block the switch dropped (height `fork_point + 1`), read by `execute_reorg` from the domain
+  store's own headers before the rollback, after proving `fork_point_hash -> first orphan -> … ->
+old_tip_hash` links; `None` exactly for a deep detection. It is the event's D7 address, so the API
+  resolves every fork row without the node store. Reconcile and interruption rewrites carry it
+  unchanged. The `ReorgEvent` bincode layout changed (again, W5) and requires a genesis re-sync.
 
 #### `entity_stats_undo_contract`
 
@@ -419,7 +434,11 @@ During fresh-db bulk sync, the indexer writes `stats_dao`, `stats_script`, and `
 inline as Class C sealed aggregates:
 
 - `stats_dao` stores DAO daily snapshots keyed by date, then refreshes the latest/top summary rows
-  after sync tip metadata is finalized.
+  after sync tip metadata is finalized. The latest row (`DaoLatestStatistics`) records the block it
+  was computed at by number and hash (`tip_block_number`, `tip_block_hash`, both from the sync-tip
+  header its single writer `refresh_latest_dao_statistics` reads, on bulk and live alike);
+  `/dao/statistics` serves them as `anchor` and fails when that hash is no longer the canonical
+  header at that height. The bincode layout changed (W5) and requires a genesis re-sync.
 - `stats_script` stores `ScriptDailyDelta` rows keyed by
   `code_hash + hash_type + kind(lock/type) + YYYYMMDD` — the hash_type byte keeps
   references that share code_hash bytes but differ in hash_type (data/type/data1/data2)

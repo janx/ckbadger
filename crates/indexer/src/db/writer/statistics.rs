@@ -1515,8 +1515,16 @@ impl BatchWriter {
             _ => unreachable!("baseline observation and result are paired"),
         };
 
+        let tip_block_hash: [u8; 32] = header.hash.as_slice().try_into().map_err(|_| {
+            anyhow!(
+                "sync tip block hash has {} bytes while refreshing latest dao statistics: block_number={}",
+                header.hash.len(),
+                tip_block_number
+            )
+        })?;
         let latest = DaoLatestStatistics {
             tip_block_number,
+            tip_block_hash,
             total_deposited,
             total_depositors,
             active_deposits,
@@ -1971,6 +1979,10 @@ mod tests {
         let latest = store.get_latest_dao_statistics().unwrap().unwrap();
 
         assert_eq!(latest.tip_block_number, 10);
+        assert_eq!(
+            latest.tip_block_hash, [0x11; 32],
+            "the row names the sync-tip block it was computed at"
+        );
         assert_eq!(latest.total_deposited, 200_00000000);
         assert_eq!(latest.total_depositors, 1);
         assert_eq!(latest.active_deposits, 1);

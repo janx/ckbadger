@@ -207,6 +207,10 @@ pub struct DaoStatisticsResponse {
     /// sync tip by at most one batch commit, so this makes the as-of block
     /// explicit instead of implying "current".
     pub tip_block_number: i64,
+    /// The same block by number and hash (the row's persisted
+    /// `tip_block_hash`), proved to be the canonical block at that height in
+    /// the request's read view. DAO-16 states `S = still owed + burnt` at it.
+    pub anchor: DaoArAnchor,
     /// Exact chain-derived block-0 burn policy total, in shannons.
     pub genesis_baseline_burnt: String,
     pub total_deposited: String,
@@ -639,8 +643,34 @@ fn dao_24h_counts(
     Ok(Some((deposits, requests)))
 }
 
+/// The block the singleton row was computed at, which must still be the
+/// canonical block at that height: after a rollback, until the indexer's next
+/// refresh, the row describes an abandoned branch and is an error naming it.
+fn dao_statistics_anchor(
+    store: &ckbadger_store::CkbadgerStore,
+    latest: &ckbadger_store::DaoLatestStatistics,
+) -> anyhow::Result<DaoArAnchor> {
+    let block = latest.tip_block_number;
+    let recorded = hex::encode(latest.tip_block_hash);
+    let header = store.get_block_header(block)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "dao_latest_stats was computed at block {block} 0x{recorded}, which has no canonical header"
+        )
+    })?;
+    anyhow::ensure!(
+        header.hash.as_slice() == latest.tip_block_hash.as_slice(),
+        "dao_latest_stats was computed at block {block} 0x{recorded}, but the canonical block there is 0x{}",
+        hex::encode(&header.hash)
+    );
+    Ok(DaoArAnchor {
+        block_number: block,
+        block_hash: format!("0x{recorded}"),
+    })
+}
+
 fn dao_latest_to_response(
     latest: &ckbadger_store::DaoLatestStatistics,
+    anchor: DaoArAnchor,
     deltas: DaoDeltas,
     genesis_baseline_burnt: i128,
     counts_24h: Option<(u64, u64)>,
@@ -655,6 +685,7 @@ fn dao_latest_to_response(
 
     DaoStatisticsResponse {
         tip_block_number,
+        anchor,
         genesis_baseline_burnt: genesis_baseline_burnt.to_string(),
         total_deposited: total_deposited.clone(),
         total_deposited_ckb: shannon_to_ckb(&total_deposited),
@@ -885,13 +916,14 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
         let Some(latest) = store.get_latest_dao_statistics()? else {
             return Ok(None);
         };
+        let anchor = dao_statistics_anchor(&store, &latest)?;
         let counts = dao_24h_counts(&store, &latest)?;
-        Ok(Some((latest, counts)))
+        Ok(Some((latest, anchor, counts)))
     })
     .await
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(|e| ApiError::internal(format!("{e:#}")))?;
-    let Some((latest, counts_24h)) = latest else {
+    let Some((latest, anchor, counts_24h)) = latest else {
         return Err(dao_singleton_missing(&state, "dao_latest_stats"));
     };
 
@@ -899,6 +931,7 @@ async fn get_statistics(State(state): State<Arc<AppState>>) -> ApiResult<DaoStat
     let genesis_baseline_burnt = state.genesis_baseline()?.burnt;
     ok(dao_latest_to_response(
         &latest,
+        anchor,
         deltas,
         genesis_baseline_burnt,
         counts_24h,

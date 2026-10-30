@@ -571,10 +571,10 @@ fn fetch_address_count_snapshot(
         ctx,
         &format!("addresses/{}/transactions?limit=1", holder_lock_hash),
     )?;
-    // Address activities intentionally expose only cursor pagination. They are
-    // a different set from address transactions (cellbase rows are absent), so
-    // there is no authoritative pre-computed total to compare here. Still probe
-    // the endpoint and deserialize its cursor contract for every sampled holder.
+    // Address activities are a different set from address transactions
+    // (cellbase rows are absent); their `total` subtracts the persisted
+    // cellbase count, which `address_cellbase_count_consistency` verifies.
+    // Here, probe the endpoint and its cursor contract for every sampled holder.
     let _: CursorPage<serde_json::Value> = api_get(
         ctx,
         &format!("addresses/{}/activities?limit=1", holder_lock_hash),
@@ -4735,6 +4735,274 @@ impl Check for GlobalActivityBucketIndexConsistency {
     }
 }
 
+// ── Address cellbase counts ────────────────────────────────────────────────
+
+/// `AddressBalance.cellbase_txs_count` — what the unfiltered address activity
+/// total subtracts from the address's transaction count — against the block
+/// headers of a sampled set of blocks.
+///
+/// For each sampled block whose reward is already paid, the block's miner
+/// (`minerAddress`, its cellbase-witness lock) must hold the paying cellbase
+/// (`miningRewardTxHash`, at `rewardPaidAtBlock`) in its own transaction index,
+/// flagged as a cellbase. For a miner with at most 10,000 transactions the
+/// check then pages its whole index: the committed rows must equal
+/// `transactionsCount`, and the persisted cellbase count — `transactionsCount`
+/// minus the activity `total` — must equal the cellbase rows exactly. A larger
+/// miner gets the row check and `1 <= cellbase count <= transactionsCount`.
+pub struct AddressCellbaseCountConsistency;
+
+/// How many distinct sampled blocks the check walks, at most.
+const CELLBASE_COUNT_SAMPLE_BLOCK_CAP: usize = 20;
+const CELLBASE_COUNT_PAGE_LIMIT: usize = 100;
+/// Separates this check's block sample from other checks run with the same seed.
+const CELLBASE_COUNT_SEED_SALT: u64 = 0xCE11_BA5E_C0FF_EE05;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BlockRewardApiRecord {
+    miner_address: Option<String>,
+    mining_reward_tx_hash: Option<String>,
+    reward_paid_at_block: Option<i64>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AddressTxRowApiRecord {
+    tx_hash: String,
+    /// Null for a tx-pool row (page one only): not a committed transaction.
+    block_number: Option<i64>,
+    is_cellbase: bool,
+}
+
+/// Whether `miner`'s transaction index holds `cellbase` at block `paid`, as a
+/// cellbase row. Pages from just above `paid` until the listing moves below it.
+fn miner_holds_reward_cellbase(
+    ctx: &CheckContext,
+    miner: &str,
+    paid: i64,
+    cellbase: &str,
+) -> anyhow::Result<bool> {
+    let mut cursor = format!("{}:0", paid + 1);
+    loop {
+        let page: CursorPage<AddressTxRowApiRecord> = api_get(
+            ctx,
+            &format!(
+                "addresses/{miner}/transactions?limit={CELLBASE_COUNT_PAGE_LIMIT}&cursor={cursor}"
+            ),
+        )?;
+        for row in &page.data {
+            let block = row.block_number.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "transactions of {miner} at cursor {cursor} served a pool row (pool rows are page-one only)"
+                )
+            })?;
+            if block > paid {
+                anyhow::bail!(
+                    "transactions of {miner} returned block {block} above its cursor {cursor}"
+                );
+            }
+            if block < paid {
+                return Ok(false);
+            }
+            if normalize_hex_key(&row.tx_hash) == normalize_hex_key(cellbase) {
+                return Ok(row.is_cellbase);
+            }
+        }
+        match page.next_cursor {
+            Some(next) if !page.data.is_empty() => cursor = next,
+            _ => return Ok(false),
+        }
+    }
+}
+
+/// The findings for one sampled block, and whether its miner was counted
+/// exactly (bounded) or checked by position only.
+struct CellbaseCountOutcome {
+    details: Vec<String>,
+    exact: bool,
+}
+
+fn verify_cellbase_count_sample(
+    ctx: &CheckContext,
+    block: u64,
+    miner: &str,
+    paid: i64,
+    cellbase: &str,
+) -> anyhow::Result<CellbaseCountOutcome> {
+    let mut details = vec![];
+    if !miner_holds_reward_cellbase(ctx, miner, paid, cellbase)? {
+        details.push(format!(
+            "block {block}'s reward cellbase {cellbase} (block {paid}) is not a cellbase row of its miner's transaction index"
+        ));
+    }
+    let address: AddressDetailApiRecord = api_get(ctx, &format!("addresses/{miner}"))?;
+    let activities: CursorPageWithTotal<serde_json::Value> =
+        api_get(ctx, &format!("addresses/{miner}/activities?limit=1"))?;
+    let activity_total = activities
+        .total
+        .ok_or_else(|| anyhow::anyhow!("unfiltered activities of {miner} declare no total"))?;
+    let cellbase_count = address
+        .transactions_count
+        .checked_sub(activity_total)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "{miner}: transactionsCount {} - activities total {activity_total} overflows",
+                address.transactions_count
+            )
+        })?;
+    if cellbase_count < 1 || cellbase_count > address.transactions_count {
+        details.push(format!(
+            "persisted cellbase count {cellbase_count} (transactionsCount {} - activities total {activity_total}) is outside 1..=transactionsCount for a miner paid at block {paid}",
+            address.transactions_count
+        ));
+    }
+    if address.transactions_count > ADDRESS_BALANCE_MAX_TXS_PER_SAMPLE {
+        return Ok(CellbaseCountOutcome {
+            details,
+            exact: false,
+        });
+    }
+    let rows: Vec<AddressTxRowApiRecord> = all_cursor_pages(
+        ctx,
+        &format!("addresses/{miner}/transactions?limit={CELLBASE_COUNT_PAGE_LIMIT}"),
+    )?;
+    let committed: Vec<&AddressTxRowApiRecord> = rows
+        .iter()
+        .filter(|row| row.block_number.is_some())
+        .collect();
+    let committed_rows = i64::try_from(committed.len())?;
+    let cellbase_rows = i64::try_from(committed.iter().filter(|row| row.is_cellbase).count())?;
+    if committed_rows != address.transactions_count {
+        details.push(format!(
+            "transactionsCount {} != {committed_rows} committed transaction rows",
+            address.transactions_count
+        ));
+    }
+    if cellbase_count != cellbase_rows {
+        details.push(format!(
+            "persisted cellbase count {cellbase_count} (transactionsCount {} - activities total {activity_total}) != {cellbase_rows} cellbase rows",
+            address.transactions_count
+        ));
+    }
+    Ok(CellbaseCountOutcome {
+        details,
+        exact: true,
+    })
+}
+
+impl Check for AddressCellbaseCountConsistency {
+    fn name(&self) -> &'static str {
+        "address_cellbase_count_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Sampled blocks' reward cellbases sit in their miners' transaction indexes, and bounded miners' persisted cellbase counts equal their cellbase rows"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    /// The block sample is sized by `--sample-count`.
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(CELLBASE_COUNT_SAMPLE_BLOCK_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "address_cellbase_count_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let tip_before = sampling_tip_from_stats(&fetch_network_stats(ctx)?)?;
+        let tip_i64 = i64::try_from(tip_before)?;
+        // Blocks 1..=tip: genesis has no miner.
+        let blocks: Vec<u64> = LcgSampler::new(ctx.seed.wrapping_add(CELLBASE_COUNT_SEED_SALT))
+            .sample_range(
+                ctx.sample_count.min(CELLBASE_COUNT_SAMPLE_BLOCK_CAP),
+                tip_before,
+            )
+            .into_iter()
+            .map(|offset| offset + 1)
+            .collect();
+
+        let mut findings = vec![];
+        let mut skipped: Vec<String> = vec![];
+        let (mut exact, mut positional, mut unpaid) = (0u64, 0u64, 0u64);
+        for &block in &blocks {
+            let record: BlockRewardApiRecord = api_get(ctx, &format!("blocks/{block}"))?;
+            let (Some(miner), Some(cellbase), Some(paid)) = (
+                record.miner_address.as_deref(),
+                record.mining_reward_tx_hash.as_deref(),
+                record.reward_paid_at_block,
+            ) else {
+                unpaid += 1;
+                progress.inc(1);
+                continue;
+            };
+            if paid > tip_i64 {
+                unpaid += 1;
+                progress.inc(1);
+                continue;
+            }
+            let mut outcome = verify_cellbase_count_sample(ctx, block, miner, paid, cellbase)?;
+            if !outcome.details.is_empty() {
+                // Re-read once: the reads race a live-syncing tip.
+                outcome = verify_cellbase_count_sample(ctx, block, miner, paid, cellbase)?;
+            }
+            if !outcome.details.is_empty() {
+                let tip_after = sampling_tip_from_stats(&fetch_network_stats(ctx)?)?;
+                if tip_after > tip_before {
+                    skipped.push(format!(
+                        "block {block} (tip advanced {tip_before}→{tip_after}): {}",
+                        outcome.details.join("; ")
+                    ));
+                } else {
+                    findings.push(Finding {
+                        entity: format!("block={block} miner={miner}"),
+                        details: outcome.details,
+                    });
+                }
+            }
+            if outcome.exact {
+                exact += 1;
+            } else {
+                positional += 1;
+            }
+            progress.inc(1);
+        }
+        let checked = exact + positional;
+        if checked == 0 {
+            anyhow::bail!(
+                "address_cellbase_count_consistency found no sampled block with a paid reward: \
+                 tip={tip_before}, sampled={}, unpaid={unpaid}",
+                blocks.len()
+            );
+        }
+        let skip_note = if skipped.is_empty() {
+            String::new()
+        } else {
+            format!(", {} skipped: {}", skipped.len(), skipped.join(" | "))
+        };
+        let detail = format!(
+            "{checked} sampled blocks: {exact} miners counted exactly, {positional} checked by \
+             position only (more than {ADDRESS_BALANCE_MAX_TXS_PER_SAMPLE} transactions), \
+             {unpaid} rewards not yet paid{skip_note}"
+        );
+        if findings.is_empty() {
+            Ok(CheckResult::pass_with_detail(checked, detail))
+        } else {
+            Ok(CheckResult {
+                detail: Some(detail),
+                ..CheckResult::fail(checked, findings)
+            })
+        }
+    }
+}
+
 // ── `.cell` (DotCell) names ────────────────────────────────────────────────
 
 /// How many `.cell` names a records-parity sample may read back from the node.
@@ -5263,6 +5531,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DaoStatusIndexMatchesDeposits),
         Box::new(ParticipantRowsConsistency),
         Box::new(GlobalActivityBucketIndexConsistency),
+        Box::new(AddressCellbaseCountConsistency),
         Box::new(DotCellRingIntegrity),
         Box::new(DotCellIdIsLabelHash),
         Box::new(DotCellOwnerIndexConsistency),
@@ -5465,7 +5734,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 37);
+        assert_eq!(checks.len(), 38);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -5490,6 +5759,7 @@ mod tests {
         assert!(names.contains(&"dao_status_index_matches_deposits"));
         assert!(names.contains(&"participant_rows_consistency"));
         assert!(names.contains(&"global_activity_bucket_index_consistency"));
+        assert!(names.contains(&"address_cellbase_count_consistency"));
         assert!(names.contains(&"dotcell_ring_integrity"));
         assert!(names.contains(&"dotcell_id_is_label_hash"));
         assert!(names.contains(&"dotcell_owner_index_consistency"));
@@ -5551,7 +5821,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 30);
+        assert_eq!(sampling_count, 31);
     }
 
     #[test]
@@ -8016,6 +8286,179 @@ mod tests {
                 assert!(completed.status_reason.unwrap().contains("identityId"));
             }
         }
+    }
+
+    // ── address_cellbase_count_consistency ─────────────────────────────────
+
+    const CELLBASE_MINER: &str = "ckb1qcellbaseminer";
+
+    fn cellbase_hash() -> String {
+        format!("0x{}", "cb".repeat(32))
+    }
+
+    fn address_tx_row(byte: u8, block: Option<i64>, is_cellbase: bool) -> serde_json::Value {
+        json!({
+            "txHash": format!("0x{}", format!("{byte:02x}").repeat(32)),
+            "blockNumber": block,
+            "isCellbase": is_cellbase,
+        })
+    }
+
+    /// Every sampled block (tip 100) was mined by `CELLBASE_MINER`, whose
+    /// reward is paid at block 50 by `cellbase_hash()`. Returns the call
+    /// counter of the miner's full (cursor-less) transaction listing.
+    fn mount_cellbase_count_fixture(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        transactions_count: i64,
+        activities_total: i64,
+        rows_at_paid_block: serde_json::Value,
+        full_listing: serde_json::Value,
+    ) -> Arc<AtomicUsize> {
+        use wiremock::matchers::{path_regex, query_param_is_missing};
+        let full_listing_calls = Arc::new(AtomicUsize::new(0));
+        let base = format!("/api/v1/addresses/{CELLBASE_MINER}");
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path_regex(r"^/api/v1/blocks/[0-9]+$"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "minerAddress": CELLBASE_MINER,
+                    "miningRewardTxHash": cellbase_hash(),
+                    "rewardPaidAtBlock": 50,
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("{base}/transactions")))
+                .and(query_param("cursor", "51:0"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": rows_at_paid_block,
+                    "nextCursor": null,
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("{base}/transactions")))
+                .and(query_param_is_missing("cursor"))
+                .respond_with(RepeatingPageResponder {
+                    calls: full_listing_calls.clone(),
+                    page: json!({ "data": full_listing, "nextCursor": null }),
+                })
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(base.clone()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "lockScriptHash": format!("0x{}", "aa".repeat(32)),
+                    "liveCellsCount": 1,
+                    "transactionsCount": transactions_count,
+                    "recentActivitiesCount": transactions_count,
+                })))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("{base}/activities")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data": [],
+                    "total": activities_total,
+                    "nextCursor": null,
+                })))
+                .mount(server)
+                .await;
+        });
+        mount_static_network_tip(runtime, server, 100);
+        full_listing_calls
+    }
+
+    /// A bounded miner whose activity total leaves exactly its cellbase rows:
+    /// three committed transactions, two of them cellbases (one the sampled
+    /// reward), one activity. The page-one pool row is not a committed row.
+    fn bounded_miner_rows() -> (serde_json::Value, serde_json::Value) {
+        let at_paid = json!([address_tx_row(0x45, Some(50), false), {
+            "txHash": cellbase_hash(), "blockNumber": 50, "isCellbase": true,
+        }]);
+        let full = json!([
+            address_tx_row(0xee, None, false),
+            address_tx_row(0x45, Some(50), false),
+            { "txHash": cellbase_hash(), "blockNumber": 50, "isCellbase": true },
+            address_tx_row(0x40, Some(40), true),
+        ]);
+        (at_paid, full)
+    }
+
+    #[test]
+    fn cellbase_count_check_passes_when_the_counter_equals_the_cellbase_rows() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let (at_paid, full) = bounded_miner_rows();
+        let calls = mount_cellbase_count_fixture(&runtime, &server, 3, 1, at_paid, full);
+        let mut ctx = mock_ctx(&server);
+        ctx.sample_count = 1;
+        let result = AddressCellbaseCountConsistency
+            .run(&ctx, &ProgressReporter::new(None))
+            .expect("check runs");
+        assert!(result.passed(), "{:?}", result.findings);
+        assert_eq!(result.items_checked, 1);
+        assert!(
+            result
+                .detail
+                .as_deref()
+                .is_some_and(|d| d.contains("1 miners counted exactly")),
+            "{:?}",
+            result.detail
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cellbase_count_check_flags_a_counter_that_disagrees_with_the_cellbase_rows() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        let (at_paid, full) = bounded_miner_rows();
+        // Activity total 2 declares one cellbase; the index holds two.
+        mount_cellbase_count_fixture(&runtime, &server, 3, 2, at_paid, full);
+        let mut ctx = mock_ctx(&server);
+        ctx.sample_count = 1;
+        let result = AddressCellbaseCountConsistency
+            .run(&ctx, &ProgressReporter::new(None))
+            .expect("check runs");
+        assert!(!result.passed());
+        assert!(
+            result.findings[0].details.iter().any(|d| d.contains(
+                "persisted cellbase count 1 (transactionsCount 3 - activities total 2) != 2 cellbase rows"
+            )),
+            "{:?}",
+            result.findings
+        );
+    }
+
+    #[test]
+    fn cellbase_count_check_flags_a_missing_reward_row_without_paging_a_large_miner() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        // The listing at the paying block holds no cellbase: it jumps to block 49.
+        let at_paid = json!([address_tx_row(0x49, Some(49), true)]);
+        let calls =
+            mount_cellbase_count_fixture(&runtime, &server, 4_727_769, 1_682, at_paid, json!([]));
+        let mut ctx = mock_ctx(&server);
+        ctx.sample_count = 1;
+        let result = AddressCellbaseCountConsistency
+            .run(&ctx, &ProgressReporter::new(None))
+            .expect("check runs");
+        assert!(!result.passed());
+        assert!(
+            result.findings[0]
+                .details
+                .iter()
+                .any(|d| d.contains("is not a cellbase row of its miner's transaction index")),
+            "{:?}",
+            result.findings
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            0,
+            "a miner above the bound is never paged in full"
+        );
     }
 
     // ── global_activity_bucket_index_consistency ──────────────────────────

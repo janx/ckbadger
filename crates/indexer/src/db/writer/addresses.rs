@@ -812,11 +812,32 @@ impl BatchWriter {
                             delta.tx_delta
                         );
                     }
+                    let next_cellbase_txs_count = bal
+                        .cellbase_txs_count
+                        .checked_add(delta.cellbase_tx_delta)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "address cellbase_txs_count overflow: lock_hash=0x{}, cellbase_txs_count={}, delta={}",
+                                hex::encode(lock_hash),
+                                bal.cellbase_txs_count,
+                                delta.cellbase_tx_delta
+                            )
+                        })?;
+                    if next_cellbase_txs_count < 0 || next_cellbase_txs_count > next_txs_count {
+                        bail!(
+                            "address cellbase_txs_count outside 0..=txs_count: lock_hash=0x{}, cellbase_txs_count={}, delta={}, next_txs_count={}",
+                            hex::encode(lock_hash),
+                            bal.cellbase_txs_count,
+                            delta.cellbase_tx_delta,
+                            next_txs_count
+                        );
+                    }
                     bal.balance = next_balance;
                     bal.used_capacity = next_used;
                     bal.live_cells_count = next_live_cells;
                     bal.total_cells_count = next_total_cells;
                     bal.txs_count = next_txs_count;
+                    bal.cellbase_txs_count = next_cellbase_txs_count;
                     bal.last_activity_block = delta.last_activity_block;
                     bal.last_activity_tx = delta.last_activity_tx.clone();
                     bal
@@ -827,15 +848,18 @@ impl BatchWriter {
                         || delta.live_delta < 0
                         || delta.total_delta < 0
                         || delta.tx_delta < 0
+                        || delta.cellbase_tx_delta < 0
+                        || delta.cellbase_tx_delta > delta.tx_delta
                     {
                         bail!(
-                            "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, used_delta={}, live_delta={}, total_delta={}, tx_delta={}",
+                            "address delta underflow for unseen address: lock_hash=0x{}, balance_delta={}, used_delta={}, live_delta={}, total_delta={}, tx_delta={}, cellbase_tx_delta={}",
                             hex::encode(lock_hash),
                             delta.balance_delta,
                             delta.used_delta,
                             delta.live_delta,
                             delta.total_delta,
-                            delta.tx_delta
+                            delta.tx_delta,
+                            delta.cellbase_tx_delta
                         );
                     }
                     AddressBalance {
@@ -844,6 +868,7 @@ impl BatchWriter {
                         live_cells_count: delta.live_delta,
                         total_cells_count: delta.total_delta as i64,
                         txs_count: delta.tx_delta,
+                        cellbase_txs_count: delta.cellbase_tx_delta,
                         first_seen_block: delta.first_seen_block,
                         first_seen_tx: delta.first_seen_tx.clone(),
                         last_activity_block: delta.last_activity_block,

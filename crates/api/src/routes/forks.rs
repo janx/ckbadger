@@ -42,8 +42,9 @@ pub struct ReorgEventResponse {
     pub reverses_events: Vec<ForkEventRefResponse>,
     /// The first block this switch dropped (height `forkPointNumber + 1` on the
     /// abandoned branch): the second half of the event's D7 address
-    /// `/forks/<forkPointNumber>/<first 8 hex digits>`. `None` exactly when
-    /// `firstOrphanStatus` is not `recorded` or `traced`.
+    /// `/forks/<forkPointNumber>/<first 8 hex digits>`, persisted by the
+    /// indexer. `None` exactly when `firstOrphanStatus` is `not_observed` (a
+    /// deep detection, which dropped nothing).
     pub first_orphan_hash: Option<String>,
     pub first_orphan_status: &'static str,
     pub fork_point_number: i64,
@@ -146,6 +147,10 @@ pub struct OrphanedTransactionResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ReorgDetailResponse {
     pub event: ReorgEventResponse,
+    /// `available` when the branch evidence below was read from the node
+    /// store; `node_reader_unavailable` when the node store is not open — the
+    /// event itself still resolves and the evidence lists are empty.
+    pub evidence_status: &'static str,
     /// Historical branch evidence retained by the node, even after local rollback.
     pub orphaned_blocks: Vec<OrphanedBlockResponse>,
     pub orphaned_transactions: Vec<OrphanedTransactionResponse>,
@@ -339,45 +344,42 @@ fn rfc3339_from_unix_seconds(seconds: i64, context: &str) -> Result<String, ApiR
 /// The first block a switch dropped: height `fork_point + 1` on the abandoned
 /// branch, i.e. the second half of the event's D7 address.
 ///
-/// One rule: walk the recorded old branch from `old_tip_hash` down to
-/// `fork_point + 1`. A one-block switch needs no step — its old tip *is* the
-/// first orphan, which the event row records. A deeper switch needs one node
-/// read per step, so without the node reader it stays unresolved (the event row
-/// keeps only the old tip's hash; persisting the first orphan is lane W's).
+/// One path: the indexer persists it on every event that rolled blocks back
+/// (`ReorgEvent::first_orphan_hash`, read from its own headers and proved to
+/// link fork point -> first orphan -> old tip before the rollback, W5). A deep
+/// detection rolled nothing back and has none. No node read is involved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FirstOrphan {
     Recorded([u8; 32]),
-    Traced([u8; 32]),
     NotObserved,
-    NeedsNodeReader,
-    OldBranchUnavailable,
 }
 
 impl FirstOrphan {
     fn hash(&self) -> Option<&[u8; 32]> {
         match self {
-            FirstOrphan::Recorded(hash) | FirstOrphan::Traced(hash) => Some(hash),
-            _ => None,
+            FirstOrphan::Recorded(hash) => Some(hash),
+            FirstOrphan::NotObserved => None,
         }
     }
 
     fn status(&self) -> &'static str {
         match self {
             FirstOrphan::Recorded(_) => "recorded",
-            FirstOrphan::Traced(_) => "traced",
             FirstOrphan::NotObserved => "not_observed",
-            FirstOrphan::NeedsNodeReader => "needs_node_reader",
-            FirstOrphan::OldBranchUnavailable => "old_branch_unavailable",
         }
     }
 }
 
-fn first_orphan(
-    record: &ReorgEventRecord,
-    reader: Option<&CkbChainReader>,
-) -> anyhow::Result<FirstOrphan> {
+fn first_orphan(record: &ReorgEventRecord) -> anyhow::Result<FirstOrphan> {
     let event = &record.event;
     if event.orphaned_blocks == 0 {
+        if let Some(hash) = event.first_orphan_hash {
+            anyhow::bail!(
+                "fork {} rolled nothing back but records first orphan 0x{}",
+                record.key,
+                hex::encode(hash)
+            );
+        }
         return Ok(FirstOrphan::NotObserved);
     }
     let span = event.old_tip.checked_sub(event.fork_point).ok_or_else(|| {
@@ -397,36 +399,21 @@ fn first_orphan(
         event.fork_point,
         event.old_tip
     );
-    let old_tip: [u8; 32] = event.old_tip_hash.as_slice().try_into().map_err(|_| {
+    let hash = event.first_orphan_hash.ok_or_else(|| {
         anyhow::anyhow!(
-            "fork {}: old tip hash has {} bytes",
+            "fork {} rolled back {} blocks but records no first orphan (the indexer records it since W5; this store needs a re-sync)",
             record.key,
-            event.old_tip_hash.len()
+            event.orphaned_blocks
         )
     })?;
-    if span == 1 {
-        return Ok(FirstOrphan::Recorded(old_tip));
-    }
-    let Some(reader) = reader else {
-        return Ok(FirstOrphan::NeedsNodeReader);
-    };
-    match walk_recorded_branch(
-        reader,
-        "old",
-        event.old_tip,
-        &event.old_tip_hash,
-        event.fork_point,
-        &event.fork_point_hash,
-    ) {
-        Ok(branch) => {
-            let (hash, _) = branch.last().ok_or_else(|| {
-                anyhow::anyhow!("fork {}: empty old branch above fork point", record.key)
-            })?;
-            Ok(FirstOrphan::Traced(*hash))
-        }
-        Err(e) if is_old_branch_unavailable(&e) => Ok(FirstOrphan::OldBranchUnavailable),
-        Err(e) => Err(e.context(format!("tracing first orphan of fork {}", record.key))),
-    }
+    anyhow::ensure!(
+        span != 1 || hash.as_slice() == event.old_tip_hash.as_slice(),
+        "fork {}: a one-block switch records first orphan 0x{} but old tip 0x{}",
+        record.key,
+        hex::encode(hash),
+        hex::encode(&event.old_tip_hash)
+    );
+    Ok(FirstOrphan::Recorded(hash))
 }
 
 /// The whole persisted switch history of one request, with every event's
@@ -437,11 +424,11 @@ struct ForkHistory {
 }
 
 impl ForkHistory {
-    fn load(store: &CkbadgerStore, reader: Option<&CkbChainReader>) -> anyhow::Result<Self> {
+    fn load(store: &CkbadgerStore) -> anyhow::Result<Self> {
         let records = store.list_reorg_events(usize::MAX, None)?;
         let mut first_orphans = HashMap::with_capacity(records.len());
         for record in &records {
-            first_orphans.insert(record.key.clone(), first_orphan(record, reader)?);
+            first_orphans.insert(record.key.clone(), first_orphan(record)?);
         }
         Ok(Self {
             records,
@@ -1012,7 +999,7 @@ impl ForkView {
         network: &str,
         status: &ckbadger_store::types::SyncStatus,
     ) -> anyhow::Result<Self> {
-        let history = ForkHistory::load(store, reader)?;
+        let history = ForkHistory::load(store)?;
         let evidence = match reader {
             None => None,
             Some(reader) => {
@@ -1148,8 +1135,9 @@ fn parse_orphan_prefix_segment(raw: &str) -> Result<String, ApiRouteError> {
 }
 
 /// The one event a D7 address names. Exactly one event may match; a second
-/// match, or an event at the same fork point whose first orphan cannot be
-/// resolved, means the address cannot be proved unique and is an error.
+/// match means the address cannot be proved unique and is an error naming both.
+/// Every event that rolled blocks back records its first orphan, so the
+/// address resolves from the store alone.
 fn resolve_fork_address<'a>(
     history: &'a ForkHistory,
     height: i64,
@@ -1164,20 +1152,11 @@ fn resolve_fork_address<'a>(
         let orphan = history
             .first_orphan_of(&record.key)
             .map_err(|e| ApiError::internal(format!("{e:#}")))?;
-        match orphan {
-            FirstOrphan::Recorded(hash) | FirstOrphan::Traced(hash) => {
-                if hex::encode(hash).starts_with(prefix) {
-                    matches.push(record);
-                }
-            }
-            FirstOrphan::NotObserved => {}
-            FirstOrphan::NeedsNodeReader | FirstOrphan::OldBranchUnavailable => {
-                return Err(ApiError::internal(format!(
-                    "/forks/{height}/{prefix}: event {} at this fork point has an unresolved first orphan ({}); the address cannot be proved to name one event",
-                    record.key,
-                    orphan.status()
-                )));
-            }
+        if orphan
+            .hash()
+            .is_some_and(|hash| hex::encode(hash).starts_with(prefix))
+        {
+            matches.push(record);
         }
     }
     match matches.as_slice() {
@@ -1211,12 +1190,19 @@ async fn get_fork_at(
         let history = &view.history;
         let record = resolve_fork_address(history, height, &prefix)?;
         let event = view.row(record)?;
-        let reader = state.ckb_store.clone().ok_or_else(|| {
-            ApiError::internal(format!(
-                "fork {} evidence unavailable: CKB RocksDB reader is not open",
-                record.key
-            ))
-        })?;
+        // The address resolved from the store alone; the branch evidence is
+        // the node's copy of it, read only when the node store is open.
+        let Some(reader) = state.ckb_store.clone() else {
+            return Ok(ReorgDetailResponse {
+                event,
+                evidence_status: "node_reader_unavailable",
+                orphaned_blocks: Vec::new(),
+                orphaned_transactions: Vec::new(),
+                adopted_branch: Vec::new(),
+                canonical_branch: Vec::new(),
+                canonical_tip_number: None,
+            });
+        };
         let network = &state.ckb_network;
         let (mut blocks, mut transactions) =
             read_orphaned_branch(&reader, network, &record.event).map_err(internal)?;
@@ -1237,6 +1223,7 @@ async fn get_fork_at(
         ensure_first_orphan_matches(record, history, &first.hash).map_err(internal)?;
         Ok(ReorgDetailResponse {
             event,
+            evidence_status: "available",
             orphaned_blocks: blocks,
             orphaned_transactions: transactions,
             adopted_branch,
@@ -1778,6 +1765,7 @@ mod tests {
                 fork_point_hash: vec![0x01; 32],
                 old_tip: 17_103,
                 old_tip_hash: vec![0x02; 32],
+                first_orphan_hash: Some([0x05; 32]),
                 new_tip: 17_104,
                 new_tip_hash: vec![0x03; 32],
                 depth: 3,
@@ -1796,7 +1784,7 @@ mod tests {
             records: records.to_vec(),
             first_orphans: records
                 .iter()
-                .map(|record| (record.key.clone(), first_orphan(record, None).unwrap()))
+                .map(|record| (record.key.clone(), first_orphan(record).unwrap()))
                 .collect(),
         }
     }
@@ -1812,6 +1800,7 @@ mod tests {
         later.key = format!("reorg:1700000000123:{}", "ab".repeat(16));
         later.event.old_tip = later.event.fork_point + 1;
         later.event.orphaned_blocks = 1;
+        later.event.first_orphan_hash = Some([0x02; 32]);
         event.event.reverted_by_event = Some(later.key.clone());
         event.event.reverses_events = vec![later.key.clone()];
         let both = history(&[event.clone(), later.clone()]);
@@ -1823,9 +1812,9 @@ mod tests {
         });
         assert_eq!(json["revertedByEvent"], reference);
         assert_eq!(json["reversesEvents"], serde_json::json!([reference]));
-        // The three-block event itself needs the node to trace its first orphan.
-        assert_eq!(json["firstOrphanStatus"], "needs_node_reader");
-        assert_eq!(json["firstOrphanHash"], serde_json::Value::Null);
+        // The three-block event's own address is its persisted first orphan.
+        assert_eq!(json["firstOrphanStatus"], "recorded");
+        assert_eq!(json["firstOrphanHash"], format!("0x{}", "05".repeat(32)));
         event.event.reverted_by_event = Some("reorg:missing".into());
         assert!(reorg_event_response(&event, &both).is_err());
     }
@@ -1834,7 +1823,7 @@ mod tests {
     fn first_orphan_rejects_a_branch_span_the_event_did_not_roll_back() {
         let mut event = record(1_700_000_000_000, ReorgEventKind::Automatic);
         event.event.orphaned_blocks = 2;
-        let err = first_orphan(&event, None).unwrap_err().to_string();
+        let err = first_orphan(&event).unwrap_err().to_string();
         assert!(
             err.contains("recorded 2 orphaned blocks but its old branch spans 3"),
             "{err}"

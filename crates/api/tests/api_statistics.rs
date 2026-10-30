@@ -3578,6 +3578,12 @@ fn seed_reorg_event_of_kind(
         fork_point_hash: vec![seq; 32],
         old_tip: fork_point + if deep { 0 } else { i64::from(depth) },
         old_tip_hash: vec![0x11; 32],
+        // A one-block switch's first orphan is its old tip.
+        first_orphan_hash: (!deep).then_some(if depth == 1 {
+            [0x11; 32]
+        } else {
+            [seq ^ 0xf0; 32]
+        }),
         new_tip: fork_point + i64::from(depth) + if deep { 0 } else { 1 },
         new_tip_hash: vec![0x22; 32],
         depth,
@@ -3635,6 +3641,7 @@ fn seed_retained_reorg_list_history(store: &Arc<CkbadgerStore>) -> TestCkbChain 
             canonical[usize::try_from(fork_point - 17_101).unwrap()].hash()
         };
         let mut old_parent = fork_hash.clone();
+        let mut first_orphan = None;
         for number in (fork_point + 1)..=(fork_point + i64::from(depth)) {
             let block = BlockBuilder::default()
                 .number(u64::try_from(number).unwrap().pack())
@@ -3645,6 +3652,7 @@ fn seed_retained_reorg_list_history(store: &Arc<CkbadgerStore>) -> TestCkbChain 
                 )
                 .build();
             old_parent = block.hash();
+            first_orphan.get_or_insert_with(|| block.hash());
             old_blocks.push(block);
         }
         let new_tip = fork_point + i64::from(depth) + 1;
@@ -3655,6 +3663,7 @@ fn seed_retained_reorg_list_history(store: &Arc<CkbadgerStore>) -> TestCkbChain 
             fork_point_hash: fork_hash.as_slice().to_vec(),
             old_tip: fork_point + i64::from(depth),
             old_tip_hash: old_parent.as_slice().to_vec(),
+            first_orphan_hash: Some(first_orphan.expect("old branch block").unpack()),
             new_tip,
             new_tip_hash: canonical[usize::try_from(new_tip - 17_101).unwrap()]
                 .hash()
@@ -3801,8 +3810,17 @@ fn seed_dao_latest(
         11 => BLOCK_11_CSU,
         other => panic!("no C/S/U fixture for block {other}"),
     };
+    // The indexer computes the row at its sync-tip header: the caller seeds it.
+    let tip_block_hash: [u8; 32] = store
+        .get_block_header(tip_block_number)
+        .unwrap()
+        .expect("seed the tip header before the DAO singleton")
+        .hash
+        .try_into()
+        .unwrap();
     let latest = ckbadger_store::DaoLatestStatistics {
         tip_block_number,
+        tip_block_hash,
         total_deposited: dao_capacity,
         total_depositors: 1,
         active_deposits: 1,
@@ -4038,6 +4056,7 @@ async fn redesign_fork_detail_reads_retained_orphan_blocks_and_transactions() {
         fork_point_hash: parent.to_vec(),
         old_tip: 11,
         old_tip_hash: block_hash.as_slice().to_vec(),
+        first_orphan_hash: Some(block_hash.as_slice().try_into().unwrap()),
         new_tip: 12,
         new_tip_hash: adopted_hash.as_slice().to_vec(),
         depth: 1,

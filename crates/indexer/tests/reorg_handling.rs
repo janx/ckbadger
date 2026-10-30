@@ -221,6 +221,7 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
         live_cells_count: block_count as i32,
         total_cells_count: block_count,
         txs_count: block_count,
+        cellbase_txs_count: 0,
         first_seen_block: 1,
         first_seen_tx: vec![0u8; 32],
         last_activity_block: block_count,
@@ -640,6 +641,7 @@ fn test_rollback_updates_derived_cfs_inline() {
         live_cells_count: 6,
         total_cells_count: 6,
         txs_count: 4,
+        cellbase_txs_count: 0,
         first_seen_block: 1,
         first_seen_tx: vec![0u8; 32],
         last_activity_block: 4,
@@ -1982,6 +1984,7 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
 
     let latest = DaoLatestStatistics {
         tip_block_number: 10,
+        tip_block_hash: make_header(10).hash.try_into().unwrap(),
         total_deposited: 10_200_000_000,
         total_depositors: 1,
         active_deposits: 1,
@@ -2090,36 +2093,38 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     batch.commit().unwrap();
     seed_epoch_rows(&domain, 1..=3i64);
 
+    // Both transactions sit at tx position 1: position 0 of a block is its
+    // cellbase, which has no TxActions row.
     let mut batch = StoreBatch::new(&domain);
     // Block 2 survives: lock A only.
-    batch.put_tx_actions(&prefix_participant_actions(2, 0, &tx_hash_2, &lock_a));
+    batch.put_tx_actions(&prefix_participant_actions(2, 1, &tx_hash_2, &lock_a));
     batch.put_addr_tx(
         &lock_a,
         2,
-        0,
+        1,
         &tx_hash_2,
         &AddrTxValue::new(0, true, false, 0),
     );
     batch.put_addr_tx_by_prefix(
         &ROLLED_BACK_PREFIX,
         2,
-        0,
+        1,
         &tx_hash_2,
         &AddrTxValue::new(0, false, false, 0),
     );
     // Block 3 is rolled back.
-    batch.put_tx_actions(&prefix_participant_actions(3, 0, &tx_hash_3, &lock_a));
+    batch.put_tx_actions(&prefix_participant_actions(3, 1, &tx_hash_3, &lock_a));
     batch.put_addr_tx(
         &lock_a,
         3,
-        0,
+        1,
         &tx_hash_3,
         &AddrTxValue::new(0, true, false, 0),
     );
     batch.put_addr_tx_by_prefix(
         &ROLLED_BACK_PREFIX,
         3,
-        0,
+        1,
         &tx_hash_3,
         &AddrTxValue::new(0, false, false, 0),
     );
@@ -2144,7 +2149,7 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     let positions: Vec<(i64, i32)> = rows.iter().map(|(b, t, _, _)| (*b, *t)).collect();
     assert_eq!(
         positions,
-        vec![(2, 0)],
+        vec![(2, 1)],
         "only block 2 rows survive: {rows:?}"
     );
     let prefix_rows = domain
@@ -2155,7 +2160,7 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
             .iter()
             .map(|(b, t, _, _)| (*b, *t))
             .collect::<Vec<_>>(),
-        vec![(2, 0)],
+        vec![(2, 1)],
         "the rolled-back prefix row must be deleted"
     );
 

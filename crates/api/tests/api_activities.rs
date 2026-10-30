@@ -53,6 +53,7 @@ async fn test_address_activities_reads_from_store() {
         &AddrTxValue::new(0, false, true, 0),
     );
     core_batch.commit().unwrap();
+    sync_address_tx_counters(&core_store, &lock_hash);
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 10;
@@ -138,6 +139,7 @@ async fn address_activities_response(
         &AddrTxValue::new(0, false, true, 0),
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(&core_store, lock_hash);
     core_store
         .update_sync_status(|s| {
             s.tip_block_number = 88;
@@ -775,22 +777,24 @@ async fn test_address_transactions_reads_from_derived_store() {
 }
 
 // ---------------------------------------------------------------------------
-// R4-G item 3: `/addresses/{addr}/activities` declared `total` from
+// R4-G item 3 / W5: `/addresses/{addr}/activities` once declared `total` from
 // `AddressBalance.txs_count` — the address's TRANSACTION count. Activities are
 // a different set: cellbase rows are deliberately never persisted in
-// CF_TX_ACTIONS, and `is_canonical_activity` drops more. Measured on mainnet
-// (block 12000000's cellbase-output address): declared total 4,727,769 against
-// 1,682 rows enumerated to exhaustion — a total the endpoint can never reach.
-// No per-address activity count is stored, so the honest contract is no total.
+// CF_TX_ACTIONS. Measured on mainnet (block 12000000's cellbase-output
+// address): 4,727,769 transactions against 1,682 activities. W5 persists
+// `AddressBalance.cellbase_txs_count`, so the exact activity count is
+// `address_tx_count - cellbase_txs_count` and the unfiltered feed declares it.
 // ---------------------------------------------------------------------------
 
 /// Seed one canonical activity for `lock_hash` plus an `AddressBalance` whose
-/// `txs_count` deliberately disagrees with it (the shape a miner address has:
-/// many cellbase transactions, few activities).
+/// `txs_count` may far exceed it (the shape a miner address has: many
+/// cellbase transactions, few activities) — `cellbase_txs_count` of them
+/// cellbases.
 fn seed_activity_with_txs_count(
     store: &Arc<CkbadgerStore>,
     lock_hash: &[u8],
     txs_count: i64,
+    cellbase_txs_count: i64,
 ) -> Vec<u8> {
     let tx_hash = vec![0xa1; 32];
     let block_hash = vec![0xb1; 32];
@@ -851,6 +855,7 @@ fn seed_activity_with_txs_count(
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count,
+                cellbase_txs_count,
                 first_seen_block: 10,
                 first_seen_tx: tx_hash.clone(),
                 last_activity_block: 10,
@@ -868,11 +873,11 @@ fn seed_activity_with_txs_count(
 }
 
 #[tokio::test]
-async fn test_address_activities_declares_no_unreachable_total() {
+async fn test_address_activities_total_counts_activities_not_cellbase_transactions() {
     let (core_store, append_only_store) = split_test_stores();
     let lock_hash = vec![0x71; 32];
-    // 4_727_769 transactions, exactly 1 of which is an activity.
-    seed_activity_with_txs_count(&core_store, &lock_hash, 4_727_769);
+    // 4_727_769 transactions, 4_727_768 of them cellbases: exactly 1 activity.
+    seed_activity_with_txs_count(&core_store, &lock_hash, 4_727_769, 4_727_768);
 
     let config = test_config_with_append_only(core_store.clone(), append_only_store);
     let app = create_router(config).await;
@@ -886,18 +891,18 @@ async fn test_address_activities_declares_no_unreachable_total() {
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["hasMore"], false);
     assert_eq!(
-        json.get("total"),
-        None,
-        "the endpoint enumerates 1 activity; it must not declare a transaction count it can never reach, got {json}"
+        json["total"], 1,
+        "total is the activity count (transactions minus cellbases), which the page reaches, got {json}"
     );
 }
 
 #[tokio::test]
-async fn test_address_activities_omits_total_for_missing_addr_balance() {
-    // An address with activities but no `AddressBalance` row used to report
-    // `total: 0` through `.ok().flatten().map(...).unwrap_or(0)` — a silent
-    // default-zero on a correctness path, and self-contradictory next to a
-    // non-empty page.
+async fn test_address_activities_total_contradicting_page_one_is_an_error() {
+    // An address with an activity row but no `AddressBalance` row (a state no
+    // forward writer produces) once reported `total: 0` through
+    // `.ok().flatten().map(...).unwrap_or(0)` — a silent default-zero next to
+    // a non-empty page. The total is now read for every unfiltered page, and a
+    // total below page one's committed rows is an error naming the address.
     let (core_store, append_only_store) = split_test_stores();
     let lock_hash = vec![0x72; 32];
     let tx_hash = vec![0xa1; 32];
@@ -963,12 +968,12 @@ async fn test_address_activities_omits_total_for_missing_addr_balance() {
     )
     .await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["data"].as_array().unwrap().len(), 1);
-    assert_eq!(
-        json.get("total"),
-        None,
-        "a missing balance row must not be rendered as `total: 0` next to a non-empty page, got {json}"
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains(&hex::encode(&lock_hash))
+            && message.contains("activity total 0 disagrees with page one: 1 committed rows"),
+        "the error names the address and both counts, got {json}"
     );
 }
 
@@ -978,7 +983,7 @@ async fn test_address_activities_filtered_page_still_omits_total() {
     // `without_total`. Both branches now agree.
     let (core_store, append_only_store) = split_test_stores();
     let lock_hash = vec![0x73; 32];
-    seed_activity_with_txs_count(&core_store, &lock_hash, 4_727_769);
+    seed_activity_with_txs_count(&core_store, &lock_hash, 4_727_769, 4_727_768);
 
     let config = test_config_with_append_only(core_store.clone(), append_only_store);
     let app = create_router(config).await;
@@ -993,6 +998,72 @@ async fn test_address_activities_filtered_page_still_omits_total() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(json.get("total"), None);
+}
+
+/// W5 (BA-35): the declared total is exactly what paging the feed to
+/// exhaustion enumerates — three activities of a lock that also received two
+/// cellbases (their `addr_txs` rows have no `TxActions` row, as the indexer
+/// writes them), with the `AddressBalance` the forward writers produce.
+#[tokio::test]
+async fn test_address_activities_total_is_reached_by_paging_to_exhaustion() {
+    let store = test_store();
+    let lock_hash = [0x74u8; 32];
+    for (block, tx_hash) in [(20, [0xc1u8; 32]), (22, [0xc2u8; 32]), (24, [0xc3u8; 32])] {
+        seed_committed_activity(&store, &lock_hash, &tx_hash, block, 1, 100, 0);
+    }
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (block, tx_hash) in [(21, [0xd1u8; 32]), (23, [0xd2u8; 32])] {
+        batch.put_tx_hash_map(&tx_hash, block, 0);
+        batch.put_tx_index(
+            block,
+            0,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase: true,
+                timestamp: 1_700_000_000_000 + block,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_addr_tx(
+            &lock_hash,
+            block,
+            0,
+            &tx_hash,
+            &AddrTxValue::new(100, false, true, 0),
+        );
+    }
+    batch.put_addr_balance(
+        &lock_hash,
+        &ckbadger_store::types::AddressBalance {
+            txs_count: 5,
+            cellbase_txs_count: 2,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let base = format!("/addresses/0x{}/activities?limit=2", hex::encode(lock_hash));
+    let (status, first) = get_json(&app, &base).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["total"], 3, "{first}");
+    assert_eq!(first["hasMore"], true);
+    let cursor = first["nextCursor"].as_str().unwrap().to_string();
+    let (status, second) = get_json(&app, &format!("{base}&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["total"], 3, "every page declares the same total");
+    assert_eq!(second["hasMore"], false);
+    let enumerated =
+        first["data"].as_array().unwrap().len() + second["data"].as_array().unwrap().len();
+    assert_eq!(
+        enumerated, 3,
+        "paging enumerates exactly the declared total"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1012,7 +1083,7 @@ async fn test_address_activities_accepts_uppercase_address() {
     let code_hash =
         hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
     let lock_hash = compute_script_hash(&code_hash, 1, &[0u8; 20]);
-    seed_activity_with_txs_count(&core_store, &lock_hash, 1);
+    seed_activity_with_txs_count(&core_store, &lock_hash, 1, 0);
 
     let config = test_config_with_append_only(core_store.clone(), append_only_store);
     let app = create_router(config).await;
@@ -1423,6 +1494,7 @@ async fn test_address_activities_include_named_participation_with_zero_ckb_delta
         },
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(&core_store, &lock_hash);
 
     let config = test_config_with_append_only(core_store.clone(), append_only_store.clone());
     let app = create_router(config).await;
@@ -1511,6 +1583,7 @@ async fn test_address_activities_other_participants_carry_prefix_and_resolution(
         &AddrTxValue::new(-100, true, false, 0),
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(&core_store, &lock_hash);
 
     let uri = format!("/api/v1/addresses/0x{}/activities", hex::encode(&lock_hash));
 
@@ -1965,6 +2038,7 @@ fn seed_two_party_tx(store: &Arc<CkbadgerStore>, lock_hash: &[u8; 32], other: &[
         &AddrTxValue::new(-100, true, false, 0),
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(store, lock_hash);
 }
 
 /// A party whose lock script the store does not know is reported by its lock
@@ -2146,6 +2220,7 @@ async fn identity_item_deltas_name_their_standard() {
         &AddrTxValue::new(0, true, true, TAG_IDENTITY),
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(&store, &lock_hash);
     let app = create_router(test_config(store)).await;
 
     let (status, json) = get_json(
@@ -2339,6 +2414,7 @@ async fn object_item_deltas_name_collection_class_and_composition() {
         &AddrTxValue::new(0, true, true, TAG_OBJECT),
     );
     batch.commit().unwrap();
+    sync_address_tx_counters(&store, &lock_hash);
     let app = create_router(test_config(store)).await;
 
     let expected = serde_json::json!([

@@ -1457,6 +1457,22 @@ fn reverse_created_consumed_cell_totals(
     Ok(())
 }
 
+/// The `addr_txs` rows rollback deletes for one lock: every one reverses one
+/// `txs_count`, and the ones at tx position 0 (cellbases) one
+/// `cellbase_txs_count` too — the forward paths' rule, reversed.
+#[derive(Debug, Default, Clone, Copy)]
+struct AddrTxsRemoved {
+    txs: i64,
+    cellbase_txs: i64,
+}
+
+impl AddrTxsRemoved {
+    fn count(&mut self, tx_idx: i32) {
+        self.txs += 1;
+        self.cellbase_txs += AddressBalance::cellbase_tx_increment(tx_idx == 0);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn accumulate_cell_deltas(
     cell: &LiveCellInfo,
@@ -3860,7 +3876,7 @@ impl CkbadgerStore {
         // append-only store, which never deletes, so the exact key set for a
         // rolled-back tx is reconstructible from the cells its rollback already
         // loaded — see `tx_participants`.
-        let mut addr_txs_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        let mut addr_txs_count_deltas: HashMap<Vec<u8>, AddrTxsRemoved> = HashMap::new();
         let mut addr_txs_scanned = 0u64;
         {
             let mut addr_txs_removed = 0u64;
@@ -3889,7 +3905,10 @@ impl CkbadgerStore {
                             );
                         }
                         batch.delete_cf(self.cf_addr_txs(), &key);
-                        *addr_txs_count_deltas.entry(lock_hash.clone()).or_insert(0) += 1;
+                        addr_txs_count_deltas
+                            .entry(lock_hash.clone())
+                            .or_default()
+                            .count(tx_idx);
                         addr_txs_removed += 1;
                         stage.tick(addr_txs_removed);
                     }
@@ -3910,13 +3929,16 @@ impl CkbadgerStore {
                     if key.len() != keys::ADDR_TX_KEY_SIZE {
                         continue;
                     }
-                    let (lock_hash, block_num, _tx_idx, _tx_hash) = keys::decode_addr_tx_key(&key);
+                    let (lock_hash, block_num, tx_idx, _tx_hash) = keys::decode_addr_tx_key(&key);
                     if block_num <= rollback_to {
                         stage.tick(addr_txs_removed);
                         continue;
                     }
                     batch.delete_cf(self.cf_addr_txs(), &key);
-                    *addr_txs_count_deltas.entry(lock_hash).or_insert(0) += 1;
+                    addr_txs_count_deltas
+                        .entry(lock_hash)
+                        .or_default()
+                        .count(tx_idx);
                     addr_txs_removed += 1;
                     stage.tick(addr_txs_removed);
                 }
@@ -4322,7 +4344,14 @@ impl CkbadgerStore {
                 .get(lock_hash)
                 .copied()
                 .unwrap_or((0, 0, 0, 0));
-            let txs_removed = addr_txs_count_deltas.get(lock_hash).copied().unwrap_or(0);
+            // A lock with no deleted `addr_txs` row lost no transaction.
+            let AddrTxsRemoved {
+                txs: txs_removed,
+                cellbase_txs: cellbase_txs_removed,
+            } = addr_txs_count_deltas
+                .get(lock_hash)
+                .copied()
+                .unwrap_or_default();
 
             if balance_delta == 0
                 && used_delta == 0
@@ -4388,8 +4417,31 @@ impl CkbadgerStore {
                     next_txs_count
                 );
             }
+            let next_cellbase_txs_count = ab
+                .cellbase_txs_count
+                .checked_sub(cellbase_txs_removed)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "addr_balance cellbase_txs_count overflow during rollback: lock_hash=0x{}, cellbase_txs_count={}, cellbase_txs_removed={}",
+                        bytes_to_hex(lock_hash),
+                        ab.cellbase_txs_count,
+                        cellbase_txs_removed
+                    )
+                })?;
+            if next_cellbase_txs_count < 0 || next_cellbase_txs_count > next_txs_count {
+                anyhow::bail!(
+                    "addr_balance cellbase_txs_count underflow during rollback (outside 0..=txs_count): lock_hash=0x{}, cellbase_txs_count={}, cellbase_txs_removed={}, next_cellbase_txs_count={}, next_txs_count={}, rollback_to={}",
+                    bytes_to_hex(lock_hash),
+                    ab.cellbase_txs_count,
+                    cellbase_txs_removed,
+                    next_cellbase_txs_count,
+                    next_txs_count,
+                    rollback_to
+                );
+            }
             ab.total_cells_count = next_total_cells_count;
             ab.txs_count = next_txs_count;
+            ab.cellbase_txs_count = next_cellbase_txs_count;
             if ab.balance < 0 || ab.used_capacity < 0 || ab.live_cells_count < 0 {
                 anyhow::bail!(
                     "addr_balance underflow during rollback: lock_hash=0x{}, balance={}, used={}, live_cells={}",
@@ -4442,12 +4494,13 @@ impl CkbadgerStore {
                     || ab.live_cells_count != 0
                     || ab.total_cells_count != 0
                     || ab.txs_count != 0
+                    || ab.cellbase_txs_count != 0
                 {
                     anyhow::bail!(
-                        "orphan-only addr_balance is nonempty after rollback: lock_hash=0x{}, first_seen_block={}, rollback_to={}, balance={}, used={}, live_cells={}, total_cells={}, txs={}",
+                        "orphan-only addr_balance is nonempty after rollback: lock_hash=0x{}, first_seen_block={}, rollback_to={}, balance={}, used={}, live_cells={}, total_cells={}, txs={}, cellbase_txs={}",
                         bytes_to_hex(lock_hash), ab.first_seen_block, rollback_to,
                         ab.balance, ab.used_capacity, ab.live_cells_count,
-                        ab.total_cells_count, ab.txs_count
+                        ab.total_cells_count, ab.txs_count, ab.cellbase_txs_count
                     );
                 }
                 batch.delete_cf(self.cf_addr_balance(), lock_hash);
@@ -8603,7 +8656,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        batch.put_tx_index(2, 0, &tx_index);
+        batch.put_tx_index(2, 1, &tx_index);
         batch.put_cell(&input_tx, 0, &input_cell, 1);
         batch.put_cell(&consuming_tx, 0, &rollback_output_cell, 2);
         batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&consuming_tx));
@@ -8650,7 +8703,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
-        seed_tx_address_history(&store, 2, 0, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
+        seed_tx_address_history(&store, 2, 1, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
@@ -8851,6 +8904,8 @@ mod tests {
                 live_cells_count: 0,
                 total_cells_count: 1,
                 txs_count: 2,
+                // input_tx is block 1's cellbase.
+                cellbase_txs_count: 1,
                 first_seen_block: 1,
                 first_seen_tx: input_tx.clone(),
                 last_activity_block: 2,
@@ -8865,6 +8920,7 @@ mod tests {
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
+                cellbase_txs_count: 0,
                 first_seen_block: 2,
                 first_seen_tx: consuming_tx.clone(),
                 last_activity_block: 2,
@@ -8879,6 +8935,7 @@ mod tests {
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
+                cellbase_txs_count: 1,
                 first_seen_block: 2,
                 first_seen_tx: cellbase_tx.clone(),
                 last_activity_block: 2,
@@ -8943,6 +9000,213 @@ mod tests {
              cost must not scale with chain history",
             result.addr_txs_scanned, noise_count
         );
+    }
+
+    /// A miner `M` paid by the cellbases of blocks 1 and 2, whose block-1
+    /// reward cell is spent to `B` in block 2 (tx position 1), at tip 2. The
+    /// forward writer's rows: `M` has three `addr_txs` rows, two of them at tx
+    /// position 0; `B` one. `with_tx_contexts` decides whether rollback finds
+    /// the rolled-back participants from undo tx contexts or by full scan.
+    fn seed_cellbase_miner_fixture(
+        store: &CkbadgerStore,
+        miner_cellbase_txs_count: i64,
+        with_tx_contexts: bool,
+    ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let miner = vec![0xA1u8; 32];
+        let receiver = vec![0xB1u8; 32];
+        let lock_code_hash = vec![0x11u8; 32];
+        let cellbase_1 = vec![0x41u8; 32];
+        let cellbase_2 = vec![0x42u8; 32];
+        let spend = vec![0x43u8; 32];
+        let header = |n: u8| CachedBlockHeader {
+            hash: vec![n; 32],
+            parent_hash: vec![n.wrapping_sub(1); 32],
+            timestamp: 1_700_000_000_000 + i64::from(n) * 10_000,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1,
+            dao: vec![0; 32],
+            transactions_count: i32::from(n),
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0x1a08a97e,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_700_000_000_000 + i64::from(n) * 10_000,
+        };
+        let cell = |capacity: i64, lock_hash: &[u8]| LiveCellInfo {
+            capacity,
+            lock_script_hash: lock_hash.to_vec(),
+            lock_code_hash: lock_code_hash.clone(),
+            lock_hash_type: 1,
+            lock_args: vec![],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: capacity,
+            udt_amount: None,
+            data_hash: None,
+        };
+        let tx_index = |is_cellbase: bool, timestamp: i64| TxIndexEntry {
+            tx_hash: [0u8; 32],
+            is_cellbase,
+            timestamp,
+            inputs_count: if is_cellbase { 0 } else { 1 },
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 1,
+            cycles: None,
+            semantic_tags: 0,
+        };
+        let (header1, header2) = (header(1), header(2));
+        let mut batch = StoreBatch::new(store);
+        batch.put_block_header(1, &header1);
+        batch.put_block_header(2, &header2);
+        batch.put_tx_index(1, 0, &tx_index(true, header1.timestamp));
+        batch.put_tx_index(2, 0, &tx_index(true, header2.timestamp));
+        batch.put_tx_index(2, 1, &tx_index(false, header2.timestamp));
+        batch.put_cell(&cellbase_1, 0, &cell(500, &miner), 1);
+        batch.put_consumed_cell_with_consumer(
+            &cellbase_1,
+            0,
+            &cell(500, &miner),
+            1,
+            2,
+            Some(&spend),
+        );
+        batch.delete_cell(&cellbase_1, 0);
+        batch.put_cell(&cellbase_2, 0, &cell(500, &miner), 2);
+        batch.put_cell(&spend, 0, &cell(500, &receiver), 2);
+        if with_tx_contexts {
+            batch.put_reorg_undo_log_by_block(
+                2,
+                0,
+                &UndoLogEntry::TxContext(UndoTxContext {
+                    tx_hash: cellbase_2.clone(),
+                    outputs_count: 1,
+                    inputs: vec![UndoInputOutPoint {
+                        tx_hash: vec![0u8; 32],
+                        output_index: -1,
+                    }],
+                }),
+            );
+            batch.put_reorg_undo_log_by_block(
+                2,
+                1,
+                &UndoLogEntry::TxContext(UndoTxContext {
+                    tx_hash: spend.clone(),
+                    outputs_count: 1,
+                    inputs: vec![UndoInputOutPoint {
+                        tx_hash: cellbase_1.clone(),
+                        output_index: 0,
+                    }],
+                }),
+            );
+        }
+        batch.put_addr_balance(
+            &miner,
+            &AddressBalance {
+                balance: 500,
+                used_capacity: 500,
+                live_cells_count: 1,
+                total_cells_count: 2,
+                txs_count: 3,
+                cellbase_txs_count: miner_cellbase_txs_count,
+                first_seen_block: 1,
+                first_seen_tx: cellbase_1.clone(),
+                last_activity_block: 2,
+                last_activity_tx: spend.clone(),
+            },
+        );
+        batch.put_addr_balance(
+            &receiver,
+            &AddressBalance {
+                balance: 500,
+                used_capacity: 500,
+                live_cells_count: 1,
+                total_cells_count: 1,
+                txs_count: 1,
+                cellbase_txs_count: 0,
+                first_seen_block: 2,
+                first_seen_tx: spend.clone(),
+                last_activity_block: 2,
+                last_activity_tx: spend.clone(),
+            },
+        );
+        batch.put_script_info(
+            &lock_code_hash,
+            &ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                hash_type: 1,
+                lock_live_cells_count: 2,
+                lock_owned_capacity_sum: 1000,
+                lock_owned_knowledge_sum: 1000,
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+        seed_tx_address_history(store, 1, 0, &cellbase_1, &[&miner]);
+        seed_tx_address_history(store, 2, 0, &cellbase_2, &[&miner]);
+        seed_tx_address_history(store, 2, 1, &spend, &[&miner, &receiver]);
+        seed_sync_status(store, 2, &header2.hash, 3, 3, 1);
+        (miner, receiver, cellbase_1)
+    }
+
+    /// W5: rollback reverses `cellbase_txs_count` by exactly the deleted
+    /// `addr_txs` rows at tx position 0, on both participant-discovery paths,
+    /// and the reversed row counts exactly its surviving cellbase rows.
+    #[test]
+    fn test_rollback_reverses_cellbase_txs_count_by_deleted_cellbase_rows() {
+        for with_tx_contexts in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+            let (miner, receiver, cellbase_1) =
+                seed_cellbase_miner_fixture(&store, 2, with_tx_contexts);
+
+            rollback_fixture(&store, 1).unwrap();
+
+            let miner_balance = store.get_addr_balance(&miner).unwrap().unwrap();
+            assert_eq!(
+                (miner_balance.txs_count, miner_balance.cellbase_txs_count),
+                (1, 1),
+                "with_tx_contexts={with_tx_contexts}: the block-2 cellbase and spend are gone, \
+                 the block-1 cellbase survives"
+            );
+            assert_eq!(
+                (
+                    miner_balance.last_activity_block,
+                    miner_balance.last_activity_tx
+                ),
+                (1, cellbase_1.clone())
+            );
+            assert_eq!(
+                store
+                    .address_activity_count(&miner.clone().try_into().unwrap())
+                    .unwrap(),
+                0,
+                "a miner whose only surviving row is a cellbase has no activity"
+            );
+            assert!(store.get_addr_balance(&receiver).unwrap().is_none());
+        }
+    }
+
+    /// A rolled-back cellbase row the counter never counted is a forward-path
+    /// bug: the rollback fails naming the lock instead of clamping at zero.
+    #[test]
+    fn test_rollback_errors_when_cellbase_txs_count_underflows() {
+        for with_tx_contexts in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+            let (miner, _, _) = seed_cellbase_miner_fixture(&store, 0, with_tx_contexts);
+
+            let err = rollback_fixture(&store, 1).unwrap_err().to_string();
+            assert!(
+                err.contains("cellbase_txs_count underflow") && err.contains(&hex::encode(&miner)),
+                "with_tx_contexts={with_tx_contexts}: {err}"
+            );
+        }
     }
 
     /// Review #4 (R2): `addr_balance.last_activity` counts only transactions in
@@ -9043,6 +9307,8 @@ mod tests {
                 live_cells_count: 2,
                 total_cells_count: 2,
                 txs_count: 2,
+                // tx1 and tx5 are the cellbases of blocks 1 and 5.
+                cellbase_txs_count: 2,
                 first_seen_block: 1,
                 first_seen_tx: tx1.clone(),
                 last_activity_block: 5,
@@ -9175,7 +9441,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        put_canonical_tx(&mut batch, 2, 1, &transfer_tx);
         batch.put_cell(&input_tx, 0, &input_cell, 1);
         batch.put_cell(&transfer_tx, 0, &output_cell, 2);
         batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
@@ -9273,7 +9539,7 @@ mod tests {
         seed_tx_address_history(
             &store,
             2,
-            0,
+            1,
             &transfer_tx,
             &[lock_a.as_slice(), lock_b.as_slice()],
         );
@@ -9410,7 +9676,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        batch.put_tx_index(2, 0, &tx_index);
+        batch.put_tx_index(2, 1, &tx_index);
         batch.put_cell(&input_tx, 0, &input_cell, 1);
         batch.put_cell(&consuming_tx, 0, &output_cell, 2);
         batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&consuming_tx));
@@ -9456,7 +9722,7 @@ mod tests {
             },
         );
         batch.commit().unwrap();
-        seed_tx_address_history(&store, 2, 0, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
+        seed_tx_address_history(&store, 2, 1, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         // Step 1: rollback_via_undo_log deletes undo entries and returns
@@ -9573,7 +9839,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        put_canonical_tx(&mut batch, 2, 1, &transfer_tx);
         batch.put_cell(&input_tx, 0, &input_cell, 1);
         batch.put_cell(&transfer_tx, 0, &output_cell, 2);
         batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
@@ -9654,7 +9920,7 @@ mod tests {
         seed_tx_address_history(
             &store,
             2,
-            0,
+            1,
             &transfer_tx,
             &[lock_a.as_slice(), lock_b.as_slice()],
         );
@@ -9783,7 +10049,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        put_canonical_tx(&mut batch, 2, 1, &transfer_tx);
         batch.put_cell(&input_tx, 0, &input_cell, 1);
         batch.put_cell(&transfer_tx, 0, &output_cell, 2);
         batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
@@ -9864,7 +10130,7 @@ mod tests {
         seed_tx_address_history(
             &store,
             2,
-            0,
+            1,
             &transfer_tx,
             &[lock_a.as_slice(), lock_b.as_slice()],
         );
@@ -10000,7 +10266,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
-        put_canonical_tx(&mut batch, 2, 0, &transfer_tx);
+        put_canonical_tx(&mut batch, 2, 1, &transfer_tx);
         batch.put_cell(&input_tx, 0, &input_cell, 1);
         batch.put_cell(&transfer_tx, 0, &output_cell, 2);
         batch.put_consumed_cell_with_consumer(&input_tx, 0, &input_cell, 1, 2, Some(&transfer_tx));
@@ -10076,7 +10342,7 @@ mod tests {
         batch.commit().unwrap();
         // Self-transfer: input and output share lock_a, so it is the tx's only
         // participant and gets a single addr_txs row.
-        seed_tx_address_history(&store, 2, 0, &transfer_tx, &[lock_a.as_slice()]);
+        seed_tx_address_history(&store, 2, 1, &transfer_tx, &[lock_a.as_slice()]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert_eq!(
@@ -10576,6 +10842,7 @@ mod tests {
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
+                cellbase_txs_count: 1,
                 ..Default::default()
             },
         );

@@ -1311,7 +1311,7 @@ async fn get_address_activities(
     } else {
         None
     };
-    let (next_cursor, activities, pool) =
+    let (next_cursor, activities, pool, total) =
         tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let results = list_canonical_activities_page(
                 store.as_ref(),
@@ -1323,6 +1323,22 @@ async fn get_address_activities(
 
             let has_more = results.len() > limit;
             let page: Vec<_> = results.into_iter().take(limit).collect();
+
+            // The total is the unfiltered activity count, read from the same
+            // pinned view as the page; a filtered feed has no stored count.
+            let total = if matches!(filter.as_deref(), None | Some("all")) {
+                let total = store.address_activity_count(&lock32)?;
+                ensure_activity_total_covers_page_one(
+                    &lock32,
+                    total,
+                    cursor,
+                    page.len(),
+                    has_more,
+                )?;
+                Some(total)
+            } else {
+                None
+            };
 
             let next_cursor = if has_more {
                 page.last()
@@ -1369,28 +1385,53 @@ async fn get_address_activities(
                 )?);
             }
 
-            Ok((next_cursor, activities, pool))
+            Ok((next_cursor, activities, pool, total))
         })
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
-    // No total: an activity count per address is not stored anywhere, and the
-    // one count that is — `AddressBalance.txs_count` — counts *transactions*.
-    // Activities are a strictly different set: cellbase rows are deliberately
-    // never persisted in CF_TX_ACTIONS, and `is_canonical_activity` drops more
-    // still. Reporting txs_count therefore declared a total this endpoint can
-    // never page to (mainnet block 12000000's cellbase-output address: 4_727_769
-    // declared against 1_682 rows enumerated to exhaustion). Deriving a real one
-    // means the full canonical scan `list_canonical_activities_page` performs,
-    // over the whole address — unbounded exactly where it matters most.
-    // `has_more`/`next_cursor` remain the honest bound, as they already are for
-    // the filtered case and for /tokens.
-    let response = CursorPaginatedResponse::without_total(activities, limit as i64, next_cursor);
+    // `total` is the address's activity count (`address_activity_count`):
+    // its transactions minus its cellbase transactions, which are never
+    // persisted in CF_TX_ACTIONS (W5). It is NOT `AddressBalance.txs_count`,
+    // which also counts cellbases (mainnet block 12000000's cellbase-output
+    // address: 4_727_769 transactions against 1_682 activities). Committed
+    // rows only; pool rows are reported beside it in `pool`.
+    let response = match total {
+        Some(total) => CursorPaginatedResponse::new(activities, total, limit as i64, next_cursor),
+        None => CursorPaginatedResponse::without_total(activities, limit as i64, next_cursor),
+    };
     ok(match pool {
         Some(pool) => response.with_pool(pool),
         None => response,
     })
+}
+
+/// Page one of an unfiltered address feed starts at the newest activity, so
+/// the persisted total must cover its committed rows, and equal them when
+/// there is no next page. Anything else means the counter and the rows it
+/// counts disagree: an error naming the address, never a clamped total.
+fn ensure_activity_total_covers_page_one(
+    lock_hash: &[u8; 32],
+    total: i64,
+    cursor: Option<(i64, i32)>,
+    committed_rows: usize,
+    has_more: bool,
+) -> anyhow::Result<()> {
+    if cursor.is_some() {
+        return Ok(());
+    }
+    let committed_rows = i64::try_from(committed_rows)?;
+    if committed_rows > total || (!has_more && committed_rows != total) {
+        anyhow::bail!(
+            "address 0x{} activity total {} disagrees with page one: {} committed rows, has_more={}",
+            hex::encode(lock_hash),
+            total,
+            committed_rows,
+            has_more
+        );
+    }
+    Ok(())
 }
 
 /// Cellbase actions are intentionally not materialized. Reuse the indexer's

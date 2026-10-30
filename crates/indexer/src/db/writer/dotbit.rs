@@ -1971,14 +1971,15 @@ mod tests {
             domain_batch.put_block_header(block, &make_header(block));
         }
         domain_batch.put_live_cell_marker_by_outpoint(&reactivate_tx_hash, 0, 200);
-        domain_batch.put_tx_index(200, 0, &make_tx_entry(1));
-        domain_batch.put_tx_hash_map(&reactivate_tx_hash, 200, 0);
+        // Tx position 1: position 0 of every block is its cellbase.
+        domain_batch.put_tx_index(200, 1, &make_tx_entry(1));
+        domain_batch.put_tx_hash_map(&reactivate_tx_hash, 200, 1);
         // The forward writer records one addr_txs row per tx participant; the
         // owner of the reactivation output is this tx's only participant.
         domain_batch.put_addr_tx(
             &owner,
             200,
-            0,
+            1,
             &reactivate_tx_hash,
             &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
         );
@@ -1991,6 +1992,7 @@ mod tests {
                 live_cells_count: 1,
                 total_cells_count: 2,
                 txs_count: 1,
+                cellbase_txs_count: 0,
                 first_seen_block: 100,
                 first_seen_tx: initial_tx_hash.clone(),
                 last_activity_block: 200,

@@ -1259,6 +1259,7 @@ mod tests {
             fork_point_hash: vec![seq; 32],
             old_tip: fork_point + 3,
             old_tip_hash: vec![seq; 32],
+            first_orphan_hash: None,
             new_tip: fork_point + 4,
             new_tip_hash: vec![seq; 32],
             depth: 3,

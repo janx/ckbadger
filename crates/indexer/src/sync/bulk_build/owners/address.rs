@@ -35,6 +35,11 @@ pub(crate) struct CompactAddressBalance {
     pub(crate) first_seen_block: i64,
     pub(crate) last_activity_block: i64,
     pub(crate) live_cells_count: i32,
+    /// `AddressBalance::cellbase_txs_count`. A `u32` placed after the `i32`
+    /// fills what was trailing padding, so the entry stays 120 bytes: the
+    /// counter costs bulk no retained memory (a chain of ~2^32 blocks would be
+    /// needed to overflow it, and overflow is a checked error, not a wrap).
+    pub(crate) cellbase_txs_count: u32,
 }
 
 impl CompactAddressBalance {
@@ -45,6 +50,7 @@ impl CompactAddressBalance {
             live_cells_count: self.live_cells_count,
             total_cells_count: self.total_cells_count,
             txs_count: self.txs_count,
+            cellbase_txs_count: i64::from(self.cellbase_txs_count),
             first_seen_block: self.first_seen_block,
             first_seen_tx: self.first_seen_tx.to_vec(),
             last_activity_block: self.last_activity_block,
@@ -64,6 +70,7 @@ impl CompactAddressBalance {
             first_seen_block: seed as i64,
             last_activity_block: seed as i64,
             live_cells_count: 1,
+            cellbase_txs_count: 0,
         }
     }
 }
@@ -277,6 +284,18 @@ impl AddressOwner {
         tx: &ResolvedTxFacts<'_>,
         deltas: &FxHashMap<[u8; 32], AddressTxDelta>,
     ) -> Result<()> {
+        // Every lock in `deltas` gets this tx's `addr_txs` row and its
+        // `txs_count` increment; a cellbase also counts in `cellbase_txs_count`.
+        // Decided once per tx, applied in the same row update below.
+        let increment = AddressBalance::cellbase_tx_increment(tx.is_cellbase());
+        let cellbase_increment = u32::try_from(increment).map_err(|_| {
+            anyhow!(
+                "cellbase_tx_increment outside u32: increment={}, block={}, tx=0x{}",
+                increment,
+                tx.block_number,
+                hex::encode(tx.tx_hash)
+            )
+        })?;
         for (lock_hash, delta) in deltas {
             let hash = hash_lock_hash(lock_hash);
             let existing_id = self
@@ -338,6 +357,18 @@ impl AddressOwner {
                     )?;
                     balance.txs_count =
                         checked_add_i64(balance.txs_count, 1, "address txs_count", lock_hash, tx)?;
+                    balance.cellbase_txs_count = balance
+                        .cellbase_txs_count
+                        .checked_add(cellbase_increment)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "address cellbase_txs_count overflow: lock_hash=0x{}, current={}, block={}, tx=0x{}",
+                                hex::encode(lock_hash),
+                                balance.cellbase_txs_count,
+                                tx.block_number,
+                                hex::encode(tx.tx_hash)
+                            )
+                        })?;
                     balance.last_activity_block = tx.block_number;
                     balance.last_activity_tx = tx.tx_hash;
                 }
@@ -408,6 +439,7 @@ impl AddressOwner {
                             live_cells_count: delta.cells_created,
                             total_cells_count: i64::from(delta.cells_created),
                             txs_count: 1,
+                            cellbase_txs_count: cellbase_increment,
                             first_seen_block: tx.block_number,
                             first_seen_tx: tx.tx_hash,
                             last_activity_block: tx.block_number,
@@ -813,10 +845,71 @@ mod tests {
             first_seen_tx: [0xAA; 32],
             last_activity_block: 7,
             last_activity_tx: [0xBB; 32],
+            cellbase_txs_count: 4,
         };
         let stored = compact.to_stored();
+        assert_eq!(stored.txs_count, 5);
+        assert_eq!(stored.cellbase_txs_count, 4);
         assert_eq!(stored.first_seen_tx, vec![0xAA; 32]);
         assert_eq!(stored.last_activity_tx, vec![0xBB; 32]);
+    }
+
+    /// W5: the reducer counts a cellbase in `cellbase_txs_count` inside the
+    /// row update it already makes for `txs_count` — no extra lookup, no extra
+    /// row, and (by the layout assertions above) no extra retained bytes.
+    #[test]
+    fn address_owner_counts_cellbase_txs_in_the_existing_row_update() {
+        let interner = IdentityInterner::default();
+        let miner = interner.intern_bytes(vec![0xcc; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let output = |tx_hash: [u8; 32], block: i64| CellFacts {
+            outpoint: OutPointKey::new(tx_hash, 0),
+            created_at_block: block,
+            created_by_block_dao_ar: 1,
+            capacity: 1000_00000000,
+            lock_script_hash_id: miner,
+            lock_code_hash_id: InternId::new(2),
+            lock_hash_type: 1,
+            lock_args_id: InternId::new(3),
+            type_script_hash_id: None,
+            type_code_hash_id: None,
+            type_hash_type: None,
+            type_args_id: None,
+            occupied_capacity: 61_00000000,
+            data_size: 0,
+            data: Vec::new(),
+            data_hash: None,
+            udt_amount: None,
+            semantic_tag: CellSemanticTag::Plain,
+            dao_state: None,
+            protocol_facts: None,
+        };
+        let tx = |tx_hash: [u8; 32], block: i64, tx_index: i32| ResolvedTxFacts {
+            tx_hash,
+            block_number: block,
+            block_hash: [block as u8; 32],
+            timestamp_ms: 1_700_000_000_000,
+            chain_time_ms: 1_700_000_000_000,
+            block_dao_ar: 1,
+            tx_index,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![output(tx_hash, block)].into(),
+        };
+
+        let mut owner = AddressOwner::default();
+        // First seen through a cellbase, paid by a second one, then a plain
+        // transfer into the same lock (tx position 1).
+        owner.apply_tx(&tx([0x01; 32], 12, 0), &ctx).unwrap();
+        owner.apply_tx(&tx([0x02; 32], 13, 0), &ctx).unwrap();
+        owner.apply_tx(&tx([0x03; 32], 13, 1), &ctx).unwrap();
+
+        let balance = owner.get(&[0xcc; 32]).expect("miner row");
+        assert_eq!(balance.txs_count, 3);
+        assert_eq!(balance.cellbase_txs_count, 2);
+        let stored = balance.to_stored();
+        assert_eq!((stored.txs_count, stored.cellbase_txs_count), (3, 2));
     }
 
     #[test]
