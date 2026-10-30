@@ -58,6 +58,15 @@ const mockToken: Token = {
   totalCommonKnowledgeSize: '15300000000000',
   issuer: null,
   sameSymbolTokens: [],
+  // The token detail always carries its metadata provenance (contracts INT I3).
+  metadata: {
+    name: 'Test Token',
+    symbol: 'TEST',
+    decimals: 8,
+    source: 'label',
+    chain: null,
+    conflict: false,
+  },
 };
 const history: TokenHistory = {
   source: 'indexed_chain_time',
@@ -187,11 +196,12 @@ describe('TokenDetailPage', () => {
     expect(screen.getByText(/xUDT · 8 decimals/)).toBeInTheDocument();
     expect(screen.getByText('A test token')).toBeInTheDocument();
     const facts = screen.getByLabelText('Facts');
-    expect(facts).toHaveTextContent('Maximum supply: Unknown');
+    // F2 objects (D8): not established, with the one sentence that says why.
+    expect(facts).toHaveTextContent('Maximum supply: Not established.');
     expect(facts).toHaveTextContent('500,000.00000001');
-    expect(facts).toHaveTextContent('Live cells150');
     expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument();
-    expect(screen.getByText(/Metadata provenance not recorded/)).toBeInTheDocument();
+    // F2 objects (IV-19 / IV-26): live cells and the metadata source live in tier 2.
+    expect(screen.getByText(/from a curated label shipped with CKBadger/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: other })).toHaveAttribute(
       'href',
       `/mainnet/script/${other}?hashType=data1&kind=type`
@@ -209,7 +219,7 @@ describe('TokenDetailPage', () => {
   it('labels last full activity neutrally and states newest-first exactly once', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(/^Last transaction involving this token/)).toBeInTheDocument();
+    expect(await screen.findByText(/^It last moved/)).toBeInTheDocument();
     expect(
       screen.getByRole('tablist', { name: 'What happened' }).textContent?.match(/newest first/g)
     ).toHaveLength(1);
@@ -277,7 +287,7 @@ describe('TokenDetailPage', () => {
       ],
     });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText(/Other tokens also call themselves/)).toHaveTextContent(
+    expect(await screen.findByText(/Another token also calls itself/)).toHaveTextContent(
       '2 holders'
     );
     expect(screen.getByLabelText('Facts')).toHaveTextContent('JoyID · owner lock proven');

@@ -10,6 +10,7 @@ import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 
 export interface CollectionHoldersProps {
   load: (params: {
@@ -18,6 +19,27 @@ export interface CollectionHoldersProps {
   }) => Promise<CursorPaginatedResponse<CollectionHolder>>;
   queryKey: string;
   distribution?: readonly { range: string; holders: number; items: number }[];
+  /** F2 objects (OB-C7): draw the counts as bars in this class colour (Collection board). */
+  assetClass?: AssetClass;
+}
+
+/** F2 objects (OB-C7): a count with its bar, as long as its share of the largest in the list. */
+function CountBar({ value, max, color }: { value: number; max: number; color: string }) {
+  return (
+    <span className="inline-flex items-center justify-end gap-2">
+      <span
+        aria-hidden
+        data-testid="count-bar"
+        className="bg-base-elevated inline-block h-1.5 w-16 overflow-hidden rounded-sm"
+      >
+        <span
+          className="block h-full"
+          style={{ width: `${max ? (value / max) * 100 : 0}%`, backgroundColor: color }}
+        />
+      </span>
+      <AssetCount value={value} />
+    </span>
+  );
 }
 
 function count(value: number, label: string): bigint {
@@ -37,7 +59,12 @@ export function CollectionHolders(props: CollectionHoldersProps) {
   return <ScopedCollectionHolders key={props.queryKey} {...props} />;
 }
 
-function ScopedCollectionHolders({ load, queryKey, distribution }: CollectionHoldersProps) {
+function ScopedCollectionHolders({
+  load,
+  queryKey,
+  distribution,
+  assetClass,
+}: CollectionHoldersProps) {
   const [all, setAll] = useState(false);
   const pagination = useCursorPagination();
   const limit = all ? 50 : 10;
@@ -96,7 +123,16 @@ function ScopedCollectionHolders({ load, queryKey, distribution }: CollectionHol
       minWidth: 100,
       numeric: true,
       className: '!whitespace-normal break-all',
-      render: (holder) => <AssetCount value={holder.itemCount} />,
+      render: (holder) =>
+        assetClass ? (
+          <CountBar
+            value={holder.itemCount}
+            max={Math.max(...holders.data!.data.map((h) => h.itemCount))}
+            color={CLASS_COLORS[assetClass]}
+          />
+        ) : (
+          <AssetCount value={holder.itemCount} />
+        ),
     },
   ];
   const bucketColumns: ListColumn<NonNullable<CollectionHoldersProps['distribution']>[number]>[] = [
@@ -107,7 +143,16 @@ function ScopedCollectionHolders({ load, queryKey, distribution }: CollectionHol
       minWidth: 100,
       numeric: true,
       className: '!whitespace-normal break-all',
-      render: (bucket) => <AssetCount value={bucket.holders} />,
+      render: (bucket) =>
+        assetClass ? (
+          <CountBar
+            value={bucket.holders}
+            max={Math.max(...(distribution ?? []).map((b) => b.holders))}
+            color={CLASS_COLORS[assetClass]}
+          />
+        ) : (
+          <AssetCount value={bucket.holders} />
+        ),
     },
     {
       key: 'items',

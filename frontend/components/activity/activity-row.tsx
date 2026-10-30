@@ -188,38 +188,113 @@ function partyKey(p: ParticipantInfo, i: number): string {
  * up), its occupied change when there is one, and its item changes. Named parties with no change
  * are listed — their zero is the fact. Over six, the five largest and an explicit "+N" to expand.
  */
-function Participants({ participants }: { participants: ActivityParticipant[] }) {
+// ── F2 objects (round 2): the asset boards' participant line — lock kind as its own unwrapped
+// column (IV-14, OB-12), and a batch of objects folded behind "+N more objects" (OB-M3). ──
+const PARTICIPANT_GRID_LOCK =
+  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs sm:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)]';
+function FoldedItemDeltas({
+  items,
+  focusItemId,
+}: {
+  items: ParticipantInfo['itemDeltas'];
+  focusItemId?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const objects = items.filter((i) => i.kind === 'object');
+  if (open || objects.length < 2)
+    return (
+      <DotJoined
+        parts={items.map((item, i) => (
+          <ItemDeltaFact key={i} item={item} />
+        ))}
+      />
+    );
+  const lead = objects.find((o) => o.kind === 'object' && o.objectId === focusItemId) ?? objects[0];
+  const shown = items.filter((i) => i.kind !== 'object' || i === lead);
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-3 gap-y-0.5">
+      <DotJoined
+        parts={shown.map((item, i) => (
+          <ItemDeltaFact key={i} item={item} />
+        ))}
+      />
+      <button
+        type="button"
+        aria-expanded={false}
+        onClick={() => setOpen(true)}
+        className="border-base-border text-text hover:text-text-bright h-6 rounded-md border px-2 text-[11.5px]"
+      >
+        +{objects.length - 1} more object{objects.length - 1 === 1 ? '' : 's'}
+      </button>
+    </span>
+  );
+}
+
+function Participants({
+  participants,
+  lockColumn = false,
+  foldObjects = false,
+  focusItemId,
+}: {
+  participants: ActivityParticipant[];
+  lockColumn?: boolean;
+  foldObjects?: boolean;
+  focusItemId?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
   const { shown, hidden } = participantsToShow(indexed, expanded);
   const foldable = participants.length > PARTICIPANT_LIMIT;
   if (participants.length === 0) return null;
   return (
-    <div data-role="participants" className={PARTICIPANT_GRID}>
+    <div data-role="participants" className={lockColumn ? PARTICIPANT_GRID_LOCK : PARTICIPANT_GRID}>
       {shown.map((p) => (
         <Fragment key={p.key}>
           <div data-party={p.key} className="col-start-1 min-w-0 overflow-hidden">
             <ParticipantRefView participant={p} compact quiet />
-            {p.lockKind && <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>}
+            {!lockColumn && p.lockKind && (
+              <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>
+            )}
           </div>
-          <div className="col-start-2 text-right">
+          {lockColumn && (
+            <div
+              data-role="lock-kind"
+              className="text-text-dim hidden min-w-0 truncate whitespace-nowrap text-[11.5px] sm:col-start-2 sm:block"
+              title={p.lockKind ?? undefined}
+            >
+              {p.lockKind ?? ''}
+            </div>
+          )}
+          <div className={cn('col-start-2 text-right', lockColumn && 'sm:col-start-3')}>
             <ExactCkb shannons={BigInt(p.ckbDelta)} />
           </div>
           {p.usedDelta !== '0' && (
             <div
               data-role="occupied"
-              className="text-text-dim col-start-2 text-right text-[11px] sm:col-start-3"
+              className={cn(
+                'text-text-dim col-start-2 text-right text-[11px]',
+                lockColumn ? 'sm:col-start-4' : 'sm:col-start-3'
+              )}
             >
               occupied {formatOccupiedDelta(p.usedDelta)}
             </div>
           )}
           {p.itemDeltas.length > 0 && (
-            <div className="col-span-2 col-start-1 sm:col-span-1 sm:col-start-4">
-              <DotJoined
-                parts={p.itemDeltas.map((item, i) => (
-                  <ItemDeltaFact key={i} item={item} />
-                ))}
-              />
+            <div
+              className={cn(
+                'col-span-2 col-start-1 sm:col-span-1',
+                lockColumn ? 'sm:col-start-5' : 'sm:col-start-4'
+              )}
+            >
+              {foldObjects ? (
+                <FoldedItemDeltas items={p.itemDeltas} focusItemId={focusItemId} />
+              ) : (
+                <DotJoined
+                  parts={p.itemDeltas.map((item, i) => (
+                    <ItemDeltaFact key={i} item={item} />
+                  ))}
+                />
+              )}
             </div>
           )}
         </Fragment>
@@ -258,6 +333,11 @@ export type ActivityRowProps = {
   showEvidence?: boolean;
   /** F2 blocks: the row's own evidence line (see `ActivityRowHead.evidence`). */
   evidence?: ReactNode;
+  /** F2 objects: lock kind in its own column (IV-14, OB-12). */
+  lockColumn?: boolean;
+  /** F2 objects: fold a batch of objects behind "+N more objects", leading with `focusItemId` (OB-M3). */
+  foldObjects?: boolean;
+  focusItemId?: string;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -275,6 +355,9 @@ export function ActivityRow({
   showScriptDetails = true,
   showEvidence = true,
   evidence,
+  lockColumn = false,
+  foldObjects = false,
+  focusItemId,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -301,7 +384,14 @@ export function ActivityRow({
       />
       <PoolInterpretationNotice interpretation={activity.interpretation} />
       <ActivityDetails activity={activity} showScriptDetails={showScriptDetails} />
-      {showParticipants && <Participants participants={shown.participants} />}
+      {showParticipants && (
+        <Participants
+          participants={shown.participants}
+          lockColumn={lockColumn}
+          foldObjects={foldObjects}
+          focusItemId={focusItemId}
+        />
+      )}
     </article>
   );
 }

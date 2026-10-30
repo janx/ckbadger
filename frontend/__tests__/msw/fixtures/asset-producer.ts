@@ -363,6 +363,16 @@ export const tokenProducer = {
     manager: null,
     maximumSupply: null,
     maximumSupplyStatus: 'unlimited',
+    // F2 objects: the token detail always carries its metadata provenance since lane INT I3;
+    // this capture predates I3, so the field is added in the documented shape.
+    metadata: {
+      name: 'Token',
+      symbol: 'TOK',
+      decimals: 0,
+      source: 'label',
+      chain: null,
+      conflict: false,
+    },
     name: 'Token',
     operatorWebsite: null,
     published: false,

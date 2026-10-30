@@ -130,6 +130,16 @@ export function ItemTransactionContext({
       </span>
       {context.createdCell ? (
         <>
+          {/* F2 objects (OB-13): where the object went, as the ObjectTxs board names it. */}
+          {item.kind === 'object' && (
+            <span className="text-text-dim block">
+              to{' '}
+              <AppLink href={`/address/${context.createdCell.ownerAddress}`}>
+                {`${context.createdCell.ownerAddress.slice(0, 10)}…${context.createdCell.ownerAddress.slice(-6)}`}
+              </AppLink>{' '}
+              (output {context.createdCell.outputIndex})
+            </span>
+          )}
           <AppLink
             className="block"
             href={`/cell/${context.createdCell.txHash}-${context.createdCell.outputIndex}`}

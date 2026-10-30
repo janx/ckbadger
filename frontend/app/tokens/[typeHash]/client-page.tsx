@@ -1,6 +1,8 @@
 'use client';
-import { useQuery } from '@tanstack/react-query';
-import { api, isNotFoundApiError } from '@/lib/api';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetHistory } from '@/components/asset/asset-history';
@@ -11,7 +13,7 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatTimeAgo, truncateHash } from '@/lib/utils';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -20,15 +22,44 @@ function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
   return page.total;
 }
+// ── F2 objects (round 2): Token board wording ──
+/** D8: issuer and cap stay "Not established"; one sentence says why. */
+const NOT_ESTABLISHED_CAP =
+  'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.';
+const NOT_ESTABLISHED_ISSUER =
+  'Not established. This token’s type script does not name an owner lock CKBadger can prove mints it.';
+/** IV-26: where the stored name / symbol / decimals came from, as the API records it. */
+function provenanceText(metadata: Token['metadata']): string {
+  if (metadata === undefined)
+    throw new Error('token detail has no metadata provenance (contracts INT I3)');
+  if (metadata === null) return 'Neither a curated label nor a Unique Cell names this token.';
+  const source =
+    metadata.source === 'label'
+      ? 'from a curated label shipped with CKBadger, not from the chain'
+      : 'from the token’s own Unique Cell on chain';
+  const chain = metadata.chain;
+  if (!chain) return `${source}; no Unique Cell is bound to it.`;
+  const said = `${chain.name ?? 'no name'} · ${chain.symbol ?? 'no symbol'} · ${chain.decimals}`;
+  return metadata.conflict
+    ? `${source}. Its Unique Cell on chain says ${said}.`
+    : `${source}; its Unique Cell on chain says the same.`;
+}
+const PLURAL = (n: number, one: string, many: string) =>
+  `${n.toLocaleString('en-US')} ${n === 1 ? one : many}`;
+
 export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   const token = useQuery({ queryKey: ['token', typeHash], queryFn: () => api.getToken(typeHash) });
   const history = useQuery({
     queryKey: ['token-history', typeHash],
     queryFn: () => api.getTokenHistory(typeHash),
   });
+  // F2 objects (IV-27): the supply events are paged at the source, 50 at a time.
+  const supplyPages = useCursorPagination();
   const supplyEvents = useQuery({
-    queryKey: ['token-supply-events', typeHash],
-    queryFn: () => api.getTokenSupplyEvents(typeHash, { limit: 100 }),
+    queryKey: ['token-supply-events', typeHash, supplyPages.cursor],
+    queryFn: () => api.getTokenSupplyEvents(typeHash, { limit: 50, cursor: supplyPages.cursor }),
+    // keep the open list on screen while the next page loads
+    placeholderData: keepPreviousData,
   });
   const latest = useQuery({
     queryKey: ['token-latest-activity', typeHash],
@@ -79,7 +110,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     ) : t.maximumSupplyStatus === 'unlimited' ? (
       'Unlimited'
     ) : (
-      'Unknown'
+      NOT_ESTABLISHED_CAP
     );
   return (
     <AssetDetailShell
@@ -90,11 +121,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         { label: 'Tokens', href: '/inventory/tokens' },
       ]}
       identity={
-        <>
+        <span className="text-[13px]">
           {formatStandard(t.standard)} ·{' '}
           {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
           {t.name && t.name !== t.symbol && <> · {t.name}</>}
-        </>
+        </span>
       }
       intro={
         <div className="space-y-3 text-xs">
@@ -147,11 +178,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               <AssetReadState error={latest.error} label="last token movement" retained />
               {latest.data.data[0] ? (
                 <p>
-                  Last transaction involving this token{' '}
+                  It last moved{' '}
                   <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
                     {formatTimeAgo(latest.data.data[0].timestamp)}
                   </AppLink>
-                  : {activityHeadline(latest.data.data[0])}.
+                  , in a transaction the feed names “{activityHeadline(latest.data.data[0])}”.
                 </p>
               ) : (
                 <p className="text-text-dim">No recorded token movements.</p>
@@ -164,12 +195,24 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               label="last token movement"
             />
           )}
+          {t.metadata?.conflict && t.metadata.chain && (
+            // F2 objects (IV-26): a relabelled token says what the chain calls it.
+            <p className="text-text-dim">
+              Its name comes from a CKBadger label. On chain it calls itself{' '}
+              <span className="text-text-bright">
+                {t.metadata.chain.symbol ?? t.metadata.chain.name ?? 'nothing'}
+              </span>
+              .
+            </p>
+          )}
           {t.sameSymbolTokens === undefined ? (
             <p className="text-text-dim">Same-symbol comparison unavailable.</p>
           ) : (
             t.sameSymbolTokens.length > 0 && (
               <p className="border-token/40 border-l-2 pl-3">
-                Other tokens also call themselves {t.symbol}:{' '}
+                {t.sameSymbolTokens.length === 1
+                  ? `Another token also calls itself ${t.symbol}: `
+                  : `Other tokens also call themselves ${t.symbol}: `}
                 {t.sameSymbolTokens.map((other, i) => (
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
@@ -179,7 +222,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                     , <AssetCount value={other.holdersCount} /> holders
                   </span>
                 ))}
-                . Tell them apart by type hash.
+                {`. Tell them apart by type hash; this one is ${truncateHash(t.typeScriptHash, 10, 4).replace('...', '…')}.`}
               </p>
             )
           )}
@@ -190,8 +233,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           label: 'Supply',
           value: (
             <>
-              <AssetAmount amount={t.totalSupply} decimals={t.decimals} /> {t.symbol}
-              <div className="text-text-dim mt-1 text-[11px]">Maximum supply: {maximum}</div>
+              <span className="text-[15px]">
+                <AssetAmount amount={t.totalSupply} decimals={t.decimals} />
+              </span>{' '}
+              <span className="text-text-dim text-[12px]">{t.symbol}</span>
+              <div className="text-text-dim mt-1 text-[12px]">Maximum supply: {maximum}</div>
             </>
           ),
         },
@@ -203,7 +249,14 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               <AssetCount value={t.transfersCount} />
               <span className="text-text-dim text-[11px]">
                 {' '}
-                · <AssetCount value={t.transfers24h} /> in 24 h
+                ·{' '}
+                {t.transfers24h === 0 ? (
+                  'none in 24 h'
+                ) : (
+                  <>
+                    <AssetCount value={t.transfers24h} /> in 24 h
+                  </>
+                )}
               </span>
             </>
           ),
@@ -226,7 +279,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               </p>
             </>
           ) : (
-            <span className="text-text-dim text-xs">Not established by this token’s script</span>
+            <span className="text-text-dim text-[12px]">{NOT_ESTABLISHED_ISSUER}</span>
           ),
         },
         {
@@ -243,7 +296,6 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               <span className="text-text-dim">Capacity unavailable</span>
             ),
         },
-        { label: 'Live cells', value: <AssetCount value={t.cellsCount} /> },
         {
           label: 'Type hash',
           value: <Hash hash={t.typeScriptHash} truncate={false} className="break-all text-xs" />,
@@ -253,6 +305,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         <AssetFeed
           queryKey={`token:${typeHash}`}
           scope={`Every transaction that moved ${tokenLabel}`}
+          plain
+          mark="tokens"
           loadActivities={(p) => api.getTokenActivityFeed(typeHash, p)}
           loadTransactions={(p) => api.getTokenTransactions(typeHash, p)}
           token={{ typeHash, symbol: t.symbol, decimals: t.decimals }}
@@ -274,11 +328,19 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <Hash hash={t.typeCodeHash} truncate={false} className="break-all text-xs" />
                 </AppLink>
               </dd>
+              <dd className="text-text-dim mt-1 text-[11px]">
+                the token’s type script; its code decides what a valid transfer is
+              </dd>
             </div>
             <div>
               <dt className="text-text-dim">Args</dt>
               <dd className="mt-1">
                 <Hash hash={t.typeArgs} truncate={false} className="break-all text-xs" />
+              </dd>
+              <dd className="text-text-dim mt-1 text-[11px]">
+                {t.issuer
+                  ? `the lock hash of the owner that can mint (${t.issuer.address ?? t.issuer.lockHash}), proven by the token script`
+                  : NOT_ESTABLISHED_ISSUER}
               </dd>
             </div>
             <div>
@@ -287,46 +349,71 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
                 {t.decimals ?? 'Decimals unknown'}
               </dd>
-              <dd className="text-text-dim mt-1 text-[11px]">
-                Metadata provenance not recorded. These displayed values do not establish whether
-                the source was an imported label or on-chain information.
+              <dd className="text-text-dim mt-1 text-[11px]">{provenanceText(t.metadata)}</dd>
+            </div>
+            <div>
+              <dt className="text-text-dim">Live cells</dt>
+              <dd className="mt-1">
+                <AssetCount value={t.cellsCount} />
               </dd>
             </div>
           </dl>
         </DetailSection>
       }
     >
-      {history.data ? (
-        <>
-          <AssetReadState error={history.error} label="token history" retained />
-          <AssetHistory
-            daily={history.data.daily}
-            weekly={history.data.weeklyTransactions.map((w) => ({
-              weekStart: w.weekStart,
-              count: w.transactionsCount,
-            }))}
-            weeklyNoun="transactions"
-            completeThrough={history.data.completeThrough}
-            supplyEvents={
-              supplyEvents.data
-                ? { rows: supplyEvents.data.data, total: supplyEventsTotal(supplyEvents.data) }
-                : undefined
-            }
-            token={{ symbol: t.symbol, decimals: t.decimals }}
-          />
-          <AssetReadState error={supplyEvents.error} label="supply events" retained />
-          <p className="text-text-dim -mt-5 text-xs">
-            <AssetCount value={history.data.mintCount} /> mints ·{' '}
-            <AssetCount value={history.data.burnCount} /> burns ·{' '}
-            <AssetCount value={history.data.transfersCount} /> transfers.
-            {held !== null && occupied !== null && occupied > BigInt(0) && (
-              <> H-multiplier ×{formatScaledInteger(held, occupied, 2)}: CKB held ÷ occupied.</>
-            )}
-          </p>
-        </>
-      ) : (
-        <AssetReadState error={history.error} loading={history.isLoading} label="token history" />
-      )}
+      <div role="region" aria-label="History" className="min-w-0">
+        {history.data ? (
+          <>
+            <AssetReadState error={history.error} label="token history" retained />
+            <AssetHistory
+              daily={history.data.daily}
+              weekly={history.data.weeklyTransactions.map((w) => ({
+                weekStart: w.weekStart,
+                count: w.transactionsCount,
+              }))}
+              weeklyNoun="transactions"
+              completeThrough={history.data.completeThrough}
+              supplyEvents={
+                supplyEvents.data
+                  ? { rows: supplyEvents.data.data, total: supplyEventsTotal(supplyEvents.data) }
+                  : undefined
+              }
+              supplyPager={
+                supplyEvents.data && (
+                  <CursorPagination
+                    total={supplyEventsTotal(supplyEvents.data)}
+                    totalLabel="supply changes"
+                    pageSize={50}
+                    page={supplyPages.page}
+                    hasMore={supplyEvents.data.hasMore}
+                    hasPrevious={supplyPages.hasPrevious}
+                    onNext={() => supplyPages.goToNext(supplyEvents.data!.nextCursor)}
+                    onPrevious={supplyPages.goToPrevious}
+                  />
+                )
+              }
+              footnote={
+                // F2 objects (IV-17): the board's line, singular and plural as they come.
+                <>
+                  {PLURAL(history.data.mintCount, 'mint', 'mints')} ·{' '}
+                  {PLURAL(history.data.burnCount, 'burn', 'burns')} ·{' '}
+                  {PLURAL(history.data.transfersCount, 'transfer', 'transfers')}
+                  {held !== null && occupied !== null && occupied > BigInt(0) && (
+                    <>
+                      {' '}
+                      · H-multiplier ×{formatScaledInteger(held, occupied, 2)}: CKB held ÷ occupied
+                    </>
+                  )}
+                </>
+              }
+              token={{ symbol: t.symbol, decimals: t.decimals }}
+            />
+            <AssetReadState error={supplyEvents.error} label="supply events" retained />
+          </>
+        ) : (
+          <AssetReadState error={history.error} loading={history.isLoading} label="token history" />
+        )}
+      </div>
       <TokenHolders typeHash={typeHash} symbol={t.symbol} decimals={t.decimals} />
     </AssetDetailShell>
   );

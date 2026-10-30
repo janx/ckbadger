@@ -16,7 +16,9 @@ vi.mock('@/components/layout/header', () => ({ Header: () => null }));
 beforeEach(mockItemReads);
 it('keeps object capacity primary, one versions heading and exact occupied values', async () => {
   render(<SporeDetailView object={sporeDetailProducer} error={null} />);
-  expect(await screen.findByRole('heading', { name: 'Cell versions' })).toBeInTheDocument();
+  // F2 objects (OB-9): the versions are the board's "CKB held in its cell" — one heading for both.
+  expect(await screen.findByLabelText(/cell versions$/)).toBeInTheDocument();
+  expect(screen.queryByRole('heading', { name: 'Cell versions' })).not.toBeInTheDocument();
   expect(screen.getAllByRole('heading', { name: 'CKB held in its cell' })).toHaveLength(1);
   expect(
     screen.getByLabelText(`Object ${sporeDetailProducer.sporeId} capacity partition`)

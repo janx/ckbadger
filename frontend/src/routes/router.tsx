@@ -225,6 +225,8 @@ export function createAppRouter(): RouteObject[] {
     { path: 'tokens', element: <LegacyRedirect to="inventory/tokens" /> },
     { path: 'objects', element: <LegacyRedirect to="inventory/objects" /> },
     { path: 'dao/charts', element: <LegacyRedirect to="charts" /> },
+    // F2 objects (IV-25): the header's Inventory opens its first view instead of a 404.
+    { path: 'inventory', element: <LegacyRedirect to="inventory/tokens" /> },
     {
       index: true,
       element: <HomePage />,

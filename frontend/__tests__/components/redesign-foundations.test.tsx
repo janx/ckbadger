@@ -10,7 +10,7 @@ import { CellBar } from '@/components/ui/cell-bar';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
 import { HexMap } from '@/components/ui/hex-map';
 import { DnaStrip } from '@/components/ui/dna-strip';
-import { AlleleGel } from '@/components/ui/allele-gel';
+import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { Chart } from '@/components/ui/chart';
 import { TxStructure } from '@/components/transaction/tx-structure';
 import { ActivityRow } from '@/components/activity/activity-row';
@@ -226,18 +226,38 @@ describe('byte and DNA inspection', () => {
     expect(marks[2]).toHaveAttribute('y', '30');
     expect(screen.getByRole('img')).toHaveAccessibleName('Object DNA: 2 bytes, 0af1');
   });
+  // F2 objects (round 2): the single-object gel moved from `ui/allele-gel` (now the collection's
+  // allele gel) to `ui/sequencing-gel`; the same linking contract is kept here.
   it('links a decoded trait to its gene bands without inventing a decode', () => {
     const onHover = vi.fn();
-    const { container } = render(
-      <AlleleGel
-        dna="0x0102ff"
-        subject="Object X"
-        genes={fields.map((f) => ({ ...f, value: f.id === 'flags' ? 'v1' : 'raw payload' }))}
-        onGeneHover={onHover}
-      />
+    const gene = (key: string, name: string, offset: number, length: number, value: string) => ({
+      key,
+      name,
+      offset,
+      length,
+      rule: 'rawString',
+      raw: '',
+      owns: true,
+      color: CELL_COLORS.type,
+      value,
+      declared: { offset: String(offset), length: String(length) },
+      truncated: false,
+      ruleName: 'rawString',
+      ruleArguments: null,
+    });
+    const layout = {
+      bytes: ['01', '02', 'ff'],
+      genes: [gene('0:0', 'flags', 0, 1, 'v1'), gene('0:1', 'body', 1, 2, 'raw payload')],
+      owners: ['0:0', '0:1', '0:1'],
+      unmapped: [],
+      unsupported: [],
+    };
+    const { container, rerender } = render(
+      <SequencingGel layout={layout} subject="Object X" active={null} onActive={onHover} />
     );
     fireEvent.focus(container.querySelector('[data-gene="body"]')!);
     expect(onHover).toHaveBeenCalledWith('body');
+    rerender(<SequencingGel layout={layout} subject="Object X" active="body" onActive={onHover} />);
     expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '0.15');
     expect(container.querySelector('[data-nibble="2"]')).toHaveAttribute('opacity', '1');
     expect(screen.getByText('raw payload')).toBeInTheDocument();

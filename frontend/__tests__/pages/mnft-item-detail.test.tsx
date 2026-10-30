@@ -126,12 +126,15 @@ describe('MnftItemDetailPage', () => {
       '/mainnet/inventory/objects'
     );
     expect(screen.getByText(/State 0x03 · claimed · locked/)).toBeInTheDocument();
-    expect(screen.getByText(/Issued in/)).toHaveTextContent('Issuer A');
+    // F2 objects (OB-M5): the hero sentence tells who issued it and its life since.
+    expect(screen.getByText(/^Issued by Issuer A/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open the class →' })).toHaveAttribute(
       'href',
       `/mainnet/classes/${detail.class.classId}`
     );
-    expect(screen.getByText('198 of 200 issued')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'In Class A' })).toHaveTextContent(
+      '200 issued of 1,000 · 198 live'
+    );
     expect(
       screen
         .getAllByRole('link')

@@ -1,73 +1,101 @@
 'use client';
-import { useState } from 'react';
-import type { CollectionInsights, CurrentPattern, ObjectGenetics } from '@/lib/api';
-import { AlleleGel, type DnaGene } from '@/components/ui/allele-gel';
+import { useState, type CSSProperties } from 'react';
+import type {
+  CollectionInsights,
+  CurrentPattern,
+  ObjectGenetics,
+  SporeDobDecoded,
+} from '@/lib/api';
+import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
+import { AlleleGel } from '@/components/ui/allele-gel';
+import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
-import { hexBytes } from '@/lib/hex-bytes';
-import { HUE_RAMP } from '@/lib/design-tokens';
-import { formatUnixSecondsUtc8 } from '@/lib/utils';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
+import {
+  alleleLanes,
+  geneOrder,
+  genotypePoints,
+  sequencingGenes,
+  traitDisplay,
+} from '@/lib/dob-genes';
+import type { CompositionTier } from '@/lib/asset-utils';
+import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
 
+// ── F2 objects (round 2): the Object board's DNA section (OB-4, OB-5, OB-7, OB-8) ──
 export interface ObjectGeneticsViewProps {
   evidence: ObjectGenetics;
   subject: string;
-  collection?: CollectionInsights['genetics'];
+  /** The object's collection insights, for the allele-gel bridge ("Among <collection>"). */
+  collection?: CollectionInsights;
+  collectionName?: string | null;
+  collectionHref?: string;
+  tier?: CompositionTier;
+  /** The gene lit across trait list, sequencing gel and allele gel (three-way hover). */
+  active?: string | null;
+  onActive?: (gene: string | null) => void;
 }
-export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGeneticsViewProps) {
-  const { dnaHex, cachedVmTraits: cached, currentPattern: pattern } = evidence;
+function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefined {
+  if (tier !== 'btc_ckb' && tier !== 'pure_ckb') return undefined;
+  return {
+    backgroundImage: COMPOSITION_BADGES[tier].frame,
+    backgroundClip: 'padding-box, border-box',
+    backgroundOrigin: 'padding-box, border-box',
+    border: '1px solid transparent',
+  };
+}
+/**
+ * The object's DNA: a sequencing gel of its own bytes (gene by gene), then, on the same plate, the
+ * allele gel of its collection with this object's genotype drawn across it ("this one").
+ */
+export function ObjectGeneticsView({
+  evidence,
+  subject,
+  collection,
+  collectionName,
+  collectionHref,
+  tier,
+  active: controlled,
+  onActive,
+}: ObjectGeneticsViewProps) {
+  const [own, setOwn] = useState<string | null>(null);
+  const active = controlled === undefined ? own : controlled;
+  const setActive = (gene: string | null) => {
+    setOwn(gene);
+    onActive?.(gene);
+  };
+  const { dnaHex, cachedVmTraits: cached } = evidence;
   if (dnaHex === null)
     return <p className="text-text-dim text-[11px]">This object has no DOB DNA.</p>;
-  const dna = hexBytes(dnaHex, subject);
-  const genes: DnaGene[] = [];
-  const unmapped: string[] = [];
-  if (pattern.status === 'dob')
-    for (const step of pattern.steps) {
-      if (step.description.status !== 'supported') continue;
-      for (const map of step.bytes) {
-        const definition = step.description.genes.find((g) => g.index === map.geneIndex);
-        if (!definition)
-          throw new Error(
-            `${subject}: decoder step ${step.step} maps missing gene ${map.geneIndex}`
-          );
-        if (
-          dna.slice(map.byteOffset, map.byteOffset + map.byteLength).join('') !==
-          map.rawHex.replace(/^0x/, '').toLowerCase()
-        )
-          throw new Error(`${subject}: gene ${definition.name} bytes disagree with DNA`);
-        const declared = `Declared bytes ${map.declaredByteOffset} + ${map.declaredByteLength}`;
-        if (map.byteLength === 0) {
-          unmapped.push(
-            `${definition.name}: ${declared}; no bytes of this DNA fall in the declared range.`
-          );
-          continue;
-        }
-        const traits = cached.traits.filter((t) => t.name === definition.name);
-        genes.push({
-          id: `${step.step}:${map.geneIndex}`,
-          label: definition.name,
-          offset: map.byteOffset,
-          length: map.byteLength,
-          value: traits.length
-            ? `Cached VM result: ${traits.map((t) => t.value).join(' · ')}`
-            : 'No cached VM value for this gene',
-          description: `${declared}. ${map.truncated ? 'Clipped to the actual DNA shown. ' : ''}${definition.rule}; raw 0x${map.rawHex.replace(/^0x/, '')}.`,
-          color: HUE_RAMP[genes.length % HUE_RAMP.length],
-        });
-      }
-    }
+  const layout = sequencingGenes(evidence, subject);
+  const geneNames = [...new Set(layout.genes.map((g) => g.name))];
+  const pointer = layout.genes.find((g) => g.owns && /^btcfs/i.test(g.ruleName));
+  const bridge = collection?.genetics.complete
+    ? alleleLanes(
+        collection.genetics,
+        geneOrder(collection.currentPattern),
+        collectionName ?? subject
+      )
+    : null;
+  const own3 = bridge ? genotypePoints(bridge, cached.traits) : null;
   return (
-    <section aria-label="DNA and expression" className="min-w-0 space-y-4">
-      <div className="flex flex-wrap items-baseline gap-3">
-        <h2 className="text-text-bright text-[15px]">DNA & expression</h2>
-        <span className="text-text-dim text-[11px]">
-          {dna.length} bytes{evidence.number !== null ? ` · number ${evidence.number}` : ''}
+    <section aria-labelledby="h-dna" className="min-w-0 space-y-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-4">
+        <h2 id="h-dna" className="text-text-bright text-[15px]">
+          DNA
+        </h2>
+        <span className="text-text-dim text-[12px]">
+          {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
+          {evidence.number !== null ? ` · number ${evidence.number}` : ''} · hover a gene
         </span>
       </div>
-      <p className="text-text-dim text-[11px]">
-        The byte map describes the current decoder. Trait values are cached VM results
-        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
-        the original decoder binary hash was not recorded. These are separate pieces of evidence.
+      <p className="text-[13px] leading-relaxed">
+        The object’s traits are not stored as text. It carries {layout.bytes.length} bytes of DNA,
+        and the collection’s decoder reads each gene to express a trait.
+        {pointer && tier === 'btc_ckb'
+          ? ` Its ${pointer.name} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
+          : ''}
       </p>
       {cached.status === 'pending' && (
         <p role="status" className="text-text-dim">
@@ -77,44 +105,149 @@ export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGene
       {cached.status === 'failed' && (
         <p role="alert">DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}</p>
       )}
-      {genes.length ? (
-        <AlleleGel dna={dnaHex} genes={genes} subject={subject} />
-      ) : (
-        <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
-      )}
-      {unmapped.map((line) => (
-        <p key={line} className="text-text-dim text-[11px]">
-          {line}
-        </p>
-      ))}
-      {pattern.status === 'dob' &&
-        pattern.steps.map((step) =>
-          step.description.status === 'unsupported' ? (
-            <p key={step.step} role="status" className="text-text-dim text-[11px]">
-              Decoder {step.step + 1}: byte mapping unavailable — {step.description.reason}
+      <div
+        className={cn('rounded-[10px] p-[5px]', !plateStyle(tier) && 'border-base-border border')}
+        style={plateStyle(tier)}
+      >
+        <div className="space-y-4 rounded-md px-4 py-4 sm:px-5">
+          {layout.genes.length ? (
+            <SequencingGel layout={layout} subject={subject} active={active} onActive={setActive} />
+          ) : (
+            <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
+          )}
+          {layout.unsupported.map((u) => (
+            <p key={u.step} role="status" className="text-text-dim text-[11px]">
+              Decoder {u.step + 1}: byte mapping unavailable — {u.reason}
             </p>
-          ) : null
-        )}
-      {cached.traits.length > 0 && (
-        <dl aria-label="Cached VM traits" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {cached.traits.map((t, i) => (
-            <div key={`${t.name}:${i}`}>
-              <dt className="text-text-dim text-[11px]">{t.name}</dt>
-              <dd className="text-text-bright break-words">
-                {t.value}
-                {collection?.complete && (
-                  <span className="text-text-dim block text-[11px]">
-                    {(() => {
-                      const count = collection.traits
-                        .find((g) => g.name === t.name)
-                        ?.values.find((v) => v.value === t.value)?.count;
-                      return count === undefined
-                        ? 'Variant absent from the current collection result'
-                        : `${count} of ${collection.eligibleItems} live DOB items`;
-                    })()}
-                  </span>
+          ))}
+          {collection && (
+            <div className="border-base-border space-y-2 border-t pt-3">
+              <div className="flex flex-wrap items-baseline justify-between gap-4">
+                <span className="text-text text-[12.5px]">
+                  Among {collectionName ?? 'its collection'} · its variant in each gene, and how
+                  common it is among the {collection.genetics.eligibleItems.toLocaleString('en-US')}
+                </span>
+                {collectionHref && (
+                  <AppLink href={collectionHref} className="text-[12px]">
+                    Open the collection →
+                  </AppLink>
                 )}
+              </div>
+              {bridge && own3 ? (
+                <>
+                  <AlleleGel
+                    lanes={bridge}
+                    total={collection.genetics.eligibleItems}
+                    subject={collectionName ?? subject}
+                    ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
+                    height={300}
+                    overlays={[
+                      { key: 'me', label: 'this one', points: own3.points, persistent: true },
+                    ]}
+                    activeGene={active}
+                    onGeneHover={setActive}
+                  />
+                  {own3.absent.length > 0 && (
+                    <p role="status" className="text-text-dim text-[11px]">
+                      Its {own3.absent.join(', ')} variant is not among the collection’s counted
+                      variants.
+                    </p>
+                  )}
+                </>
+              ) : (
+                <p role="status" className="text-text-dim text-[11px]">
+                  Collection variant frequencies await complete decoding.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+/**
+ * Tier 2 (OB-8): what each piece of DNA evidence is — the current decoder's byte map, the cached
+ * VM result and when it was decoded, every raw trait value — so tier 1 can speak plainly.
+ */
+export function ObjectGeneticsEvidence({
+  evidence,
+  subject,
+  decoded,
+}: {
+  evidence: ObjectGenetics;
+  subject: string;
+  /** F2 objects (OB-14): the decoder's own output files, from `/spore/objects/{id}/decode`. */
+  decoded?: SporeDobDecoded;
+}) {
+  const { dnaHex, cachedVmTraits: cached } = evidence;
+  const layout = dnaHex === null ? null : sequencingGenes(evidence, subject);
+  return (
+    <section aria-label="DNA evidence" className="min-w-0 space-y-3">
+      <h2 className="text-text-bright text-[15px]">DNA evidence</h2>
+      <p className="text-text-dim text-[11px]">
+        The byte map describes the current decoder. Trait values are cached VM results
+        {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
+        the original decoder binary hash was not recorded. These are separate pieces of evidence.
+      </p>
+      {dnaHex !== null && <p className="break-all text-[11px]">DNA {dnaHex}</p>}
+      {layout && (
+        <dl className="divide-base-elevated divide-y text-[11px]">
+          {layout.genes.map((g) => (
+            <div key={g.key} className="py-2">
+              <dt>
+                {g.name}{' '}
+                <span className="text-text-dim">
+                  bytes {g.offset}–{g.offset + g.length - 1}
+                </span>
+              </dt>
+              <dd className="text-text-dim break-words">
+                Declared bytes {g.declared.offset} + {g.declared.length}.{' '}
+                {g.truncated ? 'Clipped to the actual DNA shown. ' : ''}
+                {g.ruleName}
+                {g.ruleArguments !== null && g.ruleArguments !== undefined
+                  ? ` ${JSON.stringify(g.ruleArguments)}`
+                  : ''}
+                ; raw 0x{g.raw}.
               </dd>
+            </div>
+          ))}
+          {layout.unmapped.map((u) => (
+            <div key={u.name} className="text-text-dim py-2">
+              {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this
+              DNA fall in the declared range.
+            </div>
+          ))}
+        </dl>
+      )}
+      {decoded && decoded.media.length > 0 && (
+        <ul aria-label="Decoder output" className="space-y-1 text-[11px]">
+          {decoded.media.map((m) => (
+            <li key={`${m.hash}:${m.step ?? 'x'}`} className="break-all">
+              <span className="text-text">
+                {m.mediaType} · {m.size.toLocaleString('en-US')} bytes
+                {m.step !== null ? ` · step ${m.step + 1}` : ''}
+                {m.role ? ` · ${m.role}` : ''}
+              </span>{' '}
+              <span className="text-text-dim">sha256 {m.hash.slice(0, 12)}…</span>{' '}
+              <a
+                href={`${apiBaseFor(resolveActiveNetwork())}${m.url}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-aqua"
+              >
+                Open the decoded file ↗
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+      {cached.traits.length > 0 && (
+        <dl aria-label="Cached VM traits" className="grid gap-2 text-[11px] sm:grid-cols-2">
+          {cached.traits.map((t, i) => (
+            <div key={`${t.name}:${i}`} className="min-w-0">
+              <dt className="text-text-dim">{t.name}</dt>
+              <dd className="break-all">{t.value === '' ? '(empty)' : t.value}</dd>
             </div>
           ))}
         </dl>
@@ -122,150 +255,28 @@ export function ObjectGeneticsView({ evidence, subject, collection }: ObjectGene
     </section>
   );
 }
-/**
- * A trait shows its eight most frequent variants until opened, so one genome cannot push the
- * objects and holders off-screen; "+N more" opens every variant, each still a filter (OB-C1).
- */
-const TRAIT_VALUE_PREVIEW = 8;
-
-function TraitValueButtons({
-  trait,
-  eligibleItems,
-  color,
-  selected,
-  onSelect,
-  onFocus,
-  onBlur,
-}: {
-  trait: CollectionInsights['genetics']['traits'][number];
-  eligibleItems: number;
-  color: string;
-  selected: string | undefined;
-  onSelect: (value: string | null) => void;
-  onFocus: () => void;
-  onBlur: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ranked = [...trait.values].sort((a, b) =>
-    b.count === a.count ? a.value.localeCompare(b.value) : b.count - a.count
-  );
-  const preview = ranked.slice(0, TRAIT_VALUE_PREVIEW);
-  const selectedExtra =
-    selected && !preview.some((v) => v.value === selected)
-      ? ranked.find((v) => v.value === selected)
-      : undefined;
-  const visible = open
-    ? ranked
-    : selectedExtra
-      ? [...ranked.slice(0, TRAIT_VALUE_PREVIEW - 1), selectedExtra]
-      : preview;
-  const hidden = ranked.length - visible.length;
-  return (
-    <div className="grid gap-2 sm:grid-cols-2">
-      {visible.map((v) => {
-        if (!Number.isSafeInteger(v.count) || v.count < 0 || v.count > eligibleItems)
-          throw new Error(`Collection trait ${trait.name}: invalid count ${v.count}`);
-        return (
-          <button
-            key={v.value}
-            aria-pressed={selected === v.value}
-            onClick={() => onSelect(selected === v.value ? null : v.value)}
-            onFocus={onFocus}
-            onBlur={onBlur}
-            className="border-base-border relative min-w-0 border-b px-1 py-2 text-left"
-          >
-            <span
-              aria-hidden
-              className="absolute inset-y-0 left-0 opacity-15"
-              style={{
-                background: color,
-                width: `${eligibleItems ? (v.count / eligibleItems) * 100 : 0}%`,
-              }}
-            />
-            <span className="relative flex items-baseline justify-between gap-3">
-              <span className="min-w-0 break-words">{v.value}</span>
-              <span className="text-text-dim shrink-0 text-[11px]">
-                {v.count} / {eligibleItems}
-              </span>
-            </span>
-          </button>
-        );
-      })}
-      {ranked.length > TRAIT_VALUE_PREVIEW && (
-        <button
-          type="button"
-          aria-expanded={open}
-          onClick={() => setOpen((current) => !current)}
-          className="text-text-dim hover:text-text-bright col-span-full justify-self-start text-[11px]"
-        >
-          {open
-            ? `Show the top ${TRAIT_VALUE_PREVIEW} ${trait.name} variants`
-            : `+${hidden} more ${trait.name} variant${hidden === 1 ? '' : 's'}`}
-        </button>
-      )}
-    </div>
-  );
+// F2 objects (round 2, OB-C1/C2): the per-variant button lists were replaced by the allele gel
+// (`ui/allele-gel.tsx`, `collection-objects.tsx`); a band click is the filter.
+/** "bytes 0–31" from the exact declared offset and length (never converted to a float). */
+function byteSpan(offset: string, length: string): string {
+  if (!/^(0|[1-9]\d*)$/.test(offset) || !/^(0|[1-9]\d*)$/.test(length))
+    throw new Error(`DOB blueprint: invalid byte range ${offset} + ${length}`);
+  const o = BigInt(offset),
+    l = BigInt(length);
+  if (l === BigInt(0)) return 'no bytes';
+  return l === BigInt(1) ? `byte ${o}` : `bytes ${o}–${o + l - BigInt(1)}`;
 }
-
-export interface CollectionGenesProps {
-  evidence: CollectionInsights['genetics'];
-  selected: Readonly<Record<string, string>>;
-  onSelect: (name: string, value: string | null) => void;
-}
-export function CollectionGenes({ evidence, selected, onSelect }: CollectionGenesProps) {
-  const [active, setActive] = useState<string | null>(null);
-  const total = evidence.decodedItems + evidence.pendingItems + evidence.failedItems;
-  if (
-    total !== evidence.eligibleItems ||
-    evidence.eligibleItems + evidence.nonDobItems !== evidence.liveItems
-  )
-    throw new Error('Collection genetics: live/eligible/decode coverage does not close');
-  if (evidence.complete && evidence.decodedItems !== evidence.eligibleItems)
-    throw new Error(
-      'Collection genetics: complete frequencies require every eligible item decoded'
-    );
-  if (!evidence.complete && evidence.traits.length)
-    throw new Error('Collection genetics: partial frequencies must not be presented as complete');
-  return (
-    <section aria-label="Collection allele frequencies" className="space-y-4">
-      <h2 className="text-text-bright text-[15px]">The collection genome</h2>
-      <p className="text-text-dim text-[11px]">
-        {evidence.decodedItems} decoded / {evidence.eligibleItems} DOB items ·{' '}
-        {evidence.pendingItems} pending · {evidence.failedItems} failed · {evidence.nonDobItems}{' '}
-        non-DOB items
-      </p>
-      {!evidence.complete ? (
-        <p role="status">Trait frequencies and filtering await complete decoding.</p>
-      ) : evidence.traits.length === 0 ? (
-        <p className="text-text-dim">No decoded traits.</p>
-      ) : (
-        <div className="space-y-5">
-          {evidence.traits.map((trait, index) => (
-            <div
-              key={trait.name}
-              data-allele={trait.name}
-              className={active && active !== trait.name ? 'opacity-35' : ''}
-              onMouseEnter={() => setActive(trait.name)}
-              onMouseLeave={() => setActive(null)}
-            >
-              <h3 className="mb-2 text-[13px]" style={{ color: HUE_RAMP[index % HUE_RAMP.length] }}>
-                {trait.name}
-              </h3>
-              <TraitValueButtons
-                trait={trait}
-                eligibleItems={evidence.eligibleItems}
-                color={HUE_RAMP[index % HUE_RAMP.length]}
-                selected={selected[trait.name]}
-                onSelect={(value) => onSelect(trait.name, value)}
-                onFocus={() => setActive(trait.name)}
-                onBlur={() => setActive(null)}
-              />
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
-  );
+/** A gene's value domain in words: its options, its range, or how many arguments it takes. */
+function valueDomain(rule: string, args: unknown): string {
+  if (args === null || args === undefined) return '—';
+  if (!Array.isArray(args)) return 'see raw';
+  if (rule === 'options') {
+    const shown = args.slice(0, 3).map((a) => traitDisplay(String(a)));
+    return `${args.length} option${args.length === 1 ? '' : 's'}: ${shown.join(', ')}${args.length > 3 ? ', …' : ''}`;
+  }
+  if (rule === 'range' && args.length === 2 && args.every((a) => typeof a !== 'object'))
+    return `${String(args[0])}–${String(args[1])}`;
+  return `${args.length} argument${args.length === 1 ? '' : 's'}`;
 }
 export interface CurrentPatternEvidenceProps {
   pattern: CurrentPattern;
@@ -304,22 +315,43 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
               <p className="text-text-dim text-[11px]">
                 {step.description.format} · {step.description.rangePolicy}
               </p>
-              <dl className="space-y-3">
-                {step.description.genes.map((g) => (
-                  <div key={g.index} className="min-w-0">
-                    <dt>
-                      {g.name}{' '}
-                      <span className="text-text-dim text-[11px]">
-                        {g.typeTag} · byte offset {g.byteOffset} · length {g.byteLength}
-                      </span>
-                    </dt>
-                    <dd className="text-text-dim break-words text-[11px]">
-                      {g.rule} ·{' '}
-                      <code className="break-all">{JSON.stringify(g.ruleArguments)}</code>
-                    </dd>
-                  </div>
-                ))}
-              </dl>
+              {/* F2 objects (OB-C12): the blueprint as a table of genes and value domains. */}
+              <div className="min-w-0 overflow-x-auto">
+                <table aria-label="DOB blueprint" className="w-full min-w-[480px] text-[11px]">
+                  <thead className="text-text-dim text-left">
+                    <tr>
+                      <th className="py-1 pr-3 font-normal">Gene</th>
+                      <th className="py-1 pr-3 font-normal">Bytes</th>
+                      <th className="py-1 pr-3 font-normal">Rule</th>
+                      <th className="py-1 font-normal">Values</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {step.description.genes.map((g) => (
+                      <tr key={g.index} className="border-base-elevated border-t align-top">
+                        <th scope="row" className="text-text-bright py-1.5 pr-3 font-normal">
+                          {g.name}
+                        </th>
+                        <td className="text-text-dim py-1.5 pr-3">
+                          byte offset {g.byteOffset} · length {g.byteLength}
+                          <span className="block">{byteSpan(g.byteOffset, g.byteLength)}</span>
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
+                        </td>
+                        <td
+                          className="py-1.5 [overflow-wrap:anywhere]"
+                          title={
+                            g.ruleArguments === null ? undefined : JSON.stringify(g.ruleArguments)
+                          }
+                        >
+                          {valueDomain(g.rule, g.ruleArguments)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </>
           )}
         </article>

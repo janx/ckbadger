@@ -1,9 +1,10 @@
 'use client';
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
-import { formatUtc8Date } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -20,6 +21,15 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
+import {
+  CompositionLine,
+  LiveBadge,
+  cellLifeSentence,
+  ckbText,
+  itemLifeSentence,
+  lockFootnote,
+  lockPhrase,
+} from '@/components/asset/object-hero';
 
 export function MnftTokenIdentity({ id }: { id: string }) {
   const bytes = hexBytes(id, 'm-NFT token ID');
@@ -31,13 +41,14 @@ export function MnftTokenIdentity({ id }: { id: string }) {
       fields={[
         { name: 'Issuer ID', start: 0, end: 20, valueHex: bytes.slice(0, 20).join('') },
         {
-          name: 'Class index · big-endian',
+          // F2 objects (OB-M11): each index with its decoded value.
+          name: `Class index · big-endian = ${parseInt(bytes.slice(20, 24).join(''), 16)}`,
           start: 20,
           end: 24,
           valueHex: bytes.slice(20, 24).join(''),
         },
         {
-          name: 'Token index · big-endian',
+          name: `Token index · big-endian = ${parseInt(bytes.slice(24, 28).join(''), 16)}`,
           start: 24,
           end: 28,
           valueHex: bytes.slice(24, 28).join(''),
@@ -47,21 +58,38 @@ export function MnftTokenIdentity({ id }: { id: string }) {
   );
 }
 
+/**
+ * Where the class's picture lives (Mnft board, OB-M4): a plain frame on purpose — the crystal
+ * frames are for fully on-chain objects. The scheme of the renderer reference says where it is.
+ */
 export function MnftRenderer({ renderer }: { renderer: string | null }) {
+  const scheme = renderer?.match(/^([a-z][a-z0-9+.-]*):\/\//i)?.[1].toLowerCase() ?? null;
+  const where =
+    scheme === 'http' || scheme === 'https'
+      ? 'a file on a web server'
+      : scheme === 'ipfs' || scheme === 'ipns' || scheme === 'ar'
+        ? 'a file on decentralized storage'
+        : scheme === 'btcfs'
+          ? 'a Bitcoin inscription'
+          : null;
   return (
-    <figure className="border-base-border min-w-0 space-y-3 border p-5">
-      <div className="text-text-bright text-[18px]">Class renderer</div>
+    <figure className="border-base-border min-w-0 space-y-3 rounded-md border p-5 text-center">
       {renderer ? (
         <>
-          <p className="text-text-dim break-all text-[11px]">{renderer}</p>
-          {/^(?:https?|ipfs|ipns|ar|btcfs):\/\//i.test(renderer) && (
-            <a href={renderer} rel="noreferrer" className="text-aqua text-xs">
-              Open the renderer ↗
+          <div className="text-text-bright text-[13px]">
+            {where ? `Its image is ${where}` : 'Its class names a renderer'}
+          </div>
+          <p className="text-text-dim break-all text-[12px]">{renderer}</p>
+          {where && (
+            <a href={renderer} rel="noreferrer" target="_blank" className="text-aqua text-[12px]">
+              Open the file ↗
             </a>
           )}
-          <figcaption className="text-text-dim text-[11px]">
-            The class records this renderer reference on CKB. Availability of its external content
-            is separate from ownership of this token.
+          <figcaption className="text-text-dim text-[11.5px]">
+            One file for the whole class.
+            {scheme === 'http' || scheme === 'https'
+              ? ' If that server goes away, the picture goes with it; the token itself stays on CKB.'
+              : ' Its availability is separate from ownership of this token, which stays on CKB.'}
           </figcaption>
         </>
       ) : (
@@ -76,6 +104,7 @@ export interface MnftDetailProps {
 }
 
 export function MnftDetail({ objectId }: MnftDetailProps) {
+  const [now] = useState(() => Date.now());
   const detail = useQuery({
     queryKey: ['mnft-item-detail', objectId],
     queryFn: () => api.getMnftItemDetail(objectId),
@@ -123,6 +152,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
   const first = history?.data[0];
   const last = history?.data.at(-1);
   const current = history?.data.find((cell) => cell.isLive);
+  const moves = history ? history.data.length - 1 : null;
+  const characteristic = hexBytes(item.characteristicHex, 'm-NFT characteristic');
   const classHref = getMnftClassDetailHref(item.class.classId);
   const className = item.class.name ?? 'm-NFT class';
   const evidenceState = (
@@ -145,36 +176,76 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         { label: 'Objects', href: '/inventory/objects' },
         { label: className, href: classHref },
       ]}
-      status={
-        <span className={item.isLive ? 'text-jade text-[11px]' : 'text-text-dim text-[11px]'}>
-          {item.isLive ? 'Live' : 'Burned'}
-        </span>
-      }
+      status={<LiveBadge live={item.isLive} gone="Burned" />}
       identity={<Hash hash={item.nftId} truncate={false} className="break-all text-[11px]" />}
       intro={
-        <div className="space-y-4">
+        <div className="space-y-4 pt-1">
           <AssetReadState error={detail.error} label="m-NFT" retained />
           {item.composition ? (
-            <CompositionBadge tier={item.composition.tier} />
+            <CompositionLine tier={item.composition.tier} />
           ) : (
             <p className="text-text-dim text-[11px]">Composition unavailable.</p>
           )}
-          <p>
-            Issued in <AppLink href={classHref}>{className}</AppLink> by{' '}
-            {item.issuer.name ?? 'the on-chain issuer'} at{' '}
-            <AppLink href={`/blocks/${item.createdAtBlock}`}>
-              block <AssetCount value={item.createdAtBlock} />
-            </AppLink>
-            .
-          </p>
+          {history && history.data.length > 0 ? (
+            <p className="text-text text-[15px] leading-relaxed">
+              <span>
+                {itemLifeSentence(history.data, now, 'Issued', item.issuer.name ?? 'its issuer')}
+              </span>
+            </p>
+          ) : (
+            <p className="text-text text-[15px]">
+              Issued in <AppLink href={classHref}>{className}</AppLink> at{' '}
+              <AppLink href={`/blocks/${item.createdAtBlock}`}>
+                block <AssetCount value={item.createdAtBlock} />
+              </AppLink>
+              .
+            </p>
+          )}
           {item.class.description && (
             <blockquote className="border-base-border border-l pl-4">
               <p className="break-words">{item.class.description}</p>
               <footer className="text-text-dim mt-2 text-[11px]">
-                The class description recorded on chain
+                the class’s description, on chain
               </footer>
             </blockquote>
           )}
+          {/* F2 objects (OB-M6): the board's four properties; configure decoding is tier 2. */}
+          <dl aria-label="Properties" className="grid gap-x-7 sm:grid-cols-2">
+            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+              <dt className="text-text-dim">Token</dt>
+              <dd className="text-text-bright text-right">
+                #<AssetCount value={item.tokenIndex} />{' '}
+                <span className="text-text-dim">
+                  of <AssetCount value={item.class.issued} /> issued ·{' '}
+                  <AssetCount value={item.class.total} /> planned
+                </span>
+              </dd>
+            </div>
+            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+              <dt className="text-text-dim">State</dt>
+              <dd className="text-text-bright text-right">
+                0x{item.state.toString(16).padStart(2, '0')} ·{' '}
+                {item.claimed ? 'claimed' : 'unclaimed'} · {item.locked ? 'locked' : 'unlocked'}
+              </dd>
+            </div>
+            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+              <dt className="text-text-dim">Issuer</dt>
+              <dd className="text-text-bright text-right">
+                {item.issuer.name ?? 'Unnamed issuer'}{' '}
+                <span className="text-text-dim">
+                  · <AssetCount value={item.issuer.classCount} /> classes
+                </span>
+              </dd>
+            </div>
+            <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
+              <dt className="text-text-dim">Characteristic</dt>
+              <dd className="text-text-bright min-w-0 break-all text-right">
+                {characteristic.every((b) => b === '00')
+                  ? `none, all zero · ${characteristic.length} bytes`
+                  : item.characteristicHex}
+              </dd>
+            </div>
+          </dl>
         </div>
       }
       facts={[
@@ -182,9 +253,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           label: 'Owner',
           value: history ? (
             current ? (
-              <AppLink href={`/address/${current.ownerAddress}`}>
-                <Hash hash={current.ownerAddress} className="text-xs" copyable={false} />
-              </AppLink>
+              <>
+                <AppLink href={`/address/${current.ownerAddress}`}>
+                  <Hash hash={current.ownerAddress} className="text-xs" copyable={false} />
+                </AppLink>
+                <span className="text-text-dim mt-1 block text-[12px]">
+                  {current.lockName ?? 'Unregistered lock'} · since{' '}
+                  {formatUtc8Date(current.timestamp)}
+                </span>
+              </>
             ) : (
               'No live cell'
             )
@@ -192,30 +269,55 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             evidenceState
           ),
         },
-        { label: 'Class', value: <AppLink href={classHref}>{className}</AppLink> },
+        {
+          label: 'Class',
+          value: (
+            <>
+              <AppLink href={classHref}>{className}</AppLink>
+              <span className="text-text-dim mt-1 block text-[12px]">
+                by {item.issuer.name ?? 'an unnamed issuer'}
+              </span>
+            </>
+          ),
+        },
         {
           label: 'Issued',
           value: first ? (
             <>
-              <span className="block text-[11px]">{formatUtc8Date(first.timestamp)} UTC+8</span>
-              <AppLink href={`/blocks/${first.blockNumber}`}>
-                {formatBlockNumber(first.blockNumber)}
-              </AppLink>
+              <span className="block">{formatUtc8DateTime(first.timestamp)}</span>
+              <span className="text-text-dim mt-1 block text-[12px]">
+                <AppLink href={`/blocks/${first.blockNumber}`}>
+                  {formatBlockNumber(first.blockNumber)}
+                </AppLink>{' '}
+                · to {lockPhrase(first.lockName)}
+              </span>
             </>
           ) : (
             evidenceState
           ),
         },
         {
-          label: 'Latest cell version',
-          value: last ? (
-            <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
-              <span className="block text-[11px]">{formatUtc8Date(last.timestamp)} UTC+8</span>Block{' '}
-              {formatBlockNumber(last.blockNumber)} · output {last.outputIndex}
-            </AppLink>
-          ) : (
-            evidenceState
-          ),
+          label: 'Last moved',
+          value:
+            last && moves !== null ? (
+              moves === 0 ? (
+                <span className="text-text-dim">Never moved since issue</span>
+              ) : (
+                <>
+                  <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
+                    {formatUtc8DateTime(last.timestamp)}
+                  </AppLink>
+                  <span className="text-text-dim mt-1 block text-[12px]">
+                    <AppLink href={`/blocks/${last.blockNumber}`}>
+                      {formatBlockNumber(last.blockNumber)}
+                    </AppLink>{' '}
+                    · {moves} transfer{moves === 1 ? '' : 's'} since issue
+                  </span>
+                </>
+              )
+            ) : (
+              evidenceState
+            ),
         },
         {
           label: 'CKB held in its cell',
@@ -223,14 +325,10 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             current ? (
               <>
                 <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" wrap />
-                <div className="text-text-dim mt-1 text-[11px]">
-                  <ExactCkb
-                    shannons={BigInt(current.occupiedCapacity)}
-                    signed={false}
-                    tone="plain"
-                    wrap
-                  />{' '}
-                  occupied
+                <div className="text-text-dim mt-1 text-[12px]">
+                  <span className="text-jade">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
+                  occupied · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))}{' '}
+                  free
                 </div>
               </>
             ) : (
@@ -248,6 +346,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           queryKey={`mnft:${objectId}`}
           scope="Its whole life"
           item={{ kind: 'object' }}
+          plain
+          focusItemId={objectId}
           loadActivities={(params) => api.getItemActivityFeed('mnft', objectId, params)}
           loadTransactions={(params) => api.getItemTransactions('mnft', objectId, params)}
           context={{
@@ -261,7 +361,13 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       tier2={
         <>
           <MnftTokenIdentity id={item.nftId} />
+          <MnftPermissions
+            permissions={item.permissions}
+            configure={item.configure}
+            state={{ claimed: item.claimed, locked: item.locked, value: item.state }}
+          />
           <DetailSection title="Issuer record">
+            <p className="text-[11px]">Name · {item.issuer.name ?? 'not recorded'}</p>
             <p className="text-[11px]">
               Issuer ID ·{' '}
               <Hash
@@ -292,88 +398,99 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       }
     >
       <MnftRenderer renderer={item.class.renderer} />
-      <DetailSection title="Token properties">
-        <dl className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <dt className="text-text-dim text-[11px]">Token</dt>
-            <dd>
-              #<AssetCount value={item.tokenIndex} /> · <AssetCount value={item.class.issued} />{' '}
-              issued of <AssetCount value={item.class.total} /> planned
-            </dd>
-          </div>
-          <div>
-            <dt className="text-text-dim text-[11px]">Characteristic</dt>
-            <dd className="break-all text-xs">
-              {item.characteristicHex}
-              <span className="text-text-dim block text-[11px]">
-                {hexBytes(item.characteristicHex, 'm-NFT characteristic').length} bytes
-              </span>
-            </dd>
-          </div>
-        </dl>
-      </DetailSection>
-      <MnftPermissions
-        permissions={item.permissions}
-        configure={item.configure}
-        state={{ claimed: item.claimed, locked: item.locked, value: item.state }}
-      />
       <AssetReadState
         error={protocol.error}
         label="item cell evidence"
         retained={!!evidence}
         loading={protocol.isLoading}
       />
-      {history && <CellVersions history={history} subject="m-NFT" />}
-      <DetailSection
-        title={`In ${className}`}
-        actions={
-          <AppLink className="text-[11px]" href={classHref}>
+      {history && (
+        <div role="region" aria-label="CKB held in its cell" className="space-y-3">
+          <CellVersions
+            history={history}
+            subject="m-NFT"
+            life
+            firstLabel="Issued"
+            title="CKB held in its cell"
+            actions={
+              current && (
+                <span className="text-text-dim text-[12px]">
+                  1 CKB per byte ·{' '}
+                  <span className="text-jade">
+                    {ckbText(BigInt(current.occupiedCapacity))} occupied
+                  </span>{' '}
+                  · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))} free
+                </span>
+              )
+            }
+            intro={
+              history.data.length > 0 && (
+                <p className="mb-4 text-[13px] leading-relaxed">
+                  {cellLifeSentence(history.data, 'token')}
+                </p>
+              )
+            }
+          />
+          {lockFootnote(history.data) && (
+            <p className="text-text-dim text-[12px]">{lockFootnote(history.data)}</p>
+          )}
+        </div>
+      )}
+      <section aria-label={`In ${className}`} className="space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-4">
+          <h2 className="text-text-bright text-[15px]">In {className}</h2>
+          <AppLink className="text-[12px]" href={classHref}>
             Open the class →
           </AppLink>
-        }
-      >
+        </div>
         {collection.data ? (
           <>
             <AssetReadState error={collection.error} label="class totals" retained />
-            <dl className="grid gap-4 sm:grid-cols-2">
-              <div>
-                <dt className="text-text-dim text-[11px]">Live items</dt>
-                <dd>
-                  <AssetCount value={collection.data.liveCount} /> of{' '}
-                  <AssetCount value={collection.data.totalCount} /> issued
-                </dd>
-              </div>
-              <div>
-                <dt className="text-text-dim text-[11px]">Holders</dt>
-                <dd>
+            <div className="flex flex-wrap items-baseline gap-x-10 gap-y-2">
+              <span>
+                <span className="text-text-bright text-[15px]">
+                  <AssetCount value={collection.data.totalCount} />
+                </span>{' '}
+                <span className="text-text-dim">
+                  issued of <AssetCount value={item.class.total} /> ·{' '}
+                  <AssetCount value={collection.data.liveCount} /> live
+                </span>
+              </span>
+              <span>
+                <span className="text-text-bright text-[15px]">
                   <AssetCount value={collection.data.holdersCount} />
-                </dd>
-              </div>
-              <div>
-                <dt className="text-text-dim text-[11px]">CKB held in class item cells</dt>
-                <dd>
-                  {collection.data.ownedCapacity === null ? (
-                    'Unavailable'
-                  ) : (
+                </span>{' '}
+                <span className="text-text-dim">holders</span>
+              </span>
+              {collection.data.composition && (
+                <span>
+                  <span className="text-text-bright text-[15px]">
+                    <AssetCount value={collection.data.composition.onchainCount} /> of{' '}
+                    <AssetCount value={collection.data.liveCount} />
+                  </span>{' '}
+                  <span className="text-text-dim">fully on-chain</span>
+                </span>
+              )}
+              {collection.data.ownedCapacity !== null && (
+                <span>
+                  <span className="text-text-bright text-[15px]">
                     <ExactCkb
                       shannons={BigInt(collection.data.ownedCapacity)}
                       signed={false}
                       tone="plain"
                       wrap
                     />
-                  )}
-                </dd>
-              </div>
-              {collection.data.composition && (
-                <div>
-                  <dt className="text-text-dim text-[11px]">Fully on chain</dt>
-                  <dd>
-                    <AssetCount value={collection.data.composition.onchainCount} /> of{' '}
-                    <AssetCount value={collection.data.liveCount} /> live items
-                  </dd>
-                </div>
+                  </span>{' '}
+                  <span className="text-text-dim">held in their cells</span>
+                </span>
               )}
-            </dl>
+            </div>
+            <div className="text-text-dim flex flex-wrap items-center gap-4 text-[12px]">
+              {collection.data.composition && (
+                <CompositionBadge tier={collection.data.composition.tier} size="sm" />
+              )}
+              <span>issued by {item.issuer.name ?? 'an unnamed issuer'}</span>
+            </div>
           </>
         ) : (
           <AssetReadState
@@ -382,7 +499,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             label="class totals"
           />
         )}
-      </DetailSection>
+      </section>
     </AssetDetailShell>
   );
 }

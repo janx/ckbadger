@@ -40,7 +40,8 @@ describe('Inventory rows', () => {
     const table = screen.getByRole('table', { name: 'Tokens' });
     expect(table).toHaveTextContent('1.000000000000000000000001');
     expect(table).toHaveTextContent('100.00000001');
-    expect(within(table).getByText('xUDT')).toBeInTheDocument();
+    // F2 objects (IV-04): the standard sits under the full name, after the symbol.
+    expect(within(table).getByText(/xUDT$/)).toBeInTheDocument();
     expect(table.querySelector('.truncate')).toBeNull();
   });
   it('breaks a long amount only after a thousands separator and ghosts trailing zeros (IV-28/IV-13/IV-05)', () => {
