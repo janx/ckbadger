@@ -86,3 +86,15 @@ export const CODE_CLASS_COLORS = {
 export const FREE_CAPACITY_COLOR = '#1a1f30';
 /** The neutral of plain CKB held: the area under occupied in a script's history. */
 export const HELD_CAPACITY_COLOR = '#3a4258';
+/** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */
+export const ELF_REGION_COLORS = {
+  header: '#5f9fb2',
+  programHeaders: '#7fb0c0',
+  rodata: '#8fd6a8',
+  ehFrame: '#9ab0a0',
+  text: '#6fc3d9',
+  data: '#d9c38f',
+  meta: '#c9b3d9',
+  sectionHeaders: '#5f9fb2',
+  padding: '#4b5266',
+} as const;

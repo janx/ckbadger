@@ -12,6 +12,7 @@ vi.mock('@/lib/api', () => ({
   api: {
     getTransactionDetail: (...args: unknown[]) => getTransactionDetail(...args),
     getTransactionCellDeps: (...args: unknown[]) => getTransactionCellDeps(...args),
+    lookupScripts: async () => ({}),
   },
 }));
 vi.mock('@/components/transaction/tx-structure', async (importOriginal) => {
@@ -111,7 +112,9 @@ describe('CellTransactions', () => {
       (await screen.findByTestId('structure')).querySelector('[data-cell-id="out:1"]')
     ).toHaveAttribute('data-highlighted', 'true');
     expect(screen.getByText(/Ambiguous current code cells/)).toBeInTheDocument();
-    expect(screen.getByText(/Candidate cell/)).toBeInTheDocument();
+    expect(screen.getByTitle(/^Candidate cell 0x(cc){32}:1/)).toHaveTextContent(
+      '0xcccccccc…cccccc:1'
+    );
     expect(screen.getByText(/Built-in Type ID/)).toBeInTheDocument();
     expect(screen.queryByText(/Spent transaction/)).not.toBeInTheDocument();
   });

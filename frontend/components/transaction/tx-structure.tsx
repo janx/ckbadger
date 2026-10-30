@@ -5,7 +5,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import Link from '@/components/ui/link';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { CELL_COLORS, CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
 
 export interface TxStructureGroup {
@@ -23,7 +23,8 @@ export interface TxContinuity {
   from: string;
   to: string;
   label: string;
-  kind?: AssetClass | 'file';
+  // group scripts (F2-5): 'type-id' = the same Type ID continues (a code cell replaced), olive.
+  kind?: AssetClass | 'file' | 'type-id';
 }
 export interface TxStructureProps {
   txHash: string;
@@ -67,7 +68,13 @@ export function TxStructure({
   onward = 'this cell, onward',
 }: TxStructureProps) {
   const continuityColor = (kind: TxContinuity['kind']) =>
-    kind === 'file' ? '#a0a8be' : kind ? CLASS_COLORS[kind] : CLASS_COLORS.objects;
+    kind === 'file'
+      ? '#a0a8be'
+      : kind === 'type-id'
+        ? CELL_COLORS.type
+        : kind
+          ? CLASS_COLORS[kind]
+          : CLASS_COLORS.objects;
   const [hover, setHover] = useState<{ kind: 'cell' | 'group'; id: string } | null>(null);
   const canvas = useRef<HTMLDivElement>(null);
   const [centers, setCenters] = useState<Record<string, number>>({});

@@ -5,22 +5,45 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
-import { formatUtc8DateTime } from '@/lib/utils';
+import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+import { CELL_COLORS } from '@/lib/design-tokens';
+import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
 
-const TYPE_ID_CODE_HASH = '0x00000000000000000000000000000000000000000000000000545950455f4944';
+function short(hash: string, head = 8, tail = 6): string {
+  return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
+}
 
 export function TransactionEvidence({
   hash,
   label,
   focus,
+  onward,
 }: {
   hash: string;
   label: string;
   focus?: string;
+  /** The focused output's txviz bridge label (the cell carries on past this transaction). */
+  onward?: string;
 }) {
   const transaction = useQuery({
     queryKey: ['cell-transaction-detail', hash],
     queryFn: () => api.getTransactionDetail(hash),
+  });
+  const codeHashes = Array.from(
+    new Set(
+      [...(transaction.data?.inputs ?? []), ...(transaction.data?.outputs ?? [])]
+        .flatMap((cell) => [cell.lock?.codeHash, cell.type?.codeHash])
+        .concat((transaction.data?.scriptGroups ?? []).map((group) => group.script.codeHash))
+        .filter((value): value is string => value !== undefined && value !== TYPE_ID_CODE_HASH)
+    )
+  );
+  // The transaction page's naming path: one lookup of the tx's script references.
+  const lookup = useQuery({
+    queryKey: ['scriptLookup', codeHashes, hash],
+    queryFn: () => api.lookupScripts(codeHashes, hash),
+    enabled: codeHashes.length > 0,
+    staleTime: Infinity,
   });
   const dependencies = useQuery({
     queryKey: ['cell-transaction-deps', hash],
@@ -45,7 +68,12 @@ export function TransactionEvidence({
     !tx.witnessDetails
   )
     throw new Error(`${label} transaction ${hash} lacks committed structure`);
-  const tiles = cellTiles(tx, undefined);
+  const tiles = cellTiles(tx, lookup.data);
+  const scriptName = (codeHash: string) => {
+    if (codeHash.toLowerCase() === TYPE_ID_CODE_HASH) return 'Type ID';
+    const name = lookup.data?.[codeHash]?.name;
+    return name && name.toLowerCase() !== 'unknown' ? name : short(codeHash);
+  };
   if (focus && ![...tiles.inputs, ...tiles.outputs].some((tile) => tile.id === focus))
     throw new Error(`${label} transaction ${hash} does not contain focused cell ${focus}`);
   const groups: TxStructureGroup[] = tx.scriptGroups.map((group) => {
@@ -61,7 +89,7 @@ export function TransactionEvidence({
     return {
       id: `${group.kind}:${group.ran ? 'run' : 'attached'}:${group.scriptHash}`,
       kind: group.kind,
-      label: `${group.kind} · ${group.script.codeHash.slice(0, 16)}…`,
+      label: scriptName(group.script.codeHash),
       href: `/script/${group.script.codeHash}?hashType=${group.script.hashType}&kind=${group.kind}`,
       cellIds: [
         ...group.inputIndices.map((index) => `in:${index}`),
@@ -72,21 +100,32 @@ export function TransactionEvidence({
         typeof witness === 'string'
           ? witness
           : `Witness #${witness!.index} · ${witness!.size} bytes`,
-      dependency: tx.isCellbase
-        ? 'Cellbase group: no script execution'
-        : group.ran
-          ? deps.length
-            ? deps
-                .map((dep) => `${dep.outPointTxHash}:${dep.outPointIndex} (${dep.depType})`)
-                .join(', ')
-            : group.kind === 'type' &&
-                group.script.hashType === 'type' &&
-                group.script.codeHash.toLowerCase() === TYPE_ID_CODE_HASH
-              ? 'Built-in Type ID · no cell dep'
-              : 'No matching cell dep in transaction evidence'
-          : group.inputIndices.length === 0
-            ? 'Output-only group: no execution in this transaction'
-            : 'Group did not execute in this transaction',
+      // Prose wraps between words; only the outpoints may break anywhere (SC-C8).
+      dependency: (
+        <span className="break-normal">
+          {tx.isCellbase
+            ? 'Cellbase group: no script execution'
+            : group.ran
+              ? deps.length
+                ? deps.map((dep, i) => (
+                    <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`}>
+                      {i > 0 && ', '}
+                      <span className="[overflow-wrap:anywhere]">
+                        {dep.outPointTxHash}:{dep.outPointIndex}
+                      </span>{' '}
+                      ({dep.depType})
+                    </span>
+                  ))
+                : group.kind === 'type' &&
+                    group.script.hashType === 'type' &&
+                    group.script.codeHash.toLowerCase() === TYPE_ID_CODE_HASH
+                  ? 'Built-in Type ID · no cell dep'
+                  : 'No matching cell dep in transaction evidence'
+              : group.inputIndices.length === 0
+                ? 'Output-only group: runs when these cells are spent'
+                : 'Group did not execute in this transaction'}
+        </span>
+      ),
       cycles: group.cycles,
     };
   });
@@ -110,94 +149,124 @@ export function TransactionEvidence({
         fee={tx.fee}
         poolCapacity={tx.isCellbase ? undefined : (tx.inputsCapacity ?? undefined)}
         groups={groups}
+        continuity={txContinuity(tx, tiles.inputs)}
         focusedCellIds={focus ? [focus] : []}
+        meOut={onward !== undefined ? focus : undefined}
+        onward={onward}
       />
     </div>
   );
 }
 
-export function CellTransactions({ cell }: { cell: Cell }) {
+/** The dashed "Not spent yet" box: the groups the transaction that spends this cell will run. */
+function NotSpentYet({
+  cell,
+  lockName,
+  typeName,
+}: {
+  cell: Cell;
+  lockName: string | null;
+  typeName: string | null;
+}) {
+  const replaced =
+    cell.type?.hashType === 'type' && cell.type.codeHash.toLowerCase() === TYPE_ID_CODE_HASH;
+  return (
+    <div
+      data-testid="not-spent-yet"
+      className="flex max-w-[640px] flex-col gap-1.5 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5 text-xs"
+    >
+      <div className="flex flex-wrap justify-between gap-2">
+        <span className="text-text-bright">{replaced ? 'Not replaced yet' : 'Not spent yet'}</span>
+        {cell.liveAgeMs != null && (
+          <span className="text-text-dim">
+            {formatDurationMs(cell.liveAgeMs)}
+            {cell.liveAgeAtBlock != null && <> · as of {formatBlockNumber(cell.liveAgeAtBlock)}</>}
+          </span>
+        )}
+      </div>
+      <div className="text-text-dim">
+        {replaced
+          ? 'The transaction that replaces or destroys it will run:'
+          : 'The transaction that spends it will run:'}
+      </div>
+      <div className="grid gap-x-2.5 gap-y-1 sm:grid-cols-[76px_minmax(0,1fr)]">
+        {(cell.currentSpendRequirements ?? []).map((requirement) => (
+          <div key={requirement.kind} className="contents">
+            <span style={{ color: CELL_COLORS[requirement.kind] }}>{requirement.kind} group</span>
+            <span className="min-w-0">
+              <Link
+                href={`/script/${requirement.referenceHash}?hashType=${requirement.hashType}&kind=${requirement.kind}`}
+                className="text-text hover:text-jade"
+                title={`${requirement.hashType} ${requirement.referenceHash}`}
+              >
+                {(requirement.kind === 'lock' ? lockName : typeName) ??
+                  short(requirement.referenceHash)}
+              </Link>
+              <span className="text-text-dim">
+                {' '}
+                ·{' '}
+                {requirement.resolution === 'builtin'
+                  ? 'Built-in Type ID; no code-cell dep'
+                  : requirement.resolution === 'not_found'
+                    ? 'No current code cell resolved'
+                    : requirement.resolution === 'unavailable'
+                      ? 'No live code cell for this reference'
+                      : requirement.resolution === 'ambiguous'
+                        ? 'Ambiguous current code cells'
+                        : 'code'}
+              </span>
+              {requirement.candidateCells.map((candidate) => (
+                <span key={`${candidate.txHash}:${candidate.outputIndex}`}>
+                  {' '}
+                  <Link
+                    href={`/cell/${candidate.txHash}-${candidate.outputIndex}`}
+                    className="text-[#6aa9c4]"
+                    title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
+                  >
+                    {short(candidate.txHash)}:{candidate.outputIndex}
+                  </Link>
+                </span>
+              ))}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="text-text-dim text-[11px]">
+        Current code cells at the indexed tip; the spender picks its own cell deps.
+      </p>
+    </div>
+  );
+}
+
+export function CellTransactions({
+  cell,
+  lockName = null,
+  typeName = null,
+}: {
+  cell: Cell;
+  lockName?: string | null;
+  typeName?: string | null;
+}) {
   if (cell.status === 'dead' && (!cell.consumedByTx || cell.consumingInputIndex == null))
     throw new Error(`Consumed cell ${cell.txHash}:${cell.outputIndex} lacks exact spending input`);
+  const spent = cell.status === 'dead';
   return (
     <DetailSection title="Its transactions">
       <div className="space-y-8">
-        <TransactionEvidence hash={cell.txHash} label="Created" focus={`out:${cell.outputIndex}`} />
-        {cell.status === 'dead' && cell.consumedByTx && cell.consumingInputIndex != null ? (
+        <TransactionEvidence
+          hash={cell.txHash}
+          label="Created"
+          focus={`out:${cell.outputIndex}`}
+          onward={spent ? 'this cell, onward: spent below' : 'this cell, onward: not spent yet'}
+        />
+        {spent ? (
           <TransactionEvidence
-            hash={cell.consumedByTx}
+            hash={cell.consumedByTx!}
             label="Spent"
             focus={`in:${cell.consumingInputIndex}`}
           />
         ) : (
-          <div className="space-y-2 text-xs">
-            <p className="text-text-dim">
-              Current reference candidates at the indexed tip. A future spender chooses dependencies
-              and witnesses; none are historical execution for this live cell.
-            </p>
-            {cell.currentSpendRequirements?.map((requirement) => (
-              <div
-                key={requirement.kind}
-                className="border-base-border grid gap-1 border-t py-2 sm:grid-cols-[3rem_1fr]"
-              >
-                <span className="text-text-bright capitalize">{requirement.kind}</span>
-                <div className="min-w-0 break-all">
-                  <Link
-                    href={`/script/${requirement.referenceHash}?hashType=${requirement.hashType}&kind=${requirement.kind}`}
-                    className="text-[#7aa7d6]"
-                  >
-                    {requirement.referenceHash}
-                  </Link>
-                  <span className="text-text-dim">
-                    {' '}
-                    · {requirement.hashType} ·{' '}
-                    {requirement.resolution === 'builtin'
-                      ? 'Built-in Type ID; no code-cell dep'
-                      : requirement.resolution === 'not_found'
-                        ? 'No current code cell resolved'
-                        : requirement.resolution === 'unavailable'
-                          ? 'No live code cell for this reference'
-                          : requirement.resolution === 'ambiguous'
-                            ? 'Ambiguous current code cells'
-                            : 'Current code cell resolved'}
-                  </span>
-                  {requirement.versionHashes.map((hash) => (
-                    <p key={hash} className="text-text-dim break-all">
-                      Version {hash}
-                    </p>
-                  ))}
-                  {requirement.candidateCells.map((candidate) => (
-                    <p
-                      key={`${candidate.txHash}:${candidate.outputIndex}`}
-                      className="text-text-dim break-all"
-                    >
-                      <Link
-                        href={`/cell/${candidate.txHash}-${candidate.outputIndex}`}
-                        className="text-[#7aa7d6]"
-                      >
-                        Candidate cell {candidate.txHash}:{candidate.outputIndex}
-                      </Link>{' '}
-                      · live
-                    </p>
-                  ))}
-                  {requirement.historicalCells?.map((historical) => (
-                    <p
-                      key={`${historical.txHash}:${historical.outputIndex}`}
-                      className="text-text-dim break-all"
-                    >
-                      <Link
-                        href={`/cell/${historical.txHash}-${historical.outputIndex}`}
-                        className="text-text-dim"
-                      >
-                        Historical cell {historical.txHash}:{historical.outputIndex}
-                      </Link>{' '}
-                      · spent, not a current dependency
-                    </p>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <NotSpentYet cell={cell} lockName={lockName} typeName={typeName} />
         )}
       </div>
     </DetailSection>
