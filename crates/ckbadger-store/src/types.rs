@@ -556,7 +556,6 @@ pub struct DaoLatestStatistics {
     /// compensation). Equals `Σ_phase0 free_i × AR_tip / AR_dep_i`. Not the
     /// same as `dao_free_capacity` (which also counts phase-1 nominal free and
     /// omits accrued compensation).
-    #[serde(default)]
     pub depositor_allocation_weight: i128,
     /// DAO header `C`, `S` and `U` of `tip_block_number`, so readers that
     /// combine them with the figures above need no header: a rollback deletes

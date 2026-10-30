@@ -2516,12 +2516,9 @@ mod tests {
         assert_eq!(latest.dao_free_capacity, 296_00000000);
         // Every live DAO cell's capacity, both phases.
         assert_eq!(latest.dao_capacity, 500_00000000);
-        // Depositor secondary-issuance weight uses only phase-0 free plus
-        // accrued compensation (fixture unclaimed/frozen leave weight = phase0 free).
-        assert_eq!(
-            latest.depositor_allocation_weight, 98_00000000,
-            "phase-0 free only when unclaimed equals frozen_phase1"
-        );
+        // Every deposit here was made at the tip AR, so nothing has accrued:
+        // the depositor weight is the phase-0 free capacity alone.
+        assert_eq!(latest.depositor_allocation_weight, 98_00000000);
         // The tip header's C, S and U travel with the row, so a reader can
         // combine them with the DAO figures without the (possibly rolled
         // back) header.
@@ -2537,6 +2534,48 @@ mod tests {
                 i128::from(DAO_FREE_FIXTURE_U)
             )
         );
+    }
+
+    /// The depositor weight is `Σ_phase0 free_i × AR_tip / AR_dep_i`, computed
+    /// as phase-0 free + (unclaimed − frozen phase-1). Both DAO phases here
+    /// were deposited at AR 1 and the tip is at AR 2, so both have accrued
+    /// compensation and `unclaimed` (phase-0 accrued + phase-1 frozen) is
+    /// strictly larger than `frozen_phase1`:
+    ///
+    /// - phase 0: free 98 CKB, accrued 98 × 2 / 1 − 98 = 98 CKB
+    /// - phase 1: free 198 CKB against the request cell's 102 CKB occupied,
+    ///   frozen at the request AR 2: 198 × 2 / 1 − 198 = 198 CKB
+    /// - unclaimed = 98 + 198 = 296 CKB, frozen_phase1 = 198 CKB
+    /// - weight = 98 + (296 − 198) = 196 CKB = 98 × 2 / 1
+    ///
+    /// Dropping the accrued term (98), flipping its sign (0) or counting the
+    /// frozen phase-1 compensation (394) all miss 196.
+    #[test]
+    fn test_refresh_dao_statistics_depositor_weight_includes_phase0_accrued_compensation() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        seed_test_genesis_baseline(&store);
+        seed_dao_free_fixture(
+            &store,
+            &[
+                DaoDepositCacheEntry {
+                    deposit_ar: 1,
+                    ..dao_free_test_entry(200_00000000, 102_00000000, 0, None)
+                },
+                DaoDepositCacheEntry {
+                    deposit_ar: 1,
+                    ..dao_free_test_entry(300_00000000, 115_00000000, 1, Some(102_00000000))
+                },
+            ],
+        );
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        seed_exact_tip_daily_partition(&store);
+        writer.refresh_latest_dao_statistics().unwrap();
+        let latest = store.get_latest_dao_statistics().unwrap().unwrap();
+
+        assert_eq!(latest.unclaimed_compensation, 296_00000000);
+        assert_eq!(latest.depositor_allocation_weight, 196_00000000);
     }
 
     /// A phase-1 entry without its request cell's occupied capacity cannot be
