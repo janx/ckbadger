@@ -42,12 +42,19 @@ describe('detail and list foundations', () => {
         title="Transaction"
         identity="0xabc"
         facts={[{ label: 'Block', value: '12' }]}
-        tier2={<p>Script evidence</p>}
+        tier2={<DetailSection title="Script groups">Script evidence</DetailSection>}
         rawData={<code>0x0012</code>}
       >
         <DetailSection title="Activity">A transfer</DetailSection>
       </DetailLayout>
     );
+    // Tier-2 headings are the quieter 13 px #a0a8be; tier 1 keeps 15 px (TX-16, FINAL_REVIEW).
+    expect(screen.getByRole('heading', { name: 'Script groups' })).toHaveClass(
+      'text-[13px]',
+      'text-[#a0a8be]'
+    );
+    expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('text-[15px]');
+    expect(screen.getByRole('heading', { name: 'Activity' })).not.toHaveClass('text-[13px]');
     expect(screen.getByRole('heading', { name: 'Transaction' })).toHaveClass('text-[26px]');
     expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
     expect(container.querySelector('details')).not.toHaveAttribute('open');

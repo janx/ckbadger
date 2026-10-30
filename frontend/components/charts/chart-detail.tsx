@@ -142,6 +142,46 @@ function DetailBody({
     seriesLabels: model.series.map((series) => series.label),
   });
   if (!description) throw new Error(`${definition.slug}: no calculation description`);
+  // Method and evidence are the quieter developer tier, after related charts (CH-20).
+  const method = (
+    <DetailSection title="How it is computed / Evidence">
+      <div className="grid min-w-0 gap-4 text-xs md:grid-cols-2">
+        <div className="border-base-border min-w-0 border-t pt-3">
+          <div className="text-text-dim mb-2">Calculation scope</div>
+          <p className="text-text-bright leading-6">{description.overview}</p>
+          <ul className="text-text-dim mt-3 space-y-2">
+            {description.legendItems.map((item) => (
+              <li key={item.label}>
+                <span className="text-text-bright">{item.label}:</span> {item.description}
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="border-base-border min-w-0 border-t pt-3">
+          <div className="text-text-dim mb-2">Evidence path</div>
+          <p className="leading-6">
+            Values come from the local index of canonical chain {definition.source}. The chart
+            returns observations at its own recorded dates or buckets; gaps are not interpolated.
+          </p>
+          <Link
+            href={definition.evidenceHref}
+            className="text-jade mt-3 inline-block hover:underline"
+          >
+            Explore {definition.evidenceLabel} →
+          </Link>
+          <div className="text-text-dim mt-2">
+            Source:{' '}
+            <a
+              href={`${apiBaseFor(network)}${chartApiPath(definition)}`}
+              className="text-jade break-all hover:underline"
+            >
+              <code>{chartApiPath(definition)}</code>
+            </a>
+          </div>
+        </div>
+      </div>
+    </DetailSection>
+  );
   return (
     <DetailLayout
       title={definition.title}
@@ -166,6 +206,7 @@ function DetailBody({
             ]
           : undefined
       }
+      tier2={method}
     >
       <DetailSection
         title={definition.visual === 'ranked' ? 'Distribution' : 'Full history'}
@@ -278,43 +319,6 @@ function DetailBody({
           />
         </DetailSection>
       )}
-      <DetailSection title="How it is computed / Evidence">
-        <div className="grid min-w-0 gap-4 text-xs md:grid-cols-2">
-          <div className="border-base-border min-w-0 border-t pt-3">
-            <div className="text-text-dim mb-2">Calculation scope</div>
-            <p className="text-text-bright leading-6">{description.overview}</p>
-            <ul className="text-text-dim mt-3 space-y-2">
-              {description.legendItems.map((item) => (
-                <li key={item.label}>
-                  <span className="text-text-bright">{item.label}:</span> {item.description}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div className="border-base-border min-w-0 border-t pt-3">
-            <div className="text-text-dim mb-2">Evidence path</div>
-            <p className="leading-6">
-              Values come from the local index of canonical chain {definition.source}. The chart
-              returns observations at its own recorded dates or buckets; gaps are not interpolated.
-            </p>
-            <Link
-              href={definition.evidenceHref}
-              className="text-jade mt-3 inline-block hover:underline"
-            >
-              Explore {definition.evidenceLabel} →
-            </Link>
-            <div className="text-text-dim mt-2">
-              Source:{' '}
-              <a
-                href={`${apiBaseFor(network)}${chartApiPath(definition)}`}
-                className="text-jade break-all hover:underline"
-              >
-                <code>{chartApiPath(definition)}</code>
-              </a>
-            </div>
-          </div>
-        </div>
-      </DetailSection>
       <DetailSection title="Related charts">
         <div className="grid min-w-0 gap-x-10 gap-y-8 sm:grid-cols-2 xl:grid-cols-4">
           {definition.related.map((slug) => {

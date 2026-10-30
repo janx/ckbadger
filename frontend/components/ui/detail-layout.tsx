@@ -1,5 +1,19 @@
-import type { ReactNode } from 'react';
+import { createContext, useContext, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+
+/** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
+const DetailTierContext = createContext<1 | 2>(1);
+
+/** The developer-evidence tier: one 72 px boundary, and every section heading inside is quiet. */
+export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <DetailTierContext.Provider value={2}>
+      <div data-tier="2" className={cn('mt-[72px] min-w-0 space-y-8', className)}>
+        {children}
+      </div>
+    </DetailTierContext.Provider>
+  );
+}
 
 export interface DetailFact {
   label: string;
@@ -74,7 +88,7 @@ export function DetailLayout({
         {children}
       </div>
       {(tier2 || rawData) && (
-        <div data-tier="2" className="mt-[72px] min-w-0 space-y-8">
+        <DetailTier2>
           {tier2}
           {rawData && (
             <details open={rawOpen} className="border-base-border-subtle border-t pt-4">
@@ -84,7 +98,7 @@ export function DetailLayout({
               <div className="mt-4 min-w-0 overflow-x-auto text-xs">{rawData}</div>
             </details>
           )}
-        </div>
+        </DetailTier2>
       )}
     </div>
   );
@@ -101,10 +115,18 @@ export function DetailSection({
   children: ReactNode;
   className?: string;
 }) {
+  const tier = useContext(DetailTierContext);
   return (
     <section className={cn('min-w-0', className)}>
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-[13px] font-medium text-[#a0a8be]">{title}</h2>
+        <h2
+          className={cn(
+            'font-medium',
+            tier === 2 ? 'text-[13px] text-[#a0a8be]' : 'text-text-bright text-[15px]'
+          )}
+        >
+          {title}
+        </h2>
         {actions}
       </div>
       {children}
