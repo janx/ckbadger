@@ -139,6 +139,32 @@ struct Params {
     #[serde(default = "default_limit")]
     limit: i64,
     cursor: Option<String>,
+    /// `capacity`: largest cell first (ties by owner-index key), for the DAO
+    /// class only (BA-34). Default: owner-index order (creation height).
+    order: Option<String>,
+}
+
+/// `/addresses/{addr}/cells?class=dao&order=capacity`'s cursor: the last
+/// served cell's capacity and owner-index key.
+const CAPACITY_CURSOR_PREFIX: &str = "v1:dao:capacity:";
+
+fn capacity_cursor(raw: &str, owner: &[u8]) -> Result<(i64, Vec<u8>), ApiRouteError> {
+    let rest = raw.strip_prefix(CAPACITY_CURSOR_PREFIX).ok_or_else(|| {
+        ApiError::bad_request("cell cursor does not belong to the capacity order")
+    })?;
+    let (capacity, key) = rest
+        .split_once(':')
+        .ok_or_else(|| ApiError::bad_request("capacity cursor needs capacity:key"))?;
+    let capacity: i64 = capacity
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid capacity in cell cursor"))?;
+    let key = hex::decode(key).map_err(|_| ApiError::bad_request("invalid cell cursor hex"))?;
+    if key.len() != 74 || !key.starts_with(owner) {
+        return Err(ApiError::bad_request(
+            "cell cursor belongs to a different address or has invalid length",
+        ));
+    }
+    Ok((capacity, key))
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -698,6 +724,23 @@ async fn cells(
     if !(1..=100).contains(&params.limit) {
         return Err(ApiError::bad_request("limit must be between 1 and 100"));
     }
+    let by_capacity = match (params.order.as_deref(), params.class) {
+        (None, _) => false,
+        (Some("capacity"), Some(Class::Dao)) => true,
+        (Some("capacity"), _) => {
+            return Err(ApiError::bad_request(
+                "order=capacity pages an address's DAO cells; it needs class=dao",
+            ))
+        }
+        (Some(other), _) => {
+            return Err(ApiError::bad_request(format!(
+                "invalid cell order '{other}'; expected capacity"
+            )))
+        }
+    };
+    if by_capacity {
+        return ok(dao_cells_by_capacity(state, owner, params).await?);
+    }
     let after = params
         .cursor
         .as_deref()
@@ -770,6 +813,71 @@ async fn cells(
     .map_err(|e| ApiError::internal(e.to_string()))?
     .map_err(route_error)?;
     ok(page)
+}
+
+/// An address's live DAO cells, largest capacity first (BA-34). The order
+/// needs the whole DAO subset, so this walks the address's owner index once
+/// (the same walk the holdings summary makes) and keeps only DAO cells, sorted
+/// by capacity descending and owner-index key ascending; the cursor resumes
+/// strictly after the last served `(capacity, key)`.
+async fn dao_cells_by_capacity(
+    state: Arc<AppState>,
+    owner: Vec<u8>,
+    params: Params,
+) -> Result<CursorPaginatedResponse<Cell>, ApiRouteError> {
+    let after = params
+        .cursor
+        .as_deref()
+        .map(|raw| capacity_cursor(raw, &owner))
+        .transpose()?;
+    let limit = params.limit as usize;
+    tokio::task::spawn_blocking(move || -> Result<_> {
+        let mut rows = Vec::new();
+        scan(&state, &owner, None, |key, hash, index, info, evidence| {
+            if evidence.class == Class::Dao {
+                rows.push((key.to_vec(), hash.to_vec(), index, info.clone(), evidence));
+            }
+            Ok(true)
+        })?;
+        rows.sort_by(|a, b| b.3.capacity.cmp(&a.3.capacity).then_with(|| a.0.cmp(&b.0)));
+        let start = match &after {
+            None => 0,
+            Some((capacity, key)) => rows.partition_point(|row| {
+                (row.3.capacity, std::cmp::Reverse(&row.0)) >= (*capacity, std::cmp::Reverse(key))
+            }),
+        };
+        let mut page: Vec<_> = rows.into_iter().skip(start).take(limit + 1).collect();
+        let has_more = page.len() > limit;
+        page.truncate(limit);
+        let next = has_more.then(|| {
+            let last = page.last().expect("nonempty next page");
+            format!(
+                "{CAPACITY_CURSOR_PREFIX}{}:{}",
+                last.3.capacity,
+                hex::encode(&last.0)
+            )
+        });
+        let rows = page
+            .into_iter()
+            .map(|(_, hash, index, info, evidence)| {
+                cell_response(&state, &hash, index, &info, evidence).with_context(|| {
+                    format!(
+                        "address 0x{} DAO cell 0x{}:{index}",
+                        hex::encode(&owner),
+                        hex::encode(hash)
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(CursorPaginatedResponse::without_total(
+            rows,
+            params.limit,
+            next,
+        ))
+    })
+    .await
+    .map_err(|e| ApiError::internal(e.to_string()))?
+    .map_err(route_error)
 }
 
 fn script(code: &[u8], hash_type: i16, args: &[u8]) -> Result<ScriptResponse> {
