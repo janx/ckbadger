@@ -2324,7 +2324,27 @@ interface ChartResponse {
    * `/charts/nominal-apc` only (lane R8, CH-03): the model's value today, the detail chart's main
    * reading. Until the API sends it the page shows no reading rather than the last sample.
    */
-  today?: { date: string; value: string };
+  today?: NominalApcTodayF2;
+  // --- F2 charts group (R8 contract, CH-21): the API's peak of `value` / `value2` ---
+  peak?: ChartPeakF2 | null;
+  peak2?: ChartPeakF2 | null;
+}
+
+// --- F2 charts group (R8 contract) ---
+/** The FIRST point holding a series' greatest value, as the API compared it exactly. */
+export interface ChartPeakF2 {
+  /** The point's own x label: an ISO day, or a bucket label. */
+  date: string;
+  /** The raw API value (the chart's own unit before display scaling). */
+  value: string;
+}
+/** Nominal APC's model at the indexed tip: `date` is the tip's UTC+8 day, `year` the exact age. */
+export interface NominalApcTodayF2 {
+  blockNumber: number;
+  date: string;
+  /** Exact elapsed chain time since genesis, in mean Gregorian years. */
+  year: string;
+  value: string;
 }
 
 /**
@@ -2415,6 +2435,8 @@ interface StackedAreaChartResponse {
   data: StackedAreaDataPoint[];
   series: StackedAreaSeries[];
   title: string;
+  /** F2 charts group (R8 contract): each series' peak, by series key. */
+  peaks?: Record<string, ChartPeakF2>;
 }
 
 export interface AssetCapacityHistory extends StackedAreaChartResponse {

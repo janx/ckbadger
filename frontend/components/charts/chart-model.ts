@@ -12,12 +12,31 @@ import {
   formatExactDecimal,
   formatScaledInteger,
 } from '@/lib/exact-integer';
+import { niceStep } from '@/lib/chart-ticks';
+import { CLASS_COLORS, DATA_COLOR, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
   label: string;
   title: string;
   share: string;
+  /** The asset class the API's label names (Assets ranking), drawn as its mark (CH-06). */
+  assetClass?: AssetClass;
+}
+
+// --- F2 charts group ---
+/** A card headline: a small qualifier over one rounded number (CH-07, CH-09, CH-31, CH-33). */
+export interface ChartHeadline {
+  pre: string;
+  display: string;
+  unit: string;
+}
+export interface ChartLegendEntry {
+  key: string;
+  label: string;
+  color: string;
+  /** The entry's reading on the last returned day, with its unit. */
+  value: string;
 }
 
 export interface ChartModel {
@@ -49,6 +68,17 @@ export interface ChartModel {
   today?: ChartPoint | null;
   contextFacts?: { label: string; value: string }[];
   coverage?: string;
+  // --- F2 charts group ---
+  /** The card's headline; `null` when the source has no reading to head it (a model's today). */
+  headline?: ChartHeadline | null;
+  /** What the index card draws when it summarises the detail: fewer bands, a legend (CH-07). */
+  card?: { points: ChartPoint[]; series: ChartSeries[]; legend: ChartLegendEntry[] };
+  /** A fixed value domain: a share chart runs 0–100 (CH-15). */
+  yDomain?: readonly [number, number];
+  /** Dashed reference values drawn across the plot, e.g. the consensus target (CH-12). */
+  referenceLines?: { value: number; label: string }[];
+  /** The API's peak of the drawn series, in display units (CH-21); absent where none applies. */
+  peak?: { label: string; raw: string } | null;
 }
 
 function decimalByPower(value: string, power: number, context: string): string {
@@ -157,7 +187,9 @@ function singleChart(
     yAxisLabel: string;
     y2AxisLabel?: string;
     data: { date: string; value: string; value2?: string | null }[];
-    today?: { date: string; value: string };
+    today?: { blockNumber: number; date: string; year: string; value: string };
+    peak?: { date: string; value: string } | null;
+    peak2?: { date: string; value: string } | null;
   }
 ): ChartModel {
   const primaryField = definition.primaryField ?? 'value';
@@ -205,6 +237,8 @@ function singleChart(
       key: 'companion',
       label: primaryField === 'value2' ? payload.yAxisLabel : (payload.y2AxisLabel ?? 'Companion'),
       color: '#68ccf0',
+      // A companion reading of the same unit (real inflation, daily turnover) is dashed (CH-12).
+      dashed: true,
     });
   const secondary =
     hasSecond && definition.secondaryUnit
@@ -232,12 +266,9 @@ function singleChart(
       : undefined;
   const last = points.at(-1);
   const previous = points.at(-2);
-  const bucketDistribution = [
-    'cell-size-distribution',
-    'block-time-distribution',
-    'epoch-time-distribution',
-    'address-cohort-retention',
-  ].includes(definition.slug);
+  const bucketDistribution = BUCKET_DISTRIBUTIONS.includes(definition.slug);
+  // Cohorts are ordered by first-seen month: the card reads the newest one, not the largest (CH-09).
+  const cohorts = definition.slug === 'address-cohort-retention';
   const leadingBucket = bucketDistribution
     ? points.reduce<ChartPoint | null>((best, point) => {
         if (!best) return point;
@@ -257,7 +288,21 @@ function singleChart(
   // A model timeline is summarised at its "today" sample; any other series at its last point.
   const todayPoint = currentIndex === null ? null : points[currentIndex];
   const summaryPoint = leadingBucket ?? todayPoint ?? last;
-  return {
+  const today =
+    timelineMarkers && payload.today
+      ? {
+          label: `year ${modelYear(payload.today.year, definition.slug)}`,
+          values: {
+            primary: chartUnitValue(
+              payload.today.value,
+              definition.scale,
+              `${definition.slug} today at ${payload.today.date}`
+            ),
+          },
+        }
+      : null;
+  const apiPeak = primaryField === 'value2' ? payload.peak2 : payload.peak;
+  const model: ChartModel = {
     title: payload.title,
     points,
     series,
@@ -291,28 +336,57 @@ function singleChart(
       : null,
     // Neighbouring samples of a model curve or of a bucket histogram are not a change over time.
     delta:
-      bucketDistribution || todayPoint
+      bucketDistribution || cohorts || todayPoint
         ? null
         : last && previous
           ? exactDelta(previous.values.primary, last.values.primary, definition.slug)
           : null,
-    summaryLabel: leadingBucket ? 'Largest bucket' : todayPoint ? 'Today' : undefined,
+    summaryLabel: leadingBucket
+      ? 'Most common'
+      : todayPoint
+        ? 'Today'
+        : cohorts
+          ? 'Newest cohort'
+          : undefined,
     projectedAfter: currentIndex ?? undefined,
-    today: timelineMarkers
-      ? payload.today
-        ? {
-            label: `year ${payload.today.date}`,
-            values: {
-              primary: chartUnitValue(
-                payload.today.value,
-                definition.scale,
-                `${definition.slug} today at ${payload.today.date}`
-              ),
+    today: timelineMarkers ? today : undefined,
+    // A bucket histogram's peak is its most common bucket, already the headline; a model has none.
+    peak:
+      bucketDistribution || cohorts || timelineMarkers || apiPeak === undefined
+        ? undefined
+        : apiPeak === null
+          ? null
+          : {
+              label: apiPeak.date,
+              raw: chartUnitValue(apiPeak.value, definition.scale, `${definition.slug} peak`),
             },
-          }
-        : null
-      : undefined,
   };
+  // A model timeline's headline is the API's today, at its exact age (CH-03, CH-33).
+  if (timelineMarkers && today) {
+    model.latest = {
+      label: today.label,
+      raw: today.values.primary,
+      display: summary(today.values.primary, definition.unit),
+    };
+    model.headline = { pre: today.label, display: model.latest.display, unit: definition.unit };
+  } else if (timelineMarkers) model.headline = null;
+  else if (leadingBucket) model.headline = bucketHeadline(definition, points, leadingBucket);
+  else if (cohorts && last)
+    model.headline = {
+      pre: last.label,
+      display: summary(last.values.primary, definition.unit),
+      unit: definition.unit,
+    };
+  else if (definition.slug === 'epoch-time-length' && last)
+    model.headline = {
+      pre: `#${formatEpochLabel(last.label, definition.slug)}`,
+      display: summary(last.values.primary, definition.unit),
+      unit: definition.unit,
+    };
+  // The weekly share alone on the card; the daily share stays on the detail (CH-12).
+  if (definition.slug === 'capacity-turnover-ratio')
+    model.card = { points, series: series.filter((entry) => entry.key === 'primary'), legend: [] };
+  return model;
 }
 
 /**
@@ -342,23 +416,24 @@ function timelineCurrentIndex(
   return current;
 }
 
-function stackedChart(
-  definition: ChartDefinition,
-  payload: {
-    title: string;
-    data: {
-      date: string;
-      values: Record<string, string>;
-      protocolTotalShannons?: string;
-      phase1CompensationShannons?: string;
-    }[];
-    series: { key: string; label: string; color: string }[];
-  }
-): ChartModel {
-  const selectedSeries =
-    definition.slug === 'cell-count'
-      ? payload.series.filter((series) => series.key !== 'allCells')
-      : payload.series;
+type StackedPayload = {
+  title: string;
+  data: {
+    date: string;
+    values: Record<string, string>;
+    protocolTotalShannons?: string;
+    phase1CompensationShannons?: string;
+  }[];
+  series: { key: string; label: string; color: string }[];
+  peaks?: Record<string, { date: string; value: string }>;
+};
+
+function stackedChart(definition: ChartDefinition, payload: StackedPayload): ChartModel {
+  if (definition.slug === 'cell-count') return liveCellsChart(definition, payload);
+  const classes = CLASSED_SERIES[definition.slug];
+  const selectedSeries = classes
+    ? classedSeries(definition.slug, classes, payload)
+    : payload.series;
   if (!selectedSeries.length) throw new Error(`${definition.slug}: no chart series`);
   const points = payload.data.map((point) => ({
     label: point.date,
@@ -378,43 +453,20 @@ function stackedChart(
       })
     ),
   }));
-  const series = selectedSeries.map((entry, index) => ({
-    key: entry.key,
-    label: entry.label,
-    // Gold belongs to DAO or a proposed state. Other charts share the cool hue ramp.
-    color:
-      definition.source === 'dao' || definition.source === 'supply'
-        ? entry.color
-        : ['#2edba3', '#68ccf0', '#8f9cdb', '#52b8a7', '#547fae', '#6fcfc2', '#879abb', '#a0a8be'][
-            index % 8
-          ],
-  }));
+  // Asset classes keep their colour wherever a chart splits by them, gold only for DAO; every
+  // other split shares the jade ramp (CH-06, CH-14).
+  const series: ChartSeries[] = selectedSeries.map((entry, index) =>
+    classes
+      ? { key: entry.key, label: classes[entry.key].label, color: classes[entry.key].color }
+      : { key: entry.key, label: entry.label, color: HUE_RAMP[index % HUE_RAMP.length] }
+  );
   const last = points.at(-1);
   const previous = points.at(-2);
-  const total = (point: ChartPoint): string => {
-    const ratios = selectedSeries.map((item) =>
-      exactDecimalRatio(point.values[item.key], `${definition.slug} ${item.key}`)
+  const total = (point: ChartPoint): string =>
+    exactSum(
+      selectedSeries.map((item) => point.values[item.key]),
+      definition.slug
     );
-    const denominator = ratios.reduce(
-      (largest, [, divisor]) => (divisor > largest ? divisor : largest),
-      BigInt(1)
-    );
-    const sum = ratios.reduce((acc, [numerator, divisor]) => {
-      if (denominator % divisor !== BigInt(0))
-        throw new Error(`${definition.slug}: incompatible decimal divisors`);
-      return acc + numerator * (denominator / divisor);
-    }, BigInt(0));
-    const whole = sum / denominator;
-    const fraction = (sum % denominator)
-      .toString()
-      .padStart(denominator.toString().length - 1, '0')
-      .replace(/0+$/, '');
-    return fraction ? `${whole}.${fraction}` : whole.toString();
-  };
-  const summarySeries =
-    definition.slug === 'cell-count'
-      ? selectedSeries.find((entry) => entry.key === 'liveCells')
-      : undefined;
   const isComposition = definition.slug === 'hodl-wave';
   const isSecondaryIssuance = definition.slug === 'secondary-issuance';
   const protocolTotal = (point: (typeof payload.data)[number]): string => {
@@ -455,25 +507,21 @@ function stackedChart(
         )
       : null;
   const lastTotal = last
-    ? summarySeries
-      ? last.values[summarySeries.key]
-      : isSecondaryIssuance
-        ? protocolTotal(payload.data.at(-1)!)
-        : leadingAge
-          ? last.values[leadingAge.key]
-          : total(last)
+    ? isSecondaryIssuance
+      ? protocolTotal(payload.data.at(-1)!)
+      : leadingAge
+        ? last.values[leadingAge.key]
+        : total(last)
     : null;
   const previousTotal = previous
-    ? summarySeries
-      ? previous.values[summarySeries.key]
-      : isSecondaryIssuance
-        ? protocolTotal(payload.data.at(-2)!)
-        : total(previous)
+    ? isSecondaryIssuance
+      ? protocolTotal(payload.data.at(-2)!)
+      : total(previous)
     : null;
   const holderCount = isComposition && payload.data.length > 0;
   if (holderCount && payload.data.some((point) => point.values.holderCount === undefined))
     throw new Error(`${definition.slug}: missing holderCount at returned point`);
-  return {
+  const model: ChartModel = {
     title: payload.title,
     points,
     series,
@@ -505,22 +553,149 @@ function stackedChart(
       : last && previous && previousTotal !== null && lastTotal !== null
         ? exactDelta(previousTotal, lastTotal, definition.slug)
         : null,
-    summaryLabel: summarySeries
-      ? 'Live cells'
-      : isSecondaryIssuance
-        ? 'Protocol secondary issuance'
-        : leadingAge
-          ? `Largest age band: ${leadingAge.label}`
-          : undefined,
+    summaryLabel: isSecondaryIssuance
+      ? 'Protocol secondary issuance'
+      : leadingAge
+        ? `Largest age band: ${leadingAge.label}`
+        : undefined,
     contextFacts:
       isSecondaryIssuance && payload.data.length
         ? [
             {
               label: 'Frozen phase-1 overlap',
-              value: `${chartUnitValue(payload.data.at(-1)!.phase1CompensationShannons!, 'shannons', `${definition.slug} latest phase-1`)} CKB`,
+              // Grouped like the line above it (CH-34).
+              value: `${formatChartExact(chartUnitValue(payload.data.at(-1)!.phase1CompensationShannons!, 'shannons', `${definition.slug} latest phase-1`), 'CKB')} CKB`,
             },
           ]
         : undefined,
+  };
+  // F2 charts group: what the index card shows of a stacked chart (CH-07, CH-15).
+  if (definition.slug === 'hodl-wave') model.yDomain = [0, 100];
+  if (!last) return model;
+  const groups = CARD_GROUPS[definition.slug];
+  if (groups) {
+    const cardSeries = groups.map((group, index) => ({
+      key: group.key,
+      label: group.label,
+      color: HUE_RAMP[index % HUE_RAMP.length],
+    }));
+    const cardPoints = points.map((point) => ({
+      label: point.label,
+      values: Object.fromEntries(
+        groups.map((group) => [
+          group.key,
+          exactSum(
+            group.members.map((member) => {
+              const value = point.values[member];
+              if (value === undefined)
+                throw new Error(`${definition.slug}: card group ${group.key} has no ${member}`);
+              return value;
+            }),
+            `${definition.slug} ${group.key} at ${point.label}`
+          ),
+        ])
+      ),
+    }));
+    const lastGroups = cardPoints.at(-1)!;
+    // A percentage band already is its share; a count is read against the day's total.
+    const share = (key: string) =>
+      definition.unit === '%'
+        ? summary(lastGroups.values[key], '%')
+        : shareOf(lastGroups.values[key], total(last), `${definition.slug} ${key}`);
+    model.card = {
+      points: cardPoints,
+      series: cardSeries,
+      legend: cardSeries.map((entry) => ({
+        key: entry.key,
+        label: entry.label,
+        color: entry.color,
+        value: `${share(entry.key)} %`,
+      })),
+    };
+    model.headline = {
+      pre: groups[0].label.toLowerCase(),
+      display: share(groups[0].key),
+      unit: '%',
+    };
+  } else {
+    const legendValue = (key: string) =>
+      definition.slug === 'common-knowledge-composition'
+        ? `${shareOf(last.values[key], total(last), `${definition.slug} ${key}`)} %`
+        : `${summary(last.values[key], definition.unit)} ${definition.unit}`;
+    model.card = {
+      points,
+      series,
+      legend: series.map((entry) => ({
+        key: entry.key,
+        label: entry.label,
+        color: entry.color!,
+        value: legendValue(entry.key),
+      })),
+    };
+    if (definition.slug === 'common-knowledge-composition')
+      model.headline = {
+        pre: series[0].label.toLowerCase(),
+        display: shareOf(last.values[series[0].key], total(last), definition.slug),
+        unit: '%',
+      };
+  }
+  return model;
+}
+
+/**
+ * Live cells as the one live count it is named for; the cumulative consumed count is a separate
+ * chart on the detail, never stacked on top of it (CH-08). `allCells` is their sum and is not drawn.
+ */
+function liveCellsChart(definition: ChartDefinition, payload: StackedPayload): ChartModel {
+  for (const key of ['liveCells', 'deadCells'])
+    if (!payload.series.some((series) => series.key === key))
+      throw new Error(`${definition.slug}: no ${key} series`);
+  const read = (point: StackedPayload['data'][number], key: string) => {
+    const raw = point.values[key];
+    if (raw === undefined) throw new Error(`${definition.slug}: missing ${key} at ${point.date}`);
+    return chartUnitValue(raw, definition.scale, `${definition.slug} ${key} at ${point.date}`);
+  };
+  const points = payload.data.map((point) => ({
+    label: point.date,
+    values: { liveCells: read(point, 'liveCells') },
+  }));
+  const last = points.at(-1);
+  const previous = points.at(-2);
+  const peak = payload.peaks?.liveCells;
+  return {
+    title: payload.title,
+    points,
+    series: [{ key: 'liveCells', label: 'Live cells', color: DATA_COLOR }],
+    unit: definition.unit,
+    kind: 'line',
+    secondary: {
+      title: 'Consumed cells, cumulative',
+      unit: 'cells',
+      series: [{ key: 'secondary', label: 'Consumed cells', color: '#68ccf0' }],
+      points: payload.data.map((point) => ({
+        label: point.date,
+        values: { secondary: read(point, 'deadCells') },
+      })),
+    },
+    latest: last
+      ? {
+          label: last.label,
+          raw: last.values.liveCells,
+          display: summary(last.values.liveCells, definition.unit),
+        }
+      : null,
+    delta:
+      last && previous
+        ? exactDelta(previous.values.liveCells, last.values.liveCells, definition.slug)
+        : null,
+    summaryLabel: 'Live cells',
+    peak:
+      peak === undefined
+        ? undefined
+        : {
+            label: peak.date,
+            raw: chartUnitValue(peak.value, definition.scale, `${definition.slug} peak`),
+          },
   };
 }
 
@@ -640,11 +815,14 @@ function shareRows(
   );
   const othersKey = used.series.find((series) => series.key === 'others')?.label;
   const named = sorted.filter((entry) => entry.label !== othersKey);
+  const others = sorted.filter((entry) => entry.label === othersKey);
   // The API's own bucket holds the ranks beyond its named list; say so, the card's "Others" differs.
-  const rankedRows = sorted.map((entry) => ({
+  // It is a remainder, not a rank: it closes the list instead of leading it (CH-29).
+  const rankedRows = [...named, ...others].map((entry) => ({
     label: entry.label === othersKey ? `Others beyond the top ${named.length}` : entry.label,
     value: entry.value,
     share: share(entry.shannons),
+    ...(definition.source === 'assets' && entry.label !== othersKey ? assetLabel(entry.label) : {}),
   }));
   const leader = named[0] ?? sorted[0];
   const summaryLabel = `Largest ${definition.source === 'scripts' ? 'script' : 'asset'}: ${leader.label}`;
@@ -668,13 +846,38 @@ function shareRows(
         total,
         share,
         definition.slug
+      ).map((row) =>
+        definition.source === 'assets' && row.label !== 'Others'
+          ? { ...row, ...assetLabel(row.label) }
+          : row
       ),
       summaryLabel,
     },
     historicalShares: histories,
     coverage: `${payload.capacityShare.data.length} owned-capacity dates`,
     summaryLabel,
+    headline:
+      total === BigInt(0)
+        ? null
+        : {
+            pre: definition.source === 'assets' ? assetLabel(leader.label).label : leader.label,
+            display: share(leader.shannons).replace(/%$/, ''),
+            unit: '%',
+          },
   };
+}
+
+/**
+ * The Assets ranking labels each entry "<name> (<class>)"; the class becomes its mark (CH-06). A
+ * suffix outside the class vocabulary stays in the label, unmarked.
+ */
+function assetLabel(label: string): { label: string; assetClass?: AssetClass } {
+  const match = /^(.*) \((token|object|identity)\)$/.exec(label);
+  if (!match) return { label };
+  const assetClass = ({ token: 'tokens', object: 'objects', identity: 'identities' } as const)[
+    match[2] as 'token' | 'object' | 'identity'
+  ];
+  return { label: match[1], assetClass };
 }
 
 function minerRows(
@@ -730,8 +933,12 @@ function minerRows(
       ? {
           label: `${payload.fromDate}–${payload.toDate}`,
           raw: rankedRows[0].value,
-          display: rankedRows[0].value,
+          // Grouped like the detail's fact, never a bare 42705 (CH-31).
+          display: formatChartExact(rankedRows[0].value, 'blocks'),
         }
+      : null,
+    headline: rankedRows[0]
+      ? { pre: 'top', display: summary(payload.data[0].percentage, '%'), unit: '%' }
       : null,
     delta: null,
     rankedRows,
@@ -752,8 +959,10 @@ function minerRows(
         : undefined,
     },
     coverage: `${payload.fromDate}–${payload.toDate} · ${payload.totalBlocks.toLocaleString()} blocks`,
-    summaryLabel: rankedRows[0]
-      ? `Leading miner: ${rankedRows[0].label} (${rankedRows[0].share})`
+    // The fact names the miner in the same head…tail form as the card; the ranking links the
+    // full address (CH-04).
+    summaryLabel: miners[0]
+      ? `Leading miner: ${miners[0].shortLabel} (${miners[0].row.share})`
       : undefined,
   };
 }
@@ -775,6 +984,235 @@ export function chartModel(definition: ChartDefinition, payload: ChartPayload): 
     model.contextFacts = [
       { label: 'Consensus target', value: `${numerator} / ${denominator} blocks` },
     ];
+    // The target as a percentage of blocks: exact, at the rate units' two decimals (CH-12).
+    const percent = formatScaledInteger(BigInt(numerator) * BigInt(100), BigInt(denominator), 2);
+    model.referenceLines = [{ value: Number(percent), label: `target ${percent} %` }];
   }
   return model;
+}
+
+// --- F2 charts group: board encodings computed once here, rendered by card and detail ---
+
+/** Bucket histograms (no time axis): headlined by their most common bucket. */
+const BUCKET_DISTRIBUTIONS: readonly string[] = [
+  'cell-size-distribution',
+  'block-time-distribution',
+  'epoch-time-distribution',
+];
+
+/**
+ * The API series of the charts that split CKB by asset class, in the board's stacking order (bottom
+ * first), with the class vocabulary's names and colours (CH-06, CH-14). Burnt and plain CKB are the
+ * neutral band; gold is DAO alone; jade is the data hue (circulating, miners).
+ */
+const CLASSED_SERIES: Readonly<
+  Record<string, Readonly<Record<string, { label: string; color: string }>>>
+> = {
+  'common-knowledge-composition': {
+    transfer: { label: 'Plain CKB', color: CLASS_COLORS.ckb },
+    dao: { label: 'Nervos DAO', color: CLASS_COLORS.dao },
+    udt: { label: 'Tokens', color: CLASS_COLORS.tokens },
+    nftSpore: { label: 'Objects', color: CLASS_COLORS.objects },
+    otherContracts: { label: 'Other scripts', color: CLASS_COLORS.other },
+  },
+  'total-supply': {
+    circulating: { label: 'Circulating', color: DATA_COLOR },
+    nervosdao: { label: 'Nervos DAO', color: CLASS_COLORS.dao },
+    burnt: { label: 'Burnt', color: CLASS_COLORS.ckb },
+  },
+  'secondary-issuance': {
+    burnt: { label: 'Burnt', color: CLASS_COLORS.ckb },
+    compensation: { label: 'DAO compensation', color: CLASS_COLORS.dao },
+    mining: { label: 'Miners', color: DATA_COLOR },
+  },
+};
+
+/** The returned series of a classed chart, every key known, in board order (CH-06). */
+function classedSeries(
+  slug: string,
+  classes: Readonly<Record<string, { label: string; color: string }>>,
+  payload: StackedPayload
+): StackedPayload['series'] {
+  for (const entry of payload.series)
+    if (!classes[entry.key]) throw new Error(`${slug}: unknown series ${entry.key}`);
+  const order = Object.keys(classes).filter((key) =>
+    payload.series.some((entry) => entry.key === key)
+  );
+  const byKey = new Map(payload.series.map((entry) => [entry.key, entry]));
+  const ordered = order.map((key) => byKey.get(key)!);
+  // Knowledge by kind stacks the largest kind today at the bottom, like the board.
+  const last = payload.data.at(-1);
+  if (slug !== 'common-knowledge-composition' || !last) return ordered;
+  const amount = (key: string) => {
+    const raw = last.values[key];
+    if (raw === undefined) throw new Error(`${slug}: missing ${key} at ${last.date}`);
+    return exactDecimalRatio(raw, `${slug} ${key}`);
+  };
+  return [...ordered].sort((a, b) => {
+    const [an, ad] = amount(a.key);
+    const [bn, bd] = amount(b.key);
+    const left = bn * ad;
+    const right = an * bd;
+    return left === right ? 0 : left > right ? 1 : -1;
+  });
+}
+
+/** The card's coarser bands of the HODL wave and activity by type, as on the board (CH-07). */
+const CARD_GROUPS: Readonly<
+  Record<string, readonly { key: string; label: string; members: readonly string[] }[]>
+> = {
+  'hodl-wave': [
+    { key: 'over1y', label: 'over 1 y', members: ['gt3y', '1y3y'] },
+    { key: 'm3y1', label: '3 m – 1 y', members: ['6m1y', '3m6m'] },
+    { key: 'w1m3', label: '1 w – 3 m', members: ['1m3m', '1w1m'] },
+    { key: 'under1w', label: 'under 1 w', members: ['1d1w', '24h'] },
+  ],
+  'activity-type-breakdown': [
+    { key: 'scriptCall', label: 'Script calls', members: ['scriptCall'] },
+    { key: 'transfer', label: 'Transfers', members: ['transfer'] },
+    { key: 'assets', label: 'Assets', members: ['token', 'object', 'identity'] },
+    { key: 'dao', label: 'DAO', members: ['dao'] },
+  ],
+};
+
+/** The exact sum of non-negative decimals, trailing zeros trimmed. */
+function exactSum(values: readonly string[], context: string): string {
+  const ratios = values.map((value) => exactDecimalRatio(value, context));
+  const denominator = ratios.reduce(
+    (largest, [, divisor]) => (divisor > largest ? divisor : largest),
+    BigInt(1)
+  );
+  const sum = ratios.reduce((acc, [numerator, divisor]) => {
+    if (denominator % divisor !== BigInt(0))
+      throw new Error(`${context}: incompatible decimal divisors`);
+    return acc + numerator * (denominator / divisor);
+  }, BigInt(0));
+  const whole = sum / denominator;
+  const fraction = (sum % denominator)
+    .toString()
+    .padStart(denominator.toString().length - 1, '0')
+    .replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
+/** `part` as a share of `whole`, in percent at two decimals (exact, rounded half up). */
+function shareOf(part: string, whole: string, context: string): string {
+  const [pn, pd] = exactDecimalRatio(part, `${context} part`);
+  const [wn, wd] = exactDecimalRatio(whole, `${context} whole`);
+  if (wn === BigInt(0)) throw new Error(`${context}: share of a zero total`);
+  return formatScaledInteger(pn * wd * BigInt(100), pd * wn, 2);
+}
+
+/** A histogram's headline: its most common bucket, by what that bucket means (CH-09). */
+function bucketHeadline(
+  definition: ChartDefinition,
+  points: readonly ChartPoint[],
+  leading: ChartPoint
+): ChartHeadline {
+  if (definition.slug === 'cell-size-distribution')
+    return {
+      pre: leading.label,
+      display: shareOf(
+        leading.values.primary,
+        exactSum(
+          points.map((point) => point.values.primary),
+          definition.slug
+        ),
+        definition.slug
+      ),
+      unit: '%',
+    };
+  return {
+    pre: 'most common',
+    display: leading.label,
+    unit: definition.slug === 'block-time-distribution' ? 's' : 'hours',
+  };
+}
+
+/** A model's exact age in years, at two decimals: "6.96" (CH-33). */
+function modelYear(year: string, slug: string): string {
+  const [numerator, denominator] = exactDecimalRatio(year, `${slug} today year`);
+  return formatScaledInteger(numerator, denominator, 2);
+}
+
+/** An epoch number with thousands groups: "15,202" (CH-35). */
+export function formatEpochLabel(label: string, slug: string): string {
+  if (!/^\d+$/.test(label)) throw new Error(`${slug}: invalid epoch label ${label}`);
+  return formatExactDecimal(label, `${slug} epoch`);
+}
+
+export type AxisStyle = 'date' | 'month' | 'epoch' | 'model-year' | 'bucket';
+
+/** How a chart's x labels read (CH-24, CH-35). */
+export function axisStyle(definition: ChartDefinition): AxisStyle {
+  if (definition.slug === 'epoch-time-length') return 'epoch';
+  if (definition.slug === 'nominal-apc') return 'model-year';
+  if (definition.slug === 'address-cohort-retention') return 'month';
+  if (BUCKET_DISTRIBUTIONS.includes(definition.slug)) return 'bucket';
+  return 'date';
+}
+
+function thin<T>(items: readonly T[], max: number): T[] {
+  if (items.length <= max) return [...items];
+  if (max === 1) return [items[items.length - 1]];
+  // Evenly spaced, always keeping the first and the last.
+  return Array.from(
+    { length: max },
+    (_, i) => items[Math.round((i * (items.length - 1)) / (max - 1))]
+  );
+}
+
+/**
+ * X-axis ticks at the points where a calendar unit starts (years, else months), at round epoch
+ * numbers, at round model years, or at buckets; at most `max`, evenly thinned (CH-24, CH-09).
+ */
+export function axisTicks(
+  points: readonly ChartPoint[],
+  style: AxisStyle,
+  max: number
+): { index: number; label: string }[] {
+  if (!points.length) return [];
+  if (style === 'bucket')
+    return thin(
+      points.map((point, index) => ({ index, label: point.label })),
+      max
+    );
+  if (style === 'epoch' || style === 'model-year') {
+    const values = points.map((point) => {
+      const value = Number(point.label);
+      if (!Number.isFinite(value)) throw new Error(`invalid ${style} axis label ${point.label}`);
+      return value;
+    });
+    const first = values[0];
+    const last = values[values.length - 1];
+    if (last <= first) return [{ index: 0, label: tickLabel(style, first) }];
+    const step = niceStep((last - first) / max);
+    const ticks: { index: number; label: string }[] = [];
+    for (let tick = Math.ceil(first / step) * step; tick <= last; tick += step) {
+      const index = values.findIndex((value) => value >= tick);
+      if (index >= 0 && !ticks.some((t) => t.index === index))
+        ticks.push({ index, label: tickLabel(style, values[index]) });
+    }
+    return thin(ticks, max);
+  }
+  const unit = (label: string) => {
+    if (style === 'month' ? !/^\d{4}-\d{2}$/.test(label) : !/^\d{4}-\d{2}-\d{2}$/.test(label))
+      throw new Error(`invalid ${style} axis label ${label}`);
+    return label;
+  };
+  const starts = (cut: number) =>
+    points.flatMap((point, index) => {
+      const key = unit(point.label).slice(0, cut);
+      return index > 0 && key !== points[index - 1].label.slice(0, cut)
+        ? [{ index, label: key }]
+        : [];
+    });
+  const years = starts(4);
+  return thin(years.length >= 2 || style === 'month' ? years : starts(7), max);
+}
+
+function tickLabel(style: 'epoch' | 'model-year', value: number): string {
+  return style === 'epoch'
+    ? `#${formatExactDecimal(String(value), 'epoch tick')}`
+    : `year ${value}`;
 }

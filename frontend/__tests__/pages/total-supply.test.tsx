@@ -22,10 +22,12 @@ describe('TotalSupplyPage', () => {
     chartMock.mockClear();
     vi.mocked(api.getTotalSupplyChart).mockResolvedValue({
       title: 'Total Supply',
-      data: [{ date: '2026-02-23', values: { primary: '70.00000001', secondary: '30.00000002' } }],
+      data: [
+        { date: '2026-02-23', values: { circulating: '70.00000001', nervosdao: '30.00000002' } },
+      ],
       series: [
-        { key: 'primary', label: 'Primary Issuance', color: '#00c389' },
-        { key: 'secondary', label: 'Secondary Issuance', color: '#ffb000' },
+        { key: 'circulating', label: 'Circulating', color: '#00c389' },
+        { key: 'nervosdao', label: 'Nervos DAO', color: '#3b82f6' },
       ],
     });
     render(<TotalSupplyPage />);
@@ -38,8 +40,14 @@ describe('TotalSupplyPage', () => {
     expect(chartMock.mock.calls[0][0]).toMatchObject({
       kind: 'stacked',
       unit: 'CKB',
-      data: [{ label: '2026-02-23', values: { primary: '70.00000001', secondary: '30.00000002' } }],
-      series: [{ label: 'Primary Issuance' }, { label: 'Secondary Issuance' }],
+      data: [
+        { label: '2026-02-23', values: { circulating: '70.00000001', nervosdao: '30.00000002' } },
+      ],
+      // F2 charts: the DAO band is gold, the class colour, not the API's blue (CH-06).
+      series: [
+        { label: 'Circulating', color: '#2edba3' },
+        { label: 'Nervos DAO', color: '#f2c55c' },
+      ],
     });
     expect(screen.getByText(/100.00000003 CKB/)).toBeInTheDocument();
     expect(screen.getByText('/charts/total-supply')).toBeInTheDocument();

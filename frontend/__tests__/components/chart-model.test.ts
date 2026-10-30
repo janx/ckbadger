@@ -71,15 +71,29 @@ const miners = {
   ],
 };
 
+// F2 charts: classed and grouped charts read the API's own series keys (fail fast on others).
+const keyed = (keys: string[], extra: Record<string, string> = {}) => ({
+  title: 'Indexed',
+  series: keys.map((key) => ({ key, label: key, color: '#000' })),
+  data: ['2024-01-01', '2024-01-03'].map((date, d) => ({
+    date,
+    values: { ...Object.fromEntries(keys.map((key, i) => [key, String(i + d + 1)])), ...extra },
+  })),
+});
+const HODL_KEYS = ['gt3y', '1y3y', '6m1y', '3m6m', '1m3m', '1w1m', '1d1w', '24h'];
+
 function payloadFor(definition: ChartDefinition): ChartPayload {
   if (definition.slug === 'secondary-issuance') return secondaryProducer;
-  if (definition.slug === 'hodl-wave')
+  if (definition.slug === 'hodl-wave') return keyed(HODL_KEYS, { holderCount: '123' });
+  if (definition.slug === 'total-supply') return keyed(['circulating', 'nervosdao', 'burnt']);
+  if (definition.slug === 'common-knowledge-composition')
+    return keyed(['transfer', 'dao', 'udt', 'nftSpore', 'otherContracts']);
+  if (definition.slug === 'activity-type-breakdown')
+    return keyed(['transfer', 'dao', 'token', 'object', 'identity', 'scriptCall']);
+  if (definition.slug === 'epoch-time-length')
     return {
-      ...stacked,
-      data: stacked.data.map((point) => ({
-        ...point,
-        values: { ...point.values, holderCount: '123' },
-      })),
+      ...simple,
+      data: simple.data.map((point, i) => ({ ...point, date: String(15201 + i) })),
     };
   if (definition.slug === 'most-utilized-scripts' || definition.slug === 'most-utilized-assets')
     return utilized;
@@ -233,7 +247,9 @@ describe('28 chart variants', () => {
     expect(preview.rows.at(-1)?.share).toBe('1.6893%');
     expect(preview.rows[0].title).toBe(rows[0].address);
     expect(preview.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
-    expect(model.summaryLabel).toBe(`Leading miner: ${rows[0].address} (0%)`);
+    // The detail fact names the miner in the same short form; the ranking links the full one (CH-04).
+    expect(model.summaryLabel).toBe('Leading miner: ckb1qzda0c…93hhsj (0%)');
+    expect(model.rankedRows?.[0].label).toBe(rows[0].address);
   });
 
   it('summarises nominal APC at its single current sample and rejects a missing one (CH-03)', () => {
@@ -278,7 +294,10 @@ describe('28 chart variants', () => {
       ],
     };
     expect(
-      chartModel(definition, { ...payload, today: { date: '6.83', value: '2.3601' } }).today
+      chartModel(definition, {
+        ...payload,
+        today: { blockNumber: 20876568, date: '2026-10-30', year: '6.83', value: '2.3601' },
+      }).today
     ).toEqual({ label: 'year 6.83', values: { primary: '2.3601' } });
     // Lane R8 has not shipped `today` yet: the gap stays visible (no reading), not the year-20 sample.
     expect(chartModel(definition, payload).today).toBeNull();
@@ -353,9 +372,12 @@ describe('28 chart variants', () => {
   it('adds arbitrary decimal precision in stacked totals without truncating', () => {
     const model = chartModel(CHART_BY_SLUG.get('total-supply')!, {
       title: 'Supply',
-      series: stacked.series,
+      series: [
+        { key: 'circulating', label: 'Circulating', color: '#a' },
+        { key: 'nervosdao', label: 'Nervos DAO', color: '#b' },
+      ],
       data: [
-        { date: '2024-01-01', values: { liveCells: '1.123456789', deadCells: '2.000000001' } },
+        { date: '2024-01-01', values: { circulating: '1.123456789', nervosdao: '2.000000001' } },
       ],
     });
     expect(model.latest?.raw).toBe('3.12345679');
@@ -366,20 +388,26 @@ describe('28 chart variants', () => {
     expect(cells.latest?.raw).toBe('3');
     expect(cells.summaryLabel).toBe('Live cells');
     const hodl = chartModel(CHART_BY_SLUG.get('hodl-wave')!, {
-      ...stacked,
+      title: 'HODL',
+      series: HODL_KEYS.map((key) => ({ key, label: key, color: '#a' })),
       data: [
         {
           date: '2024-01-01',
-          values: { liveCells: '35', deadCells: '65', holderCount: '9007199254740993' },
+          values: {
+            ...Object.fromEntries(HODL_KEYS.map((key) => [key, '0'])),
+            gt3y: '35',
+            '24h': '65',
+            holderCount: '9007199254740993',
+          },
         },
       ],
     });
     expect(hodl.latest?.raw).toBe('65');
     expect(hodl.delta).toBeNull();
     expect(hodl.secondary?.points[0].values.holders).toBe('9007199254740993');
-    expect(() => chartModel(CHART_BY_SLUG.get('hodl-wave')!, stacked)).toThrow(
-      /missing holderCount/
-    );
+    expect(() =>
+      chartModel(CHART_BY_SLUG.get('hodl-wave')!, keyed(HODL_KEYS) as typeof stacked)
+    ).toThrow(/missing holderCount/);
     const buckets = chartModel(CHART_BY_SLUG.get('cell-size-distribution')!, {
       title: 'Buckets',
       yAxisLabel: 'Cells',

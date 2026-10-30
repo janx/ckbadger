@@ -73,7 +73,7 @@ describe('shared chart detail', () => {
     };
     vi.mocked(api.getNominalApcChart).mockResolvedValue({
       ...timeline,
-      today: { date: '6.83', value: '2.3601' },
+      today: { blockNumber: 20876568, date: '2026-10-30', year: '6.83', value: '2.3601' },
     });
     const view = render(<ChartDetail slug="nominal-apc" />);
     const chart = await screen.findByRole('img', { name: /^Nominal APC: 3 points/ });
@@ -165,7 +165,8 @@ describe('shared chart detail', () => {
     expect(screen.getByRole('img', { name: 'Hash rate: 2 points, linear' })).toBeInTheDocument();
   });
 
-  it('wraps a full miner identity in the fact label while retaining its address link', async () => {
+  // CH-04 (round 2): the fact names the miner in the card's head…tail form; the link keeps it all.
+  it('names the leading miner in short form in the fact while retaining its address link', async () => {
     const address = `ckb1${'qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfdwlcghv62qw704s93hhsj'}`;
     vi.mocked(api.getMinerAddressDistributionChart).mockResolvedValue({
       title: 'Miner distribution',
@@ -184,7 +185,7 @@ describe('shared chart detail', () => {
       toDate: '2026-10-27',
     });
     render(<ChartDetail slug="miner-address-distribution" />);
-    const label = await screen.findByText(`Leading miner: ${address} (62.7931%)`);
+    const label = await screen.findByText('Leading miner: ckb1qzda0c…93hhsj (62.7931%)');
     expect(label).toHaveClass('min-w-0', 'break-words');
     expect(label.parentElement).toHaveClass('grid-cols-1');
     expect(screen.getByRole('link', { name: address })).toHaveAttribute(
