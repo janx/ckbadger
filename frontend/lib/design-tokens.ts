@@ -66,3 +66,23 @@ export const COMPOSITION_BADGES = {
     bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, #8ff3d6)`,
   },
 } as const;
+
+// ---- group scripts (F2-4 / F2-5) -------------------------------------------------------------
+/**
+ * "Who can change the code" (Scripts board): one fixed swatch per API code class. Immutable code
+ * is filled grey, replaceable code is an outline (lighter edge = fewer signers), never by index.
+ */
+export const CODE_CLASS_COLORS = {
+  fixed: { fill: '#8a91a6', edge: '#a0a8be' },
+  unspendable: { fill: '#5c6378', edge: '#7c849c' },
+  multisig: { fill: '#0c0e15', edge: '#a0a8be' },
+  one_key: { fill: '#0c0e15', edge: '#dee2ec' },
+  unsupported: { fill: '#0c0e15', edge: '#4b5266' },
+  mixed: { fill: '#0c0e15', edge: '#6aa9c4' },
+  ambiguous: { fill: '#0c0e15', edge: '#f08aa8' },
+  retired: { fill: '#1a1f30', edge: '#343c50' },
+} as const;
+/** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
+export const FREE_CAPACITY_COLOR = '#1a1f30';
+/** The neutral of plain CKB held: the area under occupied in a script's history. */
+export const HELD_CAPACITY_COLOR = '#3a4258';

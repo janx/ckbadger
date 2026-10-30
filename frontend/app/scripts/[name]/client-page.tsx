@@ -12,7 +12,6 @@ import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 import {
-  ScriptCodeClassSummary,
   ScriptCustodyEvidence,
   ScriptCapacityEvidenceChart,
 } from '@/components/scripts/script-code-evidence';
@@ -1538,9 +1537,6 @@ export default function ScriptDetailPage({
               </p>
             )}
           </DetailSection>
-          {!isCodeHashMode && namedScriptDetail?.codeClasses && (
-            <ScriptCodeClassSummary classes={namedScriptDetail.codeClasses} />
-          )}
           {!isCodeHashMode && namedScriptDetail?.references && (
             <DetailSection title="Registered references">
               <ListTable

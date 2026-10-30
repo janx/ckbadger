@@ -24,6 +24,7 @@ describe('script code evidence', () => {
   it('sums exact shannons across all classes without dropping unknown custody', () => {
     render(
       <ScriptCodeClassSummary
+        lockScriptCount={2}
         classes={[
           {
             class: 'fixed',
@@ -40,11 +41,14 @@ describe('script code evidence', () => {
         ]}
       />
     );
-    expect(screen.getByText('50.00% · 2 live cells · 1 references')).toBeInTheDocument();
-    expect(screen.getByText('50.00% · 1 live cells · 1 references')).toBeInTheDocument();
-    expect(screen.getByText('Custody unsupported')).toBeInTheDocument();
+    const sentence = screen.getByTestId('code-class-sentence').textContent;
+    expect(sentence).toContain('18,014,398,509.48198600');
+    expect(sentence).toContain('50.0% runs code no one can change');
+    expect(sentence).toContain('50.0% sits under code marked "holder lock not recognised"');
+    expect(screen.getByText('Holder lock not recognised')).toBeInTheDocument();
     expect(
-      screen.getByRole('img', { name: 'Live lock capacity distribution by code class' }).children
+      screen.getByRole('img', { name: 'CKB under lock scripts by who can change their code' })
+        .children
     ).toHaveLength(2);
   });
 
@@ -57,10 +61,14 @@ describe('script code evidence', () => {
       )
     ).toBe(BigInt(900));
     render(
-      <ScriptCodeClassSummary classes={listFixture.classSummary as ScriptCodeClassTotalApi[]} />
+      <ScriptCodeClassSummary
+        classes={listFixture.classSummary as ScriptCodeClassTotalApi[]}
+        lockScriptCount={listFixture.roleCounts.locks}
+      />
     );
-    expect(screen.getByText(/55.55% · 1 live cells/)).toBeInTheDocument();
-    expect(screen.getByText(/44.44% · 1 live cells/)).toBeInTheDocument();
+    const sentence = screen.getByTestId('code-class-sentence').textContent;
+    expect(sentence).toContain('55.6% runs code no one can change');
+    expect(sentence).toContain('44.4% runs code a single key can replace');
     expect(detailFixture.history.every((marker) => marker.indexedDay === '2024-01-02')).toBe(true);
   });
 

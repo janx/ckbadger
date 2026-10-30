@@ -2473,6 +2473,8 @@ interface KnownScript {
   codeCellsTotal?: number;
   observedReferences?: ScriptObservedReferenceApi[];
   codeClasses?: ScriptCodeClassTotalApi[];
+  // group scripts (F2-4): the family's registered code versions (list rows only).
+  versionsCount?: number;
 }
 
 interface DeploymentUsage {
@@ -2706,6 +2708,8 @@ function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): Kno
     liveCellsCount: script.liveCellsCount,
     cellsCount: script.cellsCount,
     codeClasses: script.codeClasses,
+    // group scripts (F2-4)
+    versionsCount: script.versionsCount,
   };
 }
 

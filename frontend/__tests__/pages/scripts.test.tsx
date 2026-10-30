@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, fireEvent, waitFor } from '@testing-library/react';
+import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
 import { api, KnownScript } from '@/lib/api';
@@ -84,12 +84,12 @@ describe('ScriptsPage', () => {
     vi.clearAllMocks();
   });
 
-  it('uses a family-name search placeholder', async () => {
+  it('uses a script-name search placeholder (SC-L5: the API searches names only)', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 
     render(<ScriptsPage />);
 
-    expect(screen.getByPlaceholderText('Search by script family name...')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search by script name')).toBeInTheDocument();
   });
 
   it('uses server role totals and refetches the filtered family set', async () => {
@@ -108,7 +108,7 @@ describe('ScriptsPage', () => {
     render(<ScriptsPage />);
     expect(await screen.findByRole('button', { name: 'Types 1' })).toBeInTheDocument();
     expect(
-      screen.getByRole('img', { name: 'Live lock capacity distribution by code class' })
+      screen.getByRole('img', { name: 'CKB under lock scripts by who can change their code' })
     ).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Types 1' }));
     await waitFor(() =>
@@ -118,7 +118,7 @@ describe('ScriptsPage', () => {
     );
   });
 
-  it('renders sortable script list columns and entries', async () => {
+  it('renders script list columns and sorts through one control', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 
     render(<ScriptsPage />);
@@ -133,20 +133,17 @@ describe('ScriptsPage', () => {
       );
     });
 
-    await waitFor(() => {
-      expect(screen.getAllByText('Used as').length).toBeGreaterThan(0);
-    });
-
-    expect(screen.getAllByRole('link', { name: 'SECP256K1_BLAKE160' })[0]).toBeInTheDocument();
+    expect(
+      (await screen.findAllByRole('link', { name: 'SECP256K1_BLAKE160' }))[0]
+    ).toBeInTheDocument();
     expect(screen.getAllByText('lock')[0]).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Sort by Total Cells' })).toBeInTheDocument();
+    const sort = screen.getByRole('combobox', { name: 'Sort scripts' });
+    for (const option of ['CKB in their cells', 'Occupied CKB', 'Live cells', 'Cells ever', 'Name'])
+      expect(within(sort).getByRole('option', { name: option })).toBeInTheDocument();
     expect(screen.queryByText('Deployed')).toBeNull();
     expect(screen.queryByRole('link', { name: '#0' })).toBeNull();
     expect(screen.queryByRole('link', { name: '#100' })).toBeNull();
-    expect(screen.getByText('Capacity (CKB)')).toBeInTheDocument();
     expect(screen.queryByText('Utilization Ratio')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
   });
 
   it('shows deprecated badge for deprecated known scripts', async () => {
@@ -169,24 +166,17 @@ describe('ScriptsPage', () => {
       expect(screen.getAllByRole('link', { name: 'PW Lock' }).length).toBeGreaterThan(0);
     });
 
-    expect(screen.getAllByText('Deprecated').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('deprecated').length).toBeGreaterThan(0);
   });
 
-  it('supports sorting by common knowledge size', async () => {
-    vi.mocked(api.getScripts)
-      .mockResolvedValueOnce(mockScriptsResponse)
-      .mockResolvedValueOnce({
-        ...mockScriptsResponse,
-        data: [mockScriptsResponse.data[1], mockScriptsResponse.data[0]],
-      });
+  it('supports sorting by occupied CKB', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
 
     render(<ScriptsPage />);
 
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Used (CKB)' })).toBeInTheDocument();
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort scripts' }), {
+      target: { value: 'used' },
     });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Used (CKB)' }));
 
     await waitFor(() => {
       expect(api.getScripts).toHaveBeenLastCalledWith(
@@ -197,6 +187,12 @@ describe('ScriptsPage', () => {
         })
       );
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Reverse order' }));
+    await waitFor(() =>
+      expect(api.getScripts).toHaveBeenLastCalledWith(
+        expect.objectContaining({ sortKey: 'used', sortDirection: 'asc' })
+      )
+    );
   });
 
   it('routes Unknown script entries to code-hash detail page', async () => {
@@ -260,10 +256,9 @@ describe('ScriptsPage', () => {
   it('supports sorting by live cells', async () => {
     vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
     render(<ScriptsPage />);
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Sort by Live Cells' })).toBeInTheDocument();
+    fireEvent.change(await screen.findByRole('combobox', { name: 'Sort scripts' }), {
+      target: { value: 'liveCells' },
     });
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by Live Cells' }));
     await waitFor(() => {
       expect(api.getScripts).toHaveBeenLastCalledWith(
         expect.objectContaining({ sortKey: 'liveCells', sortDirection: 'desc' })
