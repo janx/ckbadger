@@ -832,3 +832,149 @@ describe('Address v3', () => {
     ).toBe(holdingsFixture.classes.object.occupiedCapacity);
   });
 });
+
+// F2 blocks: the Address / AddressTxs boards (BA-31 … BA-38, BA-45).
+describe('Address board · F2 blocks', () => {
+  const section = async (name: RegExp) =>
+    (await screen.findByRole('heading', { name })).closest('section') as HTMLElement;
+
+  it('keeps every non-zero balance part visible: 3 px minimum, 2 px gaps, 10 px bar (BA-31)', async () => {
+    render(<AddressDetailPage />);
+    const balance = await screen.findByLabelText('Address capacity partition');
+    const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
+    expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'free', 'DAO free']);
+    for (const part of parts) expect(part.style.minWidth).toBe('3px');
+    expect(parts[0].parentElement).toHaveClass('h-2.5', 'gap-0.5', 'rounded-[5px]');
+    expect(balance).toHaveTextContent('free part of 5 deposits');
+  });
+
+  it('shows a token type hash only beside names that occur twice (BA-32)', async () => {
+    render(<AddressDetailPage />);
+    const tokens = await section(/Tokens$/);
+    await within(tokens).findAllByText('iCKB');
+    const rows = Array.from(tokens.querySelectorAll('[data-token-row]')) as HTMLElement[];
+    expect(rows).toHaveLength(9);
+    const withHash = rows.filter((row) => row.querySelector('[data-type-hash]'));
+    expect(withHash.map((row) => row.dataset.tokenRow)).toEqual([
+      fixtureHash(302),
+      fixtureHash(306),
+    ]);
+  });
+
+  it('marks object compositions with the crystal badges and frames on-chain tiles (BA-33)', async () => {
+    render(<AddressDetailPage />);
+    const objects = await section(/Objects$/);
+    await within(objects).findAllByRole('link', { name: /Object|拯救民主/ });
+    expect(
+      objects.querySelector('[data-composition="btc_ckb"] [data-composition-mark]')
+    ).not.toBeNull();
+    expect(
+      objects.querySelector('[data-composition="pure_ckb"] [data-composition-mark]')
+    ).not.toBeNull();
+    expect(objects.querySelector('[data-composition="centralized_mixture"]')).toHaveTextContent(
+      'Centralized mix'
+    );
+  });
+
+  it('orders collections by size, deposits by amount and the space bar by share (BA-34)', async () => {
+    vi.mocked(api.getAddressHoldings).mockResolvedValue({
+      ...holdingsFixture,
+      objectCollections: [...holdingsFixture.objectCollections].reverse(),
+    });
+    vi.mocked(api.getAddressCells).mockImplementation(async (_addr, p) =>
+      pageFixture(
+        p?.class === 'identity'
+          ? addressIdentitiesFixture
+          : p?.class === 'dao'
+            ? [...addressDaoCellsFixture].reverse()
+            : addressObjectsFixture,
+        p?.class === 'identity' ? 1 : 14
+      )
+    );
+    render(<AddressDetailPage />);
+    const objects = await section(/Objects$/);
+    await waitFor(() => expect(objects.querySelectorAll('[data-collection-row]').length).toBe(7));
+    expect(
+      Array.from(objects.querySelectorAll('[data-collection-row]')).map(
+        (row) => (row as HTMLElement).dataset.collectionRow
+      )
+    ).toEqual([
+      '拯救民主',
+      'Nervape',
+      'Nervape Mouth',
+      'Unicorn',
+      'Lightning Explorer Badge',
+      'Lightning Pioneer Badge',
+      'SOUL Dragon Eggs',
+    ]);
+    const dao = await section(/Nervos DAO deposits$/);
+    await waitFor(() => expect(dao.querySelectorAll('[data-dao-cell]').length).toBe(5));
+    expect(
+      Array.from(dao.querySelectorAll('[data-dao-cell] [data-ckb-amount]')).map(
+        (amount) => amount.textContent?.match(/^([\d,]+)\.0+ CKB$/)?.[1]
+      )
+    ).toEqual(['5,240,000', '3,500,000', '600,000', '200,000', '50,000']);
+    expect(
+      Array.from(document.querySelectorAll('[data-space-class]')).map(
+        (bar) => (bar as HTMLElement).dataset.spaceClass
+      )
+    ).toEqual(['object', 'token', 'dao', 'identity', 'script', 'plain']);
+  });
+
+  it('dates activity rows instead of "ago" (BA-35)', async () => {
+    render(<AddressDetailPage />);
+    const history = await screen.findByRole('region', { name: 'History' });
+    const evidence = await waitFor(() => {
+      const e = history.querySelector('[data-role="evidence"]');
+      expect(e).not.toBeNull();
+      return e as HTMLElement;
+    });
+    expect(evidence).toHaveTextContent(/^#18,672,923 · 0x.+ · 2026-02-21$/);
+    expect(evidence).not.toHaveTextContent('ago');
+  });
+
+  it('marks the Scripts column by class with display names, and dates the Block column (BA-36)', async () => {
+    vi.mocked(api.getAddressTransactions).mockResolvedValue(
+      pageFixture(
+        [{ ...addressTransactionsFixture[0], scriptLabels: ['NervosDAO', 'xUDT', 'Spore'] }],
+        1021
+      )
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    await tab('Transactions');
+    const table = await screen.findByRole('table', { name: 'Address transactions' });
+    expect(within(table).getByRole('columnheader', { name: 'Block · date' })).toBeInTheDocument();
+    const scripts = within(table).getAllByRole('cell').at(-1)!;
+    expect(scripts).toHaveTextContent('Nervos DAOxUDTSpore');
+    expect(
+      Array.from(scripts.querySelectorAll('[data-class]')).map((m) => m.getAttribute('data-class'))
+    ).toEqual(['dao', 'tokens', 'objects']);
+    expect(table).toHaveTextContent('2026-02-21');
+    expect(table).not.toHaveTextContent(/ago/);
+  });
+
+  it('names the DAO block "Nervos DAO deposits" and its first figure "Deposited" (BA-37)', async () => {
+    render(<AddressDetailPage />);
+    const dao = await section(/Nervos DAO deposits$/);
+    expect(within(dao).getAllByRole('term')[0]).toHaveTextContent('Deposited');
+  });
+
+  it('names the lock code and offers JSON and Markdown in the Lock script section (BA-38)', async () => {
+    render(<AddressDetailPage />);
+    const lock = await section(/^Lock script/);
+    expect(lock).toHaveTextContent(/code hash0x0+64 · JoyID/);
+    expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(
+      `/mainnet/address/${addressText}.md`
+    );
+    expect(within(lock).getByRole('link', { name: 'JSON' }).getAttribute('href')).toMatch(
+      new RegExp(`/addresses/${addressText}$`)
+    );
+  });
+
+  it('writes "1 cell" for a single identity cell (BA-45)', async () => {
+    render(<AddressDetailPage />);
+    const identities = await section(/Identities$/);
+    expect(identities).toHaveTextContent(/1 cell · 227\.99993047 CKB held/);
+  });
+});

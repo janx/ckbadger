@@ -74,6 +74,19 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
     );
   if (uncle.canonicalAtHeight.hash.toLowerCase() === uncle.hash.toLowerCase())
     throw new Error(`${context}: the uncle hash is the canonical block at its height`);
+  // R10: the API says whether the canonical block at this height shares the uncle's parent.
+  if ((uncle.sameParentAs === null) !== (uncle.msAfterSibling === null))
+    throw new Error(`${context}: sibling facts disagree (sameParentAs vs msAfterSibling)`);
+  if (uncle.sameParentAs !== null && uncle.sameParentAs !== uncle.canonicalAtHeight.number)
+    throw new Error(
+      `${context}: sibling ${formatBlockNumber(uncle.sameParentAs)} is not the canonical block at its height`
+    );
+  const delay =
+    uncle.msAfterSibling === null
+      ? null
+      : uncle.msAfterSibling >= 0
+        ? `${uncle.msAfterSibling.toLocaleString('en-US')} ms after`
+        : `${(-uncle.msAfterSibling).toLocaleString('en-US')} ms before`;
   const dao = decodeDaoHeader(uncle.dao.raw, context);
   const epoch = formatEpochPosition({
     number: uncle.epochNumber,
@@ -122,6 +135,9 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
               <span className="text-text-dim block text-[11px]">
                 {formatTimeAgo(uncle.timestamp)}
               </span>
+              {delay && (
+                <span className="text-text-dim block text-[11px]">{delay} its sibling</span>
+              )}
             </>
           ),
         },
@@ -183,12 +199,26 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         <Link href={`/blocks/${uncle.canonicalAtHeight.hash}`}>
           <Hash hash={uncle.canonicalAtHeight.hash} copyable={false} />
         </Link>
-        . It was mined on parent{' '}
-        <Link href={`/blocks/${uncle.parentHash}`}>
-          <Hash hash={uncle.parentHash} copyable={false} />
-        </Link>{' '}
-        at {formatUtc8DateTime(uncle.timestamp)} and is not part of the canonical chain: its
-        transactions never ran, but the proposals it carried count toward the proposal window.
+        {delay ? (
+          <>
+            , its sibling: both were mined on parent{' '}
+            <Link href={`/blocks/${uncle.parentHash}`}>
+              {formatBlockNumber(uncle.number - 1)}{' '}
+              <Hash hash={uncle.parentHash} copyable={false} />
+            </Link>
+            , and this uncle came {delay} it.
+          </>
+        ) : (
+          <>
+            , which has another parent; this uncle was mined on parent{' '}
+            <Link href={`/blocks/${uncle.parentHash}`}>
+              <Hash hash={uncle.parentHash} copyable={false} />
+            </Link>
+            .
+          </>
+        )}{' '}
+        It is not part of the canonical chain: its transactions never ran, but the proposals it
+        carried count toward the proposal window.
       </p>
     </DetailLayout>
   );

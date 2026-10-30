@@ -36,6 +36,15 @@ const SECTION_TYPES: Record<number, string> = {
   0x70000003: 'RISCV_ATTRIBUTES',
 };
 
+/** ELF header `e_type` names (group scripts, SC-K4). */
+const OBJECT_TYPES: Record<number, string> = {
+  0: 'NONE',
+  1: 'REL',
+  2: 'EXEC',
+  3: 'DYN',
+  4: 'CORE',
+};
+
 const MACHINES: Record<number, string> = {
   243: 'RISC-V',
 };
@@ -54,4 +63,8 @@ export function elfProgramTypeLabel(kind: number): string {
 
 export function elfSectionTypeLabel(kind: number): string {
   return namedOrHex(SECTION_TYPES, kind);
+}
+
+export function elfTypeLabel(kind: number): string {
+  return `${kind} = ${namedOrHex(OBJECT_TYPES, kind)}`;
 }

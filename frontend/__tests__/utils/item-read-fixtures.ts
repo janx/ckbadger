@@ -38,6 +38,7 @@ export function identityItem(
     name: kind === 'did' ? 'did:ckb:ceirceirceirceirceirceirceirceir' : 'alice.bit',
     standard: kind === 'did' ? 'did_ckb' : kind === 'bit-cell' ? 'bit_cell' : 'dotbit',
     ownerLockHash: v.cell.ownerLockHash,
+    ownerAddress: v.cell.ownerAddress,
     isLive: v.cell.isLive,
     createdAtBlock: v.cell.blockNumber,
     txHash: v.cell.txHash,

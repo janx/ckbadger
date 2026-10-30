@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
@@ -168,6 +168,29 @@ const mockScriptFamilyDetail = {
       ],
     },
   ],
+  // /scripts/{name} always carries the family's registered references, classes and history.
+  references: [
+    {
+      referenceHash: sharedVersionCodeHash,
+      hashType: 'type',
+      liveCellsCount: 7,
+      cellsCount: 8,
+      ownedCapacitySum: '9000000000',
+      ownedKnowledgeSum: '5490000000',
+      currentVersionHash: sharedVersionCodeHash,
+    },
+    {
+      referenceHash: sharedObservedData1Reference,
+      hashType: 'data1',
+      liveCellsCount: 1,
+      cellsCount: 2,
+      ownedCapacitySum: '1000000000',
+      ownedKnowledgeSum: '610000000',
+      currentVersionHash: sharedVersionCodeHash,
+    },
+  ],
+  codeClasses: [],
+  history: [],
 };
 
 const mockUsage = {
@@ -428,7 +451,7 @@ describe('ScriptDetailPage', () => {
     });
   });
 
-  it('uses the flat board with capacity first and code versions after the developer gap', async () => {
+  it('follows the board order: History, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
@@ -436,19 +459,19 @@ describe('ScriptDetailPage', () => {
     const tier1 = document.querySelector('[data-tier="1"]')!;
     const tier2 = document.querySelector('[data-tier="2"]')!;
     expect(
-      within(tier1 as HTMLElement).getByRole('heading', { name: 'Capacity history' })
+      within(tier1 as HTMLElement).getByRole('heading', { name: 'History' })
     ).toBeInTheDocument();
     expect(
-      within(tier2 as HTMLElement).getByRole('heading', { name: 'Code versions' })
+      within(tier1 as HTMLElement).getByRole('heading', { name: 'Code versions' })
     ).toBeInTheDocument();
     expect(
-      within(tier2 as HTMLElement).getByRole('heading', { name: 'Code cell deployments' })
+      within(tier1 as HTMLElement).getByRole('heading', { name: 'Its cells' })
     ).toBeInTheDocument();
     expect(
-      within(tier2 as HTMLElement).getByRole('heading', { name: 'Its cells' })
+      within(tier2 as HTMLElement).getByRole('heading', { name: 'Registered references' })
     ).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Code versions' })).toBeInTheDocument();
-    expect(screen.getByRole('table', { name: 'Code cell deployments' })).toBeInTheDocument();
+    expect(screen.queryByRole('table', { name: 'Code cell deployments' })).toBeNull();
     expect(screen.queryByTestId('script-versions-panel')).toBeNull();
   });
 
@@ -456,9 +479,6 @@ describe('ScriptDetailPage', () => {
     setViewportWidth(390);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('list', { name: 'Code versions, compact' })).toBeInTheDocument();
-    expect(
-      screen.getByRole('list', { name: 'Code cell deployments, compact' })
-    ).toBeInTheDocument();
     expect(await screen.findByRole('list', { name: 'Its cells, compact' })).toBeInTheDocument();
     expect(document.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
   });
@@ -568,13 +588,11 @@ describe('ScriptDetailPage', () => {
       versionsCount: 1,
     } as any);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    expect(await screen.findByRole('table', { name: 'Code versions' })).toBeInTheDocument();
-    expect(
-      within(screen.getByRole('table', { name: 'Code versions' })).getByRole('button', {
-        name: sharedVersionCodeHash,
-      })
-    ).toBeInTheDocument();
-    expect(screen.getByText('No deployments observed for this code version')).toBeInTheDocument();
+    const table = await screen.findByRole('table', { name: 'Code versions' });
+    const row = within(table).getAllByRole('row')[1];
+    expect(row).toHaveTextContent('v1');
+    expect(row).toHaveTextContent(sharedVersionCodeHash);
+    expect(row).toHaveTextContent('No deployment observed');
   });
 
   it('shows failed version usage as unavailable, never zero', async () => {
@@ -612,16 +630,23 @@ describe('ScriptDetailPage', () => {
     ).toBe(true);
   });
 
-  it('uses selected version usage as the cells total and exposes owner/type anatomy', async () => {
+  it('lists the cells of every registered reference against the family total (SC-S10)', async () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     const cells = await screen.findByRole('table', { name: 'Its cells' });
     expect(within(cells).getByText('Owner')).toBeInTheDocument();
-    expect(within(cells).getByText('Type reference')).toBeInTheDocument();
+    expect(within(cells).getByText('Also guarded by')).toBeInTheDocument();
     expect(within(cells).getByText('Occupied')).toBeInTheDocument();
-    await waitFor(() => expect(document.body.textContent).toMatch(/of 7\s*cells/));
+    await waitFor(() => expect(document.body.textContent).toMatch(/of 8\s*cells/));
+    for (const [codeHash, hashType] of [
+      [sharedVersionCodeHash, 'type'],
+      [sharedObservedData1Reference, 'data1'],
+    ])
+      expect(api.getCellsByScriptRef).toHaveBeenCalledWith(
+        expect.objectContaining({ codeHash, hashType, scriptKind: 'lock' })
+      );
   });
 
-  it('shows a true zero-usage version as having no live cells', async () => {
+  it('says so when no live cell uses the script', async () => {
     vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
       data: [],
       total: 0,
@@ -629,18 +654,8 @@ describe('ScriptDetailPage', () => {
       hasMore: false,
       nextCursor: null,
     });
-    vi.mocked(api.getScriptUsage).mockResolvedValue({
-      ...mockUsage,
-      byDeployment: mockUsage.byDeployment.map((d) =>
-        d.codeHash === sharedVersionCodeHash
-          ? { ...d, liveCellsCount: 0, ownedCapacitySum: '0', ownedKnowledgeSum: '0' }
-          : d
-      ),
-    });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const table = await screen.findByRole('table', { name: 'Code versions' });
-    fireEvent.click(within(table).getByRole('button', { name: sharedVersionCodeHash }));
-    expect(await screen.findByText('No live cells currently use this version')).toBeInTheDocument();
+    expect(await screen.findByText('No live cells use SECP256K1_BLAKE160')).toBeInTheDocument();
   });
 
   it('retains failed selected usage as an error in version rows', async () => {

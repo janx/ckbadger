@@ -104,10 +104,12 @@ describe('NetworkClientPage', () => {
 
     const { container } = render(<NetworkClientPage />, { wrapper: createWrapper() });
 
-    expect(await screen.findByText('Advertised candidates')).toBeInTheDocument();
-    expect(screen.getByText('Same-network reachable')).toBeInTheDocument();
-    expect(screen.getByText('Verified retained')).toBeInTheDocument();
-    expect(screen.getAllByText('Verified unavailable').length).toBeGreaterThan(0);
+    // F2 charts (CH-53): the board's four figures replace the tracked-capital stat blocks.
+    expect(await screen.findByText('Reachable now')).toBeInTheDocument();
+    expect(screen.getByText('Verified before, not now')).toBeInTheDocument();
+    expect(screen.getByText('Heard of')).toBeInTheDocument();
+    expect(screen.getByText('Latest round')).toBeInTheDocument();
+    expect(screen.queryByText('Verified unavailable')).not.toBeInTheDocument();
     expect(screen.queryByText('Total Known')).not.toBeInTheDocument();
     expect(screen.queryByText('Failed Peer Candidates')).not.toBeInTheDocument();
     expect(screen.queryByText(/crawling/i)).not.toBeInTheDocument();

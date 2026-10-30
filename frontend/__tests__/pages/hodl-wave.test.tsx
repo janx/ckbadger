@@ -55,9 +55,10 @@ describe('HodlWavePage', () => {
     vi.mocked(api.getHodlWaveChart).mockResolvedValue(response);
     render(<HodlWavePage />);
     expect(await screen.findByText('HODL wave')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /All charts/ })).toHaveAttribute(
+    // F2 charts (CH-26): a breadcrumb to the chart's own section replaces "← All charts".
+    expect(screen.getByRole('link', { name: 'Charts / Activity' })).toHaveAttribute(
       'href',
-      '/mainnet/charts'
+      '/mainnet/charts#activity'
     );
     await waitFor(() => expect(chartMock).toHaveBeenCalledTimes(2));
     const [ages, holders] = chartMock.mock.calls.map(([props]) => props);

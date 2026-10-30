@@ -9,7 +9,14 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { ExactCkb } from '@/components/activity-event-row';
-import { BlockContents, ResourceBar, resourceScale } from '@/components/blocks/block-visual';
+import {
+  BlockContents,
+  BlocksLimitsFootnote,
+  ResourceBar,
+  ScaleHeader,
+  resourceScale,
+} from '@/components/blocks/block-visual';
+import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
@@ -74,18 +81,19 @@ export default function BlocksPage() {
     {
       key: 'miner',
       label: 'Miner',
-      minWidth: 136,
+      minWidth: 168,
+      className: 'whitespace-nowrap',
       render: (block) =>
         block.minerAddress ? (
-          <Address address={block.minerAddress} />
+          <Address address={block.minerAddress} startChars={10} endChars={6} className="text-xs" />
         ) : (
           <span className="text-text-dim">Genesis</span>
         ),
     },
     {
       key: 'reward',
-      label: 'Reward',
-      minWidth: 165,
+      label: 'Reward, CKB',
+      minWidth: 150,
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
@@ -106,27 +114,30 @@ export default function BlocksPage() {
             shannons={parseShannons(block.miningReward, `block ${block.number} reward`)}
             signed={false}
             tone="plain"
+            unit={false}
           />
         ),
     },
     {
       key: 'fees',
-      label: 'Fees',
-      minWidth: 150,
+      label: 'Fees, CKB',
+      minWidth: 130,
       numeric: true,
       render: (block) => (
         <ExactCkb
           shannons={parseShannons(block.totalFees, `block ${block.number} fees`)}
           signed={false}
           tone="plain"
+          unit={false}
         />
       ),
     },
     {
       key: 'size',
       label: 'Size, bytes',
-      minWidth: 155,
-      numeric: true,
+      header: <ScaleHeader label="Size, bytes" scale={sizeScale} />,
+      minWidth: 190,
+      className: 'whitespace-nowrap',
       render: (block) => (
         <ResourceBar
           label="Size, bytes"
@@ -139,8 +150,9 @@ export default function BlocksPage() {
     {
       key: 'cycles',
       label: 'Cycles',
-      minWidth: 180,
-      numeric: true,
+      header: <ScaleHeader label="Cycles" scale={cyclesScale} />,
+      minWidth: 215,
+      className: 'whitespace-nowrap',
       render: (block) =>
         block.cycles === null ? (
           <span className="text-text-dim">
@@ -155,23 +167,7 @@ export default function BlocksPage() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto min-w-0 px-4 py-8">
-        <DetailLayout
-          title="Blocks"
-          kind="index"
-          actions={
-            <p className="text-text-dim flex flex-wrap gap-4 text-[11px]">
-              <span>
-                <span className="text-jade">◆</span> cellbase
-              </span>
-              <span>
-                <span className="text-jade">■</span> transaction · area ∝ bytes
-              </span>
-              <span>
-                <span className="text-gold">●</span> proposal
-              </span>
-            </p>
-          }
-        >
+        <DetailLayout title="Blocks" kind="index" actions={<BlocksLegend />}>
           {isLoading && (
             <p role="status" className="text-text-dim">
               Loading blocks…
@@ -191,20 +187,65 @@ export default function BlocksPage() {
                 rowKey={(block) => block.hash}
                 empty="No blocks indexed."
               />
+              <BlocksLimitsFootnote blocks={data.data} />
               <CursorPagination
-                total={data.total}
-                totalLabel="blocks"
-                pageSize={limit}
-                page={page}
+                summary={blocksRange(data.data, data.total, page)}
                 hasMore={data.hasMore}
                 hasPrevious={hasPrevious}
                 onNext={() => goToNext(data.nextCursor)}
                 onPrevious={goToPrevious}
+                previousLabel="Newer"
+                nextLabel="Older →"
               />
             </>
           )}
         </DetailLayout>
       </main>
+    </div>
+  );
+}
+
+/** Newest first: page one is "50 newest of N"; later pages name their first and last heights. */
+function blocksRange(blocks: readonly Block[], total: number | undefined, page: number): string {
+  if (total === undefined) throw new Error('Blocks list response has no total');
+  const of = total.toLocaleString('en-US');
+  if (!blocks.length) return `0 of ${of}`;
+  if (page === 1) return `${blocks.length.toLocaleString('en-US')} newest of ${of}`;
+  return `${formatBlockNumber(blocks[0].number)} to ${formatBlockNumber(blocks[blocks.length - 1].number)} of ${of}`;
+}
+
+/** The Blocks v3 legend: the glyph grammar and the two-part size bar. */
+function BlocksLegend() {
+  return (
+    <div
+      aria-label="Legend"
+      className="text-text-dim flex flex-wrap items-center gap-x-[18px] gap-y-1.5 text-xs"
+    >
+      <span className="flex items-center gap-1.5">
+        <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10">
+          <path d="M5 .5 9.5 5 5 9.5.5 5z" fill={DATA_COLOR} />
+        </svg>
+        cellbase
+      </span>
+      <span className="flex items-center gap-1.5">
+        <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10">
+          <rect x="1" y="1" width="8" height="8" fill={DATA_COLOR} fillOpacity="0.8" />
+        </svg>
+        transaction, area ∝ bytes
+      </span>
+      <span className="flex items-center gap-1.5">
+        <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10">
+          <circle cx="5" cy="5" r="2.4" fill={CLASS_COLORS.dao} />
+        </svg>
+        proposal
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden="true" className="flex h-2 w-[18px] overflow-hidden rounded-sm">
+          <span className="w-2" style={{ backgroundColor: CLASS_COLORS.ckb }} />
+          <span className="flex-1" style={{ backgroundColor: DATA_COLOR }} />
+        </span>
+        block overhead · user transactions
+      </span>
     </div>
   );
 }

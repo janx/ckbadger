@@ -46,7 +46,12 @@ describe('SecondaryIssuancePage', () => {
       data: [
         { label: '2026-02-23', values: { mining: '60.00000001', compensation: '29', burnt: '10' } },
       ],
-      series: [{ label: 'Deposit Compensation' }, { label: 'Mining Reward' }, { label: 'Burnt' }],
+      // F2 charts: board order and class colours, miners jade not violet (CH-06).
+      series: [
+        { label: 'Burnt', color: '#3a4258' },
+        { label: 'DAO compensation', color: '#f2c55c' },
+        { label: 'Miners', color: '#2edba3' },
+      ],
     });
     const values = (
       chartMock.mock.calls[0][0] as unknown as { data: { values: Record<string, string> }[] }

@@ -135,10 +135,13 @@ describe('ActivitiesStreamExplorer', () => {
       />
     );
     expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All100');
-    expect(screen.getByRole('button', { name: 'Token' })).toHaveTextContent('Token0');
-    expect(screen.getByRole('button', { name: 'DAO' })).toHaveTextContent('DAO6 actions');
-    expect(screen.getByRole('button', { name: 'Protocol' })).toHaveTextContent(/^Protocol$/);
-    expect(await screen.findByText('No activities yet')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('Tokens0');
+    expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent('Nervos DAO6');
+    expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Protocols' })).toHaveTextContent(/^Protocols$/);
+    expect(
+      await screen.findByText('Nothing of this kind in the latest activities.')
+    ).toBeInTheDocument();
   });
 
   it('loads older pages on intersection and resets the stream on filter change', async () => {
@@ -267,7 +270,7 @@ describe('ActivitiesStreamExplorer', () => {
     });
     expect(await screen.findByText(exactAmount('+2.00000000 CKB'))).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Token' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Tokens' }));
 
     await waitFor(() => {
       expect(api.getGlobalActivities).toHaveBeenCalledWith(
@@ -288,8 +291,9 @@ describe('ActivitiesStreamExplorer', () => {
 
     render(<ActivitiesStreamExplorer />);
 
-    expect(await screen.findByText('No activities yet')).toBeInTheDocument();
-    expect(screen.getByText('No activity matches this filter.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Nothing of this kind in the latest activities.')
+    ).toBeInTheDocument();
   });
 
   it('renders each activity row with tx hash, event rows, and participant lines', async () => {
@@ -378,7 +382,9 @@ describe('ActivitiesStreamExplorer', () => {
         limit: DEFAULT_PAGE_SIZE,
       });
     });
-    expect(screen.queryByText('No activities yet')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Nothing of this kind in the latest activities.')
+    ).not.toBeInTheDocument();
   });
 
   it('shows an unreadable DAO step as an error in its row, naming the tx, and keeps the others', async () => {
@@ -592,9 +598,8 @@ describe('ActivitiesStreamExplorer', () => {
     fireEvent.click(banner);
 
     await waitFor(() => {
-      expect(screen.getByTestId('activities-stream-toolbar').textContent).toContain(
-        `${DEFAULT_PAGE_SIZE + 2}`
-      );
+      // Every buffered row is shown once merged (the toolbar no longer counts rows, TX-30).
+      expect(document.querySelectorAll('[data-feed-row]')).toHaveLength(DEFAULT_PAGE_SIZE + 2);
     });
     expect(screen.getAllByText('#980').length).toBeGreaterThan(0);
   });

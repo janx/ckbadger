@@ -13,6 +13,8 @@ const paramsIdRef = vi.hoisted(() => ({ current: '8775638' }));
 vi.mock('@/lib/api', () => ({
   api: {
     getBlock: vi.fn(),
+    getBlocks: vi.fn(),
+    getBlockUncle: vi.fn(),
     getTransactions: vi.fn(),
     getBlockFeeStats: vi.fn(),
     getBlockProposals: vi.fn(),
@@ -73,6 +75,14 @@ describe('BlockDetailPage', () => {
     pushMock.mockReset();
     paramsIdRef.current = BLOCK_ID;
     vi.mocked(api.getBlock).mockResolvedValue(mockBlock);
+    // F2 blocks: the blocks list around the block (neighbour tiles, the bars' list scale).
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      data: [mockBlock],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getBlockUncle).mockRejectedValue(new Error('no uncle detail in this fixture'));
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [],
       limit: 100,
@@ -220,7 +230,7 @@ describe('BlockDetailPage', () => {
     render(<BlockDetailPage />);
 
     await waitFor(() => {
-      expect(screen.getByText('Block #8,775,638')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^#8,775,638$/);
     });
 
     expect(screen.queryByText(/HARDFORK ACTIVATION/i)).not.toBeInTheDocument();
@@ -319,7 +329,7 @@ describe('BlockDetailPage', () => {
     ]);
 
     render(<BlockDetailPage />);
-    await screen.findByText('Proposals (2)');
+    await screen.findByRole('heading', { name: 'Proposals' });
 
     const uncleRow = (await screen.findByText('0xaabbccddeeff00112233')).closest(
       '[data-testid="block-proposal-row"]'
@@ -353,7 +363,7 @@ describe('BlockDetailPage', () => {
     ]);
 
     render(<BlockDetailPage />);
-    await screen.findByText('Proposals (0)');
+    await screen.findByRole('heading', { name: 'Proposals' });
 
     const row = (await screen.findByText('0xaabbccddeeff00112233')).closest(
       '[data-testid="block-proposal-row"]'
@@ -366,7 +376,9 @@ describe('BlockDetailPage', () => {
     vi.mocked(api.getBlock).mockResolvedValue({ ...mockBlock, unclesCount: 1, uncles: [carrier] });
     vi.mocked(api.getBlockProposals).mockResolvedValue([]);
     render(<BlockDetailPage />);
-    const uncles = (await screen.findByText('Uncles (1)')).closest('section') as HTMLElement;
+    const uncles = (await screen.findByRole('heading', { name: 'Uncles' })).closest(
+      'section'
+    ) as HTMLElement;
     expect(within(uncles).getByRole('link', { name: /#8,775,637/ })).toHaveAttribute(
       'href',
       `/mainnet/blocks/${mockBlock.number}/uncles/0`
@@ -398,7 +410,7 @@ describe('BlockDetailPage', () => {
     vi.mocked(api.getBlockProposals).mockResolvedValue([]);
 
     render(<BlockDetailPage />);
-    await screen.findByText('Proposals (0)');
+    await screen.findByRole('heading', { name: 'Proposals' });
 
     expect(await screen.findByText('No proposals in this block')).toBeInTheDocument();
     expect(screen.queryByText('Loading proposals...')).not.toBeInTheDocument();
@@ -411,7 +423,7 @@ describe('BlockDetailPage', () => {
     );
 
     render(<BlockDetailPage />);
-    await screen.findByText('Proposals (3)');
+    await screen.findByRole('heading', { name: 'Proposals' });
 
     const row = await screen.findByTestId('block-proposals-error');
     expect(row).toHaveTextContent('ckb_db_path');
@@ -437,7 +449,7 @@ describe('BlockDetailPage', () => {
 
   it('shows block activities first and puts exact developer evidence below the shared tier boundary', async () => {
     render(<BlockDetailPage />);
-    expect(await screen.findByRole('button', { name: 'Activities' })).toHaveAttribute(
+    expect(await screen.findByRole('button', { name: /^Activities/ })).toHaveAttribute(
       'aria-pressed',
       'true'
     );
@@ -449,11 +461,15 @@ describe('BlockDetailPage', () => {
     expect(screen.getByText(/0.20% of 597,000/)).toBeInTheDocument();
     expect(screen.getByText('ckb 0.210.0')).toBeInTheDocument();
     expect(screen.getByText(/10 s after its parent/)).toBeInTheDocument();
-    expect(screen.getByText('Block evidence').closest('[data-tier="2"]')).toHaveClass('mt-[72px]');
+    expect(screen.getByTestId('block-tier2-facts').closest('[data-tier="2"]')).toHaveClass(
+      'mt-[72px]'
+    );
     expect(
-      screen.getByRole('img', { name: 'Size, bytes: 1,200, 974 overhead, 226 user transactions' })
+      await screen.findByRole('img', {
+        name: 'Size, bytes: 1,200, 974 overhead, 226 user transactions',
+      })
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Transactions (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Transactions/ }));
     expect(
       await screen.findByRole('table', { name: 'Transactions in this block' })
     ).toBeInTheDocument();

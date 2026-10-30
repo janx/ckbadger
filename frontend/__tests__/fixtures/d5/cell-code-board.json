@@ -1,0 +1,503 @@
+{
+  "txHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+  "outputIndex": 0,
+  "capacity": "10043800000000",
+  "commonKnowledgeSize": "10043800000000",
+  "commonKnowledgeSizeBreakdown": {
+    "capacityFieldBytes": 8,
+    "lockScriptBytes": 53,
+    "typeScriptBytes": 65,
+    "dataBytes": 100312,
+    "totalBytes": 100438
+  },
+  "lockScriptHash": "0x02e3dbc290f45cc0cadea20c58e50ce496df173f67819e8d4bf77d885454bc1c",
+  "address": "ckb1qpw9q60tppt7l3j7r09qcp7lxnp3vcanvgha8pmvsa3jplykxn32sqvctyreatest0ycs0zx",
+  "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+  "typeCodeHash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+  "typeHashType": "type",
+  "dataSize": 100312,
+  "createdAtBlock": 17894900,
+  "createdTimestamp": "2025-11-21T12:12:59.076+00:00",
+  "status": "live",
+  "liveAgeMs": 29253259101,
+  "liveAgeAtBlock": 20835251,
+  "lock": {
+    "codeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+    "hashType": "type",
+    "args": "0x65983f1d7520543a6f182a50354fb4ae2deed696"
+  },
+  "type": {
+    "codeHash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+    "hashType": "type",
+    "args": "0x2d1f2d4d1514ccc3bb4f04f5437a5ae30d00636ee57cedd2c70ab3ea75b62adc"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": null
+  },
+  "cellOutputMolecule": {
+    "bytes": "0xb60000001000000018000000610000000096218122090000490000001000000030000000310000005c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8011400000065983f1d7520543a6f182a50354fb4ae2deed6965500000010000000300000003100000000000000000000000000000000000000000000000000000000545950455f494401200000002d1f2d4d1514ccc3bb4f04f5437a5ae30d00636ee57cedd2c70ab3ea75b62adc",
+    "fields": [
+      {
+        "label": "total_size",
+        "start": 0,
+        "end": 4,
+        "occupied": false
+      },
+      {
+        "label": "offset_capacity",
+        "start": 4,
+        "end": 8,
+        "occupied": false
+      },
+      {
+        "label": "offset_lock",
+        "start": 8,
+        "end": 12,
+        "occupied": false
+      },
+      {
+        "label": "offset_type",
+        "start": 12,
+        "end": 16,
+        "occupied": false
+      },
+      {
+        "label": "capacity",
+        "start": 16,
+        "end": 24,
+        "occupied": true
+      },
+      {
+        "label": "lock.total_size",
+        "start": 24,
+        "end": 28,
+        "occupied": false
+      },
+      {
+        "label": "lock.offset_code_hash",
+        "start": 28,
+        "end": 32,
+        "occupied": false
+      },
+      {
+        "label": "lock.offset_hash_type",
+        "start": 32,
+        "end": 36,
+        "occupied": false
+      },
+      {
+        "label": "lock.offset_args",
+        "start": 36,
+        "end": 40,
+        "occupied": false
+      },
+      {
+        "label": "lock.code_hash",
+        "start": 40,
+        "end": 72,
+        "occupied": true
+      },
+      {
+        "label": "lock.hash_type",
+        "start": 72,
+        "end": 73,
+        "occupied": true
+      },
+      {
+        "label": "lock.args_length",
+        "start": 73,
+        "end": 77,
+        "occupied": false
+      },
+      {
+        "label": "lock.args",
+        "start": 77,
+        "end": 97,
+        "occupied": true
+      },
+      {
+        "label": "type.total_size",
+        "start": 97,
+        "end": 101,
+        "occupied": false
+      },
+      {
+        "label": "type.offset_code_hash",
+        "start": 101,
+        "end": 105,
+        "occupied": false
+      },
+      {
+        "label": "type.offset_hash_type",
+        "start": 105,
+        "end": 109,
+        "occupied": false
+      },
+      {
+        "label": "type.offset_args",
+        "start": 109,
+        "end": 113,
+        "occupied": false
+      },
+      {
+        "label": "type.code_hash",
+        "start": 113,
+        "end": 145,
+        "occupied": true
+      },
+      {
+        "label": "type.hash_type",
+        "start": 145,
+        "end": 146,
+        "occupied": true
+      },
+      {
+        "label": "type.args_length",
+        "start": 146,
+        "end": 150,
+        "occupied": false
+      },
+      {
+        "label": "type.args",
+        "start": 150,
+        "end": 182,
+        "occupied": true
+      }
+    ],
+    "lockScriptHash": "0x02e3dbc290f45cc0cadea20c58e50ce496df173f67819e8d4bf77d885454bc1c",
+    "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323"
+  },
+  "elf": {
+    "header": {
+      "class": "ELF64",
+      "endian": "little",
+      "machine": 243,
+      "entry": "77284",
+      "programHeaderOffset": "64",
+      "sectionHeaderOffset": "99544",
+      "flags": 1,
+      "headerSize": 64,
+      "programHeaderEntrySize": 56,
+      "programHeaderCount": 6,
+      "sectionHeaderEntrySize": 64,
+      "sectionHeaderCount": 12,
+      "sectionNameIndex": 11
+    },
+    "programHeaders": [
+      {
+        "index": 0,
+        "kind": 6,
+        "flags": 4,
+        "fileOffset": "64",
+        "fileSize": "336",
+        "virtualAddress": "65600",
+        "memorySize": "336",
+        "alignment": "8"
+      },
+      {
+        "index": 1,
+        "kind": 1,
+        "flags": 4,
+        "fileOffset": "0",
+        "fileSize": "7652",
+        "virtualAddress": "65536",
+        "memorySize": "7652",
+        "alignment": "4096"
+      },
+      {
+        "index": 2,
+        "kind": 1,
+        "flags": 5,
+        "fileOffset": "7652",
+        "fileSize": "91352",
+        "virtualAddress": "77284",
+        "memorySize": "91352",
+        "alignment": "4096"
+      },
+      {
+        "index": 3,
+        "kind": 1,
+        "flags": 6,
+        "fileOffset": "99008",
+        "fileSize": "304",
+        "virtualAddress": "172736",
+        "memorySize": "532785",
+        "alignment": "4096"
+      },
+      {
+        "index": 4,
+        "kind": 1685382481,
+        "flags": 6,
+        "fileOffset": "0",
+        "fileSize": "0",
+        "virtualAddress": "0",
+        "memorySize": "0",
+        "alignment": "0"
+      },
+      {
+        "index": 5,
+        "kind": 1879048195,
+        "flags": 4,
+        "fileOffset": "99399",
+        "fileSize": "43",
+        "virtualAddress": "0",
+        "memorySize": "43",
+        "alignment": "1"
+      }
+    ],
+    "sections": [
+      {
+        "index": 0,
+        "name": "",
+        "kind": 0,
+        "flags": "0",
+        "address": "0",
+        "fileOffset": "0",
+        "fileSize": "0",
+        "memorySize": "0",
+        "alignment": "0"
+      },
+      {
+        "index": 1,
+        "name": ".rodata",
+        "kind": 1,
+        "flags": "18",
+        "address": "65936",
+        "fileOffset": "400",
+        "fileSize": "1840",
+        "memorySize": "1840",
+        "alignment": "16"
+      },
+      {
+        "index": 2,
+        "name": ".eh_frame",
+        "kind": 1,
+        "flags": "2",
+        "address": "67776",
+        "fileOffset": "2240",
+        "fileSize": "5412",
+        "memorySize": "5412",
+        "alignment": "8"
+      },
+      {
+        "index": 3,
+        "name": ".text",
+        "kind": 1,
+        "flags": "6",
+        "address": "77284",
+        "fileOffset": "7652",
+        "fileSize": "91352",
+        "memorySize": "91352",
+        "alignment": "2"
+      },
+      {
+        "index": 4,
+        "name": ".data",
+        "kind": 1,
+        "flags": "3",
+        "address": "172736",
+        "fileOffset": "99008",
+        "fileSize": "184",
+        "memorySize": "184",
+        "alignment": "8"
+      },
+      {
+        "index": 5,
+        "name": ".sdata.DYNSTR.0",
+        "kind": 1,
+        "flags": "3",
+        "address": "172920",
+        "fileOffset": "99192",
+        "fileSize": "8",
+        "memorySize": "8",
+        "alignment": "8"
+      },
+      {
+        "index": 6,
+        "name": ".sdata",
+        "kind": 1,
+        "flags": "3",
+        "address": "172928",
+        "fileOffset": "99200",
+        "fileSize": "112",
+        "memorySize": "112",
+        "alignment": "8"
+      },
+      {
+        "index": 7,
+        "name": ".sbss",
+        "kind": 8,
+        "flags": "3",
+        "address": "173040",
+        "fileOffset": null,
+        "fileSize": null,
+        "memorySize": "1",
+        "alignment": "1"
+      },
+      {
+        "index": 8,
+        "name": ".bss",
+        "kind": 8,
+        "flags": "3",
+        "address": "173041",
+        "fileOffset": null,
+        "fileSize": null,
+        "memorySize": "532480",
+        "alignment": "1"
+      },
+      {
+        "index": 9,
+        "name": ".comment",
+        "kind": 1,
+        "flags": "48",
+        "address": "0",
+        "fileOffset": "99312",
+        "fileSize": "87",
+        "memorySize": "87",
+        "alignment": "1"
+      },
+      {
+        "index": 10,
+        "name": ".riscv.attributes",
+        "kind": 1879048195,
+        "flags": "0",
+        "address": "0",
+        "fileOffset": "99399",
+        "fileSize": "43",
+        "memorySize": "43",
+        "alignment": "1"
+      },
+      {
+        "index": 11,
+        "name": ".shstrtab",
+        "kind": 3,
+        "flags": "0",
+        "address": "0",
+        "fileOffset": "99442",
+        "fileSize": "102",
+        "memorySize": "102",
+        "alignment": "1"
+      }
+    ],
+    "unassignedFileRanges": [
+      {
+        "start": 99004,
+        "end": 99008
+      }
+    ],
+    "comment": "rustc version 1.76.0-nightly (9fad68599 2023-12-03) \u00b7 GCC: () 12.2.0 \u00b7 Linker: LLD 17.0.5",
+    "riscvAttributes": "rv64i2p1_m2p0_a2p1_c2p0"
+  },
+  "codeCell": {
+    "versionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+    "currentReferences": [
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "lockLiveCellsCount": 161049,
+        "typeLiveCellsCount": 0
+      },
+      {
+        "referenceHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "hashType": "data1",
+        "lockLiveCellsCount": 0,
+        "typeLiveCellsCount": 0
+      }
+    ],
+    "typeIdVersions": [
+      {
+        "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "ordinal": 1,
+        "versionHash": "0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c",
+        "codeCellTxHash": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5",
+        "codeCellOutputIndex": 0,
+        "observedAtBlock": 11132140,
+        "reactivation": false,
+        "thisBinary": false
+      },
+      {
+        "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "ordinal": 2,
+        "versionHash": "0x98eaa0a9694cabfe27195b84e1b3f9f602c7eff7141510ca0d9e796612ee7855",
+        "codeCellTxHash": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+        "codeCellOutputIndex": 0,
+        "observedAtBlock": 11133523,
+        "reactivation": false,
+        "thisBinary": false
+      },
+      {
+        "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "ordinal": 3,
+        "versionHash": "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7",
+        "codeCellTxHash": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+        "codeCellOutputIndex": 0,
+        "observedAtBlock": 17117990,
+        "reactivation": false,
+        "thisBinary": false
+      },
+      {
+        "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "ordinal": 4,
+        "versionHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+        "codeCellTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+        "codeCellOutputIndex": 0,
+        "observedAtBlock": 17119035,
+        "reactivation": false,
+        "thisBinary": false
+      },
+      {
+        "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "ordinal": 5,
+        "versionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "codeCellTxHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+        "codeCellOutputIndex": 0,
+        "observedAtBlock": 17894900,
+        "reactivation": false,
+        "thisBinary": true
+      }
+    ],
+    "upgradeCohort": [
+      {
+        "previousTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+        "previousOutputIndex": 0,
+        "currentTxHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+        "currentOutputIndex": 0,
+        "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "previousVersionHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+        "currentVersionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "binaryChanged": true
+      }
+    ]
+  },
+  "codeCellOf": [
+    {
+      "name": "JoyID",
+      "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+      "hashType": "type",
+      "deploymentTypeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+      "deploymentDataHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe"
+    }
+  ],
+  "currentSpendRequirements": [
+    {
+      "kind": "lock",
+      "referenceHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+      "hashType": "type",
+      "resolution": "resolved",
+      "versionHashes": [],
+      "candidateCells": [],
+      "historicalCells": []
+    },
+    {
+      "kind": "type",
+      "referenceHash": "0x00000000000000000000000000000000000000000000000000545950455f4944",
+      "hashType": "type",
+      "resolution": "builtin",
+      "versionHashes": [],
+      "candidateCells": [],
+      "historicalCells": []
+    }
+  ],
+  "isDepGroup": false
+}

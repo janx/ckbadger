@@ -29,6 +29,8 @@ import { useParams } from '@/src/navigation';
 import { POOL_POLL_INTERVAL_MS, poolRefetchInterval } from '@/lib/pool-polling';
 import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { apiBaseFor } from '@/lib/active-network';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
 const activityFilters = [
   ['all', 'All'],
@@ -90,6 +92,7 @@ function AddressIdentity({ value }: { value: string }) {
   );
 }
 function AddressDetailPageContent({ addr }: { addr: string }) {
+  const network = useActiveNetwork();
   const [tab, setTab] = useState<'activities' | 'transactions' | 'cells'>('activities');
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
@@ -207,7 +210,25 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               </span>
             }
             tier2={
-              <DetailSection title="Lock script">
+              <DetailSection
+                title="Lock script"
+                actions={
+                  <span className="text-xs">
+                    {/* F2 blocks (BA-38): the address JSON (its lock script) and this page as Markdown. */}
+                    <a
+                      href={`${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      JSON
+                    </a>
+                    {' · '}
+                    <Link href={`/address/${addr}.md`} target="_blank" rel="noreferrer">
+                      Markdown
+                    </Link>
+                  </span>
+                }
+              >
                 <dl className="grid grid-cols-[90px_minmax(0,1fr)] gap-x-4 gap-y-3 text-xs">
                   {a.lockScript ? (
                     <>
@@ -228,6 +249,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             className="text-xs"
                           />
                         </Link>
+                        {a.lockScriptInfo?.name && (
+                          <span className="text-text-dim"> · {a.lockScriptInfo.name}</span>
+                        )}
                       </dd>
                       <dt className="text-text-dim">hash type</dt>
                       <dd>{a.lockScript.hashType}</dd>

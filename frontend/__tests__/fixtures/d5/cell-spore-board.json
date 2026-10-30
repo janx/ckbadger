@@ -1,0 +1,286 @@
+{
+  "txHash": "0xbe1b9761b6258b002769a0ff356d4b45469d467a08e978604506c2d2df936cd8",
+  "outputIndex": 1,
+  "capacity": "32000000000",
+  "commonKnowledgeSize": "32000000000",
+  "commonKnowledgeSizeBreakdown": {
+    "capacityFieldBytes": 8,
+    "lockScriptBytes": 66,
+    "typeScriptBytes": 65,
+    "dataBytes": 181,
+    "totalBytes": 320
+  },
+  "lockScriptHash": "0x641fef9c93da844a9356cb5080864c5ad1d1a0d310802571b61826ffe40494d8",
+  "address": "ckb1qp3kr4test0shp3hr",
+  "typeScriptHash": "0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998",
+  "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+  "typeHashType": "data1",
+  "dataSize": 181,
+  "createdAtBlock": 20801533,
+  "createdTimestamp": "2026-10-22T14:43:55.651+00:00",
+  "status": "live",
+  "liveAgeMs": 296853730,
+  "liveAgeAtBlock": 20834844,
+  "lock": {
+    "codeHash": "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+    "hashType": "data1",
+    "args": "0x0131dab8f8dba964015894b2ddb55da8faa61479191004f36ccd3b1b204ffd5d74"
+  },
+  "type": {
+    "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+    "hashType": "data1",
+    "args": "0x51c75ad6c509e05ec5933e32093a5b32eeab7fe59dbe9ecc05546306002796f2"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "spore"
+  },
+  "data": "0xb500000010000000190000009100000005000000646f622f30740000007b22646e61223a2261393436313739353333343163393561633664383862336664366635656432613938626337366135656362373064653134323131643764346139313837396530303333333538333033313332333534653464346535363431353033303333333333323330333230303030227d2000000026a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c",
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "spore",
+      "summary": "SporeData",
+      "segments": [
+        {
+          "label": "total_size",
+          "start": 0,
+          "end": 4,
+          "meaning": "SporeData table size",
+          "humanValue": "181"
+        },
+        {
+          "label": "offset_content_type",
+          "start": 4,
+          "end": 8,
+          "meaning": "Offset of content_type",
+          "humanValue": "16"
+        },
+        {
+          "label": "offset_content",
+          "start": 8,
+          "end": 12,
+          "meaning": "Offset of content",
+          "humanValue": "25"
+        },
+        {
+          "label": "offset_cluster_id",
+          "start": 12,
+          "end": 16,
+          "meaning": "Offset of cluster_id",
+          "humanValue": "145"
+        },
+        {
+          "label": "content_type_length",
+          "start": 16,
+          "end": 20,
+          "meaning": "Molecule Bytes length word (u32 LE)",
+          "humanValue": "5"
+        },
+        {
+          "label": "content_type",
+          "start": 20,
+          "end": 25,
+          "meaning": "Spore content MIME type",
+          "humanValue": "dob/0"
+        },
+        {
+          "label": "content_length",
+          "start": 25,
+          "end": 29,
+          "meaning": "Molecule Bytes length word (u32 LE)",
+          "humanValue": "116"
+        },
+        {
+          "label": "content",
+          "start": 29,
+          "end": 145,
+          "meaning": "DOB DNA content",
+          "humanValue": "{\"dna\":\"a94617953341c95ac6d88b3fd6f5ed2a98bc76a5ecb70de14211d7d4a91879e0033358303132354e4d4e5641503033333230320000\"}"
+        },
+        {
+          "label": "cluster_id_length",
+          "start": 145,
+          "end": 149,
+          "meaning": "Molecule Bytes length word (u32 LE)",
+          "humanValue": "32"
+        },
+        {
+          "label": "cluster_id",
+          "start": 149,
+          "end": 181,
+          "meaning": "Spore cluster id",
+          "humanValue": "0x26a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  },
+  "cellOutputMolecule": {
+    "bytes": "0xc300000010000000180000006e0000000040597307000000560000001000000030000000310000006361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f2402210000000131dab8f8dba964015894b2ddb55da8faa61479191004f36ccd3b1b204ffd5d74550000001000000030000000310000004a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5022000000051c75ad6c509e05ec5933e32093a5b32eeab7fe59dbe9ecc05546306002796f2",
+    "fields": [
+      {
+        "label": "total_size",
+        "start": 0,
+        "end": 4,
+        "occupied": false
+      },
+      {
+        "label": "offset_capacity",
+        "start": 4,
+        "end": 8,
+        "occupied": false
+      },
+      {
+        "label": "offset_lock",
+        "start": 8,
+        "end": 12,
+        "occupied": false
+      },
+      {
+        "label": "offset_type",
+        "start": 12,
+        "end": 16,
+        "occupied": false
+      },
+      {
+        "label": "capacity",
+        "start": 16,
+        "end": 24,
+        "occupied": true
+      },
+      {
+        "label": "lock.total_size",
+        "start": 24,
+        "end": 28,
+        "occupied": false
+      },
+      {
+        "label": "lock.offset_code_hash",
+        "start": 28,
+        "end": 32,
+        "occupied": false
+      },
+      {
+        "label": "lock.offset_hash_type",
+        "start": 32,
+        "end": 36,
+        "occupied": false
+      },
+      {
+        "label": "lock.offset_args",
+        "start": 36,
+        "end": 40,
+        "occupied": false
+      },
+      {
+        "label": "lock.code_hash",
+        "start": 40,
+        "end": 72,
+        "occupied": true
+      },
+      {
+        "label": "lock.hash_type",
+        "start": 72,
+        "end": 73,
+        "occupied": true
+      },
+      {
+        "label": "lock.args_length",
+        "start": 73,
+        "end": 77,
+        "occupied": false
+      },
+      {
+        "label": "lock.args",
+        "start": 77,
+        "end": 110,
+        "occupied": true
+      },
+      {
+        "label": "type.total_size",
+        "start": 110,
+        "end": 114,
+        "occupied": false
+      },
+      {
+        "label": "type.offset_code_hash",
+        "start": 114,
+        "end": 118,
+        "occupied": false
+      },
+      {
+        "label": "type.offset_hash_type",
+        "start": 118,
+        "end": 122,
+        "occupied": false
+      },
+      {
+        "label": "type.offset_args",
+        "start": 122,
+        "end": 126,
+        "occupied": false
+      },
+      {
+        "label": "type.code_hash",
+        "start": 126,
+        "end": 158,
+        "occupied": true
+      },
+      {
+        "label": "type.hash_type",
+        "start": 158,
+        "end": 159,
+        "occupied": true
+      },
+      {
+        "label": "type.args_length",
+        "start": 159,
+        "end": 163,
+        "occupied": false
+      },
+      {
+        "label": "type.args",
+        "start": 163,
+        "end": 195,
+        "occupied": true
+      }
+    ],
+    "lockScriptHash": "0x641fef9c93da844a9356cb5080864c5ad1d1a0d310802571b61826ffe40494d8",
+    "typeScriptHash": "0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998"
+  },
+  "currentSpendRequirements": [
+    {
+      "kind": "lock",
+      "referenceHash": "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+      "hashType": "data1",
+      "resolution": "resolved",
+      "versionHashes": ["0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24"],
+      "candidateCells": [
+        {
+          "txHash": "0x5b20ec7d0000000000000000000000000000000000000000000000000000724dc2",
+          "outputIndex": 0,
+          "versionHash": "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+          "live": true
+        }
+      ],
+      "historicalCells": []
+    },
+    {
+      "kind": "type",
+      "referenceHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+      "hashType": "data1",
+      "resolution": "resolved",
+      "versionHashes": ["0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"],
+      "candidateCells": [
+        {
+          "txHash": "0x96b198fb0000000000000000000000000000000000000000000000000000b69824",
+          "outputIndex": 0,
+          "versionHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+          "live": true
+        }
+      ],
+      "historicalCells": []
+    }
+  ],
+  "isDepGroup": false
+}

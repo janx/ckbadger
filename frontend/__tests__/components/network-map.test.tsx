@@ -28,11 +28,14 @@ describe('NetworkMapView', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <NetworkMapView />
+        <NetworkMapView neverVerified={0} />
       </QueryClientProvider>
     );
-    expect(await screen.findByText('0.119.0')).toBeInTheDocument();
-    expect(screen.getByText('AS65000 Ex')).toBeInTheDocument();
+    // F2 charts (CH-51): the panel starts as the legend; a peer's readout follows focus.
+    fireEvent.focus(await screen.findByLabelText('US peer 7065657241, reachable now'));
+    const detail = screen.getByRole('complementary', { name: 'Selected peer evidence' });
+    expect(detail).toHaveTextContent('0.119.0');
+    expect(detail).toHaveTextContent('US · AS65000 Ex');
     expect(screen.getByText(/1 of 2 retained verified peers/)).toHaveTextContent(
       '1 locations are unavailable'
     );
@@ -64,19 +67,20 @@ describe('NetworkMapView', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <NetworkMapView />
+        <NetworkMapView neverVerified={0} />
       </QueryClientProvider>
     );
     const peer = await screen.findByLabelText(
-      'US peer b, verified before but unavailable in last round'
+      'US peer b, verified before, not reachable now, a session with this node in the latest round'
     );
     fireEvent.focus(peer);
     const detail = screen.getByRole('complementary', { name: 'Selected peer evidence' });
     expect(detail).toHaveTextContent('ckb/0.113');
-    expect(detail).toHaveTextContent('verified earlier; unavailable last round');
-    expect(detail).toHaveTextContent('2 retained in round #5');
-    expect(screen.getByRole('list', { name: 'Located peers by country' })).toHaveTextContent(
-      'US 2'
-    );
+    expect(detail).toHaveTextContent('verified before, not reachable now');
+    expect(detail).toHaveTextContent('of 2 peers in round #5');
+    // The country count sits at its cluster on the map (CH-51), not in a list under it.
+    expect(
+      [...document.querySelectorAll('[data-country-label]')].map((node) => node.textContent)
+    ).toEqual(['US 2']);
   });
 });

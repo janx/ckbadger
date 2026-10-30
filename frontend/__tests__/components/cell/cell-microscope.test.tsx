@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { CellMicroscope, dataFields, moleculeFields } from '@/components/cell/cell-microscope';
+import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
 
@@ -8,7 +8,14 @@ const cell = {
   txHash: `0x${'01'.repeat(32)}`,
   outputIndex: 0,
   capacity: '10000000000',
-  commonKnowledgeSize: '6100000000',
+  commonKnowledgeSize: '600000000',
+  commonKnowledgeSizeBreakdown: {
+    capacityFieldBytes: 8,
+    lockScriptBytes: 0,
+    typeScriptBytes: 0,
+    dataBytes: 4,
+    totalBytes: 6,
+  },
   lockScriptHash: `0x${'11'.repeat(32)}`,
   dataSize: 4,
   createdAtBlock: 1,
@@ -36,17 +43,16 @@ const cell = {
 
 describe('cell microscope', () => {
   it('partitions serialized output and fills only unclassified data gaps', () => {
-    expect(moleculeFields(cell).map((field) => [field.offset, field.length])).toEqual([
-      [0, 4],
-      [4, 2],
+    expect(cellOutputParts(cell).map((part) => [part.start, part.end, part.occupied])).toEqual([
+      [0, 4, false],
+      [4, 6, true],
     ]);
-    expect(dataFields(cell).map((field) => [field.label, field.offset, field.length])).toEqual([
+    expect(cellDataParts(cell).map((part) => [part.label, part.start, part.end])).toEqual([
       ['length word', 0, 2],
-      ['Unclassified bytes', 2, 2],
+      ['unclassified bytes', 2, 4],
     ]);
     render(<CellMicroscope cell={cell} />);
     expect(screen.getByLabelText('CellOutput byte map')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'CellData' }));
     expect(screen.getByLabelText('CellData byte map')).toBeInTheDocument();
   });
 
@@ -58,7 +64,19 @@ describe('cell microscope', () => {
         fields: [{ label: 'bad', start: 1, end: 4, occupied: false }],
       },
     } as Cell;
-    expect(() => moleculeFields(broken)).toThrow('does not partition');
+    expect(() => cellOutputParts(broken)).toThrow('does not partition');
+  });
+
+  it('fails visibly when the bytes disagree with the occupied size', () => {
+    render(
+      <CellMicroscope
+        cell={{
+          ...cell,
+          commonKnowledgeSizeBreakdown: { ...cell.commonKnowledgeSizeBreakdown!, totalBytes: 7 },
+        }}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('disagree with its occupied size 7 B');
   });
 });
 
@@ -125,25 +143,34 @@ it('shows NOBITS as memory only and current references as current evidence', () 
     },
   } as Cell;
   render(<CodeCellBoard cell={codeCell} />);
-  expect(screen.getByText('Memory only')).toBeInTheDocument();
-  expect(screen.getByText(/7 live locks/)).toBeInTheDocument();
-  expect(screen.getByText(/actual cell deps/)).toBeInTheDocument();
+  // a data1 reference to another binary is listed with its live users, never as these bytes'
+  expect(screen.getByText(/· 9 live cells/)).toBeInTheDocument();
+  expect(screen.getByTestId('code-by-data-hash')).toHaveTextContent(
+    '0 live cells pin this exact binary'
+  );
 });
 
-it('pages the complete byte stream and jumps to the last ELF file range', () => {
+it('shows long data as excerpts with "⋯ N bytes … show" rows instead of pages (SC-K4)', () => {
   const large = {
     ...cell,
-    data: `0x${'ab'.repeat(1200)}`,
-    dataSize: 1200,
+    capacity: '400200000000',
+    data: `0x${'ab'.repeat(4000)}`,
+    dataSize: 4000,
     dataAnalysis: undefined,
+    commonKnowledgeSizeBreakdown: {
+      ...cell.commonKnowledgeSizeBreakdown!,
+      dataBytes: 4000,
+      totalBytes: 4002,
+    },
   } as Cell;
   render(<CellMicroscope cell={large} />);
-  fireEvent.click(screen.getByRole('button', { name: 'CellData' }));
-  expect(screen.getByText(/page 1\/3/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('button', { name: 'Next bytes' }));
-  fireEvent.click(screen.getByRole('button', { name: 'Next bytes' }));
-  expect(screen.getByText(/1024–1199 of 1200/)).toBeInTheDocument();
-  expect(screen.getByLabelText('CellData byte map')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Next bytes' })).toBeNull();
+  const data = screen.getByLabelText('CellData byte map');
+  expect(data.querySelectorAll('[data-byte^="data:"]')).toHaveLength(768 + 400);
+  expect(data).toHaveTextContent('⋯ 2,832 bytes [768..3,600): unclassified bytes');
+  fireEvent.click(screen.getByRole('button', { name: 'show' }));
+  expect(data.querySelectorAll('[data-byte^="data:"]')).toHaveLength(768 + 1032 + 400);
+  expect(data).toHaveTextContent('⋯ 1,800 bytes [1,800..3,600)');
 });
 
 it('links actual same-transaction Type ID upgrades without treating unchanged bytes as upgrades', () => {

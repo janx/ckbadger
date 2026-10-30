@@ -210,6 +210,11 @@ interface BlockUncle {
   proposalIds: string[];
   includedBy: { number: number; hash: string; index: number };
   canonicalAtHeight: { number: number; hash: string };
+  // F2 blocks (R10, BA-43): the uncle's sibling facts, computed by the API.
+  /** `canonicalAtHeight.number` when that block shares the uncle's parent; otherwise null. */
+  sameParentAs: number | null;
+  /** Uncle timestamp minus its sibling's, in ms (negative if older); null exactly when `sameParentAs` is. */
+  msAfterSibling: number | null;
 }
 
 interface HardforkActivation {
@@ -432,6 +437,21 @@ interface HardforkTimelineResponse {
   events: HardforkEvent[];
   consensusFeatures: Array<{ rfc: string; activationEpoch: number | null }>;
   scriptDeployments: HardforkScriptDeployment[];
+  /**
+   * F2 charts group (R11 contract, CH-41): always the four lanes, in VM order. Typed optional only
+   * so older consumers' fixtures still compile; the Hardforks page rejects a response without it.
+   */
+  hashTypeLanes?: HardforkHashTypeLaneF2[];
+}
+
+// --- F2 charts group (R11 contract) ---
+/** How the script registry's versions are referenced with one hash_type (CH-41). */
+export interface HardforkHashTypeLaneF2 {
+  hashType: 'type' | 'data1' | 'data2' | 'data';
+  /** Registered versions with at least one registered reference form of this hash_type. */
+  knownVersions: number;
+  /** Exact decimal: live cells whose lock or type references one of those forms. */
+  liveReferences: string;
 }
 
 export interface VesselCell {
@@ -519,8 +539,31 @@ interface TransactionScriptGroup {
 interface TransactionWitness {
   index: number;
   size: number;
-  kind: 'empty' | 'witness_args' | 'ckbfs' | 'cobuild' | 'opaque';
+  kind: 'empty' | 'witness_args' | 'ckbfs' | 'cobuild' | 'opaque' | 'cellbase';
   fields: Array<{ name: string; start: number; end: number; hex: string }>;
+  /** F2-tx (R9): only on a `cobuild` witness that carries a message. */
+  actions?: CobuildAction[];
+}
+
+// F2-tx (round 2): R9 transaction detail completions (contracts.md R9; TX-33, TX-35, TX-36), read
+// by `TransactionDetail.headerDeps` / `.cellbaseWitness` and `TransactionWitness.actions`.
+
+/** A header the transaction reads, "read, not consumed" (a DAO withdrawal reads two). */
+export interface TransactionHeaderDep {
+  blockHash: string;
+  /** Always set for a committed transaction; null only while an uncommitted one's block is unindexed. */
+  blockNumber: number | null;
+}
+/** A cellbase's witness 0: the miner's lock and the client message, raw bytes. */
+export interface TransactionCellbaseWitness {
+  lock: Script;
+  message: string;
+}
+/** One CoBuild message action: whose script it is for and its raw data (name not decoded). */
+export interface CobuildAction {
+  scriptInfoHash: string;
+  scriptHash: string;
+  data: string;
 }
 
 /** Per-cell semantics read from its payload and the canonical item indexes. */
@@ -639,6 +682,10 @@ interface TransactionDetail extends Omit<
    * index. Absent when there are none.
    */
   dotcellNames?: DotCellNameWitness[];
+  /** F2-tx (R9): headers read, not consumed, in `header_deps` order (`[]` when none). */
+  headerDeps: TransactionHeaderDep[];
+  /** F2-tx (R9): a cellbase's decoded witness 0; null for every other transaction. */
+  cellbaseWitness: TransactionCellbaseWitness | null;
 }
 
 /** A `.cell` name a transaction creates, with the records its witness carries. */
@@ -882,6 +929,10 @@ interface Cell {
   daoInfo?: CellDaoInfo;
   /** `/cells/by-script` only: which index enumerated this row. */
   matchedScriptKind?: 'lock' | 'type';
+  // group scripts (F2-5), contract R6: list rows of /cells and /cells/by-script name their
+  // references from the script registry (null = unregistered); absent on the single-cell detail.
+  lockScriptName?: string | null;
+  typeScriptName?: string | null;
 }
 
 interface LiveCellSummary {
@@ -2142,6 +2193,11 @@ interface CollectionItem {
   name: string | null;
   standard: string;
   ownerLockHash: string | null;
+  // F2 identities (round 2) — R3 / R4 (contracts.md, ID-COL-2 / ID-COL-3):
+  /** The owner lock's address; null only when there is no owner or its script is not indexed. */
+  ownerAddress: string | null;
+  /** `.cell` rows only: the owner prefix in the name's data (`ownerLockHash` is what it resolves to). */
+  ownerHashPrefix?: string;
   isLive: boolean;
   createdAtBlock: number;
   expiredAt?: number | null;
@@ -2345,7 +2401,27 @@ interface ChartResponse {
    * `/charts/nominal-apc` only (lane R8, CH-03): the model's value today, the detail chart's main
    * reading. Until the API sends it the page shows no reading rather than the last sample.
    */
-  today?: { date: string; value: string };
+  today?: NominalApcTodayF2;
+  // --- F2 charts group (R8 contract, CH-21): the API's peak of `value` / `value2` ---
+  peak?: ChartPeakF2 | null;
+  peak2?: ChartPeakF2 | null;
+}
+
+// --- F2 charts group (R8 contract) ---
+/** The FIRST point holding a series' greatest value, as the API compared it exactly. */
+export interface ChartPeakF2 {
+  /** The point's own x label: an ISO day, or a bucket label. */
+  date: string;
+  /** The raw API value (the chart's own unit before display scaling). */
+  value: string;
+}
+/** Nominal APC's model at the indexed tip: `date` is the tip's UTC+8 day, `year` the exact age. */
+export interface NominalApcTodayF2 {
+  blockNumber: number;
+  date: string;
+  /** Exact elapsed chain time since genesis, in mean Gregorian years. */
+  year: string;
+  value: string;
 }
 
 /**
@@ -2436,6 +2512,8 @@ interface StackedAreaChartResponse {
   data: StackedAreaDataPoint[];
   series: StackedAreaSeries[];
   title: string;
+  /** F2 charts group (R8 contract): each series' peak, by series key. */
+  peaks?: Record<string, ChartPeakF2>;
 }
 
 export interface AssetCapacityHistory extends StackedAreaChartResponse {
@@ -2494,6 +2572,8 @@ interface KnownScript {
   codeCellsTotal?: number;
   observedReferences?: ScriptObservedReferenceApi[];
   codeClasses?: ScriptCodeClassTotalApi[];
+  // group scripts (F2-4): the family's registered code versions (list rows only).
+  versionsCount?: number;
 }
 
 interface DeploymentUsage {
@@ -2727,6 +2807,8 @@ function scriptFamilyListItemToKnownScript(script: ScriptFamilyListItemApi): Kno
     liveCellsCount: script.liveCellsCount,
     cellsCount: script.cellsCount,
     codeClasses: script.codeClasses,
+    // group scripts (F2-4)
+    versionsCount: script.versionsCount,
   };
 }
 
@@ -4974,4 +5056,13 @@ export const api = {
 
   getNetworkPeer: async (peerId: string): Promise<NetworkPeerDetail> =>
     fetchApi(`/network/peers/${encodeURIComponent(peerId)}`),
+
+  // ---- F2 group `fiber` ----
+  /**
+   * D7: one fork event by its fork point height and the first 8 hex digits of the first block it
+   * dropped (`/forks/<fork_point_height>/<orphan_hash_prefix8>`). Needs the backend route of the
+   * same shape; the response is the existing fork detail.
+   */
+  getForkAt: (forkPointNumber: number, orphanPrefix: string): Promise<ReorgDetail> =>
+    fetchApi(`/forks/${forkPointNumber}/${orphanPrefix}`),
 };

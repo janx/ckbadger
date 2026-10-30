@@ -2,15 +2,26 @@
 
 import { useState } from 'react';
 import Link from '@/components/ui/link';
-import { formatUtc8DateTime } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
+  /**
+   * The time axis the marks sit on, in ms: the lane timeline's genesis → tip. Omitted, the strip
+   * spans the deployments themselves.
+   */
+  domain?: readonly [number, number];
+  /** Pixel insets matching the lane timeline's label and live-reference columns. */
+  inset?: { left: number; right: number };
 }
 
-function utcTimestamp(timestampMs: number): string {
+/** Columns a mark can take on the strip; marks in the same column stack downward. */
+const COLUMNS = 200;
+const ROW_PX = 8;
+
+function headerMs(timestampMs: number): number {
   if (
     !Number.isSafeInteger(timestampMs) ||
     timestampMs < 0 ||
@@ -18,10 +29,19 @@ function utcTimestamp(timestampMs: number): string {
   ) {
     throw new Error(`Invalid indexed script deployment timestamp: ${timestampMs}`);
   }
-  return formatUtc8DateTime(timestampMs);
+  return timestampMs;
 }
 
-export function ScriptDeploymentTimeline({ deployments }: Props) {
+/** A version's name is not unique (two "PW Lock" versions): the version hash tells them apart. */
+function markName(mark: HardforkScriptDeployment): string {
+  return `${mark.versionName} · ${mark.familyName} · version ${mark.versionHash.slice(0, 10)}…`;
+}
+
+/**
+ * Each known script version's earliest indexed code cell as a dot on the time axis (CH-40): no
+ * scrolling list, every mark in place; hover or focus a dot for its evidence (CH-44).
+ */
+export function ScriptDeploymentTimeline({ deployments, domain, inset }: Props) {
   const [selectedHash, setSelectedHash] = useState<string | null>(null);
   const marks = [...deployments].sort(
     (left, right) =>
@@ -30,7 +50,7 @@ export function ScriptDeploymentTimeline({ deployments }: Props) {
       left.codeCellOutputIndex - right.codeCellOutputIndex ||
       left.versionHash.localeCompare(right.versionHash)
   );
-  const selected = marks.find((mark) => mark.versionHash === selectedHash) ?? marks[0];
+  const selected = marks.find((mark) => mark.versionHash === selectedHash) ?? null;
 
   if (marks.length === 0) {
     return (
@@ -40,69 +60,112 @@ export function ScriptDeploymentTimeline({ deployments }: Props) {
     );
   }
 
+  const times = marks.map((mark) => headerMs(mark.timestampMs));
+  const [start, end] = domain ?? [Math.min(...times) - 86_400_000, Math.max(...times) + 86_400_000];
+  if (!(start < end)) throw new Error(`Invalid deployment time axis ${start}..${end}`);
+  const filled = new Map<number, number>();
+  const placed = marks.map((mark, i) => {
+    const fraction = (times[i] - start) / (end - start);
+    if (fraction < 0 || fraction > 1)
+      throw new Error(
+        `Script deployment ${mark.versionHash} at ${formatUtc8DateTime(times[i])} lies outside the indexed chain time`
+      );
+    const column = Math.min(COLUMNS - 1, Math.floor(fraction * COLUMNS));
+    const row = filled.get(column) ?? 0;
+    filled.set(column, row + 1);
+    return { mark, left: (column + 0.5) / COLUMNS, row };
+  });
+  const rows = Math.max(...placed.map((entry) => entry.row)) + 1;
+  const left = inset?.left ?? 0;
+  const right = inset?.right ?? 0;
+
   return (
-    <div className="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <ol
-        aria-label="Known script-version deployment timeline"
-        className="border-base-border-subtle max-h-80 min-w-0 overflow-y-auto border-l pl-4"
-      >
-        {marks.map((mark) => (
-          <li key={mark.versionHash} className="relative min-w-0 py-2">
-            <span
-              aria-hidden="true"
-              className="bg-text-bright absolute -left-[21px] top-4 h-[9px] w-[9px] rounded-full"
-            />
-            <button
-              type="button"
-              className="text-text-bright hover:text-jade focus-visible:text-jade min-w-0 text-left text-[12px] focus-visible:outline"
-              onMouseEnter={() => setSelectedHash(mark.versionHash)}
-              onFocus={() => setSelectedHash(mark.versionHash)}
-              onClick={() => setSelectedHash(mark.versionHash)}
-              aria-label={`${mark.versionName}, first code cell at block ${formatBlockNumber(mark.blockNumber)}`}
-            >
-              <span className="text-text-dim mr-3 tabular-nums">
-                {utcTimestamp(mark.timestampMs).slice(0, 10)}
+    <div className="min-w-0">
+      <div className="relative" style={{ height: rows * ROW_PX + 6 }}>
+        {left > 0 && (
+          <span
+            className="text-text-dim absolute left-0 top-0 text-[10.5px] leading-tight"
+            style={{ width: left - 8 }}
+          >
+            known script versions · {marks.length.toLocaleString()}
+          </span>
+        )}
+        <div
+          role="list"
+          aria-label="Known script-version deployment timeline"
+          className="absolute inset-y-0"
+          style={{ left, right }}
+        >
+          {placed.map(({ mark, left: x, row }) => {
+            const active = mark.versionHash === selected?.versionHash;
+            return (
+              <span
+                role="listitem"
+                key={mark.versionHash}
+                className="absolute"
+                style={{ left: `${x * 100}%`, top: row * ROW_PX }}
+              >
+                <button
+                  type="button"
+                  title={`${mark.versionName} · deployed ${formatUtc8Date(mark.timestampMs)}`}
+                  aria-label={`${markName(mark)}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
+                  aria-pressed={active}
+                  className={`focus-visible:outline-jade block h-[7px] w-[7px] -translate-x-1/2 rounded-full border focus-visible:outline ${active ? 'bg-jade border-jade' : 'border-text-bright bg-base-bg hover:bg-jade'}`}
+                  onMouseEnter={() => setSelectedHash(mark.versionHash)}
+                  onFocus={() => setSelectedHash(mark.versionHash)}
+                  onClick={() => setSelectedHash(mark.versionHash)}
+                />
               </span>
-              <span className="break-all">{mark.versionName}</span>
-            </button>
-          </li>
-        ))}
-      </ol>
+            );
+          })}
+        </div>
+      </div>
       <aside
         aria-label="Selected script deployment evidence"
-        className="border-base-border-subtle min-w-0 border-t pt-3 text-[12px]"
+        className="border-base-border-subtle mt-3 min-w-0 border-t pt-3 text-[12px]"
       >
-        <p className="text-text-bright break-words">{selected.versionName}</p>
-        <p className="text-text-dim mt-2 leading-relaxed">
-          Earliest indexed code-cell creation for this named version. This is a code-cell event, not
-          proof that a script instance used a particular VM or that the code remains live.
-        </p>
-        <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-y-2">
-          <dt className="text-text-dim">Header time</dt>
-          <dd className="break-words">{utcTimestamp(selected.timestampMs)}</dd>
-          <dt className="text-text-dim">Epoch</dt>
-          <dd>{selected.epochNumber.toLocaleString()}</dd>
-          <dt className="text-text-dim">Version</dt>
-          <dd className="break-all font-mono">{selected.versionHash}</dd>
-          <dt className="text-text-dim">Evidence</dt>
-          <dd className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
-            <Link
-              href={`/scripts/${encodeURIComponent(selected.familyName)}`}
-              className="text-jade hover:underline"
-            >
-              {selected.familyName} family
-            </Link>
-            <Link
-              href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
-              className="text-jade hover:underline"
-            >
-              Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
-            </Link>
-            <Link href={`/blocks/${selected.blockNumber}`} className="text-jade hover:underline">
-              Block {formatBlockNumber(selected.blockNumber)}
-            </Link>
-          </dd>
-        </dl>
+        {selected ? (
+          <>
+            <p className="text-text-bright break-words">{markName(selected)}</p>
+            <p className="text-text-dim mt-2 max-w-[70ch] leading-relaxed">
+              Earliest indexed code-cell creation for this named version. This is a code-cell event,
+              not proof that a script instance used a particular VM or that the code remains live.
+            </p>
+            <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-y-2">
+              <dt className="text-text-dim">Header time</dt>
+              <dd className="break-words">{formatUtc8DateTime(selected.timestampMs)}</dd>
+              <dt className="text-text-dim">Epoch</dt>
+              <dd>{selected.epochNumber.toLocaleString()}</dd>
+              <dt className="text-text-dim">Version</dt>
+              <dd className="break-all font-mono">{selected.versionHash}</dd>
+              <dt className="text-text-dim">Evidence</dt>
+              <dd className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+                <Link
+                  href={`/scripts/${encodeURIComponent(selected.familyName)}`}
+                  className="text-jade hover:underline"
+                >
+                  {selected.familyName} family
+                </Link>
+                <Link
+                  href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
+                  className="text-jade hover:underline"
+                >
+                  Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
+                </Link>
+                <Link
+                  href={`/blocks/${selected.blockNumber}`}
+                  className="text-jade hover:underline"
+                >
+                  Block {formatBlockNumber(selected.blockNumber)}
+                </Link>
+              </dd>
+            </dl>
+          </>
+        ) : (
+          <p className="text-text-dim">
+            Hover or focus a dot for that script version, its first code cell and its block.
+          </p>
+        )}
       </aside>
     </div>
   );

@@ -73,7 +73,7 @@ it.each([
 it('shows inactive identity state without manufacturing a live owner', async () => {
   const item = identityItem('dotbit');
   vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(
-    emptyPage([{ ...item, isLive: false, ownerLockHash: null }])
+    emptyPage([{ ...item, isLive: false, ownerLockHash: null, ownerAddress: null }])
   );
   render(<Page collectionId="dotbit" />);
   const region = await screen.findByRole('region', { name: 'Collection items' });
@@ -105,4 +105,69 @@ it('uses whole-scope current DID documents for PDS grouping with explicit overla
     await within(pds).findByText(/An identity can name more than one endpoint/)
   ).toBeInTheDocument();
   expect(api.getDidPdsDistribution).toHaveBeenCalledOnce();
+});
+
+// ── F2 identities (round 2): identity collection pages (ID-COL-1/2/3/5) ──
+it('reports a gateway timeout as a status, never the proxy URL, and wraps at 390 (ID-COL-1)', async () => {
+  vi.mocked(api.getCollectionInsights).mockRejectedValue(
+    new ApiRequestError(
+      504,
+      'unknown_error',
+      "upstream network 'mainnet' timed out: error sending request for url (http://127.0.0.1:8101/api/v1/assets/objects/dotbit/insights)"
+    )
+  );
+  render(<Page collectionId="dotbit" />);
+  await screen.findAllByText(/HTTP 504/, {}, { timeout: 4000 });
+  expect(document.body).not.toHaveTextContent('127.0.0.1');
+  expect(document.body).not.toHaveTextContent('error sending request');
+  // The read-state line breaks anywhere, so no long token can widen the page at 390 px.
+  const alert = screen.getAllByRole('alert').find((a) => /HTTP 504/.test(a.textContent ?? ''))!;
+  expect(alert).toHaveClass('[overflow-wrap:anywhere]');
+});
+it('names each identity owner by address, a .cell owner by its prefix when unresolved (ID-COL-2/3)', async () => {
+  const item = identityItem('dotbit');
+  vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(
+    emptyPage([
+      { ...item, ownerAddress: 'ckb1qzownerofalice' },
+      {
+        ...item,
+        nftId: '0x' + '44'.repeat(20),
+        name: 'bob.cell',
+        standard: 'dotcell',
+        ownerLockHash: null,
+        ownerAddress: null,
+        ownerHashPrefix: '0x' + '57'.repeat(20),
+      },
+      {
+        ...item,
+        nftId: '0x' + '45'.repeat(20),
+        name: 'carol.bit',
+        ownerLockHash: '0x' + '46'.repeat(32),
+        ownerAddress: null,
+      },
+    ])
+  );
+  render(<Page collectionId="dotbit" />);
+  const region = await screen.findByRole('region', { name: 'Collection items' });
+  const alice = await within(region).findByRole('link', { name: /ckb1qzowner/ });
+  expect(alice).toHaveAttribute('href', '/mainnet/address/ckb1qzownerofalice');
+  // A named prefix with no indexed lock is shown as exactly that, never "No live owner".
+  const bob = within(region).getByText('bob.cell').closest('article')!;
+  expect(bob).toHaveTextContent('0x' + '57'.repeat(20));
+  expect(bob).toHaveTextContent('named owner prefix · no indexed lock');
+  expect(bob).not.toHaveTextContent('No live owner');
+  // A lock hash whose script is not indexed is not dressed up as an address link.
+  const carol = within(region).getByText('carol.bit').closest('article')!;
+  expect(within(carol).queryByRole('link', { name: /0x4646/ })).not.toBeInTheDocument();
+  expect(carol).toHaveTextContent('address not indexed');
+});
+it('opens with what the standard is, not its route alias or a placeholder (ID-COL-5)', async () => {
+  render(<Page collectionId="dotbit" />);
+  // Wait for the collection itself, not the loading shell that shares its title.
+  await screen.findByRole('complementary', { name: 'Facts' });
+  const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+  expect(header).not.toHaveTextContent('No collection description recorded.');
+  expect(header).not.toHaveTextContent('dotbit');
+  expect(header).toHaveTextContent('Pure CKB');
+  expect(header).toHaveTextContent('Each .bit name and everything about it live in one CKB cell.');
 });

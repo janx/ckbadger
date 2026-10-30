@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
+import { elfParts } from '@/lib/cell-parts';
 import type { Cell } from '@/lib/api';
 
 const txA = `0x${'11'.repeat(32)}`;
@@ -119,29 +120,59 @@ describe('CodeCellBoard', () => {
     );
     expect(screen.getByText(/binary changed/)).toBeInTheDocument();
   });
-  it('renders exact ELF file and memory ranges without losing wide addresses', () => {
+  it('reads wide ELF addresses exactly and names kinds instead of raw decimals', () => {
+    // 64 header + 56 program header + 8 unassigned + 16 loaded: the bytes the layout covers.
+    const parts = elfParts({ ...cell, data: `0x${'00'.repeat(144)}` } as Cell);
+    const load = parts.find((part) => part.id === 'elf:ph0')!;
+    expect(load.label).toBe('program header 0 · LOAD');
+    expect(load.value).toBe('RX · file [128..144) → 0x20000000000001 · memsz 32');
+    expect(parts.find((part) => part.label === 'e_machine')!.value).toBe('RISC-V');
+    expect(parts.find((part) => part.label === 'e_entry')!.value).toBe('0x20000000000001');
+    // NOBITS sections have no file bytes, so they own none
+    expect(parts.some((part) => part.label === '.bss')).toBe(false);
+    expect(parts.find((part) => part.start === 120)).toMatchObject({
+      label: 'alignment padding',
+      end: 128,
+    });
+    expect(parts.find((part) => part.start === 128)).toMatchObject({
+      label: 'padding in program segment 0',
+      end: 144,
+    });
     render(<CodeCellBoard cell={cell} />);
-    expect(screen.getAllByText('0x20000000000001').length).toBeGreaterThan(0);
-    expect(screen.getByText('Memory only')).toBeInTheDocument();
-    expect(screen.getByText(/120–127 · 8 bytes · purpose unspecified/)).toBeInTheDocument();
-    expect(screen.getByText(/rv64imac/)).toBeInTheDocument();
-    expect(screen.getByText(/rustc 1.99/)).toBeInTheDocument();
+    expect(screen.getByTestId('code-built-with')).toHaveTextContent('rustc 1.99');
+    expect(screen.getByTestId('code-built-with')).toHaveTextContent(
+      'target rv64imac · entry 0x20000000000001 · no symbol table'
+    );
+    expect(screen.queryByRole('table')).toBeNull();
   });
-  it('labels ELF machine and header kinds by name instead of raw decimals', () => {
-    render(<CodeCellBoard cell={cell} />);
-    expect(screen.getByText(/ELF64 · little endian · RISC-V/)).toBeInTheDocument();
-    expect(screen.getByText('LOAD')).toBeInTheDocument();
-    expect(screen.getByText('NOBITS')).toBeInTheDocument();
-    expect(screen.queryByText('machine 243')).not.toBeInTheDocument();
+  it('counts the live cells that name these bytes by each way, as current evidence', () => {
+    render(
+      <CodeCellBoard
+        cell={{
+          ...cell,
+          cellOutputMolecule: {
+            bytes: '0x',
+            fields: [],
+            lockScriptHash: `0x${'66'.repeat(32)}`,
+            typeScriptHash: reference,
+          },
+        }}
+      />
+    );
+    expect(screen.getByTestId('code-by-type-hash')).toHaveTextContent(
+      '11 live cells name it this way'
+    );
+    expect(screen.getByTestId('code-by-data-hash')).toHaveTextContent(
+      '0 live cells pin this exact binary'
+    );
   });
-  it('shows current reference counts as current evidence, not historical execution', () => {
+  it('lists a reference that names neither the type hash nor these bytes on its own', () => {
     render(<CodeCellBoard cell={cell} />);
-    expect(screen.getByText(/9 live locks · 2 live types/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: `type · ${reference}` })).toHaveAttribute(
       'href',
       `/mainnet/script/${reference}?hashType=type`
     );
-    expect(screen.getByText(/actual cell deps/)).toBeInTheDocument();
+    expect(screen.getByText(/· 11 live cells/)).toBeInTheDocument();
   });
   it('does not label non-ELF payloads as code cells', () => {
     const { container } = render(<CodeCellBoard cell={{ ...cell, elf: undefined } as Cell} />);

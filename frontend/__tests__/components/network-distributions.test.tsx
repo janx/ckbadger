@@ -3,14 +3,15 @@ import { http, HttpResponse } from 'msw';
 import { render, screen, waitFor } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { NetworkDistributions } from '@/app/network/distributions';
-import { mergePeerCounts, NetworkTrends } from '@/app/network/trends';
+import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
+import { mergePeerCounts, NetworkShareHistory, NetworkTrends } from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
 
 const API_BASE = '/api/:network/v1';
 
 describe('NetworkDistributions', () => {
-  it('renders verified-peer distributions and the exact retained reachability split', async () => {
+  // F2 charts (CH-52, CH-54): versions in tier 1; ASNs as hosting organisations; protocols tier 2.
+  it('renders verified-peer versions, hosting organisations and protocols', async () => {
     server.use(
       http.get(`${API_BASE}/network/distributions`, () =>
         HttpResponse.json({
@@ -25,23 +26,30 @@ describe('NetworkDistributions', () => {
             { label: 'United States', count: 3 },
             { label: 'Germany', count: 2 },
           ],
-          asns: [{ label: 'AS24940 Hetzner', count: 2 }],
+          asns: [
+            { label: 'AS24940 Hetzner', count: 2 },
+            { label: 'Unknown', count: 5 },
+          ],
           protocols: [{ label: '/ckb/2', count: 5 }],
         })
       )
     );
 
-    render(<NetworkDistributions />);
+    render(
+      <>
+        <NetworkDistributions />
+        <HostingBar />
+        <NetworkProtocols />
+      </>
+    );
 
-    // Version + country bar labels are rendered as real DOM text (not SVG geometry).
+    // Version bar labels are rendered as real DOM text (not SVG geometry).
     expect(await screen.findByText('0.114.0')).toBeInTheDocument();
-    expect(screen.getByText('United States')).toBeInTheDocument();
-    // ASN + protocol bars too.
-    expect(screen.getByText('AS24940 Hetzner')).toBeInTheDocument();
-    expect(screen.getByText('/ckb/2')).toBeInTheDocument();
+    // The ASN's organisation, with the one-sentence reading over the verified peers.
     expect(
-      screen.getByText('5 same-network reachable · 2 verified unavailable')
+      screen.getByText('2 of the 7 verified nodes run on Hetzner, across 2 countries.')
     ).toBeInTheDocument();
+    expect(screen.getByText('/ckb/2')).toBeInTheDocument();
   });
 
   it('renders an empty-state note when a distribution has no data', async () => {
@@ -61,11 +69,8 @@ describe('NetworkDistributions', () => {
 
     render(<NetworkDistributions />);
 
-    expect(
-      await screen.findByText('0 same-network reachable · 0 verified unavailable')
-    ).toBeInTheDocument();
     // Empty distributions render an honest "no data" note rather than a broken chart.
-    expect(screen.getAllByText(/no data/i).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText(/no data/i)).length).toBeGreaterThan(0);
   });
 });
 
@@ -265,7 +270,13 @@ describe('NetworkTrends', () => {
       })
     );
 
-    render(<NetworkTrends />);
+    // The daily count tables now sit in tier 2 (CH-54), rendered by their own component.
+    render(
+      <>
+        <NetworkTrends />
+        <NetworkShareHistory />
+      </>
+    );
 
     expect(await screen.findByText('Retained verification state (daily)')).toBeInTheDocument();
     expect((await screen.findAllByText('Same-network reachable')).length).toBeGreaterThan(0);
@@ -287,7 +298,12 @@ describe('NetworkTrends', () => {
       })
     );
 
-    render(<NetworkTrends />);
+    render(
+      <>
+        <NetworkTrends />
+        <NetworkShareHistory />
+      </>
+    );
 
     // Wait until all four daily queries have fired.
     await waitFor(() => {
@@ -348,7 +364,7 @@ describe('NetworkTrends', () => {
         });
       })
     );
-    render(<NetworkTrends />);
+    render(<NetworkShareHistory />);
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Failed to load client version share.'
     );

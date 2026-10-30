@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ExactCkb } from '@/components/activity-event-row';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
@@ -13,6 +13,13 @@ export interface CapacityPartitionProps {
   daoFree?: string;
   className?: string;
   showTotal?: boolean;
+  /**
+   * F2 blocks (BA-31): keep every non-zero part visible — each at least this many px, 2 px
+   * apart, on a 10 px rounded bar; a zero part is left out of the bar (its figure stays).
+   */
+  minSegmentWidth?: number;
+  /** F2 blocks (BA-37): what the DAO free part is, e.g. "free part of 5 deposits". */
+  daoFreeNote?: ReactNode;
 }
 export function CapacityPartition({
   subject,
@@ -22,6 +29,8 @@ export function CapacityPartition({
   daoFree,
   className,
   showTotal = true,
+  minSegmentWidth,
+  daoFreeNote,
 }: CapacityPartitionProps) {
   const [active, setActive] = useState<string | null>(null);
   const sum = exactUnsignedInteger(total, `${subject}: total`);
@@ -56,7 +65,29 @@ export function CapacityPartition({
           <ExactCkb shannons={sum} signed={false} tone="plain" />
         </div>
       )}
-      {sum > BigInt(0) && (
+      {sum > BigInt(0) && minSegmentWidth !== undefined && (
+        <div
+          className="bg-base-surface flex h-2.5 w-full gap-0.5 overflow-hidden rounded-[5px]"
+          aria-hidden="true"
+        >
+          {parts
+            .filter((p) => p.value > BigInt(0))
+            .map((p) => (
+              <div
+                key={p.label}
+                data-part={p.label}
+                style={{
+                  flexGrow: Number(p.value) / Number(sum),
+                  flexBasis: 0,
+                  minWidth: `${minSegmentWidth}px`,
+                  backgroundColor: p.color,
+                  opacity: active && active !== p.label ? 0.25 : 1,
+                }}
+              />
+            ))}
+        </div>
+      )}
+      {sum > BigInt(0) && minSegmentWidth === undefined && (
         <div className="flex h-2 w-full" aria-hidden="true">
           {parts.map((p) => (
             <div
@@ -88,6 +119,9 @@ export function CapacityPartition({
                 <span className="text-text-dim ml-2">
                   {formatScaledInteger(p.value * BigInt(100), sum, 2)}%
                 </span>
+              )}
+              {p.label === 'DAO free' && daoFreeNote && (
+                <span className="text-text-dim"> · {daoFreeNote}</span>
               )}
             </dd>
           </div>

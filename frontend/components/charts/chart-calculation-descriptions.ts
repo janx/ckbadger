@@ -218,31 +218,33 @@ const CHART_DESCRIPTION_BUILDERS: Record<string, ChartDescriptionBuilder> = {
     ],
   }),
   'chart-hash-rate': ({ yAxisLabel }) => ({
-    overview: 'Shows estimated network mining power trend.',
+    overview:
+      "For each complete UTC+8 day: the sum of the difficulty of that day's blocks, divided by the sum of their intervals in seconds. The day in progress is left out until it is complete.",
     legendItems: [
       {
         label: yAxisLabel ?? 'Hash Rate',
         description:
-          'For each period: hash-rate estimate derived from chain difficulty and observed block production interval.',
+          'Hashes per second, drawn in PH/s (10^15). Every day is its own estimate; nothing is averaged across days.',
       },
     ],
   }),
   'chart-difficulty': ({ yAxisLabel }) => ({
-    overview: 'Shows canonical network difficulty trend.',
+    overview:
+      "For each complete UTC+8 day: the mean difficulty of that day's blocks, the sum of their header difficulties divided by the number of blocks.",
     legendItems: [
       {
         label: yAxisLabel ?? 'Difficulty',
-        description:
-          'For each period: canonical difficulty value from block headers (or period aggregate of header values).',
+        description: 'Drawn in P (10^15). The day in progress is left out until it is complete.',
       },
     ],
   }),
   'chart-uncle-rate': ({ yAxisLabel }) => ({
-    overview: 'Shows uncle-block share trend.',
+    overview:
+      "For each complete UTC+8 day: the uncles included by that day's blocks divided by the number of blocks, as a percentage. The dashed line is the consensus orphan-rate target the difficulty adjustment aims for.",
     legendItems: [
       {
         label: yAxisLabel ?? 'Uncle Rate',
-        description: 'For each period: (uncle blocks / canonical blocks) × 100%.',
+        description: 'Exact ratio of two daily counts; the day in progress is left out.',
       },
     ],
   }),

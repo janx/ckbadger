@@ -68,6 +68,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa'],
       witnessesAvailable: true,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
 
     const result = await renderRawPage({
@@ -111,6 +113,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: [],
       witnessesAvailable: false,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
     const result = await renderRawPage({
       page: parseRawSourcePath(`/tx/0x${'a'.repeat(64)}`),
@@ -164,6 +168,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: ['0x1b00000010000000160000001600000006000000112205000000aa', '0x64617301020304'],
       witnessesAvailable: true,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
     vi.mocked(api.getTransactionCellDeps).mockResolvedValue([
       {
@@ -415,6 +421,7 @@ describe('renderRawPage', () => {
       name: 'alice.did',
       standard: 'did_ckb',
       ownerLockHash: '0xowner',
+      ownerAddress: null,
       isLive: true,
       createdAtBlock: 123,
       txHash: '0xtx',
@@ -460,6 +467,7 @@ describe('renderRawPage', () => {
       name: 'alice.bit',
       standard: 'dotbit',
       ownerLockHash: '0xowner',
+      ownerAddress: null,
       isLive: true,
       createdAtBlock: 321,
       txHash: '0xtx',
@@ -505,6 +513,7 @@ describe('renderRawPage', () => {
       name: 'alice.bit-cell',
       standard: 'bit_cell',
       ownerLockHash: '0xowner',
+      ownerAddress: null,
       isLive: true,
       createdAtBlock: 456,
       txHash: '0xtx',
@@ -736,6 +745,8 @@ describe('renderRawPage', () => {
       outputs: [],
       witnesses: [],
       witnessesAvailable: true,
+      headerDeps: [],
+      cellbaseWitness: null,
     });
     vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
     vi.mocked(api.getTransactionLifecycle).mockResolvedValue({

@@ -231,8 +231,9 @@ describe('ActivityFeed', () => {
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Token transfer')).toBeInTheDocument();
+    // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
     expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      'lock0x43b2924e(0x4b00...838e)'
+      'lock0xab0ede...e09f(0x4b00...838e)'
     );
     expect(
       within(row).getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })

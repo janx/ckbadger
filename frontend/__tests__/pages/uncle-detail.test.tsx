@@ -87,4 +87,47 @@ describe('Uncle detail page', () => {
     );
     spy.mockRestore();
   });
+
+  // F2 blocks (BA-43): the sibling relation, read from R10's sameParentAs / msAfterSibling.
+  it('names the canonical block at its height as its sibling on the same parent, and the delay', async () => {
+    params.current = { id: '8775638', index: '0' };
+    render(<UncleDetailPage />);
+    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
+    expect(sentence).toHaveTextContent(
+      /on the canonical chain is 0x.+, its sibling: both were mined on parent #8,775,636 0x.+, and this uncle came 92 ms after it\./
+    );
+    expect(screen.getByText('92 ms after its sibling')).toBeInTheDocument();
+  });
+
+  it('says the canonical block at its height has another parent when they are not siblings', async () => {
+    params.current = { id: '8775638', index: '0' };
+    server.use(
+      http.get('/api/:network/v1/blocks/:id/uncles/:index', () =>
+        HttpResponse.json({ ...blockUncle, sameParentAs: null, msAfterSibling: null })
+      )
+    );
+    render(<UncleDetailPage />);
+    await screen.findByRole('heading', { name: 'Uncle #8,775,637' });
+    const sentence = screen.getByText(/^Uncle at height #8,775,637, included by/);
+    expect(sentence).toHaveTextContent('which has another parent');
+    expect(sentence).not.toHaveTextContent('sibling');
+  });
+
+  it('refuses sibling facts that contradict each other', async () => {
+    params.current = { id: '8775638', index: '0' };
+    server.use(
+      http.get('/api/:network/v1/blocks/:id/uncles/:index', () =>
+        HttpResponse.json({ ...blockUncle, msAfterSibling: null })
+      )
+    );
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(
+      <Boundary>
+        <UncleDetailPage />
+      </Boundary>
+    );
+    expect(await screen.findByRole('alert')).toHaveTextContent('sibling facts disagree');
+    spy.mockRestore();
+  });
 });

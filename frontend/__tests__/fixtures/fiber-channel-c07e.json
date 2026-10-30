@@ -1,0 +1,414 @@
+{
+  "channel": {
+    "channelId": "0xc07e3fa53b35983136108532e1dd105608cfd1f49c234ae5c1831a76c3efeee6",
+    "state": "settled",
+    "capacity": "106200000000",
+    "udtTypeHash": null,
+    "udtAmount": null,
+    "fundingTxHash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+    "fundingOutputIndex": 0,
+    "openBlock": 15564812,
+    "openTimestamp": "1741228548404",
+    "closeBlock": 15634497,
+    "closeTimestamp": "1741932932281",
+    "closeTxHash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+    "commitmentTxHash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+    "delayEpoch": "11529216145580097542",
+    "delayEpochDecoded": {
+      "relative": true,
+      "epochs": 6,
+      "index": 0,
+      "length": 1
+    },
+    "settlementBlock": 15643185,
+    "settlementTimestamp": "1742018027989",
+    "settlementTxHash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+    "participants": [
+      "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+      "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6"
+    ],
+    "observedParties": [
+      {
+        "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr"
+      },
+      {
+        "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+        "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y"
+      }
+    ],
+    "observedLifetimeMs": "704383877",
+    "lifetimeAnchorBlock": 15634497,
+    "timeline": [
+      {
+        "event": "open",
+        "blockNumber": 15564812,
+        "txHash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+        "timestamp": "1741228548404"
+      },
+      {
+        "event": "forceClose",
+        "blockNumber": 15634497,
+        "txHash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+        "timestamp": "1741932932281"
+      },
+      {
+        "event": "settlement",
+        "blockNumber": 15643185,
+        "txHash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+        "timestamp": "1742018027989"
+      }
+    ]
+  },
+  "evidence": {
+    "channelId": "0xc07e3fa53b35983136108532e1dd105608cfd1f49c234ae5c1831a76c3efeee6",
+    "funding": {
+      "txHash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+      "outputIndex": 0,
+      "blockNumber": 15564812,
+      "capacity": "106200000000",
+      "lockCodeHash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+      "lockHashType": "type",
+      "lockArgs": "0x27077f1f76a98ec4bdc13750d8bccf2bee36e3f3",
+      "isLive": false,
+      "consumedByTx": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849"
+    },
+    "currentCommitment": {
+      "txHash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+      "outputIndex": 0,
+      "blockNumber": 15634497,
+      "capacity": "106199999545",
+      "lockCodeHash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+      "lockHashType": "type",
+      "lockArgs": "0xf959178a80133b437afc9b1a03c30e8457b61ed206000000000100a00000000000000002",
+      "isLive": false,
+      "consumedByTx": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+      "pubkeyHash": "0xf959178a80133b437afc9b1a03c30e8457b61ed2",
+      "delayEpoch": "11529216145580097542",
+      "delayEpochDecoded": {
+        "relative": true,
+        "epochs": 6,
+        "index": 0,
+        "length": 1
+      },
+      "version": "2",
+      "settlementHash": null,
+      "settlementFlag": null,
+      "lockFormat": "legacy36",
+      "epochLock": "legacyFormatRuleUnverified",
+      "readyEpoch": null,
+      "epochLockMetAtTip": null,
+      "tipEpoch": "13254+512/1800"
+    },
+    "openingPartyFlows": [
+      {
+        "lockScriptHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+        "openingInputCapacity": "150000000000",
+        "openingOutputCapacity": "49999999431",
+        "observedNetInput": "100000000569"
+      },
+      {
+        "lockScriptHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+        "openingInputCapacity": "150000000000",
+        "openingOutputCapacity": "143799999649",
+        "observedNetInput": "6200000351"
+      }
+    ],
+    "stages": [
+      {
+        "stage": "opening",
+        "txHash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+        "blockNumber": 15564812,
+        "timestamp": "1741228548404",
+        "inputs": 2,
+        "outputs": 3,
+        "witnessCount": 2
+      },
+      {
+        "stage": "close",
+        "txHash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+        "blockNumber": 15634497,
+        "timestamp": "1741932932281",
+        "inputs": 1,
+        "outputs": 1,
+        "witnessCount": 1
+      },
+      {
+        "stage": "settlement",
+        "txHash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+        "blockNumber": 15643185,
+        "timestamp": "1742018027989",
+        "inputs": 2,
+        "outputs": 3,
+        "witnessCount": 2
+      }
+    ],
+    "settlementOutputs": [
+      {
+        "txHash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+        "outputIndex": 0,
+        "ownerLockHash": "0x724f15b7e78b82b068f69d442a0993b549ef59d2f7a035066a6cc54847396bf6",
+        "observedParty": true,
+        "capacity": "16199999545"
+      },
+      {
+        "txHash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+        "outputIndex": 1,
+        "ownerLockHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+        "observedParty": true,
+        "capacity": "89999999545"
+      },
+      {
+        "txHash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+        "outputIndex": 2,
+        "ownerLockHash": "0x5a76ef0a255f2703c47c697332bc0e8fefdc02ef58a7f874143ba7d79bd31548",
+        "observedParty": true,
+        "capacity": "49999998619"
+      }
+    ]
+  },
+  "transactions": {
+    "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6": {
+      "hash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+      "status": "committed",
+      "fee": "920",
+      "isCellbase": false,
+      "blockNumber": 15564812,
+      "timestamp": "2025-03-06T02:35:48.404Z",
+      "inputsCapacity": "300000000000",
+      "inputs": [
+        {
+          "previousOutput": {
+            "txHash": "0x76d99ad05885e3b0e7933222c638105e4381eb290d691d53adc38fe4e04e4930",
+            "index": 0
+          },
+          "capacity": "150000000000",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "display": null,
+          "since": "0x0"
+        },
+        {
+          "previousOutput": {
+            "txHash": "0x70af013d0454969b14dce89e3c5c3f9d3805ed09cda1655a3a7257005c5529fb",
+            "index": 0
+          },
+          "capacity": "150000000000",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
+          },
+          "display": null,
+          "since": "0x0"
+        }
+      ],
+      "outputs": [
+        {
+          "capacity": "106200000000",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qrj9k8u0yxllyvfhqddr4d636adnd2vpmmkru7pqr99ecppfvl60zqf8qal37a4f3mztmsfh2rvtenetacmw8uc2uwluc",
+          "lock": {
+            "codeHash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+            "hashType": "type",
+            "args": "0x27077f1f76a98ec4bdc13750d8bccf2bee36e3f3"
+          },
+          "status": "dead",
+          "display": null
+        },
+        {
+          "capacity": "49999999431",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "status": "dead",
+          "display": null
+        },
+        {
+          "capacity": "143799999649",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
+          },
+          "status": "dead",
+          "display": null
+        }
+      ],
+      "scriptGroups": [],
+      "witnessDetails": [
+        {
+          "index": 0,
+          "size": 85,
+          "kind": "opaque",
+          "fields": []
+        },
+        {
+          "index": 1,
+          "size": 85,
+          "kind": "opaque",
+          "fields": []
+        }
+      ]
+    },
+    "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849": {
+      "hash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+      "status": "committed",
+      "fee": "455",
+      "isCellbase": false,
+      "blockNumber": 15634497,
+      "timestamp": "2025-03-14T06:15:32.281Z",
+      "inputsCapacity": "106200000000",
+      "inputs": [
+        {
+          "previousOutput": {
+            "txHash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+            "index": 0
+          },
+          "capacity": "106200000000",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qrj9k8u0yxllyvfhqddr4d636adnd2vpmmkru7pqr99ecppfvl60zqf8qal37a4f3mztmsfh2rvtenetacmw8uc2uwluc",
+          "lock": {
+            "codeHash": "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
+            "hashType": "type",
+            "args": "0x27077f1f76a98ec4bdc13750d8bccf2bee36e3f3"
+          },
+          "display": null,
+          "since": "0x0"
+        }
+      ],
+      "outputs": [
+        {
+          "capacity": "106199999545",
+          "commonKnowledgeSize": "77",
+          "address": "ckb1qqk5t3xna5lfgtceg5uxa6p2t5dhuja3d4l7r2cp2ss3wj4hgaqxcq0etytc4qqn8dph4lymrgpuxr5y27mpa5sxqqqqqqqpqzsqqqqqqqqqqqqz4767wx",
+          "lock": {
+            "codeHash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+            "hashType": "type",
+            "args": "0xf959178a80133b437afc9b1a03c30e8457b61ed206000000000100a00000000000000002"
+          },
+          "status": "dead",
+          "display": null
+        }
+      ],
+      "scriptGroups": [],
+      "witnessDetails": [
+        {
+          "index": 0,
+          "size": 112,
+          "kind": "opaque",
+          "fields": []
+        }
+      ]
+    },
+    "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c": {
+      "hash": "0x9345967025b585df70efda45f325564988d1ddbb3b20d30d60aef08efa2f187c",
+      "status": "committed",
+      "fee": "1267",
+      "isCellbase": false,
+      "blockNumber": 15643185,
+      "timestamp": "2025-03-15T05:53:47.989Z",
+      "inputsCapacity": "156199998976",
+      "inputs": [
+        {
+          "previousOutput": {
+            "txHash": "0xf2ad37221b696d404583f7ecc293a74964ed4750bb9632127b131c2074f34849",
+            "index": 0
+          },
+          "capacity": "106199999545",
+          "commonKnowledgeSize": "77",
+          "address": "ckb1qqk5t3xna5lfgtceg5uxa6p2t5dhuja3d4l7r2cp2ss3wj4hgaqxcq0etytc4qqn8dph4lymrgpuxr5y27mpa5sxqqqqqqqpqzsqqqqqqqqqqqqz4767wx",
+          "lock": {
+            "codeHash": "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
+            "hashType": "type",
+            "args": "0xf959178a80133b437afc9b1a03c30e8457b61ed206000000000100a00000000000000002"
+          },
+          "display": null,
+          "since": "0xa000010000000006"
+        },
+        {
+          "previousOutput": {
+            "txHash": "0xbcba65190b578218b5f8d738b0f7b6a8aff9ea780b9b3d4a923da485161e4fc6",
+            "index": 1
+          },
+          "capacity": "49999999431",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "display": null,
+          "since": "0x0"
+        }
+      ],
+      "outputs": [
+        {
+          "capacity": "16199999545",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqvuvdh8c0m3rlpmv7ztqul2camhwskrmrc5eyy6y",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x9c636e7c3f711fc3b6784b073eac7777742c3d8f"
+          },
+          "status": "dead",
+          "display": null
+        },
+        {
+          "capacity": "89999999545",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "status": "dead",
+          "display": null
+        },
+        {
+          "capacity": "49999998619",
+          "commonKnowledgeSize": "61",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdfvv0v4duyu34t4qq7fpcu27sf9y56d7sppedrr",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xa9631ecab784e46aba801e4871c57a092929a6fa"
+          },
+          "status": "dead",
+          "display": null
+        }
+      ],
+      "scriptGroups": [],
+      "witnessDetails": [
+        {
+          "index": 0,
+          "size": 113,
+          "kind": "opaque",
+          "fields": []
+        },
+        {
+          "index": 1,
+          "size": 85,
+          "kind": "opaque",
+          "fields": []
+        }
+      ]
+    }
+  }
+}

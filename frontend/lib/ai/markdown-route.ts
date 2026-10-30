@@ -22,7 +22,7 @@ export type ParsedMarkdownPage =
   | { kind: 'dao_overview'; pathname: '/dao' }
   | { kind: 'dao_charts'; pathname: '/dao/charts' }
   | { kind: 'forks_list'; pathname: '/forks' }
-  | { kind: 'fork_detail'; pathname: string; id: string }
+  | { kind: 'fork_detail'; pathname: string; height: string; orphan: string }
   | { kind: 'hardforks'; pathname: '/hardforks' }
   | { kind: 'network_overview'; pathname: '/network' }
   | { kind: 'identity_collection'; pathname: string; collectionId: string }

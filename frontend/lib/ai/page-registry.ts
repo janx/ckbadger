@@ -20,7 +20,7 @@ export const PAGE_ROUTES = [
   { pattern: '/dao', kind: 'dao_overview', rawProfiles: [] },
   { pattern: '/dao/charts', kind: 'dao_charts', rawProfiles: [] },
   { pattern: '/forks', kind: 'forks_list', rawProfiles: [] },
-  { pattern: '/forks/{id}', kind: 'fork_detail', rawProfiles: [] },
+  { pattern: '/forks/{height}/{orphan}', kind: 'fork_detail', rawProfiles: [] },
   { pattern: '/hardforks', kind: 'hardforks', rawProfiles: [] },
   { pattern: '/network', kind: 'network_overview', rawProfiles: [] },
   { pattern: '/identities/{collectionId}', kind: 'identity_collection', rawProfiles: [] },

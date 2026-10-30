@@ -66,3 +66,90 @@ export const COMPOSITION_BADGES = {
     bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, #8ff3d6)`,
   },
 } as const;
+
+// ---- F2 blocks: the Block board's reward shares (primary jade, secondary deep jade, committed
+// fees ink, proposal fees gold — gold only for what was proposed). ----
+export const REWARD_COLORS = {
+  primary: DATA_COLOR,
+  secondary: '#17775c',
+  committed: '#a0a8be',
+  proposal: CLASS_COLORS.dao,
+} as const;
+
+// ---- F2 group dao (round-2 fix) ----
+/**
+ * Nervos DAO secondary-issuance partition (board V63): the whole issuance a quiet slate, miners
+ * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
+ */
+export const DAO_ISSUANCE_COLORS = {
+  total: '#4b5266',
+  miners: '#a0a8be',
+  compensation: CLASS_COLORS.dao,
+  burnt: CLASS_COLORS.other,
+} as const;
+
+// ---- F2 group `fiber` (Fiber network, Fiber channel, Forks, Fork detail) ----
+/** Jade = open now / CKB locked now; grey ink = history; a dashed light line = forced. */
+export const FIBER_COLORS = {
+  open: '#2edba3',
+  openFill: 'rgba(46,219,163,.28)',
+  history: '#a0a8be',
+  historyFill: 'rgba(160,168,190,.3)',
+  forced: '#dee2ec',
+  nodeFill: '#141826',
+  nodeStroke: '#a0a8be',
+  label: '#a0a8be',
+  count: '#dee2ec',
+  halo: '#0c0e15',
+  note: '#7c849c',
+} as const;
+/** Uncles on chain are grey ink; this node's view and an uncle inclusion are jade. */
+export const FORK_COLORS = {
+  uncles: '#a0a8be',
+  nodeSwitches: '#2edba3',
+  uncleLink: '#2edba3',
+  dropped: '#dee2ec',
+  spine: '#343c50',
+  edge: '#4b5266',
+  tileFill: '#141826',
+  tileStroke: '#2c3348',
+  tileStrokeLit: '#dee2ec',
+  grid: '#161a25',
+  axis: '#1a1f30',
+  tick: '#7c849c',
+  ink: '#dee2ec',
+  dim: '#a0a8be',
+  halo: '#0c0e15',
+} as const;
+
+// ---- group scripts (F2-4 / F2-5) -------------------------------------------------------------
+/**
+ * "Who can change the code" (Scripts board): one fixed swatch per API code class. Immutable code
+ * is filled grey, replaceable code is an outline (lighter edge = fewer signers), never by index.
+ */
+export const CODE_CLASS_COLORS = {
+  fixed: { fill: '#8a91a6', edge: '#a0a8be' },
+  unspendable: { fill: '#5c6378', edge: '#7c849c' },
+  multisig: { fill: '#0c0e15', edge: '#a0a8be' },
+  one_key: { fill: '#0c0e15', edge: '#dee2ec' },
+  unsupported: { fill: '#0c0e15', edge: '#4b5266' },
+  mixed: { fill: '#0c0e15', edge: '#6aa9c4' },
+  ambiguous: { fill: '#0c0e15', edge: '#f08aa8' },
+  retired: { fill: '#1a1f30', edge: '#343c50' },
+} as const;
+/** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
+export const FREE_CAPACITY_COLOR = '#1a1f30';
+/** The neutral of plain CKB held: the area under occupied in a script's history. */
+export const HELD_CAPACITY_COLOR = '#3a4258';
+/** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */
+export const ELF_REGION_COLORS = {
+  header: '#5f9fb2',
+  programHeaders: '#7fb0c0',
+  rodata: '#8fd6a8',
+  ehFrame: '#9ab0a0',
+  text: '#6fc3d9',
+  data: '#d9c38f',
+  meta: '#c9b3d9',
+  sectionHeaders: '#5f9fb2',
+  padding: '#4b5266',
+} as const;

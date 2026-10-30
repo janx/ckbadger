@@ -279,11 +279,15 @@ describe('ChartsPage', () => {
     expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Charts')).toBeInTheDocument();
 
-    expect(screen.getByText('Proof of work')).toBeInTheDocument();
-    expect(screen.getByText('Nervos DAO & economics')).toBeInTheDocument();
-    expect(screen.getByText('Blocks')).toBeInTheDocument();
-    expect(screen.getByText('Activity')).toBeInTheDocument();
-    expect(screen.getByText('Common knowledge')).toBeInTheDocument();
+    // Each section name is also its jump link in the header nav (CH-10): read the headings.
+    for (const name of [
+      'Proof of work',
+      'Nervos DAO & economics',
+      'Blocks',
+      'Activity',
+      'Common knowledge',
+    ])
+      expect(screen.getByRole('heading', { level: 2, name })).toBeInTheDocument();
     expect(screen.getAllByRole('article').length).toBe(28);
     expect(screen.getByRole('link', { name: 'Scripts' })).toHaveAttribute(
       'href',
@@ -316,5 +320,85 @@ describe('ChartsPage', () => {
       expect(screen.getAllByTestId('chart-%').length).toBeGreaterThan(0);
       expect(screen.getAllByTestId('chart-CKB').length).toBeGreaterThan(0);
     });
+  });
+
+  // F2 charts group (CH-05, CH-10, CH-11): the user's section order, anchors, footnote.
+  it('orders sections and charts the way the user corrected them (CH-05)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+    render(<ChartsPage />);
+    expect(
+      screen.getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent)
+    ).toEqual([
+      'Activity',
+      'Nervos DAO & economics',
+      'Common knowledge',
+      'Proof of work',
+      'Blocks',
+    ]);
+    const titles = screen
+      .getAllByRole('article')
+      .map((article) => article.getAttribute('aria-label')!.replace(' chart preview', ''));
+    expect(titles).toEqual([
+      'Transactions',
+      'Active addresses',
+      'CKB moved',
+      'Activities',
+      'Activity by type',
+      'Live cells',
+      'HODL wave',
+      'Supply',
+      'DAO deposits',
+      'Deposited per day',
+      'Nominal APC',
+      'Inflation',
+      'Secondary issuance',
+      'Knowledge size',
+      'Knowledge by kind',
+      'Scripts',
+      'Assets',
+      'Cell size',
+      'Capacity turnover',
+      'Cohort retention',
+      'Hash rate',
+      'Difficulty',
+      'Uncle rate',
+      'Miners',
+      'Block time',
+      'Epoch length',
+      'Block intervals',
+      'Epoch durations',
+    ]);
+  });
+
+  it('links every section from the header and ends with the complete-day note (CH-10)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+    render(<ChartsPage />);
+    const nav = screen.getByRole('navigation', { name: 'Chart sections' });
+    expect(
+      [...nav.querySelectorAll('a')].map((a) => `${a.textContent} ${a.getAttribute('href')}`)
+    ).toEqual([
+      'Activity #activity',
+      'Nervos DAO & economics #nervos-dao-economics',
+      'Common knowledge #common-knowledge',
+      'Proof of work #proof-of-work',
+      'Blocks #blocks',
+    ]);
+    expect(document.getElementById('proof-of-work')).not.toBeNull();
+    expect(screen.getByText(/Every chart stops at the last complete day/)).toBeInTheDocument();
+    expect(screen.queryByText('Canonical chain aggregates and distributions')).toBeNull();
+  });
+
+  it('does not repeat a "Last change" line on every card (CH-11, CH-32)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
+    vi.mocked(api.getHashRateChart).mockResolvedValue({
+      ...mockChartResponse,
+      data: [
+        { date: '2024-01-01', value: '100' },
+        { date: '2024-01-02', value: '90' },
+      ],
+    });
+    render(<ChartsPage />);
+    await screen.findByRole('group', { name: 'Hash rate current readout' });
+    expect(screen.queryByText(/Last change/)).toBeNull();
   });
 });

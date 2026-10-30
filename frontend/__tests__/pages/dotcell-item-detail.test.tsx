@@ -20,17 +20,20 @@ it('routes only an actual name 404 to exact endpoint evidence', async () => {
 });
 it('shows current name state, exact protocol, physical cell history and both feed layers', async () => {
   render(<Page identityId="alice.cell" />);
-  expect(await screen.findByRole('heading', { level: 1, name: 'alice.cell' })).toHaveClass(
-    'text-[26px]'
+  // The name's own title replaces the loading one once its detail arrives.
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.cell')
   );
+  expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
   expect(api.getDotCellItemDetail).toHaveBeenCalledWith('alice.cell');
-  expect(await screen.findByLabelText('Named ownership')).toHaveTextContent(
-    'protocol rights are separate'
+  expect(await screen.findByRole('region', { name: 'Owner and manager' })).toBeInTheDocument();
+  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
+    'Name cell data · layout v3 · 103 bytes'
   );
-  expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent('dotcell cell data');
   expect(screen.getByRole('tab', { name: 'Activities' })).toBeInTheDocument();
   expect(screen.getByRole('tab', { name: 'Transactions' })).toBeInTheDocument();
-  expect(screen.getByLabelText('Facts')).toHaveTextContent('active');
+  // The API's name state is the status beside the title (ID-C10).
+  expect(screen.getByText('Active')).toHaveAttribute('data-identity-state', 'active');
 });
 it('links a uniquely resolved protocol owner and retains unresolved manager bytes', async () => {
   const protocol: ItemProtocol = structuredClone(evidence);
@@ -42,14 +45,20 @@ it('links a uniquely resolved protocol owner and retains unresolved manager byte
   };
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
   render(<Page identityId="alice" />);
-  const rights = await screen.findByLabelText('Named ownership');
-  expect(within(rights).getByRole('link')).toHaveAttribute('href', '/mainnet/address/ckb1owner');
+  const rights = await screen.findByRole(
+    'region',
+    { name: 'Owner and manager' },
+    { timeout: 4000 }
+  );
+  expect(
+    within(within(rights).getByLabelText('Owner · holds the name')).getByRole('link')
+  ).toHaveAttribute('href', '/mainnet/address/ckb1owner');
   expect(rights).toHaveTextContent(evidence.versions[0].decoded.manager.hashPrefix);
   expect(rights.querySelector('a[href*="626262"]')).toBeNull();
 });
 it('shows unresolved named owner as exact prefix and never a fabricated address', async () => {
   render(<Page identityId="alice" />);
-  const rights = await screen.findByLabelText('Named ownership');
+  const rights = await screen.findByRole('region', { name: 'Owner and manager' });
   expect(rights).toHaveTextContent(evidence.versions[0].decoded.owner.hashPrefix);
   expect(within(rights).queryByRole('link')).not.toBeInTheDocument();
 });
@@ -75,10 +84,15 @@ it('renders UTF8 and binary records with exact TTL without dropping unknown keys
   ];
   vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
   render(<Page identityId="alice" />);
-  const records = await screen.findByLabelText('Name records');
-  expect(records).toHaveTextContent('https://example.com');
-  expect(records).toHaveTextContent('0xff0080');
-  expect(records).toHaveTextContent('TTL 4294967295s');
+  // Tier 1 names them (ID-DC5); tier 2 keeps them exactly as stored, unknown keys included.
+  const named = await screen.findByRole('region', { name: 'What alice.cell points to' });
+  expect(named).toHaveTextContent('Website');
+  expect(named).toHaveTextContent('https://example.com');
+  expect(named).toHaveTextContent('custom.raw');
+  expect(named).toHaveTextContent('3 bytes, not text');
+  const stored = screen.getByRole('region', { name: 'Records as stored · witness' });
+  expect(stored).toHaveTextContent('0xff0080');
+  expect(stored).toHaveTextContent('ttl 4294967295');
 });
 it('shows exact sale price, named seller, and the current sale offer only when listed', async () => {
   const item = dotcellItem();
@@ -99,7 +113,9 @@ it('shows exact sale price, named seller, and the current sale offer only when l
   unmount();
   vi.mocked(api.getDotCellItemDetail).mockResolvedValue(dotcellItem());
   render(<Page identityId="alice" />);
-  await screen.findByRole('heading', { level: 1, name: 'alice.cell' });
+  await waitFor(() =>
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.cell')
+  );
   expect(screen.queryByText('For sale')).not.toBeInTheDocument();
 });
 it('links the parent, ring successor and sub-names to canonical name routes', async () => {
@@ -122,9 +138,21 @@ it('links the parent, ring successor and sub-names to canonical name routes', as
     'href',
     `/mainnet/cell/${'0x' + '99'.repeat(32)}-0`
   );
-  expect(screen.getByText('Ring successor').querySelector('a')).toHaveAttribute(
+  // The fixture name is the ring's last (next id zero = end of ring): no successor link.
+  expect(screen.getByRole('region', { name: 'Name cell' })).toHaveTextContent("the ring's end");
+});
+it('names the ring successor and links it by its id (ID-DC6)', async () => {
+  const next = '0x' + '3a'.repeat(20);
+  const protocol: ItemProtocol = structuredClone(evidence);
+  (protocol.versions[0].decoded as { nextId: string }).nextId = next;
+  vi.mocked(api.getItemProtocol).mockResolvedValue(protocol);
+  vi.mocked(api.getDotCellItemDetail).mockImplementation(async (ref) =>
+    ref === next ? { ...dotcellItem(), identityId: next, name: 'ckb.cell' } : dotcellItem()
+  );
+  render(<Page identityId="alice" />);
+  expect(await screen.findByRole('link', { name: 'ckb.cell' }, { timeout: 4000 })).toHaveAttribute(
     'href',
-    `/mainnet/identities/dotcell/${item.nextId}`
+    `/mainnet/identities/dotcell/${next}`
   );
 });
 it('appends every sub-name page and only reports the full child count after completion', async () => {
@@ -151,7 +179,7 @@ it('appends every sub-name page and only reports the full child count after comp
     limit: 50,
     cursor: 'second',
   });
-  expect(screen.getByText('Children (3)')).toBeInTheDocument();
+  expect(screen.getByText('Sub-names · 3')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Show more sub-names' })).not.toBeInTheDocument();
 });
 it('retains loaded child names when a later page fails and exposes the error', async () => {
@@ -184,8 +212,8 @@ it('retains recycled name protocol history without a live cell or sale', async (
   };
   vi.mocked(api.getItemCellVersions).mockResolvedValue(history);
   render(<Page identityId="alice" />);
-  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
-  expect(await screen.findByText('No live cell')).toBeInTheDocument();
+  expect(await screen.findByText('Recycled')).toHaveAttribute('data-identity-state', 'recycled');
+  expect(await screen.findByText('no live cell')).toBeInTheDocument();
   expect(screen.queryByRole('heading', { name: 'For sale' })).not.toBeInTheDocument();
   expect(await screen.findByLabelText('Raw item evidence')).toBeInTheDocument();
 });
@@ -224,4 +252,28 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   render(<Page identityId="unknown" />);
   expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
   expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();
+});
+
+// ── F2 identities (round 2): IdentityDotcell tier 1 (ID-C7 grace, ID-DC5, ID-DC7) ──
+it('reads like the .cell board: records named, roles, a held-until bar with grace', async () => {
+  render(<Page identityId="alice" />);
+  expect(
+    await screen.findByRole('heading', { name: 'Held until 2030-03-18' }, { timeout: 4000 })
+  ).toBeInTheDocument();
+  expect(screen.getByText(/then 30 days of grace/)).toBeInTheDocument();
+  expect(document.querySelector('[data-grace]')).not.toBeNull();
+  expect(screen.getByRole('region', { name: 'What alice.cell points to' })).toBeInTheDocument();
+  const facts = screen.getByRole('complementary', { name: 'Facts' });
+  expect(
+    Array.from(facts.querySelectorAll(':scope > dl > div > dt')).map((d) => d.textContent)
+  ).toEqual([
+    'Owner',
+    'Manager',
+    'Expires',
+    'Registered',
+    'Records',
+    'Sub-names · for sale',
+    'CKB held in its cell',
+  ]);
+  expect(facts).not.toHaveTextContent(/Namespace args|Physical cell owner|Name state/);
 });

@@ -40,6 +40,8 @@ export interface ItemFeedSubject {
   protocolName?: string;
   /** `.bit`: rows are named by their `dotbit:` actions in the board's words. */
   protocol?: 'dotbit';
+  /** F2 identities (round 2): this standard's words for the API's coarse item action. */
+  actionWords?: Readonly<Record<string, string>>;
 }
 
 const sentence = (labels: string[]) =>
@@ -106,11 +108,29 @@ export function itemFeedHeadline(
       text: `${item.protocolName} · ${context.protocolActions.map((action) => dotcellActionLabel(action)).join(', ')}`,
       neighbour,
     };
+  const worded = item.actionWords?.[context.action];
+  if (worded) return { text: worded, neighbour };
   return {
     text: `${item.kind === 'identity' ? 'Identity' : 'Object'} ${context.action.toLowerCase()}`,
     neighbour,
   };
 }
+
+// ── F2 identities (round 2) ──────────────────────────────────────────────────────────────────
+/**
+ * did:ckb and `.bit Cell` transactions carry no protocol action; their rows are named from the
+ * API's coarse item action in their boards' words (IdentityDid, IdentityBitCell; ID-C1). The
+ * boards' "Handle changed" / "Updated by its owner" need an API fact and are not inferred.
+ */
+export const IDENTITY_ACTION_WORDS = {
+  did_ckb: { mint: 'Created', update: 'Document updated', transfer: 'Transferred', burn: 'Burned' },
+  bit_cell: {
+    mint: 'Minted as a .bit Cell',
+    update: 'Updated',
+    transfer: 'Transferred',
+    burn: 'Burned',
+  },
+} as const satisfies Record<string, Record<string, string>>;
 
 const COLLECTION_KINDS = [
   ['minted', 'mint', 'Minted'],

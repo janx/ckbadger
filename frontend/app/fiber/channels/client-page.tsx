@@ -5,32 +5,103 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { FiberNetworkGraph } from '@/components/fiber/fiber-network-graph';
-import { observedDuration } from '@/components/fiber/fiber-channel-board';
+import { TopicHero, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type FiberChannelState } from '@/lib/api';
+import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+import { cn, formatUtc8Date } from '@/lib/utils';
+import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { ExactCkb } from '@/components/activity-event-row';
 
 type StateFilter = 'all' | FiberChannelState;
-const filters: { value: StateFilter; label: string }[] = [
-  { value: 'all', label: 'All' },
-  { value: 'open', label: 'Open' },
-  { value: 'cooperativelyClosed', label: 'Cooperative' },
-  { value: 'forceClosed', label: 'Force-close waiting' },
-  { value: 'settled', label: 'Settled' },
+/** The board's chip order and words (Fiber V65); counts are the summary's own fields. */
+const filters: {
+  value: StateFilter;
+  label: string;
+  count: (summary: FiberNetwork['summary']) => number;
+}[] = [
+  { value: 'open', label: 'Open', count: (s) => s.openChannels },
+  {
+    value: 'cooperativelyClosed',
+    label: 'Closed together',
+    count: (s) => s.cooperativelyClosedChannels,
+  },
+  { value: 'settled', label: 'Force-closed, settled', count: (s) => s.forceClosedSettledChannels },
+  {
+    value: 'forceClosed',
+    label: 'Force-closed, not settled',
+    count: (s) => s.forceClosedWaitingChannels,
+  },
+  { value: 'all', label: 'All', count: (s) => s.totalChannels },
 ];
-const stateLabel: Record<FiberChannelState, string> = {
-  open: 'Open',
-  cooperativelyClosed: 'Cooperative close',
-  forceClosed: 'Force-close waiting',
-  settled: 'Settled',
-};
-const short = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-8)}`;
+const shortId = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
+
+function Party({ party }: { party: FiberChannel['observedParties'][number] }) {
+  const text = party.address
+    ? `${party.address.slice(0, 10)}…${party.address.slice(-6)}`
+    : `${party.lockScriptHash.slice(0, 10)}…${party.lockScriptHash.slice(-6)}`;
+  return party.address ? (
+    <Link
+      href={`/address/${party.address}`}
+      className="text-text hover:text-jade"
+      title={party.address}
+    >
+      {text}
+    </Link>
+  ) : (
+    <span className="text-text" title={party.lockScriptHash}>
+      {text}
+    </span>
+  );
+}
+
+function heroFigures(summary: FiberNetwork['summary']): TopicFigure[] {
+  const closed = summary.totalChannels - summary.openChannels;
+  if (closed < 0 || summary.closedWithinHour > closed)
+    throw new Error(
+      `Fiber summary: ${summary.closedWithinHour} closed within an hour of ${summary.totalChannels} channels, ${summary.openChannels} open`
+    );
+  return [
+    {
+      label: 'Open now',
+      value: summary.openChannels.toLocaleString('en-US'),
+      sub: (
+        <>
+          locking{' '}
+          <ExactCkb shannons={BigInt(summary.totalCapacityLocked)} signed={false} tone="plain" />
+        </>
+      ),
+    },
+    {
+      label: 'Channels ever',
+      value: summary.totalChannels.toLocaleString('en-US'),
+      sub: summary.firstOpenTimestamp
+        ? `since ${formatUtc8Date(summary.firstOpenTimestamp)}`
+        : 'none yet',
+    },
+    {
+      label: 'Parties',
+      value: summary.observedParties.toLocaleString('en-US'),
+      sub: `in ${formatCount(summary.observedPairs, 'pair')}`,
+    },
+    {
+      label: 'Typical lifetime',
+      value:
+        summary.typicalClosedLifetimeMs === null
+          ? 'none closed yet'
+          : fiberDuration(summary.typicalClosedLifetimeMs, 'typical closed lifetime'),
+      sub: `${summary.closedWithinHour.toLocaleString('en-US')} of ${closed.toLocaleString('en-US')} closed within an hour`,
+    },
+  ];
+}
+
+const COLUMNS =
+  'md:grid-cols-[200px_minmax(0,1fr)_210px_120px_110px] md:items-baseline md:gap-[14px]';
 
 export default function FiberChannelsPage() {
-  const [stateFilter, setStateFilter] = useState<StateFilter>('all');
+  const [stateFilter, setStateFilter] = useState<StateFilter>('open');
   const pagination = useCursorPagination();
   const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
   const channels = useQuery({
@@ -42,114 +113,60 @@ export default function FiberChannelsPage() {
         state: stateFilter === 'all' ? undefined : stateFilter,
       }),
   });
-  const stats = network.data?.summary;
+  const summary = network.data?.summary;
+  const chosen = filters.find((filter) => filter.value === stateFilter)!;
+  const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto max-w-[1440px] px-4 pb-16 pt-6">
-        <div className="text-jade font-mono text-[11px] uppercase tracking-[0.16em]">
-          Payment channels · on-chain view
-        </div>
-        <h1 className="text-text-bright mt-1 text-[26px] font-semibold">Fiber channels</h1>
-        <p className="text-text-dim mt-2 max-w-3xl text-[15px] leading-relaxed">
-          Fiber parties lock CKB or tokens in a shared cell and can pay off chain. This page shows
-          only openings and closes observed on CKB; it cannot reveal off-chain payments, balances,
-          or routing.
-        </p>
+      <main className="container mx-auto flex max-w-[1280px] flex-col gap-11 px-4 pb-[72px] pt-7">
+        <TopicHero
+          title="Fiber channels"
+          intro="Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in one shared cell and pay each other off chain as often as they like. Only opening and closing a channel touch the chain, so that is what CKBadger sees."
+          figures={summary ? heroFigures(summary) : undefined}
+        />
         {network.isError && (
-          <p role="alert" className="text-rouge mt-5 text-[13px]">
+          <p role="alert" className="text-rouge text-[13px]">
             Fiber network evidence could not be loaded: {String(network.error)}
           </p>
         )}
         {network.isLoading && (
-          <p className="text-text-dim py-8 text-[13px]">Loading indexed Fiber network…</p>
-        )}
-        {stats && (
-          <div className="border-base-border mt-7 grid min-h-[72px] gap-4 border-y py-3 sm:grid-cols-2 lg:grid-cols-5">
-            <div>
-              <div className="text-text-dim text-[11px]">Channels ever</div>
-              <div className="text-text-bright mt-1 font-mono text-[18px]">
-                {stats.totalChannels.toLocaleString()}
-              </div>
-              <div className="text-text-dim text-[11px]">
-                {stats.firstOpenTimestamp
-                  ? `since ${new Date(Number(stats.firstOpenTimestamp)).toLocaleDateString()}`
-                  : 'none yet'}
-              </div>
-            </div>
-            <div>
-              <div className="text-text-dim text-[11px]">Open now</div>
-              <div className="text-jade mt-1 font-mono text-[18px]">
-                {stats.openChannels.toLocaleString()}
-              </div>
-              <div className="text-text-dim text-[11px]">
-                <ExactCkb
-                  shannons={BigInt(stats.totalCapacityLocked)}
-                  signed={false}
-                  tone="plain"
-                />{' '}
-                locked
-              </div>
-            </div>
-            <div>
-              <div className="text-text-dim text-[11px]">Observed parties</div>
-              <div className="text-text-bright mt-1 font-mono text-[18px]">
-                {stats.observedParties.toLocaleString()}
-              </div>
-              <div className="text-text-dim text-[11px]">
-                in {stats.observedPairs.toLocaleString()} on-chain pairs
-              </div>
-            </div>
-            <div>
-              <div className="text-text-dim text-[11px]">Force-close waiting</div>
-              <div className="text-text-bright mt-1 font-mono text-[18px]">
-                {stats.forceClosedWaitingChannels.toLocaleString()}
-              </div>
-              <div className="text-text-dim text-[11px]">
-                {stats.forceClosedSettledChannels} settled · {stats.cooperativelyClosedChannels}{' '}
-                cooperative
-              </div>
-            </div>
-            <div>
-              <div className="text-text-dim text-[11px]">Observed closed lifetime</div>
-              <div className="text-text-bright mt-1 font-mono text-[18px]">
-                {observedDuration(stats.typicalClosedLifetimeMs)}
-              </div>
-              <div className="text-text-dim text-[11px]">
-                lower median · {stats.closedWithinHour} under 1 h
-              </div>
-            </div>
-          </div>
+          <p className="text-text-dim text-[13px]">Loading indexed Fiber network…</p>
         )}
         {network.data && <FiberNetworkGraph network={network.data} />}
-        <section className="border-base-border border-t pt-5" aria-label="Fiber channels">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="text-text-bright text-[18px] font-medium">Channels on CKB</h2>
-              <p className="text-text-dim mt-1 text-[12px]">
-                Each row is an indexed funding cell and its on-chain lifecycle.
-              </p>
-            </div>
-            <div
-              className="flex flex-wrap gap-1"
-              role="group"
-              aria-label="Filter channels by state"
-            >
-              {filters.map((filter) => (
+        <section aria-labelledby="fiber-channels-heading" className="flex min-w-0 flex-col gap-2.5">
+          <h2 id="fiber-channels-heading" className="text-text-bright text-[15px] font-medium">
+            Channels
+          </h2>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="State">
+            {filters.map((filter) => {
+              const on = stateFilter === filter.value;
+              return (
                 <button
                   key={filter.value}
                   type="button"
-                  aria-pressed={stateFilter === filter.value}
+                  aria-pressed={on}
                   onClick={() => {
                     setStateFilter(filter.value);
                     pagination.reset();
                   }}
-                  className={`border px-2.5 py-1 font-mono text-[11px] ${stateFilter === filter.value ? 'border-jade text-jade' : 'border-base-border text-text-dim hover:text-text'}`}
+                  className={cn(
+                    'h-[30px] rounded-md border px-[11px] text-[12px]',
+                    on
+                      ? 'bg-base-elevated text-text-bright border-[#2c3348]'
+                      : 'border-base-border-subtle text-text hover:text-text-bright'
+                  )}
                 >
                   {filter.label}
+                  {summary && (
+                    <span className="text-text-dim">
+                      {' '}
+                      {filter.count(summary).toLocaleString('en-US')}
+                    </span>
+                  )}
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
           {channels.isError && (
             <p role="alert" className="text-rouge py-7 text-[13px]">
@@ -161,80 +178,88 @@ export default function FiberChannelsPage() {
           )}
           {channels.data && (
             <>
-              <div className="border-base-border text-text-dim mt-4 hidden grid-cols-[minmax(0,1.5fr)_minmax(0,1.7fr)_150px_145px_110px] gap-4 border-y py-2 font-mono text-[11px] uppercase tracking-wider md:grid">
-                <span>Channel</span>
-                <span>Observed locks</span>
-                <span>State</span>
-                <span className="text-right">Funding capacity</span>
-                <span className="text-right">Opened</span>
-              </div>
-              {channels.data.data.length === 0 && (
-                <p className="text-text-dim py-10 text-[13px]">
-                  No {stateFilter === 'all' ? '' : `${stateFilter} `}channels observed.
-                </p>
-              )}
-              {channels.data.data.map((channel) => (
+              <div role="table" aria-label={`${chosen.label} channels`} className="min-w-0">
                 <div
-                  key={channel.channelId}
-                  className="border-base-border grid gap-2 border-b py-3 text-[12px] md:grid-cols-[minmax(0,1.5fr)_minmax(0,1.7fr)_150px_145px_110px] md:items-center md:gap-4"
+                  role="row"
+                  className={cn(
+                    'border-base-border-subtle text-text-dim hidden border-b py-1.5 text-[11px] md:grid',
+                    COLUMNS
+                  )}
                 >
-                  <Link
-                    href={`/fiber/channels/${channel.channelId}`}
-                    className="text-jade min-w-0 break-all font-mono hover:underline"
-                    title={channel.channelId}
-                  >
-                    {short(channel.channelId)}
-                  </Link>
-                  <div className="text-text-dim flex min-w-0 flex-wrap gap-x-2 gap-y-1 font-mono text-[11px]">
-                    {channel.observedParties.map((party) =>
-                      party.address ? (
+                  <span role="columnheader">Channel</span>
+                  <span role="columnheader">Parties</span>
+                  <span role="columnheader" className="text-right">
+                    Capacity
+                  </span>
+                  <span role="columnheader">Opened</span>
+                  <span role="columnheader" className="text-right">
+                    {lastColumn}
+                  </span>
+                </div>
+                {channels.data.data.length === 0 && (
+                  <p className="text-text-dim py-10 text-[13px]">
+                    No {chosen.label.toLowerCase()} channels observed.
+                  </p>
+                )}
+                {channels.data.data.map((channel) => {
+                  if (channel.observedLifetimeMs === null)
+                    throw new Error(`Fiber channel ${channel.channelId} has no observed lifetime`);
+                  return (
+                    <div
+                      key={channel.channelId}
+                      role="row"
+                      className={cn(
+                        'grid gap-1 border-b border-[#161a25] py-2 text-[12.5px]',
+                        COLUMNS
+                      )}
+                    >
+                      <span role="cell" className="min-w-0">
                         <Link
-                          key={party.lockScriptHash}
-                          href={`/address/${party.address}`}
-                          className="hover:text-jade"
-                          title={party.address}
+                          href={`/fiber/channels/${channel.channelId}`}
+                          className="text-[#6aa9c4] hover:underline"
+                          title={channel.channelId}
                         >
-                          {short(party.address)}
+                          {shortId(channel.channelId)}
                         </Link>
-                      ) : (
-                        <span key={party.lockScriptHash} title={party.lockScriptHash}>
-                          Unknown address · {short(party.lockScriptHash)}
-                        </span>
-                      )
-                    )}
-                  </div>
-                  <span
-                    className={
-                      channel.state === 'open'
-                        ? 'text-jade'
-                        : channel.state === 'forceClosed'
-                          ? 'text-text-bright'
-                          : 'text-text-dim'
-                    }
-                  >
-                    {stateLabel[channel.state]}
-                  </span>
-                  <span className="text-text-bright font-mono md:text-right">
-                    <ExactCkb shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
-                  </span>
-                  <span className="text-text-dim md:text-right">
-                    {formatTimeAgo(channel.openTimestamp)}
-                  </span>
-                </div>
-              ))}
+                        {stateFilter === 'all' && (
+                          <span className="text-text-dim block text-[11px]">
+                            {FIBER_STATE_WORDS[channel.state]}
+                          </span>
+                        )}
+                      </span>
+                      <span role="cell" className="flex min-w-0 flex-wrap gap-x-1.5">
+                        {channel.observedParties.map((party, index) => (
+                          <span key={party.lockScriptHash}>
+                            {index > 0 && <span className="text-[#4b5266]">↔ </span>}
+                            <Party party={party} />
+                          </span>
+                        ))}
+                      </span>
+                      <span role="cell" className="md:text-right">
+                        <ExactCkb shannons={BigInt(channel.capacity)} signed={false} tone="plain" />
+                      </span>
+                      <span role="cell" className="text-text-dim">
+                        {formatUtc8Date(channel.openTimestamp)}
+                      </span>
+                      <span role="cell" className="text-text md:text-right">
+                        {fiberDuration(channel.observedLifetimeMs, `${channel.channelId} lifetime`)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
               {(channels.data.hasMore || pagination.hasPrevious) && (
-                <div className="mt-4 flex justify-center">
-                  <CursorPagination
-                    total={channels.data.total}
-                    totalLabel="channels"
-                    pageSize={DEFAULT_PAGE_SIZE}
-                    hasMore={channels.data.hasMore}
-                    hasPrevious={pagination.hasPrevious}
-                    page={pagination.page}
-                    onNext={() => pagination.goToNext(channels.data?.nextCursor)}
-                    onPrevious={pagination.goToPrevious}
-                  />
-                </div>
+                <CursorPagination
+                  className="pt-1"
+                  totalLabel="channels"
+                  pageSize={DEFAULT_PAGE_SIZE}
+                  page={pagination.page}
+                  currentCount={channels.data.data.length}
+                  hasMore={channels.data.hasMore}
+                  hasPrevious={pagination.hasPrevious}
+                  onNext={() => pagination.goToNext(channels.data?.nextCursor)}
+                  onPrevious={pagination.goToPrevious}
+                />
               )}
             </>
           )}

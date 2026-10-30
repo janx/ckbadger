@@ -6,6 +6,7 @@ import { api, type NetworkHistory } from '@/lib/api';
 import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/components/ui/chart';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import { axisTicks } from '@/components/charts/chart-model';
 
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
@@ -185,20 +186,10 @@ export function NetworkTrends() {
     queryFn: () => api.getNetworkHistory('reachablePeers', 'day', undefined, nowSeconds()),
     refetchInterval: 60000,
   });
-  const versionShare = useQuery({
-    queryKey: ['network', 'history', 'versionShare', 'day'],
-    queryFn: () => api.getNetworkHistory('versionShare', 'day', undefined, nowSeconds()),
-    refetchInterval: 60000,
-  });
-  const countryShare = useQuery({
-    queryKey: ['network', 'history', 'countryShare', 'day'],
-    queryFn: () => api.getNetworkHistory('countryShare', 'day', undefined, nowSeconds()),
-    refetchInterval: 60000,
-  });
-
+  // The board: reachable a jade area, verified a white line over it (CH-58).
   const peerSeries: ChartSeries[] = [
     { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
-    { key: 'verified', label: 'Verified (retained)', color: '#dee2ec' },
+    { key: 'verified', label: 'Verified (retained)', color: '#dee2ec', lineOnly: true },
   ];
   const peerCounts = mergePeerCounts(verifiedPeers.data, reachablePeers.data);
   const peerHistoryError =
@@ -254,6 +245,8 @@ export function NetworkTrends() {
               }
               gaps={gaps}
               formatValue={(value) => formatExactDecimal(value, 'peer count')}
+              xTicks={axisTicks(peerCounts.data, 'date', 6)}
+              pointDots
             />
             <p className="text-text-dim mt-2 text-[11px]">
               {gaps.length > 0 && 'Shaded days have no retained round observation. '}
@@ -262,19 +255,30 @@ export function NetworkTrends() {
           </>
         )}
       </TrendPanel>
-
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <ShareTrend
-          title="Client Version Share"
-          history={versionShare.data}
-          error={versionShare.isError}
-        />
-        <ShareTrend
-          title="Country Share"
-          history={countryShare.data}
-          error={countryShare.isError}
-        />
-      </div>
     </section>
+  );
+}
+
+/** The retained daily version and country counts: developer evidence, tier 2 (CH-54). */
+export function NetworkShareHistory() {
+  const versionShare = useQuery({
+    queryKey: ['network', 'history', 'versionShare', 'day'],
+    queryFn: () => api.getNetworkHistory('versionShare', 'day', undefined, nowSeconds()),
+    refetchInterval: 60000,
+  });
+  const countryShare = useQuery({
+    queryKey: ['network', 'history', 'countryShare', 'day'],
+    queryFn: () => api.getNetworkHistory('countryShare', 'day', undefined, nowSeconds()),
+    refetchInterval: 60000,
+  });
+  return (
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      <ShareTrend
+        title="Client Version Share"
+        history={versionShare.data}
+        error={versionShare.isError}
+      />
+      <ShareTrend title="Country Share" history={countryShare.data} error={countryShare.isError} />
+    </div>
   );
 }

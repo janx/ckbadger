@@ -134,6 +134,74 @@ describe('IciclePartition (DAO-7)', () => {
   });
 });
 
+// ---- F2 group dao: additive IciclePartition options (DAO-7 on the DAO page) ----
+describe('IciclePartition label placement and pixel width (F2 dao)', () => {
+  const node = (over: Record<string, unknown>) => ({
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    ...over,
+  });
+  const tree = node({
+    align: 'inside',
+    note: '1.344 billion CKB a year',
+    color: '#4b5266',
+    ink: 'bright',
+    children: [
+      { key: 'm', label: 'to miners', value: BigInt(10), tone: 'ckb' as const, note: '10.00%' },
+      {
+        key: 'c',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        align: 'end' as const,
+        note: '20.00% · via AR',
+      },
+      {
+        key: 'b',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        align: 'inside' as const,
+        ink: 'bright' as const,
+      },
+    ],
+  });
+  it('draws at a measured pixel width, with a fill override and three label placements', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} />
+    );
+    const svg = container.querySelector('svg')!;
+    // The root's words sit inside it, so row 1 follows 16 px below it, not a label band.
+    expect(svg.getAttribute('viewBox')).toBe('0 0 1200 116');
+    const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
+    expect(box('total').getAttribute('fill')).toBe('#4b5266');
+    expect(box('c').getAttribute('x')).toBe('120');
+    // inside: one line in the box; end: right-aligned under the box; default: left under it
+    const label = (key: string) => container.querySelector(`[data-label="${key}"]`)!;
+    expect(label('total').getAttribute('y')).toBe('19');
+    expect(label('total')).toHaveTextContent(
+      'Secondary issuance since genesis 100 · 1.344 billion CKB a year'
+    );
+    expect(label('total')).toHaveClass('fill-text-bright');
+    expect(label('c').getAttribute('text-anchor')).toBe('end');
+    expect(label('c').getAttribute('x')).toBe('350');
+    expect(container.querySelector('[data-note="c"]')).toHaveTextContent('20.00% · via AR');
+    expect(label('m').getAttribute('text-anchor')).toBe('start');
+    expect(label('b').getAttribute('y')).toBe(String(44 + 19));
+  });
+  it('can leave every word to an HTML legend at narrow widths', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={358} hideLabels />
+    );
+    expect(container.querySelectorAll('text')).toHaveLength(0);
+    // rows sit one box apart once no labels need the room between them
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 358 64');
+    expect(container.querySelector('[data-node="b"]')!.getAttribute('y')).toBe('36');
+  });
+});
+
 describe('ConcentrationBar (DAO-12)', () => {
   it('splits a total into ranked groups of one class colour with exact shares', () => {
     const { container } = render(
@@ -220,6 +288,19 @@ describe('TenureBar (ID-C7)', () => {
       'fill',
       CLASS_COLORS.identities
     );
+  });
+  // F2 identities (round 2): the board's caption beside the title (IdentityBit "3 years paid").
+  it('sets an optional caption beside its title', () => {
+    render(
+      <TenureBar
+        name="valar.bit"
+        periods={[{ label: 'paid at registration', start: reg, end: reg + 365 * day }]}
+        now={reg + 100 * day}
+        note="1 year paid at registration · not renewed"
+      />
+    );
+    const heading = screen.getByRole('heading', { name: 'Held until 2025-02-19' });
+    expect(heading.parentElement).toHaveTextContent('1 year paid at registration · not renewed');
   });
 });
 

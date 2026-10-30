@@ -4,6 +4,11 @@ import { cn } from '@/lib/utils';
 /** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
 const DetailTierContext = createContext<1 | 2>(1);
 
+/** F2 identities (round 2): which tier a section renders in, for headings outside DetailSection. */
+export function useDetailTier(): 1 | 2 {
+  return useContext(DetailTierContext);
+}
+
 /** The developer-evidence tier: one 72 px boundary, and every section heading inside is quiet. */
 export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
   return (

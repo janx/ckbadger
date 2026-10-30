@@ -56,7 +56,7 @@ beforeEach(() => {
 it('uses the canonical item outpoint and protocol instead of resolving an owner balance', async () => {
   render(<IdentityItemDetail config={dotbitConfig} identityId={dotbitV4ProtocolProducer.itemId} />);
   await screen.findByRole('region', { name: 'Raw item evidence' });
-  expect(screen.getByRole('heading', { level: 1, name: 'alice.bit' })).toBeInTheDocument();
+  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.bit');
   const cell = dotbitV4ProtocolProducer.versions[0].cell;
   expect(
     screen
@@ -114,6 +114,6 @@ it('keeps recycled identities inspectable without claiming a live cell', async (
     ownerLockHash: null,
   });
   render(<IdentityItemDetail config={dotbitConfig} identityId={dotbitV4ProtocolProducer.itemId} />);
-  expect(await screen.findByText('Recycled / inactive')).toBeInTheDocument();
+  expect(await screen.findByText('Recycled')).toBeInTheDocument();
   expect(await screen.findByRole('region', { name: 'Raw item evidence' })).toBeInTheDocument();
 });

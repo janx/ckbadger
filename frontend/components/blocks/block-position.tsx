@@ -7,6 +7,40 @@ import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
+import { formatCount } from '@/lib/format-count';
+
+/** A canonical block beside this one, as the blocks list reports it (F2 blocks, BA-15). */
+export type BlockNeighbour = Pick<
+  Block,
+  'number' | 'hash' | 'timestamp' | 'transactionSizes' | 'proposalsCount' | 'unclesCount'
+>;
+
+const heightList = (heights: readonly number[]) => {
+  const names = heights.map(formatBlockNumber);
+  return names.length < 3
+    ? names.join(' and ')
+    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+};
+
+/** "committed what #930 proposed, proposed what #934 committed, and included 1 uncle". */
+export function positionSentence(
+  block: Pick<Block, 'number' | 'proposalsCount' | 'unclesCount'>,
+  links: readonly { from: number; to: number }[]
+): string {
+  const origins = [...new Set(links.filter((l) => l.to === block.number).map((l) => l.from))];
+  const targets = [...new Set(links.filter((l) => l.from === block.number).map((l) => l.to))];
+  return [
+    origins.length
+      ? `committed what ${heightList(origins.sort((a, b) => a - b))} proposed`
+      : 'committed no proposed transactions',
+    block.proposalsCount === 0
+      ? 'proposed nothing'
+      : targets.length
+        ? `proposed what ${heightList(targets.sort((a, b) => a - b))} committed`
+        : `proposed ${formatCount(block.proposalsCount, 'transaction')}, none committed yet`,
+    `and included ${block.unclesCount ? formatCount(block.unclesCount, 'uncle') : 'no uncle'}`,
+  ].join(', ');
+}
 
 interface BlockPositionProps {
   block: Pick<
@@ -24,6 +58,8 @@ interface BlockPositionProps {
   >;
   transactions?: readonly Pick<Transaction, 'hash' | 'isCellbase' | 'proposalOrigin'>[];
   proposals?: readonly BlockProposal[];
+  /** The canonical blocks around this one (two either side), for their times and contents. */
+  neighbours?: readonly BlockNeighbour[];
   page: number;
   hasMore: boolean;
   transactionsError?: string;
@@ -35,11 +71,18 @@ export function BlockPosition({
   block,
   transactions,
   proposals,
+  neighbours,
   page,
   hasMore,
   transactionsError,
   proposalsError,
 }: BlockPositionProps) {
+  const known = new Map((neighbours ?? []).map((n) => [n.number, n]));
+  const own = known.get(block.number);
+  if (own && own.hash.toLowerCase() !== block.hash.toLowerCase())
+    throw new Error(
+      `Block ${formatBlockNumber(block.number)}: the blocks list has another block at this height`
+    );
   const viewport = useRef<HTMLDivElement>(null);
   const arcs = new Map<
     string,
@@ -89,6 +132,19 @@ export function BlockPosition({
     heights.add(arc.from);
     heights.add(arc.to);
   }
+  for (const n of known.keys()) if (Math.abs(n - block.number) <= 2) heights.add(n);
+  // The uncle forks off its parent's tile when that parent is the canonical block beside it.
+  const forkFrom = block.uncles.map((uncle) => {
+    const parent = known.get(uncle.number - 1);
+    return parent && parent.hash.toLowerCase() === uncle.parentHash.toLowerCase()
+      ? uncle.number - 1
+      : null;
+  });
+  for (const [index, from] of forkFrom.entries())
+    if (from !== null) {
+      heights.add(from);
+      heights.add(block.uncles[index].number);
+    }
   const ordered = [...heights].sort((a, b) => a - b);
   const tileWidth = 148;
   const step = 192;
@@ -105,9 +161,8 @@ export function BlockPosition({
   return (
     <div className="min-w-0 space-y-3">
       <p className="text-text-dim text-xs">
-        Gold links show proposals that became committed transactions. Dashed links show uncle
-        inclusion.
-        {(page > 1 || hasMore) && ` Incoming relationships cover transaction page ${page} only.`}
+        {positionSentence(block, links)}
+        {(page > 1 || hasMore) && `. Incoming relationships cover transaction page ${page} only.`}
       </p>
       {transactionsError ? (
         <p role="alert" className="text-text-dim text-xs">
@@ -258,7 +313,11 @@ export function BlockPosition({
           {ordered.map((number) => {
             const current = number === block.number;
             const parent = number === block.number - 1;
-            const timestamp = current ? block.timestamp : parent ? block.parentTimestamp : null;
+            const neighbour = known.get(number);
+            const timestamp = current
+              ? block.timestamp
+              : (neighbour?.timestamp ?? (parent ? block.parentTimestamp : null));
+            const contents = current ? block : neighbour;
             return (
               <g key={number} transform={`translate(${x(number)}, ${tileTop})`}>
                 <Link
@@ -275,17 +334,17 @@ export function BlockPosition({
                     {formatBlockNumber(number)}
                   </text>
                   {timestamp && (
-                    <text x="10" y="39" fill="#7c849c" fontSize="11">
+                    <text data-tile-time x="10" y="39" fill="#7c849c" fontSize="11">
                       {formatUtc8Time(timestamp)}
                     </text>
                   )}
                 </Link>
-                {current && (
+                {contents && (
                   <foreignObject x="10" y="48" width="130" height="40">
                     <BlockContents
-                      transactionSizes={block.transactionSizes}
-                      proposalsCount={block.proposalsCount}
-                      unclesCount={block.unclesCount}
+                      transactionSizes={contents.transactionSizes}
+                      proposalsCount={contents.proposalsCount}
+                      unclesCount={contents.unclesCount}
                     />
                   </foreignObject>
                 )}
@@ -294,6 +353,49 @@ export function BlockPosition({
           })}
           {block.uncles.map((uncle, index) => {
             const top = tileBottom + 36 + index * 94;
+            const from = forkFrom[index];
+            if (from !== null) {
+              const uncleX = x(uncle.number);
+              return (
+                <g key={uncle.hash} data-uncle-hash={uncle.hash}>
+                  <path
+                    data-uncle-fork-from={from}
+                    d={`M${x(from) + tileWidth} ${tileTop + 44}C${x(from) + tileWidth + 25} ${tileTop + 44} ${uncleX - 25} ${top + 28} ${uncleX} ${top + 28}`}
+                    stroke="#2c3348"
+                    strokeWidth="1.5"
+                    fill="none"
+                  />
+                  <path
+                    d={`M${currentX + tileWidth / 2} ${tileBottom}C${currentX + tileWidth / 2} ${top + 28} ${uncleX + tileWidth + 36} ${top + 28} ${uncleX + tileWidth} ${top + 28}`}
+                    fill="none"
+                    stroke="#7c849c"
+                    strokeDasharray="3 3"
+                  />
+                  <Link
+                    href={getUncleDetailHref(block.number, index)}
+                    aria-label={`Included uncle ${formatBlockNumber(uncle.number)}`}
+                  >
+                    <rect
+                      x={uncleX + 0.5}
+                      y={top + 0.5}
+                      width={tileWidth - 1}
+                      height="57"
+                      rx="6"
+                      fill="none"
+                      stroke="#4b5266"
+                      strokeDasharray="3 3"
+                    />
+                    <text x={uncleX + 10} y={top + 21} fill="#a0a8be" fontSize="11">
+                      uncle {formatBlockNumber(uncle.number)}
+                    </text>
+                    <text x={uncleX + 10} y={top + 41} fill="#7c849c" fontSize="11">
+                      {uncle.hash.slice(0, 6)}…{uncle.hash.slice(-4)} ·{' '}
+                      {formatUtc8Time(uncle.timestamp)}
+                    </text>
+                  </Link>
+                </g>
+              );
+            }
             const parentX = 12;
             const uncleX = 230;
             return (

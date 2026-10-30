@@ -103,8 +103,12 @@ describe('TransactionsPage', () => {
       expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
     }
     expect(screen.queryByTitle(/Click to copy/)).not.toBeInTheDocument();
-    expect(screen.getAllByText('2')).toHaveLength(2);
-    expect(screen.getAllByText('3')).toHaveLength(2);
+    expect(screen.getAllByText('2 → 3')).toHaveLength(2);
+    // F2-tx (TX-25 / TX-26): the board's columns, newest first with cellbase rows set back.
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    expect(table).toHaveTextContent('What it did');
+    expect(screen.getByText('newest first · cellbase rows set back')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Older →' })).toBeDisabled();
   });
 });
 
@@ -145,7 +149,7 @@ describe('Transactions pool view', () => {
       ],
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: 'In the pool' }));
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
     const table = await screen.findByRole('table', { name: 'Transactions in the pool' });
     expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
     expect(table).toHaveTextContent('184,467,440,737.09551615 CKB');
@@ -194,7 +198,7 @@ describe('Transactions pool view', () => {
       lastPolledAt: '2026-10-25T00:00:00Z',
     });
     render(<TransactionsPage />);
-    fireEvent.click(screen.getByRole('button', { name: 'In the pool' }));
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
     expect(
       await screen.findByRole('table', { name: 'Transactions in the pool' })
     ).toHaveTextContent('Interpretation partial');
@@ -202,9 +206,20 @@ describe('Transactions pool view', () => {
     expect(screen.getByTestId('pool-banner')).toHaveTextContent(
       '0 pending · 1 proposed · 0 awaiting index'
     );
-    expect(screen.getByLabelText('Pool summary')).toHaveTextContent('226 bytes');
-    expect(screen.getByLabelText('Pool summary')).toHaveTextContent('1,709,221');
-    expect(screen.getByLabelText('Pool summary')).toHaveTextContent('54,623–54,623 shannon/KB');
+    const summary = screen.getByLabelText('Pool summary');
+    expect(summary).toHaveTextContent('Pending · proposed0 · 1');
+    expect(summary).toHaveTextContent('Total size226 B');
+    expect(summary).toHaveTextContent('Total cycles1,709,221');
+    expect(summary).toHaveTextContent('Fee rate, shannon/KB54,623 – 54,623');
+    expect(
+      screen.getByText(
+        'Newest first, 50 a page. A proposed transaction enters a block 2–10 blocks after its proposal.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.getByText('not yet in a block · newest first')).toBeInTheDocument();
+    const pool = screen.getByRole('table', { name: 'Transactions in the pool' });
+    expect(pool).toHaveTextContent('Status · waiting');
+    expect(pool).not.toHaveTextContent('Seen');
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
       expect(hash).toHaveClass('text-text', 'text-xs');
       expect(hash).toHaveTextContent('0xababababab...ababab');
@@ -246,7 +261,8 @@ it('keeps the pool banner above tabs and uses exact day counts even when kinds o
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent('All20')
   );
-  expect(screen.getByRole('button', { name: 'DAO' })).toHaveTextContent('3 actions');
+  expect(screen.getByRole('button', { name: 'Nervos DAO' })).toHaveTextContent(/^Nervos DAO3$/);
+  expect(screen.getByText(/DAO counts actions/)).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'Tokens' })).toHaveTextContent('11');
   expect(screen.getByRole('button', { name: 'Cellbase' })).toHaveTextContent('3');
   expect(
@@ -298,4 +314,42 @@ it('does not infer a transaction total from kind counts when yesterday is incomp
     await screen.findByText(`No complete transaction count for ${yesterday} (UTC+8).`)
   ).toBeInTheDocument();
   expect(screen.getByRole('button', { name: 'All' })).toHaveTextContent(/^All$/);
+});
+
+it('draws awaiting-index pool squares hollow, apart from pending (cyan) and proposed (gold) (TX-38)', async () => {
+  vi.mocked(api.getTransactions).mockResolvedValue({
+    data: [],
+    limit: 50,
+    hasMore: false,
+    nextCursor: null,
+  });
+  const row = (n: number, status: 'pending' | 'proposed' | 'committed_awaiting_index') => ({
+    hash: `0x${String(n).repeat(64)}`,
+    status,
+    value: '0',
+    fee: '1000',
+    feeRate: '1000',
+    txSize: 400,
+    cycles: '1000',
+    inputsCount: 1,
+    outputsCount: 1,
+    timestamp: '1792886400000',
+    interpretation: { status: 'complete' as const, reasons: [] },
+    activity: null,
+  });
+  vi.mocked(api.getPoolTransactions).mockResolvedValue({
+    ...emptyPool,
+    data: [row(1, 'pending'), row(2, 'proposed'), row(3, 'committed_awaiting_index')],
+    total: 3,
+    totals: { pending: 1, proposed: 1, awaitingIndex: 1 },
+  });
+  render(<TransactionsPage />);
+  const banner = await screen.findByTestId('pool-banner');
+  await waitFor(() => expect(banner.querySelectorAll('[data-pool-status]')).toHaveLength(3));
+  expect(banner.querySelector('[data-pool-status="pending"]')).toHaveClass('bg-info');
+  expect(banner.querySelector('[data-pool-status="proposed"]')).toHaveClass('bg-gold');
+  const awaiting = banner.querySelector('[data-pool-status="committed_awaiting_index"]');
+  expect(awaiting).toHaveClass('border', 'border-text-dim');
+  expect(awaiting).not.toHaveClass('bg-info');
+  expect(screen.getByRole('button', { name: /^In the pool/ })).toHaveTextContent('In the pool2');
 });

@@ -2,13 +2,7 @@
 
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  TerminalPanel,
-  TerminalPanelContent,
-  TerminalPanelFooter,
-  TerminalPanelHeader,
-  TerminalRow,
-} from '@/components/ui/terminal-panel';
+import { TerminalRow } from '@/components/ui/terminal-panel';
 import { Badge } from '@/components/ui/page-header';
 import {
   api,
@@ -411,14 +405,10 @@ export function PeersTable() {
   const showEmpty = !isLoading && !isError && rows.length === 0;
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-text-bright font-mono text-lg font-bold">Peer evidence</h2>
-
-      <TerminalPanel>
-        <TerminalPanelHeader indicator={isFetching ? 'active' : 'none'}>
-          Observed network peers
-        </TerminalPanelHeader>
-        <TerminalPanelContent padding="none">
+    // One heading — the section's "Peer evidence" — and plain rules, not a terminal panel (CH-56).
+    <section aria-busy={isFetching} className="space-y-4">
+      <div className="border-base-border-subtle border-y">
+        <div>
           <div className="border-base-border flex flex-wrap items-center gap-3 border-b px-4 py-2">
             <select
               value={filters.state ?? ''}
@@ -482,7 +472,7 @@ export function PeersTable() {
 
           <div className="overflow-x-auto">
             <div
-              className="border-base-border bg-base-surface/50 text-text-dim grid items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider"
+              className="border-base-border bg-base-surface/50 text-text-dim grid items-center gap-x-4 border-b px-4 py-2 font-mono text-xs"
               style={{ gridTemplateColumns: GRID_TEMPLATE, minWidth: GRID_MIN_WIDTH }}
             >
               {COLUMNS.map((label, index) => (
@@ -508,10 +498,10 @@ export function PeersTable() {
               rows.map((peer) => <PeerRow key={peer.peerId} peer={peer} />)
             )}
           </div>
-        </TerminalPanelContent>
+        </div>
 
         {data?.nextCursor != null && (
-          <TerminalPanelFooter className="flex justify-center">
+          <div className="border-base-border-subtle flex justify-center border-t px-4 py-2">
             <button
               type="button"
               onClick={() => setCursor(data.nextCursor ?? undefined)}
@@ -520,9 +510,9 @@ export function PeersTable() {
             >
               {isFetching ? 'Loading…' : 'Load more'}
             </button>
-          </TerminalPanelFooter>
+          </div>
         )}
-      </TerminalPanel>
+      </div>
     </section>
   );
 }

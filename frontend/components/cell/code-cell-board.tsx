@@ -1,220 +1,155 @@
 'use client';
 import Link from '@/components/ui/link';
 import type { Cell } from '@/lib/api';
-import { elfMachineLabel, elfProgramTypeLabel, elfSectionTypeLabel } from '@/lib/elf-labels';
 import { formatBlockNumber } from '@/lib/format-block';
+import { CELL_COLORS } from '@/lib/design-tokens';
 
-function fileExtent(offset: string | null, size: string | null): string {
-  return offset === null || size === null
-    ? 'Memory only'
-    : `${offset}–${(BigInt(offset) + BigInt(size)).toString()}${size === '0' ? ' (empty)' : ''}`;
+const DATA_HASH_TYPES = new Set(['data', 'data1', 'data2']);
+
+function liveUsers(reference: { lockLiveCellsCount: number; typeLiveCellsCount: number }): number {
+  return reference.lockLiveCellsCount + reference.typeLiveCellsCount;
 }
 
-function hex64(value: string): string {
-  return `0x${BigInt(value).toString(16)}`;
-}
-
+/**
+ * "This cell is code" (CellCode board): how scripts name this binary — by the Type ID's type
+ * hash (follows upgrades) or by its data hash (pins it) — with the live cells that use each way,
+ * and what built it, read from the binary's own .comment and .riscv.attributes sections. The
+ * ELF's parts are not tabled here: the microscope below names every byte.
+ */
 export function CodeCellBoard({ cell }: { cell: Cell }) {
   if (!cell.elf || !cell.codeCell) return null;
-  const { header, programHeaders, sections, unassignedFileRanges, comment, riscvAttributes } =
-    cell.elf;
+  const { codeCell, elf } = cell;
+  const names = (cell.codeCellOf ?? []).map((script) => script.name);
+  const typeHash = cell.cellOutputMolecule?.typeScriptHash ?? null;
+  const byType = typeHash
+    ? codeCell.currentReferences.filter(
+        (reference) => reference.hashType === 'type' && reference.referenceHash === typeHash
+      )
+    : [];
+  const byData = codeCell.currentReferences.filter(
+    (reference) =>
+      DATA_HASH_TYPES.has(reference.hashType) && reference.referenceHash === codeCell.versionHash
+  );
+  const otherReferences = codeCell.currentReferences.filter(
+    (reference) => !byType.includes(reference) && !byData.includes(reference)
+  );
+  const typeUsers = byType.reduce((n, reference) => n + liveUsers(reference), 0);
+  const dataUsers = byData.reduce((n, reference) => n + liveUsers(reference), 0);
+  const who = names.length ? `${names.join(' / ')} ` : '';
+  const comment = elf.comment?.split(' · ').filter(Boolean) ?? [];
+  const stripped = !elf.sections.some((section) => section.name === '.symtab');
   return (
-    <section aria-label="Code cell ELF" className="border-base-border mt-6 space-y-5 border-t pt-5">
-      <div>
-        <h2 className="text-text-bright text-[15px]">This cell is code · RISC-V ELF</h2>
-        <p className="text-text-dim mt-1 break-all font-mono text-xs">
-          Version {cell.codeCell.versionHash}
-        </p>
-      </div>
-      <dl className="grid gap-3 text-xs sm:grid-cols-3">
-        <div>
-          <dt className="text-text-dim">Format</dt>
-          <dd>
-            {header.class} · {header.endian} endian · {elfMachineLabel(header.machine)}
-          </dd>
+    <section aria-labelledby="code-cell-heading" className="min-w-0 space-y-3">
+      <h2 id="code-cell-heading" className="text-text-bright text-[15px] font-medium">
+        This cell is code
+      </h2>
+      <p className="max-w-[860px] text-[13px] leading-relaxed">
+        Its data is a RISC-V program. A script names it in one of two ways, and each way decides
+        what happens when the code changes.
+      </p>
+      <div className="grid gap-7 text-xs leading-relaxed md:grid-cols-3">
+        <div
+          data-testid="code-by-type-hash"
+          className="flex min-w-0 flex-col gap-1 border-t-2 pt-2.5"
+          style={{ borderTopColor: CELL_COLORS.type }}
+        >
+          <span className="text-text-dim">by type hash · hash_type type</span>
+          {typeHash ? (
+            <>
+              <span className="text-text-bright [overflow-wrap:anywhere]">{typeHash}</span>
+              <span>
+                <span className="text-text-bright">{typeUsers.toLocaleString('en-US')}</span> live{' '}
+                {who}cells name it this way. They follow upgrades: whatever cell carries this type
+                id next is what they run.
+              </span>
+            </>
+          ) : (
+            <span className="text-text-dim">
+              No type script: no one can name this binary by type hash.
+            </span>
+          )}
         </div>
-        <div>
-          <dt className="text-text-dim">Entry address</dt>
-          <dd className="font-mono">{hex64(header.entry)}</dd>
+        <div
+          data-testid="code-by-data-hash"
+          className="flex min-w-0 flex-col gap-1 border-t-2 pt-2.5"
+          style={{ borderTopColor: CELL_COLORS.data }}
+        >
+          <span className="text-text-dim">by data hash · hash_type data1 / data2</span>
+          <span className="text-text-bright [overflow-wrap:anywhere]">{codeCell.versionHash}</span>
+          <span>
+            <span className="text-text-bright">{dataUsers.toLocaleString('en-US')}</span> live cells
+            pin this exact binary. A pin survives any upgrade, and keeps working if anyone redeploys
+            the same bytes.
+          </span>
         </div>
-        <div>
-          <dt className="text-text-dim">ELF flags</dt>
-          <dd className="font-mono">0x{header.flags.toString(16)}</dd>
-        </div>
-        <div>
-          <dt className="text-text-dim">Program table</dt>
-          <dd>
-            {header.programHeaderOffset} · {header.programHeaderCount} ×{' '}
-            {header.programHeaderEntrySize} bytes
-          </dd>
-        </div>
-        <div>
-          <dt className="text-text-dim">Section table</dt>
-          <dd>
-            {header.sectionHeaderOffset} · {header.sectionHeaderCount} ×{' '}
-            {header.sectionHeaderEntrySize} bytes
-          </dd>
-        </div>
-        <div>
-          <dt className="text-text-dim">Header size</dt>
-          <dd>{header.headerSize} bytes</dd>
-        </div>
-      </dl>
-      <div>
-        <h3 className="text-text-bright mb-2 text-sm">Program headers</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[620px] text-left text-xs">
-            <thead className="text-text-dim">
-              <tr>
-                <th>Index</th>
-                <th>Type</th>
-                <th>Flags</th>
-                <th>File bytes</th>
-                <th>Virtual address</th>
-                <th>Memory size</th>
-                <th>Align</th>
-              </tr>
-            </thead>
-            <tbody>
-              {programHeaders.map((entry) => (
-                <tr key={entry.index} className="border-base-border border-t">
-                  <td>{entry.index}</td>
-                  <td>{elfProgramTypeLabel(entry.kind)}</td>
-                  <td>0x{entry.flags.toString(16)}</td>
-                  <td>{fileExtent(entry.fileOffset, entry.fileSize)}</td>
-                  <td>{hex64(entry.virtualAddress)}</td>
-                  <td>{entry.memorySize}</td>
-                  <td>{entry.alignment}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div
+          data-testid="code-built-with"
+          className="flex min-w-0 flex-col gap-1 border-t-2 border-[#343c50] pt-2.5"
+        >
+          <span className="text-text-dim">built with</span>
+          {comment.length ? (
+            comment.map((piece) => (
+              <span key={piece} className="text-text-bright [overflow-wrap:anywhere]">
+                {piece}
+              </span>
+            ))
+          ) : (
+            <span className="text-text-dim">No .comment section</span>
+          )}
+          <span>
+            {elf.riscvAttributes ? `target ${elf.riscvAttributes} · ` : ''}entry 0x
+            {BigInt(elf.header.entry).toString(16)}
+            {stripped ? ' · no symbol table' : ''}. Read from the binary&apos;s own .comment and
+            .riscv.attributes sections.
+          </span>
         </div>
       </div>
-      <div>
-        <h3 className="text-text-bright mb-2 text-sm">Sections</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[620px] text-left text-xs">
-            <thead className="text-text-dim">
-              <tr>
-                <th>Name</th>
-                <th>Type</th>
-                <th>Flags</th>
-                <th>File bytes</th>
-                <th>Address</th>
-                <th>Memory size</th>
-                <th>Align</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sections.map((entry) => (
-                <tr key={entry.index} className="border-base-border border-t">
-                  <td>{entry.name || '(unnamed)'}</td>
-                  <td>{elfSectionTypeLabel(entry.kind)}</td>
-                  <td>{hex64(entry.flags)}</td>
-                  <td>{fileExtent(entry.fileOffset, entry.fileSize)}</td>
-                  <td>{hex64(entry.address)}</td>
-                  <td>{entry.memorySize}</td>
-                  <td>{entry.alignment}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="text-text-dim mt-2 text-xs">
-          NOBITS sections occupy memory after loading, not file bytes. Program and section ranges
-          may overlap in the same file.
-        </p>
-      </div>
-      <div className="grid gap-3 text-xs sm:grid-cols-2">
-        <div>
-          <h3 className="text-text-bright text-sm">Unassigned file bytes</h3>
-          {unassignedFileRanges.length ? (
-            unassignedFileRanges.map((gap) => (
-              <p key={gap.start}>
-                {gap.start}–{gap.end - 1} · {gap.end - gap.start} bytes · purpose unspecified
+      {otherReferences.length > 0 && (
+        <ul className="text-text-dim space-y-1 text-[11px]">
+          {otherReferences.map((reference) => (
+            <li key={`${reference.referenceHash}-${reference.hashType}`} className="break-all">
+              Also named as{' '}
+              <Link
+                href={`/script/${reference.referenceHash}?hashType=${reference.hashType}`}
+                className="text-[#7aa7d6]"
+              >
+                {reference.hashType} · {reference.referenceHash}
+              </Link>{' '}
+              · {liveUsers(reference).toLocaleString('en-US')} live cells
+            </li>
+          ))}
+        </ul>
+      )}
+      <details className="text-xs">
+        <summary className="text-text-dim hover:text-text cursor-pointer">
+          Type ID lineage of these bytes
+        </summary>
+        <div className="mt-2 space-y-1.5">
+          {codeCell.typeIdVersions.length ? (
+            codeCell.typeIdVersions.map((item) => (
+              <p
+                key={`${item.typeScriptHash}:${item.codeCellTxHash}:${item.codeCellOutputIndex}`}
+                className="break-all"
+              >
+                <span className={item.thisBinary ? 'text-text-bright' : 'text-text-dim'}>
+                  Version {item.ordinal}
+                  {item.thisBinary ? ' · these bytes' : ''}
+                  {item.reactivation ? ' · reactivated' : ''}
+                </span>{' '}
+                <Link
+                  href={`/cell/${item.codeCellTxHash}-${item.codeCellOutputIndex}`}
+                  className="text-[#7aa7d6]"
+                >
+                  {item.codeCellTxHash}:{item.codeCellOutputIndex}
+                </Link>{' '}
+                · observed block {formatBlockNumber(item.observedAtBlock)}
               </p>
             ))
           ) : (
-            <p>None</p>
+            <p className="text-text-dim">No registered Type ID version history for this binary.</p>
           )}
-        </div>
-        <div>
-          <h3 className="text-text-bright text-sm">Build evidence</h3>
-          <p>.comment: {comment ?? 'Absent'}</p>
-          <p>.riscv.attributes: {riscvAttributes ?? 'Absent'}</p>
-        </div>
-      </div>
-      <div>
-        <h3 className="text-text-bright text-sm">Current runtime references</h3>
-        {cell.codeCell.currentReferences.length ? (
-          <ul className="mt-2 space-y-2 text-xs">
-            {cell.codeCell.currentReferences.map((reference) => (
-              <li key={`${reference.referenceHash}-${reference.hashType}`} className="break-all">
-                <Link
-                  href={`/script/${reference.referenceHash}?hashType=${reference.hashType}`}
-                  className="text-[#7aa7d6]"
-                >
-                  {reference.hashType} · {reference.referenceHash}
-                </Link>
-                <span className="text-text-dim">
-                  {' '}
-                  · {reference.lockLiveCellsCount} live locks · {reference.typeLiveCellsCount} live
-                  types
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-text-dim mt-2 text-xs">
-            No indexed current consumers for these reference forms.
-          </p>
-        )}
-        <p className="text-text-dim mt-2 text-xs">
-          Type references are resolved against current live code cells. A historical transaction’s
-          executable is established by its actual cell deps.
-        </p>
-      </div>
-      <div className="border-base-border border-t pt-4">
-        <h3 className="text-text-bright text-sm">Observed Type ID versions</h3>
-        {cell.codeCell.typeIdVersions.length ? (
-          cell.codeCell.typeIdVersions.map((item) => (
-            <p
-              key={`${item.typeScriptHash}:${item.codeCellTxHash}:${item.codeCellOutputIndex}`}
-              className="mt-2 break-all text-xs"
-            >
-              <span className={item.thisBinary ? 'text-text-bright' : 'text-text-dim'}>
-                Version {item.ordinal}
-                {item.thisBinary ? ' · these bytes' : ''}
-                {item.reactivation ? ' · reactivated' : ''}
-              </span>{' '}
-              <Link
-                href={`/cell/${item.codeCellTxHash}-${item.codeCellOutputIndex}`}
-                className="text-[#7aa7d6]"
-              >
-                {item.codeCellTxHash}:{item.codeCellOutputIndex}
-              </Link>{' '}
-              · observed block {formatBlockNumber(item.observedAtBlock)} · {item.typeScriptHash}
-            </p>
-          ))
-        ) : (
-          <p className="text-text-dim mt-2 text-xs">
-            No registered Type ID version history for this binary.
-          </p>
-        )}
-      </div>
-      <div className="border-base-border border-t pt-4">
-        <h3 className="text-text-bright text-sm">Same-transaction upgrade cohort</h3>
-        <p className="text-text-dim mt-1 text-xs">
-          Each pair continues the same exact type script from a consumed input to an ELF output in
-          this transaction.
-        </p>
-        {cell.codeCell.upgradeCohort.length ? (
-          cell.codeCell.upgradeCohort.map((item) => (
-            <p
-              key={`${item.currentTxHash}:${item.currentOutputIndex}`}
-              className="mt-2 break-all text-xs"
-            >
+          {codeCell.upgradeCohort.map((item) => (
+            <p key={`${item.currentTxHash}:${item.currentOutputIndex}`} className="break-all">
               <Link
                 href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`}
                 className="text-[#7aa7d6]"
@@ -233,16 +168,11 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
                 ? 'previous binary hash unavailable'
                 : item.binaryChanged
                   ? 'binary changed'
-                  : 'same binary'}{' '}
-              · {item.typeScriptHash}
+                  : 'same binary'}
             </p>
-          ))
-        ) : (
-          <p className="text-text-dim mt-2 text-xs">
-            No same-transaction ELF continuation observed.
-          </p>
-        )}
-      </div>
+          ))}
+        </div>
+      </details>
     </section>
   );
 }

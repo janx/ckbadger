@@ -16,7 +16,8 @@ import type {
   AddressCell,
   ParticipantInfo,
 } from '@/lib/api';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatUtc8Date, truncateHash } from '@/lib/utils';
+import type { AssetClass } from '@/lib/design-tokens';
 import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -54,6 +55,22 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
         activity={row}
         mode="participant"
         participant={participant}
+        evidence={
+          activity.blockNumber === null || activity.timestamp === null ? undefined : (
+            // F2 blocks (BA-35): the Address board dates a row; "ago" drifts as the page is read.
+            <>
+              <Link href={`/blocks/${activity.blockNumber}`} className="hover:text-text">
+                {formatBlockNumber(activity.blockNumber)}
+              </Link>
+              {' · '}
+              <Link href={`/tx/${activity.txHash}`} className="hover:text-jade text-text-dim">
+                {truncateHash(activity.txHash, 10, 6)}
+              </Link>
+              {' · '}
+              {formatUtc8Date(activity.timestamp)}
+            </>
+          )
+        }
       />
       {activity.roles.length > 0 && (
         <p className="text-text-dim pb-2 text-xs">Roles: {activity.roles.join(', ')}</p>
@@ -73,7 +90,7 @@ function TxPosition({ tx }: { tx: AddressTransaction }) {
         <>
           <Link href={`/blocks/${tx.blockNumber}`}>{formatBlockNumber(tx.blockNumber)}</Link>
           {tx.timestamp !== null && (
-            <span className="text-text-dim">{formatTimeAgo(tx.timestamp)}</span>
+            <span className="text-text-dim">{formatUtc8Date(tx.timestamp)}</span>
           )}
         </>
       )}
@@ -106,7 +123,7 @@ const columns: ListColumn<AddressTransaction>[] = [
       </span>
     ),
   },
-  { key: 'block', label: 'Block · time', minWidth: 136, render: (tx) => <TxPosition tx={tx} /> },
+  { key: 'block', label: 'Block · date', minWidth: 136, render: (tx) => <TxPosition tx={tx} /> },
   {
     key: 'cells',
     label: 'Cells in → out',
@@ -160,16 +177,20 @@ const columns: ListColumn<AddressTransaction>[] = [
     label: 'Scripts',
     minWidth: 146,
     render: (tx) => (
-      <span className="flex flex-wrap gap-x-2 gap-y-1">
-        {tx.scriptLabels.map((name) => (
-          <Link
-            key={name}
-            href={`/scripts/${encodeURIComponent(name)}`}
-            className="text-text-dim hover:text-jade"
-          >
-            {name}
-          </Link>
-        ))}
+      <span className="flex flex-wrap gap-x-2.5 gap-y-1">
+        {tx.scriptLabels.map((label) => {
+          const script = scriptLabel(label, tx.txHash);
+          return (
+            <Link
+              key={label}
+              href={`/scripts/${encodeURIComponent(label)}`}
+              className="text-text-dim hover:text-jade inline-flex items-center gap-1.5"
+            >
+              <ClassMark kind={script.mark} size={12} />
+              {script.name}
+            </Link>
+          );
+        })}
       </span>
     ),
   },
@@ -291,4 +312,26 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
       empty="No live cells match this class."
     />
   );
+}
+
+// ---- F2 blocks (BA-36): the API's fixed script-label vocabulary, as the board writes it ----
+
+/** `scriptLabels` come from the address index's semantic-tag bitmap: a closed set of nine. */
+const SCRIPT_LABELS: Record<string, { name: string; mark: AssetClass }> = {
+  NervosDAO: { name: 'Nervos DAO', mark: 'dao' },
+  sUDT: { name: 'sUDT', mark: 'tokens' },
+  xUDT: { name: 'xUDT', mark: 'tokens' },
+  mNFT: { name: 'mNFT', mark: 'objects' },
+  Spore: { name: 'Spore', mark: 'objects' },
+  'Spore Cluster': { name: 'Spore Cluster', mark: 'objects' },
+  '.bit': { name: '.bit', mark: 'identities' },
+  'did:ckb': { name: 'did:ckb', mark: 'identities' },
+  '.cell': { name: '.cell', mark: 'identities' },
+};
+
+export function scriptLabel(label: string, txHash: string) {
+  const known = SCRIPT_LABELS[label];
+  if (!known)
+    throw new Error(`Transaction ${txHash}: unknown script label ${JSON.stringify(label)}`);
+  return known;
 }

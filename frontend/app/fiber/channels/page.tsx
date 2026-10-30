@@ -4,7 +4,7 @@ export const revalidate = 0;
 export const metadata = {
   title: 'Fiber Channels',
   description:
-    'Follow the living circuitry of Fiber on Nervos, where nodes whisper value through channels like signals across a sleepless mind.',
+    'Fiber payment channels as the chain sees them: who opened channels with whom, what is locked now, and how each channel opened and closed.',
 };
 
 export default function Page() {
