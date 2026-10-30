@@ -117,6 +117,9 @@ describe('JoyID script page against the ScriptJoyid board', () => {
   it('shows who can change the code as three multisigs, key by key (SC-S4)', async () => {
     await renderJoyid();
     const holders = screen.getByRole('list', { name: 'Code cell holders' });
+    // one column at 390 px, one per holder from md up (no horizontal overflow on phones)
+    expect(holders).toHaveClass('grid-cols-1');
+    expect(holders.style.getPropertyValue('--holders')).toBe('3');
     const columns = within(holders)
       .getAllByRole('listitem')
       .filter((li) => li.dataset.holder);

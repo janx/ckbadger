@@ -494,8 +494,8 @@ export function ScriptCustodyFigure({
       </p>
       <ol
         aria-label="Code cell holders"
-        className="grid gap-x-6 gap-y-6"
-        style={{ gridTemplateColumns: `repeat(${holders.length}, minmax(0, 1fr))` }}
+        className="grid grid-cols-1 gap-x-6 gap-y-6 md:[grid-template-columns:repeat(var(--holders),minmax(0,1fr))]"
+        style={{ ['--holders' as string]: holders.length }}
       >
         {holders.map((holder, i) => (
           <li key={holder.lockArgs} data-holder={holder.lockArgs} className="min-w-0 text-xs">
