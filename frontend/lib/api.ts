@@ -89,16 +89,7 @@ export function isServiceUnavailableError(error: unknown): error is ApiRequestEr
   return candidate.code === 'service_unavailable' && candidate.status === 503;
 }
 
-/**
- * "The resource does not exist", read from the HTTP status the API answered
- * with — never from the rendered message text, which is prose and changes.
- */
-export function isNotFoundApiError(error: unknown): error is ApiRequestError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  return (error as Partial<ApiRequestError>).status === 404;
-}
+export { isNotFoundApiError } from '@/lib/api-errors';
 
 interface PaginatedResponse<T> {
   data: T[];

@@ -1,5 +1,6 @@
 import { QueryClient } from '@tanstack/react-query';
 import { isWarmupPendingError, isNetworkInitializingError } from '@/lib/api';
+import { isNotFoundApiError } from '@/lib/api-errors';
 
 export const WARMUP_PENDING_RETRY_DELAY_MS = 2000;
 /**
@@ -53,6 +54,8 @@ export function createAppQueryClient(options: CreateAppQueryClientOptions = {}):
           if (isWarmupPendingError(error)) {
             return failureCount < warmupRetryLimit;
           }
+          // A 404 is the API's definite answer; asking again only delays the not-found page.
+          if (isNotFoundApiError(error)) return false;
           return shouldRetryNonWarmup(failureCount, options.nonWarmupRetry);
         },
         retryDelay: (attemptIndex, error) => {

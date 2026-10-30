@@ -51,4 +51,22 @@ describe('CursorPagination', () => {
     expect(screen.getByText('Showing 21-40 of 105 Spores, 20 per page')).toBeInTheDocument();
     expect(screen.getByText('Page 2 of 6')).toBeInTheDocument();
   });
+
+  it('shows no pager for an empty list instead of "Page 1 of 0" (FF-L5)', () => {
+    const { container } = render(
+      <CursorPagination
+        hasMore={false}
+        hasPrevious={false}
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+        total={0}
+        totalLabel="events"
+        page={1}
+        pageSize={50}
+        currentCount={0}
+      />
+    );
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByText(/of 0/)).toBeNull();
+  });
 });

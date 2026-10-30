@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { formatCount } from '@/lib/format-count';
 
 export interface TxStructureGroup {
   id: string;
@@ -113,7 +114,7 @@ export function TxStructure({
   const column = (cells: readonly CellTileData[], label: string) => (
     <div className="min-w-0">
       <h3 className="text-text-dim mb-3 text-xs">
-        {cells.length} {label}
+        {formatCount(cells.length, 'cell')} {label}
       </h3>
       <div className="space-y-3">
         {cells.map((cell) => (
@@ -138,7 +139,7 @@ export function TxStructure({
         ref={canvas}
         className="relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)] lg:gap-0"
       >
-        {column(inputs, 'cells consumed')}
+        {column(inputs, 'consumed')}
         <div className="text-text-dim relative flex flex-wrap items-center justify-center gap-2 py-3 text-center text-[11px] lg:block lg:min-h-[180px] lg:p-0">
           <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
           <span aria-hidden="true" className="lg:hidden">
@@ -199,7 +200,7 @@ export function TxStructure({
             />
           </div>
         </div>
-        {column(outputs, 'cells created')}
+        {column(outputs, 'created')}
       </div>
       {poolCapacity !== undefined && (
         <p className="text-text-dim text-[11px]">

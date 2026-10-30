@@ -33,6 +33,7 @@ import { getScriptDetailHref, getIdentityItemDetailHref } from '@/lib/detail-rou
 import { cn, formatTimeAgo, truncateHash, formatUtc8DateTime } from '@/lib/utils';
 import dynamic from '@/lib/dynamic-client';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-xs">Loading graph section...</p>,
@@ -567,11 +568,7 @@ export default function TransactionDetailPage() {
         <span className={cn('text-xs', tx.status === 'proposed' ? 'text-gold' : 'text-text-dim')}>
           {status}
           {!isProvisional && (
-            <>
-              {' '}
-              · {required(tx.confirmations, hash, 'confirmations').toLocaleString('en-US')}{' '}
-              Confirmations
-            </>
+            <> · {formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')}</>
           )}
         </span>
       }
@@ -877,7 +874,7 @@ export default function TransactionDetailPage() {
       )}
       {tiles && (
         <DetailSection
-          title={`${tiles.inputs.length} cells consumed → ${tiles.outputs.length} cells created`}
+          title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
         >
           <p className="text-text-dim mb-4 text-xs">
             A transaction spends whole cells and creates new ones.

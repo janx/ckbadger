@@ -17,6 +17,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 const fullHash = (hash: string) => <span className="break-all font-mono text-xs">{hash}</span>;
 const blockAt = (number: number) => (
@@ -119,7 +120,7 @@ function ForkEvidence({ data }: { data: Awaited<ReturnType<typeof api.getForkDet
         },
         {
           label: event.eventType === 'deep' ? 'Detected depth' : 'Switch depth',
-          value: `${event.depth.toLocaleString()} blocks`,
+          value: formatCount(event.depth, 'block'),
         },
         { label: 'Old branch transactions', value: event.orphanedTxsCount.toLocaleString() },
         {

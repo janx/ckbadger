@@ -21,6 +21,7 @@ import { formatCompositionTier } from '@/lib/asset-utils';
 import { getIdentityItemDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -313,7 +314,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     throw new Error('Address class occupied capacities do not equal total');
   const summary = (kind: AddressCellClass) => (
     <>
-      {holdings.classes[kind].cellCount.toLocaleString('en-US')} cells ·{' '}
+      {formatCount(holdings.classes[kind].cellCount, 'cell')} ·{' '}
       <ExactCkb
         shannons={BigInt(holdings.classes[kind].capacity)}
         signed={false}
@@ -384,7 +385,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
             <span className="text-text-dim">On-chain space they take</span>
             <span>
               {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
-              {holdings.liveCellsCount} cells
+              {formatCount(holdings.liveCellsCount, 'cell')}
             </span>
           </div>
           <div
