@@ -21,6 +21,8 @@ export const BITCOIN_COLORS = {
   inner: '#1a110d',
 } as const;
 export const DATA_COLOR = '#2edba3';
+/** Ended states (an expired identity term): neutral grey, never gold or the class colour. */
+export const EXPIRED_COLOR = '#7c849c';
 export const HUE_RAMP = ['#2edba3', '#24b68a', '#259775', '#287b64', '#2b6054', '#344e48'] as const;
 
 /**
