@@ -58,8 +58,8 @@ fn row_key(i: u32) -> [u8; 32] {
     hash
 }
 
-/// `TokenDailyDelta { owned_capacity_delta, owned_knowledge_delta }` as bincode
-/// writes it: two little-endian i128s.
+/// A daily capacity/knowledge pair (`ScriptDailyDelta` and the other pair
+/// families) as bincode writes it: two little-endian i128s.
 fn row_value(i: u32) -> [u8; 32] {
     let mut value = [0u8; 32];
     value[..16].copy_from_slice(&i128::from(i + 100).to_le_bytes());

@@ -18,7 +18,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use ckbadger_indexer::db::{apply_hourly_increment, BatchWriter, EntityStatsOverlay};
-use ckbadger_indexer::sync::types::{EntityDailyChanges, EntityDateKey, ScriptDailyKey};
+use ckbadger_indexer::sync::types::{
+    EntityDailyChanges, EntityDateKey, ScriptDailyKey, TokenDailyChanges,
+};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys::UndoSeqScope;
 use ckbadger_store::types::{EpochStats, HourlyRetentionFamily};
@@ -252,7 +254,8 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
     let mut undo_seq: HashMap<i64, u64> = HashMap::new();
 
     let mut script = EntityDailyChanges::<ScriptDailyKey>::new();
-    let mut token = EntityDailyChanges::<EntityDateKey>::new();
+    // Each token contribution is one transaction touching the token's cells.
+    let mut token = TokenDailyChanges::<EntityDateKey>::new();
     let mut cluster = EntityDailyChanges::<EntityDateKey>::new();
     let mut spore = EntityDailyChanges::<EntityDateKey>::new();
     let mut object = EntityDailyChanges::<EntityDateKey>::new();
@@ -262,7 +265,7 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
             script.add(b.block, k.clone(), *cap, *know).unwrap();
         }
         for (k, cap, know) in &b.token {
-            token.add(b.block, k.clone(), *cap, *know).unwrap();
+            token.add_tx(b.block, k.clone(), *cap, *know).unwrap();
         }
         for (k, cap, know) in &b.cluster {
             cluster.add(b.block, k.clone(), *cap, *know).unwrap();
@@ -510,22 +513,24 @@ async fn token_daily_orphan_only_row_removed() {
 
 #[tokio::test]
 async fn consume_in_orphan_restores_capacity_and_occupied() {
+    // A pair family (cluster) collapses a net-zero day to no row; token days
+    // keep their transaction count instead (below).
     let (domain, append) = setup_split_stores();
     let writer = BatchWriter::new(domain.clone(), append.clone());
 
     apply_commit(
         &writer,
         &domain,
-        &[blk(2).token(TOKEN_X, DAY, 12_000_000_000, 6_100_000_000)],
+        &[blk(2).cluster(CLUSTER_ID, DAY, 12_000_000_000, 6_100_000_000)],
     );
-    let key = keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec();
+    let key = keys::encode_cluster_daily_key(&CLUSTER_ID, DAY).to_vec();
     let before = read_stats(&domain, &key).unwrap();
 
     // Orphan block 3 consumes the cell block 2 created: both fields go negative.
     apply_commit(
         &writer,
         &domain,
-        &[blk(3).token(TOKEN_X, DAY, -12_000_000_000, -6_100_000_000)],
+        &[blk(3).cluster(CLUSTER_ID, DAY, -12_000_000_000, -6_100_000_000)],
     );
     assert_eq!(
         read_stats(&domain, &key),
@@ -542,21 +547,78 @@ async fn consume_in_orphan_restores_capacity_and_occupied() {
     );
 }
 
+/// W3: the token day the orphan consume nets to zero keeps its row with both
+/// transactions counted, and rollback restores the block-2 row — capacity,
+/// occupied capacity and the count.
+#[tokio::test]
+async fn consume_in_orphan_restores_token_day_with_its_transaction_count() {
+    let (domain, append) = setup_split_stores();
+    let writer = BatchWriter::new(domain.clone(), append.clone());
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[blk(2).token(TOKEN_X, DAY, 12_000_000_000, 6_100_000_000)],
+    );
+    let key = keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec();
+    let before = read_stats(&domain, &key).unwrap();
+    let decode = |bytes: Vec<u8>| -> ckbadger_store::TokenDailyDelta {
+        bincode::deserialize(&bytes).unwrap()
+    };
+    assert_eq!(decode(before.clone()).tx_count, 1);
+
+    apply_commit(
+        &writer,
+        &domain,
+        &[blk(3).token(TOKEN_X, DAY, -12_000_000_000, -6_100_000_000)],
+    );
+    assert_eq!(
+        decode(read_stats(&domain, &key).expect("the day keeps its row")),
+        ckbadger_store::TokenDailyDelta {
+            owned_capacity_delta: 0,
+            owned_knowledge_delta: 0,
+            tx_count: 2,
+        }
+    );
+
+    rollback(&domain, &append, 2);
+
+    assert_eq!(read_stats(&domain, &key), Some(before));
+}
+
 #[tokio::test]
 async fn same_block_create_then_consume_nets_zero_row() {
-    // Block 4 creates and consumes inside itself: net zero, no row either way.
+    // Block 2 creates and consumes inside itself: net zero, no row either way
+    // for a pair family (cluster). A token day counts both transactions.
+    let other_cluster = [0x34u8; 32];
     let original = vec![
-        vec![blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000)],
+        vec![blk(1).cluster(CLUSTER_ID, DAY, 9_000_000_000, 6_100_000_000)],
         vec![blk(2)
+            .cluster(other_cluster, DAY, 4_000_000_000, 3_000_000_000)
+            .cluster(other_cluster, DAY, -4_000_000_000, -3_000_000_000)
             .token(TOKEN_Y, DAY, 4_000_000_000, 3_000_000_000)
             .token(TOKEN_Y, DAY, -4_000_000_000, -3_000_000_000)],
     ];
     let (replayed, direct) = run_scenario(&original, 2, &[]);
     assert_eq!(replayed, direct);
     assert_eq!(
-        direct.get(keys::encode_token_daily_key(&TOKEN_Y, DAY).as_slice()),
+        direct.get(keys::encode_cluster_daily_key(&other_cluster, DAY).as_slice()),
         None,
         "a create+consume inside one block leaves no row"
+    );
+    let token_day: ckbadger_store::TokenDailyDelta = bincode::deserialize(
+        direct
+            .get(keys::encode_token_daily_key(&TOKEN_Y, DAY).as_slice())
+            .expect("a token day with two transactions keeps its row"),
+    )
+    .unwrap();
+    assert_eq!(
+        token_day,
+        ckbadger_store::TokenDailyDelta {
+            owned_capacity_delta: 0,
+            owned_knowledge_delta: 0,
+            tx_count: 2,
+        }
     );
 }
 
@@ -596,13 +658,15 @@ async fn multi_block_batch_rollback_to_middle() {
 async fn sign_cancel_row_disappears_then_reappears() {
     // Block 3 zeroes the row (deleting it), block 4 recreates it. Rolling back
     // to 2 must restore `Some(bytes)`; rolling back to 3 must restore `None`.
+    // A pair family (cluster): token days never zero out while they count
+    // transactions.
     let commits = vec![
-        vec![blk(1).token(TOKEN_X, DAY, 5_000_000_000, 500_000_000)],
-        vec![blk(2).token(TOKEN_X, DAY, 3_000_000_000, 300_000_000)],
-        vec![blk(3).token(TOKEN_X, DAY, -8_000_000_000, -800_000_000)],
-        vec![blk(4).token(TOKEN_X, DAY, 2_000_000_000, 200_000_000)],
+        vec![blk(1).cluster(CLUSTER_ID, DAY, 5_000_000_000, 500_000_000)],
+        vec![blk(2).cluster(CLUSTER_ID, DAY, 3_000_000_000, 300_000_000)],
+        vec![blk(3).cluster(CLUSTER_ID, DAY, -8_000_000_000, -800_000_000)],
+        vec![blk(4).cluster(CLUSTER_ID, DAY, 2_000_000_000, 200_000_000)],
     ];
-    let key = keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec();
+    let key = keys::encode_cluster_daily_key(&CLUSTER_ID, DAY).to_vec();
 
     let (domain, append) = setup_split_stores();
     let writer = BatchWriter::new(domain.clone(), append.clone());

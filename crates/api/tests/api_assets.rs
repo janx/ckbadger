@@ -112,6 +112,7 @@ async fn test_assets_list_supports_standard_filter_for_tokens_and_nfts() {
                 &TokenDailyDelta {
                     owned_capacity_delta: 100,
                     owned_knowledge_delta: 50,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -468,6 +469,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
             &TokenDailyDelta {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
+                tx_count: 1,
             },
         )
         .unwrap();
@@ -478,6 +480,7 @@ async fn test_assets_list_defaults_to_capacity_sort_and_supports_cursor_paginati
             &TokenDailyDelta {
                 owned_capacity_delta: 300,
                 owned_knowledge_delta: 120,
+                tx_count: 1,
             },
         )
         .unwrap();
@@ -661,6 +664,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
             &TokenDailyDelta {
                 owned_capacity_delta: 200,
                 owned_knowledge_delta: 100,
+                tx_count: 1,
             },
         )
         .unwrap();
@@ -673,6 +677,7 @@ async fn test_assets_list_token_errors_when_daily_deltas_invalid() {
             &TokenDailyDelta {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 120,
+                tx_count: 1,
             },
         )
         .unwrap();
@@ -3567,6 +3572,7 @@ fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]
             &TokenDailyDelta {
                 owned_capacity_delta: 100,
                 owned_knowledge_delta: 60,
+                tx_count: 1,
             },
         )
         .unwrap();
@@ -3577,6 +3583,7 @@ fn seed_two_assets_for_cursor_tests() -> (Arc<CkbadgerStore>, [u8; 32], [u8; 32]
             &TokenDailyDelta {
                 owned_capacity_delta: 300,
                 owned_knowledge_delta: 120,
+                tx_count: 1,
             },
         )
         .unwrap();

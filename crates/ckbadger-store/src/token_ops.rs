@@ -50,6 +50,8 @@ pub struct TokenDailyValidationError {
     pub owned_knowledge: i128,
     pub capacity_delta: i128,
     pub used_delta: i128,
+    /// The row's transaction count; a row with none is invalid by itself.
+    pub tx_count: u64,
 }
 
 impl CkbadgerStore {
@@ -275,6 +277,7 @@ impl CkbadgerStore {
     /// - running live capacity must be >= 0
     /// - running live used capacity must be >= 0
     /// - running live used capacity must be <= running live capacity
+    /// - every row counts at least one transaction (`tx_count >= 1`)
     pub fn find_first_invalid_token_daily_delta(
         &self,
     ) -> anyhow::Result<Option<TokenDailyValidationError>> {
@@ -345,7 +348,11 @@ impl CkbadgerStore {
                     )
                 })?;
 
-            if owned_capacity < 0 || owned_knowledge < 0 || owned_knowledge > owned_capacity {
+            if delta.tx_count == 0
+                || owned_capacity < 0
+                || owned_knowledge < 0
+                || owned_knowledge > owned_capacity
+            {
                 return Ok(Some(TokenDailyValidationError {
                     type_hash,
                     date_yyyymmdd,
@@ -353,6 +360,7 @@ impl CkbadgerStore {
                     owned_knowledge,
                     capacity_delta: delta.owned_capacity_delta,
                     used_delta: delta.owned_knowledge_delta,
+                    tx_count: delta.tx_count,
                 }));
             }
         }
@@ -1081,6 +1089,7 @@ mod tests {
                 &TokenDailyDelta {
                     owned_capacity_delta: 1_000_000_000_000,
                     owned_knowledge_delta: 610_000_000_000,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -1091,6 +1100,7 @@ mod tests {
                 &TokenDailyDelta {
                     owned_capacity_delta: -200_000_000_000,
                     owned_knowledge_delta: -150_000_000_000,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -1129,6 +1139,48 @@ mod tests {
         ));
     }
 
+    /// A token day exists only because a transaction touched the token's
+    /// cells, so a row that counts no transaction is a write-path bug even
+    /// when its running capacity totals look sane.
+    #[test]
+    fn test_find_first_invalid_token_daily_delta_flags_a_day_without_transactions() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x09u8; 32];
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240115,
+                &TokenDailyDelta {
+                    owned_capacity_delta: 300,
+                    owned_knowledge_delta: 100,
+                    tx_count: 2,
+                },
+            )
+            .unwrap();
+        store
+            .put_token_daily_delta(
+                &type_hash,
+                20240116,
+                &TokenDailyDelta {
+                    owned_capacity_delta: 10,
+                    owned_knowledge_delta: 5,
+                    tx_count: 0,
+                },
+            )
+            .unwrap();
+        let invalid = store
+            .find_first_invalid_token_daily_delta()
+            .unwrap()
+            .expect("a day with no transactions is invalid");
+        assert_eq!(invalid.type_hash, type_hash.to_vec());
+        assert_eq!(invalid.date_yyyymmdd, 20240116);
+        assert_eq!(invalid.tx_count, 0);
+        assert_eq!(
+            (invalid.owned_capacity, invalid.owned_knowledge),
+            (310, 105)
+        );
+    }
+
     #[test]
     fn test_find_first_invalid_token_daily_delta_none_for_valid_data() {
         let (_dir, store) = test_store();
@@ -1141,6 +1193,7 @@ mod tests {
                 &TokenDailyDelta {
                     owned_capacity_delta: 1_000,
                     owned_knowledge_delta: 600,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -1151,6 +1204,7 @@ mod tests {
                 &TokenDailyDelta {
                     owned_capacity_delta: -200,
                     owned_knowledge_delta: -100,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -1174,6 +1228,7 @@ mod tests {
                 &TokenDailyDelta {
                     owned_capacity_delta: 500,
                     owned_knowledge_delta: 300,
+                    tx_count: 1,
                 },
             )
             .unwrap();
@@ -1184,6 +1239,7 @@ mod tests {
                 &TokenDailyDelta {
                     owned_capacity_delta: 100,
                     owned_knowledge_delta: 120,
+                    tx_count: 1,
                 },
             )
             .unwrap();

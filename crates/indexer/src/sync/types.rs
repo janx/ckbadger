@@ -363,6 +363,170 @@ impl<K: Eq + std::hash::Hash + Clone> EntityDailyChanges<K> {
     }
 }
 
+/// One block's contribution to one token day: the net capacity / knowledge
+/// change of the token's cells and the number of transactions that touched
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TokenDayContribution {
+    pub capacity_delta: i128,
+    pub knowledge_delta: i128,
+    pub tx_count: u64,
+}
+
+/// `TOKEN_DAILY` changes accumulated **per block**, like
+/// [`EntityDailyChanges`], with a transaction count beside the
+/// capacity/knowledge deltas.
+///
+/// The only way in is [`TokenDailyChanges::add_tx`], one call per transaction
+/// and token, so a capacity change can never be recorded without the
+/// transaction that made it.
+#[derive(Debug, Clone)]
+pub struct TokenDailyChanges<K: Eq + std::hash::Hash> {
+    by_block: Vec<(i64, std::collections::HashMap<K, TokenDayContribution>)>,
+}
+
+impl<K: Eq + std::hash::Hash> Default for TokenDailyChanges<K> {
+    fn default() -> Self {
+        Self {
+            by_block: Vec::new(),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash + Clone> TokenDailyChanges<K> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// One transaction in `block` touched the cells of token `key`, changing
+    /// their capacity / knowledge by the given net amounts.
+    pub fn add_tx(
+        &mut self,
+        block: i64,
+        key: K,
+        capacity_delta: i128,
+        knowledge_delta: i128,
+    ) -> anyhow::Result<()> {
+        self.add(
+            block,
+            key,
+            TokenDayContribution {
+                capacity_delta,
+                knowledge_delta,
+                tx_count: 1,
+            },
+        )
+    }
+
+    fn add(
+        &mut self,
+        block: i64,
+        key: K,
+        contribution: TokenDayContribution,
+    ) -> anyhow::Result<()> {
+        match self.by_block.last() {
+            Some((last, _)) if *last > block => anyhow::bail!(
+                "token daily changes must accumulate in ascending block order: \
+                 last_block={last}, block={block}"
+            ),
+            Some((last, _)) if *last == block => {}
+            _ => self
+                .by_block
+                .push((block, std::collections::HashMap::new())),
+        }
+        let entry = self
+            .by_block
+            .last_mut()
+            .expect("by_block is non-empty after the push above")
+            .1
+            .entry(key)
+            .or_default();
+        entry.capacity_delta = entry
+            .capacity_delta
+            .checked_add(contribution.capacity_delta)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token daily capacity delta overflow in block {block}: current={}, delta={}",
+                    entry.capacity_delta,
+                    contribution.capacity_delta
+                )
+            })?;
+        entry.knowledge_delta = entry
+            .knowledge_delta
+            .checked_add(contribution.knowledge_delta)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token daily knowledge delta overflow in block {block}: current={}, delta={}",
+                    entry.knowledge_delta,
+                    contribution.knowledge_delta
+                )
+            })?;
+        entry.tx_count = entry
+            .tx_count
+            .checked_add(contribution.tx_count)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token daily tx_count overflow in block {block}: current={}, delta={}",
+                    entry.tx_count,
+                    contribution.tx_count
+                )
+            })?;
+        Ok(())
+    }
+
+    /// Blocks in ascending order with their per-block contributions.
+    pub fn by_block(&self) -> &[(i64, std::collections::HashMap<K, TokenDayContribution>)] {
+        &self.by_block
+    }
+
+    /// Reassign every per-block contribution to its canonical stats key,
+    /// keeping block boundaries for the entity-stats undo log.
+    pub fn remap_keys<M: Eq + std::hash::Hash + Clone>(
+        self,
+        mut map_key: impl FnMut(i64, K) -> anyhow::Result<M>,
+    ) -> anyhow::Result<TokenDailyChanges<M>> {
+        let mut remapped = TokenDailyChanges::<M>::new();
+        for (block, keys) in self.by_block {
+            for (key, contribution) in keys {
+                remapped.add(block, map_key(block, key)?, contribution)?;
+            }
+        }
+        Ok(remapped)
+    }
+}
+
+#[cfg(test)]
+mod token_daily_changes_tests {
+    use super::*;
+
+    #[test]
+    fn add_tx_counts_one_transaction_per_call_and_keeps_blocks_apart() {
+        let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
+        changes.add_tx(10, vec![0x22; 32], 100, 5).unwrap();
+        changes.add_tx(10, vec![0x22; 32], -100, -5).unwrap();
+        changes.add_tx(11, vec![0x22; 32], 7, 1).unwrap();
+        let remapped = changes
+            .remap_keys(|block, id| Ok((id, if block == 10 { 20_260_922 } else { 20_260_923 })))
+            .unwrap();
+        let blocks = remapped.by_block();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(
+            blocks[0].1[&(vec![0x22; 32], 20_260_922)],
+            TokenDayContribution {
+                capacity_delta: 0,
+                knowledge_delta: 0,
+                tx_count: 2
+            },
+            "a net-zero block still counts its two transactions"
+        );
+        assert_eq!(blocks[1].1[&(vec![0x22; 32], 20_260_923)].tx_count, 1);
+        let mut backwards = TokenDailyChanges::<UndatedEntityKey>::new();
+        backwards.add_tx(10, vec![1], 1, 1).unwrap();
+        let err = backwards.add_tx(9, vec![1], 1, 1).unwrap_err();
+        assert!(err.to_string().contains("ascending block order"), "{err}");
+    }
+}
+
 #[cfg(test)]
 mod entity_daily_changes_tests {
     use super::*;

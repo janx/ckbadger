@@ -49,8 +49,8 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
     AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
-    EntityDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey, UnresolvedLocalProbeSummary,
-    UnresolvedRpcProbeSummary,
+    EntityDailyChanges, TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey,
+    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
@@ -1690,7 +1690,7 @@ impl Indexer {
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
-        token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+        token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
         spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
         spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
@@ -6812,7 +6812,7 @@ mod tests {
             indexer: &Indexer,
             block: BlockResponseWithCycles,
         ) -> Result<()> {
-            write_live_block_with_entity_changes(indexer, block, EntityDailyChanges::new())
+            write_live_block_with_entity_changes(indexer, block, TokenDailyChanges::new())
                 .await
                 .map(|_metrics| ())
         }
@@ -6826,7 +6826,7 @@ mod tests {
         pub(super) async fn write_live_block_with_entity_changes(
             indexer: &Indexer,
             block: BlockResponseWithCycles,
-            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+            token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             write_live_blocks_with_entity_changes(indexer, vec![block], token_daily_changes).await
         }
@@ -6836,7 +6836,7 @@ mod tests {
         pub(super) async fn write_live_blocks_with_entity_changes(
             indexer: &Indexer,
             blocks: Vec<BlockResponseWithCycles>,
-            token_daily_changes: EntityDailyChanges<UndatedEntityKey>,
+            token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
         ) -> Result<crate::sync::types::BatchWriteMetrics> {
             write_live_blocks_inner(
                 indexer,
@@ -6864,19 +6864,22 @@ mod tests {
         }
 
         enum FixtureTokenDaily {
-            Given(EntityDailyChanges<UndatedEntityKey>),
+            Given(TokenDailyChanges<UndatedEntityKey>),
             FromCells,
         }
 
         /// The parser stage's `TOKEN_DAILY` accumulation: every member cell a
-        /// transaction creates adds, every member cell it consumes subtracts.
+        /// transaction creates adds, every member cell it consumes subtracts,
+        /// and `pipeline::add_token_daily_tx` — the parser's own function —
+        /// turns each transaction's members into one contribution per token.
         fn token_daily_from_cells(
             all_tx_data: &[TxData],
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        ) -> Result<EntityDailyChanges<UndatedEntityKey>> {
-            let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
+        ) -> Result<TokenDailyChanges<UndatedEntityKey>> {
+            let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
             for tx_data in all_tx_data {
+                let mut members: Vec<(Vec<u8>, i128, i128)> = Vec::new();
                 for cell in &tx_data.cells {
                     if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
                         cell.type_script_hash.as_deref(),
@@ -6888,48 +6891,50 @@ mod tests {
                             cell.type_args.as_ref().map(|args| args.len()),
                             cell.data_size,
                         );
-                        changes.add(
-                            tx_data.block_number,
+                        members.push((
                             type_hash.to_vec(),
                             i128::from(cell.capacity),
                             i128::from(occupied),
-                        )?;
+                        ));
                     }
                 }
-                if tx_data.is_cellbase {
-                    continue;
-                }
-                for input in &tx_data.inputs {
-                    let key = (
-                        input.previous_tx_hash.to_vec(),
-                        parsed_input_outpoint_index_i16(
-                            input.previous_output_index,
-                            "fixture token daily",
-                        )?,
-                    );
-                    let info = input_cell_info
-                        .get(&key)
-                        .or_else(|| batch_cell_infos.get(&key))
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "fixture input cell missing: outpoint=0x{}:{}",
-                                hex::encode(&key.0),
-                                key.1
-                            )
-                        })?;
-                    if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
-                        info.type_script_hash.as_deref(),
-                        info.type_code_hash.as_deref(),
-                        info.type_hash_type,
-                    ) {
-                        changes.add(
-                            tx_data.block_number,
-                            type_hash.to_vec(),
-                            -i128::from(info.capacity),
-                            -i128::from(info.occupied_capacity),
-                        )?;
+                if !tx_data.is_cellbase {
+                    for input in &tx_data.inputs {
+                        let key = (
+                            input.previous_tx_hash.to_vec(),
+                            parsed_input_outpoint_index_i16(
+                                input.previous_output_index,
+                                "fixture token daily",
+                            )?,
+                        );
+                        let info = input_cell_info
+                            .get(&key)
+                            .or_else(|| batch_cell_infos.get(&key))
+                            .ok_or_else(|| {
+                                anyhow!(
+                                    "fixture input cell missing: outpoint=0x{}:{}",
+                                    hex::encode(&key.0),
+                                    key.1
+                                )
+                            })?;
+                        if let Some(type_hash) = crate::sync::pipeline::token_daily_member(
+                            info.type_script_hash.as_deref(),
+                            info.type_code_hash.as_deref(),
+                            info.type_hash_type,
+                        ) {
+                            members.push((
+                                type_hash.to_vec(),
+                                -i128::from(info.capacity),
+                                -i128::from(info.occupied_capacity),
+                            ));
+                        }
                     }
                 }
+                crate::sync::pipeline::add_token_daily_tx(
+                    &mut changes,
+                    tx_data.block_number,
+                    &members,
+                )?;
             }
             Ok(changes)
         }
@@ -7252,7 +7257,7 @@ mod tests {
             let error = write_live_block_with_entity_changes(
                 &indexer,
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap_err();
@@ -7277,7 +7282,7 @@ mod tests {
             let metrics = write_live_block_with_entity_changes(
                 &indexer,
                 block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -7365,7 +7370,7 @@ mod tests {
                     AR_DEPOSIT,
                     vec![cellbase_tx(0xc0, FUNDING_CAPACITY)],
                 )],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -7379,7 +7384,7 @@ mod tests {
                     block(102, AR_DEPOSIT, vec![cellbase_tx(0xc2, FUNDING_CAPACITY)]),
                     block(103, AR_DEPOSIT, vec![cellbase_tx(0xc3, FUNDING_CAPACITY)]),
                 ],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -7512,9 +7517,9 @@ mod tests {
                 witnesses: vec![],
             };
 
-            let mut token_daily = EntityDailyChanges::<UndatedEntityKey>::new();
+            let mut token_daily = TokenDailyChanges::<UndatedEntityKey>::new();
             token_daily
-                .add(
+                .add_tx(
                     101,
                     type_script_hash.clone(),
                     20_000_000_000,
@@ -7903,7 +7908,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &indexer,
                 vec![block_102, completion_block(expected_fee)],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -8314,7 +8319,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &batch_indexer,
                 blocks.clone(),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -8453,7 +8458,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &batch_indexer,
                 blocks[2..].to_vec(),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -9100,7 +9105,7 @@ mod tests {
                         ],
                     ),
                 ],
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -10285,6 +10290,61 @@ mod tests {
                 .collect()
         }
 
+        /// W3: `TokenDailyDelta.tx_count` is the number of transactions that
+        /// day that created or consumed a cell of the token — the mint (two
+        /// token cells) and the transfer (two in, two out) are one each —
+        /// identically on the live writer and in bulk build, and a shallow
+        /// rollback of the transfer's block takes its count back out.
+        #[tokio::test]
+        async fn token_daily_counts_each_transaction_once_on_both_paths() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = blocks();
+            let type_hash = crate::parser::ScriptParser::compute_script_hash(&xudt_type());
+            let day = ckbadger_store::keys::timestamp_ms_to_date(1_700_000_101_000);
+            let daily_key = ckbadger_store::keys::encode_token_daily_key(&type_hash, day).to_vec();
+
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&blocks).expect("bulk");
+            let bulk_rows = token_daily_rows(&bulk.token_rows);
+            assert_eq!(bulk_rows.len(), 1, "all three blocks share one day");
+            assert_eq!(bulk_rows[0].tx_count, 2, "bulk: mint + transfer");
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            write_live_block(&indexer, blocks[0].clone()).await.unwrap();
+            write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[1].clone()])
+                .await
+                .unwrap();
+            let after_mint: TokenDailyDelta =
+                bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
+            assert_eq!(after_mint.tx_count, 1, "live: the mint");
+            write_live_blocks_with_parser_token_daily(&indexer, vec![blocks[2].clone()])
+                .await
+                .unwrap();
+            let live_rows = token_daily_rows(
+                &crate::sync::bulk_build::collect_token_raw_rows(store.as_ref()).unwrap(),
+            );
+            assert_eq!(live_rows, bulk_rows, "live and bulk TOKEN_DAILY rows");
+
+            // Shallow rollback of block 102: the undo pre-image restores the
+            // end-of-block-101 row, count included.
+            indexer
+                .writer
+                .cleanup_batch_range(store.as_ref(), 102, 102)
+                .unwrap();
+            let rolled_back: TokenDailyDelta =
+                bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
+            assert_eq!(rolled_back, after_mint);
+            assert!(store
+                .find_first_invalid_token_daily_delta()
+                .unwrap()
+                .is_none());
+        }
+
         #[tokio::test]
         async fn owner_mode_udt_cells_count_in_token_daily_on_both_paths() {
             let _guard =
@@ -10384,11 +10444,11 @@ mod tests {
             range.map(cellbase_block).collect()
         }
 
-        fn token_changes_at(blocks: &[u64]) -> EntityDailyChanges<UndatedEntityKey> {
-            let mut changes = EntityDailyChanges::<UndatedEntityKey>::new();
+        fn token_changes_at(blocks: &[u64]) -> TokenDailyChanges<UndatedEntityKey> {
+            let mut changes = TokenDailyChanges::<UndatedEntityKey>::new();
             for &block in blocks {
                 changes
-                    .add(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000)
+                    .add_tx(block as i64, TOKEN.to_vec(), 61_00000000, 61_00000000)
                     .unwrap();
             }
             changes
@@ -10426,7 +10486,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &indexer,
                 blocks(100..=1100),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();
@@ -10480,7 +10540,7 @@ mod tests {
             write_live_blocks_with_entity_changes(
                 &indexer,
                 blocks(2601..=2601),
-                EntityDailyChanges::new(),
+                TokenDailyChanges::new(),
             )
             .await
             .unwrap();

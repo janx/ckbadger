@@ -10,8 +10,8 @@ use crate::parser::ParsedUdtTransfer;
 
 use ckbadger_store::keys;
 
-use super::entity_stats::{apply_daily_pair, EntityStatsOverlay, SharedEntityStatsOverlay};
-use crate::sync::types::{EntityDailyChanges, EntityDateKey};
+use super::entity_stats::{apply_token_daily, EntityStatsOverlay, SharedEntityStatsOverlay};
+use crate::sync::types::{EntityDateKey, TokenDailyChanges};
 use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
@@ -36,16 +36,17 @@ impl BatchWriter {
         UdtBatchState { stats, undo_seq }
     }
 
-    /// Per-block token daily capacity/knowledge deltas.
+    /// Per-block token daily capacity/knowledge deltas and transaction counts.
     ///
     /// Every mutation goes through the batch overlay, which records the value
     /// as of the end of the previous block the first time a given block touches
     /// a given key. That undo entry is the ONLY thing that restores these rows
     /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
-    /// them (Task 2.4).
+    /// them (Task 2.4). Every contribution carries at least one transaction,
+    /// so every one is written, including a net-zero capacity change.
     pub fn update_token_daily_deltas_batch(
         &self,
-        changes: &EntityDailyChanges<EntityDateKey>,
+        changes: &TokenDailyChanges<EntityDateKey>,
         overlay: &mut EntityStatsOverlay,
         undo_seq: &mut HashMap<i64, u64>,
         batch: &mut StoreBatch,
@@ -56,11 +57,7 @@ impl BatchWriter {
         // pre-batch value (`prefetch_never_overwrites_a_value_the_batch_computed`).
         let mut prefetch_keys: Vec<Vec<u8>> = Vec::new();
         for (_, map) in changes.by_block() {
-            for (key_parts, (capacity_delta, knowledge_delta)) in map {
-                if *capacity_delta == 0 && *knowledge_delta == 0 {
-                    continue;
-                }
-                let (type_hash, date_yyyymmdd) = key_parts;
+            for (type_hash, date_yyyymmdd) in map.keys() {
                 prefetch_keys
                     .push(keys::encode_token_daily_key(type_hash, *date_yyyymmdd).to_vec());
             }
@@ -70,22 +67,27 @@ impl BatchWriter {
         overlay.prefetch(self.store.as_ref(), &prefetch_keys)?;
 
         for (block, map) in changes.by_block() {
-            for (key_parts, (capacity_delta, knowledge_delta)) in map {
-                if *capacity_delta == 0 && *knowledge_delta == 0 {
-                    continue;
-                }
-                let (type_hash, date_yyyymmdd) = key_parts;
+            for ((type_hash, date_yyyymmdd), contribution) in map {
                 let key = keys::encode_token_daily_key(type_hash, *date_yyyymmdd).to_vec();
                 let ctx = || {
                     format!(
-                        "token_daily type_hash=0x{} date={}",
+                        "token_daily type_hash=0x{} date={} block={}",
                         hex::encode(type_hash),
-                        date_yyyymmdd
+                        date_yyyymmdd,
+                        block
                     )
                 };
+                if contribution.tx_count == 0 {
+                    anyhow::bail!("token daily contribution without a transaction: {}", ctx());
+                }
                 let prev = overlay.current(self.store.as_ref(), &key)?;
-                let next =
-                    apply_daily_pair(prev.as_deref(), *capacity_delta, *knowledge_delta, &ctx)?;
+                let next = apply_token_daily(
+                    prev.as_deref(),
+                    contribution.capacity_delta,
+                    contribution.knowledge_delta,
+                    contribution.tx_count,
+                    &ctx,
+                )?;
                 overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
             }
         }
@@ -93,21 +95,21 @@ impl BatchWriter {
     }
 
     /// Test-only adapter: run a flat `(entity, delta)` map through the real
-    /// per-block writer as a single block, then stage the overlay.
+    /// per-block writer as a single block — one transaction per entry — then
+    /// stage the overlay.
     ///
-    /// The value semantics these callers assert (accumulate, delete on net
-    /// zero, fail on a corrupt existing row) are unchanged by Task 2.3; the
-    /// per-block undo semantics are covered by `entity_stats`' own unit tests
-    /// and by `tests/entity_stats_rollback.rs`.
+    /// The value semantics these callers assert (accumulate, fail on a corrupt
+    /// existing row) are covered here; the per-block undo semantics by
+    /// `entity_stats`' own unit tests and `tests/entity_stats_rollback.rs`.
     #[cfg(test)]
     pub(crate) fn update_token_daily_deltas_batch_flat_for_test(
         &self,
         changes: &HashMap<(Vec<u8>, u32), (i128, i128)>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let mut by_block = EntityDailyChanges::new();
+        let mut by_block = TokenDailyChanges::new();
         for (key, (capacity_delta, knowledge_delta)) in changes {
-            by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
+            by_block.add_tx(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
         let mut overlay = EntityStatsOverlay::new();
         let mut undo_seq = HashMap::new();
@@ -653,7 +655,9 @@ mod tests {
     }
 
     #[test]
-    fn test_update_token_daily_deltas_batch_accumulates_and_deletes_zero_net() {
+    /// W3: a token day counts its transactions, so a day whose capacity nets
+    /// to zero keeps its row (with the count) instead of being deleted.
+    fn test_update_token_daily_deltas_batch_accumulates_and_keeps_a_net_zero_day() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -681,6 +685,7 @@ mod tests {
             .unwrap();
         assert_eq!(delta.owned_capacity_delta, 80);
         assert_eq!(delta.owned_knowledge_delta, 50);
+        assert_eq!(delta.tx_count, 2);
 
         let mut third = HashMap::new();
         third.insert((type_hash.clone(), 20240115u32), (-80i128, -50i128));
@@ -690,8 +695,18 @@ mod tests {
             .unwrap();
         batch.commit().unwrap();
 
-        let delta = store.get_token_daily_delta(&type_hash, 20240115).unwrap();
-        assert!(delta.is_none());
+        let delta = store
+            .get_token_daily_delta(&type_hash, 20240115)
+            .unwrap()
+            .expect("a day with three transactions keeps its row");
+        assert_eq!(
+            delta,
+            ckbadger_store::TokenDailyDelta {
+                owned_capacity_delta: 0,
+                owned_knowledge_delta: 0,
+                tx_count: 3,
+            }
+        );
     }
 
     #[test]
@@ -713,11 +728,11 @@ mod tests {
         let err = writer
             .update_token_daily_deltas_batch_flat_for_test(&changes, &mut batch)
             .unwrap_err();
-        // Same guard, now raised by the single daily codec, which still names
-        // the family and the entity.
+        // Same guard, raised by the token daily codec's width check, which
+        // still names the family and the entity.
         assert!(
             err.to_string()
-                .contains("failed to deserialize entity daily delta")
+                .contains("entity daily delta has 31 bytes, expected 40")
                 && err.to_string().contains("token_daily type_hash="),
             "got: {err}"
         );

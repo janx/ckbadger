@@ -244,8 +244,11 @@ impl TokenOwner {
 
 impl BulkReducer for TokenOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
-        // Capacity history first: every sUDT/xUDT-typed cell, amount or not.
+        // Capacity history first: every sUDT/xUDT-typed cell, amount or not,
+        // and one transaction per token the tx touches (the live parser's
+        // `pipeline::add_token_daily_tx` counts the same set).
         let date = keys::timestamp_ms_to_date(tx.chain_time_ms);
+        let mut tx_tokens: Vec<Vec<u8>> = Vec::new();
         for input in &tx.resolved_inputs {
             if let Some(type_hash) = token_daily_type_hash(
                 input.semantic_tag,
@@ -254,6 +257,9 @@ impl BulkReducer for TokenOwner {
                 tx,
                 "input",
             )? {
+                if !tx_tokens.contains(&type_hash) {
+                    tx_tokens.push(type_hash.clone());
+                }
                 self.record_daily_delta(
                     type_hash,
                     date,
@@ -271,6 +277,9 @@ impl BulkReducer for TokenOwner {
                 tx,
                 "output",
             )? {
+                if !tx_tokens.contains(&type_hash) {
+                    tx_tokens.push(type_hash.clone());
+                }
                 self.record_daily_delta(
                     type_hash,
                     date,
@@ -279,6 +288,21 @@ impl BulkReducer for TokenOwner {
                     tx,
                 )?;
             }
+        }
+        for type_hash in tx_tokens {
+            let entry = self
+                .daily_deltas
+                .entry(type_hash)
+                .or_default()
+                .entry(date)
+                .or_default();
+            entry.tx_count = entry.tx_count.checked_add(1).ok_or_else(|| {
+                anyhow!(
+                    "token daily tx_count overflow: tx=0x{} date={}",
+                    hex::encode(tx.tx_hash),
+                    date
+                )
+            })?;
         }
 
         let input_views = tx
@@ -403,8 +427,15 @@ impl TokenOwner {
             let mut daily_dates = self.daily_deltas[type_hash].iter().collect::<Vec<_>>();
             daily_dates.sort_by_key(|(date, _)| *date);
             for (date, delta) in daily_dates {
-                if delta.owned_capacity_delta == 0 && delta.owned_knowledge_delta == 0 {
-                    continue;
+                // Every recorded day counts at least the transaction that
+                // created its entry, so every day is a row — including one
+                // whose capacity netted to zero.
+                if delta.tx_count == 0 {
+                    bail!(
+                        "token daily row without a transaction: type_hash=0x{} date={}",
+                        hex::encode(type_hash),
+                        date
+                    );
                 }
                 emit(MaterializedRow::new(
                     CF_STATS_TOKEN,
