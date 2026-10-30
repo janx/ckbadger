@@ -91,7 +91,7 @@ export const DAO_ISSUANCE_COLORS = {
 // ---- F2 group `fiber` (Fiber network, Fiber channel, Forks, Fork detail) ----
 /** Jade = open now / CKB locked now; grey ink = history; a dashed light line = forced. */
 export const FIBER_COLORS = {
-  open: '#2edba3',
+  open: DATA_COLOR,
   openFill: 'rgba(46,219,163,.28)',
   history: '#a0a8be',
   historyFill: 'rgba(160,168,190,.3)',
@@ -106,8 +106,8 @@ export const FIBER_COLORS = {
 /** Uncles on chain are grey ink; this node's view and an uncle inclusion are jade. */
 export const FORK_COLORS = {
   uncles: '#a0a8be',
-  nodeSwitches: '#2edba3',
-  uncleLink: '#2edba3',
+  nodeSwitches: DATA_COLOR,
+  uncleLink: DATA_COLOR,
   dropped: '#dee2ec',
   spine: '#343c50',
   edge: '#4b5266',
@@ -140,7 +140,7 @@ export const CODE_CLASS_COLORS = {
 /** Free capacity in a cell anatomy bar (the Script board's "free" swatch). */
 export const FREE_CAPACITY_COLOR = '#1a1f30';
 /** The neutral of plain CKB held: the area under occupied in a script's history. */
-export const HELD_CAPACITY_COLOR = '#3a4258';
+export const HELD_CAPACITY_COLOR = CLASS_COLORS.ckb;
 /** A code cell's ELF file to scale (CellCode board): one tone per kind of region. */
 export const ELF_REGION_COLORS = {
   header: '#5f9fb2',
