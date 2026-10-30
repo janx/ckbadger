@@ -4018,13 +4018,15 @@ export const api = {
     fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
   getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
     fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),
+  /** Spore clusters have their own insights; m-NFT classes and identity collections (by alias)
+   * are served by the object-collection insights route. */
   getCollectionInsights: (
     id: string,
-    kind: 'spore' | 'object' = 'spore'
+    kind: 'spore' | 'object' | 'identity' = 'spore'
   ): Promise<CollectionInsights> =>
-    kind === 'object'
-      ? fetchApi(`/assets/objects/${encodeURIComponent(id)}/insights`)
-      : fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`),
+    kind === 'spore'
+      ? fetchApi(`/spore/clusters/${encodeURIComponent(id)}/insights`)
+      : fetchApi(`/assets/objects/${encodeURIComponent(id)}/insights`),
   getCollectionGallery: (
     id: string,
     params: CursorQueryParams & { traits?: Record<string, string> } = {}

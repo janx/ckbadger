@@ -49,9 +49,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
   });
   const insights = useQuery({
     queryKey: ['collection-insights', kind, id],
-    queryFn: () => api.getCollectionInsights(id, kind === 'object' ? 'object' : 'spore'),
-    // Spore clusters and m-NFT classes have insights; identity collections have none indexed.
-    enabled: kind === 'spore' || kind === 'object',
+    queryFn: () => api.getCollectionInsights(id, kind),
     retry: false,
   });
   const chart = useQuery({
@@ -296,12 +294,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               insights.data
                 ? insights.data.weeklyActivity
                 : {
-                    unavailable:
-                      kind === 'identity'
-                        ? 'Weekly transfer totals are not indexed for identity collections'
-                        : insights.error
-                          ? `Weekly transfers unavailable: ${insights.error.message}`
-                          : 'Loading weekly transfers…',
+                    unavailable: insights.error
+                      ? `Weekly transfers unavailable: ${insights.error.message}`
+                      : 'Loading weekly transfers…',
                   }
             }
           />
@@ -309,7 +304,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       ) : (
         <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
       )}
-      {kind === 'object' && (
+      {kind !== 'spore' && (
         <AssetReadState
           label="collection insights"
           error={insights.error}
