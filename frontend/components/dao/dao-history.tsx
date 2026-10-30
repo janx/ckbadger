@@ -369,7 +369,7 @@ export function DaoHistory({
                 data-role="clip-note"
                 x={LEFT}
                 y={C_Y - 6}
-                fontSize="11"
+                fontSize="10"
                 className="fill-text-dim"
               >
                 {clipNote}

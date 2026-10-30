@@ -143,6 +143,8 @@ describe('DaoHistory at phone width (DAO-22)', () => {
     const note = container.querySelector('[data-role="clip-note"]')!;
     expect(note.tagName.toLowerCase()).toBe('text');
     expect(note).toHaveTextContent('1 week beyond the scale is cut and marked');
+    // Its own line in 10 px, so 44 characters end inside a 358 px column in the site font.
+    expect(note).toHaveAttribute('font-size', '10');
     const label = container.querySelector('[data-role="largest-week"]')!;
     expect(label).toHaveAttribute('text-anchor', 'end');
     expect(Number(label.getAttribute('x'))).toBeLessThanOrEqual(358 - 8);
