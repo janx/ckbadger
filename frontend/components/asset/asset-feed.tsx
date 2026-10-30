@@ -1,10 +1,15 @@
 'use client';
 import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import type { GlobalActivity, ItemActivity, Transaction, CursorPaginatedResponse } from '@/lib/api';
+import type {
+  CursorPaginatedResponse,
+  GlobalActivity,
+  ItemActivity,
+  ItemRingRelink,
+  Transaction,
+} from '@/lib/api';
 import { ActivityRow } from '@/components/activity/activity-row';
-import { activityHeadline, capitalizeAction } from '@/components/activity-event-row';
-import { classifyActivity } from '@/lib/activity-classify';
+import { ActivityReadError, capitalizeAction } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
@@ -15,8 +20,12 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
-/** The .cell actions that rewrite a ring neighbour's pointer (indexer `metadata.relinked`). */
-const NEIGHBOUR_ACTIONS: Record<string, string> = { register: 'registered', recycle: 'recycled' };
+const NEIGHBOUR_HEADLINES: Record<ItemRingRelink['by'], string> = {
+  register: 'Neighbour registered',
+  register_subname: 'Neighbour registered a sub-name',
+  recycle: 'Neighbour recycled',
+  unattributed: 'Ring pointer changed',
+};
 
 export interface ItemFeedHeadline {
   text: string;
@@ -24,34 +33,38 @@ export interface ItemFeedHeadline {
   neighbour: boolean;
 }
 
+/** One item's own feed: its kind, and the protocol name for standards with protocol actions. */
+export interface ItemFeedSubject {
+  kind: 'identity' | 'object';
+  /** `.cell`: its rows are named by the item's own protocol action. */
+  protocolName?: string;
+}
+
 /**
- * Headline of a row in one item's own feed (ID-C1). A protocol action is the exact,
- * standard-specific name (".cell · edit records"); without one, the item's own action names the
- * row ("Identity Renew"), never a net-delta guess. A .cell registration whose `relinked` names
- * this item, or a recycle that unlinked a name next to it, only rewrote its ring pointer:
- * "Neighbour registered" / "Neighbour recycled".
+ * Headline of a row in one item's own feed. The API states what the tx meant for this item
+ * (`itemContext.protocolAction` / `ringRelink`); this only displays it (ID-C1, #5). A ring
+ * neighbour's rewrite is dimmed; a `.cell` row is its own protocol action; any other standard is
+ * named by its exact item action ("Identity Renew").
  */
-export function itemFeedHeadline(
-  activity: ItemActivity,
-  kind: 'identity' | 'object'
-): ItemFeedHeadline {
+export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject): ItemFeedHeadline {
   const context = activity.itemContext;
   if (!context?.action)
-    throw new Error(`${activity.txHash}: item feed row has no item action for ${kind}`);
-  for (const pa of activity.protocolActions) {
-    if (pa.protocol !== 'dotcell' || pa.metadata.relinked === undefined) continue;
-    const relinked = pa.metadata.relinked;
-    if (typeof relinked !== 'string' || !/^0x[0-9a-f]+$/i.test(relinked))
-      throw new Error(`${activity.txHash}: invalid .cell relink ${JSON.stringify(relinked)}`);
-    if (relinked.toLowerCase() !== context.itemId.toLowerCase()) continue;
-    const done = NEIGHBOUR_ACTIONS[pa.action];
-    if (!done) throw new Error(`${activity.txHash}: .cell ${pa.action} cannot relink a neighbour`);
-    return { text: `Neighbour ${done}`, neighbour: true };
+    throw new Error(`${activity.txHash}: item feed row has no item action for ${item.kind}`);
+  if (context.ringRelink) {
+    const text = NEIGHBOUR_HEADLINES[context.ringRelink.by];
+    if (!text)
+      throw new Error(
+        `${activity.txHash}: unknown ring relink ${JSON.stringify(context.ringRelink.by)}`
+      );
+    return { text, neighbour: true };
   }
-  if (classifyActivity(activity).primaryProtocolAction)
-    return { text: activityHeadline(activity), neighbour: false };
+  if (item.protocolName && context.protocolAction)
+    return {
+      text: `${item.protocolName} · ${context.protocolAction.replaceAll('_', ' ')}`,
+      neighbour: false,
+    };
   return {
-    text: `${kind === 'identity' ? 'Identity' : 'Object'} ${capitalizeAction(context.action)}`,
+    text: `${item.kind === 'identity' ? 'Identity' : 'Object'} ${capitalizeAction(context.action)}`,
     neighbour: false,
   };
 }
@@ -198,8 +211,8 @@ export interface AssetFeedProps {
   }) => Promise<CursorPaginatedResponse<Transaction>>;
   token?: AssetTransactionsProps['token'];
   context?: AssetTransactionsProps['context'];
-  /** One item's own feed: every row carries its item action (see itemFeedHeadline). */
-  itemKind?: 'identity' | 'object';
+  /** One item's own feed: every row carries its item context (see itemFeedHeadline). */
+  item?: ItemFeedSubject;
 }
 export function AssetFeed({
   queryKey,
@@ -210,7 +223,7 @@ export function AssetFeed({
   context,
   initialActivityCursor,
   onActivityCursorChange,
-  itemKind,
+  item,
 }: AssetFeedProps) {
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
@@ -257,13 +270,23 @@ export function AssetFeed({
           {tab === 'activities' ? (
             acts.data!.data.length ? (
               acts.data!.data.map((a) => {
-                const headline = itemKind && itemFeedHeadline(a as ItemActivity, itemKind);
+                let headline: ItemFeedHeadline | undefined;
+                try {
+                  headline = item && itemFeedHeadline(a as ItemActivity, item);
+                } catch (error) {
+                  // A row that breaks the feed contract is reported in place; the page stays up.
+                  return (
+                    <div key={a.txHash} className="border-base-elevated border-b py-3">
+                      <ActivityReadError txHash={a.txHash} error={error} />
+                    </div>
+                  );
+                }
                 return (
                   <ActivityRow
                     key={a.txHash}
                     activity={a}
-                    headline={headline ? headline.text : undefined}
-                    className={headline && headline.neighbour ? 'opacity-[0.45]' : undefined}
+                    headline={headline?.text}
+                    className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
                   />
                 );
               })

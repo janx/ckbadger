@@ -1479,9 +1479,20 @@ export interface GalleryObject extends SporeNft {
   traits: DobTrait[];
   decodeStatus: string;
 }
+/** Who rewrote this item's cell as a ring neighbour, when the tx had no action of its own. */
+export interface ItemRingRelink {
+  by: 'register' | 'register_subname' | 'recycle' | 'unattributed';
+  /** The neighbour name whose action rewrote this one; null when unattributed. */
+  byId: string | null;
+}
+/** What one transaction meant for this item, stated by the API (one derivation, #5). */
 export interface ItemFeedContext {
   itemId: string;
   action: string;
+  /** The item's own protocol action in this tx (e.g. `edit_records`); null when it has none. */
+  protocolAction: string | null;
+  /** Set only when the item's cell was rewritten as a ring neighbour with no own action. */
+  ringRelink: ItemRingRelink | null;
   createdCell: ItemCellVersion | null;
   consumedCell: ItemCellVersion | null;
 }

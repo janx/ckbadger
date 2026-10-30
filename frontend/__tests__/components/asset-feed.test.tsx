@@ -60,106 +60,93 @@ const transaction: Transaction = {
   activity,
 };
 describe('Shared asset feeds', () => {
-  it('prefers itemContext.action over net identity mint inference (ID-C1)', () => {
-    const row = {
-      ...activity,
-      itemContext: {
-        itemId: '0x' + '11'.repeat(20),
-        action: 'update',
-        createdCell: null,
-        consumedCell: null,
-      },
-      tags: 4, // TAG_IDENTITY
-      participants: [
-        {
-          ...activity.participants[0],
-          tags: 4,
-          itemDeltas: [
-            {
-              kind: 'identity',
-              standard: 'dotbit',
-              identityId: '0x' + '11'.repeat(20),
-              delta: 1,
-            },
-          ],
-        },
-      ],
-    } as ItemActivity;
-    expect(itemFeedHeadline(row, 'identity')).toEqual({
-      text: 'Identity Update',
-      neighbour: false,
-    });
-  });
-
-  const dotcell = (action: string, metadata: ItemActivity['protocolActions'][number]['metadata']) =>
+  const aptId = '0x' + 'a7'.repeat(20);
+  /** One item-feed row; the API states what the tx meant for this item in its itemContext. */
+  const row = (context: Partial<ItemActivity['itemContext']>, extra: Partial<ItemActivity> = {}) =>
     ({
       ...activity,
       participants: [{ ...activity.participants[0], itemDeltas: [] }],
-      protocolActions: [{ protocol: 'dotcell', protocolName: '.cell', action, metadata }],
-      itemContext: { itemId: aptId, action: 'update', createdCell: null, consumedCell: null },
+      ...extra,
+      itemContext: {
+        itemId: aptId,
+        action: 'update',
+        protocolAction: null,
+        ringRelink: null,
+        createdCell: null,
+        consumedCell: null,
+        ...context,
+      },
     }) as ItemActivity;
-  const aptId = '0x' + 'a7'.repeat(20);
+  const cell = { kind: 'identity', protocolName: '.cell' } as const;
 
-  it('keeps the .cell protocol action names over the coarse item action (ID-C1)', () => {
-    expect(itemFeedHeadline(dotcell('edit_records', { label: 'apt' }), 'identity')).toEqual({
+  it('names a .cell row by the protocol action the API attributes to this item (ID-C1, #5)', () => {
+    expect(itemFeedHeadline(row({ protocolAction: 'edit_records' }), cell)).toEqual({
       text: '.cell · edit records',
       neighbour: false,
     });
-    expect(itemFeedHeadline(dotcell('transfer', { label: 'apt' }), 'identity').text).toBe(
-      '.cell · transfer'
+    // A batch tx: another name's action comes first in protocolActions; it is not this row's.
+    const batch = row(
+      { protocolAction: 'transfer', action: 'transfer' },
+      {
+        protocolActions: [
+          { protocol: 'dotcell', protocolName: '.cell', action: 'edit_records', metadata: {} },
+          { protocol: 'dotcell', protocolName: '.cell', action: 'transfer', metadata: {} },
+        ],
+      }
+    );
+    expect(itemFeedHeadline(batch, cell).text).toBe('.cell · transfer');
+  });
+
+  it('names other standards by the exact item action, never a net-delta guess or "Item"', () => {
+    expect(itemFeedHeadline(row({ action: 'renew' }), { kind: 'identity' }).text).toBe(
+      'Identity Renew'
+    );
+    expect(itemFeedHeadline(row({ action: 'transfer' }), { kind: 'object' }).text).toBe(
+      'Object Transfer'
+    );
+    expect(() => itemFeedHeadline(row({ action: '' }), { kind: 'identity' })).toThrow(
+      'item feed row has no item action'
     );
   });
 
-  it('names an identity row without protocol actions or deltas by its item action, not "Item"', () => {
-    const did = {
-      ...activity,
-      participants: [{ ...activity.participants[0], itemDeltas: [] }],
-      itemContext: {
-        itemId: '0x' + '12'.repeat(20),
-        action: 'update',
-        createdCell: null,
-        consumedCell: null,
-      },
-    } as ItemActivity;
-    expect(itemFeedHeadline(did, 'identity').text).toBe('Identity Update');
-    expect(() =>
-      itemFeedHeadline({ ...did, itemContext: { ...did.itemContext, action: '' } }, 'identity')
-    ).toThrow('item feed row has no item action');
+  it.each([
+    ['register', 'Neighbour registered'],
+    ['register_subname', 'Neighbour registered a sub-name'],
+    ['recycle', 'Neighbour recycled'],
+    ['unattributed', 'Ring pointer changed'],
+  ] as const)('dims a ring rewrite by a neighbour %s (#1, #5)', (by, text) => {
+    const relinked = row({
+      ringRelink: { by, byId: by === 'unattributed' ? null : '0x' + 'cc'.repeat(20) },
+    });
+    expect(itemFeedHeadline(relinked, cell)).toEqual({ text, neighbour: true });
   });
 
-  it('dims a ring neighbour registration on the predecessor it relinked', async () => {
-    const register = dotcell('register', { label: 'ckb', relinked: aptId.toUpperCase() });
-    expect(itemFeedHeadline(register, 'identity')).toEqual({
-      text: 'Neighbour registered',
-      neighbour: true,
-    });
-    // The same registration on the new name's own page is its registration.
-    const own = {
-      ...register,
-      itemContext: { ...register.itemContext, itemId: '0x' + 'cc'.repeat(20) },
+  it('keeps the identity page up when a row breaks the feed contract, naming the tx', async () => {
+    // T3 shape: shop.v3-first-name registered as a sub-name, rewriting its parent's ring pointer.
+    const t3 = row(
+      { action: 'update', ringRelink: { by: 'register_subname', byId: '0x' + 'cc'.repeat(20) } },
+      {
+        protocolActions: [
+          {
+            protocol: 'dotcell',
+            protocolName: '.cell',
+            action: 'register_subname',
+            metadata: { relinked: aptId, parentId: aptId },
+          },
+        ],
+      }
+    );
+    const broken = {
+      ...row({ ringRelink: { by: 'migrate' as never, byId: null } }),
+      txHash: '0x' + 'ee'.repeat(32),
     };
-    expect(itemFeedHeadline(own, 'identity')).toEqual({
-      text: '.cell · register',
-      neighbour: false,
-    });
-    expect(() =>
-      itemFeedHeadline(dotcell('register', { relinked: 'apt.cell' }), 'identity')
-    ).toThrow('invalid .cell relink');
-    // A recycled neighbour unlinks from the ring and rewrites this name's pointer too.
-    expect(itemFeedHeadline(dotcell('recycle', { relinked: aptId }), 'identity')).toEqual({
-      text: 'Neighbour recycled',
-      neighbour: true,
-    });
-    expect(() => itemFeedHeadline(dotcell('transfer', { relinked: aptId }), 'identity')).toThrow(
-      '.cell transfer cannot relink a neighbour'
-    );
     render(
       <AssetFeed
-        queryKey="dotcell:apt"
+        queryKey="dotcell:v3-first-name"
         scope="This identity's whole life"
-        itemKind="identity"
+        item={cell}
         loadActivities={async () => ({
-          data: [register],
+          data: [t3, broken],
           limit: 50,
           hasMore: false,
           nextCursor: null,
@@ -167,9 +154,11 @@ describe('Shared asset feeds', () => {
         loadTransactions={async () => ({ data: [], limit: 50, hasMore: false, nextCursor: null })}
       />
     );
-    const headline = await screen.findByText('Neighbour registered');
+    const headline = await screen.findByText('Neighbour registered a sub-name');
     expect(headline.closest('article')).toHaveClass('opacity-[0.45]');
-    expect(screen.queryByText('.cell · register')).not.toBeInTheDocument();
+    expect(screen.getByTestId('activity-read-error')).toHaveTextContent(
+      `Cannot read tx ${broken.txHash}`
+    );
   });
 
   it('counts this token once from positive participant deltas, not CKB value or both sides', () => {
