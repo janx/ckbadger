@@ -250,7 +250,8 @@ interface Transaction {
   inputsCount: number;
   outputsCount: number;
   fee: string;
-  txSize?: number;
+  /** Serialized size in a block; null while unknown. */
+  txSize: number | null;
   cycles: number | null;
   cyclesStatus: 'complete' | 'pending' | 'failed';
   isCellbase: boolean;
@@ -578,7 +579,7 @@ interface PoolTransactionsResponse {
 
 interface TransactionDetail extends Omit<
   Transaction,
-  'blockNumber' | 'blockHash' | 'index' | 'timestamp' | 'value'
+  'blockNumber' | 'blockHash' | 'index' | 'timestamp' | 'value' | 'txSize'
 > {
   status: TransactionStatus;
   /**
@@ -588,20 +589,23 @@ interface TransactionDetail extends Omit<
    * and `index` not yet known). Absent once the store has it.
    */
   poolStatus?: PoolStatus;
-  pendingSince: string | null;
-  blockNumber: number | null;
-  blockHash: string | null;
-  index: number | null;
-  feeRate?: string;
-  txSize?: number;
+  // The API omits each of these keys (never sends null) while the store has not indexed the
+  // transaction; `committed_awaiting_index` already has `blockNumber`/`blockHash` (TX-06).
+  pendingSince?: string;
+  blockNumber?: number;
+  blockHash?: string;
+  index?: number;
+  /** Null while the serialized size is unknown. */
+  feeRate: string | null;
+  txSize: number | null;
   cycles: number | null;
   cyclesStatus: 'complete' | 'pending' | 'failed';
-  timestamp: string | null;
-  confirmations: number | null;
-  inputsCapacity: string | null;
-  outputsCapacity: string | null;
-  inputsCommonKnowledgeSize: string | null;
-  outputsCommonKnowledgeSize: string | null;
+  timestamp?: string;
+  confirmations?: number;
+  inputsCapacity?: string;
+  outputsCapacity?: string;
+  inputsCommonKnowledgeSize?: string;
+  outputsCommonKnowledgeSize?: string;
   inputs?: Array<{
     previousOutput?: {
       txHash: string;

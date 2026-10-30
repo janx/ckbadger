@@ -1049,7 +1049,6 @@ describe('renderMarkdownPage', () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       hash,
       status: 'committed',
-      pendingSince: null,
       blockNumber: 100,
       blockHash: `0x${'2'.repeat(64)}`,
       index: 0,
@@ -1111,5 +1110,50 @@ describe('renderMarkdownPage', () => {
     });
     expect(unavailable.body).toContain('| witnessesCount | — |');
     expect(unavailable.body).toContain('| witnessesAvailable | false |');
+  });
+
+  it('says a pending tx is not indexed instead of printing undefined (TX-06)', async () => {
+    const hash = `0x${'3'.repeat(64)}`;
+    // The API omits every unindexed key; it never sends null for them.
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      hash,
+      status: 'pending',
+      pendingSince: '2026-03-12T12:00:00Z',
+      inputsCount: 1,
+      outputsCount: 1,
+      fee: '1000',
+      feeRate: null,
+      txSize: null,
+      cycles: null,
+      cyclesStatus: 'pending',
+      isCellbase: false,
+      inputs: [],
+      outputs: [],
+      scriptGroups: [],
+      witnessDetails: [],
+      witnesses: [],
+      witnessesAvailable: false,
+    } as any);
+    vi.mocked(api.getTransactionLifecycle).mockResolvedValue({
+      hash,
+      phase: 'pending',
+      proposalId: '0x03',
+      proposedIn: null,
+      committedIn: null,
+      commitmentDistance: null,
+      commitmentWindow: null,
+      isCellbase: false,
+      confirmations: 0,
+    } as any);
+    vi.mocked(api.getTransactionCellDeps).mockResolvedValue([]);
+    const result = await renderMarkdownPage({
+      page: parseMarkdownSourcePath(`/tx/${hash}`),
+      searchParams: new URLSearchParams(),
+      origin: 'http://localhost:3000',
+    });
+    expect(result.body).toContain('| status | pending |');
+    expect(result.body).toContain('| blockNumber | not indexed |');
+    expect(result.body).toContain('| confirmations | not indexed |');
+    expect(result.body).not.toContain('undefined');
   });
 });

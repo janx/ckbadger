@@ -538,11 +538,13 @@ function renderTxSummary(tx: TransactionDetail, lifecycle: TransactionLifecycle 
     ['field', 'value'],
     [
       ['hash', tx.hash],
-      ['blockNumber', tx.blockNumber],
-      ['index', tx.index],
-      ['timestamp', tx.timestamp],
+      ['status', tx.poolStatus ?? tx.status],
+      // Absent keys are a transaction this explorer has not indexed yet, said as such.
+      ['blockNumber', tx.blockNumber ?? 'not indexed'],
+      ['index', tx.index ?? 'not indexed'],
+      ['timestamp', tx.timestamp ?? 'not indexed'],
       ['isCellbase', tx.isCellbase],
-      ['confirmations', tx.confirmations],
+      ['confirmations', tx.confirmations ?? 'not indexed'],
       ['inputsCount', tx.inputsCount],
       ['outputsCount', tx.outputsCount],
       ['fee', tx.fee],
