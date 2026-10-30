@@ -832,9 +832,9 @@ pub mod stats_prefix {
     /// Persistent address set for hourly unique address dedup across batches.
     pub const ACTIVITY_HOURLY_ADDR_SET: u8 = 0x24;
     /// An output carrying the `.bit` AccountCell type script that the indexer
-    /// did not materialize as an account (the DAS root AccountCell with its
-    /// all-zero account id, data too short to name one, or a DAS witness
-    /// without its name). Suffix: outpoint. Value: empty.
+    /// did not materialize as an account because its data names none (the DAS
+    /// root AccountCell with its all-zero account id, or data too short to
+    /// name one). Suffix: outpoint. Value: empty.
     pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
 }
 

@@ -119,8 +119,10 @@ impl DotbitParser {
         })
     }
 
-    /// The `.bit` account id an AccountCell OUTPUT's data names, by the same
-    /// parser identity materialization uses. `None` when the cell names no
+    /// The `.bit` account id an AccountCell OUTPUT's data names: the one
+    /// identity rule shared by the activity builder and the materialization
+    /// partition (`parse_account_outputs`, bulk protocol facts), both of which
+    /// go through `parse_identity_cell_data`. `None` when the cell names no
     /// account: data shorter than `hash(32) + id(20)`, or an all-zero id (the
     /// DAS root AccountCell). Mainnet AccountCells carry empty type args; the
     /// id sits at `data[32..52]`.
@@ -233,10 +235,14 @@ impl DotbitParser {
 
     /// Every `.bit` AccountCell output of `tx`, split into the accounts the
     /// indexer materializes and the AccountCell-typed outputs it does not
-    /// (`unindexed_output_indices`): the DAS root AccountCell with its
-    /// all-zero id, data too short to name an account, or an account whose
-    /// name the DAS witness does not carry. The second list is recorded so a
-    /// later consumption can tell "never an account" from a lost index row.
+    /// (`unindexed_output_indices`). The split is the activity builder's
+    /// identity rule, `parse_identity_cell_data` over the cell's data, so a
+    /// cell is an identity on both its creation and its consumption or on
+    /// neither: unindexed are exactly the cells whose data names no account
+    /// (the DAS root AccountCell with its all-zero id, data too short). The
+    /// DAS witness only supplies the display name. The unindexed list is
+    /// recorded so a later consumption can tell "never an account" from a lost
+    /// index row.
     pub fn parse_account_outputs(tx: &TransactionView) -> Result<DotbitAccountOutputs> {
         if tx.outputs.len() != tx.outputs_data.len() {
             return Err(anyhow!(
@@ -283,17 +289,16 @@ impl DotbitParser {
                 }
             }
             if account.account.is_none() {
-                // DAS witness may lack account name for some historical or
-                // edge-case transactions. Skip rather than crash sync,
-                // matching the bulk-path behavior.
+                // The DAS witness does not carry this account's name. The
+                // data still names the account, so it is a `.bit` identity
+                // like any other — the activity builder counts it from the
+                // data alone — indexed under its id with the name unknown.
                 warn!(
                     tx_hash = %tx.hash,
                     output_index,
                     account_id = hex::encode(&account.account_id),
-                    "skipping DotBit account: name missing in DAS witness"
+                    "indexing DotBit account without a name: name missing in DAS witness"
                 );
-                outputs.unindexed_output_indices.push(output_index);
-                continue;
             }
             outputs.accounts.push(ParsedDotbitAccountOutput {
                 output_index,
@@ -1058,24 +1063,30 @@ mod tests {
         assert_eq!(preparsed.owner_lock_hash, raw.owner_lock_hash);
     }
 
+    /// An AccountCell whose data names an account is a `.bit` identity even
+    /// when the DAS witness does not carry its name: the activity builder
+    /// counts it from the data alone, so the partition must index it too, or
+    /// its consumption could never be counted back (round-2 review #3). The
+    /// name is simply unknown.
     #[test]
-    fn test_parse_accounts_skips_when_witness_name_missing() {
+    fn test_parse_accounts_indexes_an_account_whose_name_the_witness_lacks() {
         let account_id = [0x22u8; 20];
         let tx = create_dotbit_tx(&account_id, false);
 
-        let accounts =
-            DotbitParser::parse_accounts(&tx).expect("missing name should skip, not error");
-        assert!(
-            accounts.is_empty(),
-            "accounts with missing names should be skipped"
-        );
+        let outputs = DotbitParser::parse_account_outputs(&tx).unwrap();
+        assert!(outputs.unindexed_output_indices.is_empty());
+        assert_eq!(outputs.accounts.len(), 1);
+        assert_eq!(outputs.accounts[0].account.account_id, account_id.to_vec());
+        assert_eq!(outputs.accounts[0].account.account, None);
     }
 
     /// Every AccountCell output is either an indexed account or reported as
-    /// unindexed — the root AccountCell, a name missing from the witness — so
-    /// its later consumption can be classified; other outputs are neither.
+    /// unindexed — exactly the cells whose data names no account (the root
+    /// AccountCell) — and the partition agrees, output by output, with the id
+    /// the activity builder reads from the same data. Other outputs are
+    /// neither.
     #[test]
-    fn test_parse_account_outputs_reports_every_unindexed_account_cell() {
+    fn test_parse_account_outputs_partition_is_the_activity_identity_rule() {
         let account_id = [0x23u8; 20];
         let mut tx = create_dotbit_tx(&account_id, true);
         let mut root = tx.outputs[0].clone();
@@ -1084,7 +1095,7 @@ mod tests {
             hash_type: "type".to_string(),
             args: "0x".to_string(),
         });
-        tx.outputs.push(root);
+        tx.outputs.push(root.clone());
         tx.outputs_data
             .push(super::fixtures::MAINNET_ROOT_ACCOUNT_CELL_DATA.to_string());
         let mut plain = tx.outputs[0].clone();
@@ -1098,6 +1109,8 @@ mod tests {
             "0x{}",
             hex::encode(create_account_cell_data(&[0x24; 20], None, None))
         ));
+        tx.outputs.push(root);
+        tx.outputs_data.push(format!("0x{}", hex::encode([0xAA; 51])));
 
         let outputs = DotbitParser::parse_account_outputs(&tx).unwrap();
         assert_eq!(
@@ -1106,9 +1119,26 @@ mod tests {
                 .iter()
                 .map(|a| a.output_index)
                 .collect::<Vec<_>>(),
-            vec![0]
+            vec![0, 3]
         );
-        assert_eq!(outputs.unindexed_output_indices, vec![1, 3]);
+        assert_eq!(outputs.unindexed_output_indices, vec![1, 4]);
+
+        for (index, (output, data_hex)) in tx.outputs.iter().zip(&tx.outputs_data).enumerate() {
+            let Some(type_script) = output.type_.as_ref() else {
+                continue;
+            };
+            let from_data = DotbitParser::parse_account_id_from_data(
+                &parse_hex_to_bytes(&type_script.code_hash),
+                Some(&parse_hex_to_bytes(&type_script.args)),
+                &parse_hex_to_bytes(data_hex),
+            );
+            let partitioned = outputs
+                .accounts
+                .iter()
+                .find(|a| a.output_index as usize == index)
+                .map(|a| a.account.account_id.clone());
+            assert_eq!(from_data, partitioned, "output {index}");
+        }
     }
 
     #[test]

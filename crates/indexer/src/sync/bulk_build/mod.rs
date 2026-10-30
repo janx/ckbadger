@@ -4126,8 +4126,8 @@ fn semantic_tag_to_bit(tag: facts::CellSemanticTag) -> u16 {
 /// CF_TX_ACTIONS itself excludes cellbase at materialize time.
 /// The account id a consumed `.bit` AccountCell carries into the activity
 /// builder: the id its protocol facts were created with, or nothing when its
-/// creation named no account (the DAS root AccountCell, data naming no account,
-/// a name the DAS witness did not carry). The live path reads the same decision
+/// data named no account (the DAS root AccountCell, data too short to name
+/// one). The live path reads the same decision
 /// back from `CF_DOTBIT_OUTPOINT` and the unindexed-outpoint marker this
 /// engine writes for those cells.
 pub(in crate::sync) fn bulk_input_dotbit_account_id(input: &facts::ResolvedInputFacts) -> Result<&[u8]> {
