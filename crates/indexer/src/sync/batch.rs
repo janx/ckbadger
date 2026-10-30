@@ -5334,7 +5334,7 @@ mod tests {
             .iter()
             .map(|p| {
                 (
-                    p.id.clone(),
+                    p.id,
                     p.item_deltas
                         .iter()
                         .filter(|d| {
