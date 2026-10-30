@@ -1,0 +1,845 @@
+{
+  "family": {
+    "familyId": "joyid",
+    "name": "JoyID",
+    "description": "An universal Account Protocol for Web3 Mass-adoption",
+    "scriptKind": "lock",
+    "website": "https://joy.id",
+    "liveCellsCount": 161049,
+    "cellsCount": 2707778,
+    "ownedCapacitySum": "45600217957000000",
+    "ownedKnowledgeSum": "1909628300000000",
+    "versionsCount": 5,
+    "versions": [
+      {
+        "versionHash": "0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c",
+        "name": "JoyID",
+        "description": "An universal Account Protocol for Web3 Mass-adoption",
+        "scriptKind": "lock",
+        "website": "https://joy.id",
+        "deprecated": false,
+        "canonicalReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "canonicalHashType": "type",
+        "deployedAt": 1696664371829,
+        "firstDeployedBlock": 11132140,
+        "firstDeployedTxIndex": 1,
+        "liveCellsCount": 0,
+        "cellsCount": 0,
+        "ownedCapacitySum": "0",
+        "ownedKnowledgeSum": "0",
+        "codeCellsLiveCount": 0,
+        "codeCellsTotal": 1,
+        "deployments": [
+          {
+            "hashType": "type",
+            "typeReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "dataReferenceHash": "0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c",
+            "codeCellTxHash": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5",
+            "codeCellOutputIndex": 0,
+            "deployedAt": 1696664371829,
+            "createdAtBlock": 11132140,
+            "status": "consumed",
+            "consumedAtBlock": 11133523,
+            "consumedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+            "custody": {
+              "class": "multisig",
+              "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+              "lockHashType": "type",
+              "lockArgs": "0xd1dbde9214a1cb1e377c9b643ae5c680de0cb95c",
+              "threshold": 3,
+              "keyCount": 5,
+              "requireFirstN": 0,
+              "keyHashes": [
+                "0x9e541048b5336c9e93570da0b9e4044918d9b8ba",
+                "0xbf5280407b93a3284125a45e762abf082697b580",
+                "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+                "0xfd851647600858c78221ccb880252c11813b35bb",
+                "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
+              ],
+              "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+              "witnessState": "verified",
+              "owners": []
+            }
+          }
+        ],
+        "references": []
+      },
+      {
+        "versionHash": "0x98eaa0a9694cabfe27195b84e1b3f9f602c7eff7141510ca0d9e796612ee7855",
+        "name": "JoyID",
+        "description": "An universal Account Protocol for Web3 Mass-adoption",
+        "scriptKind": "lock",
+        "website": "https://joy.id",
+        "deprecated": false,
+        "canonicalReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "canonicalHashType": "type",
+        "deployedAt": 1696677808751,
+        "firstDeployedBlock": 11133523,
+        "firstDeployedTxIndex": 1,
+        "liveCellsCount": 0,
+        "cellsCount": 0,
+        "ownedCapacitySum": "0",
+        "ownedKnowledgeSum": "0",
+        "codeCellsLiveCount": 0,
+        "codeCellsTotal": 1,
+        "deployments": [
+          {
+            "hashType": "type",
+            "typeReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "dataReferenceHash": "0x98eaa0a9694cabfe27195b84e1b3f9f602c7eff7141510ca0d9e796612ee7855",
+            "codeCellTxHash": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+            "codeCellOutputIndex": 0,
+            "deployedAt": 1696677808751,
+            "createdAtBlock": 11133523,
+            "status": "consumed",
+            "consumedAtBlock": 17117990,
+            "consumedByTx": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+            "custody": {
+              "class": "multisig",
+              "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+              "lockHashType": "type",
+              "lockArgs": "0xd1dbde9214a1cb1e377c9b643ae5c680de0cb95c",
+              "threshold": 3,
+              "keyCount": 5,
+              "requireFirstN": 0,
+              "keyHashes": [
+                "0x9e541048b5336c9e93570da0b9e4044918d9b8ba",
+                "0xbf5280407b93a3284125a45e762abf082697b580",
+                "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+                "0xfd851647600858c78221ccb880252c11813b35bb",
+                "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
+              ],
+              "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+              "witnessState": "verified",
+              "owners": []
+            }
+          }
+        ],
+        "references": []
+      },
+      {
+        "versionHash": "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7",
+        "name": "JoyID",
+        "description": "An universal Account Protocol for Web3 Mass-adoption",
+        "scriptKind": "lock",
+        "website": "https://joy.id",
+        "deprecated": false,
+        "canonicalReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "canonicalHashType": "type",
+        "deployedAt": 1756386096175,
+        "firstDeployedBlock": 17117990,
+        "firstDeployedTxIndex": 1,
+        "liveCellsCount": 0,
+        "cellsCount": 0,
+        "ownedCapacitySum": "0",
+        "ownedKnowledgeSum": "0",
+        "codeCellsLiveCount": 0,
+        "codeCellsTotal": 1,
+        "deployments": [
+          {
+            "hashType": "type",
+            "typeReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "dataReferenceHash": "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7",
+            "codeCellTxHash": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+            "codeCellOutputIndex": 0,
+            "deployedAt": 1756386096175,
+            "createdAtBlock": 17117990,
+            "status": "consumed",
+            "consumedAtBlock": 17119035,
+            "consumedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+            "custody": {
+              "class": "multisig",
+              "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+              "lockHashType": "type",
+              "lockArgs": "0x07a21dc2d33dca6604c5056d54c6f8ce429d68ca",
+              "threshold": 3,
+              "keyCount": 5,
+              "requireFirstN": 0,
+              "keyHashes": [
+                "0x182f61e73385edd9610ab061a0d306d00f3df6bf",
+                "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+                "0xa406aa92a83a4506d251078a3e070760ab39a9fe",
+                "0xfd851647600858c78221ccb880252c11813b35bb",
+                "0xb6931c61c9472326c26e1c485358f4af009cb126"
+              ],
+              "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+              "witnessState": "verified",
+              "owners": []
+            }
+          }
+        ],
+        "references": []
+      },
+      {
+        "versionHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+        "name": "JoyID",
+        "description": "An universal Account Protocol for Web3 Mass-adoption",
+        "scriptKind": "lock",
+        "website": "https://joy.id",
+        "deprecated": false,
+        "canonicalReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "canonicalHashType": "type",
+        "deployedAt": 1756395656867,
+        "firstDeployedBlock": 17119035,
+        "firstDeployedTxIndex": 1,
+        "liveCellsCount": 0,
+        "cellsCount": 0,
+        "ownedCapacitySum": "0",
+        "ownedKnowledgeSum": "0",
+        "codeCellsLiveCount": 0,
+        "codeCellsTotal": 1,
+        "deployments": [
+          {
+            "hashType": "type",
+            "typeReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "dataReferenceHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+            "codeCellTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+            "codeCellOutputIndex": 0,
+            "deployedAt": 1756395656867,
+            "createdAtBlock": 17119035,
+            "status": "consumed",
+            "consumedAtBlock": 17894900,
+            "consumedByTx": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+            "custody": {
+              "class": "multisig",
+              "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+              "lockHashType": "type",
+              "lockArgs": "0x07a21dc2d33dca6604c5056d54c6f8ce429d68ca",
+              "threshold": 3,
+              "keyCount": 5,
+              "requireFirstN": 0,
+              "keyHashes": [
+                "0x182f61e73385edd9610ab061a0d306d00f3df6bf",
+                "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+                "0xa406aa92a83a4506d251078a3e070760ab39a9fe",
+                "0xfd851647600858c78221ccb880252c11813b35bb",
+                "0xb6931c61c9472326c26e1c485358f4af009cb126"
+              ],
+              "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+              "witnessState": "verified",
+              "owners": []
+            }
+          }
+        ],
+        "references": []
+      },
+      {
+        "versionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "name": "JoyID",
+        "description": "An universal Account Protocol for Web3 Mass-adoption",
+        "scriptKind": "lock",
+        "website": "https://joy.id",
+        "deprecated": false,
+        "canonicalReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "canonicalHashType": "type",
+        "deployedAt": 1763727179076,
+        "firstDeployedBlock": 17894900,
+        "firstDeployedTxIndex": 1,
+        "liveCellsCount": 161049,
+        "cellsCount": 2707778,
+        "ownedCapacitySum": "45600217957000000",
+        "ownedKnowledgeSum": "1909628300000000",
+        "codeCellsLiveCount": 1,
+        "codeCellsTotal": 1,
+        "deployments": [
+          {
+            "hashType": "type",
+            "typeReferenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "dataReferenceHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+            "codeCellTxHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+            "codeCellOutputIndex": 0,
+            "deployedAt": 1763727179076,
+            "createdAtBlock": 17894900,
+            "status": "live",
+            "consumedAtBlock": null,
+            "consumedByTx": null,
+            "custody": {
+              "class": "multisig",
+              "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+              "lockHashType": "type",
+              "lockArgs": "0x65983f1d7520543a6f182a50354fb4ae2deed696",
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "never_signed",
+              "owners": []
+            }
+          }
+        ],
+        "references": []
+      }
+    ],
+    "references": [
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "liveCellsCount": 161049,
+        "cellsCount": 2707778,
+        "ownedCapacitySum": "45600217957000000",
+        "ownedKnowledgeSum": "1909628300000000",
+        "currentVersionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0x65983f1d7520543a6f182a50354fb4ae2deed696",
+          "threshold": null,
+          "keyCount": null,
+          "requireFirstN": null,
+          "keyHashes": [],
+          "verifiedByTx": null,
+          "witnessState": "never_signed",
+          "owners": []
+        }
+      }
+    ],
+    "codeClasses": [
+      {
+        "class": "multisig",
+        "lockCellsCount": 161049,
+        "lockOwnedCapacitySum": "45600217957000000",
+        "referenceCount": 1
+      }
+    ],
+    "history": [
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c",
+        "blockNumber": 11132140,
+        "txIndex": 1,
+        "timestamp": 1696664371829,
+        "chainTimeMs": 1696664371829,
+        "indexedDay": "2023-10-07",
+        "codeCellOutputIndex": 0,
+        "event": "deployed",
+        "codeCellTxHash": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5",
+        "eventTxHash": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0xd1dbde9214a1cb1e377c9b643ae5c680de0cb95c",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x9e541048b5336c9e93570da0b9e4044918d9b8ba",
+            "0xbf5280407b93a3284125a45e762abf082697b580",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
+          ],
+          "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c",
+        "blockNumber": 11133523,
+        "txIndex": 1,
+        "timestamp": 1696677808751,
+        "chainTimeMs": 1696677808751,
+        "indexedDay": "2023-10-07",
+        "codeCellOutputIndex": 0,
+        "event": "consumed",
+        "codeCellTxHash": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5",
+        "eventTxHash": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0xd1dbde9214a1cb1e377c9b643ae5c680de0cb95c",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x9e541048b5336c9e93570da0b9e4044918d9b8ba",
+            "0xbf5280407b93a3284125a45e762abf082697b580",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
+          ],
+          "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x98eaa0a9694cabfe27195b84e1b3f9f602c7eff7141510ca0d9e796612ee7855",
+        "blockNumber": 11133523,
+        "txIndex": 1,
+        "timestamp": 1696677808751,
+        "chainTimeMs": 1696677808751,
+        "indexedDay": "2023-10-07",
+        "codeCellOutputIndex": 0,
+        "event": "deployed",
+        "codeCellTxHash": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+        "eventTxHash": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0xd1dbde9214a1cb1e377c9b643ae5c680de0cb95c",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x9e541048b5336c9e93570da0b9e4044918d9b8ba",
+            "0xbf5280407b93a3284125a45e762abf082697b580",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
+          ],
+          "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x98eaa0a9694cabfe27195b84e1b3f9f602c7eff7141510ca0d9e796612ee7855",
+        "blockNumber": 17117990,
+        "txIndex": 1,
+        "timestamp": 1756386096175,
+        "chainTimeMs": 1756386096175,
+        "indexedDay": "2025-08-28",
+        "codeCellOutputIndex": 0,
+        "event": "consumed",
+        "codeCellTxHash": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+        "eventTxHash": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0xd1dbde9214a1cb1e377c9b643ae5c680de0cb95c",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x9e541048b5336c9e93570da0b9e4044918d9b8ba",
+            "0xbf5280407b93a3284125a45e762abf082697b580",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xe9d70fb668bc80f20418b084c0f6ce2b7bd80169"
+          ],
+          "verifiedByTx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7",
+        "blockNumber": 17117990,
+        "txIndex": 1,
+        "timestamp": 1756386096175,
+        "chainTimeMs": 1756386096175,
+        "indexedDay": "2025-08-28",
+        "codeCellOutputIndex": 0,
+        "event": "deployed",
+        "codeCellTxHash": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+        "eventTxHash": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0x07a21dc2d33dca6604c5056d54c6f8ce429d68ca",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x182f61e73385edd9610ab061a0d306d00f3df6bf",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xa406aa92a83a4506d251078a3e070760ab39a9fe",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xb6931c61c9472326c26e1c485358f4af009cb126"
+          ],
+          "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7",
+        "blockNumber": 17119035,
+        "txIndex": 1,
+        "timestamp": 1756395656867,
+        "chainTimeMs": 1756395656867,
+        "indexedDay": "2025-08-28",
+        "codeCellOutputIndex": 0,
+        "event": "consumed",
+        "codeCellTxHash": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+        "eventTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0x07a21dc2d33dca6604c5056d54c6f8ce429d68ca",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x182f61e73385edd9610ab061a0d306d00f3df6bf",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xa406aa92a83a4506d251078a3e070760ab39a9fe",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xb6931c61c9472326c26e1c485358f4af009cb126"
+          ],
+          "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+        "blockNumber": 17119035,
+        "txIndex": 1,
+        "timestamp": 1756395656867,
+        "chainTimeMs": 1756395656867,
+        "indexedDay": "2025-08-28",
+        "codeCellOutputIndex": 0,
+        "event": "deployed",
+        "codeCellTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+        "eventTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0x07a21dc2d33dca6604c5056d54c6f8ce429d68ca",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x182f61e73385edd9610ab061a0d306d00f3df6bf",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xa406aa92a83a4506d251078a3e070760ab39a9fe",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xb6931c61c9472326c26e1c485358f4af009cb126"
+          ],
+          "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+        "blockNumber": 17894900,
+        "txIndex": 1,
+        "timestamp": 1763727179076,
+        "chainTimeMs": 1763727179076,
+        "indexedDay": "2025-11-21",
+        "codeCellOutputIndex": 0,
+        "event": "consumed",
+        "codeCellTxHash": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+        "eventTxHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0x07a21dc2d33dca6604c5056d54c6f8ce429d68ca",
+          "threshold": 3,
+          "keyCount": 5,
+          "requireFirstN": 0,
+          "keyHashes": [
+            "0x182f61e73385edd9610ab061a0d306d00f3df6bf",
+            "0xdcfa8de6e183a0acaa7d3e721da79877532a6466",
+            "0xa406aa92a83a4506d251078a3e070760ab39a9fe",
+            "0xfd851647600858c78221ccb880252c11813b35bb",
+            "0xb6931c61c9472326c26e1c485358f4af009cb126"
+          ],
+          "verifiedByTx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+          "witnessState": "verified",
+          "owners": []
+        }
+      },
+      {
+        "referenceHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        "hashType": "type",
+        "versionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "blockNumber": 17894900,
+        "txIndex": 1,
+        "timestamp": 1763727179076,
+        "chainTimeMs": 1763727179076,
+        "indexedDay": "2025-11-21",
+        "codeCellOutputIndex": 0,
+        "event": "deployed",
+        "codeCellTxHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+        "eventTxHash": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+        "custody": {
+          "class": "multisig",
+          "lockCodeHash": "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+          "lockHashType": "type",
+          "lockArgs": "0x65983f1d7520543a6f182a50354fb4ae2deed696",
+          "threshold": null,
+          "keyCount": null,
+          "requireFirstN": null,
+          "keyHashes": [],
+          "verifiedByTx": null,
+          "witnessState": "never_signed",
+          "owners": []
+        }
+      }
+    ]
+  },
+  "usage": {
+    "name": "JoyID",
+    "cellsCount": 2707778,
+    "liveCellsCount": 161049,
+    "capacitySum": "45600217957000000",
+    "ownedCapacitySum": "45600217957000000",
+    "commonKnowledgeSizeSum": "1909628300000000",
+    "ownedKnowledgeSum": "1909628300000000",
+    "byDeployment": [
+      {
+        "codeHash": "0x0b6a8ef9dee12629aaa738266a56e6e0ec3330782af9ac29f50e04b0daa1845c",
+        "scriptKind": "lock",
+        "cellsCount": 0,
+        "liveCellsCount": 0,
+        "capacitySum": "0",
+        "ownedCapacitySum": "0",
+        "commonKnowledgeSizeSum": "0",
+        "ownedKnowledgeSum": "0"
+      },
+      {
+        "codeHash": "0x98eaa0a9694cabfe27195b84e1b3f9f602c7eff7141510ca0d9e796612ee7855",
+        "scriptKind": "lock",
+        "cellsCount": 0,
+        "liveCellsCount": 0,
+        "capacitySum": "0",
+        "ownedCapacitySum": "0",
+        "commonKnowledgeSizeSum": "0",
+        "ownedKnowledgeSum": "0"
+      },
+      {
+        "codeHash": "0xd2c0f2f621a337007e046f0ed65f8fe29112c32a00ea1e43c2f8059fd42ca6d7",
+        "scriptKind": "lock",
+        "cellsCount": 0,
+        "liveCellsCount": 0,
+        "capacitySum": "0",
+        "ownedCapacitySum": "0",
+        "commonKnowledgeSizeSum": "0",
+        "ownedKnowledgeSum": "0"
+      },
+      {
+        "codeHash": "0x7e1baf1e2c98959b3b2972b57942cd6977afce520551913a6ff4933037848d0a",
+        "scriptKind": "lock",
+        "cellsCount": 0,
+        "liveCellsCount": 0,
+        "capacitySum": "0",
+        "ownedCapacitySum": "0",
+        "commonKnowledgeSizeSum": "0",
+        "ownedKnowledgeSum": "0"
+      },
+      {
+        "codeHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",
+        "scriptKind": "lock",
+        "cellsCount": 2707778,
+        "liveCellsCount": 161049,
+        "capacitySum": "0",
+        "ownedCapacitySum": "45600217957000000",
+        "commonKnowledgeSizeSum": "0",
+        "ownedKnowledgeSum": "1909628300000000"
+      }
+    ]
+  },
+  "chart": {
+    "title": "JoyID capacity",
+    "series": [
+      {
+        "key": "used",
+        "label": "Used",
+        "color": "#f59e0b"
+      },
+      {
+        "key": "unused",
+        "label": "Unused",
+        "color": "#00c389"
+      }
+    ],
+    "data": [
+      {
+        "date": "2023-10-07",
+        "values": {
+          "used": "5500000000",
+          "unused": "10000000000"
+        }
+      },
+      {
+        "date": "2024-06-01",
+        "values": {
+          "used": "800000000000000",
+          "unused": "9000000000000000"
+        }
+      },
+      {
+        "date": "2025-07-10",
+        "values": {
+          "used": "1888674900000000",
+          "unused": "28657710373441640"
+        }
+      },
+      {
+        "date": "2025-08-28",
+        "values": {
+          "used": "1890000000000000",
+          "unused": "30000000000000000"
+        }
+      },
+      {
+        "date": "2025-11-21",
+        "values": {
+          "used": "1900000000000000",
+          "unused": "40000000000000000"
+        }
+      },
+      {
+        "date": "2026-10-29",
+        "values": {
+          "used": "1909628300000000",
+          "unused": "43690589657000000"
+        }
+      }
+    ]
+  },
+  "cells": {
+    "data": [
+      {
+        "txHash": "0x44e5e96c783d8a1c7abc34961ebebfea19ccfd048f88696ecf5d37b63ef8517f",
+        "outputIndex": 1,
+        "capacity": "15399958000",
+        "commonKnowledgeSize": "6300000000",
+        "commonKnowledgeSizeBreakdown": {
+          "capacityFieldBytes": 8,
+          "lockScriptBytes": 55,
+          "typeScriptBytes": 0,
+          "dataBytes": 0,
+          "totalBytes": 63
+        },
+        "lockScriptHash": "0xabababababababababababababababababababababababababababababababab",
+        "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq03dwzcucjtl5qcg72kxx9euah4avhq3dv77xsf8",
+        "typeProtocolName": null,
+        "lockScriptName": "JoyID",
+        "typeScriptName": null,
+        "dataSize": 0,
+        "createdAtBlock": 11141234,
+        "createdTimestamp": "2023-10-08T09:23:56.628+00:00",
+        "status": "live",
+        "matchedScriptKind": "lock"
+      },
+      {
+        "txHash": "0xab7d4ef38f4a5810937378645e434a27d5dbd442667f58da98f2ad66ff050a0d",
+        "outputIndex": 1,
+        "capacity": "15000000000",
+        "commonKnowledgeSize": "14900000000",
+        "commonKnowledgeSizeBreakdown": {
+          "capacityFieldBytes": 8,
+          "lockScriptBytes": 55,
+          "typeScriptBytes": 53,
+          "dataBytes": 33,
+          "totalBytes": 149
+        },
+        "lockScriptHash": "0xabababababababababababababababababababababababababababababababab",
+        "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq8p3ylefer9m53su7lnlm205fxedy89m6g95dv3g",
+        "typeScriptHash": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "typeCodeHash": "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df",
+        "typeHashType": "type",
+        "typeProtocolName": null,
+        "lockScriptName": "JoyID",
+        "typeScriptName": "COTA",
+        "dataSize": 33,
+        "createdAtBlock": 11286483,
+        "createdTimestamp": "2023-10-26T10:08:14.377+00:00",
+        "status": "live",
+        "matchedScriptKind": "lock"
+      },
+      {
+        "txHash": "0x8f16b3cc14732c5c5a7759c8a8849cf7759abc96391de3e70a0ee9dda41eac45",
+        "outputIndex": 0,
+        "capacity": "14999997804",
+        "commonKnowledgeSize": "14900000000",
+        "commonKnowledgeSizeBreakdown": {
+          "capacityFieldBytes": 8,
+          "lockScriptBytes": 55,
+          "typeScriptBytes": 53,
+          "dataBytes": 33,
+          "totalBytes": 149
+        },
+        "lockScriptHash": "0xabababababababababababababababababababababababababababababababab",
+        "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq88e4wl84wr4clkct40m3qtcvyvgvwhnryceh55h",
+        "typeScriptHash": "0xcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+        "typeCodeHash": "0x1122a4fb54697cf2e6e3a96c9d80fd398a936559b90954c6e88eb7ba0cf652df",
+        "typeHashType": "type",
+        "typeProtocolName": null,
+        "lockScriptName": "JoyID",
+        "typeScriptName": "COTA",
+        "dataSize": 33,
+        "createdAtBlock": 11288012,
+        "createdTimestamp": "2023-10-26T15:31:00.319+00:00",
+        "status": "live",
+        "matchedScriptKind": "lock"
+      }
+    ],
+    "total": 161049,
+    "limit": 50,
+    "hasMore": true,
+    "nextCursor": "0xcur"
+  },
+  "versions": [
+    {
+      "v": 1,
+      "tx": "0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5",
+      "idx": 0,
+      "size": 96760,
+      "cap": 9688600000000,
+      "block": 11132140
+    },
+    {
+      "v": 2,
+      "tx": "0xbdc3153fcb7c256d007be758c0b50c8da60b5ac0e44ae9e11d3dcc5b73d2b347",
+      "idx": 0,
+      "size": 96712,
+      "cap": 9683800000000,
+      "block": 11133523
+    },
+    {
+      "v": 3,
+      "tx": "0x8a605a4402cadda69fa64fd25cbbd74058e3eb86a7a72aee3d25df278564d31b",
+      "idx": 0,
+      "size": 100336,
+      "cap": 10046200000000,
+      "block": 17117990
+    },
+    {
+      "v": 4,
+      "tx": "0x4f5d09d1af01e97b53526a4c01bf7d482adc5e634a3d43d6081bfa6d013682c0",
+      "idx": 0,
+      "size": 100312,
+      "cap": 10043800000000,
+      "block": 17119035
+    },
+    {
+      "v": 5,
+      "tx": "0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9",
+      "idx": 0,
+      "size": 100312,
+      "cap": 10043800000000,
+      "block": 17894900
+    }
+  ]
+}

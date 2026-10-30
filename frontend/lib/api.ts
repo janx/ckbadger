@@ -882,6 +882,10 @@ interface Cell {
   daoInfo?: CellDaoInfo;
   /** `/cells/by-script` only: which index enumerated this row. */
   matchedScriptKind?: 'lock' | 'type';
+  // group scripts (F2-5), contract R6: list rows of /cells and /cells/by-script name their
+  // references from the script registry (null = unregistered); absent on the single-cell detail.
+  lockScriptName?: string | null;
+  typeScriptName?: string | null;
 }
 
 interface LiveCellSummary {

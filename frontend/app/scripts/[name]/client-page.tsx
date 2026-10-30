@@ -15,6 +15,7 @@ import {
   ScriptCustodyEvidence,
   ScriptCapacityEvidenceChart,
 } from '@/components/scripts/script-code-evidence';
+import { ScriptFamilyPage } from '@/components/scripts/script-family-page';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
@@ -759,6 +760,27 @@ export default function ScriptDetailPage({
     selectedVersionDeployments,
     selectedVersionGroup,
   ]);
+  // Named family: "Its cells" lists every cell of every registered reference (SC-S10), never only
+  // the selected version's. A raw code-hash page keeps the reference(s) of its one version.
+  const cellReferences = useMemo<VersionUsageReference[]>(() => {
+    if (isCodeHashMode) return versionUsageReferences;
+    const references = new Map<string, VersionUsageReference>();
+    for (const reference of namedScriptDetail?.references ?? []) {
+      const hashType = normalizeScriptRefHashType(reference.hashType);
+      if (!hashType)
+        throw new Error(
+          `${namedScriptDetail!.name}: registered reference ${reference.referenceHash} has hash type ${reference.hashType}`
+        );
+      const key = `${reference.referenceHash}:${hashType}`;
+      references.set(key, { key, referenceHash: reference.referenceHash, hashType });
+    }
+    return Array.from(references.values()).sort((a, b) => a.key.localeCompare(b.key));
+  }, [isCodeHashMode, namedScriptDetail, versionUsageReferences]);
+  const cellsScriptKind = isCodeHashMode
+    ? undefined
+    : namedScriptDetail?.scriptKind === 'lock' || namedScriptDetail?.scriptKind === 'type'
+      ? namedScriptDetail.scriptKind
+      : undefined;
   const versionCellsCursorState = useMemo(
     () => decodeVersionCellsCursorState(cellsPagination.cursor),
     [cellsPagination.cursor]
@@ -794,27 +816,28 @@ export default function ScriptDetailPage({
             selectedVersion!.codeHash,
             selectedScriptKindForChart
           ),
-    enabled: Boolean(selectedVersion),
+    enabled: isCodeHashMode && Boolean(selectedVersion),
   });
+  const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
   const selectedVersionCellsQueries = useQueries({
-    queries: versionUsageReferences.map((reference) => ({
+    queries: cellReferences.map((reference) => ({
       queryKey: [
         'script-version-cells',
-        selectedVersion?.codeHash,
+        isCodeHashMode ? selectedVersion?.codeHash : `family:${name}`,
         reference.referenceHash,
         reference.hashType,
-        selectedScriptKindForChart,
+        cellsKind,
         versionCellsCursorState[reference.key] ?? null,
       ],
       queryFn: () =>
         api.getCellsByScriptRef({
           codeHash: reference.referenceHash,
           hashType: reference.hashType,
-          scriptKind: selectedScriptKindForChart,
+          scriptKind: cellsKind,
           limit: DEFAULT_PAGE_SIZE,
           cursor: versionCellsCursorState[reference.key],
         }),
-      enabled: Boolean(selectedVersion),
+      enabled: isCodeHashMode ? Boolean(selectedVersion) : Boolean(namedScriptDetail),
       placeholderData: keepPreviousData,
     })),
   });
@@ -861,7 +884,7 @@ export default function ScriptDetailPage({
     >();
 
     for (const [index, query] of selectedVersionCellsQueries.entries()) {
-      const reference = versionUsageReferences[index];
+      const reference = cellReferences[index];
       if (!reference || !query.data) {
         continue;
       }
@@ -891,7 +914,7 @@ export default function ScriptDetailPage({
     };
 
     for (const [index, query] of selectedVersionCellsQueries.entries()) {
-      const reference = versionUsageReferences[index];
+      const reference = cellReferences[index];
       if (!reference || !query.data) {
         continue;
       }
@@ -913,7 +936,7 @@ export default function ScriptDetailPage({
           outputIndex: lastConsumedCell.outputIndex,
           // Without an explicit script kind the request is script_kind=both,
           // whose cursor is phase-composite.
-          phase: selectedScriptKindForChart ? undefined : lastConsumedCell.matchedScriptKind,
+          phase: cellsKind ? undefined : lastConsumedCell.matchedScriptKind,
         });
       }
     }
@@ -931,11 +954,11 @@ export default function ScriptDetailPage({
       currentCount: pageEntries.length,
     };
   }, [
-    selectedScriptKindForChart,
+    cellsKind,
     selectedVersionCellsQueries,
     selectedVersionLiveCellsCount,
     versionCellsCursorState,
-    versionUsageReferences,
+    cellReferences,
   ]);
   const isLoading = isCodeHashMode
     ? isCodeHashLookupLoading || isCodeHashCodeCellsLoading
@@ -1160,6 +1183,46 @@ export default function ScriptDetailPage({
       <span className="text-text-dim">Status unavailable</span>
     );
 
+  if (!isCodeHashMode && namedScriptDetail) {
+    const codeCells = new Map(
+      sortedDeployments.flatMap((deployment, index) => {
+        const key = deploymentOutpointKey(
+          deployment.codeCellTxHash,
+          deployment.codeCellOutputIndex
+        );
+        const query = deploymentCellQueries[index];
+        return key ? [[key, { cell: query?.data, error: query?.error ?? null }] as const] : [];
+      })
+    );
+    return (
+      <ScriptFamilyPage
+        family={namedScriptDetail}
+        deprecated={pageDeprecated}
+        chart={familyCapacityChart}
+        chartLoading={isFamilyCapacityChartLoading}
+        chartError={familyCapacityChartError}
+        capacityRange={capacityRange}
+        onCapacityRange={setCapacityRange}
+        versionUsage={(versionHash) => (
+          <VersionUsageCell
+            usage={versionUsageOf(usageByCodeHash.get(versionHash), versionHash)}
+            field="cells"
+          />
+        )}
+        codeCells={codeCells}
+        cells={{
+          rows: selectedVersionCellsData.data,
+          loading: isVersionCellsLoading,
+          page: cellsPagination.page,
+          hasMore: selectedVersionCellsData.hasMore,
+          hasPrevious: cellsPagination.hasPrevious,
+          currentCount: selectedVersionCellsData.currentCount,
+          onNext: () => cellsPagination.goToNext(selectedVersionCellsData.nextCursor),
+          onPrevious: cellsPagination.goToPrevious,
+        }}
+      />
+    );
+  }
   const namedVersion = namedScriptDetail?.versions.find(
     (version) => version.versionHash === selectedVersion?.codeHash
   );
