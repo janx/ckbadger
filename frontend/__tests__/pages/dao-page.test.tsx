@@ -30,6 +30,7 @@ const stats = {
   totalCompensationPaid: '100000000',
   unclaimedCompensation: '200000000',
   burnt: '300000000',
+  tipSecondaryPool: '500000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   daoFreeCapacity: '40000000000',
@@ -71,6 +72,8 @@ describe('DaoPage', () => {
         totalWithdrawable: '1020000000000',
         totalWithdrawableCkb: '10200',
         apc: null,
+        occupiedCapacity: '10200000000',
+        freeCapacity: '989800000000',
       })
     );
     vi.mocked(api.getTransactions).mockResolvedValue({

@@ -123,6 +123,10 @@ function Hero({
     throw new Error('/dao/charts/total-deposit has no peak (R8 chart contract)');
   const share = ratio?.data.at(-1);
   const peak = deposited?.peak ?? null;
+  if ((statistics.deposits24h === null) !== (statistics.withdrawalRequests24h === null))
+    throw new Error(
+      `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: 24 h deposits ${statistics.deposits24h} without its withdrawal-request count`
+    );
   const change = statistics.depositChange24h;
   const changeShannons = change === null ? null : parseCkbDecimal(change);
   const year = evidence.ar.year365;
@@ -178,7 +182,15 @@ function Hero({
         >
           {evidence.phase0.count.toLocaleString('en-US')}
         </Metric>
-        <Metric label="Change in 24 h" className="col-span-2">
+        <Metric
+          label="Change in 24 h"
+          className="col-span-2"
+          detail={
+            statistics.deposits24h === null || statistics.withdrawalRequests24h === null
+              ? undefined
+              : `${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`
+          }
+        >
           {changeShannons === null ? (
             <span className="text-text-dim">—</span>
           ) : (

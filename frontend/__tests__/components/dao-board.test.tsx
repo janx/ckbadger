@@ -28,6 +28,8 @@ function stubCalculator() {
       totalWithdrawable: '',
       totalWithdrawableCkb: '',
       apc: null,
+      occupiedCapacity: '10200000000',
+      freeCapacity: '989800000000',
     })
   );
 }
@@ -41,6 +43,7 @@ const stats = {
   totalCompensationPaid: '100000000',
   unclaimedCompensation: '200000000',
   burnt: '300000000',
+  tipSecondaryPool: '500000000',
   totalDeposited: '50000000000',
   totalDepositedCkb: '500',
   // Free capacity in DAO counts frozen phase-1 cells; the depositors' weight does not, but adds
@@ -311,8 +314,8 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
     // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
     expect(hero).not.toHaveTextContent(/anchor/i);
     expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
-    // The API has no 24 h deposit / request counts: nothing stands in for them (needs backend).
-    expect(hero).not.toHaveTextContent(/deposits in|requests out/);
+    // R2b-a 41: the 24 h window's own counts (board: "N deposits in, M withdrawal requests out").
+    expect(hero).toHaveTextContent('12 deposits in, 9 withdrawal requests out');
   });
 
   it('fails when the deposit history arrives without its R8 peak', () => {
@@ -622,5 +625,40 @@ describe('DaoBoard tier-1 rhythm (board V63)', () => {
       'text-[15px]',
       'font-medium'
     );
+  });
+});
+
+describe('DaoBoard 24 h counts (DAO-10, R2b-a 41)', () => {
+  it('says one deposit and one request in the singular, and nothing without a 24 h window', () => {
+    stubCalculator();
+    const { rerender } = render(
+      <DaoBoard
+        statistics={{ ...stats, deposits24h: 1, withdrawalRequests24h: 1 }}
+        evidence={evidence}
+      />
+    );
+    const hero = () => screen.getByRole('region', { name: 'Nervos DAO summary' });
+    expect(hero()).toHaveTextContent('1 deposit in, 1 withdrawal request out');
+    rerender(
+      <DaoBoard
+        statistics={{
+          ...stats,
+          deposits24h: null,
+          withdrawalRequests24h: null,
+          depositChange24h: null,
+        }}
+        evidence={evidence}
+      />
+    );
+    expect(hero()).not.toHaveTextContent(/ in, .* out/);
+  });
+
+  it('refuses a 24 h window with one count and not the other', () => {
+    stubCalculator();
+    expect(() =>
+      render(
+        <DaoBoard statistics={{ ...stats, withdrawalRequests24h: null }} evidence={evidence} />
+      )
+    ).toThrow('DAO statistics at #5: 24 h deposits 12 without its withdrawal-request count');
   });
 });
