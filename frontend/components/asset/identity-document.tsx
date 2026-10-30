@@ -80,7 +80,7 @@ export function IdentityDocument({ protocol }: IdentityDocumentProps) {
                 Expires{' '}
                 {v.decoded.expiredAt === null
                   ? 'not recorded'
-                  : `${secondsDate(v.decoded.expiredAt)} UTC+8 · Unix ${v.decoded.expiredAt}`}
+                  : `${secondsDate(v.decoded.expiredAt)} UTC+8`}
               </p>
             )}
             <AppLink href={`/tx/${v.cell.txHash}`} className="text-text-dim text-[11px]">

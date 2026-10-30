@@ -136,3 +136,11 @@ it.each([
   );
   expect(screen.getByRole('heading', { name: 'DID document' })).toHaveClass('text-[15px]');
 });
+it('lists versions with site dates, never raw Unix seconds (ID-C7)', () => {
+  render(<IdentityDocument protocol={dotbitV4ProtocolProducer} />);
+  const versions = screen.getByLabelText('Identity term and document versions');
+  expect(versions).not.toHaveTextContent(/Unix/);
+  const d = dotbitV4ProtocolProducer.versions[0].decoded;
+  if ('expiredAt' in d && d.expiredAt !== null) expect(versions).not.toHaveTextContent(d.expiredAt);
+  expect(versions).toHaveTextContent(/Expires \d{4}-\d{2}-\d{2} UTC\+8/);
+});

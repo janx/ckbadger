@@ -6,6 +6,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
+import { formatBlockNumber } from '@/lib/format-block';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
 }
@@ -31,7 +32,7 @@ export function ItemEvidence({ protocol }: ItemEvidenceProps) {
               key={`${v.cell.txHash}:${v.cell.outputIndex}`}
               value={`${v.cell.txHash}:${v.cell.outputIndex}`}
             >
-              Version {i + 1} · block {v.cell.blockNumber}
+              Version {i + 1} · block {formatBlockNumber(v.cell.blockNumber)}
               {v.cell.isLive ? ' · current' : ''}
             </option>
           ))}
