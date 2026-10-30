@@ -1088,10 +1088,12 @@ type ItemDelta =
       objectId: string;
       delta: number;
       /**
-       * Lane R12 (TX-12 / TX-29, not yet in contracts.md): the object's collection and its
-       * composition tier, read from the spore / cluster aggregates. Rendered only when present.
+       * Lane R12 (TX-12 / TX-29; contracts.md: resolver ready, not yet on the wire): the object's
+       * collection (`name: null` for m-NFT classes and clusterless spores), its asset class and
+       * its composition tier (`null` for m-NFT). Each is rendered only when present.
        */
       collection?: { id: string; name: string | null } | null;
+      class?: 'object';
       composition?: CompositionTier | null;
     }
   | { kind: 'identity'; standard: IdentityStandard; identityId: string; delta: number };
