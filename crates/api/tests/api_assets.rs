@@ -1365,6 +1365,12 @@ async fn test_assets_nft_collection_accepts_did_ckb_aliases() {
     assert_eq!(json["data"].as_array().unwrap().len(), 1);
     assert_eq!(json["data"][0]["name"], "did:alice.ckb");
     assert_eq!(json["data"][0]["standard"], "did_ckb");
+    // ID-COL-3: a did:ckb row names its DID, derived from the 20-byte id by the
+    // same encoder as the protocol view (base32, lowercase).
+    assert_eq!(
+        json["data"][0]["did"], "did:ckb:uws2ljnfuws2ljnfuws2ljnfuws2ljnf",
+        "{json}"
+    );
 
     let request = Request::builder()
         .uri("/api/v1/assets/objects/did%3Ackb/charts/capacity-history")

@@ -128,6 +128,20 @@ fn json_cbor(value: ciborium::Value) -> Result<Value> {
         _ => anyhow::bail!("unsupported CBOR value"),
     })
 }
+/// The DID of a did:ckb identity: `did:ckb:` + the lowercase unpadded base32
+/// of the first 20 bytes of its id — the one encoder of every DID the API shows.
+pub(crate) fn did_ckb_string(id: &[u8]) -> Result<String> {
+    let head = id
+        .get(..20)
+        .ok_or_else(|| anyhow::anyhow!("DID type args shorter than 20 bytes"))?;
+    Ok(format!(
+        "did:ckb:{}",
+        data_encoding::BASE32_NOPAD
+            .encode(head)
+            .to_ascii_lowercase()
+    ))
+}
+
 fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
     anyhow::ensure!(id.len() >= 20, "DID type args shorter than 20 bytes");
     anyhow::ensure!(data.len() >= 4, "DID union tag missing");
@@ -151,12 +165,7 @@ fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
     } else {
         Some(std::str::from_utf8(molecule_bytes(fields[1])?)?.to_string())
     };
-    let did = format!(
-        "did:ckb:{}",
-        data_encoding::BASE32_NOPAD
-            .encode(&id[..20])
-            .to_ascii_lowercase()
-    );
+    let did = did_ckb_string(id)?;
     let mut pds = Vec::new();
     if let Some(services) = document.get("services").and_then(Value::as_object) {
         for service in services.values() {
