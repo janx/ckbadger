@@ -37,6 +37,14 @@ pub struct ParsedDotbitAccountOutput {
     pub account: ParsedDotbitAccount,
 }
 
+/// The `.bit` AccountCell outputs of one transaction; see
+/// [`DotbitParser::parse_account_outputs`].
+#[derive(Debug, Default)]
+pub struct DotbitAccountOutputs {
+    pub accounts: Vec<ParsedDotbitAccountOutput>,
+    pub unindexed_output_indices: Vec<i16>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DotbitWitnessBundle {
     pub(crate) action: Option<String>,
@@ -111,46 +119,43 @@ impl DotbitParser {
         })
     }
 
-    /// Resolve the canonical 20-byte `.bit` account ID for activity building.
+    /// The `.bit` account id an AccountCell OUTPUT's data names, by the same
+    /// parser identity materialization uses. `None` when the cell names no
+    /// account: data shorter than `hash(32) + id(20)`, or an all-zero id (the
+    /// DAS root AccountCell). Mainnet AccountCells carry empty type args; the
+    /// id sits at `data[32..52]`.
+    pub(crate) fn parse_account_id_from_data(
+        type_code_hash: &[u8],
+        type_args: Option<&[u8]>,
+        data: &[u8],
+    ) -> Option<Vec<u8>> {
+        Self::parse_identity_cell_data(type_code_hash, type_args.unwrap_or_default(), data)
+            .map(|parsed| parsed.account_id)
+    }
+
+    /// The `.bit` account id of a consumed AccountCell INPUT.
     ///
-    /// Output cells carry raw protocol data and use the same parser as identity
-    /// materialization. Input activities may instead carry an already-resolved
-    /// 20-byte ID loaded from the outpoint index because raw input data is not
-    /// available in that stage.
+    /// An input reaches the activity builder without its data, so both sync
+    /// paths hand over the id the cell was indexed under when it was created
+    /// (live: `CF_DOTBIT_OUTPOINT`; bulk: the cell's protocol facts), and an
+    /// empty slice for a cell creation did not index (see
+    /// `keys::stats_prefix::DOTBIT_UNINDEXED_OUTPOINT`). The tx-pool mirror
+    /// holds the consumed cell's real data and passes that instead; it is
+    /// parsed exactly like an output.
     pub(crate) fn resolve_account_id(
         type_code_hash: &[u8],
         type_args: Option<&[u8]>,
-        data_or_resolved_id: &[u8],
+        indexed_id_or_data: &[u8],
     ) -> Option<Vec<u8>> {
         if !Self::is_account_cell_type_script(type_code_hash) {
             return None;
         }
-
-        // Already-resolved 20-byte account id from the outpoint index (live
-        // activity inputs often carry this instead of raw cell data).
-        if data_or_resolved_id.len() == ACCOUNT_ID_LEN
-            && !data_or_resolved_id.iter().all(|&byte| byte == 0)
+        if indexed_id_or_data.len() == ACCOUNT_ID_LEN
+            && !indexed_id_or_data.iter().all(|&byte| byte == 0)
         {
-            return Some(data_or_resolved_id.to_vec());
+            return Some(indexed_id_or_data.to_vec());
         }
-
-        // Inputs without raw cell bytes or a 20-byte pre-resolved id fall back
-        // to the 20-byte account id on type_args. Non-empty cell data must
-        // still pass `parse_identity_cell_data` below.
-        if data_or_resolved_id.is_empty() {
-            if let Some(args) = type_args {
-                if args.len() == ACCOUNT_ID_LEN && !args.iter().all(|&byte| byte == 0) {
-                    return Some(args.to_vec());
-                }
-            }
-        }
-
-        Self::parse_identity_cell_data(
-            type_code_hash,
-            type_args.unwrap_or_default(),
-            data_or_resolved_id,
-        )
-        .map(|parsed| parsed.account_id)
+        Self::parse_account_id_from_data(type_code_hash, type_args, indexed_id_or_data)
     }
 
     fn parse_identity_cell_data(
@@ -223,6 +228,16 @@ impl DotbitParser {
     }
 
     pub fn parse_accounts(tx: &TransactionView) -> Result<Vec<ParsedDotbitAccountOutput>> {
+        Ok(Self::parse_account_outputs(tx)?.accounts)
+    }
+
+    /// Every `.bit` AccountCell output of `tx`, split into the accounts the
+    /// indexer materializes and the AccountCell-typed outputs it does not
+    /// (`unindexed_output_indices`): the DAS root AccountCell with its
+    /// all-zero id, data too short to name an account, or an account whose
+    /// name the DAS witness does not carry. The second list is recorded so a
+    /// later consumption can tell "never an account" from a lost index row.
+    pub fn parse_account_outputs(tx: &TransactionView) -> Result<DotbitAccountOutputs> {
         if tx.outputs.len() != tx.outputs_data.len() {
             return Err(anyhow!(
                 "transaction outputs mismatch while parsing dotbit accounts: tx_hash={}, outputs={}, outputs_data={}",
@@ -232,15 +247,17 @@ impl DotbitParser {
             ));
         }
         let witness_bundle = parse_dotbit_witness_bundle(&tx.witnesses);
-        let mut accounts = Vec::new();
+        let mut outputs = DotbitAccountOutputs::default();
 
         for (output_index, (output, data_hex)) in
             tx.outputs.iter().zip(tx.outputs_data.iter()).enumerate()
         {
-            let Some(mut account) = Self::parse_account_cell(output, data_hex) else {
+            let Some(type_script) = output.type_.as_ref() else {
                 continue;
             };
-
+            if !Self::is_account_cell_type_script(&parse_hex_to_bytes(&type_script.code_hash)) {
+                continue;
+            }
             let output_index = i16::try_from(output_index).map_err(|_| {
                 anyhow!(
                     "dotbit output index exceeds i16 range: tx_hash={}, output_index={}",
@@ -248,6 +265,16 @@ impl DotbitParser {
                     output_index
                 )
             })?;
+            let Some(mut account) = Self::parse_account_cell(output, data_hex) else {
+                warn!(
+                    tx_hash = %tx.hash,
+                    output_index,
+                    data_hex_len = data_hex.len(),
+                    "not indexing DotBit AccountCell: its data names no account"
+                );
+                outputs.unindexed_output_indices.push(output_index);
+                continue;
+            };
             if account.account.is_none() {
                 if let Some(wd) = witness_bundle.accounts.get(&account.account_id) {
                     account.account = wd.name.clone();
@@ -265,15 +292,16 @@ impl DotbitParser {
                     account_id = hex::encode(&account.account_id),
                     "skipping DotBit account: name missing in DAS witness"
                 );
+                outputs.unindexed_output_indices.push(output_index);
                 continue;
             }
-            accounts.push(ParsedDotbitAccountOutput {
+            outputs.accounts.push(ParsedDotbitAccountOutput {
                 output_index,
                 account,
             });
         }
 
-        Ok(accounts)
+        Ok(outputs)
     }
 }
 
@@ -547,6 +575,19 @@ fn parse_molecule_dynvec_items(data: &[u8]) -> Option<Vec<&[u8]>> {
             .map(|pair| &data[pair[0]..pair[1]])
             .collect(),
     )
+}
+
+/// Real on-chain `.bit` AccountCell data, shared by the parser, activity and
+/// sync tests.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    /// Mainnet AccountCell `0x85522974…3a80:0` ("metastrike.bit"): type args
+    /// are EMPTY and the account id sits at `data[32..52]`.
+    pub(crate) const MAINNET_ACCOUNT_CELL_DATA: &str = "0x8e9251dce982e23dbf2fbfbdf279723f624c4de0ecde0350e70b32a1cc91bae61e957e9874ee9607d3e04641a55759a1661d0d181ea3b9da44039b470df3f953ec3a12c60ec294e17a27336b000000006d657461737472696b652e626974";
+    pub(crate) const MAINNET_ACCOUNT_CELL_ID: &str = "0x1e957e9874ee9607d3e04641a55759a1661d0d18";
+    /// Mainnet DAS root AccountCell (tx `0x00a660fd…a87c`, output 0): all-zero
+    /// account id, `next` = 0xff…ff, empty type args. It names no account.
+    pub(crate) const MAINNET_ROOT_ACCOUNT_CELL_DATA: &str = "0xd58e4b5c3c1a2e5687de0bc1ed0bc2039fd8a5918092640793b765cecea083100000000000000000000000000000000000000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff1efc6340e3f0520d03a4af6f0dd9e152453482558358e5c79b92812654136d08b8b4ab3f45492a8942ba065938d5f065e29597aeb28941efe66e2c0d420d1a421748a38ee6f920076ba87f235f7c97137e4cf45be0af58b5f55355bc0996e7d0";
 }
 
 #[cfg(test)]
@@ -844,22 +885,68 @@ mod tests {
         assert_eq!(parsed.account_id, account_id_from_args.to_vec());
     }
 
+    use super::fixtures::*;
+
     #[test]
-    fn test_resolve_account_id_uses_type_args_when_input_data_empty() {
-        // ID-C2: live activity inputs often carry empty cell data. The account
-        // id must still resolve from type args so an in-place update cancels
-        // to a net-zero identity delta instead of looking like a mint.
-        let account_id: [u8; 20] = [0x2d; 20];
+    fn test_account_id_of_real_mainnet_account_cell_comes_from_data_with_empty_args() {
         let code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let data = crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_DATA);
+        let id = crate::rpc::parse_hex_to_bytes(MAINNET_ACCOUNT_CELL_ID);
 
-        let resolved = DotbitParser::resolve_account_id(&code_hash, Some(&account_id), &[]);
-        assert_eq!(resolved, Some(account_id.to_vec()));
-
-        // Non-empty truncated cell data (< 52 bytes) is rejected even when
-        // 20-byte type_args is present.
-        let truncated = [0xAA; 12];
         assert_eq!(
-            DotbitParser::resolve_account_id(&code_hash, Some(&account_id), &truncated),
+            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &data),
+            Some(id.clone())
+        );
+        // An input carries the id it was indexed under (live and bulk), or the
+        // real data (tx-pool mirror): both resolve to the same id.
+        assert_eq!(
+            DotbitParser::resolve_account_id(&code_hash, Some(&[]), &id),
+            Some(id.clone())
+        );
+        assert_eq!(
+            DotbitParser::resolve_account_id(&code_hash, Some(&[]), &data),
+            Some(id)
+        );
+    }
+
+    /// The type args never stand in for a missing id: mainnet args are empty,
+    /// and an input without its indexed id names no account.
+    #[test]
+    fn test_account_id_never_comes_from_type_args_alone() {
+        let code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let args = [0x2d; 20];
+        assert_eq!(
+            DotbitParser::resolve_account_id(&code_hash, Some(&args), &[]),
+            None
+        );
+        assert_eq!(
+            DotbitParser::parse_account_id_from_data(&code_hash, Some(&args), &[]),
+            None
+        );
+    }
+
+    /// The DAS root AccountCell and too-short data name no account, exactly as
+    /// identity materialization skips them; 20 bytes of OUTPUT data are data,
+    /// not an already-resolved id.
+    #[test]
+    fn test_root_and_short_account_cells_name_no_account() {
+        let code_hash = crate::rpc::parse_hex_to_bytes(DOTBIT_ACCOUNT_CELL_TYPE_ID);
+        let root = crate::rpc::parse_hex_to_bytes(MAINNET_ROOT_ACCOUNT_CELL_DATA);
+        assert_eq!(root.len(), 176);
+        assert_eq!(
+            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &root),
+            None
+        );
+        assert_eq!(
+            DotbitParser::resolve_account_id(&code_hash, Some(&[]), &root),
+            None
+        );
+        assert_eq!(
+            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &[0xAA; 20]),
+            None
+        );
+        assert_eq!(
+            DotbitParser::parse_account_id_from_data(&code_hash, Some(&[]), &[0xAA; 51]),
             None
         );
     }
@@ -982,6 +1069,46 @@ mod tests {
             accounts.is_empty(),
             "accounts with missing names should be skipped"
         );
+    }
+
+    /// Every AccountCell output is either an indexed account or reported as
+    /// unindexed — the root AccountCell, a name missing from the witness — so
+    /// its later consumption can be classified; other outputs are neither.
+    #[test]
+    fn test_parse_account_outputs_reports_every_unindexed_account_cell() {
+        let account_id = [0x23u8; 20];
+        let mut tx = create_dotbit_tx(&account_id, true);
+        let mut root = tx.outputs[0].clone();
+        root.type_ = Some(Script {
+            code_hash: DOTBIT_ACCOUNT_CELL_TYPE_ID.to_string(),
+            hash_type: "type".to_string(),
+            args: "0x".to_string(),
+        });
+        tx.outputs.push(root);
+        tx.outputs_data
+            .push(super::fixtures::MAINNET_ROOT_ACCOUNT_CELL_DATA.to_string());
+        let mut plain = tx.outputs[0].clone();
+        plain.type_ = None;
+        tx.outputs.push(plain);
+        tx.outputs_data.push("0x".to_string());
+        let mut nameless = tx.outputs[0].clone();
+        nameless.type_ = Some(create_account_cell_type_script_with_args(&[0x24; 20]));
+        tx.outputs.push(nameless);
+        tx.outputs_data.push(format!(
+            "0x{}",
+            hex::encode(create_account_cell_data(&[0x24; 20], None, None))
+        ));
+
+        let outputs = DotbitParser::parse_account_outputs(&tx).unwrap();
+        assert_eq!(
+            outputs
+                .accounts
+                .iter()
+                .map(|a| a.output_index)
+                .collect::<Vec<_>>(),
+            vec![0]
+        );
+        assert_eq!(outputs.unindexed_output_indices, vec![1, 3]);
     }
 
     #[test]

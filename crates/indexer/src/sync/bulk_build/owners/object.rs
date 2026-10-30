@@ -27,7 +27,7 @@ use crate::db::writer::dotbit::IdentityActionState;
 use crate::parser::analyze_spore_media_profile;
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
-    CellFacts, CellProtocolFacts, ResolvedInputFacts, ResolvedTxFacts,
+    CellFacts, CellProtocolFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
 };
 use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
@@ -68,6 +68,11 @@ pub(crate) struct ObjectOwner {
     bit_cell_owner_counts: BTreeMap<Vec<u8>, i64>,
     dotbit_outpoints: BTreeMap<Vec<u8>, Vec<u8>>,
     dotbit_outpoints_by_account: BTreeMap<Vec<u8>, u8>,
+    /// `DOTBIT_UNINDEXED_OUTPOINT` keys: AccountCell-typed outputs whose
+    /// protocol facts named no account (the DAS root AccountCell, data naming
+    /// no account, a name the DAS witness did not carry). Live sync consumes
+    /// these after the handoff and must find them recorded.
+    dotbit_unindexed_outpoints: BTreeSet<Vec<u8>>,
     dotbit_hourly_transfers: BTreeMap<Vec<u8>, i64>,
     cluster_owner_counts: BTreeMap<(Vec<u8>, Vec<u8>), i64>,
     /// Daily capacity deltas keyed by (collection_id, date_yyyymmdd).
@@ -290,6 +295,9 @@ impl ObjectOwner {
                 key.clone(),
                 vec![*action],
             ))?;
+        }
+        for key in &self.dotbit_unindexed_outpoints {
+            emit(MaterializedRow::new(CF_STATS_MNFT, key.clone(), Vec::new()))?;
         }
         for (key, count) in &self.dotbit_hourly_transfers {
             emit(MaterializedRow::new(
@@ -602,6 +610,9 @@ impl ObjectOwner {
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_outpoints_by_account,
             )
+            + crate::sync::bulk_build::accounting::btree_set_serialized_bytes(
+                &self.dotbit_unindexed_outpoints,
+            )
             + crate::sync::bulk_build::accounting::btree_map_serialized_bytes(
                 &self.dotbit_hourly_transfers,
             )
@@ -751,6 +762,16 @@ impl ObjectOwner {
         consumed: &ConsumedObjectActions<'_>,
     ) -> Result<()> {
         let Some(protocol) = cell.protocol_facts.as_ref() else {
+            if cell.semantic_tag == CellSemanticTag::Dotbit {
+                let output_index = Self::as_i16_outpoint_index(&cell.outpoint, ".bit")?;
+                self.dotbit_unindexed_outpoints.insert(
+                    keys::encode_dotbit_unindexed_outpoint_key(
+                        &cell.outpoint.tx_hash,
+                        output_index,
+                    )
+                    .to_vec(),
+                );
+            }
             return Ok(());
         };
 
@@ -4591,6 +4612,73 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// An AccountCell output whose protocol facts named no account (the DAS
+    /// root AccountCell) materializes the unindexed-outpoint marker live sync
+    /// reads after the handoff — and no account row.
+    #[test]
+    fn object_owner_records_unindexed_account_cell_outpoint_marker() {
+        let interner = crate::sync::bulk_build::interner::IdentityInterner::default();
+        let owner_lock = interner.intern_bytes(vec![0xa3; 32]);
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let tx = ResolvedTxFacts {
+            tx_hash: [0x35; 32],
+            block_number: 310,
+            block_hash: [0xa5; 32],
+            timestamp_ms: 1_700_100_000_000,
+            chain_time_ms: 1_700_100_000_000,
+            block_dao_ar: 0,
+            tx_index: 0,
+            dotbit_action: None,
+            resolved_inputs: Vec::new(),
+            cells: vec![cell_facts! {
+                outpoint: OutPointKey::new([0x35; 32], 1),
+                created_at_block: 310,
+                capacity: 300_00000000,
+                lock_script_hash_id: owner_lock,
+                lock_code_hash_id: InternId::new(201),
+                lock_hash_type: 1,
+                lock_args_id: InternId::new(202),
+                type_script_hash_id: Some(InternId::new(203)),
+                type_code_hash_id: Some(InternId::new(204)),
+                type_hash_type: Some(1),
+                type_args_id: Some(InternId::new(205)),
+                occupied_capacity: 200_00000000,
+                data_size: 176,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: None,
+                semantic_tag: CellSemanticTag::Dotbit,
+                dao_state: None,
+                protocol_facts: None,
+            }]
+            .into(),
+        };
+
+        let mut owner = ObjectOwner::default();
+        owner.apply_tx(&tx, &ctx).expect("apply root AccountCell");
+
+        let mut rows = Vec::new();
+        owner
+            .emit_sealed_rows(|row| {
+                rows.push(row);
+                Ok(())
+            })
+            .expect("emit sealed rows");
+        let marker = keys::encode_dotbit_unindexed_outpoint_key(&[0x35; 32], 1).to_vec();
+        let marker_rows: Vec<_> = rows
+            .iter()
+            .filter(|row| row.cf_name == CF_STATS_MNFT && row.key == marker)
+            .collect();
+        assert_eq!(marker_rows.len(), 1, "one marker row for the root cell");
+        assert!(marker_rows[0].value.is_empty());
+        assert!(
+            !rows.iter().any(|row| row.key
+                == keys::encode_dotbit_account_outpoint_key(&[0x35; 32], 1).to_vec()),
+            "a cell that names no account gets no account outpoint row"
+        );
     }
 
     #[test]
