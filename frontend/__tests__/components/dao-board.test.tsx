@@ -121,9 +121,11 @@ describe('DaoBoard', () => {
 
   it("draws the depositors' share from their allocation weight, not DAO free capacity (DAO-2)", () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    expect(screen.getByText('DAO depositors 4.50%')).toBeInTheDocument();
+    // The board legend (D3 wording): the weight's 4.50%, not DAO free capacity's 4.00%.
+    expect(screen.getByRole('region', { name: 'Where secondary issuance goes' })).toHaveTextContent(
+      'phase-0 free capacity + compensation already accrued 4.50% → depositors'
+    );
     expect(screen.getByTitle('DAO depositors: 450.00000000 CKB')).toBeInTheDocument();
-    expect(screen.getByText(/phase-0 free capacity plus the compensation/)).toBeInTheDocument();
     expect(screen.queryByText(/free capacity in DAO/)).not.toBeInTheDocument();
   });
 
@@ -302,5 +304,57 @@ describe('DaoBoard History (DAO-11)', () => {
     const region = screen.getByRole('region', { name: 'History' });
     expect(region.querySelectorAll('svg')).toHaveLength(1);
     expect(within(region).getAllByLabelText('History reading')).toHaveLength(1);
+  });
+});
+
+describe('DaoBoard secondary issuance (DAO-7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+  const issuance = () => screen.getByRole('region', { name: 'Where secondary issuance goes' });
+
+  it('splits issuance three ways and only compensation two ways, as an aligned icicle', () => {
+    stubChartWidth(1400);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const svg = within(issuance()).getByRole('img', {
+      name: /Secondary issuance since genesis, split three ways/,
+    });
+    const box = (key: string) => svg.querySelector(`[data-node="${key}"]`)!;
+    for (const key of ['total', 'miners', 'compensation', 'burnt', 'paid', 'owed'])
+      expect(box(key)).not.toBeNull();
+    // compensation's two parts sit exactly under it
+    expect(box('paid').getAttribute('x')).toBe(box('compensation').getAttribute('x'));
+    expect(svg.querySelector('[data-label="compensation"]')).toHaveTextContent(
+      'compensation for depositors'
+    );
+    expect(svg.querySelector('[data-placeholder="burnt"]')).toHaveTextContent(
+      'No cell can ever claim it.'
+    );
+    expect(svg.querySelector('[data-placeholder="miners"]')).toHaveTextContent('paid in cellbases');
+    expect(issuance()).toHaveTextContent('still owed');
+    expect(issuance()).not.toHaveTextContent(/interest|earned/i);
+  });
+
+  it('says where each share of capacity use goes, and why a deposit keeps its share', () => {
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(issuance()).toHaveTextContent('occupied by cells 0.01% → miners');
+    expect(issuance()).toHaveTextContent(
+      'phase-0 free capacity + compensation already accrued 4.50% → depositors · withdrawal requests take no share'
+    );
+    expect(issuance()).toHaveTextContent('everything else 95.49% → burnt');
+    expect(issuance()).toHaveTextContent(
+      'So a deposit keeps its share of all CKB through secondary issuance.'
+    );
+  });
+
+  it('states every part in words at phone width instead of shrinking the drawing', () => {
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const svg = within(issuance()).getByRole('img', {
+      name: /Secondary issuance since genesis, split three ways/,
+    });
+    expect(svg.querySelectorAll('text')).toHaveLength(0);
+    const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
+    expect(legend).toHaveTextContent('to miners');
+    expect(legend).toHaveTextContent('paid out');
+    expect(legend).toHaveTextContent('No cell can ever claim it.');
   });
 });

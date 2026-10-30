@@ -66,3 +66,15 @@ export const COMPOSITION_BADGES = {
     bar: `linear-gradient(90deg, ${BITCOIN_COLORS.dark}, ${BITCOIN_COLORS.light}, ${BITCOIN_COLORS.copper}, #8ff3d6)`,
   },
 } as const;
+
+// ---- F2 group dao (round-2 fix) ----
+/**
+ * Nervos DAO secondary-issuance partition (board V63): the whole issuance a quiet slate, miners
+ * the light text grey, compensation the DAO gold (the only gold), burnt the darkest "other" slate.
+ */
+export const DAO_ISSUANCE_COLORS = {
+  total: '#4b5266',
+  miners: '#a0a8be',
+  compensation: CLASS_COLORS.dao,
+  burnt: CLASS_COLORS.other,
+} as const;

@@ -12,6 +12,9 @@ import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
@@ -236,7 +239,23 @@ function ratioText(value: string): string {
   return formatExactDecimal(value, 'DAO circulation ratio');
 }
 
+/** An exact CKB amount inside SVG text: whole part, then the significant decimals dimmed. */
+function SvgCkb({ shannons }: { shannons: bigint }) {
+  const parts = splitCkbAmount(shannons);
+  return (
+    <>
+      {parts.integer}
+      <tspan fillOpacity={0.7}>{parts.fraction}</tspan>
+    </>
+  );
+}
+
+const ICICLE_LABEL_MIN_PX = 1000;
+const BURNT_FOR_GOOD =
+  'No cell can ever claim it. A hardfork could only put future secondary issuance to use; what is burnt stays burnt.';
+
 function Issuance({ statistics }: Pick<Props, 'statistics'>) {
+  const [ref, width] = useElementWidth<HTMLDivElement>();
   const mining = parseShannons(statistics.miningReward, 'miningReward');
   const compensation = parseShannons(statistics.depositCompensation, 'depositCompensation');
   const burnt = parseShannons(statistics.burnt, 'burnt');
@@ -266,100 +285,217 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
       `invalid DAO capacity-use partition at statistics block ${statistics.tipBlockNumber}`
     );
   }
-  const parts = [
-    { label: 'To miners', amount: mining, color: '#7a879e', note: 'occupied capacity share' },
+  const liveCells = (
+    statistics.depositCellsCount + statistics.withdrawalRequestCellsCount
+  ).toLocaleString('en-US');
+  const share = (v: bigint) => `${formatPercent(v, total, 2)}%`;
+  const root: IcicleNode | null = issuanceEmpty
+    ? null
+    : {
+        key: 'total',
+        label: 'Secondary issuance since genesis',
+        value: total,
+        tone: 'ckb',
+        color: DAO_ISSUANCE_COLORS.total,
+        opacity: 0.55,
+        ink: 'bright',
+        align: 'inside',
+        note: '1.344 billion CKB a year, split in every block',
+        children: [
+          {
+            key: 'miners',
+            label: 'to miners',
+            value: mining,
+            tone: 'ckb',
+            color: DAO_ISSUANCE_COLORS.miners,
+            ink: 'bright',
+            note: `${share(mining)} · s × U ÷ C`,
+            placeholder: 'paid in cellbases',
+          },
+          {
+            key: 'compensation',
+            label: 'compensation for depositors',
+            value: compensation,
+            tone: 'dao',
+            align: 'end',
+            note: `${share(compensation)} · via AR`,
+            children: [
+              {
+                key: 'paid',
+                label: 'paid out',
+                value: claimed,
+                tone: 'dao',
+                opacity: 1,
+                align: 'end',
+                note: 'at withdrawals',
+              },
+              {
+                key: 'owed',
+                label: 'still owed',
+                value: unclaimed,
+                tone: 'dao',
+                opacity: 0.4,
+                note: `to the ${liveCells} live deposit cells`,
+              },
+            ],
+          },
+          {
+            key: 'burnt',
+            label: 'burnt',
+            value: burnt,
+            tone: 'other',
+            color: DAO_ISSUANCE_COLORS.burnt,
+            opacity: 1,
+            ink: 'bright',
+            align: 'inside',
+            note: `${share(burnt)} · gone for good`,
+            placeholder: BURNT_FOR_GOOD,
+          },
+        ],
+      };
+  const narrow = width !== null && width < ICICLE_LABEL_MIN_PX;
+  const use = [
+    { key: 'occupied', title: 'Occupied', value: occupied, color: DAO_ISSUANCE_COLORS.miners },
     {
-      label: 'Compensation for depositors',
-      amount: compensation,
-      color: '#f2c55c',
-      note: 'via accumulated rate',
+      key: 'depositors',
+      title: 'DAO depositors',
+      value: depositorWeight,
+      color: DAO_ISSUANCE_COLORS.compensation,
     },
-    { label: 'Burnt', amount: burnt, color: '#667080', note: 'gone for good' },
+    { key: 'other', title: 'Everything else', value: other, color: DAO_ISSUANCE_COLORS.burnt },
   ];
   return (
     <Section
       title="Where secondary issuance goes"
-      note={`since genesis · exact shannons at block ${formatBlockNumber(statistics.tipBlockNumber)}`}
+      note={`since genesis · exact to the shannon at block ${formatBlockNumber(statistics.tipBlockNumber)}`}
     >
-      <div className="mb-3 text-[13px]">
-        Secondary issuance since genesis: <Amount value={total.toString()} /> CKB
-      </div>
-      {issuanceEmpty ? (
-        <div className="text-text-dim text-[12px]">
-          No secondary issuance has accrued at this indexed block; allocation shares are undefined.
-        </div>
-      ) : (
-        <div className="flex h-7 w-full overflow-hidden" aria-label="Secondary issuance partition">
-          {parts.map((part) => (
-            <div
-              key={part.label}
-              style={{ width: `${formatPercent(part.amount, total, 3)}%`, background: part.color }}
-              title={`${part.label}: ${formatPercent(part.amount, total, 2)}%`}
-            />
-          ))}
-        </div>
-      )}
-      <div className="mt-3 grid gap-3 md:grid-cols-3">
-        {parts.map((part) => (
-          <div key={part.label} className="border-base-border border-l pl-3 text-[12px]">
-            <div className="text-text-dim">
-              {part.label} · {issuanceEmpty ? '—' : `${formatPercent(part.amount, total, 2)}%`}
-            </div>
-            <div className="text-text-bright">
-              <Amount value={part.amount.toString()} /> CKB
-            </div>
-            <div className="text-text-dim text-[11px]">{part.note}</div>
+      <div ref={ref} className="min-w-0">
+        {root === null ? (
+          <div className="text-text-dim text-[12px]">
+            No secondary issuance has accrued at this indexed block; allocation shares are
+            undefined.
           </div>
-        ))}
-      </div>
-      <div className="border-base-border mt-5 grid gap-3 border-t pt-4 text-[12px] md:grid-cols-2">
-        <div>
-          Paid at completed withdrawals: <Amount value={statistics.totalCompensationPaid} /> CKB
-        </div>
-        <div>
-          Still owed to live DAO cells: <Amount value={statistics.unclaimedCompensation} /> CKB
-        </div>
-      </div>
-      <p className="text-text-dim mt-3 text-[12px]">
-        Each block splits its secondary issuance by capacity use: the protocol occupied share goes
-        to miners; the depositors&apos; weight, phase-0 free capacity plus the compensation it has
-        already accrued, goes to DAO depositors (withdrawal requests are frozen and take no share);
-        the rest is burnt and cannot be claimed later.
-      </p>
-      <div className="mt-4">
-        <div className="text-text-dim mb-1 text-[12px]">
-          Current capacity use at statistics block {formatBlockNumber(statistics.tipBlockNumber)}
-        </div>
-        <div className="flex h-3 w-full" aria-label="Current capacity use partition">
-          {[
-            { key: 'Protocol occupied', value: occupied, color: '#58a5b5' },
-            { key: 'DAO depositors', value: depositorWeight, color: '#f2c55c' },
-            { key: 'Other', value: other, color: '#667080' },
-          ].map((part) => (
-            <div
-              key={part.key}
-              title={`${part.key}: ${formatCapacity(part.value)}`}
-              style={{ width: `${formatPercent(part.value, issued, 4)}%`, background: part.color }}
+        ) : (
+          width !== null && (
+            <IciclePartition
+              root={root}
+              label="Secondary issuance since genesis, split three ways: to miners, compensation for depositors, burnt; the compensation is paid out or still owed to live deposits"
+              formatValue={(v) => <SvgCkb shannons={v} />}
+              width={width}
+              hideLabels={narrow}
             />
-          ))}
-        </div>
-        <div className="text-text-dim mt-1 flex flex-wrap gap-x-5 text-[11px]">
-          <span>Protocol occupied {formatPercent(occupied, issued, 2)}%</span>
-          <span>DAO depositors {formatPercent(depositorWeight, issued, 2)}%</span>
-          <span>Other {formatPercent(other, issued, 2)}%</span>
-        </div>
-        <p className="text-text-dim mt-1 text-[11px]">
-          Protocol occupied includes the genesis virtual occupied baseline; it is not the real
-          occupied size of live cells.
-        </p>
+          )
+        )}
       </div>
-      <Link
-        href={`/blocks/${statistics.tipBlockNumber}`}
-        className="mt-2 inline-block text-[11px] text-[#f2c55c] hover:underline"
-      >
-        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
-      </Link>
+      {root !== null && narrow && (
+        <ul
+          aria-label="Secondary issuance parts"
+          className="mt-3 space-y-2 text-[12px] leading-relaxed"
+        >
+          <li className="text-text-bright">
+            Secondary issuance since genesis <Amount value={total.toString()} /> CKB ·{' '}
+            <span className="text-text-dim">1.344 billion CKB a year, split in every block</span>
+          </li>
+          <li>
+            <Swatch color={DAO_ISSUANCE_COLORS.miners} /> to miners{' '}
+            <Amount value={mining.toString()} /> · {share(mining)} ·{' '}
+            <span className="text-text-dim">s × U ÷ C, paid in cellbases</span>
+          </li>
+          <li>
+            <Swatch color={DAO_ISSUANCE_COLORS.compensation} />{' '}
+            <span className="text-gold">compensation for depositors</span>{' '}
+            <Amount value={compensation.toString()} /> · {share(compensation)} ·{' '}
+            <span className="text-text-dim">via AR</span>
+            <ul className="mt-1 space-y-1 pl-5">
+              <li>
+                paid out <Amount value={claimed.toString()} />{' '}
+                <span className="text-text-dim">at withdrawals</span>
+              </li>
+              <li>
+                still owed <Amount value={unclaimed.toString()} />{' '}
+                <span className="text-text-dim">to the {liveCells} live deposit cells</span>
+              </li>
+            </ul>
+          </li>
+          <li>
+            <Swatch color={DAO_ISSUANCE_COLORS.burnt} /> burnt <Amount value={burnt.toString()} /> ·{' '}
+            {share(burnt)} · <span className="text-text-dim">gone for good. {BURNT_FOR_GOOD}</span>
+          </li>
+        </ul>
+      )}
+      <div className="mt-6 grid gap-7 md:grid-cols-[300px_minmax(0,1fr)] md:items-start">
+        <p className="text-text text-[12.5px] leading-relaxed">
+          Every block splits its share the same way. The proportions are simply how all{' '}
+          <Amount value={issued.toString()} /> CKB issued by block{' '}
+          {formatBlockNumber(statistics.tipBlockNumber)} is used right now.
+        </p>
+        <div className="flex min-w-0 flex-col gap-2">
+          <div className="text-text-dim text-[12px]">
+            Current capacity use at statistics block {formatBlockNumber(statistics.tipBlockNumber)}
+          </div>
+          <div
+            className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded"
+            aria-label="Current capacity use partition"
+          >
+            {use.map((part) => (
+              <div
+                key={part.key}
+                title={`${part.title}: ${formatCapacity(part.value)}`}
+                style={{
+                  width: `${formatPercent(part.value, issued, 4)}%`,
+                  background: part.color,
+                }}
+              />
+            ))}
+          </div>
+          <div className="text-text-dim flex flex-wrap gap-x-7 gap-y-1.5 text-[12px]">
+            <span>
+              <Swatch color={DAO_ISSUANCE_COLORS.miners} />
+              occupied by cells{' '}
+              <span className="text-text-bright">{formatPercent(occupied, issued, 2)}%</span> →
+              miners
+            </span>
+            <span>
+              <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
+              phase-0 free capacity + compensation already accrued{' '}
+              <span className="text-text-bright">
+                {formatPercent(depositorWeight, issued, 2)}%
+              </span>{' '}
+              → depositors · withdrawal requests take no share
+            </span>
+            <span>
+              <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
+              everything else{' '}
+              <span className="text-text-bright">{formatPercent(other, issued, 2)}%</span> → burnt
+            </span>
+          </div>
+          <span className="text-text-dim text-[11.5px]">
+            So a deposit keeps its share of all CKB through secondary issuance. Free CKB outside the
+            DAO receives nothing: its share of each block&apos;s issuance is burnt.
+          </span>
+          <span className="text-text-dim text-[11px]">
+            Protocol occupied includes the genesis virtual occupied baseline; it is not the real
+            occupied size of live cells.
+          </span>
+          <Link
+            href={`/blocks/${statistics.tipBlockNumber}`}
+            className="text-text hover:text-text-bright text-[11px] hover:underline"
+          >
+            Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
+          </Link>
+        </div>
+      </div>
     </Section>
+  );
+}
+
+function Swatch({ color }: { color: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="mr-1.5 inline-block h-[9px] w-[9px] rounded-sm align-middle"
+      style={{ background: color }}
+    />
   );
 }
 
