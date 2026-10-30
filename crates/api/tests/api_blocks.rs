@@ -3,7 +3,16 @@ use crate::common::*;
 /// Node-backed block routes now require actual serialized evidence. These
 /// fixtures retain each test's canonical hashes and economics while seeding
 /// the node's independent read-only database with matching transactions.
-fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
+fn attach_block_evidence(config: AppConfig, numbers: &[i64]) -> AppConfig {
+    attach_block_evidence_with_message(config, numbers, b"ckb 0.210.0")
+}
+
+/// [`attach_block_evidence`] with every cellbase witness carrying `message`.
+fn attach_block_evidence_with_message(
+    mut config: AppConfig,
+    numbers: &[i64],
+    message: &[u8],
+) -> AppConfig {
     use ckb_types::{core, packed, prelude::*};
     let mut blocks = Vec::new();
     for &number in numbers {
@@ -18,7 +27,7 @@ fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
             .build();
         let witness = packed::CellbaseWitness::new_builder()
             .lock(lock)
-            .message(ckb_types::bytes::Bytes::from_static(b"ckb 0.210.0").pack())
+            .message(ckb_types::bytes::Bytes::from(message.to_vec()).pack())
             .build();
         let cellbase = core::TransactionBuilder::default()
             .input(packed::CellInput::new_cellbase_input(number as u64))
@@ -41,6 +50,20 @@ fn attach_block_evidence(mut config: AppConfig, numbers: &[i64]) -> AppConfig {
             parent.timestamp -= 10_000;
             parent.chain_time_ms = parent.timestamp;
             batch.put_block_header(number - 1, &parent);
+        }
+        // Every block below an indexed block is indexed: the block whose
+        // reward this one's cellbase pays (mainnet window, `number - 11`) too.
+        let target = number - 11;
+        if target > 0
+            && target != number - 1
+            && config.store.get_block_header(target).unwrap().is_none()
+        {
+            let mut paid = header.clone();
+            paid.hash = vec![0xEE; 32];
+            paid.hash[..8].copy_from_slice(&target.to_be_bytes());
+            paid.timestamp -= 110_000;
+            paid.chain_time_ms = paid.timestamp;
+            batch.put_block_header(target, &paid);
         }
         for (index, tx) in transactions.iter().enumerate() {
             batch.put_tx_index(
@@ -1292,5 +1315,121 @@ async fn block_uncle_detail_requires_the_canonical_block_at_its_height() {
             && message.contains("uncle 0")
             && message.contains("no canonical block indexed at uncle height 439"),
         "{message}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Lane R2b-a · block page read-path additions (BA-12, BA-13, BA-17, BA-19,
+// BA-41).
+// ---------------------------------------------------------------------------
+
+/// BA-12: the block page's cellbase row says which block's reward it pays —
+/// `#N − (farthest + 1)` on the consensus window — and a block too close to
+/// genesis to pay any reward says `null`.
+#[tokio::test]
+async fn block_names_the_block_its_cellbase_pays() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    seed_proposer_header(&store, 5, &[0x05; 32]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(attach_block_evidence(config, &[500, 5])).await;
+
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["cellbasePays"],
+        serde_json::json!({"number": 489, "hash": format!("0x{}", hex::encode([0x48; 32]))}),
+        "{detail}"
+    );
+    let (status, page) = get_json(&app, "/blocks?cursor=501&limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    assert_eq!(page["data"][0]["cellbasePays"], detail["cellbasePays"]);
+
+    let (status, early) = get_json(&app, "/blocks/5").await;
+    assert_eq!(status, StatusCode::OK, "{early}");
+    assert!(early["cellbasePays"].is_null(), "{early}");
+}
+
+/// BA-13: the reward breakdown carries the block's whole secondary issuance
+/// beside the miner's share of it.
+#[tokio::test]
+async fn block_reward_breakdown_carries_the_whole_secondary_issuance() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    let finalizing = build_finalizing_block(511);
+    seed_finalizing_index(&store, &finalizing);
+    let server = MockServer::start().await;
+    mount_block_economic_state_rpc(
+        &server,
+        &[(
+            &format!("0x{}", hex::encode([0x50; 32])),
+            &format!("0x{}", hex::encode(finalizing.hash().raw_data())),
+        )],
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(attach_block_evidence(config, &[500])).await;
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    // The mock node reports `issuance.secondary` = 3 × the miner's share.
+    assert_eq!(
+        detail["rewardBreakdown"]["secondaryIssuance"],
+        (MOCK_MINER_REWARD.secondary * 3).to_string(),
+        "{detail}"
+    );
+    assert_eq!(
+        detail["rewardBreakdown"]["secondary"],
+        MOCK_MINER_REWARD.secondary.to_string()
+    );
+}
+
+/// BA-17: the miner client text is decoded once, without the node's 4-byte
+/// versionbits prefix (and its separating space) that used to show up as NUL
+/// padding.
+#[tokio::test]
+async fn block_miner_message_text_drops_the_versionbits_prefix() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let mut message = vec![0u8, 0, 0, 0, b' '];
+    message.extend_from_slice(b"0.210.0 (2592ddf 2026-09-17)");
+    let app = create_router(attach_block_evidence_with_message(config, &[500], &message)).await;
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["minerMessageText"], "0.210.0 (2592ddf 2026-09-17)",
+        "{detail}"
+    );
+    // The raw bytes stay available, prefix included.
+    assert_eq!(
+        detail["minerMessage"],
+        format!("0x{}", hex::encode(&message))
+    );
+}
+
+/// BA-41: an uncle serves its header's packed epoch as hex, as a canonical
+/// block's `rawHeader.epoch` does.
+#[tokio::test]
+async fn block_uncle_detail_serves_the_raw_epoch() {
+    let fixture = uncle_fixture(true).await;
+    let (status, json) = get_json(&fixture.app, "/blocks/440/uncles/0").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["rawEpoch"],
+        format!(
+            "{:#x}",
+            ckb_types::core::EpochNumberWithFraction::new(1, 5, 1800).full_value()
+        ),
+        "{json}"
     );
 }

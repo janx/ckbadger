@@ -13,12 +13,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::cache::{CacheBackend, CacheKeys, CacheTtl};
+use crate::consensus::ProposalWindow;
 use crate::cycles::cycles_replay_paused_by_deep_fork;
 use crate::response::{
     default_limit, ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse,
 };
 use crate::routes::hardforks::HardforkResourceResponse;
-use crate::routes::proposal_window::{block_proposal_zone, resolve_committed_txs};
+use crate::routes::proposal_window::{
+    block_proposal_zone, cellbase_reward_target, resolve_committed_txs,
+};
 use crate::routes::transactions::tx_serialized_size_in_block;
 use crate::utils::exact_fee::{mean_rate, FeeRate};
 use crate::utils::{
@@ -86,6 +89,10 @@ pub struct BlockResponse {
     pub reward_breakdown: Option<RewardBreakdownResponse>,
     pub reward_paid_at_block: Option<i64>,
     pub reward_finalizes_at: Option<i64>,
+    /// The block whose reward THIS block's cellbase pays, `number` minus the
+    /// finalization delay ([`cellbase_reward_target`]); `null` for blocks whose
+    /// target would be genesis or earlier — their cellbase pays nothing (BA-12).
+    pub cellbase_pays: Option<BlockRefResponse>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +102,11 @@ pub struct RewardBreakdownResponse {
     pub secondary: String,
     pub committed: String,
     pub proposal: String,
+    /// The block's WHOLE secondary issuance `s_i` (the node's
+    /// `issuance.secondary`), of which `secondary` is the miner's share
+    /// `floor(s_i * U_(i-1) / C_(i-1))`; the rest goes to DAO depositors or
+    /// is burnt (BA-13).
+    pub secondary_issuance: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -147,6 +159,10 @@ pub struct UncleDetailResponse {
     pub epoch_number: i64,
     pub epoch_index: i32,
     pub epoch_length: i32,
+    /// The header's packed `epoch` field as hex (`EpochNumberWithFraction`,
+    /// the value `epochNumber` / `epochIndex` / `epochLength` decode), as the
+    /// canonical block's `rawHeader.epoch` serves it (BA-41).
+    pub raw_epoch: String,
     pub compact_target: String,
     pub difficulty: String,
     pub nonce: String,
@@ -335,6 +351,7 @@ struct BlockExtra {
     reward_breakdown: Option<RewardBreakdownResponse>,
     reward_paid_at_block: Option<i64>,
     reward_finalizes_at: Option<i64>,
+    cellbase_pays: Option<BlockRefResponse>,
 }
 
 // ── Header field formatting ─────────────────────────────────────────────
@@ -453,7 +470,40 @@ fn cached_header_to_block_response(
         reward_breakdown: extra.reward_breakdown,
         reward_paid_at_block: extra.reward_paid_at_block,
         reward_finalizes_at: extra.reward_finalizes_at,
+        cellbase_pays: extra.cellbase_pays,
     })
+}
+
+/// What block `number`'s cellbase pays: the canonical block
+/// [`cellbase_reward_target`] names, read from this store. `None` exactly when
+/// the target would be genesis or earlier. A target the store has no
+/// canonical header for is an error naming both blocks (it is below an
+/// indexed block, so it must be indexed).
+pub(crate) fn cellbase_pays(
+    store: &ckbadger_store::CkbadgerStore,
+    window: ProposalWindow,
+    number: i64,
+) -> Result<Option<BlockRefResponse>, ApiRouteError> {
+    let Some(target) = cellbase_reward_target(window, number) else {
+        return Ok(None);
+    };
+    let header = store
+        .get_block_header(target)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "block {target} header read (the reward target of block {number}): {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "store has no canonical header for block {target}, the reward target of \
+                 indexed block {number}"
+            ))
+        })?;
+    Ok(Some(BlockRefResponse {
+        number: target,
+        hash: format_hash(&header.hash),
+    }))
 }
 
 fn resolve_hardfork_activation(
@@ -546,6 +596,7 @@ async fn build_block_response(
                 })?,
         )
     };
+    let cellbase_pays = cellbase_pays(&state.store, consensus.tx_proposal_window, block_num)?;
     let reward = if block_num == 0 {
         None
     } else {
@@ -588,6 +639,7 @@ async fn build_block_response(
             reward_breakdown,
             reward_paid_at_block,
             reward_finalizes_at,
+            cellbase_pays,
         },
     )
 }
@@ -732,9 +784,8 @@ fn read_block_evidence(
         Some(format_header_timestamp(parent.timestamp, &context)?)
     };
     let miner_message_text = miner_message
-        .as_ref()
-        .and_then(|message| std::str::from_utf8(message).ok())
-        .map(str::to_owned);
+        .as_deref()
+        .and_then(super::transaction_structure::cellbase_message_text);
     let raw_header = raw_header_response(&block.header());
     let uncles = block
         .uncles()
@@ -1017,6 +1068,7 @@ fn read_block_uncle(
         // EpochNumberWithFraction packs index and length in 16 bits each.
         epoch_index: epoch.index() as i32,
         epoch_length: epoch.length() as i32,
+        raw_epoch: raw.epoch,
         compact_target,
         difficulty,
         nonce: format_nonce(uncle_header.nonce()),
@@ -1060,8 +1112,15 @@ struct RpcErrorBody {
 
 #[derive(Debug, Deserialize)]
 struct RawBlockEconomicState {
+    issuance: RawBlockIssuance,
     miner_reward: RawMinerReward,
     finalized_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawBlockIssuance {
+    primary: String,
+    secondary: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1083,6 +1142,9 @@ pub(crate) struct BlockEconomicState {
     /// `primary + secondary + committed + proposal`, shannons: the capacity of
     /// the reward cell the finalizing block's cellbase creates.
     pub miner_reward_total: u64,
+    /// The block's whole secondary issuance (`issuance.secondary`), shannons —
+    /// the miner's share is `miner_reward.secondary`.
+    pub secondary_issuance: u64,
 }
 
 /// The reward of a finalized block's miner, as ckb's `RewardCalculator`
@@ -1177,6 +1239,17 @@ pub(crate) async fn fetch_block_economic_state(
         committed: reward(&raw.miner_reward.committed, "miner_reward.committed")?,
         proposal: reward(&raw.miner_reward.proposal, "miner_reward.proposal")?,
     };
+    let issued_primary = reward(&raw.issuance.primary, "issuance.primary")?;
+    let secondary_issuance = reward(&raw.issuance.secondary, "issuance.secondary")?;
+    // The miner receives the whole primary issuance and a share of the
+    // secondary one (RFC-0015); an answer saying otherwise is not one to show.
+    if issued_primary != miner_reward.primary || miner_reward.secondary > secondary_issuance {
+        return Err(ApiError::internal(format!(
+            "{call}: issuance {{primary {issued_primary}, secondary {secondary_issuance}}} \
+             contradicts miner_reward {miner_reward:?}: the miner gets all primary issuance \
+             and at most the whole secondary issuance"
+        )));
+    }
     let miner_reward_total = miner_reward
         .primary
         .checked_add(miner_reward.secondary)
@@ -1192,6 +1265,7 @@ pub(crate) async fn fetch_block_economic_state(
         finalized_at,
         miner_reward,
         miner_reward_total,
+        secondary_issuance,
     }))
 }
 
@@ -1232,6 +1306,7 @@ async fn get_mining_reward(
             secondary: economic_state.miner_reward.secondary.to_string(),
             committed: economic_state.miner_reward.committed.to_string(),
             proposal: economic_state.miner_reward.proposal.to_string(),
+            secondary_issuance: economic_state.secondary_issuance.to_string(),
         },
         paid_at_block: paid_at_block.ok_or_else(|| {
             ApiError::internal("reward cellbase resolved without its canonical block number")
@@ -1547,6 +1622,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn cellbase_pays_names_the_indexed_target_or_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let window = ProposalWindow::new(2, 10).unwrap();
+        // Too close to genesis: nothing to pay, no header needed.
+        assert!(cellbase_pays(&store, window, 11).unwrap().is_none());
+        // A target below an indexed block that is not indexed is an error.
+        let (_, error) = cellbase_pays(&store, window, 500).unwrap_err();
+        assert!(
+            error.0.message.contains("block 489") && error.0.message.contains("block 500"),
+            "{}",
+            error.0.message
+        );
+        let mut batch = ckbadger_store::StoreBatch::new(&store);
+        batch.put_block_header(
+            489,
+            &ckbadger_store::CachedBlockHeader {
+                hash: vec![0x48; 32],
+                parent_hash: vec![0; 32],
+                timestamp: 1,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1,
+            },
+        );
+        batch.commit().unwrap();
+        let pays = cellbase_pays(&store, window, 500).unwrap().unwrap();
+        assert_eq!(pays.number, 489);
+        assert_eq!(pays.hash, format!("0x{}", "48".repeat(32)));
+    }
+
+    #[test]
     fn genesis_has_no_script_execution_even_for_non_cellbase_transactions() {
         let tx = ckbadger_store::TxIndexEntry {
             tx_hash: [0x11; 32],
@@ -1654,6 +1769,7 @@ mod tests {
                 reward_breakdown: None,
                 reward_paid_at_block: None,
                 reward_finalizes_at: Some(11),
+                cellbase_pays: None,
             },
         )
         .unwrap();
@@ -1704,6 +1820,7 @@ mod tests {
                 reward_breakdown: None,
                 reward_paid_at_block: None,
                 reward_finalizes_at: Some(11),
+                cellbase_pays: None,
             },
         )
         .unwrap();
@@ -1743,6 +1860,7 @@ mod tests {
                 reward_breakdown: None,
                 reward_paid_at_block: None,
                 reward_finalizes_at: Some(11),
+                cellbase_pays: None,
             },
         )
         .unwrap_err();
@@ -1838,6 +1956,7 @@ mod tests {
             reward_breakdown: None,
             reward_paid_at_block: None,
             reward_finalizes_at: Some(111),
+            cellbase_pays: None,
         };
 
         let json = serde_json::to_value(&response).unwrap();

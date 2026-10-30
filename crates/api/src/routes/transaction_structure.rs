@@ -327,6 +327,27 @@ pub fn cellbase_witness(bytes: &[u8]) -> Option<CellbaseWitnessResponse> {
     })
 }
 
+/// The text of a cellbase message, decided once (BA-17).
+///
+/// The CKB node's block assembler writes the message as `versionbits (u32
+/// LE) + " "` — when it computes versionbits, as every node since the 2021
+/// hardfork does — then the client's binary version and its configured
+/// message. Consensus reads the first four bytes as that version word, and
+/// accepts it as one only when its top three bits are `000`
+/// (`VERSIONBITS_TOP_MASK`), i.e. when the fourth byte is below `0x20`. A
+/// printable character there is always `>= 0x20`, so the prefix is exactly:
+/// at least five bytes, byte 3 below `0x20`, byte 4 a space. The text is the
+/// rest of the message when it is UTF-8 without control characters; any other
+/// message (a pool's binary extra-nonce, say) has no text and `None` says so.
+pub(crate) fn cellbase_message_text(message: &[u8]) -> Option<String> {
+    let payload = match message {
+        [_, _, _, version_top, b' ', rest @ ..] if *version_top < 0x20 => rest,
+        _ => message,
+    };
+    let text = std::str::from_utf8(payload).ok()?;
+    (!text.is_empty() && !text.chars().any(char::is_control)).then(|| text.to_string())
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedDependencyCell {
@@ -724,6 +745,36 @@ pub fn witness_details(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cellbase_message_text_strips_the_versionbits_prefix_only() {
+        // The node's own format: versionbits 0 + " " + binary version.
+        let mut message = vec![0, 0, 0, 0, b' '];
+        message.extend_from_slice(b"0.210.0 (2592ddf 2026-09-17)");
+        assert_eq!(
+            cellbase_message_text(&message).as_deref(),
+            Some("0.210.0 (2592ddf 2026-09-17)")
+        );
+        // A signalling version word (bit 1 set) is still the prefix.
+        let mut signalling = vec![2, 0, 0, 0, b' '];
+        signalling.extend_from_slice(b"0.119.0");
+        assert_eq!(
+            cellbase_message_text(&signalling).as_deref(),
+            Some("0.119.0")
+        );
+        // Text from the first byte (no versionbits) is kept whole.
+        assert_eq!(
+            cellbase_message_text(b"ckb 0.210.0").as_deref(),
+            Some("ckb 0.210.0")
+        );
+        // Trailing binary bytes, a bare prefix, or no bytes: no text.
+        let mut binary = b"0.210.0 (860c9bb 2026-09-21) ".to_vec();
+        binary.extend_from_slice(&[0xff, 0, 1, 2, 3, 4, 5, 6]);
+        assert_eq!(cellbase_message_text(&binary), None);
+        assert_eq!(cellbase_message_text(&[0, 0, 0, 0, b' ']), None);
+        assert_eq!(cellbase_message_text(&[]), None);
+    }
+
     #[test]
     fn witness_args_fields_retain_byte_ranges_and_payload() {
         let lock = packed::BytesOpt::new_builder()
