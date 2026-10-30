@@ -24,6 +24,31 @@ import type { GlobalActivity, Transaction } from '@/lib/api';
 
 const TRACK = 80;
 
+/** A zero amount drawn quiet (board: `#4b5266`), never a different number. */
+function Quiet({ when, children }: { when: boolean; children: ReactNode }) {
+  return when ? (
+    <span data-zero className="[&_[data-ckb-amount]]:text-text-dim">
+      {children}
+    </span>
+  ) : (
+    <>{children}</>
+  );
+}
+
+/** A cellbase's note (R2b-a 35): the block whose reward it pays, or that it pays none. */
+function paysNote(tx: Transaction): ReactNode {
+  if (tx.pays === undefined) throw new Error(`Cellbase ${tx.hash} has no "pays" field`);
+  if (tx.pays === null) return 'pays no reward yet';
+  return (
+    <>
+      pays{' '}
+      <Link href={`/blocks/${tx.pays.number}`} className="hover:text-jade">
+        {formatBlockNumber(tx.pays.number)}
+      </Link>
+    </>
+  );
+}
+
 /** The quiet note beside a row's kind: its protocol facts, its type scripts, or its parties. */
 function whatNote(activity: GlobalActivity): ReactNode {
   if (activity.protocolActions.length > 0) {
@@ -93,7 +118,7 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      minWidth: 170,
+      minWidth: 160,
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
           <Hash hash={tx.hash} startChars={10} endChars={6} copyable={false} className="text-xs" />
@@ -103,9 +128,9 @@ export function TransactionListTable({
     {
       key: 'block',
       label: 'Block · age',
-      minWidth: 150,
+      minWidth: 175,
       render: (tx) => (
-        <span className="text-xs">
+        <span className="whitespace-nowrap text-xs">
           <Link href={`/blocks/${tx.blockNumber}`} className="hover:text-jade">
             {formatBlockNumber(tx.blockNumber)}
           </Link>
@@ -116,7 +141,7 @@ export function TransactionListTable({
     {
       key: 'what',
       label: 'What it did',
-      minWidth: 260,
+      minWidth: 220,
       render: (tx) => {
         const mark = tx.activity ? activityClassMark(tx.activity) : null;
         return (
@@ -125,11 +150,9 @@ export function TransactionListTable({
             <span className={tx.isCellbase ? 'text-text flex-none' : 'text-text-bright flex-none'}>
               {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
             </span>
-            {!tx.isCellbase && (
-              <span className="text-text-dim min-w-0 truncate text-xs">
-                {whatNote(tx.activity!)}
-              </span>
-            )}
+            <span className="text-text-dim min-w-0 truncate text-xs">
+              {tx.isCellbase ? paysNote(tx) : whatNote(tx.activity!)}
+            </span>
           </span>
         );
       },
@@ -148,34 +171,41 @@ export function TransactionListTable({
                 shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
                 signed={false}
                 tone="plain"
+                unit={false}
               />
             </span>
           </span>
         ) : (
-          <ExactCkb
-            shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
-            signed={false}
-            tone="plain"
-          />
+          <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
+            <ExactCkb
+              shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
+              signed={false}
+              tone="plain"
+              unit={false}
+            />
+          </Quiet>
         ),
     },
     {
       key: 'fee',
       label: 'Fee, CKB',
-      minWidth: 128,
+      minWidth: 105,
       numeric: true,
       render: (tx) => (
-        <ExactCkb
-          shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
-          signed={false}
-          tone="plain"
-        />
+        <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
+          <ExactCkb
+            shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
+            signed={false}
+            tone="plain"
+            unit={false}
+          />
+        </Quiet>
       ),
     },
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 64,
+      minWidth: 56,
       render: (tx) => (
         <span className="text-text-dim text-xs">
           {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount}
@@ -185,7 +215,7 @@ export function TransactionListTable({
     {
       key: 'size',
       label: 'Size, bytes',
-      minWidth: 170,
+      minWidth: 145,
       header: <ScaleHeader label="Size, bytes" scale={sizeScale} />,
       render: (tx) => (
         <AlignedBar
@@ -206,7 +236,7 @@ export function TransactionListTable({
     {
       key: 'cycles',
       label: 'Cycles',
-      minWidth: 190,
+      minWidth: 180,
       header: <ScaleHeader label="Cycles" scale={cycleScale} />,
       render: (tx) =>
         tx.cycles === null ? (

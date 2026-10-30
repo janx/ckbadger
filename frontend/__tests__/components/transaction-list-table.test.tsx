@@ -70,6 +70,7 @@ const cellbase: Transaction = {
   txSize: 360,
   cycles: 0,
   activity: null,
+  pays: { number: 20829764 },
 };
 
 describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => {
@@ -107,11 +108,35 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     expect(row).toHaveClass('opacity-[.55]');
     expect(row).toHaveTextContent('Cellbase');
     const value = row.querySelector('[data-reward]')!;
-    expect(value).toHaveTextContent('reward 559.61739927 CKB');
+    expect(value).toHaveTextContent(/^reward 559\.61739927$/);
     expect(value).toHaveClass('text-text-dim');
     expect(row).toHaveTextContent('0 → 1');
+    // R2b-a 35 (TX-25): the block whose reward this cellbase pays.
+    expect(row).toHaveTextContent('Cellbasepays #20,829,764');
+    expect(within(row).getByRole('link', { name: '#20,829,764' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20829764'
+    );
     expect(row.querySelector('[data-segment="value"]')).toHaveStyle({
       backgroundColor: 'rgb(58, 66, 88)',
     });
+  });
+});
+
+describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
+  it('fits the 1,248 px container, keeps block · age on one line and drops the per-cell unit', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
+    const row = within(table).getAllByRole('row')[2];
+    expect(row.querySelector('td:nth-child(2) > span')).toHaveClass('whitespace-nowrap');
+    expect(row.querySelector('td:nth-child(4)')).toHaveTextContent(/^767\.29874184$/);
+    expect(row.querySelector('td:nth-child(5)')).toHaveTextContent(/^0\.00030000$/);
+  });
+
+  it('draws a zero value quiet, as the board does', () => {
+    render(<TransactionListTable transactions={[scriptCall]} />);
+    const row = within(screen.getByRole('table')).getAllByRole('row')[1];
+    expect(row.querySelector('td:nth-child(4) [data-zero]')).toBeInTheDocument();
   });
 });
