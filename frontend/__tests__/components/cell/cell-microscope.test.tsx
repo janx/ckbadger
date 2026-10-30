@@ -143,9 +143,11 @@ it('shows NOBITS as memory only and current references as current evidence', () 
     },
   } as Cell;
   render(<CodeCellBoard cell={codeCell} />);
-  expect(screen.getByText('Memory only')).toBeInTheDocument();
-  expect(screen.getByText(/7 live locks/)).toBeInTheDocument();
-  expect(screen.getByText(/actual cell deps/)).toBeInTheDocument();
+  // a data1 reference to another binary is listed with its live users, never as these bytes'
+  expect(screen.getByText(/· 9 live cells/)).toBeInTheDocument();
+  expect(screen.getByTestId('code-by-data-hash')).toHaveTextContent(
+    '0 live cells pin this exact binary'
+  );
 });
 
 it('shows long data as excerpts with "⋯ N bytes … show" rows instead of pages (SC-K4)', () => {

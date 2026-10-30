@@ -266,7 +266,8 @@ export function elfParts(cell: Cell): CellPart[] {
         ph.kind === 1
           ? `Loads file bytes into memory with permissions ${PF(ph.flags) || 'none'}.`
           : 'Describes how CKB-VM loads the program.',
-      indexed: ph.kind === 1 && (ph.flags & 1) !== 0,
+      // The executable and writable loads are listed; the rest are reached through their bytes.
+      indexed: ph.kind === 1 && (ph.flags & 3) !== 0,
     });
   }
   for (const section of elf.sections) {
@@ -329,6 +330,38 @@ export function elfParts(cell: Cell): CellPart[] {
       meaning: 'Describes the sections. The machine never reads it: it is for tools.',
       indexed: true,
     });
+  parts.sort((a, b) => a.start - b.start);
+  // Bytes no header, section or table claims but a program segment loads: the API counts them as
+  // assigned (they are loaded), so they are named by that segment.
+  const loaded: CellPart[] = [];
+  let reach = 0;
+  for (const part of [...parts, null]) {
+    const next = part?.start ?? bytes.length;
+    if (next > reach) {
+      const segment = elf.programHeaders.find(
+        (ph) =>
+          BigInt(ph.fileOffset) <= BigInt(reach) &&
+          BigInt(ph.fileOffset) + BigInt(ph.fileSize) >= BigInt(next)
+      );
+      if (segment)
+        loaded.push({
+          id: `elf:loaded${reach}`,
+          block: 'data',
+          group: 'data',
+          label: `padding in program segment ${segment.index}`,
+          start: reach,
+          end: next,
+          occupied: true,
+          tone: ELF_REGION_COLORS.padding,
+          type: null,
+          value: bytes.slice(reach, Math.min(next, reach + 8)).join(' '),
+          meaning: 'Loaded with its program segment, but in no section. Still occupied.',
+          indexed: true,
+        });
+    }
+    if (part) reach = Math.max(reach, part.end);
+  }
+  parts.push(...loaded);
   parts.sort((a, b) => a.start - b.start);
   let end = 0;
   for (const part of parts) {
