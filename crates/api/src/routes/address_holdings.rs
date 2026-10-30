@@ -229,55 +229,66 @@ where
             continue;
         }
         ensure!(
-            key.len() == 74,
-            "invalid owner live-cell index key owner=0x{} key=0x{}",
-            hex::encode(owner),
-            hex::encode(&key)
-        );
-        ensure!(
             value.is_empty(),
             "invalid owner live-cell index value owner=0x{} key=0x{}",
             hex::encode(owner),
             hex::encode(&key)
         );
-        let (hash, index) = keys::decode_outpoint(&key[40..]);
-        let context = format!(
-            "address 0x{} cell 0x{}:{index}",
-            hex::encode(owner),
-            hex::encode(&hash)
-        );
-        let keep_going = (|| -> Result<bool> {
-            ensure!(index >= 0, "negative output index");
-            let info = state
-                .store
-                .get_cell(&hash, index, &state.append_only_store)?
-                .context("owner index points to missing live marker")?;
-            ensure!(info.created_at_block >= 0, "negative cell creation height");
-            ensure!(
-                info.lock_script_hash == owner,
-                "owner index disagrees with immutable lock hash"
-            );
-            ensure!(
-                keys::encode_cell_index_key(owner, info.created_at_block, &hash, index).as_slice()
-                    == key.as_ref(),
-                "owner index height disagrees with live marker"
-            );
-            ensure!(
-                info.capacity >= info.occupied_capacity && info.occupied_capacity > 0,
-                "invalid capacity/occupied capacity {}/{}",
-                info.capacity,
-                info.occupied_capacity
-            );
-            ensure!(info.data_size >= 0, "negative data size");
-            let evidence = classify(&state.store, &hash, index, &info)?;
-            visit(&key, &hash, index, &info, evidence)
-        })()
-        .with_context(|| context)?;
-        if !keep_going {
+        let (hash, index, info, evidence) = owner_cell(state, owner, &key)?;
+        if !visit(&key, &hash, index, &info, evidence)? {
             break;
         }
     }
     Ok(())
+}
+
+/// The live cell an owner-index key names, validated against the index and
+/// classified — the one per-row check every owner walk and every memoized
+/// page applies.
+fn owner_cell(
+    state: &AppState,
+    owner: &[u8],
+    key: &[u8],
+) -> Result<(Vec<u8>, i16, PositionedCellInfo, Evidence)> {
+    ensure!(
+        key.len() == 74 && key.starts_with(owner),
+        "invalid owner live-cell index key owner=0x{} key=0x{}",
+        hex::encode(owner),
+        hex::encode(key)
+    );
+    let (hash, index) = keys::decode_outpoint(&key[40..]);
+    let context = format!(
+        "address 0x{} cell 0x{}:{index}",
+        hex::encode(owner),
+        hex::encode(&hash)
+    );
+    (|| -> Result<_> {
+        ensure!(index >= 0, "negative output index");
+        let info = state
+            .store
+            .get_cell(&hash, index, &state.append_only_store)?
+            .context("owner index points to missing live marker")?;
+        ensure!(info.created_at_block >= 0, "negative cell creation height");
+        ensure!(
+            info.lock_script_hash == owner,
+            "owner index disagrees with immutable lock hash"
+        );
+        ensure!(
+            keys::encode_cell_index_key(owner, info.created_at_block, &hash, index).as_slice()
+                == key,
+            "owner index height disagrees with live marker"
+        );
+        ensure!(
+            info.capacity >= info.occupied_capacity && info.occupied_capacity > 0,
+            "invalid capacity/occupied capacity {}/{}",
+            info.capacity,
+            info.occupied_capacity
+        );
+        ensure!(info.data_size >= 0, "negative data size");
+        let evidence = classify(&state.store, &hash, index, &info)?;
+        Ok((hash.to_vec(), index, info, evidence))
+    })()
+    .with_context(|| context)
 }
 
 /// Registry classification plus the indexer's own outpoint identity. No raw
@@ -815,11 +826,43 @@ async fn cells(
     ok(page)
 }
 
+/// One owner's live DAO cells at one canonical tip, largest capacity first:
+/// `(capacity, owner-index key)`.
+pub(crate) type DaoCapacityOrder = Arc<Vec<(i64, Vec<u8>)>>;
+
+/// Owners whose DAO capacity order is kept at once. Entries are keyed by the
+/// canonical tip as well, so an entry is never stale — a moved tip is a miss —
+/// and old tips' entries simply age out first-in-first-out.
+const DAO_CAPACITY_MEMO_OWNERS: std::num::NonZeroUsize = match std::num::NonZeroUsize::new(64) {
+    Some(capacity) => capacity,
+    None => unreachable!(),
+};
+
+/// `/addresses/{addr}/cells?class=dao&order=capacity`'s memo (BA-34): the
+/// ordered DAO subset of an owner at a tip `(owner, tip number, tip hash)`,
+/// computed once inside one pinned read view and paged from API memory.
+/// Nothing is written to any store.
+pub struct DaoCapacityMemo(crate::cache::BoundedCache<(Vec<u8>, i64, Vec<u8>), DaoCapacityOrder>);
+
+impl DaoCapacityMemo {
+    pub fn new() -> Self {
+        Self(crate::cache::BoundedCache::new(DAO_CAPACITY_MEMO_OWNERS))
+    }
+}
+
+impl Default for DaoCapacityMemo {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An address's live DAO cells, largest capacity first (BA-34). The order
-/// needs the whole DAO subset, so this walks the address's owner index once
-/// (the same walk the holdings summary makes) and keeps only DAO cells, sorted
-/// by capacity descending and owner-index key ascending; the cursor resumes
-/// strictly after the last served `(capacity, key)`.
+/// needs the whole DAO subset, so the first page at a canonical tip walks the
+/// owner's index once (the walk the holdings summary makes), keeps the DAO
+/// cells sorted by capacity descending and owner-index key ascending, and
+/// memoizes that key list for `(owner, tip)`; every page — the first included
+/// — then reads only its own rows. The cursor resumes strictly after the last
+/// served `(capacity, key)`.
 async fn dao_cells_by_capacity(
     state: Arc<AppState>,
     owner: Vec<u8>,
@@ -832,39 +875,55 @@ async fn dao_cells_by_capacity(
         .transpose()?;
     let limit = params.limit as usize;
     tokio::task::spawn_blocking(move || -> Result<_> {
-        let mut rows = Vec::new();
-        scan(&state, &owner, None, |key, hash, index, info, evidence| {
-            if evidence.class == Class::Dao {
-                rows.push((key.to_vec(), hash.to_vec(), index, info.clone(), evidence));
+        let (tip_number, tip) = state
+            .store
+            .get_sync_tip_block()?
+            .context("no canonical tip to order DAO cells at")?;
+        let memo_key = (owner.clone(), tip_number, tip.hash.clone());
+        let order = match state.dao_capacity_memo.0.get(&memo_key) {
+            Some(order) => order,
+            None => {
+                let mut order = Vec::new();
+                scan(&state, &owner, None, |key, _, _, info, evidence| {
+                    if evidence.class == Class::Dao {
+                        order.push((info.capacity, key.to_vec()));
+                    }
+                    Ok(true)
+                })?;
+                order.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+                let order: DaoCapacityOrder = Arc::new(order);
+                state.dao_capacity_memo.0.insert(memo_key, order.clone());
+                order
             }
-            Ok(true)
-        })?;
-        rows.sort_by(|a, b| b.3.capacity.cmp(&a.3.capacity).then_with(|| a.0.cmp(&b.0)));
+        };
         let start = match &after {
             None => 0,
-            Some((capacity, key)) => rows.partition_point(|row| {
-                (row.3.capacity, std::cmp::Reverse(&row.0)) >= (*capacity, std::cmp::Reverse(key))
+            Some((capacity, key)) => order.partition_point(|(row_capacity, row_key)| {
+                (*row_capacity, std::cmp::Reverse(row_key)) >= (*capacity, std::cmp::Reverse(key))
             }),
         };
-        let mut page: Vec<_> = rows.into_iter().skip(start).take(limit + 1).collect();
+        let page = &order[start.min(order.len())..];
         let has_more = page.len() > limit;
-        page.truncate(limit);
+        let page = &page[..page.len().min(limit)];
         let next = has_more.then(|| {
-            let last = page.last().expect("nonempty next page");
-            format!(
-                "{CAPACITY_CURSOR_PREFIX}{}:{}",
-                last.3.capacity,
-                hex::encode(&last.0)
-            )
+            let (capacity, key) = page.last().expect("nonempty next page");
+            format!("{CAPACITY_CURSOR_PREFIX}{capacity}:{}", hex::encode(key))
         });
         let rows = page
-            .into_iter()
-            .map(|(_, hash, index, info, evidence)| {
+            .iter()
+            .map(|(capacity, key)| {
+                let (hash, index, info, evidence) = owner_cell(&state, &owner, key)?;
+                ensure!(
+                    evidence.class == Class::Dao && info.capacity == *capacity,
+                    "memoized DAO cell 0x{}:{index} at tip {tip_number} is no longer the \
+                     DAO cell of {capacity} shannons it was ordered as",
+                    hex::encode(&hash)
+                );
                 cell_response(&state, &hash, index, &info, evidence).with_context(|| {
                     format!(
                         "address 0x{} DAO cell 0x{}:{index}",
                         hex::encode(&owner),
-                        hex::encode(hash)
+                        hex::encode(&hash)
                     )
                 })
             })
