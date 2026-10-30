@@ -97,6 +97,10 @@ describe('DaoHistory (DAO-11, DAO-18)', () => {
     const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
     const weekly = container.querySelector('[data-panel="weekly"]')!;
     expect(weekly).toHaveTextContent('1 week beyond the scale is cut and marked');
+    // Inline after the title; no-break spaces, since SVG drops a text node's leading space.
+    expect(container.querySelector('[data-role="clip-note"]')!.textContent).toBe(
+      '\u00a0·\u00a01 week beyond the scale is cut and marked'
+    );
     const clipped = container.querySelectorAll('[data-week][data-clipped="true"]');
     expect(clipped).toHaveLength(1);
     expect(clipped[0]).toHaveAttribute('data-week', date(1 + 5 * 7));
@@ -135,6 +139,27 @@ describe('DaoHistory at phone width (DAO-22)', () => {
     const label = container.querySelector('[data-role="largest-week"]')!;
     expect(label).toHaveAttribute('text-anchor', 'end');
     expect(Number(label.getAttribute('x'))).toBeLessThanOrEqual(358 - 8);
+  });
+
+  it('keeps a long largest-week label clear of the axis when it fits on neither side', () => {
+    stubChartWidth(358);
+    const { deposited, ratio } = series();
+    // +1,000,000,000 CKB in week 10: the label is ~35 characters, wider than either side of its bar.
+    const jump = BigInt(1_000_000_000) * BigInt(1e8);
+    const values = deposited.data.map((p, i) => ({
+      ...p,
+      value: i >= 77 ? String((BigInt(p.value) * BigInt(1e8) + jump) / BigInt(1e8)) : p.value,
+    }));
+    const { container } = render(
+      <DaoHistory deposited={{ ...deposited, data: values }} ratio={ratio} />
+    );
+    const label = container.querySelector('[data-role="largest-week"]')!;
+    expect(label.textContent).toMatch(/^\+1,000,000,010 · week of /);
+    const x = Number(label.getAttribute('x'));
+    expect(label).toHaveAttribute('text-anchor', 'end');
+    expect(x).toBeLessThanOrEqual(358 - 8);
+    // ends at the plot edge, so it starts right of the 64 px axis column
+    expect(x - label.textContent!.length * 6.3).toBeGreaterThanOrEqual(64);
   });
 
   it('starts the deposited axis at a round top near the peak, not twice it', () => {

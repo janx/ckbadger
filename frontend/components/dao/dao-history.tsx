@@ -221,10 +221,15 @@ export function DaoHistory({
     const largest = biggest
       ? `${formatSignedCkbInteger(biggest.net)} · week of ${days[biggest.start].date}`
       : null;
-    const largestFitsRight =
-      biggest !== null &&
-      largest !== null &&
-      x(biggest.start) + bw + 6 + largest.length * 6.3 <= LEFT + plotW;
+    // The largest week's label: right of its bar, else left of it, else ending at the plot's edge.
+    const largestPlace = (() => {
+      if (!biggest || !largest) return null;
+      const w = largest.length * 6.3;
+      const bx = x(biggest.start);
+      if (bx + bw + 6 + w <= LEFT + plotW) return { x: bx + bw + 6, anchor: 'start' as const };
+      if (bx - 6 - w >= LEFT) return { x: bx - 6, anchor: 'end' as const };
+      return { x: LEFT + plotW, anchor: 'end' as const };
+    })();
     figure = (
       <div className="relative">
         <svg
@@ -334,12 +339,12 @@ export function DaoHistory({
                 </g>
               );
             })}
-            {biggest && largest && (
+            {biggest && largest && largestPlace && (
               <text
                 data-role="largest-week"
-                x={largestFitsRight ? x(biggest.start) + bw + 6 : x(biggest.start) - 6}
+                x={largestPlace.x}
                 y={biggest.net > 0 ? C_Y + 10 : C_Y + C_H - 2}
-                textAnchor={largestFitsRight ? 'start' : 'end'}
+                textAnchor={largestPlace.anchor}
                 fontSize="10.5"
                 className="fill-text"
               >
@@ -362,7 +367,7 @@ export function DaoHistory({
                 fontSize="11"
                 className="fill-text-dim"
               >
-                {noteInline ? ` · ${clipNote}` : clipNote}
+                {noteInline ? `\u00a0·\u00a0${clipNote}` : clipNote}
               </text>
             )}
           </g>
