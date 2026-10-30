@@ -145,6 +145,14 @@ describe('Shared asset feeds', () => {
     expect(() =>
       itemFeedHeadline(dotcell('register', { relinked: 'apt.cell' }), 'identity')
     ).toThrow('invalid .cell relink');
+    // A recycled neighbour unlinks from the ring and rewrites this name's pointer too.
+    expect(itemFeedHeadline(dotcell('recycle', { relinked: aptId }), 'identity')).toEqual({
+      text: 'Neighbour recycled',
+      neighbour: true,
+    });
+    expect(() => itemFeedHeadline(dotcell('transfer', { relinked: aptId }), 'identity')).toThrow(
+      '.cell transfer cannot relink a neighbour'
+    );
     render(
       <AssetFeed
         queryKey="dotcell:apt"

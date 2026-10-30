@@ -15,6 +15,9 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo } from '@/lib/utils';
+/** The .cell actions that rewrite a ring neighbour's pointer (indexer `metadata.relinked`). */
+const NEIGHBOUR_ACTIONS: Record<string, string> = { register: 'registered', recycle: 'recycled' };
+
 export interface ItemFeedHeadline {
   text: string;
   /** Someone else's action that only rewrote this item's cell (a ring neighbour): dimmed. */
@@ -25,7 +28,8 @@ export interface ItemFeedHeadline {
  * Headline of a row in one item's own feed (ID-C1). A protocol action is the exact,
  * standard-specific name (".cell · edit records"); without one, the item's own action names the
  * row ("Identity Renew"), never a net-delta guess. A .cell registration whose `relinked` names
- * this item only rewrote its ring pointer: "Neighbour registered".
+ * this item, or a recycle that unlinked a name next to it, only rewrote its ring pointer:
+ * "Neighbour registered" / "Neighbour recycled".
  */
 export function itemFeedHeadline(
   activity: ItemActivity,
@@ -34,19 +38,15 @@ export function itemFeedHeadline(
   const context = activity.itemContext;
   if (!context?.action)
     throw new Error(`${activity.txHash}: item feed row has no item action for ${kind}`);
-  const relink = activity.protocolActions.find(
-    (pa) => pa.protocol === 'dotcell' && pa.metadata.relinked !== undefined
-  );
-  if (relink) {
-    const relinked = relink.metadata.relinked;
-    if (
-      relink.action !== 'register' ||
-      typeof relinked !== 'string' ||
-      !/^0x[0-9a-f]+$/i.test(relinked)
-    )
+  for (const pa of activity.protocolActions) {
+    if (pa.protocol !== 'dotcell' || pa.metadata.relinked === undefined) continue;
+    const relinked = pa.metadata.relinked;
+    if (typeof relinked !== 'string' || !/^0x[0-9a-f]+$/i.test(relinked))
       throw new Error(`${activity.txHash}: invalid .cell relink ${JSON.stringify(relinked)}`);
-    if (relinked.toLowerCase() === context.itemId.toLowerCase())
-      return { text: 'Neighbour registered', neighbour: true };
+    if (relinked.toLowerCase() !== context.itemId.toLowerCase()) continue;
+    const done = NEIGHBOUR_ACTIONS[pa.action];
+    if (!done) throw new Error(`${activity.txHash}: .cell ${pa.action} cannot relink a neighbour`);
+    return { text: `Neighbour ${done}`, neighbour: true };
   }
   if (classifyActivity(activity).primaryProtocolAction)
     return { text: activityHeadline(activity), neighbour: false };
