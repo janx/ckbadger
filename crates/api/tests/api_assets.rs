@@ -4528,6 +4528,54 @@ async fn test_assets_dotcell_holders_are_owner20() {
     );
 }
 
+/// ID-COL-2: the `.cell` collection list said "No live owner" for every live
+/// name while "Who holds it" listed their holders. A `.cell` name's owner is
+/// the 20-byte prefix in its data, resolved the same way the holders view
+/// resolves it: the items list reports that prefix, its full lock hash and
+/// the lock's address, and the set of owners equals the holders' set.
+#[tokio::test]
+async fn test_assets_dotcell_items_report_the_owner_the_holders_view_lists() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    seed_owner_lock(&store);
+    let app = create_router(test_config(store)).await;
+    let (status, items) = dotcell_get(app.clone(), "/api/v1/assets/identities/dotcell/items").await;
+    assert_eq!(status, StatusCode::OK, "{items}");
+    let (status, holders) = dotcell_get(app, "/api/v1/assets/identities/dotcell/holders").await;
+    assert_eq!(status, StatusCode::OK, "{holders}");
+    let rows = items["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{items}");
+    assert_eq!(rows[0]["ownerLockHash"], SUPPORT_OWNER_LOCK_HASH, "{items}");
+    assert_eq!(rows[0]["ownerHashPrefix"], SUPPORT_OWNER20, "{items}");
+    assert!(
+        rows[0]["ownerAddress"]
+            .as_str()
+            .is_some_and(|address| address.starts_with("ckb")),
+        "{items}"
+    );
+    let owners: std::collections::BTreeSet<_> = rows
+        .iter()
+        .filter(|row| row["isLive"] == true)
+        .map(|row| row["ownerLockHash"].as_str().unwrap().to_string())
+        .collect();
+    let holder_set: std::collections::BTreeSet<_> = holders["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| row["lockScriptHash"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(owners, holder_set);
+    assert_eq!(rows[0]["ownerAddress"], holders["data"][0]["address"]);
+}
+
 #[tokio::test]
 async fn test_assets_dotcell_children_of_parent() {
     let store = test_store();
@@ -5573,6 +5621,80 @@ fn mnft_insights_fixture(aggregate_live_count: i64) -> (Arc<CkbadgerStore>, [u8;
     }
     batch.commit().unwrap();
     (store, class_id)
+}
+
+/// OB-K3 / OB-K4: an m-NFT class's holders and items listed bare lock hashes
+/// (`address: null`). Both now carry the holder's address from the site's
+/// one lock → address encoder.
+#[tokio::test]
+async fn mnft_class_holders_and_items_carry_addresses() {
+    let (store, class_id) = mnft_insights_fixture(6);
+    let secp =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let token_id = [class_id.as_slice(), &[0, 0, 0, 1]].concat();
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (holder, args) in [([0x11; 32], 0x01), ([0x22; 32], 0x02), ([0x33; 32], 0x03)] {
+        batch.put_lock_script(
+            &holder,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: secp.clone(),
+                hash_type: 1,
+                args: vec![args; 20],
+            },
+        );
+    }
+    batch.put_mnft(
+        &token_id,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftToken,
+            collection_id: Some(class_id.to_vec()),
+            token_id: Some(token_id.clone()),
+            owner_lock_hash: Some(vec![0x11; 32]),
+            name: None,
+            description: None,
+            is_live: false,
+            created_at_block: 1,
+            created_at_tx: vec![0xa1; 32],
+            extra: ObjectExtra::MnftToken {
+                token_index: 1,
+                characteristic: vec![0; 8],
+                configure: 0,
+                state: 0,
+            },
+        },
+    );
+    batch.put_mnft_by_collection(&class_id, &token_id);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let base = format!("/assets/objects/0x{}", hex::encode(class_id));
+
+    let (status, holders) = get_json(&app, &format!("{base}/holders")).await;
+    assert_eq!(status, StatusCode::OK, "{holders}");
+    let rows = holders["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{holders}");
+    for row in rows {
+        assert!(
+            row["address"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("ckb1")),
+            "holder row without an address: {row}"
+        );
+    }
+
+    let (status, items) = get_json(&app, &format!("{base}/items")).await;
+    assert_eq!(status, StatusCode::OK, "{items}");
+    let item = &items["data"][0];
+    assert_eq!(
+        item["ownerLockHash"],
+        format!("0x{}", hex::encode([0x11; 32]))
+    );
+    assert_eq!(
+        item["ownerAddress"],
+        rows.iter()
+            .find(|row| row["lockScriptHash"] == item["ownerLockHash"])
+            .unwrap()["address"],
+        "{items}"
+    );
 }
 
 #[tokio::test]

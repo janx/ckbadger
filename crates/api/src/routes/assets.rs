@@ -437,7 +437,15 @@ pub struct CollectionItemResponse {
     pub nft_id: String,
     pub name: Option<String>,
     pub standard: String,
+    /// The owner's full lock hash. For `.cell` it is the lock the owner's
+    /// 20-byte prefix resolves to, `None` when no indexed lock has that prefix.
     pub owner_lock_hash: Option<String>,
+    /// The owner lock's address (the site's one lock → address encoder);
+    /// `None` when the owner lock's script is not indexed.
+    pub owner_address: Option<String>,
+    /// `.cell` only: the 20-byte owner prefix its data names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_hash_prefix: Option<String>,
     pub is_live: bool,
     pub created_at_block: i64,
     pub expired_at: Option<u64>,
@@ -531,6 +539,41 @@ pub struct CollectionHolderResponse {
     pub owner_hash_prefix: Option<String>,
     pub address: Option<String>,
     pub item_count: i64,
+}
+
+/// The address of `lock_hash`, through the site's one lock → address
+/// encoder; `None` when the lock's script is not indexed.
+pub(super) fn lock_address(
+    store: &CkbadgerStore,
+    lock_hash: &[u8],
+    network: &str,
+) -> Result<Option<String>, ApiRouteError> {
+    Ok(
+        crate::utils::address::resolve_lock_address(store, lock_hash, network)
+            .map_err(|e| {
+                ApiError::internal(format!(
+                    "owner lock 0x{} address: {e:#}",
+                    hex::encode(lock_hash)
+                ))
+            })?
+            .map(|resolved| resolved.address),
+    )
+}
+
+/// `(ownerLockHash, ownerAddress)` of a collection item whose entry names its
+/// owner's full lock hash.
+pub(super) fn item_owner(
+    store: &CkbadgerStore,
+    owner_lock_hash: Option<&[u8]>,
+    network: &str,
+) -> Result<(Option<String>, Option<String>), ApiRouteError> {
+    match owner_lock_hash {
+        None => Ok((None, None)),
+        Some(lock_hash) => Ok((
+            Some(format!("0x{}", hex::encode(lock_hash))),
+            lock_address(store, lock_hash, network)?,
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2929,6 +2972,7 @@ fn fetch_nft_collection_entries_by_ids(
 pub(crate) fn list_identity_items_inner(
     store: &CkbadgerStore,
     append_only_store: &CkbadgerStore,
+    network: &str,
     collection_id_bytes: &[u8],
     limit: i64,
     cursor_bytes: Option<Vec<u8>>,
@@ -3069,14 +3113,15 @@ pub(crate) fn list_identity_items_inner(
                 (None, None)
             };
 
+            let (owner_lock_hash, owner_address) =
+                item_owner(store, entry.owner_lock_hash.as_deref(), network)?;
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
                 standard: "dotbit".to_string(),
-                owner_lock_hash: entry
-                    .owner_lock_hash
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
+                owner_lock_hash,
+                owner_address,
+                owner_hash_prefix: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -3125,14 +3170,15 @@ pub(crate) fn list_identity_items_inner(
                 (None, None)
             };
 
+            let (owner_lock_hash, owner_address) =
+                item_owner(store, entry.owner_lock_hash.as_deref(), network)?;
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(identity_id)),
                 name: entry.name.clone(),
                 standard: IdentityStandard::BitCell.asset_standard().to_string(),
-                owner_lock_hash: entry
-                    .owner_lock_hash
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
+                owner_lock_hash,
+                owner_address,
+                owner_hash_prefix: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -3143,8 +3189,7 @@ pub(crate) fn list_identity_items_inner(
             });
         }
     } else if identity_standard == IdentityStandard::DotCell {
-        // A `.cell` name's owner is a 20-byte prefix, so `ownerLockHash` stays
-        // null here; the item detail route resolves and reports the prefix.
+        let resolver = super::identities::DotCellPartyResolver { store, network };
         let live_identity_ids: Vec<Vec<u8>> = page_items
             .iter()
             .filter(|(_, entry)| entry.is_live)
@@ -3157,10 +3202,12 @@ pub(crate) fn list_identity_items_inner(
         )?;
 
         for (identity_id, entry) in &page_items {
-            let expired_at = match &entry.extra {
-                ckbadger_store::types::IdentityExtra::DotCell { expired_at, .. } => {
-                    Some(*expired_at)
-                }
+            let (expired_at, owner_hash20) = match &entry.extra {
+                ckbadger_store::types::IdentityExtra::DotCell {
+                    expired_at,
+                    owner_hash20,
+                    ..
+                } => (Some(*expired_at), *owner_hash20),
                 _ => {
                     return Err(ApiError::internal(format!(
                         ".cell identity has wrong extra variant: identity_id=0x{}",
@@ -3182,11 +3229,16 @@ pub(crate) fn list_identity_items_inner(
             } else {
                 (None, None)
             };
+            // The owner is the 20-byte prefix in the name's data, resolved
+            // exactly as the holders view resolves it.
+            let owner = resolver.resolve(&owner_hash20)?;
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(identity_id)),
                 name: entry.name.clone(),
                 standard: IdentityStandard::DotCell.asset_standard().to_string(),
-                owner_lock_hash: None,
+                owner_lock_hash: owner.lock_hash,
+                owner_address: owner.address,
+                owner_hash_prefix: Some(owner.hash_prefix),
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at,
@@ -3205,14 +3257,15 @@ pub(crate) fn list_identity_items_inner(
                     hex::encode(nft_id)
                 )));
             }
+            let (owner_lock_hash, owner_address) =
+                item_owner(store, entry.owner_lock_hash.as_deref(), network)?;
             rows.push(CollectionItemResponse {
                 nft_id: format!("0x{}", hex::encode(nft_id)),
                 name: entry.name.clone(),
                 standard: "did_ckb".to_string(),
-                owner_lock_hash: entry
-                    .owner_lock_hash
-                    .as_ref()
-                    .map(|h| format!("0x{}", hex::encode(h))),
+                owner_lock_hash,
+                owner_address,
+                owner_hash_prefix: None,
                 is_live: entry.is_live,
                 created_at_block: entry.created_at_block,
                 expired_at: None,
@@ -3322,25 +3375,31 @@ fn list_spore_cluster_items(
 
     let rows: Vec<CollectionItemResponse> = page_items
         .iter()
-        .map(|(spore_id, entry)| CollectionItemResponse {
-            nft_id: format!("0x{}", hex::encode(spore_id)),
-            name: entry.name.clone(),
-            standard: entry.standard.asset_standard().to_string(),
-            owner_lock_hash: entry
-                .owner_lock_hash
-                .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h))),
-            is_live: entry.is_live,
-            created_at_block: entry.created_at_block,
-            expired_at: None,
-            registered_at: None,
-            status: None,
-            // Spores carry their creation outpoint's tx hash, exactly like
-            // /spore/clusters/{id}/spores; ObjectEntry has no output_index.
-            tx_hash: Some(format!("0x{}", hex::encode(&entry.created_at_tx))),
-            output_index: None,
+        .map(|(spore_id, entry)| {
+            let (owner_lock_hash, owner_address) = item_owner(
+                &state.store,
+                entry.owner_lock_hash.as_deref(),
+                &state.ckb_network,
+            )?;
+            Ok(CollectionItemResponse {
+                nft_id: format!("0x{}", hex::encode(spore_id)),
+                name: entry.name.clone(),
+                standard: entry.standard.asset_standard().to_string(),
+                owner_lock_hash,
+                owner_address,
+                owner_hash_prefix: None,
+                is_live: entry.is_live,
+                created_at_block: entry.created_at_block,
+                expired_at: None,
+                registered_at: None,
+                status: None,
+                // Spores carry their creation outpoint's tx hash, exactly like
+                // /spore/clusters/{id}/spores; ObjectEntry has no output_index.
+                tx_hash: Some(format!("0x{}", hex::encode(&entry.created_at_tx))),
+                output_index: None,
+            })
         })
-        .collect();
+        .collect::<Result<_, ApiRouteError>>()?;
 
     let next_cursor = if has_more {
         page_items
@@ -3421,6 +3480,7 @@ async fn list_object_collection_items(
             return list_identity_items_inner(
                 state.store.as_ref(),
                 state.append_only_store.as_ref(),
+                &state.ckb_network,
                 &collection_id_bytes,
                 limit,
                 cursor_bytes,
@@ -3548,14 +3608,18 @@ async fn list_object_collection_items(
             _ => (None, None),
         };
 
+        let (owner_lock_hash, owner_address) = item_owner(
+            &state.store,
+            entry.owner_lock_hash.as_deref(),
+            &state.ckb_network,
+        )?;
         rows.push(CollectionItemResponse {
             nft_id: format!("0x{}", hex::encode(nft_id)),
             name: entry.name.clone(),
             standard: entry.standard.asset_standard().to_string(),
-            owner_lock_hash: entry
-                .owner_lock_hash
-                .as_ref()
-                .map(|h| format!("0x{}", hex::encode(h))),
+            owner_lock_hash,
+            owner_address,
+            owner_hash_prefix: None,
             is_live: entry.is_live,
             created_at_block: entry.created_at_block,
             expired_at: None,
@@ -3703,13 +3767,15 @@ async fn list_object_collection_holders(
 
     let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
-        .map(|(lock_hash, count)| CollectionHolderResponse {
-            lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
-            owner_hash_prefix: None,
-            address: None,
-            item_count: *count,
+        .map(|(lock_hash, count)| {
+            Ok(CollectionHolderResponse {
+                lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
+                owner_hash_prefix: None,
+                address: lock_address(state.store.as_ref(), lock_hash, &state.ckb_network)?,
+                item_count: *count,
+            })
         })
-        .collect();
+        .collect::<Result<_, ApiRouteError>>()?;
 
     ok(CursorPaginatedResponse::new(
         rows,

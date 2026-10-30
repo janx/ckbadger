@@ -279,7 +279,11 @@ async fn list_identity_collection_holders(
             rows.push(CollectionHolderResponse {
                 lock_script_hash: Some(format!("0x{}", hex::encode(owner_segment))),
                 owner_hash_prefix: None,
-                address: None,
+                address: super::assets::lock_address(
+                    state.store.as_ref(),
+                    owner_segment,
+                    &state.ckb_network,
+                )?,
                 item_count: *count,
             });
         }
@@ -426,6 +430,7 @@ async fn list_identity_collection_items(
     list_identity_items_inner(
         state.store.as_ref(),
         state.append_only_store.as_ref(),
+        &state.ckb_network,
         &collection_id_bytes,
         limit,
         cursor_bytes,
@@ -493,14 +498,18 @@ async fn get_dotbit_item_detail(
         (None, None)
     };
 
+    let (owner_lock_hash, owner_address) = super::assets::item_owner(
+        state.store.as_ref(),
+        entry.owner_lock_hash.as_deref(),
+        &state.ckb_network,
+    )?;
     ok(CollectionItemResponse {
         nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
         name: entry.name,
         standard: entry.standard.asset_standard().to_string(),
-        owner_lock_hash: entry
-            .owner_lock_hash
-            .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
+        owner_lock_hash,
+        owner_address,
+        owner_hash_prefix: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at,
@@ -543,14 +552,18 @@ async fn get_did_ckb_item_detail(
         .into_iter()
         .find(|version| version.response.is_live)
         .map(|version| (version.tx_hash, version.response.output_index));
+    let (owner_lock_hash, owner_address) = super::assets::item_owner(
+        state.store.as_ref(),
+        entry.owner_lock_hash.as_deref(),
+        &state.ckb_network,
+    )?;
     ok(CollectionItemResponse {
         nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
         name: entry.name,
         standard: "did_ckb".to_string(),
-        owner_lock_hash: entry
-            .owner_lock_hash
-            .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
+        owner_lock_hash,
+        owner_address,
+        owner_hash_prefix: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at: None,
@@ -608,14 +621,18 @@ async fn get_bit_cell_item_detail(
         (None, None)
     };
 
+    let (owner_lock_hash, owner_address) = super::assets::item_owner(
+        state.store.as_ref(),
+        entry.owner_lock_hash.as_deref(),
+        &state.ckb_network,
+    )?;
     ok(CollectionItemResponse {
         nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
         name: entry.name,
         standard: entry.standard.asset_standard().to_string(),
-        owner_lock_hash: entry
-            .owner_lock_hash
-            .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
+        owner_lock_hash,
+        owner_address,
+        owner_hash_prefix: None,
         is_live: entry.is_live,
         created_at_block: entry.created_at_block,
         expired_at,
