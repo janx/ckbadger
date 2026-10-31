@@ -12629,6 +12629,455 @@ mod tests {
             assert_eq!(live.symbol.as_deref(), Some("RGB++"));
             assert_eq!(live.decimals, Some(8));
         }
+
+        // ── J4: token metadata rollback ─────────────────────────────────────
+        //
+        // A shallow rollback must leave a token exactly as a store that never
+        // saw the orphaned blocks: its row (metadata, existence, transfer
+        // count) and its transfer counter. Every test compares against such a
+        // reference store, written live through the surviving blocks only.
+
+        const TOKEN_MAX_SUPPLY: u128 = 2_100_000_000_000_000;
+        const EXT_OWNER: u8 = 0xa7;
+        /// The extension args make the token cell occupy 227 CKB.
+        const EXT_CELL_CAPACITY: u64 = 300_00000000;
+
+        /// Molecule table (and dynvec — same layout): total size, one offset
+        /// per item, then the items.
+        fn molecule_table(items: &[Vec<u8>]) -> Vec<u8> {
+            let header = 4 + 4 * items.len();
+            let total = header + items.iter().map(Vec::len).sum::<usize>();
+            let mut out = u32::try_from(total).unwrap().to_le_bytes().to_vec();
+            let mut offset = header;
+            for item in items {
+                out.extend_from_slice(&u32::try_from(offset).unwrap().to_le_bytes());
+                offset += item.len();
+            }
+            for item in items {
+                out.extend_from_slice(item);
+            }
+            out
+        }
+
+        /// xUDT type script carrying its extension scripts in its args (flags
+        /// 0x1); the one extension names the fixture's Unique Cell
+        /// (`unique_type_script()` args). That is the cryptographic binding,
+        /// which also names a token issued earlier.
+        fn xudt_ext_type_script() -> Script {
+            let unique_args = [0x9au8; 20];
+            // `Bytes` header as `token_helpers::parse_molecule_bytes` reads it
+            // today: the total size, header included (see the round-3 W
+            // result file, "Found, not fixed").
+            let mut args_bytes = u32::try_from(4 + unique_args.len())
+                .unwrap()
+                .to_le_bytes()
+                .to_vec();
+            args_bytes.extend_from_slice(&unique_args);
+            let extension = molecule_table(&[vec![0xcc; 32], vec![1], args_bytes]);
+            let mut args = vec![EXT_OWNER; 32];
+            args.extend_from_slice(&1u32.to_le_bytes());
+            args.extend_from_slice(&molecule_table(&[extension]));
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode(args)),
+            }
+        }
+
+        fn ext_type_hash() -> Vec<u8> {
+            ScriptParser::compute_script_hash(&xudt_ext_type_script())
+        }
+
+        /// The RGB++ Unique Cell payload plus a total-supply tag, so the
+        /// binding block also sets `max_supply`.
+        fn unique_data_with_supply() -> String {
+            let mut data = hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap();
+            data.extend_from_slice(&1u32.to_le_bytes());
+            data.extend_from_slice(&16u32.to_le_bytes());
+            data.extend_from_slice(&TOKEN_MAX_SUPPLY.to_le_bytes());
+            format!("0x{}", hex::encode(data))
+        }
+
+        fn funding_block() -> BlockResponseWithCycles {
+            block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)])
+        }
+
+        /// Block 101 issues the extension token with no Unique Cell: the row
+        /// is created unnamed.
+        fn ext_issuance_block() -> BlockResponseWithCycles {
+            let issue_tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe1; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xc0, 0)],
+                outputs: vec![
+                    output(
+                        EXT_CELL_CAPACITY,
+                        lock_script(),
+                        Some(xudt_ext_type_script()),
+                    ),
+                    output(FUNDING_CAPACITY - EXT_CELL_CAPACITY, lock_script(), None),
+                ],
+                outputs_data: vec![amount_data(TOKEN_AMOUNT), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            block(101, AR, vec![cellbase_tx(0xc1, 500_00000000), issue_tx])
+        }
+
+        /// Block 102 moves the token to lock B and creates the Unique Cell its
+        /// extension names: name, symbol, decimals, max supply, source and the
+        /// bound chain values all change here.
+        fn ext_naming_block() -> BlockResponseWithCycles {
+            let tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 0), input(0xe1, 1)],
+                outputs: vec![
+                    output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                    output(
+                        EXT_CELL_CAPACITY,
+                        lock_script_b(),
+                        Some(xudt_ext_type_script()),
+                    ),
+                    output(
+                        FUNDING_CAPACITY - 2 * EXT_CELL_CAPACITY - CELL_CAPACITY,
+                        lock_script(),
+                        None,
+                    ),
+                ],
+                outputs_data: vec![
+                    unique_data_with_supply(),
+                    amount_data(TOKEN_AMOUNT),
+                    "0x".to_string(),
+                ],
+                witnesses: vec!["0x".to_string()],
+            };
+            block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), tx])
+        }
+
+        /// Block 102 alternative: a plain transfer of the token to lock B.
+        fn ext_plain_transfer_block() -> BlockResponseWithCycles {
+            let tx = TransactionView {
+                hash: format!("0x{}", hex::encode([0xe2; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs: vec![input(0xe1, 0), input(0xe1, 1)],
+                outputs: vec![
+                    output(
+                        EXT_CELL_CAPACITY,
+                        lock_script_b(),
+                        Some(xudt_ext_type_script()),
+                    ),
+                    output(
+                        FUNDING_CAPACITY - 2 * EXT_CELL_CAPACITY,
+                        lock_script(),
+                        None,
+                    ),
+                ],
+                outputs_data: vec![amount_data(TOKEN_AMOUNT), "0x".to_string()],
+                witnesses: vec!["0x".to_string()],
+            };
+            block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), tx])
+        }
+
+        /// What label import writes for the extension token before the
+        /// first block is indexed.
+        fn labelled_ext_row() -> TokenInfo {
+            let script = xudt_ext_type_script();
+            let mut row = TokenInfo {
+                type_code_hash: hex::decode(script.code_hash.trim_start_matches("0x")).unwrap(),
+                hash_type: 1,
+                type_args: hex::decode(script.args.trim_start_matches("0x")).unwrap(),
+                standard: "xudt".to_string(),
+                name: None,
+                symbol: None,
+                decimals: None,
+                max_supply: None,
+                first_seen_block: 0,
+                icon_url: None,
+                description: None,
+                transfers_count: 0,
+                metadata_source: None,
+                chain_metadata: None,
+            };
+            row.apply_label("Label X".to_string(), "LBX".to_string(), 6);
+            row
+        }
+
+        /// Write each inner vec as ONE live batch, on a store seeded with the
+        /// rows a rollback reads (the pre-parent header, script info) and,
+        /// optionally, a label-imported token row.
+        async fn write_batches_live(
+            batches: &[Vec<BlockResponseWithCycles>],
+            label_row: Option<(Vec<u8>, TokenInfo)>,
+        ) -> Arc<CkbadgerStore> {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            super::live_dao_fee::seed_secp_script_info(store.as_ref());
+            super::live_dao_fee::seed_script_info(store.as_ref(), XUDT_CODE_HASH_TYPE);
+            super::live_dao_fee::seed_script_info(
+                store.as_ref(),
+                crate::sync::token_helpers::UNIQUE_CELL_CODE_HASH_MAINNET,
+            );
+            if let Some((type_hash, row)) = label_row {
+                store.put_token_direct(&type_hash, &row).unwrap();
+            }
+            let indexer = indexer_for_live_write_test(store.clone());
+            for batch in batches {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    batch.clone(),
+                )
+                .await
+                .unwrap();
+            }
+            store
+        }
+
+        fn rollback_to(store: &CkbadgerStore, fork_point: i64) {
+            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
+            store
+                .rollback_to_block_with_tx_contexts(fork_point, Some(store), undo.tx_contexts)
+                .unwrap();
+        }
+
+        /// The token row and its `CF_STATS_TOKEN` transfer counter, as stored.
+        fn token_state(
+            store: &CkbadgerStore,
+            type_hash: &[u8],
+        ) -> (Option<TokenInfo>, Option<Vec<u8>>) {
+            (
+                store.get_token(type_hash).unwrap(),
+                store
+                    .get_cf(
+                        store.cf_stats_token(),
+                        &ckbadger_store::keys::encode_token_transfers_key(type_hash),
+                    )
+                    .unwrap(),
+            )
+        }
+
+        /// The pre-images of the `CF_TOKENS` rows block `block` recorded.
+        fn token_pre_images(store: &CkbadgerStore, block: i64) -> Vec<Option<Vec<u8>>> {
+            let start = ckbadger_store::keys::encode_reorg_undo_log_key(block, 0);
+            let mut pre_images = Vec::new();
+            for item in store.iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
+            ) {
+                let (key, value) = item.unwrap();
+                if ckbadger_store::keys::decode_reorg_undo_log_key(&key).0 != block {
+                    break;
+                }
+                if let ckbadger_store::types::UndoLogEntry::KeyMutation {
+                    cf_name,
+                    previous_value,
+                    ..
+                } = bincode::deserialize(&value).unwrap()
+                {
+                    if cf_name == ckbadger_store::CF_TOKENS {
+                        pre_images.push(previous_value);
+                    }
+                }
+            }
+            pre_images
+        }
+
+        /// J4 (1): the orphan names a token issued unnamed earlier; rollback
+        /// restores every metadata field, `metadata_source` and
+        /// `chain_metadata` included, and the transfer count.
+        #[tokio::test]
+        async fn rollback_restores_the_metadata_an_orphan_block_bound() {
+            let store = write_batches_live(
+                &[
+                    vec![funding_block()],
+                    vec![ext_issuance_block()],
+                    vec![ext_naming_block()],
+                ],
+                None,
+            )
+            .await;
+            let named = store.get_token(&ext_type_hash()).unwrap().unwrap();
+            assert_eq!(named.name.as_deref(), Some("RGB++ Protocol"), "fixture");
+            assert_eq!(named.max_supply, Some(TOKEN_MAX_SUPPLY), "fixture");
+            assert!(named.chain_metadata.is_some(), "fixture");
+
+            rollback_to(&store, 101);
+
+            let reference =
+                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
+                    .await;
+            let expected = token_state(&reference, &ext_type_hash());
+            assert_eq!(expected.0.as_ref().unwrap().name, None, "reference");
+            assert_eq!(token_state(&store, &ext_type_hash()), expected);
+        }
+
+        /// J4 (2): the orphan created the token; rollback removes the row and
+        /// its transfer counter.
+        #[tokio::test]
+        async fn rollback_removes_a_token_the_orphan_block_created() {
+            let store =
+                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
+                    .await;
+            assert!(
+                store.get_token(&ext_type_hash()).unwrap().is_some(),
+                "fixture"
+            );
+
+            rollback_to(&store, 100);
+
+            assert_eq!(token_state(&store, &ext_type_hash()), (None, None));
+        }
+
+        /// J4 (2), born named: a co-occurrence issuance creates token B with
+        /// its Unique Cell metadata; rollback removes B and leaves token A as
+        /// the reference has it.
+        #[tokio::test]
+        async fn rollback_removes_a_named_token_the_orphan_block_issued() {
+            let mut batches: Vec<Vec<BlockResponseWithCycles>> =
+                issuance_blocks().into_iter().map(|b| vec![b]).collect();
+            batches.push(vec![real_issuance_block()]);
+            let store = write_batches_live(&batches, None).await;
+            assert_eq!(
+                store
+                    .get_token(&token_type_hash(0xb2))
+                    .unwrap()
+                    .unwrap()
+                    .name
+                    .as_deref(),
+                Some("RGB++ Protocol"),
+                "fixture"
+            );
+
+            rollback_to(&store, 101);
+
+            assert_eq!(token_state(&store, &token_type_hash(0xb2)), (None, None));
+            let reference = write_batches_live(&batches[..2], None).await;
+            assert_eq!(
+                token_state(&store, &token_type_hash(0xa1)),
+                token_state(&reference, &token_type_hash(0xa1))
+            );
+        }
+
+        /// J4 (3): the orphan replaces a label-imported name with the chain's
+        /// (an extension binding is authoritative); rollback restores the
+        /// label's name, symbol, decimals and source.
+        #[tokio::test]
+        async fn rollback_restores_the_name_an_orphan_block_replaced() {
+            let label = Some((ext_type_hash(), labelled_ext_row()));
+            let store = write_batches_live(
+                &[
+                    vec![funding_block()],
+                    vec![ext_issuance_block()],
+                    vec![ext_naming_block()],
+                ],
+                label.clone(),
+            )
+            .await;
+            let renamed = store.get_token(&ext_type_hash()).unwrap().unwrap();
+            assert_eq!(renamed.name.as_deref(), Some("RGB++ Protocol"), "fixture");
+            assert_eq!(
+                renamed.metadata_source,
+                Some(ckbadger_store::types::TokenMetadataSource::Chain),
+                "fixture"
+            );
+
+            rollback_to(&store, 101);
+
+            let reference =
+                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], label)
+                    .await;
+            let expected = token_state(&reference, &ext_type_hash());
+            assert_eq!(
+                expected.0.as_ref().unwrap().name.as_deref(),
+                Some("Label X"),
+                "reference"
+            );
+            assert_eq!(token_state(&store, &ext_type_hash()), expected);
+        }
+
+        /// J4 (4): only a block that changes the row's metadata (or creates
+        /// it) records a pre-image; a plain transfer records none, and its
+        /// transfer count still rolls back by arithmetic.
+        #[tokio::test]
+        async fn only_a_block_that_changes_token_metadata_records_a_pre_image() {
+            let store = write_batches_live(
+                &[
+                    vec![funding_block()],
+                    vec![ext_issuance_block()],
+                    vec![ext_plain_transfer_block()],
+                ],
+                None,
+            )
+            .await;
+
+            assert_eq!(
+                token_pre_images(&store, 101),
+                vec![None],
+                "the creating block records that the row did not exist"
+            );
+            assert_eq!(
+                token_pre_images(&store, 102),
+                Vec::<Option<Vec<u8>>>::new(),
+                "a transfer that changes no metadata records nothing"
+            );
+
+            rollback_to(&store, 101);
+
+            let reference =
+                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
+                    .await;
+            assert_eq!(
+                token_state(&store, &ext_type_hash()),
+                token_state(&reference, &ext_type_hash())
+            );
+        }
+
+        /// A live batch spans many blocks: a fork point inside the batch
+        /// restores the row as of the end of that block — each block that
+        /// changed the row recorded the value at the end of the block before.
+        #[tokio::test]
+        async fn rollback_inside_one_live_batch_restores_each_block_boundary() {
+            let store = write_batches_live(
+                &[
+                    vec![funding_block()],
+                    vec![ext_issuance_block(), ext_naming_block()],
+                ],
+                None,
+            )
+            .await;
+            assert_eq!(
+                store
+                    .get_token(&ext_type_hash())
+                    .unwrap()
+                    .unwrap()
+                    .name
+                    .as_deref(),
+                Some("RGB++ Protocol"),
+                "fixture"
+            );
+
+            rollback_to(&store, 101);
+            let reference =
+                write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
+                    .await;
+            assert_eq!(
+                token_state(&store, &ext_type_hash()),
+                token_state(&reference, &ext_type_hash())
+            );
+
+            rollback_to(&store, 100);
+            assert_eq!(token_state(&store, &ext_type_hash()), (None, None));
+        }
     }
     mod all_stats_dao_parity {
         use super::*;

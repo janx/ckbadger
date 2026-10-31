@@ -114,8 +114,8 @@ impl BatchWriter {
         &self.append_only_store
     }
 
-    /// Record an undo log entry for an object/identity entity mutation.
-    /// Captures the previous value so rollback can restore it.
+    /// Record an undo log entry for an entity row mutation (object, identity,
+    /// token). Captures the previous value so rollback can restore it.
     /// Skipped during bulk sync mode (no undo log needed).
     pub(crate) fn record_object_undo(
         &self,

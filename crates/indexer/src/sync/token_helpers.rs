@@ -489,6 +489,65 @@ impl OnchainTokenInfo {
     }
 }
 
+/// A token's on-chain info binding across one live batch.
+///
+/// The batch settles on one binding per token (the last extension binding, else
+/// the first co-occurrence binding, in transaction order). A shallow rollback
+/// to a block inside the batch must restore the row a batch ending at that
+/// block would have stored, so every time the batch's choice is (re)assigned the
+/// assignment is kept with the block of the transaction that made it.
+/// Transactions arrive in chain order, so the assignments are in block order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct OnchainTokenInfoTimeline {
+    /// `(block, binding)` per assignment, in transaction order; never empty.
+    assignments: Vec<(i64, OnchainTokenInfo)>,
+}
+
+impl OnchainTokenInfoTimeline {
+    fn new(block_number: i64, bound: OnchainTokenInfo) -> Self {
+        Self {
+            assignments: vec![(block_number, bound)],
+        }
+    }
+
+    fn assign(&mut self, block_number: i64, bound: OnchainTokenInfo) {
+        self.assignments.push((block_number, bound));
+    }
+
+    /// The binding the whole batch settled on (`winner_through` its last block).
+    #[cfg(test)]
+    pub(crate) fn winner(&self) -> &OnchainTokenInfo {
+        &self
+            .assignments
+            .last()
+            .expect("an on-chain info timeline is created with its first assignment")
+            .1
+    }
+
+    /// The binding a batch ending at `block_number` would have settled on.
+    pub(crate) fn winner_through(&self, block_number: i64) -> Option<&OnchainTokenInfo> {
+        self.assignments
+            .iter()
+            .rev()
+            .find(|(block, _)| *block <= block_number)
+            .map(|(_, bound)| bound)
+    }
+
+    /// The blocks whose transactions assigned a binding.
+    pub(crate) fn blocks(&self) -> impl Iterator<Item = i64> + '_ {
+        self.assignments.iter().map(|(block, _)| *block)
+    }
+}
+
+/// The first max-supply observation of one live batch for a token, with the
+/// block of the transaction that carried it: a shallow rollback below that
+/// block must undo it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MaxSupplyObservation {
+    pub max_supply: u128,
+    pub block_number: i64,
+}
+
 /// Type script hash by outpoint — a borrowed view over cells the caller has
 /// already resolved, used to answer "does this input carry type X?" without
 /// resolving anything again.
@@ -517,8 +576,8 @@ pub(crate) type OutpointTypeHashes<'a> = HashMap<(&'a [u8], i32), &'a [u8]>;
 pub(crate) fn collect_token_onchain_info(
     all_tx_data: &[TxData],
     persisted_input_types: &OutpointTypeHashes<'_>,
-) -> HashMap<Vec<u8>, OnchainTokenInfo> {
-    let mut result: HashMap<Vec<u8>, OnchainTokenInfo> = HashMap::new();
+) -> HashMap<Vec<u8>, OnchainTokenInfoTimeline> {
+    let mut result: HashMap<Vec<u8>, OnchainTokenInfoTimeline> = HashMap::new();
 
     // Outpoint → type_script_hash for outputs created in this batch. Used
     // together with `persisted_input_types` to screen transfers out of the
@@ -578,13 +637,21 @@ pub(crate) fn collect_token_onchain_info(
                     if let Some(info) = unique_infos.get(&extension.args) {
                         // Unconditional: an extension binding displaces any
                         // earlier co-occurrence binding for the same token.
-                        result.insert(
-                            token_type_hash.clone(),
-                            OnchainTokenInfo {
-                                info: info.clone(),
-                                binding: OnchainInfoBinding::XudtExtension,
-                            },
-                        );
+                        let bound = OnchainTokenInfo {
+                            info: info.clone(),
+                            binding: OnchainInfoBinding::XudtExtension,
+                        };
+                        match result.entry(token_type_hash.clone()) {
+                            std::collections::hash_map::Entry::Occupied(mut timeline) => {
+                                timeline.get_mut().assign(tx_data.block_number, bound);
+                            }
+                            std::collections::hash_map::Entry::Vacant(slot) => {
+                                slot.insert(OnchainTokenInfoTimeline::new(
+                                    tx_data.block_number,
+                                    bound,
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -596,9 +663,14 @@ pub(crate) fn collect_token_onchain_info(
             &batch_output_types,
             persisted_input_types,
         ) {
-            result.entry(token_type_hash).or_insert(OnchainTokenInfo {
-                info,
-                binding: OnchainInfoBinding::IssuanceCooccurrence,
+            result.entry(token_type_hash).or_insert_with(|| {
+                OnchainTokenInfoTimeline::new(
+                    tx_data.block_number,
+                    OnchainTokenInfo {
+                        info,
+                        binding: OnchainInfoBinding::IssuanceCooccurrence,
+                    },
+                )
             });
         }
     }
@@ -696,18 +768,18 @@ fn collect_issuance_cooccurrence_binding(
 }
 
 pub(crate) fn observe_max_supply(
-    observations: &mut HashMap<Vec<u8>, u128>,
-    tx_hash: &[u8; 32],
+    observations: &mut HashMap<Vec<u8>, MaxSupplyObservation>,
+    tx: &TxData,
     token_type_hash: Vec<u8>,
     max_supply: u128,
     source: &str,
 ) {
     if let Some(existing) = observations.get(&token_type_hash) {
-        if *existing != max_supply {
+        if existing.max_supply != max_supply {
             warn!(
-                tx_hash = %hex::encode(tx_hash),
+                tx_hash = %hex::encode(tx.hash),
                 token_type_hash = %hex::encode(&token_type_hash),
-                existing_max_supply = existing,
+                existing_max_supply = existing.max_supply,
                 observed_max_supply = max_supply,
                 source = source,
                 "conflicting max supply observations in the same batch; keeping first value"
@@ -716,12 +788,18 @@ pub(crate) fn observe_max_supply(
         return;
     }
 
-    observations.insert(token_type_hash, max_supply);
+    observations.insert(
+        token_type_hash,
+        MaxSupplyObservation {
+            max_supply,
+            block_number: tx.block_number,
+        },
+    );
 }
 
 pub(crate) fn collect_token_max_supply_observations(
     all_tx_data: &[TxData],
-) -> HashMap<Vec<u8>, u128> {
+) -> HashMap<Vec<u8>, MaxSupplyObservation> {
     let mut observations = HashMap::new();
 
     for tx_data in all_tx_data {
@@ -752,7 +830,7 @@ pub(crate) fn collect_token_max_supply_observations(
             };
             observe_max_supply(
                 &mut observations,
-                &tx_data.hash,
+                tx_data,
                 token_type_hash.to_vec(),
                 max_supply,
                 "omnilock_supply_info_cell",
@@ -802,7 +880,7 @@ pub(crate) fn collect_token_max_supply_observations(
                 };
                 observe_max_supply(
                     &mut observations,
-                    &tx_data.hash,
+                    tx_data,
                     token_type_hash.clone(),
                     max_supply,
                     "xudt_extension_script_unique_cell",
@@ -1271,7 +1349,12 @@ mod tests {
 
         let tx = dummy_tx_data([0x88; 32], false, vec![], vec![info_cell], vec![]);
         let observations = collect_token_max_supply_observations(&[tx]);
-        assert_eq!(observations.get(token_type_hash.as_slice()), Some(&1_000));
+        assert_eq!(
+            observations
+                .get(token_type_hash.as_slice())
+                .map(|observed| observed.max_supply),
+            Some(1_000)
+        );
     }
 
     #[test]
@@ -1294,8 +1377,10 @@ mod tests {
 
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
-            observations.get(token_type_hash.as_slice()),
-            Some(&total_supply)
+            observations
+                .get(token_type_hash.as_slice())
+                .map(|observed| observed.max_supply),
+            Some(total_supply)
         );
     }
 
@@ -1324,8 +1409,10 @@ mod tests {
 
         let observations = collect_token_max_supply_observations(&[tx]);
         assert_eq!(
-            observations.get(token_type_hash.as_slice()),
-            Some(&total_supply)
+            observations
+                .get(token_type_hash.as_slice())
+                .map(|observed| observed.max_supply),
+            Some(total_supply)
         );
     }
 
@@ -1505,7 +1592,7 @@ mod tests {
         );
 
         let infos = collect_token_onchain_info(&[tx], &HashMap::new());
-        let bound = infos.get(token_type_hash.as_slice()).unwrap();
+        let bound = infos.get(token_type_hash.as_slice()).unwrap().winner();
         assert_eq!(bound.binding, OnchainInfoBinding::XudtExtension);
         assert_eq!(bound.info.name, "Token");
         assert_eq!(bound.info.symbol, "TKN");
@@ -1596,7 +1683,8 @@ mod tests {
         let infos = collect_token_onchain_info(&[tx], &HashMap::new());
         let bound = infos
             .get(token_type_hash.as_slice())
-            .expect("single-mint issuance tx with a Unique Cell output must bind token info");
+            .expect("single-mint issuance tx with a Unique Cell output must bind token info")
+            .winner();
         assert_eq!(bound.binding, OnchainInfoBinding::IssuanceCooccurrence);
         assert_eq!(bound.info.name, "RGB++ Protocol");
         assert_eq!(bound.info.symbol, "RGB++");
@@ -1753,10 +1841,104 @@ mod tests {
         let infos = collect_token_onchain_info(&[tx1, tx2], &HashMap::new());
         let bound = infos
             .get(token_type_hash.as_slice())
-            .expect("extension binding must be present");
+            .expect("extension binding must be present")
+            .winner();
         assert_eq!(bound.binding, OnchainInfoBinding::XudtExtension);
         assert_eq!(bound.info.name, "Token");
         assert_eq!(bound.info.symbol, "TKN");
         assert_eq!(bound.info.decimal, 8);
+    }
+
+    /// J4: a live batch spans many blocks, so a shallow rollback to a block
+    /// inside it needs the binding a batch ending there would have chosen.
+    /// Block 5 binds by co-occurrence ("Other"), block 7 displaces it with
+    /// the extension binding ("Token").
+    #[test]
+    fn test_collect_token_onchain_info_keeps_the_block_of_each_assignment() {
+        let token_type_hash = [0x9C; 32];
+        let unique_type_args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let script_vec = encode_script_vec_with_unique_args(&unique_type_args);
+        let ext_type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+        let mut other_info = vec![9u8, 5u8];
+        other_info.extend_from_slice(b"Other");
+        other_info.push(3u8);
+        other_info.extend_from_slice(b"OTH");
+
+        let mut cooccurrence_tx = dummy_tx_data(
+            [0xD6; 32],
+            false,
+            vec![],
+            vec![
+                dummy_unique_info_cell_with_code_hash(
+                    mainnet_unique_code_hash(),
+                    vec![0x9B; UNIQUE_TYPE_ARGS_LEN],
+                    other_info,
+                ),
+                dummy_xudt_cell(token_type_hash, ext_type_args.clone()),
+            ],
+            vec![],
+        );
+        cooccurrence_tx.block_number = 5;
+        let mut extension_tx = dummy_tx_data(
+            [0xD7; 32],
+            false,
+            vec![],
+            vec![
+                dummy_unique_token_info_cell(unique_type_args, 42_000),
+                dummy_xudt_cell(token_type_hash, ext_type_args),
+            ],
+            vec![],
+        );
+        extension_tx.block_number = 7;
+
+        let infos = collect_token_onchain_info(&[cooccurrence_tx, extension_tx], &HashMap::new());
+        let timeline = infos.get(token_type_hash.as_slice()).unwrap();
+        assert_eq!(timeline.blocks().collect::<Vec<_>>(), vec![5, 7]);
+        assert_eq!(timeline.winner_through(4), None);
+        let at = |block| timeline.winner_through(block).map(|b| b.info.name.as_str());
+        assert_eq!(at(5), Some("Other"));
+        assert_eq!(at(6), Some("Other"));
+        assert_eq!(at(7), Some("Token"));
+        assert_eq!(timeline.winner().info.name, "Token");
+        assert_eq!(
+            timeline.winner_through(6).unwrap().binding,
+            OnchainInfoBinding::IssuanceCooccurrence
+        );
+    }
+
+    /// J4: the batch's max supply is its first observation, and it carries
+    /// the block that observed it.
+    #[test]
+    fn test_collect_token_max_supply_observations_keeps_the_first_observing_block() {
+        let unique_type_args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let token_type_hash = [0x93; 32];
+        let script_vec = encode_script_vec_with_unique_args(&unique_type_args);
+        let type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+        let observing_tx = |hash: u8, block: i64, supply: u128| {
+            let mut tx = dummy_tx_data(
+                [hash; 32],
+                false,
+                vec![],
+                vec![
+                    dummy_unique_token_info_cell(unique_type_args.clone(), supply),
+                    dummy_xudt_cell(token_type_hash, type_args.clone()),
+                ],
+                vec![],
+            );
+            tx.block_number = block;
+            tx
+        };
+
+        let observations = collect_token_max_supply_observations(&[
+            observing_tx(0xE1, 11, 42_000),
+            observing_tx(0xE2, 12, 43_000),
+        ]);
+        assert_eq!(
+            observations.get(token_type_hash.as_slice()),
+            Some(&MaxSupplyObservation {
+                max_supply: 42_000,
+                block_number: 11,
+            })
+        );
     }
 }
