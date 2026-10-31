@@ -554,21 +554,28 @@ finished_at_ms }`, with `state` one of:
 | State                                                     | Meaning                                                                                                                    |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `NotStarted`                                              | rows absent or garbage; not maintained, not served                                                                         |
-| `Running { derived_from_tip: H, cursor, rows_done }`      | rebuild in flight over the snapshot at `H`; live deltas above `H` applied; `cursor` is progress only                       |
+| `Running { derived_from_tip: H, phase, cursor, rows_done }` | rebuild in flight over the snapshot at `H`; live deltas above `H` applied. `phase` `Folding`: source rows being folded (rows may be negative); `Validating`: source exhausted, rows exact, being checked in chunks and live writes checked; `cursor` is progress only |
 | `Complete { derived_from_tip: H, completed_at_tip: C, … }` | rows equal a from-scratch derivation at the sync tip; exact since block `C` (the tip when the last chunk committed)        |
-| `Failed { error }`                                        | an invariant violation in the rebuild or a live write; rows not served, the API answers `500` with the error               |
+| `Failed { error }`                                        | written only by an indexer that is stopping on an invariant violation of this aggregate (rebuild or live write), so the TUI / API can say why; reset at the next start |
 
 Transitions: on indexer start (before the first live batch) a missing meta, a `version` other
 than the current one, `Running` (its snapshot died with the process) or `Failed` → rows cleared,
 `NotStarted`; `Complete` is kept (and must have `C` ≤ the sync tip). Once sync is within
 `bulk_sync_threshold` of the tip, the scheduler starts the first not-complete aggregate in
-registry order: rows cleared + `Running{H}` in one write, then the snapshot. When its source is
-exhausted, every row is checked and the state becomes `Complete{H, C}`. A rollback resets
-(`NotStarted` + clear, committed **before** undo replay) a `Running` derivation whenever it
-removes a block, and a `Complete` one when its target is below `C`; otherwise undo replay
-restores the rows exactly. A live write that breaks a row invariant stages `Failed` instead of
-its rows; canonical sync continues. `Failed` is retried once per indexer start. Bumping an
-aggregate's `version` in `derive_ops.rs` re-derives it on the next start.
+registry order: rows cleared + `Running{H, Folding}` in one write, then the snapshot. Each chunk
+folds at most 20,000 source rows / 4,096 distinct keys / ~150 ms. When the source is exhausted
+the phase becomes `Validating`: the rows are checked against the aggregate's invariant in chunks
+of the same size (live writes are checked from then on, since every row is exact), and after the
+last row the state becomes `Complete{H, C}`. A rollback resets
+(`NotStarted` + clear + deletion of its `Derived` undo entries above the target, committed
+**before** undo replay) a `Running` derivation whenever it removes a block, and a `Complete` one
+when its target is below `C`; otherwise undo replay restores the rows exactly. Aggregates that are
+not maintained have their entries above the target dropped the same way. **Fail fast:** a live delta that cannot be computed or a row that
+breaks its invariant fails the live batch as a pre-commit invariant (nothing of the batch is
+committed) and a rebuild-chunk or validation error propagates out of the scheduler — either way
+the indexer stops, after writing the aggregate's `Failed` marker. There is no degraded
+continuation. Bumping an aggregate's `version` in `derive_ops.rs` re-derives it on the next
+start.
 
 **`dao_live_agg`** (L1, J1). Source rows: the `dao_deposits` lifecycle entries with status 0 (a
 live deposit cell) and 1 (a live withdraw-request cell), walked through `dao_by_status_block`. The
@@ -605,7 +612,10 @@ exactly `[1]`.
 **Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
 deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
 meta and the rows in the request's pinned view and serves an aggregate only when its meta is
-`Complete` at the version it reads; otherwise `503 derive_pending` (`crates/api/src/derived.rs`).
+`Complete` at the version it reads (`crates/api/src/derived.rs`). Until then `/dao/evidence` and
+`/dao/depositors` — whose whole response is the aggregate — answer `503 derive_pending`, and every
+other field an aggregate feeds (a cluster's `activitiesCount`, a feed's `total`, a `.bit`
+account's `bitCells`) is `null` (unknown) in an otherwise normal response.
 Progress is mirrored to `background_tasks` as `derive:<aggregate>` (TUI, `/pipeline`).
 
 ### stats_hodl Key Prefixes

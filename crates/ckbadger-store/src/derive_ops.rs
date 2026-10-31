@@ -199,6 +199,17 @@ pub mod bit_cell_by_account {
 /// family: longer than any derived key, so it sorts after every one of them.
 const DERIVED_CLEAR_END: [u8; 128] = [0xFF; 128];
 
+/// The two halves of a running rebuild.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RebuildPhase {
+    /// Folding the snapshot's source rows; a row may be negative meanwhile.
+    Folding,
+    /// The source is exhausted, so every row is exact at the sync tip; the
+    /// rows are being checked in chunks (`cursor` = last checked key), and
+    /// live writes are checked from here on.
+    Validating,
+}
+
 /// Where one aggregate's derivation stands.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DeriveState {
@@ -207,10 +218,12 @@ pub enum DeriveState {
     NotStarted,
     /// A rebuild is in flight over a snapshot taken at `derived_from_tip`.
     /// Live blocks above it are applied as signed deltas meanwhile. `cursor`
-    /// is the last source key folded (progress only: an interrupted rebuild
-    /// lost its snapshot and starts over).
+    /// is the last source key folded, or the last row checked while
+    /// `Validating` (progress only: an interrupted rebuild lost its snapshot
+    /// and starts over).
     Running {
         derived_from_tip: i64,
+        phase: RebuildPhase,
         cursor: Option<Vec<u8>>,
         rows_done: u64,
     },
@@ -259,6 +272,19 @@ impl DeriveMeta {
                 self.state,
                 DeriveState::Running { .. } | DeriveState::Complete { .. }
             )
+    }
+
+    /// Whether every row is exact, so live writes must keep every touched
+    /// row within its invariant: complete, or running past its fold.
+    pub fn checks_rows(&self) -> bool {
+        matches!(
+            self.state,
+            DeriveState::Complete { .. }
+                | DeriveState::Running {
+                    phase: RebuildPhase::Validating,
+                    ..
+                }
+        )
     }
 
     /// Whether the rows may be served.
@@ -369,6 +395,35 @@ impl CkbadgerStore {
                 anyhow::anyhow!("{cf_name} key=0x{}: {e}", crate::bytes_to_hex(&key))
             })?;
             visit(&key, value)?;
+        }
+        Ok(())
+    }
+
+    /// Derived rows from `start` (inclusive), in key order, until `visit`
+    /// returns `false`.
+    pub fn scan_derived_from<F>(
+        &self,
+        cf_name: &str,
+        start: &[u8],
+        mut visit: F,
+    ) -> anyhow::Result<()>
+    where
+        F: FnMut(&[u8], Vec<i128>) -> anyhow::Result<bool>,
+    {
+        ensure_derived_cf(cf_name)?;
+        let iter = self.iterator_cf(
+            self.cf(cf_name),
+            IteratorMode::From(start, rocksdb::Direction::Forward),
+        );
+        for item in iter {
+            let (key, value) =
+                item.map_err(|e| anyhow::anyhow!("failed to iterate {cf_name}: {e}"))?;
+            let value = decode_derived_value(&value).map_err(|e| {
+                anyhow::anyhow!("{cf_name} key=0x{}: {e}", crate::bytes_to_hex(&key))
+            })?;
+            if !visit(&key, value)? {
+                break;
+            }
         }
         Ok(())
     }
@@ -540,6 +595,7 @@ mod tests {
             version: 3,
             state: DeriveState::Running {
                 derived_from_tip: 7,
+                phase: RebuildPhase::Folding,
                 cursor: Some(vec![1, 2]),
                 rows_done: 9,
             },

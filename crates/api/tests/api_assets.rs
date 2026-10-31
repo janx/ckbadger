@@ -1994,8 +1994,8 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
 
 /// J3: a `.bit` account's detail lists the live `.bit Cells` naming it
 /// (`bitCells`), read from the derived `bit_cell_by_account` index — a burnt
-/// one and one naming another account are not listed — and answers
-/// `503 derive_pending` until the indexer has derived it.
+/// one and one naming another account are not listed — and serves
+/// `bitCells: null` until the indexer has derived it.
 #[tokio::test]
 async fn dotbit_detail_lists_the_live_bit_cells_naming_the_account() {
     use ckbadger_store::types::{IdentityEntry, IdentityExtra, IdentityStandard};
@@ -2042,11 +2042,14 @@ async fn dotbit_detail_lists_the_live_bit_cells_naming_the_account() {
         hex::encode(&account_id)
     );
 
+    // Ruling B: until the index is derived the identity is served with
+    // `bitCells: null` (unknown), not withheld.
     let app = create_router(test_config_underived(store.clone())).await;
     let (status, json) = get_json(&app, &path).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
-    assert_eq!(json["error"], "derive_pending", "{json}");
-    assert_eq!(json["derive"]["aggregate"], "bit_cell_by_account", "{json}");
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["name"], "alice.bit");
+    assert!(json["bitCells"].is_null(), "{json}");
+    assert!(json.as_object().unwrap().contains_key("bitCells"), "{json}");
 
     ckbadger_indexer::derive::derive_to_completion(&store).unwrap();
     let (status, json) = get_json(&app, &path).await;
@@ -5646,11 +5649,12 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     assert_eq!(detail["activitiesCount"], 2, "{detail}");
 }
 
-/// J5: a Spore cluster's `activitiesCount` is the indexer-derived
-/// `object_collection_activity_count` row: the detail and the object
-/// collection detail read it without walking one activity row; until it is
-/// derived they answer `503 derive_pending` and the asset list shows the count
-/// as unknown (`null`), never a stand-in.
+/// J5 + ruling B: a Spore cluster's `activitiesCount` is the indexer-derived
+/// `object_collection_activity_count` row, read without walking one activity
+/// row. Until it is derived every surface serves the cluster with the count
+/// `null` (unknown) — the detail, the object collection detail, the feeds'
+/// `total`, the asset list and the cluster list — never a 503 and never a
+/// stand-in.
 #[tokio::test]
 async fn cluster_activities_count_is_the_derived_row_count() {
     let store = test_store();
@@ -5682,6 +5686,15 @@ async fn cluster_activities_count_is_the_derived_row_count() {
     }
     batch.commit().unwrap();
     let id_hex = format!("0x{}", hex::encode(id));
+    let cluster_row = |list: &serde_json::Value| {
+        list["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == id_hex || row["clusterId"] == id_hex)
+            .cloned()
+            .unwrap_or_else(|| panic!("cluster missing from {list}"))
+    };
 
     let app = create_router(test_config_underived(store.clone())).await;
     for path in [
@@ -5689,22 +5702,18 @@ async fn cluster_activities_count_is_the_derived_row_count() {
         format!("/assets/objects/{id_hex}"),
     ] {
         let (status, json) = get_json(&app, &path).await;
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}: {json}");
-        assert_eq!(json["error"], "derive_pending", "{path}: {json}");
-        assert_eq!(
-            json["derive"]["aggregate"], "object_collection_activity_count",
-            "{json}"
-        );
+        assert_eq!(status, StatusCode::OK, "{path}: {json}");
+        assert!(json["activitiesCount"].is_null(), "{path}: {json}");
     }
     let (status, inventory) = get_json(&app, "/assets?type=object").await;
     assert_eq!(status, StatusCode::OK, "{inventory}");
-    let row = inventory["data"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|row| row["id"] == id_hex)
-        .unwrap();
-    assert!(row["activitiesCount"].is_null(), "{row}");
+    assert!(cluster_row(&inventory)["activitiesCount"].is_null());
+    let (status, clusters) = get_json(&app, "/spore/clusters").await;
+    assert_eq!(status, StatusCode::OK, "{clusters}");
+    assert!(
+        cluster_row(&clusters)["activitiesCount"].is_null(),
+        "{clusters}"
+    );
 
     ckbadger_indexer::derive::derive_to_completion(&store).unwrap();
     store.reset_read_call_counters();
@@ -5719,6 +5728,90 @@ async fn cluster_activities_count_is_the_derived_row_count() {
     let (status, detail) = get_json(&app, &format!("/assets/objects/{id_hex}")).await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["activitiesCount"], 3, "{detail}");
+    // Review P3: the cluster list serves the real count, not a synthetic 0.
+    let (status, clusters) = get_json(&app, "/spore/clusters").await;
+    assert_eq!(status, StatusCode::OK, "{clusters}");
+    assert_eq!(cluster_row(&clusters)["activitiesCount"], 3, "{clusters}");
+}
+
+/// Ruling B: a collection feed over a cluster whose count is not derived
+/// still serves its rows, with `total: null`.
+#[tokio::test]
+async fn cluster_feed_total_is_null_until_the_count_is_derived() {
+    let store = test_store();
+    let id = [0xc5; 32];
+    store
+        .put_spore_direct(&id, &regression_cluster_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cluster_aggregate(
+        &id,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 0,
+            ..Default::default()
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_underived(store.clone())).await;
+    let path = format!(
+        "/assets/objects/0x{}/activity-feed?limit=1",
+        hex::encode(id)
+    );
+    let (status, feed) = get_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert!(feed["total"].is_null(), "{feed}");
+    ckbadger_indexer::derive::derive_to_completion(&store).unwrap();
+    let (status, feed) = get_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    assert_eq!(feed["total"], 0, "{feed}");
+}
+
+/// Review P1: a cluster-count derivation that is not complete — here one the
+/// indexer marked `Failed` before stopping — must not fail the asset-cache
+/// build (which would wipe the token and the object caches); the cluster row
+/// carries `activitiesCount: null`.
+#[tokio::test]
+async fn a_failed_count_derivation_does_not_fail_the_asset_cache() {
+    use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, OBJECT_COLLECTION_ACTIVITY_COUNT};
+    let store = test_store();
+    let id = [0xc6; 32];
+    store
+        .put_spore_direct(&id, &regression_cluster_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cluster_aggregate(
+        &id,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 0,
+            ..Default::default()
+        },
+    );
+    batch.put_derive_meta(
+        OBJECT_COLLECTION_ACTIVITY_COUNT.name,
+        &DeriveMeta {
+            version: OBJECT_COLLECTION_ACTIVITY_COUNT.version,
+            state: DeriveState::Failed {
+                error: "row 0x00 out of range".to_string(),
+            },
+            run: 1,
+            started_at_ms: None,
+            finished_at_ms: None,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_underived(store.clone())).await;
+    let (status, inventory) = get_json(&app, "/assets?type=object").await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+    let row = inventory["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == format!("0x{}", hex::encode(id)))
+        .unwrap()
+        .clone();
+    assert!(row["activitiesCount"].is_null(), "{row}");
 }
 
 #[tokio::test]

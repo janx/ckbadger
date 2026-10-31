@@ -130,6 +130,66 @@ impl CkbadgerStore {
         Ok(pruned)
     }
 
+    /// Stage the deletion of every `Derived`-scope undo entry above
+    /// `rollback_to` whose pre-image restores a row of one of `cf_names`.
+    ///
+    /// A derived aggregate that a rollback resets (or that is not maintained)
+    /// must not have its pre-images replayed into its cleared column family;
+    /// the entries are dropped in the same write as the reset. Returns the
+    /// number of entries staged for deletion.
+    pub fn stage_delete_derived_undo_above(
+        &self,
+        batch: &mut crate::batch::StoreBatch,
+        cf_names: &[&str],
+        rollback_to: i64,
+    ) -> anyhow::Result<u64> {
+        if cf_names.is_empty() {
+            return Ok(0);
+        }
+        let start_key = keys::encode_block_num(rollback_to + 1);
+        let iter = self.iterator_cf(
+            self.cf_reorg_undo_log_by_block(),
+            IteratorMode::From(&start_key, rocksdb::Direction::Forward),
+        );
+        let mut deleted = 0u64;
+        for item in iter {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate reorg_undo_log_by_block while dropping derived entries above {rollback_to}: {e}"
+                )
+            })?;
+            anyhow::ensure!(
+                key.len() == keys::REORG_UNDO_LOG_KEY_SIZE,
+                "invalid reorg_undo_log_by_block key length: expected={}, got={}",
+                keys::REORG_UNDO_LOG_KEY_SIZE,
+                key.len()
+            );
+            let (block_num, seq) = keys::decode_reorg_undo_log_key(&key);
+            if block_num <= rollback_to || !keys::UndoSeqScope::Derived.owns(seq) {
+                continue;
+            }
+            let entry: UndoLogEntry = bincode::deserialize(&value).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decode derived undo entry: key=0x{}, error={e}",
+                    bytes_to_hex(&key)
+                )
+            })?;
+            match entry {
+                UndoLogEntry::KeyMutation { cf_name, .. } => {
+                    if cf_names.contains(&cf_name.as_str()) {
+                        batch.delete_reorg_undo_log_key(&key);
+                        deleted += 1;
+                    }
+                }
+                UndoLogEntry::TxContext(_) => anyhow::bail!(
+                    "a Derived-scope undo entry is a tx context: key=0x{}",
+                    bytes_to_hex(&key)
+                ),
+            }
+        }
+        Ok(deleted)
+    }
+
     pub fn rollback_via_undo_log(
         &self,
         _append_store: &CkbadgerStore,

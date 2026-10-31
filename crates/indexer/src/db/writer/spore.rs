@@ -1749,7 +1749,7 @@ mod tests {
                 object_collection_activity_rows: &[],
                 identity_transitions: &transitions,
             };
-            let failures = crate::derive::apply_live_batch(
+            crate::derive::apply_live_batch(
                 store.as_ref(),
                 &crate::derive::registry(),
                 &ctx,
@@ -1757,7 +1757,6 @@ mod tests {
                 &state.undo_seq_by_block,
             )
             .unwrap();
-            assert!(failures.is_empty(), "{failures:?}");
             batch.commit().unwrap();
         }
 

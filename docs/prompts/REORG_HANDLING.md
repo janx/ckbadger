@@ -279,9 +279,13 @@ calls `derive::invalidate_for_rollback(rollback_to)`:
 - a **complete** derivation is reset when `rollback_to` is below `completed_at_tip`, the tip at
   which its last rebuild chunk committed; at or above it, undo replay owns the rollback.
 
-A reset (`NotStarted` + range delete of the CF) commits before the undo replay, so a crash
-anywhere in the rollback leaves the aggregate reset, never half-restored; the scheduler derives it
-again and the API answers `503 derive_pending` meanwhile. `Derived` undo entries are pruned behind
+A reset (`NotStarted` + range delete of the CF) commits before the undo replay, together with
+the deletion of that aggregate's `Derived` undo entries above the target — and so do the entries
+of any aggregate that is not maintained (not started, or left `Failed`) — so the replay cannot
+write stale pre-images back into a cleared CF, and a crash anywhere in the rollback leaves the
+aggregate reset and empty, never half-restored; the scheduler derives it
+again; meanwhile the API serves the fields it feeds as unknown (`null`, or `503 derive_pending`
+for `/dao/evidence` and `/dao/depositors`). `Derived` undo entries are pruned behind
 the same coverage floor as `EntityStats`, so the floor's rebuild-required rule covers them too.
 
 ### Stats Prefix Rollback Ownership

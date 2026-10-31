@@ -281,7 +281,7 @@ impl DerivedAggregate for DaoLiveAgg {
             )? {
                 add_delta(out, key, &delta)?;
             }
-            if budget.tick() {
+            if budget.tick(out.len()) {
                 return Ok(Some(index_key.to_vec()));
             }
         }

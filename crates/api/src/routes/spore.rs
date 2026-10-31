@@ -205,7 +205,9 @@ pub struct ClusterResponse {
     pub spores_count: i32,
     pub total_count: i64,
     pub holders_count: i64,
-    pub activities_count: i64,
+    /// The cluster's derived activity row count; `null` while it is being
+    /// derived.
+    pub activities_count: Option<i64>,
     /// None when spores reference an ID with no minted cluster cell.
     pub created_at_block: Option<i64>,
     pub owned_capacity: Option<String>,
@@ -734,8 +736,20 @@ fn serve_clusters_from_cache(
         None
     };
 
+    // Review P3: each served row carries its derived activity count — one
+    // point read per row (≤ 100), in the request's pinned view — or `null`
+    // while it is not derived; never a synthetic 0.
+    let rows = page
+        .iter()
+        .map(|(id, cluster)| {
+            let mut cluster = cluster.clone();
+            cluster.activities_count =
+                super::assets::derived_collection_activity_count(state.store.as_ref(), id)?;
+            Ok(cluster)
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
     ok(CursorPaginatedResponse::without_total(
-        page.iter().map(|(_, c)| c.clone()).collect(),
+        rows,
         limit as i64,
         next_cursor,
     ))
@@ -799,7 +813,8 @@ fn build_cluster_responses_from_cached_entries(
             spores_count: spores_count as i32,
             total_count: cluster_aggregate.total_count,
             holders_count: cluster_aggregate.owner_count,
-            activities_count: 0,
+            // Filled for the served page only (see `serve_clusters_from_cache`).
+            activities_count: None,
             created_at_block,
             owned_capacity: None,
             owned_knowledge: None,

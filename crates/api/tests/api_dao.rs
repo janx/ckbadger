@@ -147,9 +147,10 @@ fn dao_evidence_fixture() -> Arc<CkbadgerStore> {
     store
 }
 
-/// Run the indexer's background derivations to completion on `store`.
+/// Run the indexer's background derivations on `store` (an invariant
+/// violation leaves the `Failed` marker the stopping indexer writes).
 fn derive(store: &CkbadgerStore) {
-    ckbadger_indexer::derive::derive_to_completion(store).unwrap();
+    derive_like_the_indexer(store);
 }
 
 /// The producer fixture covers exact phase boundaries, changed epoch lengths,
@@ -272,8 +273,15 @@ async fn dao_evidence_reads_the_derived_aggregate_not_the_deposits() {
         "dao_by_status_block",
         "dao_by_lock_block",
         "dao_by_block",
+        "dao_by_withdraw_tx",
     ] {
         assert_eq!(store.iterated_rows(cf), 0, "/dao/evidence walked {cf}");
+        // Review P3: nor looked one of its rows up by key.
+        assert_eq!(
+            store.point_reads(cf),
+            0,
+            "/dao/evidence read a {cf} row by key"
+        );
     }
     assert!(store.iterated_rows("dao_live_agg") > 0);
 }

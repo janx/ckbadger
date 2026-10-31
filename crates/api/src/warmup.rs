@@ -646,25 +646,35 @@ fn warmup_cluster_daily_deltas_sync(state: &AppState) {
 }
 
 /// A cluster row's `activitiesCount` in the cached asset list: the derived
-/// count, or absent (unknown) while the indexer is still deriving it — the
-/// list is not withheld for one column, and the next refresh fills it in. A
-/// derivation that FAILED is an invariant violation and fails the warmup.
+/// count, or `None` (unknown) while the indexer has not derived it — whatever
+/// the reason (not started, running, or left `Failed` by an indexer that
+/// stopped). The cache build never fails over this one column.
 fn cluster_activity_count_for_list(
     state: &AppState,
     cluster_id: &[u8],
 ) -> anyhow::Result<Option<i64>> {
-    match crate::routes::assets::derived_collection_activity_count(&state.store, cluster_id) {
-        Ok(count) => Ok(Some(count)),
-        Err((status, body)) if status == axum::http::StatusCode::SERVICE_UNAVAILABLE => {
-            tracing::debug!(message = %body.message, "cluster activity counts not derived yet");
-            Ok(None)
-        }
-        Err((_, body)) => Err(anyhow::anyhow!(
-            "cluster 0x{} activity count: {}",
-            hex::encode(cluster_id),
-            body.message
-        )),
-    }
+    list_cluster_activity_count(&state.store, cluster_id)
+}
+
+/// The derived count for the cached list, its meta and its row read in ONE
+/// view (review P1). The asset-cache build runs outside any request, so it
+/// pins the view itself: without the pin a catch-up between the meta read and
+/// the row read could pair a `Complete` meta with a row of a CF the indexer
+/// has reset since.
+fn list_cluster_activity_count(
+    store: &ckbadger_store::CkbadgerStore,
+    cluster_id: &[u8],
+) -> anyhow::Result<Option<i64>> {
+    let _view = ckbadger_store::read_view::acquire_read();
+    crate::routes::assets::derived_collection_activity_count(store, cluster_id).map_err(
+        |(_, body)| {
+            anyhow::anyhow!(
+                "cluster 0x{} activity count: {}",
+                hex::encode(cluster_id),
+                body.message
+            )
+        },
+    )
 }
 
 fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
@@ -1320,6 +1330,35 @@ async fn warmup_secondary_issuance(state: &AppState) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review P1: the cached list's derived count must read the meta and
+    /// the row under one pinned read view — a catch-up between the two reads
+    /// could pair a `Complete` meta with a row of a CF the indexer has since
+    /// reset. Pinned, the read waits out an open catch-up window.
+    #[test]
+    fn the_list_count_reads_meta_and_row_in_one_pinned_view() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(ckbadger_store::CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let window = ckbadger_store::read_view::catch_up_window();
+        let done = Arc::new(AtomicBool::new(false));
+        let (reader, finished) = (store.clone(), done.clone());
+        let handle = std::thread::spawn(move || {
+            assert_eq!(
+                list_cluster_activity_count(&reader, &[0x11; 32]).unwrap(),
+                None
+            );
+            finished.store(true, Ordering::SeqCst);
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !done.load(Ordering::SeqCst),
+            "the count was read during a catch-up window: no pinned view"
+        );
+        drop(window);
+        handle.join().unwrap();
+        assert!(done.load(Ordering::SeqCst));
+    }
 
     #[test]
     fn cached_collection_ratio_does_not_saturate() {

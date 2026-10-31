@@ -210,14 +210,14 @@ fn collection_feed(
         .collect::<Result<Vec<_>, _>>()?;
     let total = collection.activities_count(state, &id)?;
     let response = if transactions {
-        serde_json::to_value(CursorPaginatedResponse::new(
+        serde_json::to_value(CursorPaginatedResponse::with_optional_total(
             asset_feed::project_transactions(state, page)?,
             total,
             limit,
             next,
         ))
     } else {
-        serde_json::to_value(CursorPaginatedResponse::new(
+        serde_json::to_value(CursorPaginatedResponse::with_optional_total(
             asset_feed::project_activities(state, page)?,
             total,
             limit,

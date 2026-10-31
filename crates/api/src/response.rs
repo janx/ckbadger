@@ -165,6 +165,25 @@ impl<T: Serialize + Clone> CursorPaginatedResponse<T> {
         }
     }
 
+    /// A response whose total may be unknown (`null`), e.g. while the count
+    /// it comes from is still being derived.
+    pub fn with_optional_total(
+        data: Vec<T>,
+        total: Option<i64>,
+        limit: i64,
+        next_cursor: Option<String>,
+    ) -> Self {
+        let has_more = next_cursor.is_some();
+        Self {
+            data,
+            total,
+            limit,
+            has_more,
+            next_cursor,
+            pool: None,
+        }
+    }
+
     /// Create a response without a total count (avoids expensive COUNT queries).
     /// has_more is determined by fetching limit+1 rows.
     pub fn without_total(data: Vec<T>, limit: i64, next_cursor: Option<String>) -> Self {

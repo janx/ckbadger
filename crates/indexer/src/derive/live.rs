@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use ckbadger_store::derive_ops::{encode_derived_value, DeriveMeta, DeriveState};
+use ckbadger_store::derive_ops::{encode_derived_value, DeriveMeta};
 use ckbadger_store::keys::UndoSeqScope;
 use ckbadger_store::types::{UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::{CkbadgerStore, StoreBatch};
@@ -42,23 +42,22 @@ pub struct LiveDeriveCtx<'a> {
 }
 
 /// Add this batch's deltas to every aggregate live sync maintains (state
-/// `Running` or `Complete` at the current version), staging rows, undo
-/// pre-images and — on an invariant violation — the aggregate's `Failed`
-/// state into `batch`.
+/// `Running` or `Complete` at the current version), staging rows and undo
+/// pre-images into `batch`.
 ///
-/// A failing aggregate does not fail the batch: its rows are a rebuildable
-/// view, so its own writes are dropped, its state becomes `Failed` with the
-/// error (the API serves that error) and canonical sync continues. The
-/// failures are returned so the caller can report them once the batch has
-/// committed ([`report_live_failures`]).
+/// Fail fast: an error — a live delta that cannot be computed, or a row that
+/// breaks its aggregate's invariant — fails the batch like any other writer
+/// invariant, with the aggregate, key and blocks in its context; the caller
+/// stops the indexer. Before returning it, the aggregate is marked `Failed`
+/// (its own small write; the batch itself is never committed) so the TUI and
+/// the API can say why the indexer stopped. The next start re-derives it.
 pub(crate) fn apply_live_batch(
     store: &CkbadgerStore,
     aggregates: &[Box<dyn DerivedAggregate>],
     ctx: &LiveDeriveCtx<'_>,
     batch: &mut StoreBatch<'_>,
     undo_seq: &SharedUndoSeq,
-) -> Result<Vec<LiveFailure>> {
-    let mut failures = Vec::new();
+) -> Result<()> {
     for aggregate in aggregates {
         let id = aggregate.id();
         let Some(meta) = store.get_derive_meta(id.name)? else {
@@ -70,35 +69,37 @@ pub(crate) fn apply_live_batch(
         match stage_one(store, aggregate.as_ref(), &meta, ctx) {
             Ok(staged) => stage_into(staged, id.cf_name, batch, undo_seq)?,
             Err(err) => {
-                let failed = report_failure(id.name, &meta, &err);
-                batch.put_derive_meta(id.name, &failed);
-                failures.push(LiveFailure {
-                    name: id.name,
-                    error: format!("{err:#}"),
-                });
+                let err = err.context(format!(
+                    "derived aggregate {} live maintenance for blocks {}..={}",
+                    id.name,
+                    ctx.blocks.first().map_or(-1, |b| b.number),
+                    ctx.blocks.last().map_or(-1, |b| b.number)
+                ));
+                record_failure_before_stop(store, id.name, &meta, &err)?;
+                return Err(err);
             }
         }
     }
-    Ok(failures)
+    Ok(())
 }
 
-/// One aggregate a live batch moved to `Failed`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LiveFailure {
-    pub name: &'static str,
-    pub error: String,
-}
-
-/// Mirror live failures into the background task registry (visibility only;
-/// the meta committed with the batch is the source of truth).
-pub fn report_live_failures(store: &CkbadgerStore, failures: &[LiveFailure]) -> Result<()> {
-    for failure in failures {
-        store.update_background_task(&super::task_name(failure.name), |entry| {
-            entry.state = ckbadger_common::BackgroundTaskState::Failed;
-            entry.error = Some(failure.error.clone());
-            entry.message = Some("live maintenance found an invariant violation".to_string());
-        })?;
-    }
+/// Persist `Failed{error}` and mirror it to the background task — what a
+/// stopping indexer leaves behind for the TUI and the API.
+pub(crate) fn record_failure_before_stop(
+    store: &CkbadgerStore,
+    name: &'static str,
+    meta: &DeriveMeta,
+    err: &anyhow::Error,
+) -> Result<()> {
+    error!(aggregate = name, error = %format!("{err:#}"), "derived aggregate invariant violated; the indexer stops");
+    let mut marker = StoreBatch::new(store);
+    marker.put_derive_meta(name, &failed_meta(meta, err));
+    marker.commit()?;
+    store.update_background_task(&super::task_name(name), |entry| {
+        entry.state = ckbadger_common::BackgroundTaskState::Failed;
+        entry.error = Some(format!("{err:#}"));
+        entry.message = Some("invariant violated; the indexer stopped".to_string());
+    })?;
     Ok(())
 }
 
@@ -144,7 +145,7 @@ fn stage_one(
             rows.insert(key, next);
         }
     }
-    if matches!(meta.state, DeriveState::Complete { .. }) {
+    if meta.checks_rows() {
         for (key, value) in &rows {
             if let Some(value) = value {
                 aggregate.check_row(key, value).map_err(|e| {
@@ -187,16 +188,12 @@ fn stage_into(
     Ok(())
 }
 
-fn report_failure(name: &str, meta: &DeriveMeta, err: &anyhow::Error) -> DeriveMeta {
-    error!(aggregate = name, error = %format!("{err:#}"), "derived aggregate live maintenance failed");
-    failed_meta(meta, err)
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::super::test_support::*;
     use super::super::{DeriveScheduler, DerivedAggregate};
     use super::*;
+    use ckbadger_store::derive_ops::DeriveState;
 
     fn blocks(range: std::ops::RangeInclusive<i64>) -> Vec<LiveBlockPoint> {
         range
@@ -228,7 +225,7 @@ pub(crate) mod tests {
             object_collection_activity_rows: &[],
             identity_transitions: &[],
         };
-        let failures = apply_live_batch(
+        apply_live_batch(
             store,
             aggregates,
             &ctx,
@@ -237,7 +234,6 @@ pub(crate) mod tests {
         )
         .unwrap();
         batch.commit().unwrap();
-        report_live_failures(store, &failures).unwrap();
     }
 
     fn toy() -> Vec<Box<dyn DerivedAggregate>> {
@@ -294,34 +290,48 @@ pub(crate) mod tests {
         }
     }
 
+    /// Ruling A: a live invariant violation fails the batch like any other
+    /// writer invariant — the error names the aggregate, the key and the
+    /// blocks; nothing of the batch is committed; the `Failed` marker that is
+    /// persisted is only what the stopping process leaves for the TUI/API.
     #[test]
-    fn an_invariant_violation_fails_only_the_aggregate_and_drops_its_writes() {
+    fn a_live_invariant_violation_fails_the_batch() {
         let (_dir, store) = toy_store();
         commit_headers(&store, 0..=10);
         complete(&store);
         let before = stored_rows(&store, &TOY);
         // Epoch 3 holds blocks 9..=11; a cap of 2 per epoch is violated by 11.
         let strict: Vec<Box<dyn DerivedAggregate>> = vec![Box::new(ToyHeadersPerEpoch {
-            id: TOY,
             max_per_epoch: 2,
+            ..Default::default()
         })];
-        write_live_batch(&store, &strict, 11..=11);
-        let meta = store.get_derive_meta(TOY.name).unwrap().unwrap();
-        match &meta.state {
-            DeriveState::Failed { error } => assert!(
-                error.contains("toy row") && error.contains("11..=11"),
-                "{error}"
-            ),
-            other => panic!("expected Failed, got {other:?}"),
-        }
-        assert_eq!(
-            stored_rows(&store, &TOY),
-            before,
-            "the failing batch wrote no rows"
-        );
+        let points = blocks(11..=11);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_block_header(11, &header(11, epoch_of(11)));
+        let ctx = LiveDeriveCtx {
+            store: &store,
+            blocks: &points,
+            dao_transitions: &[],
+            object_collection_activity_rows: &[],
+            identity_transitions: &[],
+        };
+        let result = apply_live_batch(&store, &strict, &ctx, &mut batch, &SharedUndoSeq::default());
+        let err = format!("{:#}", result.expect_err("the batch must fail"));
         assert!(
-            store.get_block_header(11).unwrap().is_some(),
-            "canonical writes committed"
+            err.contains("toy_headers_per_epoch")
+                && err.contains("toy row")
+                && err.contains("11..=11"),
+            "{err}"
         );
+        drop(batch);
+        assert!(
+            store.get_block_header(11).unwrap().is_none(),
+            "nothing of the batch committed"
+        );
+        assert_eq!(stored_rows(&store, &TOY), before);
+        assert!(matches!(
+            store.get_derive_meta(TOY.name).unwrap().unwrap().state,
+            DeriveState::Failed { .. }
+        ));
     }
 }

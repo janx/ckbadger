@@ -276,9 +276,40 @@ pub fn test_config_with_ckb_db_path(
     ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
 ) -> AppConfig {
     if !store.is_secondary() {
-        ckbadger_indexer::derive::rederive_to_completion(&store).unwrap();
+        derive_like_the_indexer(&store);
     }
     underived_config(store, append_only_store, ckb_db_path, ckb_db_cleanup)
+}
+
+/// Derive `store` from scratch as the indexer does. A derivation that hits an
+/// invariant violation stops the indexer (fail fast); what it leaves behind is
+/// the aggregate's `Failed` marker, which is what the API then serves — so the
+/// error must have recorded one.
+pub fn derive_like_the_indexer(store: &CkbadgerStore) {
+    use ckbadger_store::derive_ops::{
+        DeriveState, BIT_CELL_BY_ACCOUNT, DAO_LIVE_AGG, OBJECT_COLLECTION_ACTIVITY_COUNT,
+    };
+    if let Err(error) = ckbadger_indexer::derive::rederive_to_completion(store) {
+        let failed = [
+            DAO_LIVE_AGG,
+            OBJECT_COLLECTION_ACTIVITY_COUNT,
+            BIT_CELL_BY_ACCOUNT,
+        ]
+        .iter()
+        .any(|id| {
+            matches!(
+                store
+                    .get_derive_meta(id.name)
+                    .unwrap()
+                    .map(|meta| meta.state),
+                Some(DeriveState::Failed { .. })
+            )
+        });
+        assert!(
+            failed,
+            "derivation failed without a Failed marker: {error:#}"
+        );
+    }
 }
 
 fn underived_config(

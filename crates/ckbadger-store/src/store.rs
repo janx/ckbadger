@@ -873,10 +873,22 @@ struct ReadCallCounters {
     /// Rows each column family's iterators yielded, by CF name, so a test can
     /// prove a read path never walks a CF (an activity walk, a cell walk).
     iterated_rows: Mutex<std::collections::HashMap<&'static str, u64>>,
+    /// Point reads (`get_cf` and each `multi_get_cf` key), by CF name, so a
+    /// test can prove a read path never looks a row up in a CF.
+    point_reads: Mutex<std::collections::HashMap<&'static str, u64>>,
 }
 
 #[cfg(any(test, feature = "read-call-counters"))]
 impl ReadCallCounters {
+    fn count_point_read(&self, cf_name: &'static str) {
+        *self
+            .point_reads
+            .lock()
+            .expect("point-read counter poisoned")
+            .entry(cf_name)
+            .or_insert(0) += 1;
+    }
+
     fn count_iterated_row(&self, cf_name: &'static str) {
         *self
             .iterated_rows
@@ -1813,7 +1825,10 @@ impl CkbadgerStore {
 
     pub fn get_cf(&self, cf: &ColumnFamily, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
         #[cfg(any(test, feature = "read-call-counters"))]
-        self.read_calls.get_cf.fetch_add(1, Ordering::Relaxed);
+        {
+            self.read_calls.get_cf.fetch_add(1, Ordering::Relaxed);
+            self.read_calls.count_point_read(self.cf_name_of(cf));
+        }
         Ok(self.db.get_cf(cf, key)?)
     }
 
@@ -1826,6 +1841,24 @@ impl CkbadgerStore {
             .lock()
             .expect("iterated-row counter poisoned")
             .clear();
+        self.read_calls
+            .point_reads
+            .lock()
+            .expect("point-read counter poisoned")
+            .clear();
+    }
+
+    /// Point reads of one column family since the last reset (`0` when it
+    /// was never read by key).
+    #[cfg(any(test, feature = "read-call-counters"))]
+    pub fn point_reads(&self, cf_name: &str) -> u64 {
+        self.read_calls
+            .point_reads
+            .lock()
+            .expect("point-read counter poisoned")
+            .get(cf_name)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Rows yielded by `iterator_cf` / `prefix_iterator_cf` since the last
@@ -1931,7 +1964,12 @@ impl CkbadgerStore {
         keys: Vec<(&ColumnFamily, &[u8])>,
     ) -> Vec<Result<Option<Vec<u8>>, rocksdb::Error>> {
         #[cfg(any(test, feature = "read-call-counters"))]
-        self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
+        {
+            self.read_calls.multi_get_cf.fetch_add(1, Ordering::Relaxed);
+            for (cf, _) in &keys {
+                self.read_calls.count_point_read(self.cf_name_of(cf));
+            }
+        }
         self.db.multi_get_cf(keys)
     }
 
@@ -3315,6 +3353,25 @@ mod tests {
             stats.manifest_bytes.expect("MANIFEST size") > 0,
             "an open store must report its MANIFEST size: {stats:?}"
         );
+    }
+
+    /// The per-CF point-read counter behind the API's "never reads a row
+    /// by key" assertions counts both read shapes, per column family.
+    #[test]
+    fn point_reads_are_counted_per_column_family() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        store.reset_read_call_counters();
+        store.get_cf(store.cf_dao_deposits(), b"k").unwrap();
+        let _ = store.multi_get_cf(vec![
+            (store.cf_dao_deposits(), b"a".as_slice()),
+            (store.cf_sync_meta(), b"b".as_slice()),
+        ]);
+        assert_eq!(store.point_reads(CF_DAO_DEPOSITS), 2);
+        assert_eq!(store.point_reads(CF_SYNC_META), 1);
+        assert_eq!(store.point_reads(CF_DAO_BY_BLOCK), 0);
+        store.reset_read_call_counters();
+        assert_eq!(store.point_reads(CF_DAO_DEPOSITS), 0);
     }
 
     #[test]

@@ -163,9 +163,12 @@ type ParsedBatch = (
 
 The writer loop also runs the indexer's **background derivations** (`crates/indexer/src/derive/`,
 `docs/STORE_SCHEMA.md` → Derived Aggregates). `DeriveScheduler` lives on the writer task: once
-`blocks_remaining() <= bulk_sync_threshold` (the DOB worker's gate), each loop iteration folds one
-bounded rebuild chunk (≤ `CHUNK_MAX_TIME` = 150 ms or 20,000 source rows) through a snapshot taken
-at the sync tip, then goes straight back for the next chunk unless a parsed batch is waiting. A
+`blocks_remaining() <= bulk_sync_threshold` (the DOB worker's gate), each loop iteration runs one
+bounded chunk through a snapshot taken at the sync tip — a fold of ≤ 20,000 source rows,
+≤ 4,096 distinct derived keys (`CHUNK_MAX_KEYS`, which bounds the chunk's read-modify-write) and
+≤ `CHUNK_MAX_TIME` = 150 ms of source reads, or, once the source is exhausted, a check of the
+next ≤ 20,000 rows against the aggregate's invariant — then goes straight back for the next chunk
+unless a parsed batch is waiting. A
 live batch therefore waits at most one chunk, an idle writer derives continuously, and a chunk
 and a batch never write the same rows at once. Inside `write_parsed_batch`, `apply_live_batch`
 adds each block's deltas for every running or complete derivation to the batch's own domain
