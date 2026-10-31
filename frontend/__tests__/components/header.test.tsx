@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '../utils/test-utils';
+import { fireEvent, render, screen, within } from '../utils/test-utils';
 import { Header } from '@/components/layout/header';
 
 const usePathnameMock = vi.fn(() => '/');
@@ -65,18 +65,14 @@ describe('Header', () => {
       'href',
       '/mainnet/activities'
     );
-    expect(screen.getAllByRole('link', { name: 'Tokens' }).at(0)).toHaveAttribute(
+    // TX-02 (Main.dc.html): Inventory is a plain link like the others, not a hover-only button.
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    expect(within(nav).getByRole('link', { name: 'Inventory' })).toHaveAttribute(
       'href',
-      '/mainnet/inventory/tokens'
+      '/mainnet/inventory'
     );
-    expect(screen.getAllByRole('link', { name: 'Objects' }).at(0)).toHaveAttribute(
-      'href',
-      '/mainnet/inventory/objects'
-    );
-    expect(screen.getAllByRole('link', { name: 'Identities' }).at(0)).toHaveAttribute(
-      'href',
-      '/mainnet/inventory/identities'
-    );
+    expect(within(nav).queryByRole('button', { name: /Inventory/ })).toBeNull();
+    expect(within(nav).queryByRole('link', { name: 'Tokens' })).toBeNull();
     expect(screen.getAllByRole('link', { name: 'Scripts' }).at(0)).toHaveAttribute(
       'href',
       '/mainnet/scripts'
@@ -139,8 +135,23 @@ describe('Header', () => {
     const dao = screen.getAllByRole('link', { name: 'DAO' })[0];
     expect(dao.className).not.toContain('uppercase');
     expect(dao.className).not.toContain('tracking');
-    expect(dao).toHaveClass('text-jade');
-    expect(screen.getAllByRole('link', { name: 'Charts' })[0]).toHaveClass('text-text');
+    // TX-02: the current page is marked for assistive tech and drawn bright, not jade (jade is hover).
+    expect(dao).toHaveAttribute('aria-current', 'page');
+    expect(dao).toHaveClass('text-text-bright');
+    expect(dao).not.toHaveClass('text-jade');
+    const charts = screen.getAllByRole('link', { name: 'Charts' })[0];
+    expect(charts).toHaveClass('text-text');
+    expect(charts).not.toHaveAttribute('aria-current');
+  });
+
+  it('marks Inventory current on every inventory view (TX-02)', () => {
+    usePathnameMock.mockReturnValue('/inventory/objects');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    expect(within(nav).getByRole('link', { name: 'Inventory' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
   });
 
   it('opens and closes the mobile menu with navigation links', () => {
@@ -153,9 +164,10 @@ describe('Header', () => {
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(2);
     expect(screen.getAllByRole('link', { name: 'Activities' })).toHaveLength(2);
-    expect(screen.getAllByRole('link', { name: 'Tokens' })).toHaveLength(2);
-    expect(screen.getAllByRole('link', { name: 'Objects' })).toHaveLength(2);
-    expect(screen.getAllByRole('link', { name: 'Identities' })).toHaveLength(2);
+    // The phone menu keeps the three inventory views under Inventory.
+    expect(screen.getAllByRole('link', { name: 'Tokens' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Objects' })).toHaveLength(1);
+    expect(screen.getAllByRole('link', { name: 'Identities' })).toHaveLength(1);
     expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     expect(searchBarMock.mock.calls.every(([props]) => props.variant === 'compact')).toBe(true);
 

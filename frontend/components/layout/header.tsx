@@ -10,11 +10,6 @@ import { LOGO_NOTCH_CLASS, LOGO_STRIP_NOTCH_CLASS } from '@/components/layout/lo
 import { useStickyHeaderHeight } from '@/components/layout/sticky-header';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
 import {
-  NAVBAR_DROPDOWN_ITEM_ACTIVE_CLASS,
-  NAVBAR_DROPDOWN_ITEM_CLASS,
-  NAVBAR_DROPDOWN_ITEM_DEFAULT_CLASS,
-  NAVBAR_DROPDOWN_PANEL_CLASS,
-  NAVBAR_DROPDOWN_POPOVER_CLASS,
   NAVBAR_LINK_ACTIVE_CLASS,
   NAVBAR_LINK_CLASS,
   NAVBAR_LINK_DEFAULT_CLASS,
@@ -27,7 +22,9 @@ interface NavLink {
   label: string;
 }
 
+/** A section with views: one link on the desktop row (TX-02), its views listed in the phone menu. */
 interface NavDropdown {
+  href: string;
   label: string;
   children: NavLink[];
 }
@@ -42,6 +39,7 @@ const navItems: NavItem[] = [
   { href: '/dao', label: 'DAO' },
   { href: '/activities', label: 'Activities' },
   {
+    href: '/inventory',
     label: 'Inventory',
     children: [
       { href: '/inventory/tokens', label: 'Tokens' },
@@ -62,7 +60,7 @@ export function Header() {
   const pathname = usePathname();
   const isLinkActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
   const isDropdownActive = (item: NavDropdown) =>
-    item.children.some((child) => isLinkActive(child.href));
+    isLinkActive(item.href) || item.children.some((child) => isLinkActive(child.href));
 
   const activeLabel = (() => {
     if (pathname === '/') return 'Home';
@@ -95,64 +93,23 @@ export function Header() {
             className="relative z-10 hidden shrink-0 items-center gap-x-4 md:flex lg:gap-x-6"
           >
             <NetworkSwitcher />
-            {navItems.map((item) =>
-              isDropdown(item) ? (
-                <div key={item.label} className="group relative">
-                  <button
-                    type="button"
-                    className={cn(
-                      NAVBAR_LINK_CLASS,
-                      'flex items-center gap-1',
-                      isDropdownActive(item) ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
-                    )}
-                  >
-                    {item.label}
-                    <svg
-                      className="h-3 w-3 opacity-50"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        d="M19 9l-7 7-7-7"
-                      />
-                    </svg>
-                  </button>
-                  <div className={NAVBAR_DROPDOWN_POPOVER_CLASS}>
-                    <div className={NAVBAR_DROPDOWN_PANEL_CLASS}>
-                      {item.children.map((child) => (
-                        <Link
-                          key={child.href}
-                          href={child.href}
-                          className={cn(
-                            NAVBAR_DROPDOWN_ITEM_CLASS,
-                            isLinkActive(child.href)
-                              ? NAVBAR_DROPDOWN_ITEM_ACTIVE_CLASS
-                              : NAVBAR_DROPDOWN_ITEM_DEFAULT_CLASS
-                          )}
-                        >
-                          {child.label}
-                        </Link>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              ) : (
+            {/* TX-02 (Main.dc.html): five plain links; the current one bright and aria-current. */}
+            {navItems.map((item) => {
+              const current = isDropdown(item) ? isDropdownActive(item) : isLinkActive(item.href);
+              return (
                 <Link
                   key={item.href}
                   href={item.href}
+                  aria-current={current ? 'page' : undefined}
                   className={cn(
                     NAVBAR_LINK_CLASS,
-                    isLinkActive(item.href) ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
+                    current ? NAVBAR_LINK_ACTIVE_CLASS : NAVBAR_LINK_DEFAULT_CLASS
                   )}
                 >
                   {item.label}
                 </Link>
-              )
-            )}
+              );
+            })}
           </nav>
 
           <div className="flex items-center gap-2 md:hidden">
