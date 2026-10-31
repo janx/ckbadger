@@ -13209,10 +13209,8 @@ mod tests {
         /// which also names a token issued earlier.
         fn xudt_ext_type_script() -> Script {
             let unique_args = [0x9au8; 20];
-            // `Bytes` header as `token_helpers::parse_molecule_bytes` reads it
-            // today: the total size, header included (see the round-3 W
-            // result file, "Found, not fixed").
-            let mut args_bytes = u32::try_from(4 + unique_args.len())
+            // Molecule `Bytes`: the header is the content length.
+            let mut args_bytes = u32::try_from(unique_args.len())
                 .unwrap()
                 .to_le_bytes()
                 .to_vec();

@@ -149,114 +149,17 @@ pub(crate) fn parse_omnilock_supply_info_cell_data(data: &[u8]) -> Option<(u128,
 }
 
 // ---------------------------------------------------------------------------
-// Molecule parsing
+// Molecule parsing (one decoder for every parser: `crate::parser::molecule`)
 // ---------------------------------------------------------------------------
 
-pub(crate) fn parse_molecule_u32(data: &[u8]) -> Option<usize> {
-    let raw: [u8; 4] = data.try_into().ok()?;
-    Some(u32::from_le_bytes(raw) as usize)
-}
-
-pub(crate) fn parse_molecule_table_fields(data: &[u8], field_count: usize) -> Option<Vec<&[u8]>> {
-    let header_size = 4 + field_count * 4;
-    if data.len() < header_size {
-        return None;
-    }
-    let total_size = parse_molecule_u32(&data[0..4])?;
-    if total_size != data.len() {
-        return None;
-    }
-
-    let mut offsets = Vec::with_capacity(field_count + 1);
-    for idx in 0..field_count {
-        let start = 4 + idx * 4;
-        let end = start + 4;
-        offsets.push(parse_molecule_u32(&data[start..end])?);
-    }
-    offsets.push(total_size);
-
-    if offsets.first().copied()? != header_size {
-        return None;
-    }
-    for pair in offsets.windows(2) {
-        if pair[0] > pair[1] || pair[1] > total_size {
-            return None;
-        }
-    }
-
-    Some(
-        offsets
-            .windows(2)
-            .map(|pair| &data[pair[0]..pair[1]])
-            .collect(),
-    )
-}
-
-pub(crate) fn parse_molecule_bytes(data: &[u8]) -> Option<&[u8]> {
-    if data.len() < 4 {
-        return None;
-    }
-    let total_size = parse_molecule_u32(&data[0..4])?;
-    if total_size != data.len() {
-        return None;
-    }
-    Some(&data[4..])
-}
-
-pub(crate) fn parse_molecule_dynvec_items(data: &[u8]) -> Option<Vec<&[u8]>> {
-    if data.len() < 4 {
-        return None;
-    }
-    let total_size = parse_molecule_u32(&data[0..4])?;
-    if total_size != data.len() {
-        return None;
-    }
-    if total_size == 4 {
-        return Some(Vec::new());
-    }
-    if data.len() < 8 {
-        return None;
-    }
-
-    let first_offset = parse_molecule_u32(&data[4..8])?;
-    if first_offset < 8 || first_offset > total_size || first_offset % 4 != 0 {
-        return None;
-    }
-
-    let item_count = first_offset / 4 - 1;
-    let header_size = 4 + item_count * 4;
-    if header_size != first_offset {
-        return None;
-    }
-
-    let mut offsets = Vec::with_capacity(item_count + 1);
-    for idx in 0..item_count {
-        let start = 4 + idx * 4;
-        let end = start + 4;
-        offsets.push(parse_molecule_u32(&data[start..end])?);
-    }
-    offsets.push(total_size);
-
-    for pair in offsets.windows(2) {
-        if pair[0] > pair[1] || pair[1] > total_size {
-            return None;
-        }
-    }
-
-    Some(
-        offsets
-            .windows(2)
-            .map(|pair| &data[pair[0]..pair[1]])
-            .collect(),
-    )
-}
+use crate::parser::molecule::{parse_bytes, parse_dynvec_items, parse_table_fields_exact};
 
 fn parse_molecule_script(data: &[u8]) -> Option<XudtExtensionScript> {
-    let fields = parse_molecule_table_fields(data, 3)?;
+    let fields = parse_table_fields_exact(data, 3)?;
     if fields[0].len() != 32 || fields[1].len() != 1 {
         return None;
     }
-    let args = parse_molecule_bytes(fields[2])?.to_vec();
+    let args = parse_bytes(fields[2])?.to_vec();
     Some(XudtExtensionScript { args })
 }
 
@@ -268,14 +171,14 @@ pub(crate) fn parse_xudt_extension_scripts_from_script_vec(
     script_vec: &[u8],
 ) -> Option<Vec<XudtExtensionScript>> {
     let mut scripts = Vec::new();
-    for item in parse_molecule_dynvec_items(script_vec)? {
+    for item in parse_dynvec_items(script_vec)? {
         scripts.push(parse_molecule_script(item)?);
     }
     Some(scripts)
 }
 
 pub(crate) fn extract_xudt_witness_extension_script_vec(xudt_witness: &[u8]) -> Option<&[u8]> {
-    let fields = parse_molecule_table_fields(xudt_witness, 4)?;
+    let fields = parse_table_fields_exact(xudt_witness, 4)?;
     if fields[2].is_empty() {
         None
     } else {
@@ -289,7 +192,7 @@ pub(crate) fn extract_xudt_extension_scripts_from_witnesses(
 ) -> Option<Vec<XudtExtensionScript>> {
     for witness_hex in witnesses {
         let witness_bytes = crate::rpc::parse_hex_to_bytes(witness_hex);
-        let witness_fields = match parse_molecule_table_fields(&witness_bytes, 3) {
+        let witness_fields = match parse_table_fields_exact(&witness_bytes, 3) {
             Some(fields) => fields,
             None => continue,
         };
@@ -298,7 +201,7 @@ pub(crate) fn extract_xudt_extension_scripts_from_witnesses(
             if bytes_opt_field.is_empty() {
                 continue;
             }
-            let Some(xudt_witness_bytes) = parse_molecule_bytes(bytes_opt_field) else {
+            let Some(xudt_witness_bytes) = parse_bytes(bytes_opt_field) else {
                 continue;
             };
             let Some(script_vec_bytes) =
@@ -1029,9 +932,12 @@ mod tests {
         out
     }
 
+    /// Molecule `Bytes`: the header is the content length (as the node
+    /// serializes it — this helper used to write the total size, agreeing
+    /// with a reader that had the same mistake).
     fn molecule_bytes(value: &[u8]) -> Vec<u8> {
         let mut out = Vec::with_capacity(4 + value.len());
-        out.extend_from_slice(&molecule_u32(4 + value.len()));
+        out.extend_from_slice(&molecule_u32(value.len()));
         out.extend_from_slice(value);
         out
     }
@@ -1056,6 +962,67 @@ mod tests {
             out.extend_from_slice(item);
         }
         out
+    }
+
+    // -- D-1: the real molecule layouts, serialized by ckb-types ---------------
+
+    /// One extension `Script` (args = `unique_args`), serialized by ckb-types
+    /// — the `Bytes` header of `args` is its content length — in a
+    /// `ScriptVec` (dynvec; ckb-types has no `ScriptVec`, the xUDT schema does).
+    fn real_script_vec(unique_args: &[u8]) -> Vec<u8> {
+        use ckb_types::{bytes::Bytes, packed, prelude::*};
+        let script = packed::Script::new_builder()
+            .code_hash(packed::Byte32::new([0xCC; 32]))
+            .hash_type(packed::Byte::new(1))
+            .args(Bytes::copy_from_slice(unique_args).pack())
+            .build();
+        molecule_dynvec(&[script.as_slice().to_vec()])
+    }
+
+    #[test]
+    fn test_extract_xudt_extension_scripts_reads_the_real_args_layout() {
+        let unique_args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let script_vec = real_script_vec(&unique_args);
+        let type_args = build_xudt_type_args_with_extension_in_args([0x01; 32], &script_vec);
+
+        let scripts = extract_xudt_extension_scripts(&type_args, &[])
+            .expect("a ckb-types ScriptVec in the args must decode");
+
+        assert_eq!(
+            scripts.into_iter().map(|s| s.args).collect::<Vec<_>>(),
+            vec![unique_args]
+        );
+    }
+
+    #[test]
+    fn test_extract_xudt_extension_scripts_reads_the_real_witness_layout() {
+        use ckb_types::{bytes::Bytes, packed, prelude::*};
+        let unique_args = vec![0xAB; UNIQUE_TYPE_ARGS_LEN];
+        let script_vec = real_script_vec(&unique_args);
+        // XudtWitness { owner_script: None, owner_signature: None,
+        //   raw_extension_data: Some(script_vec), extension_data: [] }.
+        let xudt_witness = molecule_table(&[
+            Vec::new(),
+            Vec::new(),
+            script_vec.clone(),
+            molecule_u32(4).to_vec(),
+        ]);
+        let witness = packed::WitnessArgs::new_builder()
+            .input_type(Some(Bytes::from(xudt_witness)).pack())
+            .build();
+        let type_args =
+            build_xudt_type_args_with_extension_in_witness([0x01; 32], blake160(&script_vec));
+
+        let scripts = extract_xudt_extension_scripts(
+            &type_args,
+            &[format!("0x{}", hex::encode(witness.as_slice()))],
+        )
+        .expect("a ckb-types WitnessArgs carrying the ScriptVec must decode");
+
+        assert_eq!(
+            scripts.into_iter().map(|s| s.args).collect::<Vec<_>>(),
+            vec![unique_args]
+        );
     }
 
     fn encode_script(args: &[u8]) -> Vec<u8> {

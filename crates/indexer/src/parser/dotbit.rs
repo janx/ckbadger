@@ -6,6 +6,7 @@ use tracing::{debug, warn};
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::cell::ParsedCell;
+use super::molecule::{parse_bytes, parse_dynvec_items, parse_table_fields_at_least};
 use super::script::ScriptParser;
 
 pub const DOTBIT_ACCOUNT_CELL_TYPE_ID: &str =
@@ -387,8 +388,8 @@ fn witness_has_das_hex_prefix(witness: &str) -> bool {
 }
 
 fn parse_das_action_from_witness_bytes(witness_bytes: &[u8]) -> Option<String> {
-    let fields = parse_molecule_table_fields(&witness_bytes[7..], 2)?;
-    let action_bytes = parse_molecule_bytes(fields[0])?;
+    let fields = parse_table_fields_at_least(&witness_bytes[7..], 2)?;
+    let action_bytes = parse_bytes(fields[0])?;
     let action = std::str::from_utf8(action_bytes).ok()?;
     Some(action.to_string())
 }
@@ -397,7 +398,7 @@ fn parse_account_data_from_witness_bytes(
     witness_bytes: &[u8],
     accounts: &mut HashMap<Vec<u8>, DotbitWitnessAccountData>,
 ) {
-    let Some(data_fields) = parse_molecule_table_fields(&witness_bytes[7..], 3) else {
+    let Some(data_fields) = parse_table_fields_at_least(&witness_bytes[7..], 3) else {
         return;
     };
 
@@ -405,7 +406,7 @@ fn parse_account_data_from_witness_bytes(
         if data_entity_opt.is_empty() {
             continue;
         }
-        let Some(data_entity_fields) = parse_molecule_table_fields(data_entity_opt, 3) else {
+        let Some(data_entity_fields) = parse_table_fields_at_least(data_entity_opt, 3) else {
             continue;
         };
         if data_entity_fields[1].len() != 4 {
@@ -415,7 +416,7 @@ fn parse_account_data_from_witness_bytes(
             continue;
         };
         let version = u32::from_le_bytes(version_bytes);
-        let Some(entity) = parse_molecule_bytes(data_entity_fields[2]) else {
+        let Some(entity) = parse_bytes(data_entity_fields[2]) else {
             continue;
         };
         if let Some((account_id, data)) = parse_account_cell_entity(entity, version) {
@@ -434,7 +435,7 @@ fn parse_account_cell_entity(
         3 => 10,
         _ => 11, // v4+
     };
-    let fields = parse_molecule_table_fields(entity, min_field_count)?;
+    let fields = parse_table_fields_at_least(entity, min_field_count)?;
     let account_id = fields.first()?.to_vec();
     if account_id.len() != ACCOUNT_ID_LEN {
         return None;
@@ -474,7 +475,7 @@ fn parse_account_cell_entity(
 }
 
 fn parse_account_chars_to_name(account_chars: &[u8]) -> Option<String> {
-    let items = parse_molecule_dynvec_items(account_chars)?;
+    let items = parse_dynvec_items(account_chars)?;
     if items.is_empty() {
         return None;
     }
@@ -482,8 +483,8 @@ fn parse_account_chars_to_name(account_chars: &[u8]) -> Option<String> {
     let mut account = String::new();
     for item in items {
         // AccountChar table: char_set_name(Uint32), bytes(Bytes)
-        let fields = parse_molecule_table_fields(item, 2)?;
-        let char_bytes = parse_molecule_bytes(fields.get(1).copied()?)?;
+        let fields = parse_table_fields_at_least(item, 2)?;
+        let char_bytes = parse_bytes(fields.get(1).copied()?)?;
         let ch = std::str::from_utf8(char_bytes).ok()?;
         account.push_str(ch);
     }
@@ -495,119 +496,6 @@ fn parse_account_chars_to_name(account_chars: &[u8]) -> Option<String> {
         account.push_str(".bit");
     }
     Some(account)
-}
-
-pub(super) fn parse_molecule_u32(data: &[u8]) -> Option<usize> {
-    let raw: [u8; 4] = data.try_into().ok()?;
-    Some(u32::from_le_bytes(raw) as usize)
-}
-
-pub(super) fn parse_molecule_table_fields(
-    data: &[u8],
-    min_field_count: usize,
-) -> Option<Vec<&[u8]>> {
-    let header_size = 4 + min_field_count * 4;
-    if data.len() < header_size {
-        return None;
-    }
-    let total_size = parse_molecule_u32(&data[0..4])?;
-    if total_size != data.len() {
-        return None;
-    }
-
-    let first_offset = parse_molecule_u32(&data[4..8])?;
-    if first_offset < 8 || first_offset > total_size || first_offset % 4 != 0 {
-        return None;
-    }
-    let field_count = first_offset / 4 - 1;
-    if field_count < min_field_count {
-        return None;
-    }
-    let exact_header_size = 4 + field_count * 4;
-    if exact_header_size != first_offset {
-        return None;
-    }
-
-    let mut offsets = Vec::with_capacity(field_count + 1);
-    for idx in 0..field_count {
-        let start = 4 + idx * 4;
-        let end = start + 4;
-        offsets.push(parse_molecule_u32(&data[start..end])?);
-    }
-    offsets.push(total_size);
-
-    for pair in offsets.windows(2) {
-        if pair[0] > pair[1] || pair[1] > total_size {
-            return None;
-        }
-    }
-
-    Some(
-        offsets
-            .windows(2)
-            .map(|pair| &data[pair[0]..pair[1]])
-            .collect(),
-    )
-}
-
-pub(super) fn parse_molecule_bytes(data: &[u8]) -> Option<&[u8]> {
-    if data.len() < 4 {
-        return None;
-    }
-    // Molecule `Bytes` is encoded as `FixVec<byte>`:
-    // 4-byte item count (payload length) + payload bytes.
-    let item_count = parse_molecule_u32(&data[0..4])?;
-    if item_count + 4 != data.len() {
-        return None;
-    }
-    Some(&data[4..])
-}
-
-fn parse_molecule_dynvec_items(data: &[u8]) -> Option<Vec<&[u8]>> {
-    if data.len() < 4 {
-        return None;
-    }
-    let total_size = parse_molecule_u32(&data[0..4])?;
-    if total_size != data.len() {
-        return None;
-    }
-    if total_size == 4 {
-        return Some(Vec::new());
-    }
-    if data.len() < 8 {
-        return None;
-    }
-
-    let first_offset = parse_molecule_u32(&data[4..8])?;
-    if first_offset < 8 || first_offset > total_size || first_offset % 4 != 0 {
-        return None;
-    }
-    let item_count = first_offset / 4 - 1;
-    let header_size = 4 + item_count * 4;
-    if header_size != first_offset {
-        return None;
-    }
-
-    let mut offsets = Vec::with_capacity(item_count + 1);
-    for idx in 0..item_count {
-        let start = 4 + idx * 4;
-        let end = start + 4;
-        offsets.push(parse_molecule_u32(&data[start..end])?);
-    }
-    offsets.push(total_size);
-
-    for pair in offsets.windows(2) {
-        if pair[0] > pair[1] || pair[1] > total_size {
-            return None;
-        }
-    }
-
-    Some(
-        offsets
-            .windows(2)
-            .map(|pair| &data[pair[0]..pair[1]])
-            .collect(),
-    )
 }
 
 /// Real on-chain `.bit` AccountCell data, shared by the parser, activity and

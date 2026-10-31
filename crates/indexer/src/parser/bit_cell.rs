@@ -4,7 +4,7 @@ use ckb_hash::new_blake2b;
 use crate::rpc::{parse_hex_to_bytes, CellOutput, TransactionView};
 
 use super::cell::ParsedCell;
-use super::dotbit::{parse_molecule_bytes, parse_molecule_table_fields, parse_molecule_u32};
+use super::molecule::{parse_bytes, parse_table_fields_at_least, parse_u32};
 use super::script::ScriptParser;
 
 pub const BIT_CELL_CODE_HASH_MAINNET: &str =
@@ -158,7 +158,7 @@ impl BitCellParser {
     }
 
     fn parse_data(data: &[u8]) -> Option<ParsedBitCellData> {
-        let leading_word = parse_molecule_u32(data.get(..4)?)?;
+        let leading_word = parse_u32(data.get(..4)?)?;
         let (account_bytes, expired_at) = if leading_word == 0 {
             Self::parse_legacy_data(data)?
         } else if leading_word == data.len() {
@@ -187,7 +187,7 @@ impl BitCellParser {
     /// Early testnet layout: `DidCellData` union tag followed by the
     /// `DidCellDataV0` molecule table.
     fn parse_legacy_data(data: &[u8]) -> Option<(&[u8], u64)> {
-        let fields = parse_molecule_table_fields(data.get(4..)?, 3)?;
+        let fields = parse_table_fields_at_least(data.get(4..)?, 3)?;
         // Official DidCellDataV0 schema: witness_hash: Byte20,
         // expire_at: Uint64, account: Bytes. The witness hash is not an
         // account ID and must not be used as the persistent identity key.
@@ -195,7 +195,7 @@ impl BitCellParser {
             return None;
         }
         let expired_at = u64::from_le_bytes(fields[1].try_into().ok()?);
-        let account = parse_molecule_bytes(fields[2])?;
+        let account = parse_bytes(fields[2])?;
         Some((account, expired_at))
     }
 
@@ -208,12 +208,12 @@ impl BitCellParser {
         const EXPIRED_AT_LEN: usize = 8;
         const ACCOUNT_OFFSET: usize = PREFIX_LEN + VERSION_LEN + WITNESS_HASH_LEN + EXPIRED_AT_LEN;
 
-        let fields = parse_molecule_table_fields(data, 3)?;
-        parse_molecule_bytes(fields[0])?;
+        let fields = parse_table_fields_at_least(data, 3)?;
+        parse_bytes(fields[0])?;
         if !fields[2].is_empty() {
-            parse_molecule_bytes(fields[2])?;
+            parse_bytes(fields[2])?;
         }
-        let content = parse_molecule_bytes(fields[1])?;
+        let content = parse_bytes(fields[1])?;
         if content.len() <= ACCOUNT_OFFSET || content[0] != 0 || content[1] != 1 {
             return None;
         }
