@@ -19,7 +19,6 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
-  const [compactCaretIndex, setCompactCaretIndex] = useState(0);
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
   const router = useRouter();
@@ -59,19 +58,10 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const syncCompactCaretPosition = (target?: HTMLInputElement | null) => {
-    if (!target) {
-      return;
-    }
-
-    setCompactCaretIndex(target.selectionStart ?? target.value.length);
-  };
-
   const resetSearchState = () => {
     setIsOpen(false);
     setIsInputFocused(false);
     setQuery('');
-    setCompactCaretIndex(0);
     setSubmitFeedback(null);
   };
 
@@ -145,10 +135,6 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
 
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
-  const compactVisibleText = query || SEARCH_PLACEHOLDER;
-  const compactCaretPosition = query ? compactCaretIndex : 0;
-  const compactTextBeforeCursor = compactVisibleText.slice(0, compactCaretPosition);
-  const compactTextAfterCursor = compactVisibleText.slice(compactCaretPosition);
   const showShortcutHints = isHome || isCompact;
 
   return (
@@ -158,43 +144,9 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           className={cn(
             'group relative',
             isHome && 'overflow-hidden rounded-xl',
-            isCompact && 'overflow-hidden rounded-none'
+            isCompact && 'rounded-md'
           )}
         >
-          {isCompact && (
-            <span
-              data-testid="compact-search-prompt"
-              className="text-jade/70 pointer-events-none absolute inset-y-0 left-0 z-10 flex w-4 items-center justify-start font-mono text-[11px]"
-            >
-              &gt;
-            </span>
-          )}
-          {isCompact && (
-            <span
-              data-testid="compact-search-command-line"
-              aria-hidden="true"
-              className="pointer-events-none absolute inset-y-0 left-4 right-14 z-10 flex items-center overflow-hidden"
-            >
-              <span
-                data-testid="compact-search-command-text"
-                className={cn(
-                  'min-w-0 truncate whitespace-nowrap font-mono text-[13px] tracking-[0.015em]',
-                  query ? 'text-jade/95' : 'text-text-dim/40'
-                )}
-              >
-                <span data-testid="compact-search-text-before-cursor">
-                  {compactTextBeforeCursor}
-                </span>
-                {isInputFocused && (
-                  <span
-                    data-testid="compact-search-cursor"
-                    className="bg-jade/90 animate-blink-cursor inline-block h-[1.05em] w-[7px] shrink-0 align-[-0.12em]"
-                  />
-                )}
-                <span data-testid="compact-search-text-after-cursor">{compactTextAfterCursor}</span>
-              </span>
-            </span>
-          )}
           <input
             ref={inputRef}
             data-ckbadger-global-search="true"
@@ -202,27 +154,23 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
-              syncCompactCaretPosition(e.target);
               setSelectedIndex(-1);
               setIsOpen(true);
             }}
-            onFocus={(e) => {
+            onFocus={() => {
               setIsOpen(true);
               setIsInputFocused(true);
-              syncCompactCaretPosition(e.target);
             }}
             onBlur={() => setIsInputFocused(false)}
-            onClick={(e) => syncCompactCaretPosition(e.currentTarget)}
             onKeyDown={handleKeyDown}
-            onKeyUp={(e) => syncCompactCaretPosition(e.currentTarget)}
-            onSelect={(e) => syncCompactCaretPosition(e.currentTarget)}
             placeholder={SEARCH_PLACEHOLDER}
             className={cn(
               'text-text-bright w-full font-mono transition-colors focus:outline-none',
               isHome
                 ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade h-10 rounded-xl border pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
-                  ? 'border-jade/18 focus:border-jade/42 h-8 rounded-none border-0 border-b bg-transparent pl-0 pr-14 text-[13px] tracking-[0.015em] text-transparent caret-transparent shadow-none placeholder:text-transparent focus:border-0 focus:border-b focus:ring-0'
+                  ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
+                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/60 h-9 rounded-md border pl-3 pr-9 text-[13px]'
                   : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade focus:ring-jade rounded-lg border px-3 py-2.5 pr-3 text-sm focus:ring-1 sm:px-4 sm:py-3 sm:text-base'
             )}
           />
@@ -310,7 +258,7 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       data-testid="search-shortcut-hints"
       className={cn(
         'pointer-events-none absolute inset-y-0 z-10 items-center gap-1',
-        isCompact ? 'right-0 flex' : 'right-3 hidden sm:flex'
+        isCompact ? 'right-2.5 flex' : 'right-3 hidden sm:flex'
       )}
     >
       <span
@@ -318,23 +266,20 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
         className={cn(
           'rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
           isCompact
-            ? 'border-jade/14 text-text-dim/72 rounded-none bg-[#06090f]'
+            ? 'border-base-border text-text-dim rounded px-1.5 text-[11px]'
             : 'border-base-border/80 bg-base-surface/80 text-text-dim'
         )}
       >
         /
       </span>
-      <span
-        data-testid="search-shortcut-key-question"
-        className={cn(
-          'rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
-          isCompact
-            ? 'border-jade/14 text-text-dim/72 rounded-none bg-[#06090f]'
-            : 'border-base-border/80 bg-base-surface/80 text-text-dim'
-        )}
-      >
-        ?
-      </span>
+      {!isCompact && (
+        <span
+          data-testid="search-shortcut-key-question"
+          className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none"
+        >
+          ?
+        </span>
+      )}
     </div>
   );
 }

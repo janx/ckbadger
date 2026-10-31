@@ -70,57 +70,27 @@ describe('SearchBar', () => {
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
   });
 
-  it('updates the compact command-line preview as the query changes', () => {
+  // TX-03 (Main.dc.html header): the compact search is a plain rounded field with one "/" key —
+  // no ">" prompt, no simulated command line or caret, no "?" key (that lives in the footer).
+  it('draws the compact search as the board field: a box, the typed text itself and one "/" key', () => {
     render(<SearchBar variant="compact" />);
-
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    expect(input).toHaveClass(
+      'rounded-md',
+      'border',
+      'bg-base-surface',
+      'border-base-border',
+      'h-9'
+    );
+    expect(input).not.toHaveClass('text-transparent');
+    expect(screen.queryByTestId('compact-search-prompt')).toBeNull();
+    expect(screen.queryByTestId('compact-search-command-line')).toBeNull();
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '0xabc123' } });
-
-    const commandText = screen.getByTestId('compact-search-command-text');
-    const commandCursor = screen.getByTestId('compact-search-cursor');
-
-    expect(commandText).toHaveTextContent('0xabc123');
-    expect(commandText).not.toHaveTextContent(SHARED_PLACEHOLDER);
-    expect(commandText).not.toHaveTextContent('[/?]');
-    expect(commandCursor).toBeInTheDocument();
-  });
-
-  it('only shows the compact fake caret while the input is focused', () => {
-    render(<SearchBar variant="compact" />);
-
-    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
-
-    expect(screen.queryByTestId('compact-search-cursor')).not.toBeInTheDocument();
-
-    fireEvent.focus(input);
-    expect(screen.getByTestId('compact-search-cursor')).toBeInTheDocument();
-
-    fireEvent.blur(input);
-    expect(screen.queryByTestId('compact-search-cursor')).not.toBeInTheDocument();
-  });
-
-  it('moves the compact fake caret with the input selection', () => {
-    vi.mocked(api.search).mockImplementationOnce(() => new Promise(() => {}));
-
-    render(<SearchBar variant="compact" />);
-
-    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER) as HTMLInputElement;
-    act(() => {
-      fireEvent.focus(input);
-      fireEvent.change(input, { target: { value: '0xabc123' } });
-    });
-
-    expect(screen.getByTestId('compact-search-text-before-cursor')).toHaveTextContent('0xabc123');
-    expect(screen.getByTestId('compact-search-text-after-cursor')).toHaveTextContent('');
-
-    act(() => {
-      input.setSelectionRange(4, 4);
-      fireEvent.select(input);
-    });
-
-    expect(screen.getByTestId('compact-search-text-before-cursor')).toHaveTextContent('0xab');
-    expect(screen.getByTestId('compact-search-text-after-cursor')).toHaveTextContent('c123');
+    expect(input).toHaveValue('0xabc123');
+    expect(screen.queryByTestId('compact-search-cursor')).toBeNull();
+    expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
+    expect(screen.queryByTestId('search-shortcut-key-question')).toBeNull();
   });
 
   it('renders semantic icons for different search result types', async () => {
