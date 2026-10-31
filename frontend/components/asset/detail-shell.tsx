@@ -19,6 +19,11 @@ export interface AssetDetailShellProps {
   feed?: ReactNode;
   tier2?: ReactNode;
   /**
+   * OB-14 (Object.dc.html): the subject's media, in a 300 px column beside the title block (under
+   * the breadcrumb); stacked above it on a phone.
+   */
+  media?: ReactNode;
+  /**
    * F2 identities (round 2, ID-C11): put the facts rail right after the header in reading order,
    * so a one-column (390 px) page shows them before the long tier-1 sections; from lg up the
    * rail still sits beside the header and tier 1.
@@ -37,8 +42,20 @@ export function AssetDetailShell({
   children,
   feed,
   tier2,
+  media,
   railAfterHeader = false,
 }: AssetDetailShellProps) {
+  const titleBlock = (
+    <>
+      <div className="flex min-w-0 flex-wrap items-center gap-3">
+        <ClassMark kind={kind} size={24} />
+        <h1 className="text-text-bright min-w-0 break-words text-[26px] font-medium">{title}</h1>
+        {status}
+      </div>
+      {identity && <div className="text-text-dim min-w-0 break-words text-[11px]">{identity}</div>}
+      {intro}
+    </>
+  );
   const headerEl = (
     <header
       className={railAfterHeader ? 'min-w-0 space-y-3 lg:col-start-1 lg:row-start-1' : 'space-y-3'}
@@ -54,13 +71,16 @@ export function AssetDetailShell({
           </span>
         ))}
       </nav>
-      <div className="flex min-w-0 flex-wrap items-center gap-3">
-        <ClassMark kind={kind} size={24} />
-        <h1 className="text-text-bright min-w-0 break-words text-[26px] font-medium">{title}</h1>
-        {status}
-      </div>
-      {identity && <div className="text-text-dim min-w-0 break-words text-[11px]">{identity}</div>}
-      {intro}
+      {media ? (
+        <div className="grid min-w-0 items-start gap-8 md:grid-cols-[300px_minmax(0,1fr)]">
+          <div data-hero-media className="min-w-0">
+            {media}
+          </div>
+          <div className="min-w-0 space-y-3">{titleBlock}</div>
+        </div>
+      ) : (
+        titleBlock
+      )}
     </header>
   );
   const asideEl = facts && (

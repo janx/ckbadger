@@ -266,36 +266,55 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           }}
         />
       }
+      media={
+        <ObjectMedia
+          object={object}
+          contentHex={data?.versions.at(-1)?.decoded.contentHex ?? null}
+          decoded={decoded.data}
+        />
+      }
       tier2={
-        <>
-          {genetics.data && (
-            <ObjectGeneticsEvidence
-              evidence={genetics.data}
-              subject={title}
-              decoded={decoded.data}
-            />
+        // OB-14 (Object.dc.html tier 2): the DNA evidence and the cell's raw record side by side.
+        <div
+          data-tier2-columns
+          className="grid min-w-0 items-start gap-x-14 gap-y-10 md:grid-cols-2"
+        >
+          {/* Only a DOB object has DNA evidence; otherwise the raw record spans both columns. */}
+          {isDob && (
+            <div className="min-w-0 space-y-10">
+              {genetics.data ? (
+                <ObjectGeneticsEvidence
+                  evidence={genetics.data}
+                  subject={title}
+                  decoded={decoded.data}
+                />
+              ) : (
+                <AssetReadState
+                  label="DNA evidence"
+                  error={genetics.error}
+                  loading={genetics.isLoading}
+                />
+              )}
+            </div>
           )}
-          {data ? (
-            <>
-              <AssetReadState label="raw object data" error={protocol.error} retained />
-              <ItemEvidence protocol={data} />
-            </>
-          ) : (
-            <AssetReadState
-              label="raw object data"
-              error={protocol.error}
-              loading={protocol.isLoading}
-            />
-          )}
-        </>
+          <div className={isDob ? 'min-w-0 space-y-10' : 'min-w-0 space-y-10 md:col-span-2'}>
+            {data ? (
+              <>
+                <AssetReadState label="raw object data" error={protocol.error} retained />
+                <ItemEvidence protocol={data} />
+              </>
+            ) : (
+              <AssetReadState
+                label="raw object data"
+                error={protocol.error}
+                loading={protocol.isLoading}
+              />
+            )}
+          </div>
+        </div>
       }
     >
       <AssetReadState label="object" error={error} retained />
-      <ObjectMedia
-        object={object}
-        contentHex={data?.versions.at(-1)?.decoded.contentHex ?? null}
-        decoded={decoded.data}
-      />
       {isDob && (
         <>
           <AssetReadState

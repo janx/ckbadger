@@ -245,3 +245,21 @@ it('keeps decoder provenance out of tier 1 and in the DNA evidence below (OB-8)'
   expect(tier2).toHaveTextContent('original decoder binary hash was not recorded');
   expect(tier2).toHaveTextContent('Declared bytes 0 + 32');
 });
+
+// OB-14 (Object.dc.html): the object's media sits beside the title in the hero (300 px column),
+// and tier 2 reads as two columns side by side.
+it('puts the media beside the title and lays tier 2 out in two columns (OB-14)', async () => {
+  const { container } = await page();
+  const hero = container.querySelector('[data-hero-media]')!;
+  expect(hero).not.toBeNull();
+  expect(hero).toContainElement(screen.getByRole('region', { name: 'Object media' }));
+  expect(hero.closest('header')).toContainElement(
+    screen.getByRole('heading', { level: 1, name: 'Nervape 3x' })
+  );
+  expect(hero.parentElement).toHaveClass('md:grid-cols-[300px_minmax(0,1fr)]');
+  const columns = container.querySelector('[data-tier="2"] [data-tier2-columns]')!;
+  expect(columns).toHaveClass('md:grid-cols-2');
+  expect(columns.children).toHaveLength(2);
+  expect(columns.children[0]).toHaveTextContent('original decoder binary hash was not recorded');
+  expect(columns.children[1]).toHaveTextContent(/[Cc]ell data/);
+});
