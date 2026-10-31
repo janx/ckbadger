@@ -1311,6 +1311,17 @@ impl CoreOwners {
     }
 }
 
+/// Consecutive transactions on one UTC+8 (day, hour) bucket pair, folded
+/// before they land in the bucket maps ([`ActivityStatsAccumulator::land_run`]).
+#[derive(Default)]
+struct ActivityRun {
+    /// `(day key, hour key)` of the open run; `None` before its first tx.
+    buckets: Option<(String, String)>,
+    stats: DailyActivityStats,
+    /// `Lock` participants of the run's non-cellbase transactions.
+    addrs: Vec<[u8; 32]>,
+}
+
 #[derive(Default)]
 struct ActivityStatsAccumulator {
     daily_stats: FxHashMap<String, DailyActivityStats>,
@@ -1323,9 +1334,21 @@ struct ActivityStatsAccumulator {
     collection_daily: ckbadger_store::CollectionActivityDailyDeltas,
     sealed_through_ms: Option<i64>,
     last_block_number: Option<i64>,
+    /// Test-only: lookups into each bucket map (`daily_stats`, `hourly_stats`,
+    /// `daily_addrs`, `hourly_addrs`) per bucket key.
+    #[cfg(test)]
+    bucket_map_lookups: FxHashMap<(&'static str, String), u32>,
 }
 
 impl ActivityStatsAccumulator {
+    #[cfg(test)]
+    fn note_bucket_lookup(&mut self, map: &'static str, bucket: &str) {
+        *self
+            .bucket_map_lookups
+            .entry((map, bucket.to_string()))
+            .or_default() += 1;
+    }
+
     fn estimated_bytes(&self) -> u64 {
         // A (padded collection id, day) key and its three counters, plus the
         // B-tree's per-entry overhead.
@@ -1424,8 +1447,16 @@ impl ActivityStatsAccumulator {
         // A bucket sealed by the previous batch's chain time cannot receive
         // another block. Treat such input as a chain/order invariant
         // violation instead of silently recreating an already-written row.
+        // The check depends only on the block's chain time, so it runs once
+        // per block, on the block's first action (the same action the error
+        // named when every action was checked).
         if let Some(watermark) = self.sealed_through_ms {
+            let mut checked_block = None;
             for actions in tx_actions_list {
+                if checked_block == Some(actions.block_number) {
+                    continue;
+                }
+                checked_block = Some(actions.block_number);
                 let chain_time =
                     *block_chain_times
                         .get(&actions.block_number)
@@ -1455,17 +1486,27 @@ impl ActivityStatsAccumulator {
             }
         }
 
+        // Every action carries its block's timestamp; the block's is looked
+        // up once per block, not once per action.
+        let mut current_block: Option<(i64, i64)> = None;
         for actions in tx_actions_list {
-            let expected_timestamp = block_timestamps.get(&actions.block_number).ok_or_else(|| {
-                anyhow!(
-                    "activity action references block outside current batch: block={} tx_index={} batch_first={} batch_last={}",
-                    actions.block_number,
-                    actions.tx_index,
-                    blocks.first().expect("non-empty checked").number,
-                    blocks.last().expect("non-empty checked").number
-                )
-            })?;
-            if actions.timestamp != *expected_timestamp {
+            let expected_timestamp = match current_block {
+                Some((number, timestamp)) if number == actions.block_number => timestamp,
+                _ => {
+                    let timestamp = *block_timestamps.get(&actions.block_number).ok_or_else(|| {
+                        anyhow!(
+                            "activity action references block outside current batch: block={} tx_index={} batch_first={} batch_last={}",
+                            actions.block_number,
+                            actions.tx_index,
+                            blocks.first().expect("non-empty checked").number,
+                            blocks.last().expect("non-empty checked").number
+                        )
+                    })?;
+                    current_block = Some((actions.block_number, timestamp));
+                    timestamp
+                }
+            };
+            if actions.timestamp != expected_timestamp {
                 bail!(
                     "activity action timestamp differs from owning block: block={} tx_index={} action_timestamp_ms={} block_timestamp_ms={}",
                     actions.block_number,
@@ -1501,58 +1542,108 @@ impl ActivityStatsAccumulator {
         Ok(rows)
     }
 
+    /// Fold a batch's transactions into their UTC+8 day and hour buckets.
+    ///
+    /// Consecutive transactions on one (day, hour) — a run, normally one
+    /// UTC+8 hour of the batch's blocks — each fold ONCE through the
+    /// per-transaction rule (`accumulate_tx_activity_stats`) into the run's
+    /// stats, and their `Lock` participants (non-cellbase only, the live
+    /// rule) into the run's address list; the run then lands with one lookup
+    /// per bucket map ([`Self::land_run`]). Folding every transaction into
+    /// its day and into its hour separately gives the same rows: the same
+    /// counts summed in runs (`DailyActivityStats::add_counts`), the same
+    /// addresses.
     fn accumulate_tx_actions(
         &mut self,
         tx_actions_list: &[TxActions],
         block_chain_times: &FxHashMap<i64, i64>,
     ) -> Result<()> {
+        let mut cached_block = None;
         let mut cached_ts = i64::MIN;
-        let mut cached_date = String::new();
-        let mut cached_hour = String::new();
+        let mut run = ActivityRun::default();
 
         for tx_actions in tx_actions_list {
-            let chain_time = *block_chain_times
-                .get(&tx_actions.block_number)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing chain time for activity action: block={} tx_index={}",
-                        tx_actions.block_number,
-                        tx_actions.tx_index
-                    )
-                })?;
-            if chain_time != cached_ts {
-                cached_ts = chain_time;
-                cached_date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
-                // Activity hour keys are UTC+8, unlike chain-level hourly keys.
-                cached_hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)?;
+            if cached_block != Some(tx_actions.block_number) {
+                cached_block = Some(tx_actions.block_number);
+                let chain_time =
+                    *block_chain_times
+                        .get(&tx_actions.block_number)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "missing chain time for activity action: block={} tx_index={}",
+                                tx_actions.block_number,
+                                tx_actions.tx_index
+                            )
+                        })?;
+                if chain_time != cached_ts {
+                    cached_ts = chain_time;
+                    let date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
+                    // Activity hour keys are UTC+8, unlike chain-level hourly keys.
+                    let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)?;
+                    let same_run = run
+                        .buckets
+                        .as_ref()
+                        .is_some_and(|(run_date, run_hour)| *run_date == date && *run_hour == hour);
+                    if !same_run {
+                        self.land_run(&mut run)?;
+                        run.buckets = Some((date, hour));
+                    }
+                }
             }
 
-            crate::db::BatchWriter::accumulate_tx_activity_stats(
-                tx_actions,
-                self.daily_stats.entry(cached_date.clone()).or_default(),
-            );
-            crate::db::BatchWriter::accumulate_tx_activity_stats(
-                tx_actions,
-                self.hourly_stats.entry(cached_hour.clone()).or_default(),
-            );
-
+            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut run.stats);
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
                     // `Lock` participants only — same rule as the live path.
                     if let ParticipantId::Lock(lock_hash) = participant.id {
-                        self.daily_addrs
-                            .entry(cached_date.clone())
-                            .or_default()
-                            .insert(lock_hash);
-                        self.hourly_addrs
-                            .entry(cached_hour.clone())
-                            .or_default()
-                            .insert(lock_hash);
+                        run.addrs.push(lock_hash);
                     }
                 }
             }
         }
 
+        self.land_run(&mut run)
+    }
+
+    /// Land a run in its buckets with ONE lookup per bucket map: the day and
+    /// hour stats, and — only when the run has an address, so a bucket's
+    /// address set still exists exactly when an address landed in it — the
+    /// day and hour address sets.
+    fn land_run(&mut self, run: &mut ActivityRun) -> Result<()> {
+        let Some((date, hour)) = run.buckets.take() else {
+            return Ok(());
+        };
+        let stats = std::mem::take(&mut run.stats);
+        #[cfg(test)]
+        {
+            self.note_bucket_lookup("daily_stats", &date);
+            self.note_bucket_lookup("hourly_stats", &hour);
+        }
+        self.daily_stats
+            .entry(date.clone())
+            .or_default()
+            .add_counts(&stats)
+            .with_context(|| format!("bulk activity daily stats: day={date}"))?;
+        self.hourly_stats
+            .entry(hour.clone())
+            .or_default()
+            .add_counts(&stats)
+            .with_context(|| format!("bulk activity hourly stats: hour={hour}"))?;
+        if !run.addrs.is_empty() {
+            #[cfg(test)]
+            {
+                self.note_bucket_lookup("daily_addrs", &date);
+                self.note_bucket_lookup("hourly_addrs", &hour);
+            }
+            self.daily_addrs
+                .entry(date)
+                .or_default()
+                .extend(run.addrs.iter().copied());
+            self.hourly_addrs
+                .entry(hour)
+                .or_default()
+                .extend(run.addrs.drain(..));
+        }
         Ok(())
     }
 
@@ -9717,5 +9808,253 @@ mod tests {
         assert_eq!(hourly_addr_row.cf_name, CF_STATS_CHAIN);
         assert_eq!(hourly_addr_row.value.len(), 32);
         assert_eq!(&hourly_addr_row.value[..32], &[0x33; 32]);
+    }
+
+    /// J15: a transaction reaches each activity bucket map ONCE — the day and
+    /// hour stats (where its `.bit` `dotbit:*` counters live, beside every
+    /// other counter) and the day and hour address sets — however many
+    /// participants and protocol actions it carries; a run of transactions
+    /// in one UTC+8 hour shares those lookups. The bucket values are the
+    /// per-transaction rule summed.
+    #[test]
+    fn activity_bucket_maps_are_reached_once_per_transaction() {
+        use ckbadger_store::types::{ParticipantDelta, ProtocolAction, TAG_IDENTITY, TAG_PROTOCOL};
+        let ts = 1_700_000_000_000;
+        let participant = |byte: u8| ParticipantDelta {
+            id: ParticipantId::Lock([byte; 32]),
+            ckb_delta: 10,
+            used_delta: 0,
+            item_deltas: vec![],
+            tags: TAG_IDENTITY | TAG_PROTOCOL,
+            roles: 0,
+        };
+        let dotbit = |account: u8| {
+            ProtocolAction::new(
+                "dotbit",
+                "transfer_account",
+                serde_json::json!({ "accountId": hex::encode([account; 20]) }),
+            )
+        };
+        let bit_tx = |tx_byte: u8, tx_index: i32, first_lock: u8| TxActions {
+            tx_hash: vec![tx_byte; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 100,
+            tx_index,
+            timestamp: ts,
+            is_cellbase: false,
+            protocol_actions: vec![dotbit(0x01), dotbit(0x02)],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: (0..3).map(|i| participant(first_lock + i)).collect(),
+        };
+        let date = ckbadger_common::stats_bucket::stats_date_key(ts).unwrap();
+        let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(ts).unwrap();
+        let lookups = |acc: &ActivityStatsAccumulator| {
+            [
+                ("daily_stats", &date),
+                ("hourly_stats", &hour),
+                ("daily_addrs", &date),
+                ("hourly_addrs", &hour),
+            ]
+            .map(|(map, bucket)| {
+                acc.bucket_map_lookups
+                    .get(&(map, bucket.clone()))
+                    .copied()
+                    .unwrap_or_default()
+            })
+        };
+
+        let mut one = ActivityStatsAccumulator::default();
+        one.apply_tx_actions(&[bit_tx(0x31, 1, 0x40)]).unwrap();
+        assert_eq!(
+            lookups(&one),
+            [1, 1, 1, 1],
+            "one .bit tx with two dotbit actions and three locks: one lookup per bucket map"
+        );
+        assert_eq!(
+            one.daily_stats[&date].protocol_action_counts["dotbit:transfer_account"],
+            2
+        );
+        assert_eq!(one.daily_addrs[&date].len(), 3);
+
+        let mut run = ActivityStatsAccumulator::default();
+        run.apply_tx_actions(&[bit_tx(0x31, 1, 0x40), bit_tx(0x32, 2, 0x42)])
+            .unwrap();
+        assert_eq!(
+            lookups(&run),
+            [1, 1, 1, 1],
+            "two .bit txs in one hour share one lookup per bucket map"
+        );
+        for stats in [&run.daily_stats[&date], &run.hourly_stats[&hour]] {
+            assert_eq!(stats.protocol_action_counts["dotbit:transfer_account"], 4);
+            assert_eq!(stats.identity_count, 2);
+            assert_eq!(stats.total_ckb_moved, 60);
+        }
+        assert_eq!(run.daily_addrs[&date].len(), 5, "locks 0x40..0x44");
+        assert_eq!(run.hourly_addrs[&hour].len(), 5);
+    }
+
+    /// J15: folding transactions in runs (one bucket lookup per run) writes
+    /// byte-for-byte the rows of folding every transaction into its day and
+    /// its hour separately — the pre-J15 rule, kept here as the oracle —
+    /// across hours, days and batches, with cellbase-only blocks, repeated
+    /// and prefix-only participants, protocol actions and script calls.
+    #[test]
+    fn activity_runs_write_the_rows_of_per_transaction_folding() {
+        use ckbadger_store::types::{
+            LockCallEntry, ParticipantDelta, ProtocolAction, TypeCallEntry, TAG_DAO, TAG_IDENTITY,
+            TAG_PROTOCOL, TAG_TOKEN, TAG_TYPE_CALL,
+        };
+        const HOUR: i64 = 3_600_000;
+        const DAY: i64 = 24 * HOUR;
+        // 2023-11-15 06:13:20 UTC+8: three blocks in one hour, one in the
+        // next hour, two on the next day.
+        let base = 1_700_000_000_000;
+        let blocks: Vec<facts::BlockFacts> = [
+            (100, base),
+            (101, base + 10_000),
+            (102, base + 20_000),
+            (103, base + HOUR),
+            (104, base + DAY),
+            (105, base + DAY + 5_000),
+        ]
+        .into_iter()
+        .map(|(number, t)| facts::BlockFacts {
+            number,
+            timestamp_ms: t,
+            chain_time_ms: t,
+            ..Default::default()
+        })
+        .collect();
+        let tx = |block: usize,
+                  tx_index: i32,
+                  locks: &[u8],
+                  prefix_only: bool,
+                  actions: &[(&str, &str)],
+                  tags: u16| TxActions {
+            tx_hash: vec![block as u8 * 16 + tx_index as u8; 32],
+            block_hash: vec![block as u8; 32],
+            block_number: blocks[block].number,
+            tx_index,
+            timestamp: blocks[block].timestamp_ms,
+            is_cellbase: tx_index == 0,
+            protocol_actions: actions
+                .iter()
+                .map(|(protocol, action)| {
+                    ProtocolAction::new(*protocol, *action, serde_json::json!({}))
+                })
+                .collect(),
+            type_calls: if tags & TAG_TYPE_CALL != 0 {
+                vec![TypeCallEntry {
+                    type_code_hash: vec![0x5c; 32],
+                    type_hash_type: 1,
+                    type_args: vec![],
+                }]
+            } else {
+                vec![]
+            },
+            lock_calls: vec![LockCallEntry {
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+            }],
+            participants: locks
+                .iter()
+                .map(|byte| ParticipantDelta {
+                    id: if prefix_only {
+                        ParticipantId::LockPrefix([*byte; 20])
+                    } else {
+                        ParticipantId::Lock([*byte; 32])
+                    },
+                    ckb_delta: i128::from(*byte) * 100,
+                    used_delta: 0,
+                    item_deltas: vec![],
+                    tags,
+                    roles: 0,
+                })
+                .collect(),
+        };
+        let dotbit = ("dotbit", "transfer_account");
+        let list = vec![
+            tx(0, 0, &[0x01], false, &[], 0),
+            tx(0, 1, &[0x02, 0x03], false, &[("dao", "deposit")], TAG_DAO),
+            tx(0, 2, &[0x02], false, &[], TAG_TOKEN | TAG_TYPE_CALL),
+            tx(1, 0, &[0x01], false, &[], 0),
+            tx(
+                1,
+                1,
+                &[0x04, 0x02],
+                false,
+                &[dotbit, dotbit],
+                TAG_IDENTITY | TAG_PROTOCOL,
+            ),
+            tx(2, 0, &[0x01], false, &[], 0),
+            tx(2, 1, &[0x05], true, &[("utxoswap", "swap")], TAG_PROTOCOL),
+            tx(3, 0, &[0x01], false, &[], 0),
+            tx(3, 1, &[0x02, 0x06], false, &[], 0),
+            tx(4, 0, &[0x01], false, &[], 0),
+            tx(5, 0, &[0x01], false, &[], 0),
+            tx(5, 1, &[0x07], false, &[], TAG_TYPE_CALL),
+        ];
+
+        // The oracle: every transaction folded into its day and its hour.
+        let mut oracle = ActivityStatsAccumulator::default();
+        for tx in &list {
+            let t = tx.timestamp;
+            let date = ckbadger_common::stats_bucket::stats_date_key(t).unwrap();
+            let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(t).unwrap();
+            oracle
+                .daily_stats
+                .entry(date.clone())
+                .or_default()
+                .accumulate_from_tx_actions(tx);
+            oracle
+                .hourly_stats
+                .entry(hour.clone())
+                .or_default()
+                .accumulate_from_tx_actions(tx);
+            if !tx.is_cellbase {
+                for participant in &tx.participants {
+                    if let ParticipantId::Lock(lock_hash) = participant.id {
+                        oracle
+                            .daily_addrs
+                            .entry(date.clone())
+                            .or_default()
+                            .insert(lock_hash);
+                        oracle
+                            .hourly_addrs
+                            .entry(hour.clone())
+                            .or_default()
+                            .insert(lock_hash);
+                    }
+                }
+            }
+        }
+        let expected = oracle.build_rows().unwrap();
+        assert_eq!(
+            expected.len(),
+            2 * 2 + 3 * 2,
+            "two days and three hours, each with stats and an address set"
+        );
+
+        let mut one_shot = ActivityStatsAccumulator::default();
+        one_shot.apply_tx_actions(&list).unwrap();
+        assert_eq!(one_shot.build_rows().unwrap(), expected, "one batch");
+
+        // Three batches: the first hour seals after the second batch, the
+        // first day and the second hour after the third.
+        let mut batched = ActivityStatsAccumulator::default();
+        let mut actual = batched.apply_batch(&blocks[0..3], &list[0..7]).unwrap();
+        actual.extend(batched.apply_batch(&blocks[3..4], &list[7..9]).unwrap());
+        actual.extend(batched.apply_batch(&blocks[4..6], &list[9..]).unwrap());
+        assert!(!actual.is_empty(), "the batches seal rows");
+        actual.extend(batched.build_rows().unwrap());
+        let mut expected_sorted = expected;
+        let sort_rows = |rows: &mut Vec<materialize::MaterializedRow>| {
+            rows.sort_by(|a, b| (a.cf_name, &a.key).cmp(&(b.cf_name, &b.key)));
+        };
+        sort_rows(&mut actual);
+        sort_rows(&mut expected_sorted);
+        assert_eq!(actual, expected_sorted, "three batches with sealing");
     }
 }
