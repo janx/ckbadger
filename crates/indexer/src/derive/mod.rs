@@ -40,7 +40,7 @@ use ckbadger_store::{CkbadgerStore, StoreBatch};
 use tracing::warn;
 
 pub(crate) use live::apply_live_batch;
-pub use live::{report_live_failures, LiveBlockPoint, LiveDeriveCtx, LiveFailure};
+pub use live::{LiveBlockPoint, LiveDeriveCtx};
 pub use scheduler::{derive_to_completion, rederive_to_completion, DeriveScheduler, StepOutcome};
 
 /// Derived key → signed contribution, one map per chunk or per block.
@@ -94,6 +94,8 @@ pub struct ChunkBudget {
     started: Instant,
     max_time: Duration,
     max_rows: u64,
+    #[allow(dead_code)]
+    max_keys: usize,
     rows: u64,
 }
 
@@ -103,8 +105,15 @@ impl ChunkBudget {
             started: Instant::now(),
             max_time,
             max_rows,
+            max_keys: usize::MAX,
             rows: 0,
         }
+    }
+
+    /// At most this many distinct output keys per chunk.
+    pub fn with_max_keys(mut self, max_keys: usize) -> Self {
+        self.max_keys = max_keys;
+        self
     }
 
     /// Count one folded source row; `true` once the chunk must stop.
@@ -289,6 +298,11 @@ pub(crate) mod test_support {
         pub(crate) id: DerivedAggregateId,
         /// Rows with a count above this violate the toy invariant.
         pub(crate) max_per_epoch: i128,
+        /// Key each header by its block number instead of its epoch (one
+        /// distinct output key per source row).
+        pub(crate) key_by_block: bool,
+        /// `check_row` calls, so a test can see how much one step validated.
+        pub(crate) checks: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl Default for ToyHeadersPerEpoch {
@@ -296,6 +310,18 @@ pub(crate) mod test_support {
             Self {
                 id: TOY,
                 max_per_epoch: i128::MAX,
+                key_by_block: false,
+                checks: Default::default(),
+            }
+        }
+    }
+
+    impl ToyHeadersPerEpoch {
+        fn key_of(&self, number: i64, epoch: i64) -> Vec<u8> {
+            if self.key_by_block {
+                number.to_be_bytes().to_vec()
+            } else {
+                epoch_key(epoch)
             }
         }
     }
@@ -319,7 +345,8 @@ pub(crate) mod test_support {
                     continue;
                 }
                 let header: CachedBlockHeader = bincode::deserialize(&value)?;
-                add_delta(out, epoch_key(header.epoch_number), &[1])?;
+                let number = ckbadger_store::keys::decode_block_num(&key);
+                add_delta(out, self.key_of(number, header.epoch_number), &[1])?;
                 if budget.tick() {
                     return Ok(Some(key.to_vec()));
                 }
@@ -331,7 +358,7 @@ pub(crate) mod test_support {
             for block in ctx.blocks {
                 add_delta(
                     out.entry(block.number).or_default(),
-                    epoch_key(block.epoch_number),
+                    self.key_of(block.number, block.epoch_number),
                     &[1],
                 )?;
             }
@@ -339,6 +366,8 @@ pub(crate) mod test_support {
         }
 
         fn check_row(&self, key: &[u8], value: &[i128]) -> Result<()> {
+            self.checks
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             anyhow::ensure!(
                 value.len() == 1 && value[0] > 0 && value[0] <= self.max_per_epoch,
                 "toy row 0x{} out of range: {value:?}",

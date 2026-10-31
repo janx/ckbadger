@@ -1,17 +1,17 @@
 //! The derivation scheduler: runs on the live pipeline's writer task, between
 //! live batches, one bounded chunk per call.
 
-use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use ckbadger_common::BackgroundTaskState;
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, ReadSnapshot};
 use ckbadger_store::{CkbadgerStore, StoreBatch};
-use tracing::{error, info};
+use tracing::info;
 
+use super::live::record_failure_before_stop;
 use super::{
-    committed_tip, failed_meta, registry, stage_reset, sum_with, task_name, ChunkBudget, DeltaMap,
+    committed_tip, registry, stage_reset, sum_with, task_name, ChunkBudget, DeltaMap,
     DerivedAggregate,
 };
 
@@ -20,6 +20,8 @@ use super::{
 pub const CHUNK_MAX_TIME: Duration = Duration::from_millis(150);
 /// Source rows per chunk at most.
 pub const CHUNK_MAX_ROWS: u64 = 20_000;
+/// Distinct derived keys one chunk may read-modify-write at most.
+pub const CHUNK_MAX_KEYS: usize = 4_096;
 
 /// What one [`DeriveScheduler::step`] did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,8 +34,6 @@ pub enum StepOutcome {
     Chunk,
     /// The last chunk was folded and the aggregate is complete.
     Completed,
-    /// The derivation hit an invariant violation and is now `Failed`.
-    Failed,
 }
 
 /// The rebuild in flight: its snapshot, and where it stands.
@@ -54,9 +54,10 @@ pub struct DeriveScheduler<'s> {
     store: &'s CkbadgerStore,
     aggregates: Vec<Box<dyn DerivedAggregate>>,
     active: Option<ActiveRebuild<'s>>,
-    failed_this_process: HashSet<&'static str>,
     chunk_time: Duration,
     chunk_rows: u64,
+    #[allow(dead_code)]
+    chunk_keys: usize,
 }
 
 impl<'s> DeriveScheduler<'s> {
@@ -72,15 +73,21 @@ impl<'s> DeriveScheduler<'s> {
             store,
             aggregates,
             active: None,
-            failed_this_process: HashSet::new(),
             chunk_time: CHUNK_MAX_TIME,
             chunk_rows: CHUNK_MAX_ROWS,
+            chunk_keys: CHUNK_MAX_KEYS,
         }
     }
 
     /// Smaller chunks, for tests that interleave live batches between them.
     pub fn with_chunk_rows(mut self, rows: u64) -> Self {
         self.chunk_rows = rows;
+        self
+    }
+
+    /// Fewer distinct output keys per chunk.
+    pub fn with_chunk_keys(mut self, keys: usize) -> Self {
+        self.chunk_keys = keys;
         self
     }
 
@@ -139,23 +146,14 @@ impl<'s> DeriveScheduler<'s> {
         Ok(())
     }
 
-    /// The first aggregate, in registry order, that still needs rebuild work
-    /// in this process, with its meta.
+    /// The first aggregate, in registry order, that still needs rebuild work,
+    /// with its meta.
     fn next_pending(&self) -> Result<Option<(usize, Option<DeriveMeta>)>> {
         for (index, aggregate) in self.aggregates.iter().enumerate() {
             let id = aggregate.id();
-            if self.failed_this_process.contains(id.name) {
-                continue;
-            }
             let meta = self.store.get_derive_meta(id.name)?;
             match &meta {
                 Some(meta) if meta.is_complete(&id) => continue,
-                Some(meta)
-                    if meta.version == id.version
-                        && matches!(meta.state, DeriveState::Failed { .. }) =>
-                {
-                    continue
-                }
                 _ => return Ok(Some((index, meta))),
             }
         }
@@ -366,24 +364,20 @@ impl<'s> DeriveScheduler<'s> {
             })
     }
 
+    /// Fail fast: mark the aggregate `Failed` (what the stopping indexer
+    /// leaves for the TUI and the API) and return the error, which stops the
+    /// writer loop and the indexer.
     fn fail(&mut self, err: anyhow::Error) -> Result<StepOutcome> {
         let active = self.active.take().expect("a failing rebuild is in flight");
         let id = self.aggregates[active.index].id();
         let previous = self.store.get_derive_meta(id.name)?.ok_or_else(|| {
             anyhow::anyhow!("derive meta for {} vanished while it was running", id.name)
         })?;
-        let failed = failed_meta(&previous, &err);
-        let mut batch = StoreBatch::new(self.store);
-        batch.put_derive_meta(id.name, &failed);
-        batch.commit()?;
-        error!(target: "derive", aggregate = id.name, error = %format!("{err:#}"), "derivation failed; not retried until the indexer restarts");
-        self.failed_this_process.insert(id.name);
-        self.store
-            .update_background_task(&task_name(id.name), |entry| {
-                entry.state = BackgroundTaskState::Failed;
-                entry.error = Some(format!("{err:#}"));
-            })?;
-        Ok(StepOutcome::Failed)
+        record_failure_before_stop(self.store, id.name, &previous, &err)?;
+        Err(err.context(format!(
+            "background derivation of {} stopped the indexer",
+            id.name
+        )))
     }
 }
 
@@ -408,7 +402,8 @@ pub fn rederive_to_completion(store: &CkbadgerStore) -> Result<Vec<(&'static str
 /// Run every registered derivation to completion on a primary store, with no
 /// live sync alongside. For tests and tools that build a store and then read
 /// it; the indexer itself runs [`DeriveScheduler`] between live batches.
-/// Returns each aggregate's final state.
+/// Returns each aggregate's final state; an invariant violation is an error
+/// (after the aggregate was marked `Failed`), exactly as in the indexer.
 pub fn derive_to_completion(store: &CkbadgerStore) -> Result<Vec<(&'static str, DeriveState)>> {
     let mut scheduler = DeriveScheduler::new(store);
     scheduler.normalize_on_startup()?;
@@ -659,22 +654,27 @@ mod tests {
         assert_eq!(store.get_derive_meta(TOY.name).unwrap().unwrap().run, 2);
     }
 
+    /// Ruling A: a rebuild invariant violation stops the scheduler (the
+    /// error propagates out of `step`, so the indexer stops); the `Failed`
+    /// marker is what it leaves behind.
     #[test]
-    fn a_rebuild_invariant_violation_fails_the_aggregate_once_per_process() {
+    fn a_rebuild_invariant_violation_stops_the_scheduler() {
         let (_dir, store) = toy_store();
         commit_headers(&store, 0..=9);
         let strict: Vec<Box<dyn DerivedAggregate>> = vec![Box::new(ToyHeadersPerEpoch {
-            id: TOY,
             max_per_epoch: 2,
+            ..Default::default()
         })];
         let mut scheduler = DeriveScheduler::with_aggregates(&store, strict);
         scheduler.normalize_on_startup().unwrap();
-        let outcomes = run_to_completion(&mut scheduler);
-        assert_eq!(outcomes.last(), Some(&StepOutcome::Failed));
-        assert!(
-            !scheduler.has_pending_work().unwrap(),
-            "no retry loop in-process"
-        );
+        let err = loop {
+            match scheduler.step() {
+                Ok(StepOutcome::Idle) => panic!("the derivation completed over an invalid row"),
+                Ok(_) => continue,
+                Err(err) => break format!("{err:#}"),
+            }
+        };
+        assert!(err.contains("toy row"), "{err}");
         match store.get_derive_meta(TOY.name).unwrap().unwrap().state {
             DeriveState::Failed { error } => assert!(error.contains("toy row"), "{error}"),
             other => panic!("{other:?}"),

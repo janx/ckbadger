@@ -4073,10 +4073,10 @@ impl Indexer {
             // tip implies; the next batch, built on this tip, prunes them.
             // Derived aggregates (round 3 lane L): this batch's signed
             // deltas for every derivation that is running or complete, in
-            // this same atomic write, with per-block undo pre-images.
-            let derive_failures = if bulk_sync_mode {
-                Vec::new()
-            } else {
+            // this same atomic write, with per-block undo pre-images. A
+            // failure is a deterministic invariant violation: the batch is
+            // not committed and the indexer stops (fail fast).
+            if !bulk_sync_mode {
                 let derive_blocks: Vec<crate::derive::LiveBlockPoint> = all_parsed_blocks
                     .iter()
                     .map(|parsed| crate::derive::LiveBlockPoint {
@@ -4100,13 +4100,13 @@ impl Indexer {
                     &mut data_batch,
                     &batch_undo_seq,
                 )
-                .with_context(|| {
-                    format!(
-                        "derived aggregate live maintenance failed for blocks {}-{}",
-                        first_block, last_block
+                .map_err(|source| {
+                    PreCommitInvariantError::new(
+                        "derived aggregate",
+                        source.context(format!("live batch {}-{}", first_block, last_block)),
                     )
-                })?
-            };
+                })?;
+            }
 
             let retention_request =
                 HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
@@ -4249,7 +4249,6 @@ impl Indexer {
             })?;
             retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
-            crate::derive::report_live_failures(self.writer.store(), &derive_failures)?;
             // Debug-build invariant (plan Task 5.3): rollback replays a block's
             // undo entries scope-major, which is exact only while each key the
             // block mutates is recorded by one scope.

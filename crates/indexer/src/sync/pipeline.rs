@@ -2502,7 +2502,9 @@ impl Indexer {
             if self.progress.blocks_remaining() <= self.config.bulk_sync_threshold
                 && derive_scheduler.has_pending_work()?
             {
-                derive_scheduler.step()?;
+                derive_scheduler
+                    .step()
+                    .context("background derivation failed (fail fast: the indexer stops)")?;
                 if parse_rx.is_empty() {
                     continue;
                 }

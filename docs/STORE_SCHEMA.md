@@ -556,7 +556,7 @@ finished_at_ms }`, with `state` one of:
 | `NotStarted`                                              | rows absent or garbage; not maintained, not served                                                                         |
 | `Running { derived_from_tip: H, cursor, rows_done }`      | rebuild in flight over the snapshot at `H`; live deltas above `H` applied; `cursor` is progress only                       |
 | `Complete { derived_from_tip: H, completed_at_tip: C, … }` | rows equal a from-scratch derivation at the sync tip; exact since block `C` (the tip when the last chunk committed)        |
-| `Failed { error }`                                        | an invariant violation in the rebuild or a live write; rows not served, the API answers `500` with the error               |
+| `Failed { error }`                                        | written only by an indexer that is stopping on an invariant violation of this aggregate (rebuild or live write), so the TUI / API can say why; reset at the next start |
 
 Transitions: on indexer start (before the first live batch) a missing meta, a `version` other
 than the current one, `Running` (its snapshot died with the process) or `Failed` → rows cleared,
@@ -566,9 +566,12 @@ registry order: rows cleared + `Running{H}` in one write, then the snapshot. Whe
 exhausted, every row is checked and the state becomes `Complete{H, C}`. A rollback resets
 (`NotStarted` + clear, committed **before** undo replay) a `Running` derivation whenever it
 removes a block, and a `Complete` one when its target is below `C`; otherwise undo replay
-restores the rows exactly. A live write that breaks a row invariant stages `Failed` instead of
-its rows; canonical sync continues. `Failed` is retried once per indexer start. Bumping an
-aggregate's `version` in `derive_ops.rs` re-derives it on the next start.
+restores the rows exactly. **Fail fast:** a live delta that cannot be computed or a row that
+breaks its invariant fails the live batch as a pre-commit invariant (nothing of the batch is
+committed) and a rebuild-chunk or validation error propagates out of the scheduler — either way
+the indexer stops, after writing the aggregate's `Failed` marker. There is no degraded
+continuation. Bumping an aggregate's `version` in `derive_ops.rs` re-derives it on the next
+start.
 
 **`dao_live_agg`** (L1, J1). Source rows: the `dao_deposits` lifecycle entries with status 0 (a
 live deposit cell) and 1 (a live withdraw-request cell), walked through `dao_by_status_block`. The

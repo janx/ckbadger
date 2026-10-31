@@ -147,9 +147,10 @@ fn dao_evidence_fixture() -> Arc<CkbadgerStore> {
     store
 }
 
-/// Run the indexer's background derivations to completion on `store`.
+/// Run the indexer's background derivations on `store` (an invariant
+/// violation leaves the `Failed` marker the stopping indexer writes).
 fn derive(store: &CkbadgerStore) {
-    ckbadger_indexer::derive::derive_to_completion(store).unwrap();
+    derive_like_the_indexer(store);
 }
 
 /// The producer fixture covers exact phase boundaries, changed epoch lengths,
