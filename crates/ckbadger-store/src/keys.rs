@@ -1635,6 +1635,9 @@ pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, u8, bool, u32) {
     (code_hash, hash_type, is_type, date)
 }
 
+/// Width of a `token_transfers` key (see [`encode_token_transfer_key`]).
+pub const TOKEN_TRANSFER_KEY_SIZE: usize = 44;
+
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
 /// Uses descending block_num and tx_idx so newest transfers come first in prefix scan.
 pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
@@ -1644,7 +1647,7 @@ pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) 
         type_hash.len(),
         HASH32_LEN,
     );
-    let mut key = Vec::with_capacity(44);
+    let mut key = Vec::with_capacity(TOKEN_TRANSFER_KEY_SIZE);
     key.extend_from_slice(&type_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));

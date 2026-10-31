@@ -1283,12 +1283,30 @@ fn delete_cell_index_entries(
     if let Some(type_code_key) = type_code_key {
         batch.delete_cf(store.cf_cell_by_type_code(), &type_code_key);
     }
+    delete_cell_data_hash_entry(store, batch, cell, created_at_block, tx_hash, output_index);
+    Ok(())
+}
+
+/// Delete a rolled-back cell's `cell_by_data_hash` row.
+///
+/// Unlike the other cell indexes this row survives consumption (code-cell
+/// resolution reads consumed deployments), so it goes only when the cell itself
+/// ceases to exist: a live output of a rolled-back transaction, or a cell both
+/// created and consumed inside the rolled-back range. Deleting a row the
+/// forward writer never filed (an empty-data cell) is a no-op.
+fn delete_cell_data_hash_entry(
+    store: &CkbadgerStore,
+    batch: &mut WriteBatch,
+    cell: &LiveCellInfo,
+    created_at_block: i64,
+    tx_hash: &[u8],
+    output_index: i16,
+) {
     if let Some(ref data_hash) = cell.data_hash {
         let idx_key =
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_data_hash(), &idx_key);
     }
-    Ok(())
 }
 
 fn put_cell_index_entries(
@@ -1317,11 +1335,10 @@ fn put_cell_index_entries(
     if let Some(type_code_key) = type_code_key {
         batch.put_cf(store.cf_cell_by_type_code(), &type_code_key, []);
     }
-    if let Some(ref data_hash) = cell.data_hash {
-        let idx_key =
-            keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);
-        batch.put_cf(store.cf_cell_by_data_hash(), &idx_key, []);
-    }
+    // No `cell_by_data_hash` put: consumption never deleted that row, so a
+    // restored cell still has it exactly when its creating writer filed it
+    // (never for an empty-data cell). Re-putting it fabricated a row for
+    // empty-data cells the live writer does not index.
     Ok(())
 }
 
@@ -1588,6 +1605,22 @@ fn accumulate_cell_deltas(
         }
     }
 
+    Ok(())
+}
+
+/// Every `token_transfers` key is `type_hash(32) + block_desc(8) + tx_idx(4)`
+/// (`keys::encode_token_transfer_key`); any other width is corruption, never a
+/// row to step over.
+fn check_token_transfer_key_width(key: &[u8]) -> anyhow::Result<()> {
+    if key.len() != keys::TOKEN_TRANSFER_KEY_SIZE {
+        anyhow::bail!(
+            "{} key has {} bytes, expected {}: key=0x{}",
+            crate::store::CF_TOKEN_TRANSFERS,
+            key.len(),
+            keys::TOKEN_TRANSFER_KEY_SIZE,
+            bytes_to_hex(key)
+        );
+    }
     Ok(())
 }
 
@@ -2943,6 +2976,16 @@ impl CkbadgerStore {
                         &mut hodl_capacity_deltas,
                     )?;
                 } else {
+                    // Created inside the rolled-back range too: the cell ceases to
+                    // exist, and with it the data-hash row consumption kept.
+                    delete_cell_data_hash_entry(
+                        self,
+                        &mut batch,
+                        &info,
+                        meta.created_at_block,
+                        &tx_hash,
+                        output_index,
+                    );
                     reverse_created_consumed_cell_totals(
                         &info,
                         &mut addr_balance_deltas,
@@ -3154,6 +3197,18 @@ impl CkbadgerStore {
                                     &mut hodl_capacity_deltas,
                                 )?;
                             } else {
+                                // Created inside the rolled-back range too (its
+                                // creating tx's output loop only drops the consumed
+                                // meta): the cell ceases to exist, and with it the
+                                // data-hash row consumption kept.
+                                delete_cell_data_hash_entry(
+                                    self,
+                                    &mut batch,
+                                    &consumed.cell,
+                                    consumed.created_at_block,
+                                    &input.tx_hash,
+                                    input.output_index,
+                                );
                                 reverse_created_consumed_cell_totals(
                                     &consumed.cell,
                                     &mut addr_balance_deltas,
@@ -3745,9 +3800,7 @@ impl CkbadgerStore {
                     if !key.starts_with(type_hash.as_slice()) {
                         break;
                     }
-                    if key.len() != 44 {
-                        continue;
-                    }
+                    check_token_transfer_key_width(&key)?;
                     let (block_num, _) = keys::decode_token_transfer_key(&key);
                     if block_num <= rollback_to {
                         // Descending by block within the prefix, so every
@@ -3772,14 +3825,13 @@ impl CkbadgerStore {
                         e
                     )
                 })?;
-                if key.len() == 44 {
-                    let (block_num, _) = keys::decode_token_transfer_key(&key);
-                    if block_num > rollback_to {
-                        batch.delete_cf(self.cf_token_transfers(), &key);
-                        token_transfers_removed += 1;
-                        let type_hash = key[0..32].to_vec();
-                        *transfer_count_deltas.entry(type_hash).or_insert(0) += 1;
-                    }
+                check_token_transfer_key_width(&key)?;
+                let (block_num, _) = keys::decode_token_transfer_key(&key);
+                if block_num > rollback_to {
+                    batch.delete_cf(self.cf_token_transfers(), &key);
+                    token_transfers_removed += 1;
+                    let type_hash = key[0..32].to_vec();
+                    *transfer_count_deltas.entry(type_hash).or_insert(0) += 1;
                 }
                 stage.tick(token_transfers_removed);
             }
@@ -9779,6 +9831,40 @@ mod tests {
                 && error.contains("rollback_to=1"),
             "{error}"
         );
+    }
+
+    /// Every `token_transfers` key is 44 bytes (`encode_token_transfer_key`).
+    /// The rollback must name a malformed one rather than step over it — on the
+    /// per-token prefix path (tx-contexts) and on the full-scan fallback alike.
+    #[test]
+    fn test_rollback_fails_on_a_token_transfers_key_of_the_wrong_width() {
+        for use_tx_contexts in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+            let type_hash = seed_token_transfer_rollback_fixture(&store, 0);
+            if !use_tx_contexts {
+                // Without the block's tx-context the rollback takes the full scans.
+                store
+                    .delete_cf(
+                        store.cf_reorg_undo_log_by_block(),
+                        &keys::encode_reorg_undo_log_key(2, 0),
+                    )
+                    .unwrap();
+            }
+            let mut malformed = type_hash.clone();
+            malformed.extend_from_slice(&[0u8; 8]);
+            store
+                .put_cf(store.cf_token_transfers(), &malformed, &[])
+                .unwrap();
+
+            let error = rollback_fixture(&store, 1).unwrap_err().to_string();
+
+            assert!(
+                error.contains("token_transfers key has 40 bytes, expected 44")
+                    && error.contains(&bytes_to_hex(&malformed)),
+                "use_tx_contexts={use_tx_contexts}: {error}"
+            );
+        }
     }
 
     /// J4: the row's count is the counter's copy. A restored pre-image carries

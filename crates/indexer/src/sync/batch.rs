@@ -13079,6 +13079,192 @@ mod tests {
             assert_eq!(token_state(&store, &ext_type_hash()), (None, None));
         }
     }
+
+    /// A rollback must leave the cell indexes exactly as a store that never saw
+    /// the orphaned blocks. `cell_by_data_hash` keeps a row when its cell is
+    /// consumed (code-cell resolution reads consumed deployments), so a cell
+    /// created AND consumed inside the rolled-back range must lose that row
+    /// with its consumed meta — on the tx-context path and on the full-scan
+    /// fallback alike.
+    mod rollback_cell_index_rows {
+        use super::live_dao_fee::{block, cellbase_tx, indexer_for_live_write_test, lock_script};
+        use super::*;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const FUNDING_CAPACITY: u64 = 3000_00000000;
+        const DATA_CELL_CAPACITY: u64 = 200_00000000;
+        const FEE: u64 = 1_00000000;
+
+        fn lock_script_b() -> Script {
+            Script {
+                args: format!("0x{}", "02".repeat(20)),
+                ..lock_script()
+            }
+        }
+
+        fn input(tx_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([tx_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn output(capacity: u64, lock: Script) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_: None,
+            }
+        }
+
+        fn tx(
+            hash_byte: u8,
+            inputs: Vec<CellInput>,
+            outputs: Vec<(CellOutput, &str)>,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs,
+                outputs: outputs.iter().map(|(o, _)| o.clone()).collect(),
+                outputs_data: outputs.iter().map(|(_, d)| d.to_string()).collect(),
+                witnesses: vec!["0x".to_string()],
+            }
+        }
+
+        /// Block 100 funds, block 101 creates a cell carrying data (so it has a
+        /// `cell_by_data_hash` row), block 102 consumes it.
+        fn blocks() -> Vec<BlockResponseWithCycles> {
+            let create = tx(
+                0xe1,
+                vec![input(0xc0, 0)],
+                vec![
+                    (output(DATA_CELL_CAPACITY, lock_script()), "0xdeadbeefcafe"),
+                    (
+                        output(FUNDING_CAPACITY - DATA_CELL_CAPACITY, lock_script()),
+                        "0x",
+                    ),
+                ],
+            );
+            let consume = tx(
+                0xe2,
+                vec![input(0xe1, 0)],
+                vec![(output(DATA_CELL_CAPACITY - FEE, lock_script_b()), "0x")],
+            );
+            vec![
+                block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(101, AR, vec![cellbase_tx(0xc1, 500_00000000), create]),
+                block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), consume]),
+            ]
+        }
+
+        async fn write_live(blocks: &[BlockResponseWithCycles]) -> Arc<CkbadgerStore> {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            super::live_dao_fee::seed_secp_script_info(store.as_ref());
+            let indexer = indexer_for_live_write_test(store.clone());
+            for block in blocks {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    vec![block.clone()],
+                )
+                .await
+                .unwrap();
+            }
+            store
+        }
+
+        /// Roll back by the undo log's tx-contexts, or — `use_tx_contexts =
+        /// false` — by the full-scan fallback (no contexts handed over).
+        fn rollback_to(store: &CkbadgerStore, fork_point: i64, use_tx_contexts: bool) {
+            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
+            let contexts = if use_tx_contexts {
+                undo.tx_contexts
+            } else {
+                Vec::new()
+            };
+            store
+                .rollback_to_block_with_tx_contexts(fork_point, Some(store), contexts)
+                .unwrap();
+        }
+
+        /// Every row of every cell-state CF.
+        fn cell_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+            let mut rows = Vec::new();
+            for (name, cf) in [
+                ("live_cells", store.cf_live_cells()),
+                ("consumed_cells", store.cf_consumed_cells()),
+                ("cell_by_lock", store.cf_cell_by_lock()),
+                ("cell_by_type", store.cf_cell_by_type()),
+                ("cell_by_lock_code", store.cf_cell_by_lock_code()),
+                ("cell_by_type_code", store.cf_cell_by_type_code()),
+                ("cell_by_data_hash", store.cf_cell_by_data_hash()),
+            ] {
+                for item in store.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+                    let (key, value) = item.unwrap();
+                    rows.push((name, key.to_vec(), value.to_vec()));
+                }
+            }
+            rows
+        }
+
+        fn data_hash_rows(store: &CkbadgerStore) -> usize {
+            store
+                .iterator_cf(store.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
+                .count()
+        }
+
+        async fn assert_rollback_matches_reference(use_tx_contexts: bool) {
+            let all = blocks();
+            let store = write_live(&all).await;
+            assert_eq!(
+                data_hash_rows(&store),
+                1,
+                "fixture: the consumed data cell keeps its data-hash row"
+            );
+
+            // Fork after block 101: the cell survives, its consumption does not.
+            rollback_to(&store, 101, use_tx_contexts);
+            let through_101 = write_live(&all[..2]).await;
+            assert_eq!(
+                cell_rows(&store),
+                cell_rows(&through_101),
+                "use_tx_contexts={use_tx_contexts}: rollback to 101"
+            );
+
+            // Fork after block 100 on a fresh store: the cell was created AND
+            // consumed in the rolled-back range, so nothing of it may remain.
+            let store = write_live(&all).await;
+            rollback_to(&store, 100, use_tx_contexts);
+            let through_100 = write_live(&all[..1]).await;
+            assert_eq!(
+                cell_rows(&store),
+                cell_rows(&through_100),
+                "use_tx_contexts={use_tx_contexts}: rollback to 100"
+            );
+        }
+
+        #[tokio::test]
+        async fn rollback_by_tx_contexts_removes_a_created_and_consumed_cells_data_hash_row() {
+            assert_rollback_matches_reference(true).await;
+        }
+
+        #[tokio::test]
+        async fn rollback_by_full_scan_removes_a_created_and_consumed_cells_data_hash_row() {
+            assert_rollback_matches_reference(false).await;
+        }
+    }
     mod all_stats_dao_parity {
         use super::*;
         use ckbadger_store::AddressBalance;
