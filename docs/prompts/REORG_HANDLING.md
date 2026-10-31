@@ -198,6 +198,15 @@ removed by replay has its counter deleted. Label import is not block-scoped: a p
 before a restart that changed a label restores the earlier label until the next start re-imports
 it.
 
+**Cell index rows** follow the cell rollback (tx-contexts, or the full-scan fallback), in the same
+batch as the live-marker change. `cell_by_lock` / `cell_by_type` / the code indexes are deleted with
+a rolled-back live output and re-put with a restored consumed cell. `cell_by_data_hash` survives
+consumption (code-cell resolution reads consumed deployments), so the rollback deletes it only when
+the cell ceases to exist — a live output of a rolled-back tx, or a cell created **and** consumed in
+the rolled-back range — and never re-puts it for a restored cell (it was never deleted; re-putting
+would fabricate a row for an empty-data cell the live writer does not index). Rollback fails on a
+`token_transfers` key whose width is not 44 instead of stepping over it.
+
 ### Direct Deletion (for activity/event CFs)
 
 Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
