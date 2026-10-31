@@ -136,31 +136,11 @@ pub struct TransactionResponse {
     pub cycles_status: String,
     pub is_cellbase: bool,
     pub timestamp: String,
-    /// For a cellbase, the block whose reward it pays (TX-23 / TX-25, the same
-    /// rule as the block page's `cellbasePays`); `null` for every other
+    /// For a cellbase, the block whose reward it pays, `{ number, hash }`
+    /// (TX-23 / TX-25 / R-6a): the block page's `cellbasePays`, read by the
+    /// same [`super::blocks::cellbase_pays`]; `null` for every other
     /// transaction and for cellbases too close to genesis to pay any reward.
-    pub pays: Option<CellbasePaysResponse>,
-}
-
-/// The block a cellbase pays the reward of: its own block number minus the
-/// finalization delay ([`cellbase_reward_target`]) — read-time arithmetic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CellbasePaysResponse {
-    pub number: i64,
-}
-
-/// `pays` of a transaction at `block`: `None` unless it is a cellbase that
-/// pays a reward.
-fn cellbase_pays_response(
-    is_cellbase: bool,
-    window: ProposalWindow,
-    block: i64,
-) -> Option<CellbasePaysResponse> {
-    if !is_cellbase {
-        return None;
-    }
-    cellbase_reward_target(window, block).map(|number| CellbasePaysResponse { number })
+    pub pays: Option<super::blocks::BlockRefResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,7 +313,7 @@ pub(crate) fn transaction_response(
                 hex::encode(entry.tx_hash)
             ))
         })?;
-        cellbase_pays_response(true, window, block)
+        super::blocks::cellbase_pays(&state.store, window, block)?
     } else {
         None
     };
@@ -903,8 +883,9 @@ pub struct TransactionDetailResponse {
     /// A cellbase's decoded witness 0 (miner lock and client message); `null`
     /// for every other transaction.
     pub cellbase_witness: Option<super::transaction_structure::CellbaseWitnessResponse>,
-    /// For a cellbase, the block whose reward it pays (TX-23); `null` otherwise.
-    pub pays: Option<CellbasePaysResponse>,
+    /// For a cellbase, the block whose reward it pays, `{ number, hash }`
+    /// (TX-23 / R-6a); `null` otherwise.
+    pub pays: Option<super::blocks::BlockRefResponse>,
     /// Who paid the fee (TX-18): every input lock whose inputs hold more than
     /// the transaction returns to it, largest outflow first. Empty when no
     /// lock's balance fell — a cellbase, or a DAO withdrawal whose fee comes
@@ -1247,6 +1228,46 @@ fn occupied_capacity_bytes(
     8 + 32 + 1 + lock_args_len + type_size + data_size
 }
 
+/// `pays` of a cellbase the node committed at `number` but this store has
+/// not indexed: the target [`cellbase_reward_target`] names, hashed by the
+/// node's canonical header at that height. A node without that header is an
+/// error naming both blocks (the target is below a block the node committed).
+async fn node_cellbase_pays(
+    source: &crate::pool::HttpPoolSource,
+    window: ProposalWindow,
+    number: i64,
+    tx: &str,
+) -> Result<Option<super::blocks::BlockRefResponse>, ApiRouteError> {
+    use crate::pool::PoolSource;
+    let Some(target) = cellbase_reward_target(window, number) else {
+        return Ok(None);
+    };
+    let height = u64::try_from(target).map_err(|_| {
+        ApiError::internal(format!(
+            "cellbase {tx} at block {number}: reward target {target} is negative"
+        ))
+    })?;
+    let header = source
+        .get_header_by_number(height)
+        .await
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "cellbase {tx} at block {number}: node header of its reward target \
+                 block {target}: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cellbase {tx} at block {number}: the node has no canonical header for \
+                 its reward target block {target}"
+            ))
+        })?;
+    Ok(Some(super::blocks::BlockRefResponse {
+        number: target,
+        hash: format!("0x{}", hex::encode(header.hash)),
+    }))
+}
+
 #[instrument(skip(state, read_view), level = "debug")]
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
@@ -1461,11 +1482,13 @@ async fn get_transaction_detail(
         let fee_paid_by = settle_fee_payers_and_change(&io.inputs, &mut io.outputs, &hash)?;
         decode_detail_lock_args(&mut io.inputs, &mut io.outputs, &hash)?;
         // A cellbase is never pending; one the node has committed and this
-        // store has not indexed yet still names the block it pays.
+        // store has not indexed yet still names the block it pays. This
+        // branch reads the node only (the store may lag the target as well),
+        // so the target's hash is the node's canonical header at that height.
         let pays = match (pool_is_cellbase, tx_lookup.block_number) {
             (true, Some(number)) => {
                 let window = state.consensus().await?.tx_proposal_window;
-                cellbase_pays_response(true, window, number)
+                node_cellbase_pays(&pool_source, window, number, &hash).await?
             }
             _ => None,
         };
@@ -1702,7 +1725,7 @@ async fn get_transaction_detail(
     decode_detail_lock_args(&mut inputs, &mut outputs, &tx_hash_hex)?;
     let pays = if is_cellbase {
         let window = state.consensus().await?.tx_proposal_window;
-        cellbase_pays_response(true, window, block_number)
+        super::blocks::cellbase_pays(&state.store, window, block_number)?
     } else {
         None
     };
