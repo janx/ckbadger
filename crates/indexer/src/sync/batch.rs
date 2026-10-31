@@ -13839,6 +13839,40 @@ mod tests {
         async fn rollback_by_full_scan_removes_a_created_and_consumed_cells_data_hash_row() {
             assert_rollback_matches_reference(false).await;
         }
+
+        /// D-2: a `cell_by_data_hash` row exists iff the cell has data, on both
+        /// write paths. Bulk used to file one row per created cell — every
+        /// empty-data cell under the hash of empty data — where live files
+        /// only the data cell.
+        #[tokio::test]
+        async fn bulk_and_live_write_identical_data_hash_rows() {
+            let all = blocks();
+            let live = write_live(&all).await;
+            let mut live_rows: Vec<Vec<u8>> = live
+                .iterator_cf(live.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
+                .map(|item| item.unwrap().0.to_vec())
+                .collect();
+            live_rows.sort();
+            let bulk = crate::sync::materialize_bulk_artifacts_for_test(&all)
+                .expect("bulk build must succeed");
+            let mut bulk_rows: Vec<Vec<u8>> = bulk.cell_by_data_hash.into_iter().collect();
+            bulk_rows.sort();
+
+            let data_cell_row = ckbadger_store::keys::encode_cell_index_key(
+                &crate::parser::ScriptParser::compute_data_hash(&[
+                    0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe,
+                ]),
+                101,
+                &[0xe1; 32],
+                0,
+            );
+            assert_eq!(live_rows, vec![data_cell_row], "live: the data cell only");
+            assert_eq!(
+                bulk_rows.iter().map(hex::encode).collect::<Vec<_>>(),
+                live_rows.iter().map(hex::encode).collect::<Vec<_>>(),
+                "bulk must file exactly the rows live files"
+            );
+        }
     }
     mod all_stats_dao_parity {
         use super::*;

@@ -5115,7 +5115,16 @@ fn build_history_rows_for_block(
                 ));
             }
 
-            if let Some(data_hash) = &cell.data_hash {
+            if keys::cell_has_data_hash_row(cell.data_size) {
+                let data_hash = cell.data_hash.as_ref().ok_or_else(|| {
+                    anyhow!(
+                        "bulk build cell with {} data bytes has no data hash: outpoint=0x{}:{}, block={}",
+                        cell.data_size,
+                        hex::encode(cell.outpoint.tx_hash),
+                        cell.outpoint.index,
+                        cell.created_at_block
+                    )
+                })?;
                 let data_hash_key = keys::encode_cell_index_key(
                     data_hash,
                     cell.created_at_block,

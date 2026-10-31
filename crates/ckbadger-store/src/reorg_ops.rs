@@ -1292,8 +1292,8 @@ fn delete_cell_index_entries(
 /// Unlike the other cell indexes this row survives consumption (code-cell
 /// resolution reads consumed deployments), so it goes only when the cell itself
 /// ceases to exist: a live output of a rolled-back transaction, or a cell both
-/// created and consumed inside the rolled-back range. Deleting a row the
-/// forward writer never filed (an empty-data cell) is a no-op.
+/// created and consumed inside the rolled-back range. A cell without data has
+/// no row (`keys::cell_has_data_hash_row`).
 fn delete_cell_data_hash_entry(
     store: &CkbadgerStore,
     batch: &mut WriteBatch,
@@ -1302,6 +1302,9 @@ fn delete_cell_data_hash_entry(
     tx_hash: &[u8],
     output_index: i16,
 ) {
+    if !keys::cell_has_data_hash_row(cell.data_size) {
+        return;
+    }
     if let Some(ref data_hash) = cell.data_hash {
         let idx_key =
             keys::encode_cell_index_key(data_hash, created_at_block, tx_hash, output_index);

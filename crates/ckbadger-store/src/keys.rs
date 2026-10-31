@@ -396,6 +396,16 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
 /// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
 /// fixed, so a longer hash is truncated into the block-number bytes of another
 /// script's row and the scan answers for a different cell owner.
+/// Whether a cell has a `cell_by_data_hash` row: exactly when it carries data.
+///
+/// The one rule for every writer and reader of that index — the live cell
+/// writer, the bulk build, rollback and verify. An empty-data cell has no row
+/// (its data hash, the hash of empty data, would otherwise index every plain
+/// cell of the chain under one key).
+pub fn cell_has_data_hash_row(data_size: i32) -> bool {
+    data_size > 0
+}
+
 /// Width of a `cell_by_lock` / `cell_by_type` / `cell_by_data_hash` key:
 /// `hash(32) + block(8 BE) + outpoint(34)`.
 pub const CELL_INDEX_KEY_SIZE: usize = 74;

@@ -976,9 +976,12 @@ fn bulk_build_materializes_history_rows_and_core_snapshots_from_single_pass() {
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    // 15 history rows plus the one `tx_actions_by_bucket` row of the single
-    // non-cellbase transaction (the cellbase gets none).
-    assert_eq!(snapshot.report.streamed_history_rows, 16);
+    // 13 history rows plus the one `tx_actions_by_bucket` row of the single
+    // non-cellbase transaction (the cellbase gets none). The fixture's cells
+    // carry no data, so they file no `cell_by_data_hash` row (D-2: a row
+    // exists iff the cell has data — live never filed these two).
+    assert_eq!(snapshot.report.streamed_history_rows, 14);
+    assert!(snapshot.cell_by_data_hash.is_empty());
     assert_eq!(
         snapshot
             .tx_actions_by_bucket
@@ -1040,8 +1043,9 @@ fn bulk_build_materializes_append_only_cells_and_final_live_markers_from_single_
     let snapshot =
         materialize_bulk_artifacts_for_test(&[block]).expect("bulk build artifact snapshot");
 
-    // Includes the consume tx's one `tx_actions_by_bucket` row.
-    assert_eq!(snapshot.report.streamed_history_rows, 16);
+    // Includes the consume tx's one `tx_actions_by_bucket` row; no
+    // `cell_by_data_hash` row, since neither cell carries data (D-2).
+    assert_eq!(snapshot.report.streamed_history_rows, 14);
     assert_eq!(snapshot.cell_payloads.len(), 2);
     assert!(snapshot.cell_payloads.contains_key(&create_outpoint));
     assert!(snapshot.cell_payloads.contains_key(&consume_outpoint));

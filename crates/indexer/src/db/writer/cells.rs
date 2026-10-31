@@ -245,7 +245,7 @@ impl BatchWriter {
                         *output_index,
                     );
                 }
-                if cell.data_size > 0 {
+                if keys::cell_has_data_hash_row(cell.data_size) {
                     domain_batch.put_cell_by_data_hash(
                         &cell.data_hash,
                         info.created_at_block,
