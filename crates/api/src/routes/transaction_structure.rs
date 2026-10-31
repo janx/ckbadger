@@ -421,14 +421,30 @@ pub fn cellbase_witness(bytes: &[u8]) -> Option<CellbaseWitnessResponse> {
 /// (`VERSIONBITS_TOP_MASK`), i.e. when the fourth byte is below `0x20`. A
 /// printable character there is always `>= 0x20`, so the prefix is exactly:
 /// at least five bytes, byte 3 below `0x20`, byte 4 a space. The text is the
-/// rest of the message when it is UTF-8 without control characters; any other
-/// message (a pool's binary extra-nonce, say) has no text and `None` says so.
+/// rest of the message with its NUL padding and surrounding ASCII whitespace
+/// trimmed, when that is UTF-8 without control characters; any other message
+/// (a pool's binary extra-nonce, say, or a NUL inside the text) has no text
+/// and `None` says so. The raw bytes are served beside it as `minerMessage`.
 pub(crate) fn cellbase_message_text(message: &[u8]) -> Option<String> {
     let payload = match message {
         [_, _, _, version_top, b' ', rest @ ..] if *version_top < 0x20 => rest,
         _ => message,
     };
-    let text = std::str::from_utf8(payload).ok()?;
+    let is_padding = |byte: u8| byte == 0 || byte.is_ascii_whitespace();
+    let mut trimmed = payload;
+    while let [first, rest @ ..] = trimmed {
+        if !is_padding(*first) {
+            break;
+        }
+        trimmed = rest;
+    }
+    while let [rest @ .., last] = trimmed {
+        if !is_padding(*last) {
+            break;
+        }
+        trimmed = rest;
+    }
+    let text = std::str::from_utf8(trimmed).ok()?;
     (!text.is_empty() && !text.chars().any(char::is_control)).then(|| text.to_string())
 }
 
@@ -911,6 +927,26 @@ mod tests {
         assert_eq!(cellbase_message_text(&binary), None);
         assert_eq!(cellbase_message_text(&[0, 0, 0, 0, b' ']), None);
         assert_eq!(cellbase_message_text(&[]), None);
+    }
+
+    #[test]
+    fn cellbase_message_text_trims_nul_padding_and_surrounding_whitespace() {
+        let mut padded = vec![0, 0, 0, 0, b' ', b' '];
+        padded.extend_from_slice(b"0.210.0 (2592ddf 2026-09-17)");
+        padded.extend_from_slice(&[b' ', 0, 0, 0, 0]);
+        assert_eq!(
+            cellbase_message_text(&padded).as_deref(),
+            Some("0.210.0 (2592ddf 2026-09-17)")
+        );
+        // Without a versionbits word, leading NUL bytes are padding too.
+        assert_eq!(
+            cellbase_message_text(b"\0\0pool tag\0").as_deref(),
+            Some("pool tag")
+        );
+        // A NUL inside the text is not padding: no text.
+        assert_eq!(cellbase_message_text(b"pool\0tag"), None);
+        // Only padding: no text.
+        assert_eq!(cellbase_message_text(&[0, 0, 0, 0, b' ', 0, 0]), None);
     }
 
     #[test]

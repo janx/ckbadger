@@ -1,0 +1,52 @@
+# Mining-pool names for block miners.
+#
+# The API reads this table (it is never imported into a store) and names a
+# block's miner pool on the block page, on fork rows and on fork-detail blocks
+# by matching the block's cellbase witness at read time.
+#
+# THE ENTRIES ARE THE OPERATOR'S DATA. Add a pool only with a public source
+# for how its blocks are identified, cited in a comment next to the entry.
+# A block no entry matches has no pool name (the frontend shows the miner
+# address): the API never guesses from partial or fuzzy matches.
+#
+# Bundled into every binary at compile time. `<work_dir>/metadata/pools.toml`,
+# when present, replaces this whole file (the same per-file override label
+# import applies to `metadata/tokens/` and `metadata/scripts/`).
+#
+# Schema — one `[[pools]]` table per pool; unknown keys are an error:
+#
+#   name = "…"                  required; unique; no surrounding whitespace
+#
+#   [pools.mainnet]             the pool's rules on that network (at least one
+#   [pools.testnet]             network section, each with at least one rule)
+#
+#     message_prefixes = ["0x…"]
+#         Raw cellbase witness `message` byte prefixes, 0x-hex, compared
+#         byte-for-byte from byte 0 — NUL and non-UTF-8 bytes included, never
+#         the decoded `minerMessageText`. Note that a node-built message starts
+#         with the node's 4-byte versionbits word and a space, then its binary
+#         version, before any configured text.
+#     lock_hashes = ["0x…"]
+#         Exact 32-byte miner lock script hashes (the forks API's
+#         `minerLockHash`).
+#     locks = [{ code_hash = "0x…", hash_type = "type", args = "0x…" }]
+#         Exact miner lock scripts (hash_type: data | type | data1 | data2),
+#         matched by their script hash.
+#
+# A block belongs to a pool when its miner lock is one of the pool's locks or
+# its raw message starts with one of the pool's prefixes. No lock may be
+# listed twice and no prefix may be a prefix of another (both fail the load,
+# naming the entries); a block whose lock names one pool while its message
+# names another is an error naming both, never a pick.
+#
+# Example (commented out; not a real pool):
+#
+# [[pools]]
+# name = "Example Pool"
+# # Source: <public URL documenting this pool's payout lock or cellbase tag>
+# [pools.mainnet]
+# message_prefixes = ["0x6578616d706c652d706f6f6c"]   # "example-pool" from byte 0
+# lock_hashes = ["0x0000000000000000000000000000000000000000000000000000000000000000"]
+#
+# No entries yet: no public source documenting a CKB mining pool's cellbase
+# message or payout lock was found when this file was created (2026-10-31).

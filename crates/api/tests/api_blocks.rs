@@ -1417,6 +1417,144 @@ async fn block_miner_message_text_drops_the_versionbits_prefix() {
     );
 }
 
+/// A `<work_dir>/metadata` directory holding only `pools.toml` (R-12): the
+/// override label import's metadata directory takes, here for the API.
+fn pools_metadata_dir(pools_toml: &str) -> std::path::PathBuf {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("pools.toml"), pools_toml).unwrap();
+    dir.keep()
+}
+
+/// The lock every `attach_block_evidence*` cellbase names, as its script hash.
+fn fixture_miner_lock_hash() -> String {
+    format!(
+        "0x{}",
+        hex::encode(compute_script_hash(&[0x99; 32], 1, &[0x11; 20]))
+    )
+}
+
+async fn block_500_with(message: &[u8], pools_toml: Option<&str>) -> serde_json::Value {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    config.metadata_path = pools_toml.map(pools_metadata_dir);
+    let app = create_router(attach_block_evidence_with_message(config, &[500], message)).await;
+    let (status, detail) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    detail
+}
+
+/// R-12 (J9): the block page names the miner's pool when `pools.toml` lists
+/// the miner lock exactly; any other lock has no pool name.
+#[tokio::test]
+async fn block_miner_pool_is_named_by_an_exact_miner_lock() {
+    let pools = format!(
+        "[[pools]]\nname = \"Lock Pool\"\n[pools.mainnet]\nlock_hashes = [\"{}\"]\n",
+        fixture_miner_lock_hash()
+    );
+    let detail = block_500_with(b"ckb 0.210.0", Some(&pools)).await;
+    assert_eq!(detail["minerPool"], "Lock Pool", "{detail}");
+
+    // The same lock listed only for testnet names nothing on mainnet.
+    let testnet_only = pools.replace("[pools.mainnet]", "[pools.testnet]");
+    let detail = block_500_with(b"ckb 0.210.0", Some(&testnet_only)).await;
+    assert_eq!(detail["minerPool"], serde_json::Value::Null, "{detail}");
+
+    // No pools.toml override: the bundled table names no pool for this miner.
+    let detail = block_500_with(b"ckb 0.210.0", None).await;
+    assert_eq!(detail["minerPool"], serde_json::Value::Null, "{detail}");
+}
+
+/// R-12: message prefixes compare the raw witness bytes from byte 0 — the
+/// versionbits word's NUL bytes included — never the decoded text.
+#[tokio::test]
+async fn block_miner_pool_matches_raw_message_bytes_not_the_decoded_text() {
+    let mut message = vec![0u8, 0, 0, 0, b' '];
+    message.extend_from_slice(b"poolx/0.210.0");
+    let raw_prefix = format!("0x{}", hex::encode(&message[..10]));
+    let pools = format!(
+        "[[pools]]\nname = \"Pool X\"\n[pools.mainnet]\nmessage_prefixes = [\"{raw_prefix}\"]\n"
+    );
+    let detail = block_500_with(&message, Some(&pools)).await;
+    assert_eq!(detail["minerPool"], "Pool X", "{detail}");
+
+    // The text "poolx" (what `minerMessageText` starts with) is not a prefix
+    // of the raw bytes, so it names nothing.
+    let text_prefix = format!("0x{}", hex::encode(b"poolx"));
+    let pools = format!(
+        "[[pools]]\nname = \"Pool X\"\n[pools.mainnet]\nmessage_prefixes = [\"{text_prefix}\"]\n"
+    );
+    let detail = block_500_with(&message, Some(&pools)).await;
+    assert_eq!(detail["minerPool"], serde_json::Value::Null, "{detail}");
+}
+
+/// R-12: a block whose lock names one pool while its message names another
+/// is an error naming both, never a pick.
+#[tokio::test]
+async fn block_miner_pool_conflict_between_lock_and_message_is_an_error() {
+    let store = test_store();
+    seed_proposer_header(&store, 500, &[0x50; 32]);
+    seed_proposer_header(&store, 489, &[0x48; 32]);
+    let server = MockServer::start().await;
+    mount_block_economic_state_not_finalized(&server).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    config.metadata_path = Some(pools_metadata_dir(&format!(
+        "[[pools]]\nname = \"Lock Pool\"\n[pools.mainnet]\nlock_hashes = [\"{}\"]\n\
+         [[pools]]\nname = \"Message Pool\"\n[pools.mainnet]\nmessage_prefixes = [\"0x636b62\"]\n",
+        fixture_miner_lock_hash()
+    )));
+    let app = create_router(attach_block_evidence(config, &[500])).await;
+    let (status, body) = get_json(&app, "/blocks/500").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let error = body.to_string();
+    assert!(
+        error.contains("Lock Pool") && error.contains("Message Pool"),
+        "{error}"
+    );
+}
+
+/// R-12: a malformed `pools.toml` override fails the router build, naming the
+/// file — it never silently falls back to the bundled table.
+#[tokio::test]
+async fn router_build_fails_on_a_malformed_pools_override() {
+    let mut config = test_config(test_store());
+    config.metadata_path = Some(pools_metadata_dir(
+        "[[pools]]\nname = \"Short\"\n[pools.mainnet]\nlock_hashes = [\"0xaa\"]\n",
+    ));
+    let error = match ckbadger_api::try_create_router(config).await {
+        Ok(_) => panic!("a malformed pools.toml must fail the router build"),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(
+        error.contains("pools.toml") && error.contains("expected 32 bytes"),
+        "{error}"
+    );
+}
+
+/// The block page serves the message twice: the raw witness bytes as hex, and
+/// a printable text with the versionbits word dropped and NUL padding and
+/// surrounding whitespace trimmed (R-12 / BA-17).
+#[tokio::test]
+async fn block_miner_message_text_trims_nul_padding() {
+    let mut message = vec![0u8, 0, 0, 0, b' '];
+    message.extend_from_slice(b" 0.210.0 (2592ddf 2026-09-17)");
+    message.extend_from_slice(&[0, 0, 0, 0]);
+    let detail = block_500_with(&message, None).await;
+    assert_eq!(
+        detail["minerMessageText"], "0.210.0 (2592ddf 2026-09-17)",
+        "{detail}"
+    );
+    assert_eq!(
+        detail["minerMessage"],
+        format!("0x{}", hex::encode(&message))
+    );
+}
+
 /// BA-41: an uncle serves its header's packed epoch as hex, as a canonical
 /// block's `rawHeader.epoch` does.
 #[tokio::test]

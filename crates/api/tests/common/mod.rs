@@ -318,6 +318,13 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         &config.ckb_network,
     )
     .unwrap();
+    let pool_labels = Arc::new(
+        ckbadger_indexer::pool_labels::PoolLabels::effective(
+            config.metadata_path.as_deref(),
+            &config.ckb_network,
+        )
+        .unwrap(),
+    );
     Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
@@ -328,6 +335,7 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         script_roles,
+        pool_labels,
         consensus: Arc::new(match config.consensus {
             Some(params) => ConsensusCell::preloaded(params),
             None => ConsensusCell::new(),

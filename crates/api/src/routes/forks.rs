@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError, CursorPaginatedResponse};
-use crate::utils::script_to_address;
+use crate::utils::miner::{CellbaseMiner, MinerNaming};
 use crate::utils::stats_bucket::ChainTime;
 use crate::utils::sync_status::deep_fork_info_if_consistent;
 use crate::AppState;
@@ -73,8 +73,13 @@ pub struct ForkEventPreviewResponse {
     pub old_block_hash: String,
     pub old_miner_lock_hash: Option<String>,
     pub old_miner_address: Option<String>,
+    /// The dropped block's miner pool from `pools.toml`; `null` when no entry
+    /// names its lock or message (R-12).
+    pub old_miner_pool: Option<String>,
     pub competing_miner_lock_hash: Option<String>,
     pub competing_miner_address: Option<String>,
+    /// The competing canonical block's miner pool (R-12).
+    pub competing_miner_pool: Option<String>,
     pub fate: String,
     pub uncle_in_block: Option<i64>,
     pub timestamp_gap_ms: Option<i64>,
@@ -93,6 +98,8 @@ pub struct OrphanedBlockResponse {
     pub miner_lock_hash: Option<String>,
     /// The miner lock's address, from the cellbase witness (as on the block page).
     pub miner_address: Option<String>,
+    /// The miner's pool from `pools.toml`; `null` when no entry names it (R-12).
+    pub miner_pool: Option<String>,
     /// Fate of this historical old-branch block in the current indexed chain.
     pub fate: String,
     pub uncle_in: Option<UncleInclusionResponse>,
@@ -119,6 +126,8 @@ pub struct CanonicalBranchBlockResponse {
     pub miner_lock_hash: Option<String>,
     /// The miner lock's address, from the cellbase witness (as on the block page).
     pub miner_address: Option<String>,
+    /// The miner's pool from `pools.toml`; `null` when no entry names it (R-12).
+    pub miner_pool: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -532,26 +541,15 @@ fn reorg_event_response(
     })
 }
 
-/// The miner a block's cellbase witness names: its lock hash and address,
-/// encoded exactly as the block page encodes its miner (`script_to_address`
-/// over the witness lock). `None` only for a block whose cellbase carries no
-/// witness.
-fn cellbase_miner(
-    reader: &CkbChainReader,
-    hash: &[u8; 32],
-    network: &str,
-) -> anyhow::Result<Option<(String, String)>> {
-    let Some((lock, _)) = reader.get_cellbase_witness(hash) else {
-        return Ok(None);
-    };
-    let address = script_to_address(
-        lock.code_hash().as_slice(),
-        i16::from(lock.hash_type().as_slice()[0]),
-        &lock.args().raw_data(),
-        network,
-    )
-    .map_err(|e| anyhow::anyhow!("block 0x{}: miner witness lock: {e}", hex::encode(hash)))?;
-    Ok(Some((hex0x(lock.calc_script_hash().as_slice()), address)))
+/// A block's miner as the response rows carry it — lock hash, address, pool —
+/// from the one cellbase-witness path the block page reads too
+/// ([`MinerNaming::cellbase_miner`]); all `None` for a block whose cellbase
+/// carries no witness.
+fn miner_fields(miner: Option<CellbaseMiner>) -> (Option<String>, Option<String>, Option<String>) {
+    match miner {
+        Some(miner) => (Some(miner.lock_hash), Some(miner.address), miner.pool),
+        None => (None, None, None),
+    }
 }
 
 /// Reject anything that is not a well-formed history key before it reaches the
@@ -926,22 +924,15 @@ async fn list_forks(
 fn read_branch_evidence(
     store: &CkbadgerStore,
     reader: &CkbChainReader,
-    network: &str,
+    miners: MinerNaming<'_>,
     event: &ckbadger_store::ReorgEvent,
 ) -> anyhow::Result<Option<(Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>)>> {
-    let (mut blocks, mut transactions) = match read_orphaned_branch(reader, network, event) {
+    let (mut blocks, mut transactions) = match read_orphaned_branch(reader, miners, event) {
         Ok(branch) => branch,
         Err(e) if is_old_branch_unavailable(&e) => return Ok(None),
         Err(e) => return Err(e),
     };
-    match enrich_branch_fate(
-        store,
-        reader,
-        network,
-        event,
-        &mut blocks,
-        &mut transactions,
-    ) {
+    match enrich_branch_fate(store, reader, miners, event, &mut blocks, &mut transactions) {
         Ok(_) => Ok(Some((blocks, transactions))),
         Err(e) if is_old_branch_unavailable(&e) => Ok(None),
         Err(e) => Err(e),
@@ -980,6 +971,7 @@ fn preview_from_evidence(
         old_block_hash: first.hash.clone(),
         old_miner_lock_hash: first.miner_lock_hash.clone(),
         old_miner_address: first.miner_address.clone(),
+        old_miner_pool: first.miner_pool.clone(),
         competing_miner_lock_hash: first
             .competing_block
             .as_ref()
@@ -988,6 +980,10 @@ fn preview_from_evidence(
             .competing_block
             .as_ref()
             .and_then(|block| block.miner_address.clone()),
+        competing_miner_pool: first
+            .competing_block
+            .as_ref()
+            .and_then(|block| block.miner_pool.clone()),
         fate: first.fate.clone(),
         uncle_in_block: first.uncle_in.as_ref().map(|uncle| uncle.block_number),
         timestamp_gap_ms: first.timestamp_gap_ms,
@@ -1012,7 +1008,7 @@ impl ForkView {
     fn build(
         store: &CkbadgerStore,
         reader: Option<&CkbChainReader>,
-        network: &str,
+        miners: MinerNaming<'_>,
         status: &ckbadger_store::types::SyncStatus,
     ) -> anyhow::Result<Self> {
         let history = ForkHistory::load(store)?;
@@ -1025,7 +1021,7 @@ impl ForkView {
                     .iter()
                     .filter(|record| record.event.orphaned_blocks > 0)
                 {
-                    let branch = read_branch_evidence(store, reader, network, &record.event)
+                    let branch = read_branch_evidence(store, reader, miners, &record.event)
                         .map_err(|e| e.context(format!("fork {}", record.key)))?;
                     evidence.insert(record.key.clone(), branch);
                 }
@@ -1093,7 +1089,7 @@ fn fork_view(state: &AppState) -> anyhow::Result<Arc<ForkView>> {
     let view = Arc::new(ForkView::build(
         store,
         state.ckb_store.as_deref(),
-        &state.ckb_network,
+        state.miner_naming(),
         &status,
     )?);
     if !pending {
@@ -1219,15 +1215,15 @@ async fn get_fork_at(
                 canonical_tip_number: None,
             });
         };
-        let network = &state.ckb_network;
+        let miners = state.miner_naming();
         let (mut blocks, mut transactions) =
-            read_orphaned_branch(&reader, network, &record.event).map_err(internal)?;
+            read_orphaned_branch(&reader, miners, &record.event).map_err(internal)?;
         let adopted_branch =
-            read_adopted_branch(&reader, network, &record.event).map_err(internal)?;
+            read_adopted_branch(&reader, miners, &record.event).map_err(internal)?;
         let (canonical_branch, canonical_tip_number) = enrich_branch_fate(
             &state.store,
             &reader,
-            network,
+            miners,
             &record.event,
             &mut blocks,
             &mut transactions,
@@ -1254,7 +1250,7 @@ async fn get_fork_at(
 
 fn read_adopted_branch(
     reader: &CkbChainReader,
-    network: &str,
+    miners: MinerNaming<'_>,
     event: &ckbadger_store::ReorgEvent,
 ) -> anyhow::Result<Vec<CanonicalBranchBlockResponse>> {
     let mut branch = Vec::new();
@@ -1270,7 +1266,8 @@ fn read_adopted_branch(
         let timestamp = chrono::DateTime::from_timestamp_millis(i64::try_from(block.timestamp())?)
             .ok_or_else(|| anyhow::anyhow!("invalid adopted timestamp at block {expected_number}"))?
             .to_rfc3339();
-        let (miner_lock_hash, miner_address) = cellbase_miner(reader, &hash, network)?.unzip();
+        let (miner_lock_hash, miner_address, miner_pool) =
+            miner_fields(miners.cellbase_miner(reader, &hash)?);
         branch.push(CanonicalBranchBlockResponse {
             number: expected_number,
             hash: hex0x(&hash),
@@ -1278,6 +1275,7 @@ fn read_adopted_branch(
             transactions_count: i32::try_from(block.transactions().len())?,
             miner_lock_hash,
             miner_address,
+            miner_pool,
         });
     }
     branch.reverse();
@@ -1331,7 +1329,7 @@ fn walk_recorded_branch(
 
 fn read_orphaned_branch(
     reader: &CkbChainReader,
-    network: &str,
+    miners: MinerNaming<'_>,
     event: &ckbadger_store::ReorgEvent,
 ) -> anyhow::Result<(Vec<OrphanedBlockResponse>, Vec<OrphanedTransactionResponse>)> {
     let mut blocks = Vec::new();
@@ -1350,7 +1348,8 @@ fn read_orphaned_branch(
                 anyhow::anyhow!("invalid historical block timestamp at {}", expected_number)
             })?
             .to_rfc3339();
-        let (miner_lock_hash, miner_address) = cellbase_miner(reader, &hash, network)?.unzip();
+        let (miner_lock_hash, miner_address, miner_pool) =
+            miner_fields(miners.cellbase_miner(reader, &hash)?);
         blocks.push(OrphanedBlockResponse {
             number: expected_number,
             hash: hex0x(&hash),
@@ -1359,6 +1358,7 @@ fn read_orphaned_branch(
             transactions_count: i32::try_from(block.transactions().len())?,
             miner_lock_hash,
             miner_address,
+            miner_pool,
             fate: "canonical_evidence_unavailable".to_string(),
             uncle_in: None,
             competing_block: None,
@@ -1400,7 +1400,7 @@ fn read_orphaned_branch(
 /// name the same lock.
 fn canonical_block_response(
     reader: &CkbChainReader,
-    network: &str,
+    miners: MinerNaming<'_>,
     number: i64,
     header: &CachedBlockHeader,
 ) -> anyhow::Result<CanonicalBranchBlockResponse> {
@@ -1417,24 +1417,25 @@ fn canonical_block_response(
         "negative tx count at canonical block {number}"
     );
     let miner_lock_hash = header.miner_lock_hash.as_ref().map(|hash| hex0x(hash));
-    let miner_address = match &miner_lock_hash {
-        None => None,
+    let (miner_address, miner_pool) = match &miner_lock_hash {
+        None => (None, None),
         Some(indexed) => {
             let hash: [u8; 32] = header
                 .hash
                 .as_slice()
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("invalid canonical hash at block {number}"))?;
-            let (witness_lock, address) = cellbase_miner(reader, &hash, network)?.ok_or_else(|| {
+            let miner = miners.cellbase_miner(reader, &hash)?.ok_or_else(|| {
                 anyhow::anyhow!(
                     "canonical block {number} indexes miner {indexed} but the node has no cellbase witness"
                 )
             })?;
             anyhow::ensure!(
-                &witness_lock == indexed,
-                "canonical block {number}: indexed miner {indexed}, node cellbase witness names {witness_lock}"
+                &miner.lock_hash == indexed,
+                "canonical block {number}: indexed miner {indexed}, node cellbase witness names {}",
+                miner.lock_hash
             );
-            Some(address)
+            (Some(miner.address), miner.pool)
         }
     };
     Ok(CanonicalBranchBlockResponse {
@@ -1444,6 +1445,7 @@ fn canonical_block_response(
         transactions_count: header.transactions_count,
         miner_lock_hash,
         miner_address,
+        miner_pool,
     })
 }
 
@@ -1479,7 +1481,7 @@ fn is_old_branch_unavailable(err: &anyhow::Error) -> bool {
 fn enrich_branch_fate(
     store: &CkbadgerStore,
     reader: &CkbChainReader,
-    network: &str,
+    miners: MinerNaming<'_>,
     event: &ckbadger_store::ReorgEvent,
     blocks: &mut [OrphanedBlockResponse],
     transactions: &mut [OrphanedTransactionResponse],
@@ -1499,7 +1501,7 @@ fn enrich_branch_fate(
             number,
             &format!("reading fork {} branch view at tip {tip}", event.fork_point),
         )?;
-        canonical_branch.push(canonical_block_response(reader, network, number, &header)?);
+        canonical_branch.push(canonical_block_response(reader, miners, number, &header)?);
     }
     let mut candidates = Vec::new();
     for (index, block) in blocks.iter_mut().enumerate() {
@@ -1527,7 +1529,7 @@ fn enrich_branch_fate(
         );
         block.competing_block = Some(canonical_block_response(
             reader,
-            network,
+            miners,
             block.number,
             &current,
         )?);

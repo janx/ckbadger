@@ -25,9 +25,8 @@ use crate::routes::proposal_window::{
 };
 use crate::routes::transactions::tx_serialized_size_in_block;
 use crate::utils::exact_fee::{mean_rate, FeeRate};
-use crate::utils::{
-    parse_block_number, parse_hash32, parse_optional_block_cursor_start, script_to_address,
-};
+use crate::utils::miner::{CellbaseMiner, MinerNaming};
+use crate::utils::{parse_block_number, parse_hash32, parse_optional_block_cursor_start};
 use crate::AppState;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -80,7 +79,12 @@ pub struct BlockResponse {
     pub nonce: String,
     pub transactions_root: String,
     pub miner_address: Option<String>,
+    /// The cellbase witness `message`, raw bytes as `0x`-hex (NUL padding and
+    /// non-UTF-8 bytes included); `minerMessageText` is its printable form.
     pub miner_message: Option<String>,
+    /// The miner's pool, as `pools.toml` names its lock or raw message; `null`
+    /// when no entry does (never a guess) and for genesis (R-12).
+    pub miner_pool: Option<String>,
     pub mining_reward: Option<String>,
     pub mining_reward_tx_hash: Option<String>,
     pub hardfork_activation: Option<HardforkActivationResponse>,
@@ -346,8 +350,7 @@ fn resolve_hardfork_activation_blocks(
 }
 
 struct BlockExtra {
-    miner_address: Option<String>,
-    miner_message: Option<Vec<u8>>,
+    miner: Option<CellbaseMiner>,
     mining_reward: Option<String>,
     mining_reward_tx_hash: Option<String>,
     hardfork_activation: Option<HardforkActivationResponse>,
@@ -461,10 +464,12 @@ fn cached_header_to_block_response(
         difficulty,
         nonce,
         transactions_root,
-        miner_address: extra.miner_address,
+        miner_address: extra.miner.as_ref().map(|miner| miner.address.clone()),
         miner_message: extra
-            .miner_message
-            .map(|m| format!("0x{}", hex::encode(&m))),
+            .miner
+            .as_ref()
+            .map(|miner| format!("0x{}", hex::encode(&miner.message))),
+        miner_pool: extra.miner.and_then(|miner| miner.pool),
         mining_reward: extra.mining_reward,
         mining_reward_tx_hash: extra.mining_reward_tx_hash,
         hardfork_activation: extra.hardfork_activation,
@@ -578,11 +583,16 @@ async fn build_block_response(
     })?;
     let store = state.store.clone();
     let network = state.ckb_network.clone();
+    let pools = state.pool_labels.clone();
     let cached = header.clone();
     let consensus = state.consensus().await?;
     let limits = consensus.clone();
-    let (info, metrics, miner_address, miner_message) = tokio::task::spawn_blocking(move || {
-        read_block_evidence(&node, &store, block_num, &cached, &network, &limits)
+    let (info, metrics, miner) = tokio::task::spawn_blocking(move || {
+        let miners = MinerNaming {
+            network: &network,
+            pools: &pools,
+        };
+        read_block_evidence(&node, &store, block_num, &cached, miners, &limits)
     })
     .await
     .map_err(|e| ApiError::internal(format!("block {block_num} evidence task: {e}")))??;
@@ -634,8 +644,7 @@ async fn build_block_response(
         header,
         Some(info),
         BlockExtra {
-            miner_address,
-            miner_message,
+            miner,
             mining_reward,
             mining_reward_tx_hash,
             hardfork_activation,
@@ -653,14 +662,13 @@ fn read_block_evidence(
     store: &ckbadger_store::CkbadgerStore,
     block_num: i64,
     header: &ckbadger_store::CachedBlockHeader,
-    network: &str,
+    miners: MinerNaming<'_>,
     consensus: &crate::consensus::ConsensusParams,
 ) -> Result<
     (
         ckb_store_reader::BlockHeaderInfo,
         BlockMetricsResponse,
-        Option<String>,
-        Option<Vec<u8>>,
+        Option<CellbaseMiner>,
     ),
     ApiRouteError,
 > {
@@ -704,20 +712,15 @@ fn read_block_evidence(
         transactions_root: block.header().transactions_root().unpack(),
         version: block.header().version(),
     };
-    let (miner_address, miner_message) = if block_num == 0 {
-        (None, None)
+    let miner = if block_num == 0 {
+        None
     } else {
-        let (lock, message) = node
-            .get_cellbase_witness(&hash)
-            .ok_or_else(|| error("missing or malformed cellbase witness".into()))?;
-        let address = script_to_address(
-            lock.code_hash().as_slice(),
-            i16::from(lock.hash_type().as_slice()[0]),
-            &lock.args().raw_data(),
-            network,
+        Some(
+            miners
+                .cellbase_miner(node, &hash)
+                .map_err(|e| error(format!("{e:#}")))?
+                .ok_or_else(|| error("missing or malformed cellbase witness".into()))?,
         )
-        .map_err(|e| error(format!("miner witness lock: {e}")))?;
-        (Some(address), Some(message))
     };
     let txs = store
         .list_block_txs(block_num)
@@ -787,9 +790,9 @@ fn read_block_evidence(
             .ok_or_else(|| error(format!("missing canonical parent at {}", block_num - 1)))?;
         Some(format_header_timestamp(parent.timestamp, &context)?)
     };
-    let miner_message_text = miner_message
-        .as_deref()
-        .and_then(super::transaction_structure::cellbase_message_text);
+    let miner_message_text = miner
+        .as_ref()
+        .and_then(|miner| super::transaction_structure::cellbase_message_text(&miner.message));
     let raw_header = raw_header_response(&block.header());
     let uncles = block
         .uncles()
@@ -819,8 +822,7 @@ fn read_block_evidence(
             raw_header,
             uncles,
         },
-        miner_address,
-        miner_message,
+        miner,
     ))
 }
 
@@ -1975,8 +1977,7 @@ mod tests {
             header,
             Some(test_header_info()),
             BlockExtra {
-                miner_address: None,
-                miner_message: None,
+                miner: None,
                 mining_reward: None,
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
@@ -2026,8 +2027,7 @@ mod tests {
             header,
             Some(header_info),
             BlockExtra {
-                miner_address: None,
-                miner_message: None,
+                miner: None,
                 mining_reward: None,
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
@@ -2066,8 +2066,7 @@ mod tests {
             header,
             Some(test_header_info()),
             BlockExtra {
-                miner_address: None,
-                miner_message: None,
+                miner: None,
                 mining_reward: None,
                 mining_reward_tx_hash: None,
                 hardfork_activation: None,
@@ -2162,6 +2161,7 @@ mod tests {
             transactions_root: "0x".to_string(),
             miner_address: None,
             miner_message: None,
+            miner_pool: None,
             mining_reward: None,
             mining_reward_tx_hash: None,
             hardfork_activation: None,

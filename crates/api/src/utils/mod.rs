@@ -8,6 +8,7 @@ pub mod exact_ratio;
 pub mod format;
 pub mod hash;
 pub mod http;
+pub mod miner;
 pub mod params;
 pub mod script_resolution;
 pub mod stats_bucket;

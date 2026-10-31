@@ -83,6 +83,9 @@ pub struct AppState {
     pub ckb_rpc_url: String,
     pub ckb_network: String,
     pub script_roles: std::collections::HashMap<String, (String, String)>,
+    /// Mining-pool names (`pools.toml`, bundled or `<work_dir>/metadata/`
+    /// override) for this network, loaded once at router build (R-12).
+    pub pool_labels: Arc<ckbadger_indexer::pool_labels::PoolLabels>,
     /// The chain's consensus parameters (proposal window, block limits), read
     /// from the node's `get_consensus` on first use. Use [`AppState::consensus`].
     pub consensus: Arc<ConsensusCell>,
@@ -127,6 +130,14 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// How this network's miners are named (address encoding, pool names).
+    pub fn miner_naming(&self) -> utils::miner::MinerNaming<'_> {
+        utils::miner::MinerNaming {
+            network: &self.ckb_network,
+            pools: &self.pool_labels,
+        }
+    }
+
     pub fn record_asset_cache_warmup_error(&self, message: impl Into<String>) {
         *self
             .asset_cache_warmup_error
@@ -313,6 +324,13 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
         &config.ckb_network,
     )
     .context("failed to read effective script metadata roles")?;
+    let pool_labels = Arc::new(
+        ckbadger_indexer::pool_labels::PoolLabels::effective(
+            config.metadata_path.as_deref(),
+            &config.ckb_network,
+        )
+        .context("failed to read mining-pool names (pools.toml)")?,
+    );
     let ws_manager = Arc::new(WsManager::new());
 
     let cache = CacheBackend::new();
@@ -353,6 +371,7 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
         ckb_rpc_url: config.ckb_rpc_url,
         ckb_network: config.ckb_network,
         script_roles,
+        pool_labels,
         consensus: Arc::new(match config.consensus {
             Some(params) => ConsensusCell::preloaded(params),
             None => ConsensusCell::new(),

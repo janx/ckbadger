@@ -893,8 +893,13 @@ fn secp_address(args: [u8; 20]) -> String {
     .unwrap()
 }
 
-#[tokio::test]
-async fn d7_route_names_one_event_by_fork_point_and_first_orphan() {
+/// The R2b-b one-block switch at fork point #10: the node dropped `orphan`
+/// (#11, miner `0xaa…`) for #11 → #12 (miner `0xbb…`), and #12 includes the
+/// orphan as an uncle. Returns the router (over `metadata_path`, if any), the
+/// event's millisecond id and the orphan.
+async fn d7_switch_fixture(
+    metadata_path: Option<std::path::PathBuf>,
+) -> (axum::Router, i64, ckb_types::core::BlockView) {
     use ckb_types::{
         core::{BlockBuilder, EpochNumberWithFraction},
         packed,
@@ -966,13 +971,20 @@ async fn d7_route_names_one_event_by_fork_point_and_first_orphan() {
     record.new_tip_hash = canonical12.hash().as_slice().to_vec();
     record.orphaned_txs = 1;
     put_event(&store, id, 0x11, &record);
-    let app = create_router(test_config_with_ckb_db_path(
+    let mut config = test_config_with_ckb_db_path(
         store.clone(),
         store,
         chain.path.clone(),
         Some(chain.cleanup.clone()),
-    ))
-    .await;
+    );
+    config.metadata_path = metadata_path;
+    (create_router(config).await, id, orphan)
+}
+
+#[tokio::test]
+async fn d7_route_names_one_event_by_fork_point_and_first_orphan() {
+    use ckb_types::prelude::*;
+    let (app, id, orphan) = d7_switch_fixture(None).await;
     let orphan_hex = format!("0x{}", hex::encode(orphan.hash().as_slice()));
 
     // D7: the detail lives at the fork point and the first dropped block's prefix.
@@ -1047,6 +1059,55 @@ async fn d7_route_names_one_event_by_fork_point_and_first_orphan() {
     assert_eq!(record["orphanFates"]["competing"]["compared"], 1);
     assert_eq!(record["orphanFates"]["competing"]["sameMiner"], 0);
     assert_eq!(record["orphanFates"]["competing"]["gapMedianMs"], "50");
+}
+
+/// R-12 (J9): fork rows and fork-detail blocks name the miner's pool from
+/// `pools.toml` — here by the exact `0xbb…` lock — and a miner no entry
+/// names (`0xaa…`) has no pool name.
+#[tokio::test]
+async fn fork_rows_and_detail_blocks_name_listed_mining_pools_only() {
+    use ckb_types::{packed, prelude::*};
+    let lock_hash_bb = {
+        let tx = cellbase_paying([0xbb; 20]);
+        let witness = tx.witnesses().get(0).unwrap().raw_data();
+        let witness = packed::CellbaseWitness::from_slice(&witness).unwrap();
+        format!(
+            "0x{}",
+            hex::encode(witness.lock().calc_script_hash().as_slice())
+        )
+    };
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("pools.toml"),
+        format!(
+            "[[pools]]\nname = \"BB Pool\"\n[pools.mainnet]\nlock_hashes = [\"{lock_hash_bb}\"]\n"
+        ),
+    )
+    .unwrap();
+    let (app, _, orphan) = d7_switch_fixture(Some(dir.keep())).await;
+
+    let (status, json) = get_json(&app, &d7(10, orphan.hash().as_slice())).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["orphanedBlocks"][0]["minerPool"],
+        serde_json::Value::Null,
+        "{json}"
+    );
+    assert_eq!(
+        json["orphanedBlocks"][0]["competingBlock"]["minerPool"],
+        "BB Pool"
+    );
+    assert_eq!(json["canonicalBranch"][0]["minerPool"], "BB Pool");
+    assert_eq!(json["adoptedBranch"][1]["minerPool"], "BB Pool");
+
+    let (status, list) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(
+        list["data"][0]["preview"]["oldMinerPool"],
+        serde_json::Value::Null,
+        "{list}"
+    );
+    assert_eq!(list["data"][0]["preview"]["competingMinerPool"], "BB Pool");
 }
 
 /// W5: every switch that rolled blocks back carries its persisted first
