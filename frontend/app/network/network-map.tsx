@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { DATA_COLOR } from '@/lib/design-tokens';
-import { formatUtc8Date } from '@/lib/utils';
+import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 
 type Point = NetworkMap['points'][number];
 
@@ -183,19 +183,34 @@ function Legend({
   );
 }
 
+/**
+ * Round 3 (contracts R-C · R-13, CH-57): this node's session with the peer in the latest round,
+ * as of when the crawler read it (`observedAt`, the crawler's seconds clock), never "now".
+ */
+function sessionWords(point: Point): string {
+  const session = point.localSession;
+  if ((session !== undefined) !== point.localSessionObserved)
+    throw new Error(
+      `peer ${point.peerId}: localSession ${session ? 'present' : 'absent'} but localSessionObserved is ${point.localSessionObserved}`
+    );
+  if (!session) return 'no session in the latest round';
+  const ping =
+    session.lastPingDurationMs === undefined ? '' : ` · ping ${session.lastPingDurationMs} ms`;
+  const dial =
+    session.initiator === 'observerInitiated' ? 'this node dialled it' : 'it dialled this node';
+  return `connected for ${formatDurationMs(session.connectedDurationMs)}${ping} · ${dial} (as of ${formatUtc8Time(session.observedAt * 1000)})`;
+}
+
 function PeerReadout({ point, roundId }: { point: Point; roundId: number | null }) {
   const rows: [string, string, string?][] = [
+    // With an alias the panel is titled by it, so the peer id is a row (R-13).
+    ...(point.alias ? [['peer', shortPeerId(point.peerId)] as [string, string]] : []),
     [
       'state',
       point.reachable ? 'reachable now' : 'verified before, not reachable now',
       point.reachable ? 'text-jade' : undefined,
     ],
-    [
-      'to this node',
-      point.localSessionObserved
-        ? 'a session in the latest round'
-        : 'no session in the latest round',
-    ],
+    ['to this node', sessionWords(point), point.localSession ? 'text-jade' : undefined],
     ['version', point.clientVersion],
     ['where', `${point.country} · ${point.asn ?? '—'}`],
     [
@@ -206,7 +221,9 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
   ];
   return (
     <>
-      <p className="text-text-bright text-[13.5px]">peer {shortPeerId(point.peerId)}</p>
+      <p className="text-text-bright text-[13.5px] [overflow-wrap:anywhere]">
+        {point.alias ? point.alias.address : `peer ${shortPeerId(point.peerId)}`}
+      </p>
       <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-2 gap-y-1">
         {rows.map(([label, value, tone]) => (
           <div key={label} className="contents">

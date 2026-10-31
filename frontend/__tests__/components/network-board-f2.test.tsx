@@ -78,6 +78,16 @@ const point = (
   lastSeen: 1751500800,
   advertiserCount: 3,
   localSessionObserved,
+  // Round 3 (R-13): this node's session is present exactly when it was observed.
+  ...(localSessionObserved && {
+    localSession: {
+      connectedDurationMs: 3_725_000,
+      lastPingDurationMs: 42,
+      // 2025-07-03 00:00:00 UTC = 08:00:00 UTC+8, the crawler clock (seconds, like lastSeen).
+      observedAt: 1751500800,
+      initiator: 'observerInitiated' as const,
+    },
+  }),
 });
 const map: NetworkMap = {
   roundId: 97,
@@ -85,7 +95,10 @@ const map: NetworkMap = {
   located: 4,
   locationUnavailable: 0,
   points: [
-    point('12200fce0b01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2d1b5', 'US', true, true),
+    {
+      ...point('12200fce0b01aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2d1b5', 'US', true, true),
+      alias: { address: '/ip4/203.0.113.7/tcp/8115', verifiedAt: 1751500700 },
+    },
     point('1220aaaa', 'US', true, false),
     point('1220bbbb', 'DE', false, false),
     point('1220cccc', 'DE', true, false),
@@ -148,10 +161,24 @@ describe('Network board (F2 charts)', () => {
     expect(panel).toHaveTextContent('heard of, never verified · 115');
     expect(panel).toHaveTextContent(/none are drawn/);
     fireEvent.focus(screen.getByLabelText(/^US peer 12200fce0b…/));
-    expect(panel).toHaveTextContent('peer 12200fce0b…a2d1b5');
+    // R-13 (CH-57): titled by the alias the crawler last verified, the peer id beneath.
+    expect(panel.querySelector('p')).toHaveTextContent('/ip4/203.0.113.7/tcp/8115');
+    expect(panel).toHaveTextContent('peer12200fce0b…a2d1b5');
     expect(panel).not.toHaveTextContent(map.points[0].peerId);
-    expect(panel).toHaveTextContent('to this nodea session in the latest round');
+    expect(panel).toHaveTextContent(
+      'to this nodeconnected for 1 h 2 m · ping 42 ms · this node dialled it (as of 08:00:00 UTC+8)'
+    );
     expect(panel).toHaveTextContent('in address booksof 3 peers in round #97');
+  });
+
+  it('says nothing of an alias or a session the API does not give (R-13)', async () => {
+    server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
+    render(wrap(<NetworkMapView neverVerified={0} />));
+    const panel = await screen.findByRole('complementary', { name: 'Selected peer evidence' });
+    fireEvent.focus(screen.getByLabelText(/^DE peer 1220bbbb/));
+    expect(panel.querySelector('p')).toHaveTextContent('peer 1220bbbb');
+    expect(panel).toHaveTextContent('to this nodeno session in the latest round');
+    expect(panel).not.toHaveTextContent(/connected for|ping/);
   });
 
   it('shows the never-verified peers as an unlocated strip under the map (CH-51)', async () => {

@@ -19,6 +19,12 @@ const first: NetworkMap['points'][number] = {
   lastSeen: 200,
   advertiserCount: 2,
   localSessionObserved: true,
+  // Round 3 (R-13): present exactly when localSessionObserved is.
+  localSession: {
+    connectedDurationMs: 60_000,
+    observedAt: 200,
+    initiator: 'peerInitiated',
+  },
 };
 const second = { ...first, peerId: 'b', reachable: false, clientVersion: 'ckb/0.113' };
 
