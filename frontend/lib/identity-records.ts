@@ -19,7 +19,39 @@ export type IdentityRecordValue =
   | { kind: 'text'; text: string }
   | { kind: 'colour'; text: string }
   | { kind: 'bytes'; bytes: number }
+  /** J13: bytes that carry a raster image signature, shown as that image (`src` is a data URL). */
+  | { kind: 'image'; format: ImageFormat; bytes: number; src: string }
   | { kind: 'empty' };
+
+type ImageFormat = 'WebP' | 'PNG' | 'JPEG' | 'GIF';
+
+/**
+ * J13 (ID-DC-N1, user-approved 2026-10-31): the raster image formats a record's bytes are
+ * recognised as, by their fixed file signatures (no guessing from the key). SVG is text, so it
+ * never reaches here; anything else stays a byte count.
+ */
+const IMAGE_SIGNATURES: { format: ImageFormat; mime: string; test: (hex: string) => boolean }[] = [
+  {
+    format: 'WebP',
+    mime: 'image/webp',
+    // "RIFF" <size, 4 bytes> "WEBP"
+    test: (hex) => hex.startsWith('52494646') && hex.slice(16, 24) === '57454250',
+  },
+  { format: 'PNG', mime: 'image/png', test: (hex) => hex.startsWith('89504e470d0a1a0a') },
+  { format: 'JPEG', mime: 'image/jpeg', test: (hex) => hex.startsWith('ffd8ff') },
+  {
+    format: 'GIF',
+    mime: 'image/gif',
+    test: (hex) => hex.startsWith('474946383761') || hex.startsWith('474946383961'),
+  },
+];
+
+function hexToBase64(hex: string): string {
+  let binary = '';
+  for (let i = 0; i < hex.length; i += 2)
+    binary += String.fromCharCode(parseInt(hex.slice(i, i + 2), 16));
+  return btoa(binary);
+}
 
 export interface IdentityAddressRecord {
   key: string;
@@ -75,6 +107,16 @@ function valueOf(record: IdentityRecordInput, colour: boolean): IdentityRecordVa
   if (record.valueUtf8 === null) {
     const digits = record.valueHex.length - 2;
     if (digits % 2 !== 0) throw new Error(`record ${record.key}: odd-length value hex`);
+    const hex = record.valueHex.slice(2).toLowerCase();
+    if (!/^[0-9a-f]*$/.test(hex)) throw new Error(`record ${record.key}: value is not hex`);
+    const image = IMAGE_SIGNATURES.find((signature) => signature.test(hex));
+    if (image)
+      return {
+        kind: 'image',
+        format: image.format,
+        bytes: digits / 2,
+        src: `data:${image.mime};base64,${hexToBase64(hex)}`,
+      };
     return { kind: 'bytes', bytes: digits / 2 };
   }
   const text = record.valueUtf8.trim();

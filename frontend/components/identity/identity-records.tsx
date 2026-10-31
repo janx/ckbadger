@@ -5,8 +5,22 @@ import {
   type IdentityRecordValue,
 } from '@/lib/identity-records';
 
-function RecordValue({ value }: { value: IdentityRecordValue }) {
+function RecordValue({ value, label }: { value: IdentityRecordValue; label?: string }) {
   switch (value.kind) {
+    case 'image':
+      // J13: the owner's own image bytes as a thumbnail, the exact size beside it.
+      return (
+        <span className="flex items-center gap-2.5">
+          <img
+            src={value.src}
+            alt={`${label ?? 'Record'}, a ${value.format} image of ${value.bytes.toLocaleString('en-US')} bytes`}
+            className="border-base-border h-12 w-12 shrink-0 rounded border object-cover"
+          />
+          <span className="text-text">
+            {value.format} · {value.bytes.toLocaleString('en-US')} bytes
+          </span>
+        </span>
+      );
     case 'text':
       return <span className="text-text-bright [overflow-wrap:anywhere]">{value.text}</span>;
     case 'colour':
@@ -114,7 +128,7 @@ export function IdentityRecords({
                 <div key={p.key} className="min-w-0">
                   <dt className="text-text-dim text-[11.5px]">{p.label}</dt>
                   <dd className="mt-0.5 min-w-0">
-                    <RecordValue value={p.value} />
+                    <RecordValue value={p.value} label={p.label} />
                   </dd>
                 </div>
               ))}
@@ -131,7 +145,7 @@ export function IdentityRecords({
                     {o.key || '(empty key)'}
                   </dt>
                   <dd className="min-w-0">
-                    <RecordValue value={o.value} />
+                    <RecordValue value={o.value} label={o.key} />
                   </dd>
                 </div>
               ))}

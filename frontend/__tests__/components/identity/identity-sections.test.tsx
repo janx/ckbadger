@@ -107,6 +107,28 @@ function dotcellHistory(): Extract<ItemProtocol, { kind: 'dotcell' }> {
   return p;
 }
 
+// J13 (ID-DC-N1): an image record is a thumbnail with its byte count beside it.
+describe('IdentityRecords image records (J13)', () => {
+  it('draws a WebP avatar as a thumbnail with its byte count', () => {
+    const webp = '0x52494646' + '20000000' + '57454250' + '56503820' + 'ab'.repeat(20);
+    render(
+      <IdentityRecords
+        subject="apt.cell"
+        records={[
+          rec('profile.avatar', null, webp),
+          rec('profile.cover', null, '0x' + 'ab'.repeat(3)),
+        ]}
+      />
+    );
+    const section = screen.getByRole('region', { name: 'What apt.cell points to' });
+    const img = within(section).getByRole('img', { name: 'Avatar, a WebP image of 36 bytes' });
+    expect(img).toHaveAttribute('src', expect.stringMatching(/^data:image\/webp;base64,/));
+    expect(section).toHaveTextContent('WebP · 36 bytes');
+    // Bytes that are no image keep the byte count.
+    expect(section).toHaveTextContent('3 bytes, not text');
+  });
+});
+
 describe('DotcellRoles (ID-DC4)', () => {
   it('shows owner and manager cards and every owner so far, newest last', () => {
     render(<DotcellRoles protocol={dotcellHistory()} ownerNameCount={1} />);
