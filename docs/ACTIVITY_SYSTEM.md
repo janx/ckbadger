@@ -737,12 +737,30 @@ pub struct ProtocolActionResponse {
 
 ### Lock Args Decoder Registry
 
-`LOCK_ARGS_DECODERS` is a `LazyLock<HashMap<Vec<u8>, fn(&[u8]) -> Option<Value>>>` that maps lock code_hashes to decoder functions. Currently registered decoders:
+Which lock's args decode how is scripts-registry data: a `docs/metadata/scripts/<slug>.toml` entry
+declares `[lock_args]` (validated by `crates/indexer/build.rs`, served by code hash through
+`ckbadger_indexer::parser::registry::SCRIPT_LAYOUTS`). The one `decode_lock_args` (activity lock
+calls and the transaction detail's `lockArgsDecoded`) reads it; route code holds no code-hash table.
+An entry declares exactly one of:
 
-| Lock Script   | Decoder Output                                                     |
-| ------------- | ------------------------------------------------------------------ |
-| RGB++ Lock    | `{"protocol": "rgbpp", "btcTxid": "...", "outIndex": N}`           |
-| BTC Time Lock | `{"protocol": "rgbpp", "action": "btcTimeLock", "btcTxid": "..."}` |
+- `codec = "<name>"` — a layout implemented in `activities.rs` from its spec (flag-driven optional
+  fields, variable tails). A codec returns `null` for args that do not fit it.
+- `fields = [{ name, bytes, equals? }, …]` — a fixed field layout; the decoded object is
+  `{"lock": "<slug>", "<name>": "0x…", …}`. Args that are not exactly the layout's total length, or a
+  fixed (`equals`) field holding another value, are an error naming the script and the length.
+
+| Lock Script         | Layout                                            | Decoder Output                                                     |
+| ------------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
+| Default Lock        | codec `secp256k1_blake160`                        | `{"lock": "secp256k1_blake160", "pubkeyHash": "0x…"}`              |
+| Default Multisig    | codec `multisig`                                  | `{"lock": "multisig", "multisigScriptHash": "0x…", "since"?}`      |
+| Anyone-Can-Pay      | codec `anyone_can_pay`                            | `{"lock": "anyone_can_pay", "pubkeyHash", minimum exponents?}`     |
+| Omnilock            | codec `omnilock`                                  | `{"lock": "omnilock", "authFlag", "authKind", …}`                  |
+| RGB++ Lock          | codec `rgbpp`                                     | `{"protocol": "rgbpp", "btcTxid": "...", "outIndex": N}`           |
+| BTC Time Lock       | codec `btc_time_lock`                             | `{"protocol": "rgbpp", "action": "btcTimeLock", "btcTxid": "..."}` |
+| Fiber locks         | codecs `fiber_funding`, `fiber_commitment`        | `{"protocol": "fiber", "action": …}`                               |
+| UTXOSwap Intent     | codec `utxoswap_intent`                           | `{"protocol": "utxoswap", …}`                                      |
+| JoyID               | fields `subType(2) + pubkeyHash(20)`              | `{"lock": "joyid", "subType": "0x0001", "pubkeyHash": "0x…"}`      |
+| Nervape Shadow Lock | fields `prefix(1) = 0x01 + ckbfsTypeHash(32)`     | `{"lock": "shadow-lock", "prefix": "0x01", "ckbfsTypeHash": "0x…"}` |
 
 **RGB++ decoder**: args[0..4] = out_index (u32 LE), args[4..36] = btc_txid (32 bytes LE, reversed for display). Minimum 36 bytes.
 
@@ -1106,7 +1124,7 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 
 | File                                  | Content                                                                |
 | ------------------------------------- | ---------------------------------------------------------------------- |
-| `crates/api/src/routes/activities.rs` | Endpoints, response types, canonicality validation, LOCK_ARGS_DECODERS |
+| `crates/api/src/routes/activities.rs` | Endpoints, response types, canonicality validation, `decode_lock_args` (registry `[lock_args]` layouts) |
 
 ### Statistics
 
