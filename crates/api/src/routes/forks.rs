@@ -229,6 +229,18 @@ pub struct ForkEventRefResponse {
     pub fork_point_number: i64,
     pub first_orphan_hash: Option<String>,
     pub first_orphan_status: &'static str,
+    /// The tip the REFERENCED event adopted, as its record persisted it
+    /// (`ReorgEvent.new_tip` / `new_tip_hash`): on a `revertedByEvent`
+    /// reference, the tip the reversing switch moved to — the fork tree's ③.
+    pub new_tip: ForkTipResponse,
+}
+
+/// A block a fork event names by height and hash.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkTipResponse {
+    pub number: i64,
+    pub hash: String,
 }
 
 /// The node's switch history as a whole (Forks overview, FF-L1 / FF-L3).
@@ -454,6 +466,10 @@ impl ForkHistory {
             fork_point_number: record.event.fork_point,
             first_orphan_hash: orphan.hash().map(|hash| hex0x(hash)),
             first_orphan_status: orphan.status(),
+            new_tip: ForkTipResponse {
+                number: record.event.new_tip,
+                hash: hex0x(&record.event.new_tip_hash),
+            },
         })
     }
 }
@@ -1809,6 +1825,7 @@ mod tests {
             "forkPointNumber": 17_100,
             "firstOrphanHash": format!("0x{}", "02".repeat(32)),
             "firstOrphanStatus": "recorded",
+            "newTip": { "number": 17_104, "hash": format!("0x{}", "03".repeat(32)) },
         });
         assert_eq!(json["revertedByEvent"], reference);
         assert_eq!(json["reversesEvents"], serde_json::json!([reference]));

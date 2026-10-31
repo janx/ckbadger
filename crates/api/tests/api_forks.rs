@@ -590,7 +590,10 @@ async fn detail_keeps_historical_drop_but_marks_reentered_block_canonical_now() 
         json["event"]["revertedByEvent"],
         serde_json::json!({ "forkPointNumber": 10,
             "firstOrphanHash": format!("0x{}", hex::encode(adopted.hash().as_slice())),
-            "firstOrphanStatus": "recorded" })
+            "firstOrphanStatus": "recorded",
+            // ③: the reversing switch restored `block` at #11.
+            "newTip": { "number": 11,
+                "hash": format!("0x{}", hex::encode(block.hash().as_slice())) } })
     );
     assert_eq!(json["orphanedBlocks"][0]["fate"], "canonical_now");
     assert_eq!(
@@ -1236,14 +1239,58 @@ async fn reversal_links_are_d7_addresses_not_millisecond_ids() {
     assert_eq!(
         list["data"][1]["revertedByEvent"],
         serde_json::json!({ "forkPointNumber": 10, "firstOrphanHash": format!("0x{}", "b1".repeat(32)),
-            "firstOrphanStatus": "recorded" })
+            "firstOrphanStatus": "recorded",
+            "newTip": { "number": 12, "hash": format!("0x{}", "44".repeat(32)) } })
     );
     assert_eq!(
         list["data"][0]["reversesEvents"],
         serde_json::json!([{ "forkPointNumber": 10, "firstOrphanHash": format!("0x{}", "a1".repeat(32)),
-            "firstOrphanStatus": "recorded" }])
+            "firstOrphanStatus": "recorded",
+            "newTip": { "number": 12, "hash": format!("0x{}", "44".repeat(32)) } }])
     );
     assert_eq!(list["data"][0]["revertedByEvent"], serde_json::Value::Null);
+}
+
+/// R-6b (J10): the fork tree's ③ is the tip the reversing switch adopted.
+/// Each reference carries the REFERENCED event's persisted new tip — never
+/// the row's own — so the detail page can draw ③ without another request.
+#[tokio::test]
+async fn reversal_references_carry_the_referenced_events_new_tip() {
+    let store = test_store();
+    let reversing_key =
+        ckbadger_store::keys::encode_reorg_event_key(1_754_000_005_000, &[0x12; 16]).unwrap();
+    let mut first = automatic(10, 11, [0xa1; 32]);
+    first.new_tip = 12;
+    first.new_tip_hash = vec![0xa2; 32];
+    first.reverted_by_event = Some(reversing_key.clone());
+    let first_key = put_event(&store, 1_754_000_000_000, 0x11, &first);
+    let mut reversing = automatic(10, 11, [0xb1; 32]);
+    reversing.new_tip = 13;
+    reversing.new_tip_hash = vec![0xb3; 32];
+    reversing.reverses_events = vec![first_key];
+    put_event(&store, 1_754_000_005_000, 0x12, &reversing);
+    let app = create_router(config_without_node_reader(store)).await;
+
+    let (status, list) = get_json(&app, "/forks?limit=10").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    // Row 1 is the first switch; the switch that reversed it adopted #13 0xb3….
+    assert_eq!(
+        list["data"][1]["revertedByEvent"]["newTip"],
+        serde_json::json!({ "number": 13, "hash": format!("0x{}", "b3".repeat(32)) })
+    );
+    // Row 0 is the reversing switch; the switch it reversed had adopted #12 0xa2….
+    assert_eq!(
+        list["data"][0]["reversesEvents"][0]["newTip"],
+        serde_json::json!({ "number": 12, "hash": format!("0x{}", "a2".repeat(32)) })
+    );
+
+    // The D7 detail serves the same reference (no node reader needed).
+    let (status, detail) = get_json(&app, &d7(10, &[0xa1; 32])).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(
+        detail["event"]["revertedByEvent"]["newTip"],
+        serde_json::json!({ "number": 13, "hash": format!("0x{}", "b3".repeat(32)) })
+    );
 }
 
 #[tokio::test]
