@@ -699,34 +699,9 @@ impl BatchWriter {
         let existing = self.store.get_daily_activity_stats(date)?;
         let merged = match existing {
             Some(mut e) => {
-                e.transfer_count += accumulated.transfer_count;
-                e.dao_deposit_count += accumulated.dao_deposit_count;
-                e.dao_withdraw_request_count += accumulated.dao_withdraw_request_count;
-                e.dao_withdraw_complete_count += accumulated.dao_withdraw_complete_count;
-                e.token_count += accumulated.token_count;
-                e.object_count += accumulated.object_count;
-                e.identity_count += accumulated.identity_count;
-                e.script_call_count += accumulated.script_call_count;
-                e.unknown_count += accumulated.unknown_count;
-                e.coinbase_count += accumulated.coinbase_count;
+                e.add_counts(accumulated)
+                    .with_context(|| format!("merging daily activity stats for date {date}"))?;
                 e.unique_address_count = unique_address_count;
-                e.total_ckb_moved = e
-                    .total_ckb_moved
-                    .checked_add(accumulated.total_ckb_moved)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "total_ckb_moved overflow merging daily activity stats for date {}",
-                            date
-                        )
-                    })?;
-                // Merge script counts
-                for (code_hash, count) in &accumulated.script_counts {
-                    *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
-                }
-                // Merge protocol action counts
-                for (key, count) in &accumulated.protocol_action_counts {
-                    *e.protocol_action_counts.entry(key.clone()).or_insert(0) += count;
-                }
                 e
             }
             None => {
@@ -760,34 +735,10 @@ impl BatchWriter {
         let existing = self.store.get_hourly_activity_stats(hour_key)?;
         let merged = match existing {
             Some(mut e) => {
-                e.transfer_count += accumulated.transfer_count;
-                e.dao_deposit_count += accumulated.dao_deposit_count;
-                e.dao_withdraw_request_count += accumulated.dao_withdraw_request_count;
-                e.dao_withdraw_complete_count += accumulated.dao_withdraw_complete_count;
-                e.token_count += accumulated.token_count;
-                e.object_count += accumulated.object_count;
-                e.identity_count += accumulated.identity_count;
-                e.script_call_count += accumulated.script_call_count;
-                e.unknown_count += accumulated.unknown_count;
-                e.coinbase_count += accumulated.coinbase_count;
+                e.add_counts(accumulated).with_context(|| {
+                    format!("merging hourly activity stats for hour {hour_key}")
+                })?;
                 e.unique_address_count = unique_address_count;
-                e.total_ckb_moved = e
-                    .total_ckb_moved
-                    .checked_add(accumulated.total_ckb_moved)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "total_ckb_moved overflow merging hourly activity stats for hour {}",
-                            hour_key
-                        )
-                    })?;
-                // Merge script counts
-                for (code_hash, count) in &accumulated.script_counts {
-                    *e.script_counts.entry(code_hash.clone()).or_insert(0) += count;
-                }
-                // Merge protocol action counts
-                for (key, count) in &accumulated.protocol_action_counts {
-                    *e.protocol_action_counts.entry(key.clone()).or_insert(0) += count;
-                }
                 e
             }
             None => {
