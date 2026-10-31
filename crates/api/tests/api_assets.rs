@@ -5674,6 +5674,10 @@ async fn cluster_activities_count_is_the_derived_row_count() {
     let (status, detail) = get_json(&app, &format!("/assets/objects/{id_hex}")).await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["activitiesCount"], 3, "{detail}");
+    // Review P3: the cluster list serves the real count, not a synthetic 0.
+    let (status, clusters) = get_json(&app, "/spore/clusters").await;
+    assert_eq!(status, StatusCode::OK, "{clusters}");
+    assert_eq!(cluster_row(&clusters)["activitiesCount"], 3, "{clusters}");
 }
 
 /// Ruling B: a collection feed over a cluster whose count is not derived

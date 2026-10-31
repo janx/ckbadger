@@ -732,8 +732,20 @@ fn serve_clusters_from_cache(
         None
     };
 
+    // Review P3: each served row carries its derived activity count — one
+    // point read per row (≤ 100), in the request's pinned view — or `null`
+    // while it is not derived; never a synthetic 0.
+    let rows = page
+        .iter()
+        .map(|(id, cluster)| {
+            let mut cluster = cluster.clone();
+            cluster.activities_count =
+                super::assets::derived_collection_activity_count(state.store.as_ref(), id)?;
+            Ok(cluster)
+        })
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
     ok(CursorPaginatedResponse::without_total(
-        page.iter().map(|(_, c)| c.clone()).collect(),
+        rows,
         limit as i64,
         next_cursor,
     ))
@@ -797,8 +809,7 @@ fn build_cluster_responses_from_cached_entries(
             spores_count: spores_count as i32,
             total_count: cluster_aggregate.total_count,
             holders_count: cluster_aggregate.owner_count,
-            // Ruling B / review P3: the derived count would go here; until
-            // the list reads it, the count is unknown.
+            // Filled for the served page only (see `serve_clusters_from_cache`).
             activities_count: None,
             created_at_block,
             owned_capacity: None,
