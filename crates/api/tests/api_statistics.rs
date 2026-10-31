@@ -350,6 +350,9 @@ async fn test_hardforks_endpoint_returns_default_timeline() {
     }
     assert_eq!(json["tipEpoch"], 0);
     assert_eq!(json["tipBlock"], 0);
+    // R-10: no indexed header yet, so neither end of the timeline is known.
+    assert!(json["genesisTimestampMs"].is_null(), "{json}");
+    assert!(json["tipTimestampMs"].is_null(), "{json}");
     assert!(json["events"].as_array().unwrap().len() >= 2);
     assert_eq!(json["events"][0]["status"], "upcoming");
     assert_eq!(json["events"][1]["status"], "upcoming");
@@ -399,6 +402,26 @@ async fn hardforks_exposes_earliest_indexed_code_cell_per_named_script_version()
             family_id: Some(family_id.into()),
             name: Some("Known Lock v3".into()),
             ..Default::default()
+        },
+    );
+    // A store with an indexed tip has its genesis header (R-10 reads it).
+    batch.put_block_header(
+        0,
+        &CachedBlockHeader {
+            hash: vec![0xee; 32],
+            parent_hash: vec![0; 32],
+            timestamp: 1_573_852_190_812,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_573_852_190_812,
         },
     );
     for (block, tx_index, tx, timestamp) in [
@@ -573,6 +596,26 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
         .unwrap();
 
     let mut batch = StoreBatch::new(core_store.as_ref());
+    // A store with an indexed tip has its genesis header (R-10 reads it).
+    batch.put_block_header(
+        0,
+        &CachedBlockHeader {
+            hash: vec![0xee; 32],
+            parent_hash: vec![0u8; 32],
+            timestamp: 1_573_852_190_812,
+            epoch_number: 0,
+            epoch_index: 0,
+            epoch_length: 1000,
+            dao: vec![0; 32],
+            transactions_count: 1,
+            uncles_count: 0,
+            proposals_count: 0,
+            compact_target: 0,
+            miner_lock_hash: None,
+            cycles: None,
+            chain_time_ms: 1_573_852_190_812,
+        },
+    );
     batch.put_block_header(
         19_000_000,
         &CachedBlockHeader {
@@ -617,6 +660,35 @@ async fn test_hardforks_endpoint_marks_activated_and_fills_activation_block() {
     assert_eq!(json["events"][0]["activationBlock"], 8_775_638);
     assert_eq!(json["events"][1]["id"], "meepo-2024");
     assert_eq!(json["events"][1]["status"], "activated");
+}
+
+/// R-10 (CH-40 timeline ends): `/hardforks` carries the genesis and indexed
+/// tip header timestamps — the clock `scriptDeployments[].timestampMs` uses —
+/// so the page needs no `/blocks/0` and `/blocks/{tipBlock}` reads.
+#[tokio::test]
+async fn hardforks_carries_genesis_and_tip_header_timestamps() {
+    let store = test_store();
+    seed_block_headers_at(
+        &store,
+        &[
+            (0, 1_573_852_190_812),
+            (1, 1_573_852_200_000),
+            (2, 1_573_852_210_000),
+            (3, 1_573_852_205_000),
+        ],
+    );
+    let mut config = test_config(store);
+    let rpc = MockServer::start().await;
+    mount_consensus_rpc(&rpc, mainnet_get_consensus_result()).await;
+    config.ckb_rpc_url = rpc.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, "/hardforks").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["tipBlock"], 3, "{json}");
+    assert_eq!(json["genesisTimestampMs"], 1_573_852_190_812i64, "{json}");
+    // The tip's own header timestamp, not the running-maximum chain time.
+    assert_eq!(json["tipTimestampMs"], 1_573_852_205_000i64, "{json}");
 }
 
 #[tokio::test]
