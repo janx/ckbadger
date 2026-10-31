@@ -14,6 +14,7 @@ vi.mock('@/lib/api', () => ({
     getEpochTimeLengthChart: vi.fn(),
     getNetworkStats: vi.fn(),
     getHardforks: vi.fn(),
+    getBlocksByDay: vi.fn(),
   },
   isWarmupPendingError: vi.fn(() => false),
   isNetworkInitializingError: vi.fn(() => false),
@@ -62,6 +63,15 @@ describe('shared chart detail', () => {
     vi.mocked(api.getHardforks).mockResolvedValue({ events: [] } as unknown as Awaited<
       ReturnType<typeof api.getHardforks>
     >);
+    vi.mocked(api.getBlocksByDay).mockImplementation(async (date: string) => ({
+      date,
+      startMs: 0,
+      endMs: 86_400_000,
+      first: { number: 20_000_000, hash: `0x${'01'.repeat(32)}` },
+      last: { number: 20_008_000, hash: `0x${'02'.repeat(32)}` },
+      blocksCount: 8001,
+      complete: true,
+    }));
   });
 
   it("hands nominal APC's API today point to the chart as its main reading (CH-03)", async () => {
@@ -101,10 +111,13 @@ describe('shared chart detail', () => {
     // The head rounds a rate like the board (9.01); the exact value is its hover title.
     expect(screen.getByTitle('9.007199254740993 PH/s')).toHaveTextContent('9.01PH/s');
     expect(screen.getByText('/charts/hash-rate')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Explore Blocks →' })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks'
+    // R-10 (CH-27): a dated block chart's evidence names the blocks of its latest day, exactly.
+    expect(api.getBlocksByDay).toHaveBeenCalledWith(response.data.at(-1)!.date);
+    const day = await screen.findByTestId('blocks-of-day');
+    expect(day).toHaveTextContent(
+      `Blocks of ${response.data.at(-1)!.date} (UTC+8): #20,000,000 – #20,008,000 · 8,001 blocks`
     );
+    expect(screen.queryByRole('link', { name: 'Explore Blocks →' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: '30 d' }));
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, linear' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Log scale' }));

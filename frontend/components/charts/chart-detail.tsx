@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { BlocksOfDay } from '@/components/charts/blocks-of-day';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
@@ -218,9 +219,16 @@ function DetailBody({
             returns observations at its own recorded dates or buckets; gaps are not interpolated.
           </p>
           <div className="mt-3 flex flex-col gap-1">
-            <Link href={definition.evidenceHref} className="text-jade hover:underline">
-              Explore {definition.evidenceLabel} →
-            </Link>
+            {/* R-10 (CH-27): a dated block chart names the blocks of its latest day exactly. */}
+            {definition.source === 'blocks' &&
+            model.latest &&
+            /^\d{4}-\d{2}-\d{2}$/.test(model.latest.label) ? (
+              <BlocksOfDay date={model.latest.label} />
+            ) : (
+              <Link href={definition.evidenceHref} className="text-jade hover:underline">
+                Explore {definition.evidenceLabel} →
+              </Link>
+            )}
             {crossed.length > 0 && (
               <Link href="/hardforks" className="text-jade hover:underline">
                 Hardforks:{' '}
