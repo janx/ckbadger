@@ -2689,6 +2689,84 @@ impl DailyActivityStats {
             }
         }
     }
+
+    /// Add another accumulation of the same bucket — the transactions it
+    /// counted through [`Self::accumulate_from_tx_actions`] — every counter
+    /// checked. `unique_address_count` is left alone: two accumulations can
+    /// share addresses, so the caller sets it from the bucket's address set.
+    ///
+    /// The one forward merge rule: the live writer folds a batch's
+    /// accumulation into the stored row with it, and bulk build folds a run
+    /// of consecutive transactions into its open bucket. Summing per-tx
+    /// accumulations in any grouping gives the same row.
+    pub fn add_counts(&mut self, other: &Self) -> anyhow::Result<()> {
+        fn add(field: &str, current: u32, delta: u32) -> anyhow::Result<u32> {
+            current.checked_add(delta).ok_or_else(|| {
+                anyhow::anyhow!("activity stats {field} overflow: {current} + {delta}")
+            })
+        }
+        fn add_keyed(
+            field: &str,
+            counts: &mut BTreeMap<String, u32>,
+            deltas: &BTreeMap<String, u32>,
+        ) -> anyhow::Result<()> {
+            for (key, delta) in deltas {
+                match counts.get_mut(key) {
+                    Some(count) => *count = add(&format!("{field}[{key}]"), *count, *delta)?,
+                    None => {
+                        counts.insert(key.clone(), *delta);
+                    }
+                }
+            }
+            Ok(())
+        }
+        self.transfer_count = add("transfer_count", self.transfer_count, other.transfer_count)?;
+        self.dao_deposit_count = add(
+            "dao_deposit_count",
+            self.dao_deposit_count,
+            other.dao_deposit_count,
+        )?;
+        self.dao_withdraw_request_count = add(
+            "dao_withdraw_request_count",
+            self.dao_withdraw_request_count,
+            other.dao_withdraw_request_count,
+        )?;
+        self.dao_withdraw_complete_count = add(
+            "dao_withdraw_complete_count",
+            self.dao_withdraw_complete_count,
+            other.dao_withdraw_complete_count,
+        )?;
+        self.token_count = add("token_count", self.token_count, other.token_count)?;
+        self.object_count = add("object_count", self.object_count, other.object_count)?;
+        self.identity_count = add("identity_count", self.identity_count, other.identity_count)?;
+        self.script_call_count = add(
+            "script_call_count",
+            self.script_call_count,
+            other.script_call_count,
+        )?;
+        self.unknown_count = add("unknown_count", self.unknown_count, other.unknown_count)?;
+        self.coinbase_count = add("coinbase_count", self.coinbase_count, other.coinbase_count)?;
+        self.total_ckb_moved = self
+            .total_ckb_moved
+            .checked_add(other.total_ckb_moved)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "activity stats total_ckb_moved overflow: {} + {}",
+                    self.total_ckb_moved,
+                    other.total_ckb_moved
+                )
+            })?;
+        add_keyed(
+            "script_counts",
+            &mut self.script_counts,
+            &other.script_counts,
+        )?;
+        add_keyed(
+            "protocol_action_counts",
+            &mut self.protocol_action_counts,
+            &other.protocol_action_counts,
+        )
+    }
 }
 
 // ============================================
@@ -2876,6 +2954,126 @@ pub struct TokenActivityTransfer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn activity_tx(
+        index: i32,
+        is_cellbase: bool,
+        protocol: Option<(&str, &str)>,
+        code_hash: u8,
+        tags: u16,
+    ) -> TxActions {
+        TxActions {
+            tx_hash: vec![index as u8; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 7,
+            tx_index: index,
+            timestamp: 0,
+            is_cellbase,
+            protocol_actions: protocol
+                .map(|(protocol, action)| {
+                    vec![ProtocolAction::new(protocol, action, serde_json::json!({}))]
+                })
+                .unwrap_or_default(),
+            type_calls: vec![TypeCallEntry {
+                type_code_hash: vec![code_hash; 32],
+                type_hash_type: 1,
+                type_args: vec![],
+            }],
+            lock_calls: vec![LockCallEntry {
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x01; 20],
+            }],
+            participants: vec![ParticipantDelta {
+                id: ParticipantId::Lock([index as u8; 32]),
+                ckb_delta: 100 + i128::from(index),
+                used_delta: 0,
+                item_deltas: vec![],
+                tags,
+                roles: 0,
+            }],
+        }
+    }
+
+    /// `add_counts` is the forward merge of per-tx accumulations: summing two
+    /// groups of transactions gives byte-for-byte the row one accumulation
+    /// over all of them gives (`unique_address_count` stays the caller's).
+    #[test]
+    fn activity_stats_add_counts_matches_one_accumulation_over_all_transactions() {
+        let txs = [
+            activity_tx(0, true, None, 0x01, TAG_CELLBASE),
+            activity_tx(1, false, Some(("dao", "deposit")), 0x82, TAG_DAO),
+            activity_tx(
+                2,
+                false,
+                Some(("dotbit", "transfer_account")),
+                0x03,
+                TAG_IDENTITY,
+            ),
+            activity_tx(
+                3,
+                false,
+                Some(("dotbit", "transfer_account")),
+                0x03,
+                TAG_TOKEN,
+            ),
+            activity_tx(4, false, None, 0x04, TAG_TYPE_CALL),
+        ];
+        let mut all = DailyActivityStats::default();
+        for tx in &txs {
+            all.accumulate_from_tx_actions(tx);
+        }
+        let mut first = DailyActivityStats::default();
+        let mut second = DailyActivityStats::default();
+        for tx in &txs[..2] {
+            first.accumulate_from_tx_actions(tx);
+        }
+        for tx in &txs[2..] {
+            second.accumulate_from_tx_actions(tx);
+        }
+        first.unique_address_count = 7;
+        second.unique_address_count = 9;
+        first.add_counts(&second).unwrap();
+        assert_eq!(
+            first.unique_address_count, 7,
+            "the caller sets the address count"
+        );
+        first.unique_address_count = all.unique_address_count;
+        assert_eq!(
+            bincode::serialize(&first).unwrap(),
+            bincode::serialize(&all).unwrap()
+        );
+        assert_eq!(all.protocol_action_counts["dotbit:transfer_account"], 2);
+        assert_eq!(all.coinbase_count, 1);
+    }
+
+    #[test]
+    fn activity_stats_add_counts_fails_on_overflow_naming_the_field() {
+        let mut stats = DailyActivityStats {
+            identity_count: u32::MAX,
+            ..Default::default()
+        };
+        let one = DailyActivityStats {
+            identity_count: 1,
+            ..Default::default()
+        };
+        let err = stats.add_counts(&one).unwrap_err().to_string();
+        assert!(err.contains("identity_count"), "{err}");
+
+        let mut keyed = DailyActivityStats::default();
+        keyed
+            .protocol_action_counts
+            .insert("dotbit:renew_account".to_string(), u32::MAX);
+        let mut delta = DailyActivityStats::default();
+        delta
+            .protocol_action_counts
+            .insert("dotbit:renew_account".to_string(), 1);
+        let err = keyed.add_counts(&delta).unwrap_err().to_string();
+        assert!(
+            err.contains("protocol_action_counts[dotbit:renew_account]"),
+            "{err}"
+        );
+    }
 
     /// Every semantic tag owns one bit of `TxIndexEntry.semantic_tags`. A
     /// duplicated bit would make one protocol's cells report as another's on

@@ -20,6 +20,7 @@ use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
 use crate::sync::bulk_build::sequencer::BulkSequencer;
 use crate::sync::pipeline::build_bulk_facts_arena_from_blocks;
+use crate::sync::types::InternId;
 
 #[derive(Debug, Default)]
 pub(crate) struct TokenOwner {
@@ -36,9 +37,27 @@ pub(crate) struct TokenOwner {
     unique_cell_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
     /// Resolved on-chain token info (keyed by token type_hash).
     token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
+    /// One transaction's `TOKEN_DAILY` contribution per token, folded here
+    /// before the single `daily_deltas` update per (token, day). Cleared and
+    /// reused by every `apply_tx`: a transaction allocates nothing for it.
+    daily_tx_scratch: Vec<(InternId, TokenDailyDelta)>,
+    /// One token's transfer records of the current transaction (reused).
+    daily_tx_records: Vec<ckbadger_store::TokenTransferFact>,
+    /// Test-only: how many times `apply_tx` reached into `daily_deltas` for
+    /// each `(token, day)`.
+    #[cfg(test)]
+    daily_map_updates: FxHashMap<(Vec<u8>, u32), u32>,
 }
 
 impl TokenOwner {
+    #[cfg(test)]
+    fn note_daily_map_update(&mut self, type_hash: &[u8], date: u32) {
+        *self
+            .daily_map_updates
+            .entry((type_hash.to_vec(), date))
+            .or_default() += 1;
+    }
+
     pub(crate) fn estimated_bytes(&self) -> u64 {
         crate::sync::bulk_build::accounting::hash_map_bytes(&self.tokens, |type_hash, token| {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(type_hash)
@@ -246,65 +265,42 @@ impl BulkReducer for TokenOwner {
     fn apply_tx(&mut self, tx: &ResolvedTxFacts<'_>, ctx: &ReducerContext<'_>) -> Result<()> {
         // Capacity history first: every sUDT/xUDT-typed cell, amount or not,
         // and one transaction per token the tx touches (the live parser's
-        // `pipeline::add_token_daily_tx` counts the same set).
+        // `pipeline::add_token_daily_tx` counts the same set). The whole
+        // contribution — member cells here, transfer records below — is
+        // folded per token on the stack and lands in `daily_deltas` with ONE
+        // update per (token, day) at the end of the transaction.
         let date = keys::timestamp_ms_to_date(tx.chain_time_ms);
-        let mut tx_tokens: Vec<Vec<u8>> = Vec::new();
+        let mut daily = std::mem::take(&mut self.daily_tx_scratch);
+        daily.clear();
         for input in &tx.resolved_inputs {
-            if let Some(type_hash) = token_daily_type_hash(
-                input.semantic_tag,
-                input.type_script_hash_id,
-                ctx,
-                tx,
-                "input",
-            )? {
-                if !tx_tokens.contains(&type_hash) {
-                    tx_tokens.push(type_hash.clone());
-                }
-                self.record_daily_delta(
-                    type_hash,
-                    date,
+            if let Some(id) =
+                token_daily_type_id(input.semantic_tag, input.type_script_hash_id, tx, "input")?
+            {
+                fold_daily_member(
+                    &mut daily,
+                    id,
                     -i128::from(input.capacity),
                     -i128::from(input.occupied_capacity),
                     -1,
+                    ctx,
                     tx,
                 )?;
             }
         }
         for cell in tx.cells.iter() {
-            if let Some(type_hash) = token_daily_type_hash(
-                cell.semantic_tag,
-                cell.type_script_hash_id,
-                ctx,
-                tx,
-                "output",
-            )? {
-                if !tx_tokens.contains(&type_hash) {
-                    tx_tokens.push(type_hash.clone());
-                }
-                self.record_daily_delta(
-                    type_hash,
-                    date,
+            if let Some(id) =
+                token_daily_type_id(cell.semantic_tag, cell.type_script_hash_id, tx, "output")?
+            {
+                fold_daily_member(
+                    &mut daily,
+                    id,
                     i128::from(cell.capacity),
                     i128::from(cell.occupied_capacity),
                     1,
+                    ctx,
                     tx,
                 )?;
             }
-        }
-        for type_hash in tx_tokens {
-            let entry = self
-                .daily_deltas
-                .entry(type_hash)
-                .or_default()
-                .entry(date)
-                .or_default();
-            entry.tx_count = entry.tx_count.checked_add(1).ok_or_else(|| {
-                anyhow!(
-                    "token daily tx_count overflow: tx=0x{} date={}",
-                    hex::encode(tx.tx_hash),
-                    date
-                )
-            })?;
         }
 
         let input_views = tx
@@ -360,11 +356,8 @@ impl BulkReducer for TokenOwner {
         // Same-tx issuance co-occurrence binding (no extension flags)
         self.resolve_unique_info_by_issuance_cooccurrence(tx, ctx);
 
-        // This transaction's transfer records per token, in record order: the
-        // day's transfer-transaction count and supply facts are these same
-        // records (the live writer folds the records it persists the same way).
-        let mut tx_records: Vec<(Vec<u8>, Vec<ckbadger_store::TokenTransferFact>)> = Vec::new();
-        for transfer in UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs) {
+        let transfers = UdtParser::build_transfers_from_cells(&parsed_inputs, &parsed_outputs);
+        for transfer in &transfers {
             let token = self
                 .tokens
                 .get_mut(&transfer.type_script_hash)
@@ -378,36 +371,83 @@ impl BulkReducer for TokenOwner {
                     )
                 })?;
             token.record_transfer(hour_bucket, &transfer.type_script_hash, tx)?;
-            let record = (transfer.is_mint, transfer.is_burn, transfer.amount);
-            match tx_records
-                .iter_mut()
-                .find(|(type_hash, _)| *type_hash == transfer.type_script_hash)
-            {
-                Some((_, records)) => records.push(record),
-                None => tx_records.push((transfer.type_script_hash, vec![record])),
-            }
         }
-        for (type_hash, records) in tx_records {
-            self.daily_deltas
-                .get_mut(&type_hash)
-                .and_then(|days| days.get_mut(&date))
+
+        // This transaction's transfer records per token, in record order: the
+        // day's transfer-transaction count and supply facts are these same
+        // records (the live writer folds the records it persists the same way).
+        // A transfer always moves a member cell of its token, so every record
+        // belongs to a token already in `daily`.
+        let mut records = std::mem::take(&mut self.daily_tx_records);
+        let mut folded_records = 0usize;
+        for (id, contribution) in daily.iter_mut() {
+            let type_hash = ctx.resolve_identity(*id);
+            records.clear();
+            records.extend(
+                transfers
+                    .iter()
+                    .filter(|transfer| transfer.type_script_hash == type_hash)
+                    .map(|transfer| (transfer.is_mint, transfer.is_burn, transfer.amount)),
+            );
+            if records.is_empty() {
+                continue;
+            }
+            folded_records += records.len();
+            contribution.add_transfer_tx(&records).with_context(|| {
+                format!(
+                    "token daily transfers: type_hash=0x{} tx=0x{}",
+                    hex::encode(type_hash),
+                    hex::encode(tx.tx_hash)
+                )
+            })?;
+        }
+        if folded_records != transfers.len() {
+            let orphan = transfers
+                .iter()
+                .find(|transfer| {
+                    !daily
+                        .iter()
+                        .any(|(id, _)| ctx.resolve_identity(*id) == transfer.type_script_hash)
+                })
                 .ok_or_else(|| {
                     anyhow!(
-                        "token transfer transaction without its counted token day: type_hash=0x{} date={} tx=0x{}",
-                        hex::encode(&type_hash),
-                        date,
-                        hex::encode(tx.tx_hash)
-                    )
-                })?
-                .add_transfer_tx(&records)
-                .with_context(|| {
-                    format!(
-                        "token daily transfers: type_hash=0x{} tx=0x{}",
-                        hex::encode(&type_hash),
+                        "token transfer records folded {folded_records} of {} although every record's token is counted: tx=0x{}",
+                        transfers.len(),
                         hex::encode(tx.tx_hash)
                     )
                 })?;
+            bail!(
+                "token transfer transaction without its counted token day: type_hash=0x{} date={} tx=0x{}",
+                hex::encode(&orphan.type_script_hash),
+                date,
+                hex::encode(tx.tx_hash)
+            );
         }
+
+        // The one map update per (token, day) of this transaction.
+        for (id, contribution) in daily.drain(..) {
+            let type_hash = ctx.resolve_identity(id);
+            #[cfg(test)]
+            self.note_daily_map_update(type_hash, date);
+            self.daily_deltas
+                .entry(type_hash.to_vec())
+                .or_default()
+                .entry(date)
+                .or_default()
+                .merge(&contribution)
+                .with_context(|| {
+                    format!(
+                        "token daily: type_hash=0x{} date={} block={} tx=0x{} tx_index={}",
+                        hex::encode(type_hash),
+                        date,
+                        tx.block_number,
+                        hex::encode(tx.tx_hash),
+                        tx.tx_index
+                    )
+                })?;
+        }
+        self.daily_tx_scratch = daily;
+        self.daily_tx_records = records;
 
         Ok(())
     }
@@ -480,54 +520,6 @@ impl TokenOwner {
             }
         }
 
-        Ok(())
-    }
-
-    /// Fold one member cell into its token day: its signed capacity and
-    /// occupied capacity, and `live_cells_delta` (`+1` created, `-1`
-    /// consumed) — the same per-cell facts the live parser folds through
-    /// `pipeline::add_token_daily_tx`, on the entry this loop already updates.
-    fn record_daily_delta(
-        &mut self,
-        type_hash: Vec<u8>,
-        date_yyyymmdd: u32,
-        owned_capacity_delta: i128,
-        owned_knowledge_delta: i128,
-        live_cells_delta: i64,
-        tx: &ResolvedTxFacts<'_>,
-    ) -> Result<()> {
-        let entry = self
-            .daily_deltas
-            .entry(type_hash.clone())
-            .or_default()
-            .entry(date_yyyymmdd)
-            .or_default();
-        entry.owned_capacity_delta = checked_signed_i128(
-            entry.owned_capacity_delta,
-            owned_capacity_delta,
-            "token daily owned_capacity_delta",
-            &type_hash,
-            tx,
-        )?;
-        entry.owned_knowledge_delta = checked_signed_i128(
-            entry.owned_knowledge_delta,
-            owned_knowledge_delta,
-            "token daily owned_knowledge_delta",
-            &type_hash,
-            tx,
-        )?;
-        entry.live_cells_delta = entry
-            .live_cells_delta
-            .checked_add(live_cells_delta)
-            .ok_or_else(|| {
-                anyhow!(
-                    "token daily live_cells_delta overflow: type_hash=0x{} block={} tx=0x{} tx_index={}",
-                    hex::encode(&type_hash),
-                    tx.block_number,
-                    hex::encode(tx.tx_hash),
-                    tx.tx_index
-                )
-            })?;
         Ok(())
     }
 
@@ -983,17 +975,16 @@ impl TokenCellView {
 /// the cell is sUDT/xUDT-typed (`CellSemanticTag::{Sudt, Xudt}`, derived from
 /// the same `UdtParser::is_udt_code_hash_bytes` test as the live rule
 /// `pipeline::token_daily_member`), whether or not its data holds an amount.
-fn token_daily_type_hash(
+fn token_daily_type_id(
     semantic_tag: CellSemanticTag,
-    type_script_hash_id: Option<crate::sync::types::InternId>,
-    ctx: &ReducerContext<'_>,
+    type_script_hash_id: Option<InternId>,
     tx: &ResolvedTxFacts<'_>,
     side: &str,
-) -> Result<Option<Vec<u8>>> {
+) -> Result<Option<InternId>> {
     if !matches!(semantic_tag, CellSemanticTag::Sudt | CellSemanticTag::Xudt) {
         return Ok(None);
     }
-    let id = type_script_hash_id.ok_or_else(|| {
+    type_script_hash_id.map(Some).ok_or_else(|| {
         anyhow!(
             "{:?}-tagged {} cell has no type script hash: block={}, tx=0x{}, tx_index={}",
             semantic_tag,
@@ -1002,8 +993,70 @@ fn token_daily_type_hash(
             hex::encode(tx.tx_hash),
             tx.tx_index
         )
-    })?;
-    Ok(Some(ctx.resolve_identity(id).to_vec()))
+    })
+}
+
+/// Fold one member cell into its token's entry of the transaction's
+/// `TOKEN_DAILY` contribution: its signed capacity and occupied capacity, and
+/// `live_cells_delta` (`+1` created, `-1` consumed) — the same per-cell facts
+/// the live parser folds through `pipeline::add_token_daily_tx`. A token's
+/// first member cell opens its entry with the transaction's one `tx_count`.
+/// Tokens are matched by type script hash bytes; a transaction touches a
+/// handful of tokens, so the scan is over a few entries.
+fn fold_daily_member(
+    daily: &mut Vec<(InternId, TokenDailyDelta)>,
+    type_hash_id: InternId,
+    owned_capacity_delta: i128,
+    owned_knowledge_delta: i128,
+    live_cells_delta: i64,
+    ctx: &ReducerContext<'_>,
+    tx: &ResolvedTxFacts<'_>,
+) -> Result<()> {
+    let type_hash = ctx.resolve_identity(type_hash_id);
+    let position = match daily
+        .iter()
+        .position(|(seen, _)| ctx.resolve_identity(*seen) == type_hash)
+    {
+        Some(position) => position,
+        None => {
+            daily.push((
+                type_hash_id,
+                TokenDailyDelta {
+                    tx_count: 1,
+                    ..Default::default()
+                },
+            ));
+            daily.len() - 1
+        }
+    };
+    let entry = &mut daily[position].1;
+    entry.owned_capacity_delta = checked_signed_i128(
+        entry.owned_capacity_delta,
+        owned_capacity_delta,
+        "token daily owned_capacity_delta",
+        type_hash,
+        tx,
+    )?;
+    entry.owned_knowledge_delta = checked_signed_i128(
+        entry.owned_knowledge_delta,
+        owned_knowledge_delta,
+        "token daily owned_knowledge_delta",
+        type_hash,
+        tx,
+    )?;
+    entry.live_cells_delta = entry
+        .live_cells_delta
+        .checked_add(live_cells_delta)
+        .ok_or_else(|| {
+            anyhow!(
+                "token daily live_cells_delta overflow: type_hash=0x{} block={} tx=0x{} tx_index={}",
+                hex::encode(type_hash),
+                tx.block_number,
+                hex::encode(tx.tx_hash),
+                tx.tx_index
+            )
+        })?;
+    Ok(())
 }
 
 fn checked_add_balance(
@@ -2378,5 +2431,191 @@ mod tests {
             "bulk must show both the stored and the on-chain value: {logs}"
         );
         assert!(rows.iter().any(|row| row.cf_name == CF_TOKENS));
+    }
+
+    /// J15: one transaction's whole `TOKEN_DAILY` contribution reaches the
+    /// per-token day map ONCE per (token, day) — every member cell's capacity
+    /// / knowledge / live-cell delta, the transaction count, and all transfer,
+    /// mint and burn records are folded on the stack first. Token T: two
+    /// inputs, four outputs, five transfer legs and a mint; token U: one leg
+    /// and a burn. (A mint and a burn of one token in one tx cannot both
+    /// occur: `build_transfers_from_cells` nets each lock first.) A second
+    /// transaction on the same day touches T's day once more.
+    #[test]
+    fn token_daily_map_is_updated_once_per_token_day_per_transaction() {
+        let interner = IdentityInterner::default();
+        let token_t = interner.intern_bytes(vec![0xc1; 32]);
+        let token_u = interner.intern_bytes(vec![0xc2; 32]);
+        let code =
+            interner.intern_bytes(hex::decode(&crate::parser::udt::SUDT_CODE_HASH[2..]).unwrap());
+        let args_t = interner.intern_bytes(vec![0x01; 32]);
+        let args_u = interner.intern_bytes(vec![0x02; 32]);
+        let lock_code = interner.intern_bytes(vec![0x22; 32]);
+        let lock_args = interner.intern_bytes(vec![0x33; 20]);
+        let locks: Vec<InternId> = (0..6u8)
+            .map(|i| interner.intern_bytes(vec![0xa0 + i; 32]))
+            .collect();
+        let frozen = interner.snapshot_for_reads();
+        let ctx = ReducerContext::new(&frozen);
+        let ts = 1_700_000_000_000;
+        let day = keys::timestamp_ms_to_date(ts);
+
+        let output =
+            |tx_byte: u8, index: u32, lock: InternId, token: InternId, args, amount| CellFacts {
+                outpoint: OutPointKey::new([tx_byte; 32], index),
+                created_at_block: 10,
+                created_by_block_dao_ar: 1,
+                capacity: 200_00000000,
+                lock_script_hash_id: lock,
+                lock_code_hash_id: lock_code,
+                lock_hash_type: 1,
+                lock_args_id: lock_args,
+                type_script_hash_id: Some(token),
+                type_code_hash_id: Some(code),
+                type_hash_type: Some(1),
+                type_args_id: Some(args),
+                occupied_capacity: 142_00000000,
+                data_size: 16,
+                data: Vec::new(),
+                data_hash: None,
+                udt_amount: Some(amount),
+                semantic_tag: CellSemanticTag::Sudt,
+                dao_state: None,
+                protocol_facts: None,
+            };
+        let input = |cell: CellFacts| ResolvedInputFacts {
+            outpoint: cell.outpoint,
+            created_at_block: cell.created_at_block,
+            created_by_block_dao_ar: cell.created_by_block_dao_ar,
+            capacity: cell.capacity,
+            occupied_capacity: cell.occupied_capacity,
+            udt_amount: cell.udt_amount,
+            lock_script_hash_id: cell.lock_script_hash_id,
+            lock_code_hash_id: cell.lock_code_hash_id,
+            lock_hash_type: cell.lock_hash_type,
+            lock_args_id: cell.lock_args_id,
+            type_script_hash_id: cell.type_script_hash_id,
+            type_code_hash_id: cell.type_code_hash_id,
+            type_hash_type: cell.type_hash_type,
+            type_args_id: cell.type_args_id,
+            data_size: cell.data_size,
+            data_hash: None,
+            semantic_tag: cell.semantic_tag,
+            dao_state: None,
+            dao_compensation_ars: None,
+            protocol_facts: None,
+        };
+        let tx =
+            |tx_byte: u8, inputs: Vec<ResolvedInputFacts>, cells: Vec<CellFacts>| ResolvedTxFacts {
+                tx_hash: [tx_byte; 32],
+                block_number: 10,
+                block_hash: [0x66; 32],
+                timestamp_ms: ts,
+                chain_time_ms: ts,
+                block_dao_ar: 1,
+                tx_index: 1,
+                dotbit_action: None,
+                resolved_inputs: inputs,
+                cells: cells.into(),
+            };
+
+        let mut owner = TokenOwner::default();
+        // Fund: A holds 1000 T, B 500 T, A 800 U.
+        owner
+            .apply_tx(
+                &tx(
+                    0x01,
+                    Vec::new(),
+                    vec![
+                        output(0x01, 0, locks[0], token_t, args_t, 1000),
+                        output(0x01, 1, locks[1], token_t, args_t, 500),
+                        output(0x01, 2, locks[0], token_u, args_u, 800),
+                    ],
+                ),
+                &ctx,
+            )
+            .unwrap();
+        owner.daily_map_updates.clear();
+
+        // T: A 1000 + B 500 -> C 300, D 300, E 300, F 700: legs A->C, A->D,
+        // A->E, A->F 100, B->F 500, and a 100 mint to F. U: A 800 -> C 500:
+        // one leg and a 300 burn.
+        let big = tx(
+            0x02,
+            vec![
+                input(output(0x01, 0, locks[0], token_t, args_t, 1000)),
+                input(output(0x01, 1, locks[1], token_t, args_t, 500)),
+                input(output(0x01, 2, locks[0], token_u, args_u, 800)),
+            ],
+            vec![
+                output(0x02, 0, locks[2], token_t, args_t, 300),
+                output(0x02, 1, locks[3], token_t, args_t, 300),
+                output(0x02, 2, locks[4], token_t, args_t, 300),
+                output(0x02, 3, locks[5], token_t, args_t, 700),
+                output(0x02, 4, locks[2], token_u, args_u, 500),
+            ],
+        );
+        let before_t = owner.daily_deltas[&vec![0xc1; 32]][&day].clone();
+        let before_u = owner.daily_deltas[&vec![0xc2; 32]][&day].clone();
+        owner.apply_tx(&big, &ctx).unwrap();
+
+        let updates = |owner: &TokenOwner, byte: u8| {
+            owner
+                .daily_map_updates
+                .get(&(vec![byte; 32], day))
+                .copied()
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            (updates(&owner, 0xc1), updates(&owner, 0xc2)),
+            (1, 1),
+            "one map update per (token, day) for the whole transaction"
+        );
+
+        // The folded contribution is exactly the per-field sum (the funding
+        // transaction already minted 1500 T and 800 U that day).
+        let after_t = &owner.daily_deltas[&vec![0xc1; 32]][&day];
+        assert_eq!(after_t.tx_count, before_t.tx_count + 1);
+        assert_eq!(after_t.transfer_tx_count, before_t.transfer_tx_count + 1);
+        assert_eq!(
+            (after_t.minted.clone(), after_t.mint_count),
+            (TokenBalance::from(1600), before_t.mint_count + 1)
+        );
+        assert_eq!(after_t.burn_count, 0);
+        assert_eq!(after_t.live_cells_delta, before_t.live_cells_delta + 2);
+        assert_eq!(
+            after_t.owned_capacity_delta,
+            before_t.owned_capacity_delta + 2 * 200_00000000
+        );
+        assert_eq!(
+            after_t.owned_knowledge_delta,
+            before_t.owned_knowledge_delta + 2 * 142_00000000
+        );
+        let after_u = &owner.daily_deltas[&vec![0xc2; 32]][&day];
+        assert_eq!(after_u.tx_count, before_u.tx_count + 1);
+        assert_eq!(after_u.transfer_tx_count, before_u.transfer_tx_count + 1);
+        assert_eq!(
+            (
+                after_u.burned.clone(),
+                after_u.burn_count,
+                after_u.mint_count
+            ),
+            (TokenBalance::from(300), 1, before_u.mint_count)
+        );
+        assert_eq!(after_u.live_cells_delta, before_u.live_cells_delta);
+        assert_eq!(after_u.owned_capacity_delta, before_u.owned_capacity_delta);
+
+        // Another transaction that day: one more update of T's day.
+        owner
+            .apply_tx(
+                &tx(
+                    0x03,
+                    vec![input(output(0x02, 0, locks[2], token_t, args_t, 300))],
+                    vec![output(0x03, 0, locks[3], token_t, args_t, 300)],
+                ),
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!((updates(&owner, 0xc1), updates(&owner, 0xc2)), (2, 1));
     }
 }
