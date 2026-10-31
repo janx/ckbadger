@@ -232,6 +232,91 @@ pub struct NetworkMapPoint {
     pub last_seen: u64,
     pub advertiser_count: u64,
     pub local_session_observed: bool,
+    /// This node's session with the peer in the latest completed round, as
+    /// the crawler read it from the node's `get_peers`; present exactly when
+    /// `localSessionObserved` (R-13 / CH-57).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_session: Option<LocalSessionResponse>,
+    /// The dial alias this crawler last identified the node through; absent
+    /// when no retained alias was ever verified (R-13 / CH-57).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alias: Option<VerifiedAliasResponse>,
+}
+
+/// One session of the configured node with a peer, exactly as the node's
+/// `get_peers` reported it when the crawler read it (network store only;
+/// the API makes no RPC call for it).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalSessionResponse {
+    pub connected_duration_ms: u64,
+    /// Absent when the node reported no ping for the session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_ping_duration_ms: Option<u64>,
+    /// When the crawler read `get_peers` (the crawler clock, as `lastSeen`);
+    /// `connectedDurationMs` is as of this time.
+    pub observed_at: u64,
+    pub initiator: &'static str,
+}
+
+/// A dial alias of a peer and when this crawler last identified the node
+/// through it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifiedAliasResponse {
+    pub address: String,
+    pub verified_at: u64,
+}
+
+/// The configured node's session with `peer_id` in the latest completed
+/// round. The crawler reads the node's `get_peers` once per round and a peer
+/// appears in it at most once, so two such sessions are an invariant
+/// violation.
+fn latest_local_session<'a>(
+    peer_id: &[u8],
+    candidate: &'a CrawlCandidate,
+    status: Option<&LatestStatus>,
+) -> Result<Option<&'a DirectSessionEvidence>, ApiRouteError> {
+    let Some((round_id, observer)) = status.and_then(|status| {
+        status
+            .local_observer
+            .as_ref()
+            .map(|observer| (status.round_id, observer))
+    }) else {
+        return Ok(None);
+    };
+    let mut sessions = candidate.direct_sessions.iter().filter(|session| {
+        session.last_observed_round == round_id && session.observer_peer_id == observer.peer_id
+    });
+    let session = sessions.next();
+    if sessions.next().is_some() {
+        return Err(ApiError::internal(format!(
+            "peer has more than one session with the local observer in round {round_id}: peer_id={}, observer_peer_id={}",
+            hex(peer_id),
+            hex(&observer.peer_id)
+        )));
+    }
+    Ok(session)
+}
+
+/// The alias verified last; aliases verified at the same instant are equally
+/// true, so among them the smallest address is shown.
+fn latest_verified_alias(candidate: &CrawlCandidate) -> Option<VerifiedAliasResponse> {
+    candidate
+        .addresses
+        .iter()
+        .filter_map(|address| {
+            address
+                .last_verified_at
+                .map(|verified_at| (verified_at, &address.addr))
+        })
+        .max_by(|(left_at, left), (right_at, right)| {
+            left_at.cmp(right_at).then_with(|| right.cmp(left))
+        })
+        .map(|(verified_at, address)| VerifiedAliasResponse {
+            address: address.clone(),
+            verified_at,
+        })
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -293,20 +378,15 @@ async fn map(State(state): State<Arc<AppState>>) -> ApiResult<NetworkMap> {
                 hex(&peer_id)
             ))
         })?;
-        let local_session_observed = status
-            .as_ref()
-            .and_then(|status| {
-                status
-                    .local_observer
-                    .as_ref()
-                    .map(|observer| (status.round_id, observer))
-            })
-            .is_some_and(|(round_id, observer)| {
-                candidate.direct_sessions.iter().any(|session| {
-                    session.last_observed_round == round_id
-                        && session.observer_peer_id == observer.peer_id
-                })
-            });
+        let local_session = latest_local_session(&peer_id, candidate, status.as_ref())?;
+        let local_session_observed = local_session.is_some();
+        let local_session = local_session.map(|session| LocalSessionResponse {
+            connected_duration_ms: session.connected_duration_ms,
+            last_ping_duration_ms: session.last_ping_duration_ms,
+            observed_at: session.last_observed_at,
+            initiator: session_initiator_name(session.initiator),
+        });
+        let alias = latest_verified_alias(candidate);
         if let Some(geo) = record.geo {
             match (geo.lat, geo.lon) {
                 (Some(lat), Some(lon))
@@ -329,6 +409,8 @@ async fn map(State(state): State<Arc<AppState>>) -> ApiResult<NetworkMap> {
                         last_seen: record.last_seen,
                         advertiser_count,
                         local_session_observed,
+                        local_session,
+                        alias,
                     });
                 }
                 (None, None) => {}

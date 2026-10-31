@@ -81,6 +81,228 @@ async fn map_counts_unlocated_verified_peers_without_inventing_coordinates() {
     assert_eq!(map["points"][0]["clientVersion"], "0.119.0");
 }
 
+/// The network fixture plus this node as the crawler last recorded it (round
+/// 5, peer id `local-observer`) and `sessions` on peerA — what the crawler
+/// read from the node's `get_peers`. Only the test writes the store.
+fn network_store_with_peer_a_sessions(
+    sessions: Vec<DirectSessionEvidence>,
+) -> Arc<ckbadger_store::CkbadgerStore> {
+    let network = test_network_store();
+    let mut status = network.get_network_status().unwrap().unwrap();
+    status.local_observer = Some(LocalObserverEvidence {
+        peer_id: b"local-observer".to_vec(),
+        first_observed_at: 150,
+        last_observed_at: 150,
+        first_observed_round: 5,
+        last_observed_round: 5,
+        observation_count: 1,
+        client_version: "0.119.0".into(),
+        active: true,
+        addresses: vec![],
+        protocols: vec![],
+        connections: 1,
+    });
+    network.put_network_status(&status).unwrap();
+    let mut peer_a = network.get_crawl_candidate(b"peerA").unwrap().unwrap();
+    peer_a.direct_sessions = sessions;
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 6,
+                started_at: 240,
+                last_checkpoint_at: 250,
+                ..Default::default()
+            },
+            &[(b"peerA".to_vec(), peer_a)],
+        )
+        .unwrap();
+    network
+}
+
+fn local_session(
+    observer: &[u8],
+    round: u64,
+    ping: Option<u64>,
+    initiator: SessionInitiator,
+) -> DirectSessionEvidence {
+    DirectSessionEvidence {
+        observer_peer_id: observer.to_vec(),
+        initiator,
+        first_observed_at: 120,
+        last_observed_at: 150,
+        first_observed_round: 4,
+        last_observed_round: round,
+        observation_count: 2,
+        client_version: "0.119.0".into(),
+        session_addresses: vec!["/ip4/5.6.7.8/tcp/40000".into()],
+        connected_duration_ms: 3_725_000,
+        last_ping_duration_ms: ping,
+        protocols: vec![],
+    }
+}
+
+/// R-13 (CH-57): a map point names the node by the dial alias this crawler
+/// last identified it through, and — for a peer of this node in the latest
+/// round — the session's connected duration and last ping exactly as the
+/// node's `get_peers` reported them, with the time they were read.
+#[tokio::test]
+async fn map_points_carry_the_verified_alias_and_this_nodes_session() {
+    let network = network_store_with_peer_a_sessions(vec![local_session(
+        b"local-observer",
+        5,
+        Some(42),
+        SessionInitiator::Peer,
+    )]);
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, map) = get_json(&app, "/network/map").await;
+    assert_eq!(status, StatusCode::OK, "{map}");
+    let point = &map["points"][0];
+    assert_eq!(point["peerId"], "7065657241");
+    assert_eq!(
+        point["alias"],
+        serde_json::json!({ "address": "addrpeerA", "verifiedAt": 200 })
+    );
+    assert_eq!(point["localSessionObserved"], true);
+    assert_eq!(
+        point["localSession"],
+        serde_json::json!({
+            "connectedDurationMs": 3_725_000,
+            "lastPingDurationMs": 42,
+            "observedAt": 150,
+            "initiator": "peerInitiated",
+        })
+    );
+}
+
+/// R-13: unknown values are absent, never zero — no ping reported, no
+/// session in the latest round, a session seen by another observer, or no
+/// alias the crawler verified.
+#[tokio::test]
+async fn map_point_session_and_alias_fields_are_absent_when_unknown() {
+    let point_of = |network| async move {
+        let app =
+            create_router_without_warmup(test_config_with_network(test_store(), network, true));
+        let (status, map) = get_json(&app, "/network/map").await;
+        assert_eq!(status, StatusCode::OK, "{map}");
+        map["points"][0].clone()
+    };
+
+    // The node reported no ping for the session.
+    let point = point_of(network_store_with_peer_a_sessions(vec![local_session(
+        b"local-observer",
+        5,
+        None,
+        SessionInitiator::Observer,
+    )]))
+    .await;
+    assert_eq!(point["localSession"]["connectedDurationMs"], 3_725_000);
+    assert_eq!(point["localSession"]["initiator"], "observerInitiated");
+    assert!(
+        point["localSession"].get("lastPingDurationMs").is_none(),
+        "{point}"
+    );
+
+    // A session from an earlier round, or by another observer, is not this
+    // node's session now.
+    for session in [
+        local_session(b"local-observer", 4, Some(42), SessionInitiator::Peer),
+        local_session(b"other-observer", 5, Some(42), SessionInitiator::Peer),
+    ] {
+        let point = point_of(network_store_with_peer_a_sessions(vec![session])).await;
+        assert_eq!(point["localSessionObserved"], false, "{point}");
+        assert!(point.get("localSession").is_none(), "{point}");
+    }
+
+    // The plain fixture: no local observer at all.
+    let point = point_of(test_network_store()).await;
+    assert_eq!(point["localSessionObserved"], false);
+    assert!(point.get("localSession").is_none(), "{point}");
+
+    // No alias of the node was ever verified by the crawler: no alias.
+    let network = test_network_store();
+    let mut peer_a = network.get_crawl_candidate(b"peerA").unwrap().unwrap();
+    for address in &mut peer_a.addresses {
+        address.last_verified_at = None;
+    }
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 6,
+                started_at: 240,
+                last_checkpoint_at: 250,
+                ..Default::default()
+            },
+            &[(b"peerA".to_vec(), peer_a)],
+        )
+        .unwrap();
+    let point = point_of(network).await;
+    assert!(point.get("alias").is_none(), "{point}");
+}
+
+/// R-13: the crawler reads the node's peers once per round, so two sessions
+/// of one observer in the latest round are an invariant violation — an error
+/// naming the peer, never a pick.
+#[tokio::test]
+async fn map_rejects_two_latest_round_sessions_by_this_node() {
+    let network = network_store_with_peer_a_sessions(vec![
+        local_session(b"local-observer", 5, Some(1), SessionInitiator::Observer),
+        local_session(b"local-observer", 5, Some(2), SessionInitiator::Peer),
+    ]);
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, body) = get_json(&app, "/network/map").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(body.to_string().contains("7065657241"), "{body}");
+}
+
+/// R-13: the latest verified alias wins; aliases verified at the same
+/// instant are both true, so the order among them is the address order.
+#[tokio::test]
+async fn map_point_alias_is_the_latest_verified_dial_alias() {
+    let network = test_network_store();
+    let mut peer_a = network.get_crawl_candidate(b"peerA").unwrap().unwrap();
+    let template = peer_a.addresses[0].clone();
+    peer_a.addresses = vec![
+        ckbadger_store::CrawlAddress {
+            addr: "/ip4/9.9.9.9/tcp/8115".into(),
+            last_verified_at: Some(180),
+            ..template.clone()
+        },
+        ckbadger_store::CrawlAddress {
+            addr: "/ip6/::1/tcp/8115".into(),
+            last_verified_at: Some(210),
+            ..template.clone()
+        },
+        ckbadger_store::CrawlAddress {
+            addr: "/ip4/1.1.1.1/tcp/8115".into(),
+            last_verified_at: Some(210),
+            ..template.clone()
+        },
+        ckbadger_store::CrawlAddress {
+            addr: "/ip4/0.0.0.0/tcp/8115".into(),
+            last_verified_at: None,
+            ..template
+        },
+    ];
+    network
+        .checkpoint_crawl(
+            &ActiveCrawl {
+                round_id: 6,
+                started_at: 240,
+                last_checkpoint_at: 250,
+                ..Default::default()
+            },
+            &[(b"peerA".to_vec(), peer_a)],
+        )
+        .unwrap();
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, map) = get_json(&app, "/network/map").await;
+    assert_eq!(status, StatusCode::OK, "{map}");
+    assert_eq!(
+        map["points"][0]["alias"],
+        serde_json::json!({ "address": "/ip4/1.1.1.1/tcp/8115", "verifiedAt": 210 })
+    );
+}
+
 #[tokio::test]
 async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() {
     use ckbadger_store::network_keys::{Granularity, Metric};
