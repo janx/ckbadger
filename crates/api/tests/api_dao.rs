@@ -324,7 +324,7 @@ async fn dao_evidence_memoizes_only_the_depositor_ranking_per_tip() {
 #[tokio::test]
 async fn dao_evidence_and_depositors_are_derive_pending_until_derived() {
     let store = dao_evidence_fixture_underived();
-    let app = router_from_state(test_app_state(test_config(store.clone())));
+    let app = router_from_state(test_app_state(test_config_underived(store.clone())));
     for path in ["/dao/evidence", "/dao/depositors"] {
         let (status, json) = get_json(&app, path).await;
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}: {json}");

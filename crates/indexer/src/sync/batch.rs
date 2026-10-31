@@ -2493,6 +2493,9 @@ impl Indexer {
 
         let mut object_activity_batch = StoreBatch::new(self.writer.store());
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        // `(collection id, block)` of every object collection activity row,
+        // for the derived per-collection row count.
+        let mut derive_collection_activity_rows: Vec<(Vec<u8>, i64)> = Vec::new();
         let mut identity_activity_batch = StoreBatch::new(self.writer.store());
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Every collection activity row this batch writes, folded per
@@ -3250,13 +3253,14 @@ impl Indexer {
             }
             // Object/identity collection activities are now in domain store;
             // rollback deletes entries directly (no undo log needed)
-            for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
-                object_activity_acc.flush(
+            for (collection_id, block_number, _tx_idx, _block_hash, _tx_hash) in object_activity_acc
+                .flush(
                     &mut object_activity_batch,
                     &mut collection_daily,
                     &collection_day_of_block,
                 )?
             {
+                derive_collection_activity_rows.push((collection_id.clone(), block_number));
                 let delta = object_activity_count_deltas
                     .entry(collection_id)
                     .or_insert(0);
@@ -4082,6 +4086,7 @@ impl Indexer {
                     store: self.writer.store(),
                     blocks: &derive_blocks,
                     dao_transitions: live_dao.transitions(),
+                    object_collection_activity_rows: &derive_collection_activity_rows,
                 };
                 crate::derive::apply_live_batch(
                     self.writer.store(),
@@ -11625,6 +11630,88 @@ mod tests {
                 })
                 .unwrap(),
             )
+        }
+
+        fn derived_activity_count(store: &CkbadgerStore) -> Option<Vec<i128>> {
+            store
+                .get_derived_value(
+                    ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+                    &ckbadger_store::keys::encode_object_collection_activity_prefix(&class_id()),
+                )
+                .unwrap()
+        }
+
+        /// L2 (J5): the derived per-collection activity row count is kept by
+        /// the live writer (one per collection activity row), equals a
+        /// from-scratch rebuild at the tip, and undo replay restores the
+        /// count of the fork block.
+        #[tokio::test]
+        async fn derived_collection_activity_count_is_maintained_live_and_rolls_back() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            for code_hash in [
+                MNFT_ISSUER_CODE_HASH,
+                MNFT_CLASS_CODE_HASH,
+                MNFT_TOKEN_CODE_HASH,
+            ] {
+                seed_script_info(store.as_ref(), code_hash);
+            }
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            let mut counts = Vec::new();
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                mint_block(),
+                transfer_block(),
+                burn_block(),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+                counts.push(derived_activity_count(&store));
+            }
+            assert_eq!(
+                counts,
+                vec![None, Some(vec![1]), Some(vec![2]), Some(vec![3])],
+                "mint, transfer and burn each add one collection activity row"
+            );
+            // The derivation completed at 99, below every live block: undo
+            // replay owns this rollback and restores the fork block's count.
+            crate::derive::invalidate_for_rollback(store.as_ref(), 102).unwrap();
+            rollback_to(store.as_ref(), 102);
+            assert_eq!(
+                derived_activity_count(&store),
+                Some(vec![2]),
+                "undo replay to 102"
+            );
+            crate::derive::rederive_to_completion(store.as_ref()).unwrap();
+            assert_eq!(
+                derived_activity_count(&store),
+                Some(vec![2]),
+                "rebuild at tip 102"
+            );
+
+            // Now complete at 102: a rollback below it resets the derivation
+            // (the rows are cleared and derived again), never replays it.
+            crate::derive::invalidate_for_rollback(store.as_ref(), 101).unwrap();
+            assert_eq!(
+                derived_activity_count(&store),
+                None,
+                "reset before the rollback"
+            );
+            rollback_to(store.as_ref(), 101);
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            assert_eq!(
+                derived_activity_count(&store),
+                Some(vec![1]),
+                "derived again at 101"
+            );
         }
 
         /// ID-COL: `collection_activity_daily` — one row per (collection,

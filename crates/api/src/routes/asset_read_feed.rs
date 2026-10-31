@@ -184,7 +184,7 @@ fn collection_feed(
             collection_context(&state.store, &members, &actions, row.entry.outputs_count)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let total = collection.activities_count(state, &id).map_err(context)?;
+    let total = collection.activities_count(state, &id)?;
     let response = if transactions {
         serde_json::to_value(CursorPaginatedResponse::new(
             asset_feed::project_transactions(state, page)?,

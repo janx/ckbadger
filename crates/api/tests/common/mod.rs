@@ -264,7 +264,24 @@ pub fn test_config_with_append_only(
     test_config_with_ckb_db_path(store, append_only_store, ckb_db.path, Some(ckb_db.cleanup))
 }
 
+/// A config over `store` as a synced indexer leaves it: every background
+/// derivation (`ckbadger_indexer::derive`) is derived from the rows the test
+/// seeded. Every `test_config*` builder derives; [`test_config_underived`]
+/// is a store the indexer has not derived yet (endpoints that read a derived
+/// aggregate answer 503).
 pub fn test_config_with_ckb_db_path(
+    store: Arc<CkbadgerStore>,
+    append_only_store: Arc<CkbadgerStore>,
+    ckb_db_path: String,
+    ckb_db_cleanup: Option<Arc<CleanupPathGuard>>,
+) -> AppConfig {
+    if !store.is_secondary() {
+        ckbadger_indexer::derive::rederive_to_completion(&store).unwrap();
+    }
+    underived_config(store, append_only_store, ckb_db_path, ckb_db_cleanup)
+}
+
+fn underived_config(
     store: Arc<CkbadgerStore>,
     append_only_store: Arc<CkbadgerStore>,
     ckb_db_path: String,
@@ -295,8 +312,15 @@ pub fn test_config_with_ckb_db_path(
     }
 }
 
+/// A derived store's config (see [`test_config_with_ckb_db_path`]).
 pub fn test_config(store: Arc<CkbadgerStore>) -> AppConfig {
     test_config_with_append_only(store.clone(), store)
+}
+
+/// A config over `store` before the indexer has derived its aggregates.
+pub fn test_config_underived(store: Arc<CkbadgerStore>) -> AppConfig {
+    let ckb_db = test_ckb_db_path();
+    underived_config(store.clone(), store, ckb_db.path, Some(ckb_db.cleanup))
 }
 
 /// Build an [`AppConfig`] wired with a seeded network store (for `/network` endpoint tests).

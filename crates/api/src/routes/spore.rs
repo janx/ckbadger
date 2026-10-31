@@ -13,10 +13,9 @@ use ckbadger_indexer::media_store::MediaBlobStore;
 use ckbadger_indexer::parser::{build_dob1_svg, extract_dob1_pattern};
 
 use super::assets::{
-    build_nft_item_activities_response, count_nft_collection_activities_cached,
-    decode_activity_cursor, list_canonical_nft_collection_activities_page,
-    normalize_activity_action_filter, MnftItemActivitiesParams, MnftItemActivityResponse,
-    NftLifecycleStandard,
+    build_nft_item_activities_response, decode_activity_cursor, derived_collection_activity_count,
+    list_canonical_nft_collection_activities_page, normalize_activity_action_filter,
+    MnftItemActivitiesParams, MnftItemActivityResponse, NftLifecycleStandard,
 };
 use super::statistics::{StackedAreaChartResponse, StackedAreaDataPoint, StackedAreaSeries};
 use crate::response::{
@@ -1155,13 +1154,7 @@ async fn get_cluster(
     };
     let spores_count = cluster_aggregate.live_count;
     let holders_count = cluster_aggregate.owner_count;
-    let activities_count = count_nft_collection_activities_cached(
-        state.store.as_ref(),
-        state.store.as_ref(),
-        &state.mem_cache,
-        &id,
-    )
-    .map_err(|e| ApiError::internal(e.to_string()))?;
+    let activities_count = derived_collection_activity_count(state.store.as_ref(), &id)?;
 
     let (name, description, created_at_block) = if is_sole_spores_sentinel(&id) {
         (

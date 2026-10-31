@@ -6156,6 +6156,128 @@ impl Check for DaoDepositorAggregateConsistency {
     }
 }
 
+// ── Derived cluster activity count (round 3 L2) ────────────────────────────
+
+/// Each sampled Spore cluster's `activitiesCount` — the derived
+/// `object_collection_activity_count` row — equals the cluster's activity
+/// rows listed by `/spore/clusters/{id}/activities`, the same form as the
+/// collection calendar check's count assertion.
+pub struct ClusterActivitiesCountConsistency;
+
+const CLUSTER_ACTIVITY_SAMPLE_CAP: usize = 10;
+const CLUSTER_ACTIVITY_MAX_ROWS_PER_CLUSTER: i64 = 5_000;
+const CLUSTER_ACTIVITY_MAX_ROWS_TOTAL: i64 = 20_000;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObjectAssetRecord {
+    id: String,
+    standard: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterActivitiesCountRecord {
+    activities_count: i64,
+}
+
+fn count_cluster_activity_rows(ctx: &CheckContext, id: &str) -> anyhow::Result<i64> {
+    let mut rows = 0i64;
+    let mut cursor: Option<String> = None;
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!("spore/clusters/{id}/activities?limit=100&cursor={cursor}"),
+            None => format!("spore/clusters/{id}/activities?limit=100"),
+        };
+        let page: CursorPage<serde_json::Value> = api_get(ctx, &path)?;
+        rows += page.data.len() as i64;
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return Ok(rows),
+        }
+    }
+    anyhow::bail!("spore/clusters/{id}/activities walk did not terminate")
+}
+
+impl Check for ClusterActivitiesCountConsistency {
+    fn name(&self) -> &'static str {
+        "cluster_activities_count_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Each sampled Spore cluster's derived activitiesCount equals its listed activity rows"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(CLUSTER_ACTIVITY_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "cluster_activities_count_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let page: CursorPage<ObjectAssetRecord> = api_get(ctx, "assets?type=object&limit=100")?;
+        let cap = ctx.sample_count.min(CLUSTER_ACTIVITY_SAMPLE_CAP);
+        let mut findings = Vec::new();
+        let mut checked = 0u64;
+        let mut listed_total = 0i64;
+        let mut not_sampled = Vec::new();
+        for asset in page.data.iter().filter(|asset| asset.standard == "spore") {
+            if checked as usize >= cap {
+                break;
+            }
+            let id = asset.id.as_str();
+            let before: ClusterActivitiesCountRecord =
+                api_get(ctx, &format!("spore/clusters/{id}"))?;
+            let count = before.activities_count;
+            if count > CLUSTER_ACTIVITY_MAX_ROWS_PER_CLUSTER
+                || listed_total + count > CLUSTER_ACTIVITY_MAX_ROWS_TOTAL
+            {
+                not_sampled.push(format!("{id} ({count} rows)"));
+                continue;
+            }
+            let listed = count_cluster_activity_rows(ctx, id)?;
+            listed_total += listed;
+            if listed != count {
+                // The tip may have moved while paging: only a count the
+                // detail confirms after the walk is a finding.
+                let after: ClusterActivitiesCountRecord =
+                    api_get(ctx, &format!("spore/clusters/{id}"))?;
+                if after.activities_count == count {
+                    findings.push(Finding {
+                        entity: format!("cluster={id}"),
+                        details: vec![format!(
+                            "activitiesCount={count} != activity rows listed={listed}"
+                        )],
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled clusters, {listed_total} activity rows");
+        if !not_sampled.is_empty() {
+            detail.push_str(&format!(
+                "; over the {CLUSTER_ACTIVITY_MAX_ROWS_PER_CLUSTER}-row / {CLUSTER_ACTIVITY_MAX_ROWS_TOTAL}-total budget, not sampled: {}",
+                not_sampled.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -6201,6 +6323,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DotCellOwnerIndexConsistency),
         Box::new(DotCellRecordsHashParity),
         Box::new(DaoDepositorAggregateConsistency),
+        Box::new(ClusterActivitiesCountConsistency),
     ]
 }
 

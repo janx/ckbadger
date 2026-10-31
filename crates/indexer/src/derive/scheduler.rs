@@ -391,6 +391,20 @@ fn active_index(active: &Option<ActiveRebuild<'_>>) -> usize {
     active.as_ref().expect("rebuild in flight").index
 }
 
+/// Reset every registered derivation and derive it again from the store as it
+/// stands now (tests and tools that change source rows directly, outside the
+/// live writer). Returns each aggregate's final state.
+pub fn rederive_to_completion(store: &CkbadgerStore) -> Result<Vec<(&'static str, DeriveState)>> {
+    let mut batch = StoreBatch::new(store);
+    for aggregate in registry() {
+        let id = aggregate.id();
+        let previous = store.get_derive_meta(id.name)?;
+        stage_reset(&mut batch, &id, previous.as_ref())?;
+    }
+    batch.commit()?;
+    derive_to_completion(store)
+}
+
 /// Run every registered derivation to completion on a primary store, with no
 /// live sync alongside. For tests and tools that build a store and then read
 /// it; the indexer itself runs [`DeriveScheduler`] between live batches.

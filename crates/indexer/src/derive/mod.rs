@@ -25,6 +25,7 @@
 //!
 //! The persisted state machine is `ckbadger_store::derive_ops::DeriveMeta`.
 
+pub mod collection_activity;
 pub mod dao;
 pub mod live;
 pub mod scheduler;
@@ -39,7 +40,7 @@ use tracing::warn;
 
 pub(crate) use live::apply_live_batch;
 pub use live::{report_live_failures, LiveBlockPoint, LiveDeriveCtx, LiveFailure};
-pub use scheduler::{derive_to_completion, DeriveScheduler, StepOutcome};
+pub use scheduler::{derive_to_completion, rederive_to_completion, DeriveScheduler, StepOutcome};
 
 /// Derived key → signed contribution, one map per chunk or per block.
 pub type DeltaMap = BTreeMap<Vec<u8>, Vec<i128>>;
@@ -160,7 +161,10 @@ pub trait DerivedAggregate: Send + Sync {
 
 /// Every registered aggregate, in derivation order.
 pub fn registry() -> Vec<Box<dyn DerivedAggregate>> {
-    vec![Box::new(dao::DaoLiveAgg)]
+    vec![
+        Box::new(dao::DaoLiveAgg),
+        Box::new(collection_activity::ObjectCollectionActivityCount),
+    ]
 }
 
 /// Reset every derivation a rollback to `rollback_to` would corrupt, BEFORE

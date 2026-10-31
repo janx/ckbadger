@@ -833,6 +833,7 @@ mod status_model_tests {
             "collection_daily_activity_consistency",
             "dotcell_records_hash_parity",
             "dao_depositor_aggregate_consistency",
+            "cluster_activities_count_consistency",
         ];
         let mut declared = declared;
         declared.sort_unstable();

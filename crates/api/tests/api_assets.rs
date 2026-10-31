@@ -5449,8 +5449,9 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     // collection's rows names the first one instead of skipping it.
     let id_hex = format!("0x{}", hex::encode(id));
     let app = create_router(test_config(store.clone())).await;
+    // The count no longer walks the rows (J5: it is the derived row count), so
+    // only the surfaces that list rows name a non-canonical one.
     for path in [
-        "/assets?type=object".to_string(),
         format!("/spore/clusters/{id_hex}/activity-feed?limit=1"),
         format!("/assets/objects/{id_hex}/activity-feed?limit=1"),
     ] {
@@ -5507,6 +5508,81 @@ async fn regression_spore_collection_activity_count_fails_on_non_canonical_rows(
     let (status, detail) = get_json(&app, &format!("/assets/objects/{id}")).await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert_eq!(detail["activitiesCount"], 2, "{detail}");
+}
+
+/// J5: a Spore cluster's `activitiesCount` is the indexer-derived
+/// `object_collection_activity_count` row: the detail and the object
+/// collection detail read it without walking one activity row; until it is
+/// derived they answer `503 derive_pending` and the asset list shows the count
+/// as unknown (`null`), never a stand-in.
+#[tokio::test]
+async fn cluster_activities_count_is_the_derived_row_count() {
+    let store = test_store();
+    let id = [0xc3; 32];
+    store
+        .put_spore_direct(&id, &regression_cluster_metadata())
+        .unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cluster_aggregate(
+        &id,
+        &ClusterAggregate {
+            total_count: 1,
+            live_count: 0,
+            ..Default::default()
+        },
+    );
+    for block in 1..=3 {
+        batch.put_object_collection_activity(
+            &id,
+            block,
+            0,
+            &ObjectCollectionActivityEntry {
+                tx_hash: vec![block as u8; 32],
+                block_hash: vec![0xb0 + block as u8; 32],
+                timestamp_ms: 1_700_000_000_000 + block,
+                actions: vec![AssetAction::Mint],
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let id_hex = format!("0x{}", hex::encode(id));
+
+    let app = create_router(test_config_underived(store.clone())).await;
+    for path in [
+        format!("/spore/clusters/{id_hex}"),
+        format!("/assets/objects/{id_hex}"),
+    ] {
+        let (status, json) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}: {json}");
+        assert_eq!(json["error"], "derive_pending", "{path}: {json}");
+        assert_eq!(
+            json["derive"]["aggregate"], "object_collection_activity_count",
+            "{json}"
+        );
+    }
+    let (status, inventory) = get_json(&app, "/assets?type=object").await;
+    assert_eq!(status, StatusCode::OK, "{inventory}");
+    let row = inventory["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id_hex)
+        .unwrap();
+    assert!(row["activitiesCount"].is_null(), "{row}");
+
+    ckbadger_indexer::derive::derive_to_completion(&store).unwrap();
+    store.reset_read_call_counters();
+    let (status, cluster) = get_json(&app, &format!("/spore/clusters/{id_hex}")).await;
+    assert_eq!(status, StatusCode::OK, "{cluster}");
+    assert_eq!(cluster["activitiesCount"], 3, "{cluster}");
+    assert_eq!(
+        store.iterated_rows("object_collection_activities"),
+        0,
+        "the cluster detail walked the activity rows"
+    );
+    let (status, detail) = get_json(&app, &format!("/assets/objects/{id_hex}")).await;
+    assert_eq!(status, StatusCode::OK, "{detail}");
+    assert_eq!(detail["activitiesCount"], 3, "{detail}");
 }
 
 #[tokio::test]

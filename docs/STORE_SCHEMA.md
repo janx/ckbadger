@@ -587,6 +587,13 @@ ready / waiting against the tip epoch; `/dao/depositors` ranks the `0x01` rows. 
 re-checks each stored row against its headers (lifecycle markers, deposit/request AR, deposit
 time); live sync folds `LiveDaoBatch`'s transitions (creation, phase 1, phase 2) per block.
 
+**`object_collection_activity_count`** (L2, J5). Key = collection_id (32B, padded as in
+`object_collection_activities`) → `[rows]`: the number of `object_collection_activities` rows
+with that prefix (Spore clusters, the Sole Spores collection, and m-NFT classes alike; the API
+reads it for Spore collections, whose `cluster_agg` row is bulk-written and stays byte-identical).
+The rebuild counts the CF; live sync adds one per row `ObjectCollectionActivityAccumulator::flush`
+writes; rollback deletes rows and the undo log restores the count.
+
 **Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
 deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
 meta and the rows in the request's pinned view and serves an aggregate only when its meta is

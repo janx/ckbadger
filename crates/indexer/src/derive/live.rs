@@ -33,6 +33,9 @@ pub struct LiveDeriveCtx<'a> {
     /// Every NervosDAO lifecycle transition of the batch, in chain order
     /// (`LiveDaoBatch`, the live path's one resolution of DAO inputs).
     pub dao_transitions: &'a [crate::db::writer::DaoTransition],
+    /// Every `object_collection_activities` row the batch writes, as
+    /// `(collection id, block)`.
+    pub object_collection_activity_rows: &'a [(Vec<u8>, i64)],
 }
 
 /// Add this batch's deltas to every aggregate live sync maintains (state
@@ -219,6 +222,7 @@ pub(crate) mod tests {
             store,
             blocks: &points,
             dao_transitions: &[],
+            object_collection_activity_rows: &[],
         };
         let failures = apply_live_batch(
             store,
