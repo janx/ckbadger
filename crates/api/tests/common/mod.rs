@@ -292,6 +292,7 @@ pub fn test_config_with_ckb_db_path(
         pool_mirror_enabled: true,
         pool_poll_interval_ms: std::num::NonZeroU64::new(1000).unwrap(),
         pool_max_tracked_txs: std::num::NonZeroUsize::new(50_000).unwrap(),
+        secondary_catch_up: None,
     }
 }
 

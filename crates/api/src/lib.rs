@@ -11,6 +11,7 @@ pub mod pool;
 pub mod request_log;
 pub mod response;
 pub mod routes;
+pub mod store_readiness;
 pub mod utils;
 pub mod warmup;
 pub mod ws;
@@ -267,6 +268,10 @@ pub struct AppConfig {
     pub pool_poll_interval_ms: std::num::NonZeroU64,
     /// Tracking cap for that mirror (`[api] pool_max_tracked_txs`).
     pub pool_max_tracked_txs: std::num::NonZeroUsize,
+    /// Test seam: advances the secondaries in place of the stores above, so a
+    /// test can make catch-up fail on cue. Production passes `None`: the API
+    /// advances the stores it was given ([`store_readiness::ProcessSecondaries`]).
+    pub secondary_catch_up: Option<Arc<dyn store_readiness::SecondaryCatchUp>>,
 }
 
 /// Seed the asset/address/script caches at startup *only when no background
@@ -308,6 +313,12 @@ pub async fn dispatch_initial_warmup(state: Arc<AppState>, defer: bool) {
 
 /// Build the API router, failing fast on invalid metadata roles/slugs.
 pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
+    try_create_app(config).await.map(|(_state, router)| router)
+}
+
+/// [`try_create_router`], also handing back the state the router serves, so a
+/// caller (a test) can observe its caches and background tasks.
+pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>, Router)> {
     let script_roles = ckbadger_indexer::label_import::effective_script_roles(
         config.metadata_path.as_deref(),
         &config.ckb_network,
@@ -441,52 +452,11 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
     }
 
     // Spawn periodic store refresh for secondary instances.
-    let refresh_store = state.store.clone();
-    let refresh_append_only_store = state.append_only_store.clone();
-    let refresh_ckb_store = state.ckb_store.clone();
-    let refresh_network_store = state.network_store.clone();
-    tokio::spawn(async move {
-        loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-            let store = refresh_store.clone();
-            let append_only = refresh_append_only_store.clone();
-            let ckb = refresh_ckb_store.clone();
-            let network = refresh_network_store.load_full();
-            let result = tokio::task::spawn_blocking(move || {
-                // One exclusive window for every secondary this process reads.
-                // It waits for in-flight requests (each pins the view for its
-                // whole lifetime) and blocks new ones, so no response can mix a
-                // pre-catch-up index row with a post-catch-up entry, and no
-                // cross-store read can see domain advanced past append-only.
-                // Refresh order inside the window is therefore invisible to
-                // readers; append-only stays first to match the indexer's own
-                // commit order.
-                let window = read_view::catch_up_window();
-                if let Err(e) = append_only.catch_up_in_window(&window) {
-                    tracing::warn!("Append-only store refresh failed: {}", e);
-                }
-                if let Err(e) = store.catch_up_in_window(&window) {
-                    tracing::warn!("Store refresh failed: {}", e);
-                }
-                if let Some(ref ckb_store) = ckb {
-                    // Owned by ckb-store-reader; already inside our window.
-                    if let Err(e) = ckb_store.refresh() {
-                        tracing::warn!("CKB store refresh failed: {}", e);
-                    }
-                }
-                // Opt-in network-crawler secondary: refresh only when present.
-                if let Some(ref net) = network {
-                    if let Err(e) = net.catch_up_in_window(&window) {
-                        tracing::warn!("Network store refresh failed: {}", e);
-                    }
-                }
-            })
-            .await;
-            if let Err(e) = result {
-                tracing::warn!("Store refresh task panicked: {}", e);
-            }
-        }
-    });
+    let secondaries: Arc<dyn store_readiness::SecondaryCatchUp> = match config.secondary_catch_up {
+        Some(injected) => injected,
+        None => Arc::new(store_readiness::ProcessSecondaries::of(&state)),
+    };
+    tokio::spawn(store_readiness::run_store_refresh_loop(secondaries));
 
     let slow_threshold = std::time::Duration::from_millis(config.slow_request_threshold_ms);
 
@@ -518,8 +488,8 @@ pub async fn try_create_router(config: AppConfig) -> anyhow::Result<Router> {
             request_log::log_request,
         ))
         .layer(trace_layer)
-        .with_state(state);
-    Ok(router)
+        .with_state(state.clone());
+    Ok((state, router))
 }
 
 /// Unwrap wrapper for tests and callers that already assume valid metadata.

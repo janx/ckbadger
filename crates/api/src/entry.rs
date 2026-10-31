@@ -67,10 +67,13 @@ fn open_network_secondary_if_present(
     .map(Some)
 }
 
+/// Opens the network secondary when its primary exists (`Ok(None)` until then).
+type OpenNetworkSecondary = Arc<dyn Fn() -> Result<Option<Arc<CkbadgerStore>>> + Send + Sync>;
+
 async fn wait_for_network_store_secondary(
     slot: Arc<ArcSwapOption<CkbadgerStore>>,
     primary_path: PathBuf,
-    runtime_config: StoreRuntimeConfig,
+    open: OpenNetworkSecondary,
     retry_interval: Duration,
 ) {
     let mut last_error = None;
@@ -79,11 +82,8 @@ async fn wait_for_network_store_secondary(
             return;
         }
 
-        let open_primary_path = primary_path.clone();
-        let open_result = tokio::task::spawn_blocking(move || {
-            open_network_secondary_if_present(&open_primary_path, runtime_config)
-        })
-        .await;
+        let open_once = open.clone();
+        let open_result = tokio::task::spawn_blocking(move || open_once()).await;
 
         match open_result {
             Ok(Ok(Some(store))) => {
@@ -221,10 +221,12 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     let should_wait_for_network_store = initial_network_store.is_none();
     let network_store = Arc::new(ArcSwapOption::from(initial_network_store));
     if should_wait_for_network_store {
+        let open_primary_path = network_primary_path.clone();
+        let runtime_config = config.store_runtime_config;
         tokio::spawn(wait_for_network_store_secondary(
             network_store.clone(),
             network_primary_path,
-            config.store_runtime_config,
+            Arc::new(move || open_network_secondary_if_present(&open_primary_path, runtime_config)),
             NETWORK_STORE_RETRY_INTERVAL,
         ));
     }
@@ -249,6 +251,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         pool_mirror_enabled: config.pool_mirror_enabled,
         pool_poll_interval_ms: config.pool_poll_interval_ms,
         pool_max_tracked_txs: config.pool_max_tracked_txs,
+        secondary_catch_up: None,
     };
     let app = try_create_router(app_config).await?;
 
@@ -539,10 +542,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("network store tempdir");
         let primary_path = dir.path().join("network");
         let slot = Arc::new(ArcSwapOption::from(None));
+        let open_primary_path = primary_path.clone();
         let waiter = tokio::spawn(wait_for_network_store_secondary(
             slot.clone(),
             primary_path.clone(),
-            StoreRuntimeConfig::default(),
+            Arc::new(move || {
+                open_network_secondary_if_present(&open_primary_path, StoreRuntimeConfig::default())
+            }),
             Duration::from_millis(10),
         ));
 
