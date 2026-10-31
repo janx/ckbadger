@@ -119,10 +119,15 @@ export function itemFeedHeadline(
       text: `${item.protocolName} · ${context.protocolActions.map((action) => dotcellActionLabel(action)).join(', ')}`,
       neighbour,
     };
+  // Round 3 (R-11): the API compared the did:ckb documents' handles; only `true` is a fact to say.
   const worded =
+    (context.versionDiff?.handleChanged === true
+      ? item.actionWords?.[`${context.action}.handleChanged`]
+      : undefined) ??
     (context.versionDiff?.ownerChanged === false
       ? item.actionWords?.[`${context.action}.sameOwner`]
-      : undefined) ?? item.actionWords?.[context.action];
+      : undefined) ??
+    item.actionWords?.[context.action];
   if (worded) return { text: worded, neighbour };
   return {
     text: `${item.kind === 'identity' ? 'Identity' : 'Object'} ${context.action.toLowerCase()}`,
@@ -134,10 +139,17 @@ export function itemFeedHeadline(
 /**
  * did:ckb and `.bit Cell` transactions carry no protocol action; their rows are named from the
  * API's coarse item action in their boards' words (IdentityDid, IdentityBitCell; ID-C1). The
- * boards' "Handle changed" / "Updated by its owner" need an API fact and are not inferred.
+ * boards' "Handle changed" (R-11 `versionDiff.handleChanged`) and "Updated by its owner"
+ * (`versionDiff.ownerChanged === false`) are the API's facts, never inferred here.
  */
 export const IDENTITY_ACTION_WORDS = {
-  did_ckb: { mint: 'Created', update: 'Document updated', transfer: 'Transferred', burn: 'Burned' },
+  did_ckb: {
+    mint: 'Created',
+    update: 'Document updated',
+    'update.handleChanged': 'Handle changed',
+    transfer: 'Transferred',
+    burn: 'Burned',
+  },
   bit_cell: {
     mint: 'Minted as a .bit Cell',
     update: 'Updated',

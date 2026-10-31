@@ -219,3 +219,25 @@ describe('identity rows read the API version diff (ID-C1)', () => {
     expect(itemFeedHeadline(row('update', [], null), null, TX, bitCell).text).toBe('Updated');
   });
 });
+
+// Round 3 (contracts R-A · R-11, ID-C1): did:ckb rows say "Handle changed" from the API's
+// `versionDiff.handleChanged`; null (handle not locatable) says nothing about the handle.
+describe('did:ckb rows read versionDiff.handleChanged (R-11)', () => {
+  const update = (handleChanged: boolean | null): ItemFeedContext => ({
+    itemId: '0x' + '11'.repeat(20),
+    action: 'update',
+    protocolActions: [],
+    ringRelink: null,
+    actedOn: 'self',
+    createdCell: null,
+    consumedCell: null,
+    versionDiff: { ownerChanged: false, dataChanged: true, handleChanged },
+  });
+  it('says Handle changed only when the API says so', async () => {
+    const { IDENTITY_ACTION_WORDS } = await import('@/lib/feed-headlines');
+    const did = { kind: 'identity' as const, actionWords: IDENTITY_ACTION_WORDS.did_ckb };
+    expect(itemFeedHeadline(update(true), null, TX, did).text).toBe('Handle changed');
+    expect(itemFeedHeadline(update(false), null, TX, did).text).toBe('Document updated');
+    expect(itemFeedHeadline(update(null), null, TX, did).text).toBe('Document updated');
+  });
+});
