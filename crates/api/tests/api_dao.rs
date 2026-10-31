@@ -273,8 +273,15 @@ async fn dao_evidence_reads_the_derived_aggregate_not_the_deposits() {
         "dao_by_status_block",
         "dao_by_lock_block",
         "dao_by_block",
+        "dao_by_withdraw_tx",
     ] {
         assert_eq!(store.iterated_rows(cf), 0, "/dao/evidence walked {cf}");
+        // Review P3: nor looked one of its rows up by key.
+        assert_eq!(
+            store.point_reads(cf),
+            0,
+            "/dao/evidence read a {cf} row by key"
+        );
     }
     assert!(store.iterated_rows("dao_live_agg") > 0);
 }
