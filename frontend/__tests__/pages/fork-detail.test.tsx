@@ -130,6 +130,37 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(within(table).getByText('adopted then, dropped since')).toBeInTheDocument();
   });
 
+  it('draws ③ where the reversing switch took this node, and says so in the steps (R-6b)', async () => {
+    at('10', '028ea506');
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(reentryFixture));
+    const { container } = render(<ForkDetailPage />);
+    await screen.findByTestId('fork-narrative');
+    const tree = container.querySelector('[data-fork-tree]') as SVGElement;
+    expect(tree.querySelector('[data-tip-mark="3"]')).not.toBeNull();
+    // ① and ③ sit on the same block (it came back): ③ is drawn beside ①, not on top of it.
+    const circle = (n: number) =>
+      tree.querySelector(`[data-tip-mark="${n}"] circle`)!.getAttribute('cx');
+    expect(circle(3)).not.toBe(circle(1));
+    expect(screen.getByText('① ② ③ this node’s tip, in turn')).toBeInTheDocument();
+    const step = screen.getByTestId('fork-step-3');
+    expect(step.firstElementChild).toHaveTextContent('③');
+    expect(step).toHaveTextContent(
+      `a later switch moves this node to #11 ${reentryFixture.canonicalBranch[0].hash.slice(0, 10)}…${reentryFixture.canonicalBranch[0].hash.slice(-6)} on what is the main chain today`
+    );
+    expect(within(step).getByRole('link', { name: 'a later switch' })).toHaveAttribute(
+      'href',
+      `/mainnet/forks/10/${reentryFixture.adoptedBranch[0].hash.slice(2, 10)}`
+    );
+  });
+
+  it('keeps the two-mark legend when nothing reversed the switch', async () => {
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(uncleFixture));
+    render(<ForkDetailPage />);
+    await screen.findByTestId('fork-narrative');
+    expect(screen.getByText('① ② this node’s tip, in turn')).toBeInTheDocument();
+    expect(screen.queryByTestId('fork-step-3')).toBeNull();
+  });
+
   it('names both blocks of a two-block branch taken as uncles by one block', async () => {
     at('10', '95098049');
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(multiFixture));

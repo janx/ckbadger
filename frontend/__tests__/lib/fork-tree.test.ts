@@ -36,6 +36,23 @@ describe('forkTreeModel (Fork detail V67 "The two branches", FF-D4)', () => {
     expect(model.uncleLinks).toEqual([]);
   });
 
+  it('marks ③ on the tip the reversing switch adopted (R-6b `revertedByEvent.newTip`)', () => {
+    const model = forkTreeModel(detail(reentry));
+    expect(reentry.event.revertedByEvent?.newTip).toEqual({
+      number: 11,
+      hash: reentry.canonicalBranch[0].hash,
+    });
+    expect(model.marks).toEqual([
+      { n: 1, hash: reentry.event.oldTipHash },
+      { n: 2, hash: reentry.event.newTipHash },
+      { n: 3, hash: reentry.canonicalBranch[0].hash },
+    ]);
+  });
+
+  it('draws no ③ for a switch nothing reversed', () => {
+    expect(forkTreeModel(detail(uncle)).marks.map((m) => m.n)).toEqual([1, 2]);
+  });
+
   it('links both blocks of a two-block branch into the block that took them as uncles', () => {
     const model = forkTreeModel(detail(multi));
     expect(model.rows[0].tiles.map((t) => t.number)).toEqual([11, 12]);

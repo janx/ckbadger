@@ -459,7 +459,10 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             <span className="text-text-dim flex flex-wrap gap-x-4 gap-y-1 text-[11.5px]">
               <span>dashed: blocks that lost</span>
               <span className="text-jade">→ included as an uncle</span>
-              <span className="text-text-bright">① ② this node’s tip, in turn</span>
+              <span className="text-text-bright">
+                {model.marks.some((mark) => mark.n === 3) ? '① ② ③' : '① ②'} this node’s tip, in
+                turn
+              </span>
             </span>
           }
         >
@@ -485,6 +488,20 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}
               <span className="text-text-dim"> · depth {event.depth}</span>
             </span>
+            {event.revertedByEvent && (
+              <span data-testid="fork-step-3" className="contents">
+                <span className="text-text-bright">{TIP_MARKS[3]}</span>
+                <span className="text-text-dim">later</span>
+                <span className="text-text col-span-2 sm:col-span-1">
+                  <EventRef target={event.revertedByEvent} text="a later switch" /> moves this node
+                  to {formatBlockNumber(event.revertedByEvent.newTip.number)}{' '}
+                  <span className="text-text-dim">
+                    {hashShort(event.revertedByEvent.newTip.hash)}
+                  </span>{' '}
+                  {where(event.revertedByEvent.newTip.hash)}
+                </span>
+              </span>
+            )}
           </div>
         </DetailSection>
 

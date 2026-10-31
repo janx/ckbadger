@@ -13,12 +13,14 @@ const TH = 58;
 const X0 = 30;
 const GAP = 46;
 
-const MARK = ['', '①', '②'] as const;
+const MARK = ['', '①', '②', '③'] as const;
+/** A later mark on a block that already carries one is drawn this far beside it. */
+const MARK_STEP = 22;
 
 /**
  * "The two branches" (Fork board V67): today's chain on the main row, the branch that lost dashed
- * above it, a jade arrow into the block that took a dropped block as an uncle, and ① ② on the
- * tips this node had before and after the switch.
+ * above it, a jade arrow into the block that took a dropped block as an uncle, and ① ② ③ on the
+ * tips this node had before and after the switch, and after a later switch reversed it.
  */
 export function ForkTree({ model }: { model: ForkTreeModel }) {
   const marker = useId().replace(/:/g, '');
@@ -171,9 +173,11 @@ export function ForkTree({ model }: { model: ForkTreeModel }) {
           />
         );
       })}
-      {model.marks.map((mark) => {
+      {model.marks.map((mark, i) => {
         const at = position.get(mark.hash)!;
-        const cx = at.row < 0 ? at.x + 4 : at.x + TW - 4;
+        const before = model.marks.slice(0, i).filter((m) => m.hash === mark.hash).length;
+        const shift = before * MARK_STEP * (at.row < 0 ? 1 : -1);
+        const cx = (at.row < 0 ? at.x + 4 : at.x + TW - 4) + shift;
         const cy = at.row < 0 ? at.y + TH + 2 : at.y - 2;
         return (
           <g key={mark.n} data-tip-mark={mark.n}>

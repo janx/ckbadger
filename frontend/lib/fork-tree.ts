@@ -20,8 +20,11 @@ export interface ForkTreeModel {
     tiles: ForkTreeTile[];
   }[];
   uncleLinks: { from: string; to: number }[];
-  /** ① the tip this node had, ② the tip it switched to. */
-  marks: { n: 1 | 2; hash: string }[];
+  /**
+   * ① the tip this node had, ② the tip it switched to, ③ the tip a later switch that reversed
+   * this one moved it to (`revertedByEvent.newTip`, round 3 R-6b). Only marks whose block is drawn.
+   */
+  marks: { n: 1 | 2 | 3; hash: string }[];
   first: number;
   last: number;
 }
@@ -73,14 +76,12 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
   main.sort((a, b) => a.number - b.number);
   const all = [...main, ...rows.flatMap((row) => row.tiles)];
   const known = new Set(all.map((tile) => tile.hash));
-  const marks = (
-    [
-      [1, event.oldTipHash],
-      [2, event.newTipHash],
-    ] as const
-  )
-    .filter(([, hash]) => known.has(hash))
-    .map(([n, hash]) => ({ n, hash }));
+  const tips: [1 | 2 | 3, string][] = [
+    [1, event.oldTipHash],
+    [2, event.newTipHash],
+  ];
+  if (event.revertedByEvent) tips.push([3, event.revertedByEvent.newTip.hash]);
+  const marks = tips.filter(([, hash]) => known.has(hash)).map(([n, hash]) => ({ n, hash }));
   return {
     main,
     rows,
