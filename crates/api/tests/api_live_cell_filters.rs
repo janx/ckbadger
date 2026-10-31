@@ -248,3 +248,35 @@ async fn test_cursor_from_this_scan_is_accepted() {
         "seeking past the only cell must yield an empty page, body={body}"
     );
 }
+
+/// J8: every writer deletes a `cell_by_type` row in the same batch as the live
+/// marker, so a row whose cell is not live is an indexer bug. The page used to
+/// come back one row short with 200; the handler now answers 500 naming the
+/// row's CF, key and outpoint.
+#[tokio::test]
+async fn test_type_hash_scan_surfaces_a_dangling_index_row() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    seed_one_live_cell(&store);
+    let dangling_tx = [0x22; 32];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cell_by_type(&TYPE_HASH, BLOCK + 1, &dangling_tx, 4);
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, body) = get_json(
+        &app,
+        &format!("/cells/live?type_script_hash={}", hex32(&TYPE_HASH)),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "body={body}");
+    let key = keys::encode_cell_index_key(&TYPE_HASH, BLOCK + 1, &dangling_tx, 4);
+    let message = body.to_string();
+    assert!(
+        message.contains("cell_by_type")
+            && message.contains(&hex::encode(&key))
+            && message.contains(&format!("outpoint=0x{}:4", hex::encode(dangling_tx))),
+        "body={body}"
+    );
+}

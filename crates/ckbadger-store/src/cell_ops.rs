@@ -12,6 +12,43 @@ use crate::types::{
 use crate::bytes_to_hex;
 use crate::types::{LockScriptEntry, TokenCellStats};
 
+/// The three `hash(32) + block(8 BE) + outpoint(34)` cell indexes, and what a
+/// row's lifetime is bound to.
+#[derive(Debug, Clone, Copy)]
+enum CellIndex {
+    /// `cell_by_lock`: written and deleted in the batch that writes and
+    /// deletes the live marker, so every row names a live cell.
+    Lock,
+    /// `cell_by_type`: same lifetime as `cell_by_lock`.
+    Type,
+    /// `cell_by_data_hash`: kept when the cell is consumed (code-cell
+    /// resolution reads consumed deployments), so every row names a live or a
+    /// consumed cell; only live ones are listed.
+    DataHash,
+}
+
+impl CellIndex {
+    fn cf_name(self) -> &'static str {
+        match self {
+            Self::Lock => crate::store::CF_CELL_BY_LOCK,
+            Self::Type => crate::store::CF_CELL_BY_TYPE,
+            Self::DataHash => crate::store::CF_CELL_BY_DATA_HASH,
+        }
+    }
+
+    fn keeps_consumed_rows(self) -> bool {
+        matches!(self, Self::DataHash)
+    }
+
+    fn expected_cell(self) -> &'static str {
+        if self.keeps_consumed_rows() {
+            "live or consumed"
+        } else {
+            "live"
+        }
+    }
+}
+
 /// Which script slot a cell-by-code index row refers to. Used to verify the
 /// index row against the loaded cell payload (fail fast on index corruption).
 #[derive(Clone, Copy)]
@@ -464,6 +501,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
         self.list_cells_by_hash_cf(
             self.cf_cell_by_lock(),
+            CellIndex::Lock,
             lock_hash,
             limit,
             after_key,
@@ -482,6 +520,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
         self.list_cells_by_hash_cf(
             self.cf_cell_by_type(),
+            CellIndex::Type,
             type_hash,
             limit,
             after_key,
@@ -489,9 +528,16 @@ impl CkbadgerStore {
         )
     }
 
+    /// The live cells of one `hash(32) + block(8 BE) + outpoint(34)` index.
+    ///
+    /// Fails fast (J8) instead of returning a short page: a key of any other
+    /// width, and a row whose cell is not live (or, for `cell_by_data_hash`,
+    /// neither live nor consumed), is an indexer bug. The error names the CF,
+    /// the key, the outpoint and the block.
     fn list_cells_by_hash_cf(
         &self,
         cf: &rocksdb::ColumnFamily,
+        index: CellIndex,
         hash: &[u8],
         limit: usize,
         after_key: Option<&[u8]>,
@@ -526,13 +572,43 @@ impl CkbadgerStore {
                     continue;
                 }
             }
-            // Key: hash(32) + block_num(8) + outpoint(34)
-            if key.len() >= 74 {
-                let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
-                if let Some(cell) = self.get_cell(&tx_hash, output_index, cells_store)? {
+            if key.len() != keys::CELL_INDEX_KEY_SIZE {
+                anyhow::bail!(
+                    "{} index row has {} bytes, expected {}: key=0x{}",
+                    index.cf_name(),
+                    key.len(),
+                    keys::CELL_INDEX_KEY_SIZE,
+                    bytes_to_hex(&key)
+                );
+            }
+            let block_number = i64::from_be_bytes(
+                key[32..40]
+                    .try_into()
+                    .expect("a 74-byte cell index key has an 8-byte block field"),
+            );
+            let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+            match self.get_cell(&tx_hash, output_index, cells_store)? {
+                Some(cell) => {
                     results.push((tx_hash, output_index, cell));
                     if results.len() >= limit {
                         break;
+                    }
+                }
+                None => {
+                    let consumed = index.keeps_consumed_rows()
+                        && self
+                            .get_cf(self.cf_consumed_cells(), &key[40..74])?
+                            .is_some();
+                    if !consumed {
+                        anyhow::bail!(
+                            "{} index row names no {} cell: key=0x{}, outpoint=0x{}:{}, block={}",
+                            index.cf_name(),
+                            index.expected_cell(),
+                            bytes_to_hex(&key),
+                            bytes_to_hex(&tx_hash),
+                            output_index,
+                            block_number
+                        );
                     }
                 }
             }
@@ -551,6 +627,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
         self.list_cells_by_hash_cf(
             self.cf_cell_by_data_hash(),
+            CellIndex::DataHash,
             data_hash,
             limit,
             after_key,
@@ -1490,5 +1567,157 @@ mod tests {
         assert!(results[0].3, "first cell should be live");
         assert_eq!(results[1].0, tx2);
         assert!(!results[1].3, "second cell should be consumed");
+    }
+
+    // ── J8: `list_cells_by_hash_cf` fails fast on a dangling or malformed row ──
+
+    fn plain_cell(type_hash: Option<&[u8]>) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 100_00000000,
+            lock_script_hash: vec![0x11; 32],
+            lock_code_hash: vec![0x22; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x33; 20],
+            type_script_hash: type_hash.map(<[u8]>::to_vec),
+            type_code_hash: type_hash.map(|_| vec![0x44; 32]),
+            type_hash_type: type_hash.map(|_| 1),
+            type_args: type_hash.map(|_| vec![]),
+            data_size: 50,
+            occupied_capacity: 61_00000000,
+            udt_amount: None,
+            data_hash: None,
+        }
+    }
+
+    /// The writers delete a `cell_by_type` row in the same batch as the live
+    /// marker, so a row without a live cell is an indexer bug: the listing
+    /// must name it instead of returning a shorter page.
+    #[test]
+    fn test_list_cells_by_type_fails_on_a_row_without_a_live_cell() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x7a; 32];
+        let live_tx = [0x01; 32];
+        let dangling_tx = [0x02; 32];
+        insert_cell(
+            &store,
+            &live_tx,
+            0,
+            &type_hash,
+            &plain_cell(Some(&type_hash)),
+        );
+        let dangling_key = keys::encode_cell_index_key(&type_hash, 123, &dangling_tx, 3);
+        store
+            .put_cf(store.cf_cell_by_type(), &dangling_key, &[])
+            .unwrap();
+
+        let err = store
+            .list_cells_by_type(&type_hash, 10, None, &store)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("cell_by_type")
+                && err.contains(&hex::encode(&dangling_key))
+                && err.contains(&format!("outpoint=0x{}:3", hex::encode(dangling_tx)))
+                && err.contains("block=123"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_fails_on_a_row_without_a_live_cell() {
+        let (_dir, store) = test_store();
+        let lock_hash = [0x11; 32];
+        let dangling_tx = [0x05; 32];
+        let dangling_key = keys::encode_cell_index_key(&lock_hash, 77, &dangling_tx, 0);
+        store
+            .put_cf(store.cf_cell_by_lock(), &dangling_key, &[])
+            .unwrap();
+
+        let err = store
+            .list_cells_by_lock(&lock_hash, 10, None, &store)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("cell_by_lock")
+                && err.contains(&hex::encode(&dangling_key))
+                && err.contains(&format!("outpoint=0x{}:0", hex::encode(dangling_tx)))
+                && err.contains("block=77"),
+            "{err}"
+        );
+    }
+
+    /// Every row is 74 bytes (`encode_cell_index_key`); a shorter one under
+    /// the prefix is corruption, not a row to step over.
+    #[test]
+    fn test_list_cells_by_type_fails_on_a_short_key() {
+        let (_dir, store) = test_store();
+        let type_hash = [0x7b; 32];
+        let mut short_key = type_hash.to_vec();
+        short_key.extend_from_slice(&[0x00; 8]);
+        store
+            .put_cf(store.cf_cell_by_type(), &short_key, &[])
+            .unwrap();
+
+        let err = store
+            .list_cells_by_type(&type_hash, 10, None, &store)
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("cell_by_type")
+                && err.contains(&hex::encode(&short_key))
+                && err.contains("40 bytes, expected 74"),
+            "{err}"
+        );
+    }
+
+    /// `cell_by_data_hash` rows outlive consumption by design (code-cell
+    /// resolution reads consumed deployments): a consumed cell is passed over,
+    /// a live one is listed — but a row naming neither is dangling.
+    #[test]
+    fn test_list_cells_by_data_hash_passes_over_consumed_and_fails_on_dangling() {
+        let (_dir, store) = test_store();
+        let data_hash = [0xda; 32];
+        let live_tx = [0x01; 32];
+        let consumed_tx = [0x02; 32];
+        let cell = plain_cell(None);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&live_tx, 0, &cell, 5);
+        batch.put_cell_by_data_hash(&data_hash, 5, &live_tx, 0);
+        batch.put_cell_payload_by_outpoint(&consumed_tx, 0, &cell);
+        batch.put_consumed_cell(&consumed_tx, 0, &cell, 10, 20);
+        batch.put_cell_by_data_hash(&data_hash, 10, &consumed_tx, 0);
+        batch.commit().unwrap();
+
+        let listed = store
+            .list_cells_by_data_hash(&data_hash, 10, None, &store)
+            .unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|(tx, index, _)| (tx.clone(), *index))
+                .collect::<Vec<_>>(),
+            vec![(live_tx.to_vec(), 0)],
+            "the live cell is listed, the consumed one passed over"
+        );
+
+        let dangling_tx = [0x03; 32];
+        let dangling_key = keys::encode_cell_index_key(&data_hash, 30, &dangling_tx, 1);
+        store
+            .put_cf(store.cf_cell_by_data_hash(), &dangling_key, &[])
+            .unwrap();
+        let err = store
+            .list_cells_by_data_hash(&data_hash, 10, None, &store)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("cell_by_data_hash")
+                && err.contains(&hex::encode(&dangling_key))
+                && err.contains(&format!("outpoint=0x{}:1", hex::encode(dangling_tx)))
+                && err.contains("block=30"),
+            "{err}"
+        );
     }
 }
