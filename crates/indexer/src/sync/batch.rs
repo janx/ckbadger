@@ -12113,6 +12113,223 @@ mod tests {
                 );
             }
         }
+
+        /// J15: `ACTIVITY_DAILY` / `ACTIVITY_HOURLY` rows and their
+        /// address-set rows are byte-identical from bulk build and from the
+        /// live writer (one block per batch, and one multi-block batch), over
+        /// blocks across UTC+8 hour boundaries — one with a raw timestamp
+        /// behind its chain time — with cellbase, `Lock` and prefix-only
+        /// (`LockPrefix`) participants, `.bit` transactions (`dotbit:*`
+        /// counters) and plain transfers.
+        #[tokio::test]
+        async fn bulk_and_live_write_identical_activity_bucket_rows() {
+            use ckbadger_store::keys::stats_prefix::{
+                ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_SET,
+            };
+            let _guard = crate::db::writer::activities::test_detector_override::install(
+                super::live_dao_fee::naming_detectors,
+            );
+            let at = |mut block: BlockResponseWithCycles, raw_ms: u64| {
+                block.block.header.timestamp = format!("0x{raw_ms:x}");
+                block
+            };
+            // 2023-11-15 UTC+8: 06:59:50, 06:59:40 (raw behind; chain time
+            // stays 06:59:50), 07:00:05, 08:00:05.
+            let blocks = vec![
+                at(
+                    block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                    1_700_002_790_000,
+                ),
+                at(
+                    block(
+                        101,
+                        AR,
+                        vec![
+                            cellbase_tx(0xc1, 200_00000000),
+                            das_tx(
+                                0xb1,
+                                "confirm_proposal",
+                                vec![input(0xc0, 0)],
+                                vec![
+                                    (account_output(lock_script()), VALAR, 1_000),
+                                    (account_output(lock_script_b()), NEIGHBOUR, 1_000),
+                                ],
+                            ),
+                        ],
+                    ),
+                    1_700_002_780_000,
+                ),
+                at(
+                    block(
+                        102,
+                        AR,
+                        vec![
+                            cellbase_tx(0xc2, 200_00000000),
+                            das_tx(
+                                0xb4,
+                                "transfer_account",
+                                vec![input(0xb1, 0)],
+                                vec![(account_output(lock_script_b()), VALAR, 1_000)],
+                            ),
+                            super::live_dao_fee::transfer_tx(
+                                0xd1,
+                                0xc1,
+                                199_00000000,
+                                super::live_dao_fee::lock_script_c(),
+                            ),
+                        ],
+                    ),
+                    1_700_002_805_000,
+                ),
+                at(
+                    block(
+                        103,
+                        AR,
+                        vec![
+                            cellbase_tx(0xc3, 100_000_000),
+                            super::live_dao_fee::transfer_tx(
+                                0xd2,
+                                0xc2,
+                                199_00000000,
+                                lock_script_b(),
+                            ),
+                        ],
+                    ),
+                    1_700_006_405_000,
+                ),
+            ];
+            let activity_rows = |rows: Vec<(Vec<u8>, Vec<u8>)>| -> Vec<(Vec<u8>, Vec<u8>)> {
+                rows.into_iter()
+                    .filter(|(key, _)| {
+                        matches!(
+                            key.first().copied(),
+                            Some(
+                                ACTIVITY_DAILY
+                                    | ACTIVITY_HOURLY
+                                    | ACTIVITY_DAILY_ADDR_SET
+                                    | ACTIVITY_HOURLY_ADDR_SET
+                            )
+                        )
+                    })
+                    .collect()
+            };
+            let live_rows = |store: &CkbadgerStore| {
+                activity_rows(
+                    store
+                        .iterator_cf(
+                            store.cf(ckbadger_store::store::CF_STATS_CHAIN),
+                            rocksdb::IteratorMode::Start,
+                        )
+                        .map(|row| {
+                            let (key, value) = row.unwrap();
+                            (key.to_vec(), value.to_vec())
+                        })
+                        .collect(),
+                )
+            };
+
+            let bulk = activity_rows(
+                materialize_bulk_artifacts_for_test(&blocks)
+                    .expect("bulk build must succeed")
+                    .stats_dao_rows
+                    .into_iter()
+                    .filter(|(cf, _, _)| *cf == ckbadger_store::store::CF_STATS_CHAIN)
+                    .map(|(_, key, value)| (key, value))
+                    .collect(),
+            );
+            let open_live = || {
+                let dir = tempfile::tempdir().unwrap();
+                let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+                std::mem::forget(dir);
+                store
+                    .set_secondary_epoch_reward(61_369_863_013_698)
+                    .unwrap();
+                let indexer = indexer_for_live_write_test(store.clone());
+                (store, indexer)
+            };
+            let (single, single_indexer) = open_live();
+            for b in &blocks {
+                super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                    &single_indexer,
+                    vec![b.clone()],
+                )
+                .await
+                .expect("live single block");
+            }
+            let (multi, multi_indexer) = open_live();
+            super::live_dao_fee::write_live_blocks_with_parser_script_deltas(
+                &multi_indexer,
+                blocks.clone(),
+            )
+            .await
+            .expect("live multi-block batch");
+
+            // The fixture exercises what it claims: one day, three hours,
+            // the `.bit` counters and the hours' address sets.
+            let day = ckbadger_common::stats_bucket::stats_date_key(1_700_002_790_000).unwrap();
+            let daily: ckbadger_store::types::DailyActivityStats = bincode::deserialize(
+                &bulk
+                    .iter()
+                    .find(|(key, _)| {
+                        *key == ckbadger_store::keys::encode_stats_key(
+                            ACTIVITY_DAILY,
+                            day.as_bytes(),
+                        )
+                    })
+                    .expect("bulk daily row")
+                    .1,
+            )
+            .unwrap();
+            assert_eq!(daily.protocol_action_counts["dotbit:confirm_proposal"], 2);
+            assert_eq!(daily.protocol_action_counts["dotbit:transfer_account"], 1);
+            assert_eq!(daily.coinbase_count, 4);
+            let hourly_rows = bulk
+                .iter()
+                .filter(|(key, _)| key[0] == ACTIVITY_HOURLY)
+                .count();
+            let hourly_sets = bulk
+                .iter()
+                .filter(|(key, _)| key[0] == ACTIVITY_HOURLY_ADDR_SET)
+                .count();
+            assert_eq!((hourly_rows, hourly_sets), (3, 3), "hours 06, 07, 08");
+
+            assert_eq!(
+                single_rows_eq(&live_rows(&single), &bulk),
+                Ok(()),
+                "bulk vs single-block live"
+            );
+            assert_eq!(
+                single_rows_eq(&live_rows(&multi), &bulk),
+                Ok(()),
+                "bulk vs multi-block live"
+            );
+        }
+
+        /// `Ok` when the two row lists are equal, else the first differing key.
+        fn single_rows_eq(
+            actual: &[(Vec<u8>, Vec<u8>)],
+            expected: &[(Vec<u8>, Vec<u8>)],
+        ) -> Result<(), String> {
+            for (a, e) in actual.iter().zip(expected) {
+                if a != e {
+                    return Err(format!(
+                        "first difference: actual key 0x{} ({} bytes) vs expected key 0x{} ({} bytes)",
+                        hex::encode(&a.0),
+                        a.1.len(),
+                        hex::encode(&e.0),
+                        e.1.len()
+                    ));
+                }
+            }
+            if actual.len() != expected.len() {
+                return Err(format!(
+                    "row count: actual {} vs expected {}",
+                    actual.len(),
+                    expected.len()
+                ));
+            }
+            Ok(())
+        }
     }
 
     mod script_binding_parity {
