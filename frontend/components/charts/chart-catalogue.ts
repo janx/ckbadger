@@ -25,6 +25,8 @@ export interface ChartDefinition {
   subtitle: string;
   /** The Charts board's short card subtitle: what is counted, and the unit the headline is in. */
   cardSubtitle: string;
+  /** The index card draws only the newest N points, exactly as served (CH-13); the detail all. */
+  cardDays?: number;
   section: string;
   visual: ChartVisual;
   unit: string;
@@ -214,7 +216,9 @@ export const CHARTS: readonly ChartDefinition[] = [
     slug: 'daily-deposit',
     title: 'Deposited per day',
     subtitle: 'CKB deposited into Nervos DAO per day',
-    cardSubtitle: 'per day, CKB',
+    // CH-13 (Charts.dc.html): the card shows the last 60 complete days; the detail all of them.
+    cardSubtitle: 'CKB, last 60 days',
+    cardDays: 60,
     section: section.dao,
     visual: 'bars',
     unit: 'CKB',

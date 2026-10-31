@@ -490,3 +490,27 @@ describe('visual pass fixes (F2 charts, 2026-10-30 services)', () => {
     expect(shortBucketLabel('4.02')).toBe('4.02');
   });
 });
+
+// CH-13 (Charts.dc.html "Deposited per day · CKB, last 60 days"): the card draws the last 60
+// complete days exactly as the API gives them; the detail keeps the whole history.
+describe('Deposited per day card window (CH-13)', () => {
+  const days = Array.from({ length: 75 }, (_, i) => {
+    const date = new Date(Date.UTC(2026, 7, 11 + i)).toISOString().slice(0, 10);
+    return { date, value: String(1000 + i), value2: String(i) };
+  });
+  const payload = {
+    title: 'Daily deposit',
+    yAxisLabel: 'CKB',
+    y2AxisLabel: 'deposits',
+    data: days,
+  };
+  it('crops the card to the last 60 days and leaves the detail whole', () => {
+    const definition = def('daily-deposit');
+    expect(definition.cardSubtitle).toBe('CKB, last 60 days');
+    const model = chartModel(definition, payload);
+    expect(model.points).toHaveLength(75);
+    expect(model.card?.points).toHaveLength(60);
+    expect(model.card?.points[0].label).toBe(days[15].date);
+    expect(model.card?.points.at(-1)).toEqual(model.points.at(-1));
+  });
+});

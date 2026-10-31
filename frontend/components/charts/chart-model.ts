@@ -1038,6 +1038,14 @@ export function chartModel(definition: ChartDefinition, payload: ChartPayload): 
   if ('totalBlocks' in payload) return minerRows(definition, payload);
   if ('series' in payload) return stackedChart(definition, payload);
   const model = singleChart(definition, payload);
+  if (definition.cardDays !== undefined) {
+    if (model.card) throw new Error(`${definition.slug}: a card window over a card model`);
+    model.card = {
+      points: model.points.slice(-definition.cardDays),
+      series: model.series,
+      legend: [],
+    };
+  }
   if ('orphanRateTarget' in payload) {
     const { numerator, denominator } = payload.orphanRateTarget;
     if (
