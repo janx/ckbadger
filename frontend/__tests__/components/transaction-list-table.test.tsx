@@ -113,10 +113,12 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     expect(row).toHaveTextContent('0 → 1');
     // R2b-a 35 (TX-25): the block whose reward this cellbase pays.
     expect(row).toHaveTextContent('Cellbasepays #20,829,764');
+    // R-6a: the paid block is linked by the store's canonical hash, not by height.
     expect(within(row).getByRole('link', { name: '#20,829,764' })).toHaveAttribute(
       'href',
-      '/mainnet/blocks/20829764'
+      `/mainnet/blocks/0x${'64'.repeat(32)}`
     );
+
     expect(row.querySelector('[data-segment="value"]')).toHaveStyle({
       backgroundColor: 'rgb(58, 66, 88)',
     });

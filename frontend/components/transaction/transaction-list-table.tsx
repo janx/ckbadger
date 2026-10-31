@@ -35,14 +35,14 @@ function Quiet({ when, children }: { when: boolean; children: ReactNode }) {
   );
 }
 
-/** A cellbase's note (R2b-a 35): the block whose reward it pays, or that it pays none. */
+/** A cellbase's note (R2b-a 35): the block whose reward it pays (linked by hash, R-6a), or that it pays none. */
 function paysNote(tx: Transaction): ReactNode {
   if (tx.pays === undefined) throw new Error(`Cellbase ${tx.hash} has no "pays" field`);
   if (tx.pays === null) return 'pays no reward yet';
   return (
     <>
       pays{' '}
-      <Link href={`/blocks/${tx.pays.number}`} className="hover:text-jade">
+      <Link href={`/blocks/${tx.pays.hash}`} className="hover:text-jade">
         {formatBlockNumber(tx.pays.number)}
       </Link>
     </>

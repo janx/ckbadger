@@ -518,6 +518,10 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByTestId('tx-summary')).toHaveTextContent(
       'The first transaction of block #101. It consumes no cell and pays the reward of block #89, 559.61739927 CKB.'
     );
+    // R-6a: the paid block is linked by its canonical hash.
+    expect(
+      within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#89' })
+    ).toHaveAttribute('href', `/mainnet/blocks/0x${'89'.repeat(32)}`);
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(

@@ -1025,7 +1025,7 @@ export default function TransactionDetailPage() {
       ) : (
         <>
           pays the reward of block{' '}
-          <Link href={`/blocks/${tx.pays.number}`} className="text-text-bright hover:text-jade">
+          <Link href={`/blocks/${tx.pays.hash}`} className="text-text-bright hover:text-jade">
             {formatBlockNumber(tx.pays.number)}
           </Link>
         </>
