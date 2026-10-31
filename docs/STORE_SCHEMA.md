@@ -570,6 +570,23 @@ restores the rows exactly. A live write that breaks a row invariant stages `Fail
 its rows; canonical sync continues. `Failed` is retried once per indexer start. Bumping an
 aggregate's `version` in `derive_ops.rs` re-derives it on the next start.
 
+**`dao_live_agg`** (L1, J1). Source rows: the `dao_deposits` lifecycle entries with status 0 (a
+live deposit cell) and 1 (a live withdraw-request cell), walked through `dao_by_status_block`. The
+epochs come from the canonical headers of the deposit and request blocks.
+
+| Key                                                | Value                                                 | Contributed by                 |
+| -------------------------------------------------- | ----------------------------------------------------- | ------------------------------ |
+| `0x00`                                             | `[phase0 capacity, phase0 cells, phase1 capacity, phase1 cells]` | every status-0 / status-1 row |
+| `0x01` + lock_hash (32B)                           | `[phase0 capacity, phase0 cells]` of that depositor   | status-0 rows of that lock     |
+| `0x02` + deposit epoch (16B)                       | `[phase0 capacity, phase0 cells]`                     | status-0 rows deposited there  |
+| `0x03` + deposit epoch (16B) + request epoch (16B) | `[phase1 capacity, phase1 cells]`                     | status-1 rows                  |
+
+An epoch is `number (u64 BE) + index (u32 BE) + length (u32 BE)`. Capacities are exact shannons.
+`/dao/evidence` buckets the `0x02` rows into its 30 nominal days and splits the `0x03` rows into
+ready / waiting against the tip epoch; `/dao/depositors` ranks the `0x01` rows. The rebuild
+re-checks each stored row against its headers (lifecycle markers, deposit/request AR, deposit
+time); live sync folds `LiveDaoBatch`'s transitions (creation, phase 1, phase 2) per block.
+
 **Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
 deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
 meta and the rows in the request's pinned view and serves an aggregate only when its meta is

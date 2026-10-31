@@ -30,6 +30,9 @@ pub struct LiveDeriveCtx<'a> {
     pub store: &'a CkbadgerStore,
     /// Every block of the batch, ascending.
     pub blocks: &'a [LiveBlockPoint],
+    /// Every NervosDAO lifecycle transition of the batch, in chain order
+    /// (`LiveDaoBatch`, the live path's one resolution of DAO inputs).
+    pub dao_transitions: &'a [crate::db::writer::DaoTransition],
 }
 
 /// Add this batch's deltas to every aggregate live sync maintains (state
@@ -215,6 +218,7 @@ pub(crate) mod tests {
         let ctx = LiveDeriveCtx {
             store,
             blocks: &points,
+            dao_transitions: &[],
         };
         let failures = apply_live_batch(
             store,

@@ -3,11 +3,15 @@
 use axum::extract::{Query, State};
 use ckbadger_store::{types::CachedBlockHeader, CkbadgerStore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 
+use ckbadger_store::derive_ops::dao_live_agg::{self, EpochPoint};
+use ckbadger_store::derive_ops::DAO_LIVE_AGG;
+use ckbadger_store::CF_DAO_LIVE_AGG;
+
 use super::dao_epoch::{next_phase0_boundary, nominal_day_bucket, phase1_ready_epoch, Epoch};
-use crate::response::{ok, ApiError, ApiResult};
+use crate::derived::require_derived;
+use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::utils::address::{compute_script_hash, resolve_lock_address};
 use crate::utils::exact_ratio::format_percent;
 use crate::utils::script_to_address;
@@ -123,15 +127,17 @@ pub struct DaoHeaderEvidence {
     pub u: String,
 }
 
-/// One memoized computation per canonical tip (DAO-17): the `/dao/evidence`
-/// body and the whole phase-0 depositor ranking its concentration is built
-/// from, which `/dao/depositors` pages (DAO-12). API memory only.
-pub struct DaoEvidenceMemo {
-    evidence: serde_json::Value,
+/// The phase-0 depositor ranking at one canonical tip (number and hash), read
+/// from `dao_live_agg`'s depositor rows (J1) — the one ranking `/dao/evidence`
+/// cuts its concentration from and `/dao/depositors` pages by rank (J2).
+/// API memory only; the rest of the evidence is read per request from the
+/// aggregate's global and epoch rows.
+pub struct DaoDepositorRanking {
     /// Every current depositor, largest phase-0 capacity first (ties by lock
     /// hash): `(lock hash, capacity, deposit cells)`.
     ranking: Vec<(Vec<u8>, i128, u64)>,
     phase0_capacity: i128,
+    phase0_count: u64,
     tip_hash: Vec<u8>,
 }
 
@@ -157,19 +163,20 @@ struct AmountCount {
 }
 
 impl AmountCount {
-    fn add(&mut self, capacity: i64, key: &[u8]) -> anyhow::Result<()> {
+    /// Add one aggregate row `[capacity, cells]` (both positive).
+    fn add_row(&mut self, value: &[i128], key: &[u8]) -> anyhow::Result<()> {
         anyhow::ensure!(
-            capacity > 0,
-            "invalid DAO capacity at outpoint_key=0x{}: {capacity}",
+            value.len() == 2 && value[0] > 0 && value[1] > 0,
+            "invalid dao_live_agg row 0x{}: {value:?}",
             hex::encode(key)
         );
         self.capacity = self
             .capacity
-            .checked_add(i128::from(capacity))
+            .checked_add(value[0])
             .ok_or_else(|| anyhow::anyhow!("DAO capacity sum overflow"))?;
         self.count = self
             .count
-            .checked_add(1)
+            .checked_add(u64::try_from(value[1])?)
             .ok_or_else(|| anyhow::anyhow!("DAO cell count overflow"))?;
         Ok(())
     }
@@ -195,33 +202,6 @@ fn header_at(store: &CkbadgerStore, block: i64) -> anyhow::Result<CachedBlockHea
     store
         .get_block_header(block)?
         .ok_or_else(|| anyhow::anyhow!("missing canonical DAO header at block {block}"))
-}
-
-#[derive(Clone, Copy)]
-struct HeaderPoint {
-    epoch: Epoch,
-    ar: u64,
-    timestamp: i64,
-    chain_time_ms: i64,
-}
-
-fn header_point_at(
-    store: &CkbadgerStore,
-    cache: &mut HashMap<i64, HeaderPoint>,
-    block: i64,
-) -> anyhow::Result<HeaderPoint> {
-    if let Some(value) = cache.get(&block) {
-        return Ok(*value);
-    }
-    let header = header_at(store, block)?;
-    let value = HeaderPoint {
-        epoch: epoch(&header, block)?,
-        ar: dao_fields(&header, block)?[1],
-        timestamp: header.timestamp,
-        chain_time_ms: header.chain_time_ms,
-    };
-    cache.insert(block, value);
-    Ok(value)
 }
 
 fn dao_fields(header: &CachedBlockHeader, block: i64) -> anyhow::Result<[u64; 4]> {
@@ -367,103 +347,119 @@ pub(crate) fn ar_index(ar: u64) -> String {
     )
 }
 
+fn derived_epoch(bytes: &[u8]) -> anyhow::Result<Epoch> {
+    let point = EpochPoint::decode(bytes)?;
+    Epoch::new(point.number, point.index, point.length).map_err(anyhow::Error::msg)
+}
+
+/// The ranking at the request's canonical tip, read from the depositor rows
+/// on a miss.
+fn build_ranking(store: &CkbadgerStore, tip_hash: &[u8]) -> anyhow::Result<DaoDepositorRanking> {
+    let mut ranking = Vec::new();
+    let mut total = AmountCount::default();
+    store.scan_derived_prefix(
+        CF_DAO_LIVE_AGG,
+        &[dao_live_agg::KIND_DEPOSITOR],
+        |key, value| {
+            anyhow::ensure!(
+                key.len() == 33,
+                "invalid dao_live_agg depositor key 0x{}",
+                hex::encode(key)
+            );
+            let mut owner = AmountCount::default();
+            owner.add_row(&value, key)?;
+            total.add_row(&value, key)?;
+            ranking.push((key[1..].to_vec(), owner.capacity, owner.count));
+            Ok(())
+        },
+    )?;
+    ranking.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    Ok(DaoDepositorRanking {
+        ranking,
+        phase0_capacity: total.capacity,
+        phase0_count: total.count,
+        tip_hash: tip_hash.to_vec(),
+    })
+}
+
 fn build_evidence(
     store: &CkbadgerStore,
     network: &str,
     tip_number: i64,
     tip: &CachedBlockHeader,
-) -> anyhow::Result<DaoEvidenceMemo> {
+    ranking: &DaoDepositorRanking,
+) -> anyhow::Result<DaoEvidenceResponse> {
     let tip_epoch = epoch(tip, tip_number)?;
     let fields = dao_fields(tip, tip_number)?;
-    let mut epoch_cache = HashMap::new();
-    let mut phase0 = AmountCount::default();
-    let mut phase1 = AmountCount::default();
+    // An all-zero sum has no row (`derive_ops`): no row is no live DAO cell.
+    let global = match store.get_derived_value(CF_DAO_LIVE_AGG, &dao_live_agg::global_key())? {
+        Some(value) => value,
+        None => vec![0; 4],
+    };
+    anyhow::ensure!(
+        global.len() == 4,
+        "invalid dao_live_agg global row: {global:?}"
+    );
+    let pair = |capacity: i128, count: i128| -> anyhow::Result<AmountCount> {
+        anyhow::ensure!(
+            capacity >= 0 && count >= 0 && (capacity == 0) == (count == 0),
+            "invalid dao_live_agg global row: {global:?}"
+        );
+        Ok(AmountCount {
+            capacity,
+            count: u64::try_from(count)?,
+        })
+    };
+    let phase0 = pair(global[0], global[1])?;
+    let phase1 = pair(global[2], global[3])?;
+    anyhow::ensure!(
+        ranking.phase0_capacity == phase0.capacity && ranking.phase0_count == phase0.count,
+        "DAO depositor rows ({} shannons in {} cells) do not sum to the global phase-0 row ({} in {}) at tip {tip_number}",
+        ranking.phase0_capacity,
+        ranking.phase0_count,
+        phase0.capacity,
+        phase0.count
+    );
+    let mut windows = [AmountCount::default(); 30];
+    store.scan_derived_prefix(
+        CF_DAO_LIVE_AGG,
+        &[dao_live_agg::KIND_PHASE0_EPOCH],
+        |key, value| {
+            let deposit_epoch = derived_epoch(&key[1..])?;
+            let boundary =
+                next_phase0_boundary(deposit_epoch, tip_epoch).map_err(anyhow::Error::msg)?;
+            let day = nominal_day_bucket(tip_epoch, boundary).map_err(anyhow::Error::msg)?;
+            windows[day - 1].add_row(&value, key)
+        },
+    )?;
     let mut ready = AmountCount::default();
     let mut waiting = AmountCount::default();
-    let mut windows = [AmountCount::default(); 30];
-    let mut owners: HashMap<Vec<u8>, AmountCount> = HashMap::new();
-    let mut visit_live = |key: &[u8],
-                          row: &ckbadger_store::DaoDepositCacheEntry|
-     -> anyhow::Result<()> {
-        ckbadger_store::dao_compensation_for_entry_at(row, tip_number, fields[1]).map_err(
-            |error| {
-                anyhow::anyhow!(
-                    "invalid DAO lifecycle at outpoint_key=0x{}: {error:#}",
-                    hex::encode(key)
-                )
-            },
-        )?;
-        anyhow::ensure!(row.deposit_block_number >= 0 && row.deposit_block_number <= tip_number, "DAO deposit outside canonical tip: outpoint_key=0x{}, deposit_block={}, tip={tip_number}", hex::encode(key), row.deposit_block_number);
-        anyhow::ensure!(
-            row.lock_script_hash.len() == 32,
-            "invalid DAO lock hash at outpoint_key=0x{}",
-            hex::encode(key)
-        );
-        let deposit_point = header_point_at(store, &mut epoch_cache, row.deposit_block_number)?;
-        anyhow::ensure!(row.deposit_ar >= 0 && row.deposit_ar as u64 == deposit_point.ar, "DAO deposit AR differs from canonical header at outpoint_key=0x{}: stored={}, block_ar={}", hex::encode(key), row.deposit_ar, deposit_point.ar);
-        anyhow::ensure!(row.deposit_timestamp == deposit_point.timestamp && row.deposit_chain_time_ms == deposit_point.chain_time_ms, "DAO deposit time differs from canonical header at outpoint_key=0x{}: stored_raw={}, header_raw={}, stored_chain={}, header_chain={}", hex::encode(key), row.deposit_timestamp, deposit_point.timestamp, row.deposit_chain_time_ms, deposit_point.chain_time_ms);
-        let deposit_epoch = deposit_point.epoch;
-        match row.status {
-            0 => {
-                anyhow::ensure!(
-                    row.withdraw_request_occupied_capacity.is_none(),
-                    "phase-0 DAO deposit has request occupied marker at outpoint_key=0x{}",
-                    hex::encode(key)
-                );
-                phase0.add(row.capacity, key)?;
-                owners
-                    .entry(row.lock_script_hash.clone())
-                    .or_default()
-                    .add(row.capacity, key)?;
-                let boundary =
-                    next_phase0_boundary(deposit_epoch, tip_epoch).map_err(anyhow::Error::msg)?;
-                let day = nominal_day_bucket(tip_epoch, boundary).map_err(anyhow::Error::msg)?;
-                windows[day - 1].add(row.capacity, key)?;
-            }
-            1 => {
-                let request_block = row.withdraw_request_block.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "phase-1 DAO deposit missing request block at outpoint_key=0x{}",
-                        hex::encode(key)
-                    )
-                })?;
-                anyhow::ensure!(request_block > row.deposit_block_number && request_block <= tip_number, "DAO request block outside lifecycle at outpoint_key=0x{}: deposit={}, request={}, tip={tip_number}", hex::encode(key), row.deposit_block_number, request_block);
-                anyhow::ensure!(
-                    row.withdraw_request_tx
-                        .as_ref()
-                        .is_some_and(|tx| tx.len() == 32)
-                        && row
-                            .withdraw_request_output_index
-                            .is_some_and(|index| index >= 0),
-                    "DAO request outpoint malformed at outpoint_key=0x{}",
-                    hex::encode(key)
-                );
-                let request_point = header_point_at(store, &mut epoch_cache, request_block)?;
-                anyhow::ensure!(row.withdraw_request_ar.is_some_and(|ar| ar >= 0 && ar as u64 == request_point.ar), "DAO request AR differs from canonical header at outpoint_key=0x{}: stored={:?}, block_ar={}", hex::encode(key), row.withdraw_request_ar, request_point.ar);
-                let request_epoch = request_point.epoch;
-                let ready_epoch =
-                    phase1_ready_epoch(deposit_epoch, request_epoch).map_err(anyhow::Error::msg)?;
-                phase1.add(row.capacity, key)?;
-                if tip_epoch
-                    .at_or_after(ready_epoch)
-                    .map_err(anyhow::Error::msg)?
-                {
-                    ready.add(row.capacity, key)?;
-                } else {
-                    waiting.add(row.capacity, key)?;
-                }
-            }
-            status => anyhow::bail!(
-                "invalid live DAO status {status} at outpoint_key=0x{}",
+    store.scan_derived_prefix(
+        CF_DAO_LIVE_AGG,
+        &[dao_live_agg::KIND_PHASE1_EPOCHS],
+        |key, value| {
+            anyhow::ensure!(
+                key.len() == 33,
+                "invalid dao_live_agg phase-1 key 0x{}",
                 hex::encode(key)
-            ),
-        }
-        Ok(())
-    };
-    store.scan_dao_deposits_by_status(0, &mut visit_live)?;
-    store.scan_dao_deposits_by_status(1, &mut visit_live)?;
+            );
+            let deposit_epoch = derived_epoch(&key[1..17])?;
+            let request_epoch = derived_epoch(&key[17..])?;
+            let ready_epoch =
+                phase1_ready_epoch(deposit_epoch, request_epoch).map_err(anyhow::Error::msg)?;
+            if tip_epoch
+                .at_or_after(ready_epoch)
+                .map_err(anyhow::Error::msg)?
+            {
+                ready.add_row(&value, key)
+            } else {
+                waiting.add_row(&value, key)
+            }
+        },
+    )?;
     anyhow::ensure!(
-        windows.iter().map(|bucket| bucket.capacity).sum::<i128>() == phase0.capacity,
+        windows.iter().map(|bucket| bucket.capacity).sum::<i128>() == phase0.capacity
+            && windows.iter().map(|bucket| bucket.count).sum::<u64>() == phase0.count,
         "DAO phase-0 histogram capacity does not partition live deposits at tip {tip_number}"
     );
     anyhow::ensure!(
@@ -471,20 +467,13 @@ fn build_evidence(
             && ready.count + waiting.count == phase1.count,
         "DAO phase-1 readiness does not partition live requests at tip {tip_number}"
     );
-    let mut sorted: Vec<(Vec<u8>, AmountCount)> = owners.into_iter().collect();
-    sorted.sort_by(|a, b| b.1.capacity.cmp(&a.1.capacity).then_with(|| a.0.cmp(&b.0)));
-    let sum_top = |limit: usize| {
-        sorted
-            .iter()
-            .take(limit)
-            .map(|owner| owner.1.capacity)
-            .sum::<i128>()
-    };
+    let sorted = &ranking.ranking;
+    let sum_top = |limit: usize| sorted.iter().take(limit).map(|owner| owner.1).sum::<i128>();
     let top1 = sum_top(1);
     let top10 = sum_top(10);
     let top100 = sum_top(100);
     let mut owner_rows = Vec::new();
-    for (index, (lock_hash, amount)) in sorted.iter().take(10).enumerate() {
+    for (index, (lock_hash, capacity, count)) in sorted.iter().take(10).enumerate() {
         let lock = store.get_lock_script(lock_hash)?.ok_or_else(|| {
             anyhow::anyhow!(
                 "missing lock script for DAO owner 0x{}",
@@ -527,9 +516,9 @@ fn build_evidence(
             lock_code_hash: format!("0x{}", hex::encode(lock.code_hash)),
             lock_hash_type: hash_type.to_string(),
             lock_kind,
-            deposit_count: amount.count,
-            capacity: amount.capacity.to_string(),
-            share_percent: share(amount.capacity, phase0.capacity)?
+            deposit_count: *count,
+            capacity: capacity.to_string(),
+            share_percent: share(*capacity, phase0.capacity)?
                 .ok_or_else(|| anyhow::anyhow!("DAO owner with empty phase-0 denominator"))?,
         });
     }
@@ -555,7 +544,7 @@ fn build_evidence(
         })
         .collect();
     let ar = ar_evidence(store, tip_number, tip, fields[1])?;
-    let evidence = DaoEvidenceResponse {
+    Ok(DaoEvidenceResponse {
         tip_block_number: tip_number,
         tip_epoch: tip_epoch.into(),
         phase0: phase0.response(),
@@ -573,60 +562,66 @@ fn build_evidence(
             s: fields[2].to_string(),
             u: fields[3].to_string(),
         },
-    };
-    Ok(DaoEvidenceMemo {
-        evidence: serde_json::to_value(evidence)?,
-        ranking: sorted
-            .into_iter()
-            .map(|(lock, amount)| (lock, amount.capacity, amount.count))
-            .collect(),
-        phase0_capacity: phase0.capacity,
-        tip_hash: tip.hash.clone(),
     })
 }
 
-/// The memo for the request's canonical tip (number and hash), computed
-/// inside the request's pinned read view on a miss. Nothing is written to any
-/// store.
-fn evidence_memo(state: &AppState) -> anyhow::Result<(i64, Arc<DaoEvidenceMemo>)> {
+/// The ranking for the request's canonical tip (number and hash), read inside
+/// the request's pinned view on a miss. `Ok(Err(_))` is `503 derive_pending`
+/// (or a recorded derivation failure): there is no scan to fall back to.
+#[allow(clippy::type_complexity)]
+fn ranking_at_tip(
+    state: &AppState,
+) -> anyhow::Result<Result<(i64, CachedBlockHeader, Arc<DaoDepositorRanking>), ApiRouteError>> {
+    if let Err(pending) = require_derived(&state.store, &DAO_LIVE_AGG) {
+        return Ok(Err(pending));
+    }
     let (tip_number, tip) = state
         .store
         .get_sync_tip_block()?
         .ok_or_else(|| anyhow::anyhow!("no DAO sync tip yet"))?;
     if let Some(memo) = state.dao_evidence.get(tip_number, &tip.hash) {
-        return Ok((tip_number, memo));
+        return Ok(Ok((tip_number, tip, memo)));
     }
-    let memo = Arc::new(build_evidence(
-        &state.store,
-        &state.ckb_network,
-        tip_number,
-        &tip,
-    )?);
+    let memo = Arc::new(build_ranking(&state.store, &tip.hash)?);
     state
         .dao_evidence
         .set(tip_number, tip.hash.clone(), memo.clone());
-    Ok((tip_number, memo))
+    Ok(Ok((tip_number, tip, memo)))
 }
 
-/// `/dao/evidence`, computed once per canonical tip (number and hash) inside
-/// the request's pinned read view and then served from API memory until the
-/// tip moves (DAO-17). Nothing is written to any store.
+/// `/dao/evidence`, from `dao_live_agg` (J1): the global row, the phase-0
+/// epoch rows bucketed against the tip epoch, the phase-1 epoch rows split by
+/// readiness, and the depositor ranking memoized per canonical tip. No deposit
+/// row is read. `503 derive_pending` until the indexer has derived the
+/// aggregate. Nothing is written to any store.
 pub(super) async fn get_evidence(
     State(state): State<Arc<AppState>>,
-) -> ApiResult<serde_json::Value> {
-    let memo = tokio::task::spawn_blocking(move || evidence_memo(&state))
-        .await
-        .map_err(|error| ApiError::internal(format!("DAO evidence task failed: {error}")))?
-        .map_err(|error| ApiError::internal(format!("DAO evidence read failed: {error:#}")))?
-        .1;
-    ok(memo.evidence.clone())
+) -> ApiResult<DaoEvidenceResponse> {
+    let evidence = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let (tip_number, tip, ranking) = match ranking_at_tip(&state)? {
+            Ok(found) => found,
+            Err(pending) => return Ok(Err(pending)),
+        };
+        Ok(Ok(build_evidence(
+            &state.store,
+            &state.ckb_network,
+            tip_number,
+            &tip,
+            &ranking,
+        )?))
+    })
+    .await
+    .map_err(|error| ApiError::internal(format!("DAO evidence task failed: {error}")))?
+    .map_err(|error| ApiError::internal(format!("DAO evidence read failed: {error:#}")))?;
+    ok(evidence?)
 }
 
 #[derive(Debug, Deserialize)]
 pub(super) struct DepositorsParams {
     #[serde(default = "crate::response::default_limit")]
     limit: i64,
-    /// `"<tip block>:<last rank served>"`.
+    /// The number of depositors already served (J2: a rank, not bound to a
+    /// tip; the ranking is recomputed per tip).
     cursor: Option<String>,
 }
 
@@ -665,10 +660,10 @@ pub struct DaoDepositorsResponse {
 }
 
 /// `/dao/depositors`: every current depositor ranked by phase-0 capacity
-/// (DAO-12), paged from the ranking `/dao/evidence` memoizes for the same
-/// canonical tip — the ranking its concentration bar and top-10 owners are
-/// cut from. A cursor names the tip it ranks at; a cursor from another tip is
-/// refused rather than continued on a ranking it was not taken from.
+/// (DAO-12), paged by rank (J2) from the ranking `/dao/evidence` cuts its
+/// concentration from at the same canonical tip. The cursor is the number of
+/// depositors already served; it is not bound to a tip, so a page fetched
+/// after the tip moved continues the new tip's ranking (`anchor` says which).
 pub(super) async fn get_depositors(
     State(state): State<Arc<AppState>>,
     Query(params): Query<DepositorsParams>,
@@ -676,29 +671,19 @@ pub(super) async fn get_depositors(
     if !(1..=100).contains(&params.limit) {
         return Err(ApiError::bad_request("limit must be between 1 and 100"));
     }
-    let cursor = params
-        .cursor
-        .as_deref()
-        .map(
-            |raw| -> Result<(i64, usize), crate::response::ApiRouteError> {
-                let parsed = raw.split_once(':').and_then(|(tip, rank)| {
-                    Some((tip.parse::<i64>().ok()?, rank.parse::<usize>().ok()?))
-                });
-                parsed.ok_or_else(|| {
-                    ApiError::bad_request(format!(
-                        "invalid depositor cursor {raw:?}; expected <tip block>:<rank>"
-                    ))
-                })
-            },
-        )
-        .transpose()?;
+    let start = match params.cursor.as_deref() {
+        None => 0,
+        Some(raw) => raw.parse::<usize>().map_err(|_| {
+            ApiError::bad_request(format!(
+                "invalid depositor cursor {raw:?}; expected a rank (the number of depositors already served)"
+            ))
+        })?,
+    };
     let limit = params.limit as usize;
     let page = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let (tip_number, memo) = evidence_memo(&state)?;
-        let start = match cursor {
-            None => 0,
-            Some((tip, _)) if tip != tip_number => return Ok(Err(tip)),
-            Some((_, rank)) => rank,
+        let (tip_number, _tip, memo) = match ranking_at_tip(&state)? {
+            Ok(found) => found,
+            Err(pending) => return Ok(Err(pending)),
         };
         let rows = memo
             .ranking
@@ -731,17 +716,12 @@ pub(super) async fn get_depositors(
             total: memo.ranking.len(),
             limit: params.limit,
             has_more,
-            next_cursor: has_more.then(|| format!("{tip_number}:{served}")),
+            next_cursor: has_more.then(|| served.to_string()),
             data: rows,
         }))
     })
     .await
     .map_err(|error| ApiError::internal(format!("DAO depositors task failed: {error}")))?
     .map_err(|error| ApiError::internal(format!("DAO depositors read failed: {error:#}")))?;
-    match page {
-        Ok(page) => ok(page),
-        Err(tip) => Err(ApiError::bad_request(format!(
-            "depositor cursor ranks at block {tip}, not at the current tip; start again"
-        ))),
-    }
+    ok(page?)
 }

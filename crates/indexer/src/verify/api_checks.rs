@@ -5889,6 +5889,273 @@ impl Check for DotCellRecordsHashParity {
     }
 }
 
+// ── Derived DAO aggregate (round 3 L1) ─────────────────────────────────────
+
+/// `dao_live_agg` agrees with the DAO lifecycle rows it is derived from.
+///
+/// One walk of `/dao/depositors` (every page at one anchor tip `T`) must sum
+/// to `/dao/evidence`'s phase-0 totals at `T` and count its current
+/// depositors (the global row equals the sum of the depositor rows). Then,
+/// for a sample of depositors (the largest and the smallest), the depositor
+/// row must equal that lock's deposits that were phase-0 at `T`, read from
+/// `/dao/deposits/{lock}`: deposited at or before `T` and not requested by
+/// `T` (each row's own transition blocks give its state at `T`, so a tip that
+/// moves during the walk is not a finding).
+pub struct DaoDepositorAggregateConsistency;
+
+const DAO_DEPOSITOR_SAMPLE_CAP: usize = 20;
+const DAO_DEPOSITOR_WALK_ATTEMPTS: usize = 3;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoAnchorRecord {
+    block_number: i64,
+    block_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoDepositorRecord {
+    rank: usize,
+    lock_script_hash: String,
+    capacity: String,
+    deposit_count: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoDepositorsPage {
+    anchor: DaoAnchorRecord,
+    data: Vec<DaoDepositorRecord>,
+    total: usize,
+    next_cursor: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoEvidenceAmount {
+    capacity: String,
+    count: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoEvidenceConcentration {
+    current_depositors: usize,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoEvidenceRecord {
+    tip_block_number: i64,
+    phase0: DaoEvidenceAmount,
+    concentration: DaoEvidenceConcentration,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoLockDepositRecord {
+    capacity: String,
+    deposit_block_number: i64,
+    withdraw_request_block: Option<i64>,
+}
+
+/// Every `/dao/depositors` page, provided all pages were ranked at one tip.
+fn walk_dao_depositors(
+    ctx: &CheckContext,
+) -> anyhow::Result<Option<(DaoAnchorRecord, usize, Vec<DaoDepositorRecord>)>> {
+    let mut rows = Vec::new();
+    let mut anchor: Option<DaoAnchorRecord> = None;
+    let mut total = 0;
+    let mut cursor: Option<String> = None;
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!("dao/depositors?limit=100&cursor={cursor}"),
+            None => "dao/depositors?limit=100".to_string(),
+        };
+        let page: DaoDepositorsPage = api_get(ctx, &path)?;
+        match &anchor {
+            Some(first) if first.block_hash != page.anchor.block_hash => return Ok(None),
+            Some(_) => {}
+            None => {
+                total = page.total;
+                anchor = Some(page.anchor);
+            }
+        }
+        rows.extend(page.data);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => {
+                let anchor = anchor.expect("at least one page was read");
+                return Ok(Some((anchor, total, rows)));
+            }
+        }
+    }
+    anyhow::bail!("dao/depositors walk did not terminate within {DAO_DEPOSITS_MAX_PAGES} pages")
+}
+
+/// One lock's phase-0 capacity and cells at block `tip`, from its lifecycle
+/// rows.
+fn dao_lock_phase0_at(
+    ctx: &CheckContext,
+    lock_hash: &str,
+    tip: i64,
+) -> anyhow::Result<(i128, u64)> {
+    let mut capacity = 0i128;
+    let mut cells = 0u64;
+    let mut cursor: Option<String> = None;
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!("dao/deposits/{lock_hash}?limit=100&cursor={cursor}"),
+            None => format!("dao/deposits/{lock_hash}?limit=100"),
+        };
+        let page: CursorPage<DaoLockDepositRecord> = api_get(ctx, &path)?;
+        for row in page.data {
+            let requested_by_tip = row.withdraw_request_block.is_some_and(|block| block <= tip);
+            if row.deposit_block_number <= tip && !requested_by_tip {
+                capacity += row
+                    .capacity
+                    .parse::<i128>()
+                    .map_err(|e| anyhow::anyhow!("deposit capacity {:?}: {e}", row.capacity))?;
+                cells += 1;
+            }
+        }
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return Ok((capacity, cells)),
+        }
+    }
+    anyhow::bail!("dao/deposits/{lock_hash} walk did not terminate")
+}
+
+impl Check for DaoDepositorAggregateConsistency {
+    fn name(&self) -> &'static str {
+        "dao_depositor_aggregate_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "The derived DAO depositor rows sum to the global row and equal each sampled depositor's phase-0 lifecycle rows"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(DAO_DEPOSITOR_SAMPLE_CAP) as u64 + 1)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "dao_depositor_aggregate_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let mut walked = None;
+        for _ in 0..DAO_DEPOSITOR_WALK_ATTEMPTS {
+            if let Some(found) = walk_dao_depositors(ctx)? {
+                walked = Some(found);
+                break;
+            }
+        }
+        let Some((anchor, total, rows)) = walked else {
+            return Ok(CheckResult::inconclusive(format!(
+                "the tip moved during each of {DAO_DEPOSITOR_WALK_ATTEMPTS} /dao/depositors walks"
+            )));
+        };
+        let evidence: DaoEvidenceRecord = api_get(ctx, "dao/evidence")?;
+        let mut findings = Vec::new();
+        let mut sum = 0i128;
+        let mut cells = 0u64;
+        for (index, row) in rows.iter().enumerate() {
+            if row.rank != index + 1 {
+                findings.push(Finding {
+                    entity: format!("depositor={}", row.lock_script_hash),
+                    details: vec![format!("rank {} at position {}", row.rank, index + 1)],
+                });
+            }
+            sum += row
+                .capacity
+                .parse::<i128>()
+                .map_err(|e| anyhow::anyhow!("depositor capacity {:?}: {e}", row.capacity))?;
+            cells += row.deposit_count;
+        }
+        if total != rows.len() {
+            findings.push(Finding {
+                entity: "dao/depositors".to_string(),
+                details: vec![format!("total={total} but {} rows were listed", rows.len())],
+            });
+        }
+        if evidence.tip_block_number == anchor.block_number {
+            let phase0 = evidence
+                .phase0
+                .capacity
+                .parse::<i128>()
+                .map_err(|e| anyhow::anyhow!("evidence phase0 capacity: {e}"))?;
+            let mut details = Vec::new();
+            if phase0 != sum || evidence.phase0.count != cells {
+                details.push(format!(
+                    "global phase-0 row = {phase0} shannons in {} cells, depositor rows sum to {sum} in {cells}",
+                    evidence.phase0.count
+                ));
+            }
+            if evidence.concentration.current_depositors != rows.len() {
+                details.push(format!(
+                    "currentDepositors={} but {} depositor rows",
+                    evidence.concentration.current_depositors,
+                    rows.len()
+                ));
+            }
+            if !details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("dao/evidence@{}", anchor.block_number),
+                    details,
+                });
+            }
+        }
+        progress.inc(1);
+        let cap = ctx.sample_count.min(DAO_DEPOSITOR_SAMPLE_CAP);
+        let mut sample: Vec<&DaoDepositorRecord> = rows.iter().take(cap.div_ceil(2)).collect();
+        sample.extend(rows.iter().rev().take(cap / 2));
+        sample.sort_by_key(|row| row.rank);
+        sample.dedup_by_key(|row| row.rank);
+        for row in &sample {
+            let (capacity, count) =
+                dao_lock_phase0_at(ctx, &row.lock_script_hash, anchor.block_number)?;
+            let served: i128 = row
+                .capacity
+                .parse()
+                .map_err(|e| anyhow::anyhow!("depositor capacity {:?}: {e}", row.capacity))?;
+            if served != capacity || row.deposit_count != count {
+                findings.push(Finding {
+                    entity: format!("depositor={}", row.lock_script_hash),
+                    details: vec![format!(
+                        "aggregate row = {served} shannons in {} cells, its lifecycle rows phase-0 at block {} = {capacity} in {count}",
+                        row.deposit_count, anchor.block_number
+                    )],
+                });
+            }
+            progress.inc(1);
+        }
+        let checked = 1 + sample.len() as u64;
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        Ok(CheckResult::pass_with_detail(
+            checked,
+            format!(
+                "{} depositors at block {} sum to the global row; {} sampled depositors match their lifecycle rows",
+                rows.len(),
+                anchor.block_number,
+                sample.len()
+            ),
+        ))
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -5933,6 +6200,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DotCellIdIsLabelHash),
         Box::new(DotCellOwnerIndexConsistency),
         Box::new(DotCellRecordsHashParity),
+        Box::new(DaoDepositorAggregateConsistency),
     ]
 }
 

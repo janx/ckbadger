@@ -154,7 +154,7 @@ crates/
   api/            # Axum REST/WebSocket server library (port 8101)
   indexer/        # Blockchain sync daemon library (three-stage pipeline)
     src/sync/bulk_build/ # Bulk-build engine (in-memory reducers, FactsArena, LiveCellOwner)
-    src/verify/   #   Data integrity verification suite (68 checks)
+    src/verify/   #   Data integrity verification suite (69 checks)
   ckbadger-store/ # Embedded RocksDB storage engine (three store classes: 68 domain + 1 append-only + 3 network CFs)
   dob-decoder/    # CKB-VM DOB decoder (DNA extraction from Spore NFTs)
   common/         # Shared types (block, cell, tx, script, error)
@@ -204,7 +204,7 @@ hard limit; otherwise bulk sync uses the same per-network RAM share.
 
 ## Data Integrity Verification
 
-68 checks across 3 tiers: Fast (7, seconds), Sampling (35, minutes), Explorer (26, minutes). See `docs/TESTING.md` for full details.
+69 checks across 3 tiers: Fast (7, seconds), Sampling (36, minutes), Explorer (26, minutes). See `docs/TESTING.md` for full details.
 
 ```bash
 ckbadger verify --depth fast              # Quick sanity

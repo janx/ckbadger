@@ -25,6 +25,7 @@
 //!
 //! The persisted state machine is `ckbadger_store::derive_ops::DeriveMeta`.
 
+pub mod dao;
 pub mod live;
 pub mod scheduler;
 
@@ -159,7 +160,7 @@ pub trait DerivedAggregate: Send + Sync {
 
 /// Every registered aggregate, in derivation order.
 pub fn registry() -> Vec<Box<dyn DerivedAggregate>> {
-    Vec::new()
+    vec![Box::new(dao::DaoLiveAgg)]
 }
 
 /// Reset every derivation a rollback to `rollback_to` would corrupt, BEFORE

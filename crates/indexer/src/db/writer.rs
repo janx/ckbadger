@@ -229,6 +229,7 @@ pub use crate::sync::DaoConsumedRow;
 pub(crate) use addresses::collect_current_script_reference_rollup_state;
 pub(crate) use addresses::{build_script_reference_rollup_state_with_lineage, TypeIdCodeChange};
 pub(crate) use cells::is_cross_store_inconsistency;
+pub use dao::DaoTransition;
 pub(crate) use dao::LiveDaoBatch;
 pub use reorg::ReorgResult;
 pub use statistics::calculate_knowledge_size;

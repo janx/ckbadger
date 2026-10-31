@@ -139,9 +139,22 @@ fn dao_evidence_entry(capacity: i64, deposit_block: i64, lock: u8) -> DaoDeposit
     }
 }
 
+/// The producer fixture with its derived aggregate built, as a store the
+/// indexer has derived looks.
+fn dao_evidence_fixture() -> Arc<CkbadgerStore> {
+    let store = dao_evidence_fixture_underived();
+    derive(&store);
+    store
+}
+
+/// Run the indexer's background derivations to completion on `store`.
+fn derive(store: &CkbadgerStore) {
+    ckbadger_indexer::derive::derive_to_completion(store).unwrap();
+}
+
 /// The producer fixture covers exact phase boundaries, changed epoch lengths,
 /// a raw timestamp rollback, both readiness states, owner denominator and AR.
-fn dao_evidence_fixture() -> Arc<CkbadgerStore> {
+fn dao_evidence_fixture_underived() -> Arc<CkbadgerStore> {
     use ckbadger_store::LockScriptEntry;
 
     let store = test_store();
@@ -243,29 +256,54 @@ async fn dao_evidence_partitions_all_live_cells_and_exports_contract() {
     write_dao_fixture("dao-evidence", &json);
 }
 
-/// DAO-17: `/dao/evidence` scanned every live DAO row on every request
-/// (2.7–4.8 s). It is computed once per canonical tip (number and hash) and
-/// served from API memory until the tip moves; nothing is written.
+/// J1 (S6): `/dao/evidence` scanned every live DAO row and read a header per
+/// deposit on every new tip (2.7–4.8 s cold, 16.7 s under load). It now reads
+/// only `dao_live_agg`: no lifecycle row and no index row is touched, cold or
+/// warm.
 #[tokio::test]
-async fn dao_evidence_is_memoized_by_tip() {
+async fn dao_evidence_reads_the_derived_aggregate_not_the_deposits() {
+    let store = dao_evidence_fixture();
+    let app = router_from_state(test_app_state(test_config(store.clone())));
+    store.reset_read_call_counters();
+    let (status, json) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    for cf in [
+        "dao_deposits",
+        "dao_by_status_block",
+        "dao_by_lock_block",
+        "dao_by_block",
+    ] {
+        assert_eq!(store.iterated_rows(cf), 0, "/dao/evidence walked {cf}");
+    }
+    assert!(store.iterated_rows("dao_live_agg") > 0);
+}
+
+/// J2: the per-tip memo keeps only the depositor ranking — a warm request
+/// re-reads the global and epoch rows but not one depositor row; a new tip
+/// is a miss.
+#[tokio::test]
+async fn dao_evidence_memoizes_only_the_depositor_ranking_per_tip() {
     let store = dao_evidence_fixture();
     let app = router_from_state(test_app_state(test_config(store.clone())));
     store.reset_read_call_counters();
     let (status, cold) = get_json(&app, "/dao/evidence").await;
     assert_eq!(status, StatusCode::OK, "{cold}");
-    let cold_reads = store.read_call_counts();
+    let cold_rows = store.iterated_rows("dao_live_agg");
     store.reset_read_call_counters();
     let (_, warm) = get_json(&app, "/dao/evidence").await;
-    let warm_reads = store.read_call_counts();
+    let warm_rows = store.iterated_rows("dao_live_agg");
     assert_eq!(cold, warm);
-    assert_ne!(cold_reads, (0, 0));
+    let depositors = cold["concentration"]["currentDepositors"].as_u64().unwrap();
+    assert_eq!(depositors, 2);
+    // The cold request's depositor scan yields its depositor rows and the
+    // first row after them (which ends the prefix scan); a warm one skips it.
     assert_eq!(
-        warm_reads,
-        (0, 0),
-        "the same tip must be served from memory: cold={cold_reads:?}"
+        cold_rows - warm_rows,
+        depositors + 1,
+        "a warm request reads no depositor row: cold={cold_rows} warm={warm_rows}"
     );
 
-    // A new tip is a miss: the evidence is recomputed for it.
+    // A new tip is a miss: the ranking is read again for it.
     let mut header = store.get_block_header(5).unwrap().unwrap();
     header.hash = vec![0x66; 32];
     header.timestamp += 1_000;
@@ -277,7 +315,30 @@ async fn dao_evidence_is_memoized_by_tip() {
     let (status, next) = get_json(&app, "/dao/evidence").await;
     assert_eq!(status, StatusCode::OK, "{next}");
     assert_eq!(next["tipBlockNumber"], 6);
-    assert_ne!(store.read_call_counts(), (0, 0));
+    assert_eq!(store.iterated_rows("dao_live_agg"), cold_rows);
+}
+
+/// L1 (e): until the indexer has derived `dao_live_agg`, both endpoints that
+/// read it answer `503 derive_pending` — never the old scan — and serve the
+/// exact same evidence once it is complete.
+#[tokio::test]
+async fn dao_evidence_and_depositors_are_derive_pending_until_derived() {
+    let store = dao_evidence_fixture_underived();
+    let app = router_from_state(test_app_state(test_config(store.clone())));
+    for path in ["/dao/evidence", "/dao/depositors"] {
+        let (status, json) = get_json(&app, path).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}: {json}");
+        assert_eq!(json["error"], "derive_pending", "{path}: {json}");
+        assert_eq!(json["derive"]["aggregate"], "dao_live_agg", "{json}");
+        assert_eq!(json["derive"]["state"], "not_started", "{json}");
+    }
+    derive(&store);
+    let (status, json) = get_json(&app, "/dao/evidence").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["phase0"]["capacity"], "50000000000");
+    let (status, json) = get_json(&app, "/dao/depositors").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["total"], 2);
 }
 
 #[tokio::test]
@@ -292,6 +353,7 @@ async fn dao_evidence_represents_genesis_with_no_history_or_deposits() {
     store
         .update_sync_status(|status| status.tip_block_number = 0)
         .unwrap();
+    derive(&store);
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/dao/evidence").await;
     assert_eq!(status, StatusCode::OK, "{json}");
@@ -323,6 +385,7 @@ async fn dao_evidence_fails_on_missing_canonical_deposit_header() {
     store
         .update_sync_status(|status| status.tip_block_number = 2)
         .unwrap();
+    derive(&store);
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/dao/evidence").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -382,6 +445,7 @@ async fn dao_evidence_rejects_contradictory_lifecycle_markers_with_outpoint_cont
         store
             .update_sync_status(|status| status.tip_block_number = 2)
             .unwrap();
+        derive(&store);
         let app = create_router(test_config(store)).await;
         let (status, json) = get_json(&app, "/dao/evidence").await;
         assert_eq!(
@@ -434,6 +498,7 @@ async fn dao_evidence_rejects_owner_script_payload_under_wrong_hash() {
     store
         .update_sync_status(|status| status.tip_block_number = 1)
         .unwrap();
+    derive(&store);
     let app = create_router(test_config(store)).await;
     let (status, json) = get_json(&app, "/dao/evidence").await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
@@ -2044,9 +2109,42 @@ async fn dao_depositors_page_the_whole_ranking_at_the_evidence_tip() {
         evidence["concentration"]["owners"][0]["lockScriptHash"],
         row["lockScriptHash"]
     );
-    // A cursor from another tip's ranking does not page this one.
+    // J2: the cursor is a rank, not bound to a tip.
+    assert_eq!(cursor, "1");
     let (status, json) = get_json(&app, "/dao/depositors?limit=1&cursor=4:1").await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(
+        json["message"]
+            .as_str()
+            .unwrap()
+            .contains("expected a rank"),
+        "{json}"
+    );
+}
+
+/// J2: a rank cursor keeps paging after the tip moves (the anchor names the
+/// tip each page was ranked at) instead of answering "start again".
+#[tokio::test]
+async fn dao_depositors_rank_cursor_survives_a_new_tip() {
+    let store = dao_evidence_fixture();
+    let app = router_from_state(test_app_state(test_config(store.clone())));
+    let (status, first) = get_json(&app, "/dao/depositors?limit=1").await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let mut header = store.get_block_header(5).unwrap().unwrap();
+    header.hash = vec![0x66; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(6, &header);
+    batch.commit().unwrap();
+    let cursor = first["nextCursor"].as_str().unwrap();
+    let (status, second) =
+        get_json(&app, &format!("/dao/depositors?limit=1&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["anchor"]["blockNumber"], 6, "{second}");
+    assert_eq!(second["data"][0]["rank"], 2, "{second}");
+    let (status, past_end) = get_json(&app, "/dao/depositors?limit=1&cursor=9").await;
+    assert_eq!(status, StatusCode::OK, "{past_end}");
+    assert_eq!(past_end["data"].as_array().unwrap().len(), 0);
+    assert!(past_end["nextCursor"].is_null());
 }
 
 /// DAO-8: the accumulated rate at the end of every complete UTC+8 day — the

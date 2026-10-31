@@ -71,6 +71,107 @@ pub const DERIVED_CFS: &[&str] = &[
     CF_BIT_CELL_BY_ACCOUNT,
 ];
 
+/// Key layout of `dao_live_agg` (L1). Values are signed component vectors;
+/// see each kind for its components.
+pub mod dao_live_agg {
+    /// `[0x00]` → `[phase0 capacity, phase0 cells, phase1 capacity, phase1 cells]`.
+    pub const KIND_GLOBAL: u8 = 0x00;
+    /// `[0x01] + lock_hash(32)` → `[phase0 capacity, phase0 cells]` of one depositor.
+    pub const KIND_DEPOSITOR: u8 = 0x01;
+    /// `[0x02] + deposit epoch(16)` → `[phase0 capacity, phase0 cells]` deposited at that
+    /// exact epoch fraction (what `/dao/evidence` buckets into its 30 nominal days).
+    pub const KIND_PHASE0_EPOCH: u8 = 0x02;
+    /// `[0x03] + deposit epoch(16) + request epoch(16)` → `[phase1 capacity, phase1 cells]`
+    /// (what `/dao/evidence` splits into ready / waiting by epoch lock).
+    pub const KIND_PHASE1_EPOCHS: u8 = 0x03;
+
+    pub const EPOCH_KEY_LEN: usize = 16;
+
+    /// One exact epoch position `number + index/length` of a block header.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct EpochPoint {
+        pub number: i64,
+        pub index: i64,
+        pub length: i64,
+    }
+
+    impl EpochPoint {
+        pub fn new(number: i64, index: i64, length: i64) -> anyhow::Result<Self> {
+            anyhow::ensure!(
+                number >= 0
+                    && length > 0
+                    && index >= 0
+                    && index < length
+                    && number <= i64::from(u32::MAX)
+                    && length <= i64::from(u32::MAX),
+                "invalid DAO epoch {number}+{index}/{length}"
+            );
+            Ok(Self {
+                number,
+                index,
+                length,
+            })
+        }
+
+        /// `number` (u64 BE) + `index` (u32 BE) + `length` (u32 BE).
+        pub fn encode(&self) -> [u8; EPOCH_KEY_LEN] {
+            let mut out = [0u8; EPOCH_KEY_LEN];
+            out[..8].copy_from_slice(&(self.number as u64).to_be_bytes());
+            out[8..12].copy_from_slice(&(self.index as u32).to_be_bytes());
+            out[12..16].copy_from_slice(&(self.length as u32).to_be_bytes());
+            out
+        }
+
+        pub fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+            anyhow::ensure!(
+                bytes.len() == EPOCH_KEY_LEN,
+                "DAO epoch key must be {EPOCH_KEY_LEN} bytes, got {}",
+                bytes.len()
+            );
+            let number = u64::from_be_bytes(bytes[..8].try_into().expect("8 bytes"));
+            let index = u32::from_be_bytes(bytes[8..12].try_into().expect("4 bytes"));
+            let length = u32::from_be_bytes(bytes[12..16].try_into().expect("4 bytes"));
+            Self::new(
+                i64::try_from(number)
+                    .map_err(|_| anyhow::anyhow!("DAO epoch number overflows i64"))?,
+                i64::from(index),
+                i64::from(length),
+            )
+        }
+    }
+
+    pub fn global_key() -> Vec<u8> {
+        vec![KIND_GLOBAL]
+    }
+
+    pub fn depositor_key(lock_hash: &[u8]) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(
+            lock_hash.len() == 32,
+            "DAO depositor lock hash must be 32 bytes, got {}",
+            lock_hash.len()
+        );
+        let mut key = Vec::with_capacity(33);
+        key.push(KIND_DEPOSITOR);
+        key.extend_from_slice(lock_hash);
+        Ok(key)
+    }
+
+    pub fn phase0_epoch_key(deposit: EpochPoint) -> Vec<u8> {
+        let mut key = Vec::with_capacity(1 + EPOCH_KEY_LEN);
+        key.push(KIND_PHASE0_EPOCH);
+        key.extend_from_slice(&deposit.encode());
+        key
+    }
+
+    pub fn phase1_epochs_key(deposit: EpochPoint, request: EpochPoint) -> Vec<u8> {
+        let mut key = Vec::with_capacity(1 + 2 * EPOCH_KEY_LEN);
+        key.push(KIND_PHASE1_EPOCHS);
+        key.extend_from_slice(&deposit.encode());
+        key.extend_from_slice(&request.encode());
+        key
+    }
+}
+
 /// Upper bound passed to `delete_range` when a derivation clears its column
 /// family: longer than any derived key, so it sorts after every one of them.
 const DERIVED_CLEAR_END: [u8; 128] = [0xFF; 128];
@@ -364,6 +465,20 @@ impl<'a> ReadSnapshot<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dao_epoch_keys_round_trip_and_reject_invalid_fractions() {
+        use dao_live_agg::EpochPoint;
+        let point = EpochPoint::new(185, 2, 4).unwrap();
+        assert_eq!(EpochPoint::decode(&point.encode()).unwrap(), point);
+        assert!(EpochPoint::new(1, 4, 4).is_err());
+        assert!(EpochPoint::new(1, 0, 0).is_err());
+        assert!(EpochPoint::new(-1, 0, 1).is_err());
+        let key = dao_live_agg::phase1_epochs_key(point, EpochPoint::new(200, 0, 1).unwrap());
+        assert_eq!(key.len(), 33);
+        assert_eq!(key[0], dao_live_agg::KIND_PHASE1_EPOCHS);
+        assert!(dao_live_agg::depositor_key(&[0; 31]).is_err());
+    }
 
     #[test]
     fn derived_values_round_trip_and_reject_ragged_bytes() {

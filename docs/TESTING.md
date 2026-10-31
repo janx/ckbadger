@@ -19,7 +19,7 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 
 ```bash
 ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 68 checks, minutes
+ckbadger verify --depth sampling          # 69 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -32,7 +32,7 @@ declaration order. Point `-C` at a network subdirectory (for example,
 | Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| **Sampling** (S1-S35) | 35     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows |
+| **Sampling** (S1-S36) | 36     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows, derived DAO depositor rows vs the DAO lifecycle |
 | **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
 Explorer `burnt` and `treasury_amount` are not compared raw: the official explorer leaves phase-1
@@ -85,7 +85,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 68 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 69 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 
@@ -265,6 +265,22 @@ first `/assets?type=object` and `/assets?type=identity` pages (`--sample-count`)
 Rows after `completeThrough` (the tip's incomplete week) are on neither side. A collection above
 5,000 rows, or one that would take the run past 20,000 listed rows, is not paged; the pass detail
 names it as not sampled. It needs no RPC.
+
+### Derived DAO Depositor Aggregate (S36)
+
+`dao_depositor_aggregate_consistency` proves the indexer-derived `dao_live_agg` (round 3 L1)
+against the DAO lifecycle rows it is derived from, through the API:
+
+| Assertion                                                                                                                                                       | Finding names              |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| one walk of every `/dao/depositors` page, all ranked at one anchor tip `T`, sums to `/dao/evidence` `phase0` at `T` and has `concentration.currentDepositors` rows (global row = Σ depositor rows) | `dao/evidence@T`            |
+| ranks are `1..=total` and `total` equals the rows listed                                                                                                        | the depositor / the listing |
+| for up to 20 sampled depositors (`--sample-count`; the largest and the smallest), the row equals that lock's `/dao/deposits/{lock}` rows that were phase-0 at `T` | the depositor               |
+
+Each lifecycle row's own transition blocks give its state at `T`, so a tip that moves during the
+per-lock walks is not a finding. If the tip moves during each of three `/dao/depositors` walks
+the check is `inconclusive`. It needs no RPC: about 165 depositor pages plus the sampled locks'
+deposit pages on mainnet.
 
 ### DAO Lifecycle vs Live DAO Cells (S31)
 
