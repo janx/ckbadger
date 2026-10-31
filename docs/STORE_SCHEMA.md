@@ -608,7 +608,10 @@ exactly `[1]`.
 **Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
 deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
 meta and the rows in the request's pinned view and serves an aggregate only when its meta is
-`Complete` at the version it reads; otherwise `503 derive_pending` (`crates/api/src/derived.rs`).
+`Complete` at the version it reads (`crates/api/src/derived.rs`). Until then `/dao/evidence` and
+`/dao/depositors` — whose whole response is the aggregate — answer `503 derive_pending`, and every
+other field an aggregate feeds (a cluster's `activitiesCount`, a feed's `total`, a `.bit`
+account's `bitCells`) is `null` (unknown) in an otherwise normal response.
 Progress is mirrored to `background_tasks` as `derive:<aggregate>` (TUI, `/pipeline`).
 
 ### stats_hodl Key Prefixes

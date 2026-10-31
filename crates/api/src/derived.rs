@@ -1,12 +1,27 @@
-//! The one gate every endpoint that reads an indexer-derived aggregate goes
-//! through (round 3 lane L): the rows are served only when the aggregate's
+//! The one gate every read of an indexer-derived aggregate goes through
+//! (round 3 lane L): the rows are served only when the aggregate's
 //! `derive:<name>` meta says `Complete` at the version this API reads. There
 //! is no fallback to the scan the aggregate replaced.
+//!
+//! Where the aggregate IS the response (`/dao/evidence`, `/dao/depositors`),
+//! [`require_derived`] answers `503 derive_pending`. Everywhere else the
+//! field it feeds is `null` (unknown) until [`is_derived`] holds. Read the
+//! meta in the same pinned view as the rows.
 
 use ckbadger_store::derive_ops::{DeriveState, DerivedAggregateId};
 use ckbadger_store::CkbadgerStore;
 
 use crate::response::{ApiError, ApiRouteError, DerivePending};
+
+/// Whether `id`'s rows may be served: its meta is `Complete` at the version
+/// this API reads. A field fed by the aggregate is `null` while this is
+/// `false`.
+pub fn is_derived(store: &CkbadgerStore, id: &DerivedAggregateId) -> Result<bool, ApiRouteError> {
+    let meta = store.get_derive_meta(id.name).map_err(|e| {
+        ApiError::internal(format!("failed to read derive state of {}: {e:#}", id.name))
+    })?;
+    Ok(meta.is_some_and(|meta| meta.is_complete(id)))
+}
 
 /// `Ok` when `id`'s rows may be served from `store` (read in the request's
 /// pinned view, like the rows themselves). Otherwise `503 derive_pending`

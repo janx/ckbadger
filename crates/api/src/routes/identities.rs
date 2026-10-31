@@ -441,19 +441,22 @@ pub struct DotbitItemDetailResponse {
     #[serde(flatten)]
     pub item: CollectionItemResponse,
     /// Every live `.bit Cell` whose account is this one, from the derived
-    /// `bit_cell_by_account` index, by `.bit Cell` id; `[]` when none.
-    pub bit_cells: Vec<BitCellRef>,
+    /// `bit_cell_by_account` index, by `.bit Cell` id; `[]` when none;
+    /// `null` (unknown) while the index is being derived.
+    pub bit_cells: Option<Vec<BitCellRef>>,
 }
 
 /// The live `.bit Cells` naming `account_id`: a prefix scan of the derived
-/// `bit_cell_by_account` index (`503 derive_pending` until it is derived),
-/// each resolved to its identity entry.
+/// `bit_cell_by_account` index, each resolved to its identity entry; `None`
+/// (unknown) until the index is derived. Read in the request's pinned view.
 fn bit_cells_of_account(
     state: &AppState,
     account_id: &[u8],
-) -> Result<Vec<BitCellRef>, ApiRouteError> {
+) -> Result<Option<Vec<BitCellRef>>, ApiRouteError> {
     use ckbadger_store::derive_ops::BIT_CELL_BY_ACCOUNT;
-    crate::derived::require_derived(&state.store, &BIT_CELL_BY_ACCOUNT)?;
+    if !crate::derived::is_derived(&state.store, &BIT_CELL_BY_ACCOUNT)? {
+        return Ok(None);
+    }
     let mut ids = Vec::new();
     state
         .store
@@ -510,7 +513,7 @@ fn bit_cells_of_account(
             expired_at,
         });
     }
-    Ok(cells)
+    Ok(Some(cells))
 }
 
 async fn get_dotbit_item_detail(

@@ -253,7 +253,8 @@ calls `derive::invalidate_for_rollback(rollback_to)`:
 
 A reset (`NotStarted` + range delete of the CF) commits before the undo replay, so a crash
 anywhere in the rollback leaves the aggregate reset, never half-restored; the scheduler derives it
-again and the API answers `503 derive_pending` meanwhile. `Derived` undo entries are pruned behind
+again; meanwhile the API serves the fields it feeds as unknown (`null`, or `503 derive_pending`
+for `/dao/evidence` and `/dao/depositors`). `Derived` undo entries are pruned behind
 the same coverage floor as `EntityStats`, so the floor's rebuild-required rule covers them too.
 
 ### Stats Prefix Rollback Ownership

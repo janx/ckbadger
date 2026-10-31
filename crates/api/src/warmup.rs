@@ -646,25 +646,22 @@ fn warmup_cluster_daily_deltas_sync(state: &AppState) {
 }
 
 /// A cluster row's `activitiesCount` in the cached asset list: the derived
-/// count, or absent (unknown) while the indexer is still deriving it — the
-/// list is not withheld for one column, and the next refresh fills it in. A
-/// derivation that FAILED is an invariant violation and fails the warmup.
+/// count, or `None` (unknown) while the indexer has not derived it — whatever
+/// the reason (not started, running, or left `Failed` by an indexer that
+/// stopped). The cache build never fails over this one column.
 fn cluster_activity_count_for_list(
     state: &AppState,
     cluster_id: &[u8],
 ) -> anyhow::Result<Option<i64>> {
-    match crate::routes::assets::derived_collection_activity_count(&state.store, cluster_id) {
-        Ok(count) => Ok(Some(count)),
-        Err((status, body)) if status == axum::http::StatusCode::SERVICE_UNAVAILABLE => {
-            tracing::debug!(message = %body.message, "cluster activity counts not derived yet");
-            Ok(None)
-        }
-        Err((_, body)) => Err(anyhow::anyhow!(
-            "cluster 0x{} activity count: {}",
-            hex::encode(cluster_id),
-            body.message
-        )),
-    }
+    crate::routes::assets::derived_collection_activity_count(&state.store, cluster_id).map_err(
+        |(_, body)| {
+            anyhow::anyhow!(
+                "cluster 0x{} activity count: {}",
+                hex::encode(cluster_id),
+                body.message
+            )
+        },
+    )
 }
 
 fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {

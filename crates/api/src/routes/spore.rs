@@ -205,7 +205,9 @@ pub struct ClusterResponse {
     pub spores_count: i32,
     pub total_count: i64,
     pub holders_count: i64,
-    pub activities_count: i64,
+    /// The cluster's derived activity row count; `null` while it is being
+    /// derived.
+    pub activities_count: Option<i64>,
     /// None when spores reference an ID with no minted cluster cell.
     pub created_at_block: Option<i64>,
     pub owned_capacity: Option<String>,
@@ -795,7 +797,9 @@ fn build_cluster_responses_from_cached_entries(
             spores_count: spores_count as i32,
             total_count: cluster_aggregate.total_count,
             holders_count: cluster_aggregate.owner_count,
-            activities_count: 0,
+            // Ruling B / review P3: the derived count would go here; until
+            // the list reads it, the count is unknown.
+            activities_count: None,
             created_at_block,
             owned_capacity: None,
             owned_knowledge: None,

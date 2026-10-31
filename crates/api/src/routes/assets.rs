@@ -97,17 +97,20 @@ pub(super) struct ResolvedCollection {
 impl ResolvedCollection {
     /// The collection's one activity count: detail and the collection feeds'
     /// `total` (persisted for identity / m-NFT, the indexer-derived count for a
-    /// Spore cluster — `503 derive_pending` until it is derived). Source
+    /// Spore cluster — `None`, unknown, until it is derived). Source
     /// discovery, item/holder pages and charts do not pay for it.
     pub(super) fn activities_count(
         &self,
         state: &AppState,
         id: &[u8],
-    ) -> Result<i64, ApiRouteError> {
+    ) -> Result<Option<i64>, ApiRouteError> {
         let count = match self.activities {
             CollectionActivityCount::Persisted(count) => count,
             CollectionActivityCount::Derived => {
-                derived_collection_activity_count(state.store.as_ref(), id)?
+                match derived_collection_activity_count(state.store.as_ref(), id)? {
+                    Some(count) => count,
+                    None => return Ok(None),
+                }
             }
         };
         if count < 0 {
@@ -116,7 +119,7 @@ impl ResolvedCollection {
                 hex::encode(id)
             )));
         }
-        Ok(count)
+        Ok(Some(count))
     }
 }
 
@@ -418,7 +421,8 @@ pub struct NftCollectionDetailResponse {
     pub total_count: i64,
     pub live_count: i64,
     pub holders_count: i64,
-    pub activities_count: i64,
+    /// `null` while a Spore cluster's count is still being derived.
+    pub activities_count: Option<i64>,
     pub owned_capacity: Option<String>,
     pub owned_knowledge: Option<String>,
     pub composition: CollectionCompositionResponse,
@@ -1571,23 +1575,26 @@ fn completed_week_calendar(
 
 /// A Spore cluster's (or the Sole Spores collection's) activity count: its
 /// `object_collection_activity_count` row, derived by the indexer from the
-/// `object_collection_activities` rows (J5). `503 derive_pending` until the
-/// derivation is complete; there is no walk of the activity rows to fall
+/// `object_collection_activities` rows (J5). `None` (unknown) until the
+/// derivation is complete — there is no walk of the activity rows to fall
 /// back to. A complete aggregate stores no row for an all-zero sum, so a
-/// collection without activity rows has none.
+/// collection without activity rows has none. The caller reads this inside
+/// one pinned read view, so the meta and the row are of one view.
 pub(crate) fn derived_collection_activity_count(
     store: &CkbadgerStore,
     collection_id: &[u8],
-) -> Result<i64, ApiRouteError> {
+) -> Result<Option<i64>, ApiRouteError> {
     use ckbadger_store::derive_ops::OBJECT_COLLECTION_ACTIVITY_COUNT;
-    crate::derived::require_derived(store, &OBJECT_COLLECTION_ACTIVITY_COUNT)?;
+    if !crate::derived::is_derived(store, &OBJECT_COLLECTION_ACTIVITY_COUNT)? {
+        return Ok(None);
+    }
     let key = ckbadger_store::keys::encode_object_collection_activity_prefix(collection_id);
     let value = store
         .get_derived_value(OBJECT_COLLECTION_ACTIVITY_COUNT.cf_name, &key)
         .map_err(|e| ApiError::internal(format!("{e:#}")))?;
     match value.as_deref() {
-        None => Ok(0),
-        Some([count]) if *count > 0 => i64::try_from(*count).map_err(|_| {
+        None => Ok(Some(0)),
+        Some([count]) if *count > 0 => i64::try_from(*count).map(Some).map_err(|_| {
             ApiError::internal(format!(
                 "collection activity count exceeds i64: collection_id=0x{}",
                 hex::encode(collection_id)
