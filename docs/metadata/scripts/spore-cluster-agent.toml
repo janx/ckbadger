@@ -1,5 +1,16 @@
 name = "Spore Cluster Agent"
 
+# CoBuild actions this type script emits (R-7): `Action.data` is
+# spore-contract `action.mol` `union SporeAction` (schema id "spore");
+# the Cluster Agent type uses these items (union item id, table field count).
+[cobuild]
+schema = "spore"
+actions = [
+  { id = 8, name = "MintAgent", fields = 3 },
+  { id = 9, name = "TransferAgent", fields = 3 },
+  { id = 10, name = "BurnAgent", fields = 2 },
+]
+
 [testnet]
 [[testnet.versions]]
 canonical_ref_hash = "0x923e997654b2697ee3f77052cb884e98f28799a4270fd412c3edb8f3987ca622"

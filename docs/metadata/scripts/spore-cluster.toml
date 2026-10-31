@@ -1,6 +1,16 @@
 name = "Spore Cluster"
 category = "spore-cluster"
 
+# CoBuild actions this type script emits (R-7): `Action.data` is
+# spore-contract `action.mol` `union SporeAction` (schema id "spore");
+# the Cluster type uses these items (union item id, table field count).
+[cobuild]
+schema = "spore"
+actions = [
+  { id = 3, name = "MintCluster", fields = 3 },
+  { id = 4, name = "TransferCluster", fields = 3 },
+]
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0x7366a61534fa7c7e6225ecc0d828ea3b5366adec2b58206f2ee84995fe030075"

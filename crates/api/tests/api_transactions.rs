@@ -3704,9 +3704,96 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
     assert_eq!(actions.len(), 2, "{json}");
     assert_eq!(actions[0]["schema"], "spore", "{json}");
     assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
-    assert!(actions[1].get("schema").is_none(), "{json}");
-    assert!(actions[1].get("name").is_none(), "{json}");
+    // R-7: an unknown schema is stated, not omitted: `schema` and `name` are
+    // null and the action is identified by its `scriptInfoHash`.
+    assert_eq!(
+        actions[1].get("schema"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1].get("name"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1]["scriptInfoHash"],
+        format!("0x{}", "11".repeat(32))
+    );
     assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+}
+
+/// R-7 (TX-36): every schema the scripts registry declares names its
+/// actions through the one registry lookup — here a Spore Cluster Proxy
+/// (`SporeAction::MintProxy`, union item 5, a 3-field table), which no
+/// hard-coded family table knew.
+#[tokio::test]
+async fn detail_names_cobuild_actions_of_every_registry_schema() {
+    // Spore Cluster Proxy (testnet, `docs/metadata/scripts/spore-cluster-proxy.toml`).
+    let proxy_code =
+        hex::decode("4349889bda064adab8f49f7dd8810d217917f7df28e9b2a1df0b74442399670a").unwrap();
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let proxy_args = [0x51u8; 32];
+    let proxy_hash = ckbadger_api::utils::address::compute_script_hash(&proxy_code, 2, &proxy_args);
+    let lock = r2b_table(&[
+        hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+        vec![1],
+        r2b_bytes(&[0x44; 20]),
+    ]);
+    let address = [0u32.to_le_bytes().to_vec(), lock].concat();
+    // SporeAction::MintProxy (item 5) { cluster_id, proxy_id, to }.
+    let mint_proxy = [
+        5u32.to_le_bytes().to_vec(),
+        r2b_table(&[vec![0x61; 32], proxy_args.to_vec(), address]),
+    ]
+    .concat();
+    let action = r2b_table(&[vec![0x12; 32], proxy_hash.to_vec(), r2b_bytes(&mint_proxy)]);
+    let message = r2b_table(&[r2b_table(&[action])]);
+    let witness = [
+        0xff000001u32.to_le_bytes().to_vec(),
+        r2b_table(&[vec![0, 0, 0, 0], message]),
+    ]
+    .concat();
+    let hash = pending_tx_hash_hex();
+    let mut response = transaction_rpc_response(
+        &hash,
+        &[(&parent, 0)],
+        vec![serde_json::json!({
+            "capacity": "0x174876e400",
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": format!("0x{}", "44".repeat(20)),
+            },
+            "type": {
+                "code_hash": format!("0x{}", hex::encode(&proxy_code)),
+                "hash_type": "data1",
+                "args": format!("0x{}", hex::encode(proxy_args)),
+            },
+        })],
+        vec![format!("0x{}", "61".repeat(32))],
+        "pending",
+        None,
+    );
+    response["result"]["transaction"]["witnesses"] =
+        serde_json::json!([format!("0x{}", hex::encode(&witness))]);
+    mount_transaction_rpc(&server, response).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let action = &json["witnessDetails"][0]["actions"][0];
+    assert_eq!(action["schema"], "spore", "{json}");
+    assert_eq!(action["name"], "MintProxy", "{json}");
 }
 
 /// TX-20: the detail decodes each input and output lock's args for the lock

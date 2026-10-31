@@ -564,6 +564,45 @@ mod tests {
         );
     }
 
+    /// R-7: Spore-family type scripts declare the `SporeAction` items they
+    /// emit; xUDT declares none (no action schema is specified for it).
+    #[test]
+    fn script_layouts_read_cobuild_schemas_from_the_registry() {
+        let spore_code = PROTOCOL_REGISTRY
+            .iter()
+            .find(|(_, protocol)| *protocol == ProtocolScript::SporeNft)
+            .unwrap()
+            .0
+            .clone();
+        let spore = SCRIPT_LAYOUTS
+            .get(&spore_code)
+            .and_then(|layout| layout.cobuild.clone())
+            .expect("Spore CoBuild schema");
+        assert_eq!(spore.schema, "spore");
+        assert_eq!(
+            spore
+                .actions
+                .iter()
+                .map(|action| (action.id, action.name.as_str(), action.fields))
+                .collect::<Vec<_>>(),
+            vec![
+                (0, "MintSpore", 3),
+                (1, "TransferSpore", 3),
+                (2, "BurnSpore", 2)
+            ]
+        );
+        for (code_hash, protocol) in PROTOCOL_REGISTRY.iter() {
+            if protocol == ProtocolScript::Xudt {
+                assert!(
+                    SCRIPT_LAYOUTS
+                        .get(code_hash)
+                        .is_none_or(|layout| layout.cobuild.is_none()),
+                    "xUDT has no specified CoBuild action schema"
+                );
+            }
+        }
+    }
+
     #[test]
     fn required_core_protocols_present() {
         let r = &*PROTOCOL_REGISTRY;

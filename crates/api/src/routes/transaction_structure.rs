@@ -2,7 +2,6 @@
 use super::transactions::{TransactionInputResponse, TransactionOutputResponse};
 use crate::response::ScriptResponse;
 use ckb_types::{packed, prelude::*};
-use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -263,77 +262,62 @@ fn cobuild_action_script_hashes(bytes: &[u8]) -> Option<Vec<String>> {
 
 /// One CoBuild `Action` of a witness's message: `script_info_hash`,
 /// `script_hash` and its raw `data` (the action itself, in the script's own
-/// schema; not decoded here).
+/// schema).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CobuildActionResponse {
+    /// The CoBuild `ScriptInfo` hash, which commits to the action schema:
+    /// the identity shown for an action whose schema is unknown.
     pub script_info_hash: String,
     pub script_hash: String,
     pub data: String,
-    /// The action schema `data` decodes under, when one is known for the
-    /// script it is for (TX-36): `"spore"` (spore-contract `SporeAction`).
-    /// Absent for any other script — the schema is unknown.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The schema `data` decodes under (TX-36, R-7): the `[cobuild] schema`
+    /// of the scripts-registry entry of the type script this action is for
+    /// (`"spore"`: spore-contract `SporeAction`). `null` when no registry
+    /// entry declares one for that script, or `data` is not one of its items.
     pub schema: Option<String>,
-    /// The action's name in that schema, e.g. `"TransferSpore"`; present
+    /// The action's name in that schema, e.g. `"TransferSpore"`; non-null
     /// exactly when `schema` is.
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 }
 
-/// spore-contract `action.mol` `union SporeAction`, in item-id order: each
-/// item's name and its table's field count.
-const SPORE_ACTIONS: [(&str, usize); 11] = [
-    ("MintSpore", 3),
-    ("TransferSpore", 3),
-    ("BurnSpore", 2),
-    ("MintCluster", 3),
-    ("TransferCluster", 3),
-    ("MintProxy", 3),
-    ("TransferProxy", 4),
-    ("BurnProxy", 3),
-    ("MintAgent", 3),
-    ("TransferAgent", 3),
-    ("BurnAgent", 2),
-];
-
-/// The `SporeAction` name `data` encodes for a script of `family` — the
-/// Spore type (items 0..=2) or the Cluster type (items 3..=4) — when `data`
-/// is that union with a well-formed item table; `None` otherwise.
-fn spore_action_name(family: ProtocolScript, data: &[u8]) -> Option<&'static str> {
-    let item = word(data, 0)?;
-    let allowed = match family {
-        ProtocolScript::SporeNft => 0..=2,
-        ProtocolScript::Cluster => 3..=4,
-        _ => return None,
-    };
-    if !allowed.contains(&item) {
-        return None;
-    }
-    let (name, fields) = SPORE_ACTIONS[item];
-    molecule_fields(data.get(4..)?, Some(fields))?;
-    Some(name)
+/// The `[cobuild]` item `data` encodes: its molecule union item id (u32 LE)
+/// is one the script emits and the item's table has the declared field
+/// count. `None` otherwise.
+fn cobuild_action_name<'a>(
+    schema: &'a ckbadger_indexer::parser::registry::CobuildSchema,
+    data: &[u8],
+) -> Option<&'a str> {
+    let id = u32::from_le_bytes(data.get(..4)?.try_into().ok()?);
+    let item = schema.actions.iter().find(|item| item.id == id)?;
+    molecule_fields(data.get(4..)?, Some(item.fields))?;
+    Some(&item.name)
 }
 
-/// Name the CoBuild actions whose schema is known (TX-36). An action is for
-/// the script whose hash it carries; when that is a type script of this
-/// transaction's inputs or outputs registered as a Spore or Cluster, its data
-/// is decoded as `SporeAction`. Every other action keeps only its hashes and
-/// raw data: no schema registry exists for it.
+/// Name the CoBuild actions whose schema the scripts registry declares
+/// (TX-36, R-7). An action is for the script whose hash it carries; when
+/// that is a type script of this transaction's inputs or outputs whose
+/// registry entry has a `[cobuild]` schema, its data is decoded as that
+/// schema's union. Every other action keeps `schema` / `name` null: its
+/// `scriptInfoHash` identifies the schema, which nothing here knows.
 pub fn name_cobuild_actions(
     witnesses: &mut [WitnessResponse],
     inputs: &[TransactionInputResponse],
     outputs: &[TransactionOutputResponse],
 ) -> anyhow::Result<()> {
-    let mut families = BTreeMap::new();
+    use ckbadger_indexer::parser::registry::SCRIPT_LAYOUTS;
+    let mut schemas = BTreeMap::new();
     for script in inputs
         .iter()
         .filter_map(|input| input.r#type.as_ref())
         .chain(outputs.iter().filter_map(|output| output.r#type.as_ref()))
     {
         let code_hash = hex::decode(script.code_hash.trim_start_matches("0x"))?;
-        if let Some(family) = PROTOCOL_REGISTRY.get(&code_hash) {
-            families.insert(script_hash(script)?, family);
+        if let Some(schema) = SCRIPT_LAYOUTS
+            .get(&code_hash)
+            .and_then(|layout| layout.cobuild.as_ref())
+        {
+            schemas.insert(script_hash(script)?, schema);
         }
     }
     for action in witnesses
@@ -341,12 +325,12 @@ pub fn name_cobuild_actions(
         .filter_map(|witness| witness.actions.as_mut())
         .flatten()
     {
-        let Some(family) = families.get(&action.script_hash) else {
+        let Some(schema) = schemas.get(&action.script_hash) else {
             continue;
         };
         let data = hex::decode(action.data.trim_start_matches("0x"))?;
-        if let Some(name) = spore_action_name(*family, &data) {
-            action.schema = Some("spore".to_string());
+        if let Some(name) = cobuild_action_name(schema, &data) {
+            action.schema = Some(schema.schema.clone());
             action.name = Some(name.to_string());
         }
     }
@@ -883,6 +867,7 @@ pub fn witness_details(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 
     #[test]
     fn cellbase_message_text_strips_the_versionbits_prefix_only() {
@@ -1009,6 +994,8 @@ mod tests {
                 "scriptInfoHash": format!("0x{}", "11".repeat(32)),
                 "scriptHash": format!("0x{}", "30".repeat(32)),
                 "data": "0x01000000aa",
+                "schema": null,
+                "name": null,
             }])
         );
         // Witnesses that are not CoBuild carry no action list.
@@ -1018,33 +1005,32 @@ mod tests {
 
     #[test]
     fn spore_actions_decode_only_for_their_own_script_family() {
+        use ckbadger_indexer::parser::registry::{CobuildSchema, SCRIPT_LAYOUTS};
+        let schema_of = |protocol: ProtocolScript| -> Option<&'static CobuildSchema> {
+            let (code_hash, _) = PROTOCOL_REGISTRY.iter().find(|(_, p)| *p == protocol)?;
+            SCRIPT_LAYOUTS.get(code_hash)?.cobuild.as_ref()
+        };
+        let spore = schema_of(ProtocolScript::SporeNft).expect("Spore schema");
+        let cluster = schema_of(ProtocolScript::Cluster).expect("Cluster schema");
         let script = table(&[vec![0x22; 32], vec![1], vec![0, 0, 0, 0]]);
         let address = [0u32.to_le_bytes().to_vec(), script].concat();
         let union =
             |item: u32, fields: &[Vec<u8>]| [item.to_le_bytes().to_vec(), table(fields)].concat();
         let transfer = union(1, &[vec![0x41; 32], address.clone(), address.clone()]);
-        assert_eq!(
-            spore_action_name(ProtocolScript::SporeNft, &transfer),
-            Some("TransferSpore")
-        );
+        assert_eq!(cobuild_action_name(spore, &transfer), Some("TransferSpore"));
         // A Spore item is not a Cluster action, and vice versa.
-        assert_eq!(spore_action_name(ProtocolScript::Cluster, &transfer), None);
+        assert_eq!(cobuild_action_name(cluster, &transfer), None);
         let mint_cluster = union(3, &[vec![0x41; 32], address.clone(), vec![0x55; 32]]);
         assert_eq!(
-            spore_action_name(ProtocolScript::Cluster, &mint_cluster),
+            cobuild_action_name(cluster, &mint_cluster),
             Some("MintCluster")
         );
         // A wrong field count or an unknown item is not a SporeAction.
         let burn_with_three = union(2, &[vec![0x41; 32], address.clone(), address]);
-        assert_eq!(
-            spore_action_name(ProtocolScript::SporeNft, &burn_with_three),
-            None
-        );
-        assert_eq!(
-            spore_action_name(ProtocolScript::SporeNft, &[11, 0, 0, 0]),
-            None
-        );
-        assert_eq!(spore_action_name(ProtocolScript::Sudt, &transfer), None);
+        assert_eq!(cobuild_action_name(spore, &burn_with_three), None);
+        assert_eq!(cobuild_action_name(spore, &[11, 0, 0, 0]), None);
+        // sUDT declares no CoBuild schema.
+        assert!(schema_of(ProtocolScript::Sudt).is_none());
     }
 
     #[test]

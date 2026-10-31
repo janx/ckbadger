@@ -1,5 +1,16 @@
 name = "Spore Cluster Proxy"
 
+# CoBuild actions this type script emits (R-7): `Action.data` is
+# spore-contract `action.mol` `union SporeAction` (schema id "spore");
+# the Cluster Proxy type uses these items (union item id, table field count).
+[cobuild]
+schema = "spore"
+actions = [
+  { id = 5, name = "MintProxy", fields = 3 },
+  { id = 6, name = "TransferProxy", fields = 4 },
+  { id = 7, name = "BurnProxy", fields = 3 },
+]
+
 [testnet]
 [[testnet.versions]]
 canonical_ref_hash = "0x4349889bda064adab8f49f7dd8810d217917f7df28e9b2a1df0b74442399670a"
