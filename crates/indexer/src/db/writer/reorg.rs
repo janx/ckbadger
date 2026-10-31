@@ -369,6 +369,9 @@ impl BatchWriter {
         // Extract TxContext entries before the undo log deletes them, so the
         // subsequent cell rollback can use targeted lookups instead of full
         // CF scans.
+        // Derived aggregates this rollback would corrupt are reset first, so
+        // a crash anywhere below leaves them reset rather than half-restored.
+        crate::derive::invalidate_for_rollback(&self.store, fork_point)?;
         self.begin_rollback(RollbackCause::NewForkEvent)?;
         let undo_result = self.store.rollback_via_undo_log(append_store, fork_point)?;
         // Domain rollback for canonical mutable state (cells, blocks, stats,

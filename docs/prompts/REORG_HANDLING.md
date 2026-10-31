@@ -234,6 +234,28 @@ Undo replay runs **before** canonical rollback at every entry point (`execute_re
 `init_sync_start`, partial-batch cleanup), so the stages that recompute aggregates from surviving
 rows — cluster capacity, for instance — already see restored values.
 
+### Derived Aggregates (undo-log owned, or reset)
+
+`dao_live_agg`, `object_collection_activity_count` and `bit_cell_by_account` are the indexer's
+background-derived aggregates (`docs/STORE_SCHEMA.md` → Derived Aggregates). Their live
+maintenance records a per-block end-of-previous-block pre-image of every row it touches
+(`UndoSeqScope::Derived`), so undo replay restores them exactly at any fork point — including one
+inside a multi-block live batch — and nothing else rolls them back.
+
+Undo replay is exact only for rows that were exact when the pre-images were recorded, so
+**before** every rollback (`execute_reorg`, startup cleanup, partial-batch cleanup) the indexer
+calls `derive::invalidate_for_rollback(rollback_to)`:
+
+- a derivation still **running** is reset by any rollback that removes a block (its rows mix
+  snapshot contributions with live deltas, and chunk writes are not undo-logged);
+- a **complete** derivation is reset when `rollback_to` is below `completed_at_tip`, the tip at
+  which its last rebuild chunk committed; at or above it, undo replay owns the rollback.
+
+A reset (`NotStarted` + range delete of the CF) commits before the undo replay, so a crash
+anywhere in the rollback leaves the aggregate reset, never half-restored; the scheduler derives it
+again and the API answers `503 derive_pending` meanwhile. `Derived` undo entries are pruned behind
+the same coverage floor as `EntityStats`, so the floor's rebuild-required rule covers them too.
+
 ### Stats Prefix Rollback Ownership
 
 Every stats prefix the rollback path can reach has exactly one owner. The table is executable:
@@ -262,7 +284,8 @@ can still roll these families: `sync_meta` → `entity_stats_undo_contract`
 (`EntityStatsUndoContract { version, coverage_floor_block, updated_at_block }`).
 
 - Every live commit advances `coverage_floor_block` to
-  `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000) and stages the matching deletions into
+  `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000) and stages the matching deletions (of
+  `EntityStats` and `Derived` entries) into
   the same batch, so the floor and its deletions are never separately durable. `committed_tip` is
   the durable tip the batch builds on (the block before its first block), because the prune sees
   only committed rows; a batch longer than 1000 blocks leaves its own below-floor entries to the

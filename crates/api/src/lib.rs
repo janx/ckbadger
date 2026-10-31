@@ -2,6 +2,7 @@ mod asset_catalog;
 pub mod cache;
 pub mod consensus;
 pub mod cycles;
+pub mod derived;
 pub mod embedded_frontend;
 pub mod entry;
 mod frontend_formats;

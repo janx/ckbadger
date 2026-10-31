@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (69 total: 65 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (72 total: 68 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 65 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 68 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -90,6 +90,9 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 | `sync_meta`                      | fixed keys                                                                    | Typed records / JSON monitoring bytes                                          | Tip/status/runtime/progress/memory, reorg/deep-fork state, bulk session marker, background tasks, network identity, and genesis economic baseline                                                                                                          |
 | `dob_decoded`                    | spore_id (32B)                                                                | DecodeOutcome (Decoded(DobDecodedEntry) \| Failed(DobDecodeFailure))           | Cached CKB-VM DOB decode outcome (bulk-disabled, populated after sync catches up to tip). Failed is written only for deterministic failures; transient RPC failures are not persisted.                                                                     |
 | `lock_scripts`                   | lock_hash (32B)                                                               | LockScriptEntry                                                                | Lock script components by hash (survives cell consumption for address resolution)                                                                                                                                                                          |
+| `dao_live_agg`                   | kind(1B) + kind-specific key (see [Derived Aggregates](#derived-aggregates))  | signed components, 16B LE each                                                 | **Derived** (bulk-disabled): live NervosDAO cells by depositor lock, deposit epoch and (deposit, request) epoch, plus one global row                                                                                                                       |
+| `object_collection_activity_count` | collection_id (32B, padded)                                                 | `[count]` (16B LE)                                                             | **Derived** (bulk-disabled): `object_collection_activities` rows per collection — the Spore cluster `activitiesCount`                                                                                                                                      |
+| `bit_cell_by_account`            | account_id (20B) + `.bit Cell` identity id (32B)                              | `[1]` (16B LE)                                                                 | **Derived** (bulk-disabled): live `.bit Cell` items naming each `.bit` account                                                                                                                                                                            |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                                           | NodeRecord                                                                     | TTL-retained same-network crawler-Identify records, latest dialability, and exact Discovery evidence                                                                                                                                                       |
 | `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)                        | LatestStatus / HistoryPoint                                                    | Checked completed dial/session/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                                                                                                    |
 | `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                                         | ActiveCrawl / CrawlCandidate                                                   | Durable logical-round state: dial aliases, target-centric advertisements, direct sessions, active probes, and stable completed evidence                                                                                                                    |
@@ -234,6 +237,7 @@ high bits: `seq = (scope << 48) | local`, where `local` counts entries within on
 | `DotBit`      | `0x0002` | `.bit` account/identity entity mutations                                                                      |
 | `Object`      | `0x0003` | Object-writer entity mutations (Spore, cluster, mNFT, `.cell`, …) and the outpoint reverse-index rows (below) |
 | `EntityStats` | `0x0004` | The eight per-entity daily/hourly stats buckets                                                               |
+| `Derived`     | `0x0005` | Rows of the three derived aggregate CFs, written by their live maintenance                                    |
 
 The scope table has one definition, `UndoSeqScope` in `crates/ckbadger-store/src/keys.rs`, next to
 the undo-log key codec (`UNDO_SEQ_SCOPE_SHIFT`, `UndoSeqScope::seq_base` / `owns`); the indexer
@@ -292,9 +296,14 @@ without a `CF_TX_ACTIONS` row, so `CkbadgerStore::address_activity_count`
 served as `total` on the unfiltered `/addresses/{addr}/activities`. The `AddressBalance` bincode
 layout changed and requires a genesis re-sync.
 
-**Bounded window.** Only the `EntityStats` scope is pruned during normal sync. Every live commit
+**`Derived` scope.** `dao_live_agg`, `object_collection_activity_count` and `bit_cell_by_account`
+are restored by undo replay alone, with the same per-`(block, key)` end-of-previous-block
+pre-image `EntityStats` uses (`crates/indexer/src/derive/live.rs`). See
+[Derived Aggregates](#derived-aggregates) for when a rollback resets a derivation instead.
+
+**Bounded window.** Only the `EntityStats` and `Derived` scopes are pruned during normal sync. Every live commit
 advances the coverage floor to `committed_tip - ENTITY_STATS_UNDO_RETAIN_BLOCKS` (1000 blocks,
-`crates/indexer/src/sync/batch.rs`) and deletes the `EntityStats` entries it leaves behind, staged
+`crates/indexer/src/sync/batch.rs`) and deletes the `EntityStats` and `Derived` entries it leaves behind, staged
 into the same batch as the blocks, so the floor and the deletions it describes are never
 separately durable. `committed_tip` is the durable tip the batch builds on (the block before its
 first block), because the prune can only see committed rows; a batch longer than the window
@@ -361,6 +370,8 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
   snapshots (current plus the maximum 36-block automatic reorg depth).
 - entity-stats rollback coverage: `entity_stats_undo_contract`
 - hourly retention evidence: `hourly_retention_state:<family>`
+- derived aggregate state: `derive:<aggregate>` (bincode `DeriveMeta`, see
+  [Derived Aggregates](#derived-aggregates))
 - lazy VM results: `tx_group_cycles:<tx_hash_32B>` stores
   `TxGroupCyclesRecord::Complete(TransactionCycles { block_hash, cycles, groups })` or
   `Failed { block_hash, failure: ReplayFailure }`. Failure evidence is fixed-size: dependency
@@ -516,6 +527,54 @@ inline as Class C sealed aggregates:
   reverse), and a `transfer_tx_count` above `tx_count` or zero beside mint / burn records. Live rollback restores the whole row from its undo pre-image. The script,
   cluster, spore and object daily rows keep the 32-byte pair codec (`apply_daily_pair`); each codec
   rejects the other's width.
+
+### Derived Aggregates
+
+Persisted aggregates the **indexer derives from rows it has already written**, after bulk sync
+hands off to live sync, and then maintains on the live path only (round 3, lane L). They cost bulk
+sync nothing: the three CFs are `BulkDisabled` (the bulk materializer refuses them), the rebuild
+runs on the live pipeline's writer task, and live maintenance runs inside `write_parsed_batch`
+only for non-bulk batches. They need no re-sync: an existing store derives them on first start.
+
+One definition per aggregate lives in `crates/ckbadger-store/src/derive_ops.rs`
+(`DerivedAggregateId { name, cf_name, version }`, key layouts, value codec); the indexer computes
+the rows (`crates/indexer/src/derive/`), the API reads them.
+
+**Signed sums.** Every aggregate is a sum over source rows: each row contributes a fixed vector of
+`i128` components to one or more keys; a key's value is the sum (16 bytes little-endian per
+component); an all-zero sum has no row. The rebuild folds the source rows of one RocksDB
+**snapshot** taken at the sync tip `H` when the derivation starts; every live block above `H`
+adds `f(new) − f(old)` for each source row it changes. Intermediate values may be negative (a row
+present at `H` and changed above it is subtracted before the rebuild reaches it); each
+aggregate's row invariant is checked when the rebuild completes and on every later live write.
+
+**State** — `sync_meta` `derive:<aggregate>` → `DeriveMeta { version, state, run, started_at_ms,
+finished_at_ms }`, with `state` one of:
+
+| State                                                     | Meaning                                                                                                                    |
+| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `NotStarted`                                              | rows absent or garbage; not maintained, not served                                                                         |
+| `Running { derived_from_tip: H, cursor, rows_done }`      | rebuild in flight over the snapshot at `H`; live deltas above `H` applied; `cursor` is progress only                       |
+| `Complete { derived_from_tip: H, completed_at_tip: C, … }` | rows equal a from-scratch derivation at the sync tip; exact since block `C` (the tip when the last chunk committed)        |
+| `Failed { error }`                                        | an invariant violation in the rebuild or a live write; rows not served, the API answers `500` with the error               |
+
+Transitions: on indexer start (before the first live batch) a missing meta, a `version` other
+than the current one, `Running` (its snapshot died with the process) or `Failed` → rows cleared,
+`NotStarted`; `Complete` is kept (and must have `C` ≤ the sync tip). Once sync is within
+`bulk_sync_threshold` of the tip, the scheduler starts the first not-complete aggregate in
+registry order: rows cleared + `Running{H}` in one write, then the snapshot. When its source is
+exhausted, every row is checked and the state becomes `Complete{H, C}`. A rollback resets
+(`NotStarted` + clear, committed **before** undo replay) a `Running` derivation whenever it
+removes a block, and a `Complete` one when its target is below `C`; otherwise undo replay
+restores the rows exactly. A live write that breaks a row invariant stages `Failed` instead of
+its rows; canonical sync continues. `Failed` is retried once per indexer start. Bumping an
+aggregate's `version` in `derive_ops.rs` re-derives it on the next start.
+
+**Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
+deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
+meta and the rows in the request's pinned view and serves an aggregate only when its meta is
+`Complete` at the version it reads; otherwise `503 derive_pending` (`crates/api/src/derived.rs`).
+Progress is mirrored to `background_tasks` as `derive:<aggregate>` (TUI, `/pipeline`).
 
 ### stats_hodl Key Prefixes
 

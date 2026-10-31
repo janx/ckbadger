@@ -3,6 +3,7 @@ pub mod cache;
 pub mod config;
 pub mod cycles_worker;
 pub mod db;
+pub mod derive;
 pub mod entry;
 pub mod genesis_baseline;
 pub mod health_monitor;

@@ -4063,6 +4063,40 @@ impl Indexer {
             // and undo entries are not committed yet. A batch longer than the
             // undo window leaves some of its own entries below the floor its
             // tip implies; the next batch, built on this tip, prunes them.
+            // Derived aggregates (round 3 lane L): this batch's signed
+            // deltas for every derivation that is running or complete, in
+            // this same atomic write, with per-block undo pre-images.
+            let derive_failures = if bulk_sync_mode {
+                Vec::new()
+            } else {
+                let derive_blocks: Vec<crate::derive::LiveBlockPoint> = all_parsed_blocks
+                    .iter()
+                    .map(|parsed| crate::derive::LiveBlockPoint {
+                        number: parsed.number,
+                        epoch_number: parsed.epoch_number,
+                        epoch_index: parsed.epoch_index,
+                        epoch_length: parsed.epoch_length,
+                    })
+                    .collect();
+                let derive_ctx = crate::derive::LiveDeriveCtx {
+                    store: self.writer.store(),
+                    blocks: &derive_blocks,
+                };
+                crate::derive::apply_live_batch(
+                    self.writer.store(),
+                    &crate::derive::registry(),
+                    &derive_ctx,
+                    &mut data_batch,
+                    &batch_undo_seq,
+                )
+                .with_context(|| {
+                    format!(
+                        "derived aggregate live maintenance failed for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?
+            };
+
             let retention_request =
                 HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
             if !bulk_sync_mode {
@@ -4204,6 +4238,7 @@ impl Indexer {
             })?;
             retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+            crate::derive::report_live_failures(self.writer.store(), &derive_failures)?;
             // Debug-build invariant (plan Task 5.3): rollback replays a block's
             // undo entries scope-major, which is exact only while each key the
             // block mutates is recorded by one scope.
