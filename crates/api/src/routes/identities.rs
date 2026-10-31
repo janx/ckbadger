@@ -498,6 +498,7 @@ async fn get_dotbit_item_detail(
         status,
         tx_hash,
         output_index,
+        token_index: None,
     })
 }
 
@@ -558,6 +559,7 @@ async fn get_did_ckb_item_detail(
             .as_ref()
             .map(|(hash, _)| format!("0x{}", hex::encode(hash))),
         output_index: current.map(|(_, index)| index),
+        token_index: None,
     })
 }
 
@@ -626,6 +628,7 @@ async fn get_bit_cell_item_detail(
         status: None,
         tx_hash,
         output_index,
+        token_index: None,
     })
 }
 

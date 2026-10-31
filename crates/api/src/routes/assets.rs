@@ -435,6 +435,8 @@ pub struct NftCollectionDetailResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionItemResponse {
     pub nft_id: String,
+    /// The item's name. An m-NFT token has none of its own: its row carries
+    /// its class's on-chain name, read with `token_index` ("Santa Claus #0").
     pub name: Option<String>,
     pub standard: String,
     /// The owner's full lock hash. For `.cell` it is the lock the owner's
@@ -458,6 +460,9 @@ pub struct CollectionItemResponse {
     pub status: Option<u8>,
     pub tx_hash: Option<String>,
     pub output_index: Option<i16>,
+    /// m-NFT rows only: the token's index within its class (OB-K3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3132,6 +3137,7 @@ pub(crate) fn list_identity_items_inner(
                 status,
                 tx_hash,
                 output_index,
+                token_index: None,
             });
         }
     } else if identity_standard == IdentityStandard::BitCell {
@@ -3190,6 +3196,7 @@ pub(crate) fn list_identity_items_inner(
                 status: None,
                 tx_hash,
                 output_index,
+                token_index: None,
             });
         }
     } else if identity_standard == IdentityStandard::DotCell {
@@ -3251,6 +3258,7 @@ pub(crate) fn list_identity_items_inner(
                 status: None,
                 tx_hash,
                 output_index,
+                token_index: None,
             });
         }
     } else {
@@ -3282,6 +3290,7 @@ pub(crate) fn list_identity_items_inner(
                 status: None,
                 tx_hash: None,
                 output_index: None,
+                token_index: None,
             });
         }
     }
@@ -3407,6 +3416,7 @@ fn list_spore_cluster_items(
                 // /spore/clusters/{id}/spores; ObjectEntry has no output_index.
                 tx_hash: Some(format!("0x{}", hex::encode(&entry.created_at_tx))),
                 output_index: None,
+                token_index: None,
             })
         })
         .collect::<Result<_, ApiRouteError>>()?;
@@ -3595,27 +3605,38 @@ async fn list_object_collection_items(
         .get_live_mnft_token_outpoints_by_token_ids(&mnft_live_token_ids, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    // An m-NFT token has no name of its own; its row reads as its class's
+    // name and its index ("Santa Claus #0", OB-K3) — the class name the
+    // collection detail reports.
+    let class_name =
+        resolve_object_collection_name(agg.standard.asset_standard(), agg.name.as_deref());
     let mut rows = Vec::with_capacity(page_items.len());
     for (nft_id, entry) in &page_items {
-        let (tx_hash, output_index) = match entry.standard {
-            ckbadger_store::types::ObjectStandard::MnftToken => {
-                if entry.is_live {
-                    let (tx_hash, output_index) = mnft_live_outpoints.get(nft_id).ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "live mNFT token missing outpoint index: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(nft_id)
-                        ))
-                    })?;
-                    (
-                        Some(format!("0x{}", hex::encode(tx_hash))),
-                        Some(*output_index),
-                    )
-                } else {
-                    (None, None)
-                }
+        // A class's member index lists only its tokens (both sync paths).
+        let token_index = match &entry.extra {
+            ckbadger_store::types::ObjectExtra::MnftToken { token_index, .. } => *token_index,
+            other => {
+                return Err(ApiError::internal(format!(
+                    "mNFT class member is not a token: collection_id=0x{}, nft_id=0x{}, extra={other:?}",
+                    hex::encode(&collection_id_bytes),
+                    hex::encode(nft_id)
+                )))
             }
-            _ => (None, None),
+        };
+        let (tx_hash, output_index) = if entry.is_live {
+            let (tx_hash, output_index) = mnft_live_outpoints.get(nft_id).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "live mNFT token missing outpoint index: collection_id=0x{}, nft_id=0x{}",
+                    hex::encode(&collection_id_bytes),
+                    hex::encode(nft_id)
+                ))
+            })?;
+            (
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(*output_index),
+            )
+        } else {
+            (None, None)
         };
 
         let (owner_lock_hash, owner_address) = item_owner(
@@ -3625,7 +3646,7 @@ async fn list_object_collection_items(
         )?;
         rows.push(CollectionItemResponse {
             nft_id: format!("0x{}", hex::encode(nft_id)),
-            name: entry.name.clone(),
+            name: class_name.clone(),
             standard: entry.standard.asset_standard().to_string(),
             owner_lock_hash,
             owner_address,
@@ -3638,6 +3659,7 @@ async fn list_object_collection_items(
             status: None,
             tx_hash,
             output_index,
+            token_index: Some(token_index),
         });
     }
 

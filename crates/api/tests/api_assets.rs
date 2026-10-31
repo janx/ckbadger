@@ -5771,6 +5771,79 @@ async fn mnft_class_holders_and_items_carry_addresses() {
     );
 }
 
+/// OB-K3 (round 3, R-1): an m-NFT class's item rows carried nothing a row
+/// could read as "Santa Claus #0": an m-NFT token has no name of its own and
+/// the row did not carry the token's index. Every m-NFT row now carries the
+/// token's `tokenIndex` and, as `name`, the class's on-chain name.
+#[tokio::test]
+async fn mnft_class_item_rows_carry_token_index_and_class_name() {
+    let store = test_store();
+    let class_id = [0x5au8; 24];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            name: Some("Santa Claus".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 2,
+            live_count: 0,
+            holders_count: 0,
+            activities_count: 0,
+            ..Default::default()
+        },
+    );
+    for index in [0u32, 7] {
+        let token_id = [class_id.as_slice(), &index.to_be_bytes()].concat();
+        batch.put_mnft(
+            &token_id,
+            &ObjectEntry {
+                standard: ObjectStandard::MnftToken,
+                collection_id: Some(class_id.to_vec()),
+                token_id: Some(token_id.clone()),
+                owner_lock_hash: Some(vec![0x11; 32]),
+                name: None,
+                description: None,
+                is_live: false,
+                created_at_block: 1,
+                created_at_tx: vec![0xa1; 32],
+                extra: ObjectExtra::MnftToken {
+                    token_index: index,
+                    characteristic: vec![0; 8],
+                    configure: 0,
+                    state: 0,
+                },
+            },
+        );
+        batch.put_mnft_by_collection(&class_id, &token_id);
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+
+    let (status, items) = get_json(
+        &app,
+        &format!("/assets/objects/0x{}/items", hex::encode(class_id)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{items}");
+    let rows = items["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "{items}");
+    let read: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            format!(
+                "{} #{}",
+                row["name"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("m-NFT row without a name: {row}")),
+                row["tokenIndex"]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("m-NFT row without a tokenIndex: {row}"))
+            )
+        })
+        .collect();
+    assert_eq!(read, ["Santa Claus #0", "Santa Claus #7"], "{items}");
+}
+
 #[tokio::test]
 async fn mnft_class_insights_serve_real_holder_distribution_and_weekly_rows() {
     let (store, class_id) = mnft_insights_fixture(6);
