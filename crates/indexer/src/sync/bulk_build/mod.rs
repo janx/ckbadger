@@ -1313,10 +1313,11 @@ impl CoreOwners {
 
 /// Consecutive transactions on one UTC+8 (day, hour) bucket pair, folded
 /// before they land in the bucket maps ([`ActivityStatsAccumulator::land_run`]).
-#[derive(Default)]
+/// A run exists only with its buckets: there is no bucketless run to fold a
+/// transaction into.
 struct ActivityRun {
-    /// `(day key, hour key)` of the open run; `None` before its first tx.
-    buckets: Option<(String, String)>,
+    date: String,
+    hour: String,
     stats: DailyActivityStats,
     /// `Lock` participants of the run's non-cellbase transactions.
     addrs: Vec<[u8; 32]>,
@@ -1548,8 +1549,8 @@ impl ActivityStatsAccumulator {
         chain_time_of: impl Fn(i64) -> Option<i64>,
     ) -> Result<()> {
         let mut cached_block = None;
-        let mut cached_ts = i64::MIN;
-        let mut run = ActivityRun::default();
+        let mut cached_ts: Option<i64> = None;
+        let mut run: Option<ActivityRun> = None;
 
         for tx_actions in tx_actions_list {
             if cached_block != Some(tx_actions.block_number) {
@@ -1561,45 +1562,71 @@ impl ActivityStatsAccumulator {
                         tx_actions.tx_index
                     )
                 })?;
-                if chain_time != cached_ts {
-                    cached_ts = chain_time;
-                    let date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
+                if cached_ts != Some(chain_time) {
+                    cached_ts = Some(chain_time);
+                    let bucket_context = || {
+                        format!(
+                            "activity buckets of block={} tx_index={}",
+                            tx_actions.block_number, tx_actions.tx_index
+                        )
+                    };
+                    let date = ckbadger_common::stats_bucket::stats_date_key(chain_time)
+                        .with_context(bucket_context)?;
                     // Activity hour keys are UTC+8, unlike chain-level hourly keys.
-                    let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)?;
+                    let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)
+                        .with_context(bucket_context)?;
                     let same_run = run
-                        .buckets
                         .as_ref()
-                        .is_some_and(|(run_date, run_hour)| *run_date == date && *run_hour == hour);
+                        .is_some_and(|open| open.date == date && open.hour == hour);
                     if !same_run {
-                        self.land_run(&mut run)?;
-                        run.buckets = Some((date, hour));
+                        if let Some(done) = run.take() {
+                            self.land_run(done)?;
+                        }
+                        run = Some(ActivityRun {
+                            date,
+                            hour,
+                            stats: DailyActivityStats::default(),
+                            addrs: Vec::new(),
+                        });
                     }
                 }
             }
 
-            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut run.stats);
+            let open = run.as_mut().ok_or_else(|| {
+                anyhow!(
+                    "activity action has no open bucket run: block={} tx_index={}",
+                    tx_actions.block_number,
+                    tx_actions.tx_index
+                )
+            })?;
+            crate::db::BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut open.stats);
             if !tx_actions.is_cellbase {
                 for participant in &tx_actions.participants {
                     // `Lock` participants only — same rule as the live path.
                     if let ParticipantId::Lock(lock_hash) = participant.id {
-                        run.addrs.push(lock_hash);
+                        open.addrs.push(lock_hash);
                     }
                 }
             }
         }
 
-        self.land_run(&mut run)
+        match run {
+            Some(done) => self.land_run(done),
+            None => Ok(()),
+        }
     }
 
     /// Land a run in its buckets with ONE lookup per bucket map: the day and
     /// hour stats, and — only when the run has an address, so a bucket's
     /// address set still exists exactly when an address landed in it — the
     /// day and hour address sets.
-    fn land_run(&mut self, run: &mut ActivityRun) -> Result<()> {
-        let Some((date, hour)) = run.buckets.take() else {
-            return Ok(());
-        };
-        let stats = std::mem::take(&mut run.stats);
+    fn land_run(&mut self, run: ActivityRun) -> Result<()> {
+        let ActivityRun {
+            date,
+            hour,
+            stats,
+            addrs,
+        } = run;
         #[cfg(test)]
         {
             self.note_bucket_lookup("daily_stats", &date);
@@ -1615,7 +1642,7 @@ impl ActivityStatsAccumulator {
             .or_default()
             .add_counts(&stats)
             .with_context(|| format!("bulk activity hourly stats: hour={hour}"))?;
-        if !run.addrs.is_empty() {
+        if !addrs.is_empty() {
             #[cfg(test)]
             {
                 self.note_bucket_lookup("daily_addrs", &date);
@@ -1624,11 +1651,8 @@ impl ActivityStatsAccumulator {
             self.daily_addrs
                 .entry(date)
                 .or_default()
-                .extend(run.addrs.iter().copied());
-            self.hourly_addrs
-                .entry(hour)
-                .or_default()
-                .extend(run.addrs.drain(..));
+                .extend(addrs.iter().copied());
+            self.hourly_addrs.entry(hour).or_default().extend(addrs);
         }
         Ok(())
     }
@@ -10314,5 +10338,42 @@ mod tests {
             late.contains("late action: kind=hourly block=3 tx_index=0"),
             "{late}"
         );
+    }
+
+    /// A transaction whose block's chain time cannot be bucketed fails the
+    /// batch naming the block — it is never folded into a run that has no
+    /// bucket and dropped. (`i64::MIN` was the old "no block yet" sentinel of
+    /// the fold's chain-time cache.)
+    #[test]
+    fn activity_fold_fails_naming_the_block_whose_chain_time_has_no_bucket() {
+        let action = TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number: 7,
+            tx_index: 0,
+            timestamp: 0,
+            is_cellbase: true,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![],
+        };
+        let block = facts::BlockFacts {
+            number: 7,
+            timestamp_ms: 0,
+            chain_time_ms: i64::MIN,
+            ..Default::default()
+        };
+        let mut acc = ActivityStatsAccumulator::default();
+        let err = acc
+            .accumulate_tx_actions(std::slice::from_ref(&action), |_| Some(i64::MIN))
+            .expect_err("an unbucketable chain time must fail the fold");
+        assert!(format!("{err:#}").contains("block=7 tx_index=0"), "{err:#}");
+        assert!(acc.daily_stats.is_empty() && acc.hourly_stats.is_empty());
+
+        let err = ActivityStatsAccumulator::default()
+            .apply_batch(std::slice::from_ref(&block), std::slice::from_ref(&action))
+            .expect_err("the production batch path fails too");
+        assert!(format!("{err:#}").contains("block=7 tx_index=0"), "{err:#}");
     }
 }
