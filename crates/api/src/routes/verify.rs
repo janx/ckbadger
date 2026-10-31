@@ -25,7 +25,11 @@
 //!   the node — the indexer stays the only writer of chain stores.
 
 use anyhow::Context;
-use axum::{extract::State, routing::post, Json, Router};
+use axum::{
+    extract::{Query, State},
+    routing::{get, post},
+    Json, Router,
+};
 use ckbadger_common::stats_bucket::{stats_day, utc8_day_end_ms};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -56,7 +60,82 @@ const ROW_OVERHEAD_BYTES: usize = 64;
 const SUPPORTED_KINDS: &[&str] = &["token"];
 
 pub fn routes() -> Router<Arc<AppState>> {
-    Router::new().route("/verify/entity-statistics", post(export_entity_statistics))
+    Router::new()
+        .route("/verify/entity-statistics", post(export_entity_statistics))
+        .route("/verify/data-hash-rows", get(export_data_hash_rows))
+}
+
+/// Rows per `/verify/data-hash-rows` answer: the verifier names a few rows
+/// when the index is wrong; it never pages the whole index.
+const MAX_DATA_HASH_ROWS: usize = 64;
+
+#[derive(Debug, Deserialize)]
+pub struct DataHashRowsQuery {
+    pub data_hash: String,
+    /// Rows to return; defaults to (and may not exceed) [`MAX_DATA_HASH_ROWS`].
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataHashRowsResponse {
+    pub data_hash: String,
+    pub rows: Vec<DataHashRowResponse>,
+    /// No further row exists under this data hash.
+    pub complete: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataHashRowResponse {
+    pub tx_hash: String,
+    pub output_index: i16,
+    pub created_at_block: i64,
+    pub live: bool,
+    pub data_size: i32,
+}
+
+/// `GET /api/v1/verify/data-hash-rows?data_hash=0x…` — the stored
+/// `cell_by_data_hash` rows under one data hash, each with the cell it names
+/// (live or consumed) and that cell's stored data size. Raw and bounded, from
+/// the request's one read pin; a dangling or malformed row is a 500 naming it.
+/// The verifier asks for the hash of empty data, which must have no row: a row
+/// exists iff its cell has data (`keys::cell_has_data_hash_row`).
+async fn export_data_hash_rows(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<DataHashRowsQuery>,
+) -> ApiResult<DataHashRowsResponse> {
+    let data_hash = parse_hash32(&query.data_hash, "data_hash")?;
+    let data_hash_hex = hex0x(&data_hash);
+    let limit = query.limit.unwrap_or(MAX_DATA_HASH_ROWS);
+    if limit == 0 || limit > MAX_DATA_HASH_ROWS {
+        return Err(ApiError::bad_request(format!(
+            "limit must be between 1 and {MAX_DATA_HASH_ROWS}, got {limit}"
+        )));
+    }
+    let store = state.store.clone();
+    let cells_store = state.append_only_store.clone();
+    let page = tokio::task::spawn_blocking(move || {
+        store.list_data_hash_index_rows(&data_hash, limit, &cells_store)
+    })
+    .await
+    .map_err(|e| ApiError::internal(format!("data-hash export task failed: {e}")))?
+    .map_err(|e| ApiError::internal(e.to_string()))?;
+    ok(DataHashRowsResponse {
+        data_hash: data_hash_hex,
+        rows: page
+            .rows
+            .into_iter()
+            .map(|row| DataHashRowResponse {
+                tx_hash: hex0x(&row.tx_hash),
+                output_index: row.output_index,
+                created_at_block: row.created_at_block,
+                live: row.live,
+                data_size: row.data_size,
+            })
+            .collect(),
+        complete: page.complete,
+    })
 }
 
 #[derive(Debug, Deserialize)]

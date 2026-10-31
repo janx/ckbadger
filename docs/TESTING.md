@@ -18,8 +18,8 @@ Data integrity verification. Calls the API and optionally the official CKB explo
 ### Quick Start
 
 ```bash
-ckbadger verify --depth fast              # 7 checks, seconds
-ckbadger verify --depth sampling          # 71 checks, minutes
+ckbadger verify --depth fast              # 8 checks, seconds
+ckbadger verify --depth sampling          # 72 checks, minutes
 ckbadger verify --list-checks             # List all checks
 ```
 
@@ -31,7 +31,7 @@ declaration order. Point `-C` at a network subdirectory (for example,
 
 | Tier                  | Checks | Runtime | What it validates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | --------------------- | ------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Fast** (F1-F7)      | 7      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| **Fast** (F1-F8)      | 8      | seconds | API reachable, sync complete, genesis block, tip block, deep fork clear, DAO statistics sane, genesis-baseline burnt invariant, data-hash index files no empty-data cell                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | **Sampling** (S1-S38) | 38     | minutes | Block hash roundtrip, parent chain, address balance, chart validations (tx count, cells, supply, block time, epoch, HODL wave, knowledge composition, APC, inflation), supply invariants, RPC compare, tokens, spores, NFTs, holder consistency, DAO status index vs deposits, participant rows consistency, entity capacity history vs chain, `.cell` ring integrity, `.cell` id-is-label-hash, `.cell` owner index, `.cell` records hash parity, DAO lifecycle vs the node's live DAO cells, global activity bucket index vs per-block classification, address cellbase counts vs block rewards, token live cell counts vs the type index, collection daily activity counts vs activity rows, derived DAO depositor rows vs the DAO lifecycle, derived cluster activity counts vs activity rows, the derived `.bit` → `.bit Cell` index vs `.bit Cell` items |
 | **Explorer** (X1-X26) | 26     | minutes | Compare last 30 days against official CKB explorer API (tx count, DAO deposit, hash rate, difficulty, knowledge size, uncle rate, cell counts, supply, circulation, compensation, mining reward, normalized treasury)                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
@@ -67,6 +67,13 @@ deterministic sampling with `--sample-count` and `--seed`, and override API/RPC/
 the cache directory when `-C` names a single-network work directory. Endpoint overrides are
 rejected when `-C` names an orchestrator root with multiple networks.
 
+`data_hash_index_only_cells_with_data` (F8) reads the bounded raw export
+`GET /verify/data-hash-rows?data_hash=…` for the hash of empty data. A `cell_by_data_hash` row
+exists iff its cell has data (`keys::cell_has_data_hash_row`, shared by the live writer, the bulk
+build and rollback), so that hash must name no row; the export itself answers 500 for a row that
+names neither a live nor a consumed cell. A store bulk-built before the fix filed every
+empty-data cell under it and fails until re-synced.
+
 `address_balance_spot_check` is deliberately bounded. It deterministically
 selects at most 10 recently active addresses across live-cell-count bands, then
 checks every live cell of each selected address exactly. Candidates with more
@@ -85,7 +92,7 @@ unbounded scan.
 
 > **Scope:** `verify` covers only chain-derived data (the domain + append-only stores). The
 > **network store** (`net_nodes` / `net_stats` / `net_crawl`, written by the opt-in `ckbadger-crawler`) is
-> **outside** all 71 checks — it holds observational, non-chain p2p-crawler data that is
+> **outside** all 72 checks — it holds observational, non-chain p2p-crawler data that is
 > non-deterministic and not subject to chain-integrity invariants, so none of these checks apply
 > to it.
 

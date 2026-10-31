@@ -1,6 +1,6 @@
 //! API-based checks — validates data via the ckbadger REST API.
 //!
-//! Fast tier (F1-F6): few API calls, seconds.
+//! Fast tier (F1-F8): few API calls, seconds.
 //! Sampling tier (S1-S23): N API calls or chart validation, minutes.
 
 use super::checks::*;
@@ -819,7 +819,7 @@ fn sample_indices_with_cap(seed: u64, total: usize, desired: usize, cap: usize) 
 }
 
 // ============================================
-// FAST CHECKS (F1-F6)
+// FAST CHECKS (F1-F8)
 // ============================================
 
 /// F1: GET /statistics/network returns 200, latestBlock > 0.
@@ -1187,6 +1187,90 @@ impl Check for GenesisBaselineBurntInvariant {
         } else {
             Ok(CheckResult::fail(checked, findings))
         }
+    }
+}
+
+/// F8: `cell_by_data_hash` files a row exactly for a cell with data
+/// (`keys::cell_has_data_hash_row`), so the hash of empty data must name no
+/// row at all. A bulk build used to file every empty-data cell of the chain
+/// under it while live sync filed none (D-2). Read through the bounded raw
+/// export `GET /verify/data-hash-rows`, which also fails on a dangling row.
+pub struct DataHashIndexFilesOnlyCellsWithData;
+
+/// Rows the check asks for: enough to name the offending cells.
+const DATA_HASH_ROWS_SAMPLE: usize = 16;
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DataHashRowsPage {
+    rows: Vec<DataHashRowEvidence>,
+    complete: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DataHashRowEvidence {
+    tx_hash: String,
+    output_index: i64,
+    created_at_block: i64,
+    live: bool,
+    data_size: i64,
+}
+
+impl Check for DataHashIndexFilesOnlyCellsWithData {
+    fn name(&self) -> &'static str {
+        "data_hash_index_only_cells_with_data"
+    }
+    fn description(&self) -> &'static str {
+        "cell_by_data_hash files no row under the hash of empty data (a row exists iff its cell has data)"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Fast
+    }
+    fn run(&self, ctx: &CheckContext, _progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        let empty_data_hash = format!(
+            "0x{}",
+            hex::encode(crate::parser::script::ScriptParser::compute_data_hash(&[]))
+        );
+        let page: DataHashRowsPage = api_get(
+            ctx,
+            &format!(
+                "verify/data-hash-rows?data_hash={empty_data_hash}&limit={DATA_HASH_ROWS_SAMPLE}"
+            ),
+        )?;
+        if page.rows.is_empty() {
+            return Ok(CheckResult::pass_with_detail(
+                1,
+                format!("no cell_by_data_hash row under the hash of empty data {empty_data_hash}"),
+            ));
+        }
+        let mut details: Vec<String> = page
+            .rows
+            .iter()
+            .map(|row| {
+                format!(
+                    "{}:{} filed at block {} ({}, data_size {})",
+                    row.tx_hash,
+                    row.output_index,
+                    row.created_at_block,
+                    if row.live { "live" } else { "consumed" },
+                    row.data_size
+                )
+            })
+            .collect();
+        if !page.complete {
+            details.push(format!(
+                "more rows follow the first {}: the index files empty-data cells",
+                page.rows.len()
+            ));
+        }
+        Ok(CheckResult::fail(
+            1,
+            vec![Finding {
+                entity: format!("cell_by_data_hash {empty_data_hash}"),
+                details,
+            }],
+        ))
     }
 }
 
@@ -6430,6 +6514,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DeepForkClear),
         Box::new(DaoStatisticsSane),
         Box::new(GenesisBaselineBurntInvariant),
+        Box::new(DataHashIndexFilesOnlyCellsWithData),
         // Sampling
         Box::new(BlockHashRoundtrip),
         Box::new(BlockParentChain),
@@ -6665,12 +6750,13 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 43);
+        assert_eq!(checks.len(), 44);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(names.len(), unique.len(), "Duplicate check names found");
         assert!(names.contains(&"genesis_baseline_burnt_invariant"));
+        assert!(names.contains(&"data_hash_index_only_cells_with_data"));
         assert!(names.contains(&"chart_block_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_distribution_sane"));
         assert!(names.contains(&"chart_epoch_time_length_sane"));
@@ -6776,7 +6862,7 @@ mod tests {
             .iter()
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
-        assert_eq!(fast_count, 7);
+        assert_eq!(fast_count, 8);
         assert_eq!(sampling_count, 36);
     }
 
@@ -6920,6 +7006,71 @@ mod tests {
         assert!(
             detail.contains("skipped"),
             "the skip must be noted, not silent: {detail}"
+        );
+    }
+
+    fn mount_data_hash_rows(
+        runtime: &tokio::runtime::Runtime,
+        server: &MockServer,
+        body: serde_json::Value,
+    ) {
+        let empty = format!(
+            "0x{}",
+            hex::encode(crate::parser::script::ScriptParser::compute_data_hash(&[]))
+        );
+        runtime.block_on(async {
+            Mock::given(method("GET"))
+                .and(path("/api/v1/verify/data-hash-rows"))
+                .and(query_param("data_hash", empty.as_str()))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .mount(server)
+                .await;
+        });
+    }
+
+    #[test]
+    fn data_hash_index_check_passes_when_the_empty_data_hash_names_no_row() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_data_hash_rows(
+            &runtime,
+            &server,
+            json!({"dataHash": "0x", "rows": [], "complete": true}),
+        );
+
+        let result = DataHashIndexFilesOnlyCellsWithData
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+
+        assert!(result.passed(), "{:?}", result.findings);
+    }
+
+    /// The bulk build used to file every empty-data cell under the hash of
+    /// empty data; such a store must fail, naming the cells.
+    #[test]
+    fn data_hash_index_check_fails_naming_empty_data_cells_it_filed() {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let server = runtime.block_on(MockServer::start());
+        mount_data_hash_rows(
+            &runtime,
+            &server,
+            json!({
+                "dataHash": "0x",
+                "rows": [{"txHash": "0xc0c0", "outputIndex": 0, "createdAtBlock": 100, "live": true, "dataSize": 0}],
+                "complete": false,
+            }),
+        );
+
+        let result = DataHashIndexFilesOnlyCellsWithData
+            .run(&mock_ctx(&server), &ProgressReporter::new(None))
+            .unwrap();
+
+        assert!(!result.passed());
+        let details = result.findings[0].details.join("\n");
+        assert!(
+            details.contains("0xc0c0:0 filed at block 100 (live, data_size 0)")
+                && details.contains("more rows follow"),
+            "{details}"
         );
     }
 

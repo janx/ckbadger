@@ -248,7 +248,7 @@ exits, and purge preserves the lock files.
 Three testing systems: data integrity verification, per-endpoint benchmarking, and concurrent load stress testing. See [docs/TESTING.md](docs/TESTING.md) for full details.
 
 ```bash
-ckbadger verify --depth fast                       # Data integrity (7 checks, seconds)
+ckbadger verify --depth fast                       # Data integrity (8 checks, seconds)
 make bench                                         # Per-endpoint latency baseline
 make stress STRESS_ARGS="--scenario api --auto-ramp"  # Find API breaking point
 ```

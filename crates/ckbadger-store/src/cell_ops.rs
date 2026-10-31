@@ -12,6 +12,26 @@ use crate::types::{
 use crate::bytes_to_hex;
 use crate::types::{LockScriptEntry, TokenCellStats};
 
+/// One stored `cell_by_data_hash` row and the cell it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataHashIndexRow {
+    pub tx_hash: Vec<u8>,
+    pub output_index: i16,
+    /// The block the row is filed under (the cell's creation block).
+    pub created_at_block: i64,
+    pub live: bool,
+    /// The named cell's stored data size.
+    pub data_size: i32,
+}
+
+/// A bounded page of [`DataHashIndexRow`]s under one data hash.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataHashIndexPage {
+    pub rows: Vec<DataHashIndexRow>,
+    /// No further row exists under the data hash.
+    pub complete: bool,
+}
+
 /// The three `hash(32) + block(8 BE) + outpoint(34)` cell indexes, and what a
 /// row's lifetime is bound to.
 #[derive(Debug, Clone, Copy)]
@@ -38,6 +58,27 @@ impl CellIndex {
 
     fn keeps_consumed_rows(self) -> bool {
         matches!(self, Self::DataHash)
+    }
+
+    /// `(block, tx_hash, output_index)` of one row; any width but 74 is
+    /// corruption.
+    fn decode_row_key(self, key: &[u8]) -> anyhow::Result<(i64, Vec<u8>, i16)> {
+        if key.len() != keys::CELL_INDEX_KEY_SIZE {
+            anyhow::bail!(
+                "{} index row has {} bytes, expected {}: key=0x{}",
+                self.cf_name(),
+                key.len(),
+                keys::CELL_INDEX_KEY_SIZE,
+                bytes_to_hex(key)
+            );
+        }
+        let block_number = i64::from_be_bytes(
+            key[32..40]
+                .try_into()
+                .expect("a 74-byte cell index key has an 8-byte block field"),
+        );
+        let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+        Ok((block_number, tx_hash, output_index))
     }
 
     fn expected_cell(self) -> &'static str {
@@ -572,21 +613,7 @@ impl CkbadgerStore {
                     continue;
                 }
             }
-            if key.len() != keys::CELL_INDEX_KEY_SIZE {
-                anyhow::bail!(
-                    "{} index row has {} bytes, expected {}: key=0x{}",
-                    index.cf_name(),
-                    key.len(),
-                    keys::CELL_INDEX_KEY_SIZE,
-                    bytes_to_hex(&key)
-                );
-            }
-            let block_number = i64::from_be_bytes(
-                key[32..40]
-                    .try_into()
-                    .expect("a 74-byte cell index key has an 8-byte block field"),
-            );
-            let (tx_hash, output_index) = keys::decode_outpoint(&key[40..74]);
+            let (block_number, tx_hash, output_index) = index.decode_row_key(&key)?;
             match self.get_cell(&tx_hash, output_index, cells_store)? {
                 Some(cell) => {
                     results.push((tx_hash, output_index, cell));
@@ -633,6 +660,61 @@ impl CkbadgerStore {
             after_key,
             cells_store,
         )
+    }
+
+    /// The stored `cell_by_data_hash` rows under one data hash, live and
+    /// consumed alike, for the verifier (at most `limit`; `complete` says no
+    /// further row exists). Each row must name a live or a consumed cell — a
+    /// dangling or malformed row is an error naming it, as in
+    /// [`Self::list_cells_by_data_hash`].
+    pub fn list_data_hash_index_rows(
+        &self,
+        data_hash: &[u8],
+        limit: usize,
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<DataHashIndexPage> {
+        let mut rows = Vec::new();
+        let mut complete = true;
+        let iter = self.iterator_cf(
+            self.cf_cell_by_data_hash(),
+            rocksdb::IteratorMode::From(data_hash, rocksdb::Direction::Forward),
+        );
+        for item in iter {
+            let (key, _) = item.map_err(|e| {
+                anyhow::anyhow!("failed to iterate cell_by_data_hash for the verify export: {e}")
+            })?;
+            if !key.starts_with(data_hash) {
+                break;
+            }
+            if rows.len() == limit {
+                complete = false;
+                break;
+            }
+            let (block_number, tx_hash, output_index) = CellIndex::DataHash.decode_row_key(&key)?;
+            let (cell, live) = match self.get_cell(&tx_hash, output_index, cells_store)? {
+                Some(cell) => (cell, true),
+                None => match self.get_consumed_cell(&tx_hash, output_index, cells_store)? {
+                    Some(cell) => (cell, false),
+                    None => anyhow::bail!(
+                        "{} index row names no {} cell: key=0x{}, outpoint=0x{}:{}, block={}",
+                        CellIndex::DataHash.cf_name(),
+                        CellIndex::DataHash.expected_cell(),
+                        bytes_to_hex(&key),
+                        bytes_to_hex(&tx_hash),
+                        output_index,
+                        block_number
+                    ),
+                },
+            };
+            rows.push(DataHashIndexRow {
+                tx_hash,
+                output_index,
+                created_at_block: block_number,
+                live,
+                data_size: cell.data_size,
+            });
+        }
+        Ok(DataHashIndexPage { rows, complete })
     }
 
     /// Find a cell (live or consumed) by data hash.

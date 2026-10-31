@@ -1116,3 +1116,115 @@ async fn indexed_calendar_shares_the_response_byte_budget_with_daily_rows() {
     );
     assert!(serde_json::to_vec(&with_calendar).unwrap().len() <= 4 * 1024 * 1024);
 }
+
+// ── `GET /api/v1/verify/data-hash-rows` (D-2) ─────────────────────────────
+
+fn data_cell(data_size: i32, data_hash: &[u8]) -> ckbadger_store::LiveCellInfo {
+    ckbadger_store::LiveCellInfo {
+        capacity: 100_00000000,
+        lock_script_hash: vec![0x11; 32],
+        lock_code_hash: vec![0x22; 32],
+        lock_hash_type: 1,
+        lock_args: vec![],
+        type_script_hash: None,
+        type_code_hash: None,
+        type_hash_type: None,
+        type_args: None,
+        data_size,
+        occupied_capacity: 61_00000000,
+        udt_amount: None,
+        data_hash: Some(data_hash.to_vec()),
+    }
+}
+
+/// A live and a consumed cell carrying the same data, indexed as the writers
+/// index them (the consumed cell keeps its data-hash row).
+fn seed_data_hash_rows(store: &Arc<CkbadgerStore>, data_hash: &[u8]) {
+    let mut batch = StoreBatch::new(store);
+    batch.put_cell(&[0x01; 32], 0, &data_cell(6, data_hash), 5);
+    batch.put_cell_by_data_hash(data_hash, 5, &[0x01; 32], 0);
+    batch.put_cell_payload_by_outpoint(&[0x02; 32], 1, &data_cell(6, data_hash));
+    batch.put_consumed_cell(&[0x02; 32], 1, &data_cell(6, data_hash), 7, 9);
+    batch.put_cell_by_data_hash(data_hash, 7, &[0x02; 32], 1);
+    batch.commit().unwrap();
+}
+
+#[tokio::test]
+async fn data_hash_rows_lists_live_and_consumed_rows_with_their_data_size() {
+    let store = test_store();
+    let data_hash = [0xda; 32];
+    seed_data_hash_rows(&store, &data_hash);
+    let app = create_router_without_warmup(test_config(store));
+
+    let (status, body) = get_json(
+        &app,
+        &format!("/verify/data-hash-rows?data_hash={}", hex0x(&data_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "dataHash": hex0x(&data_hash),
+            "rows": [
+                {"txHash": hex0x(&[0x01; 32]), "outputIndex": 0, "createdAtBlock": 5, "live": true, "dataSize": 6},
+                {"txHash": hex0x(&[0x02; 32]), "outputIndex": 1, "createdAtBlock": 7, "live": false, "dataSize": 6},
+            ],
+            "complete": true,
+        })
+    );
+
+    let (status, body) = get_json(
+        &app,
+        &format!(
+            "/verify/data-hash-rows?data_hash={}&limit=1",
+            hex0x(&data_hash)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["rows"].as_array().unwrap().len(), 1, "{body}");
+    assert_eq!(
+        body["complete"], false,
+        "a bounded answer says it is partial"
+    );
+}
+
+#[tokio::test]
+async fn data_hash_rows_reports_a_dangling_row_by_name() {
+    let store = test_store();
+    let data_hash = [0xdb; 32];
+    let mut batch = StoreBatch::new(&store);
+    batch.put_cell_by_data_hash(&data_hash, 11, &[0x03; 32], 2);
+    batch.commit().unwrap();
+    let app = create_router_without_warmup(test_config(store));
+
+    let (status, body) = get_json(
+        &app,
+        &format!("/verify/data-hash-rows?data_hash={}", hex0x(&data_hash)),
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    let message = body.to_string();
+    assert!(
+        message.contains("cell_by_data_hash index row names no live or consumed cell")
+            && message.contains(&format!("outpoint=0x{}:2", hex::encode([0x03; 32])))
+            && message.contains("block=11"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn data_hash_rows_rejects_a_limit_over_the_cap() {
+    let app = create_router_without_warmup(test_config(test_store()));
+    let (status, body) = get_json(
+        &app,
+        &format!(
+            "/verify/data-hash-rows?data_hash={}&limit=65",
+            hex0x(&[0xdc; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
