@@ -9940,9 +9940,14 @@ mod tests {
 
     /// J15: folding transactions in runs (one bucket lookup per run) writes
     /// byte-for-byte the rows of folding every transaction into its day and
-    /// its hour separately — the pre-J15 rule, kept here as the oracle —
-    /// across hours, days and batches, with cellbase-only blocks, repeated
-    /// and prefix-only participants, protocol actions and script calls.
+    /// its hour separately — the pre-J15 rule, kept here as the oracle, which
+    /// buckets by the block's CHAIN time — on the production batch path:
+    /// one batch with hour and day boundaries inside it, and three sealing
+    /// batches. The fixture has raw timestamps behind the chain time (two
+    /// blocks share a chain time, one raw timestamp a day behind), repeated
+    /// and prefix-only participants, cellbase-only blocks, protocol actions
+    /// and script calls, and buckets whose only participants are cellbase or
+    /// prefix-only — which get stats but NO address-set row.
     #[test]
     fn activity_runs_write_the_rows_of_per_transaction_folding() {
         use ckbadger_store::types::{
@@ -9951,22 +9956,25 @@ mod tests {
         };
         const HOUR: i64 = 3_600_000;
         const DAY: i64 = 24 * HOUR;
-        // 2023-11-15 06:13:20 UTC+8: three blocks in one hour, one in the
-        // next hour, two on the next day.
+        // 2023-11-15 06:13:20 UTC+8.
         let base = 1_700_000_000_000;
+        // (number, raw timestamp, chain time): 101 shares 100's chain time
+        // with a raw timestamp seven hours (a UTC+8 day) behind it; 106
+        // shares 105's with one 40 minutes (an hour) behind.
         let blocks: Vec<facts::BlockFacts> = [
-            (100, base),
-            (101, base + 10_000),
-            (102, base + 20_000),
-            (103, base + HOUR),
-            (104, base + DAY),
-            (105, base + DAY + 5_000),
+            (100, base, base),
+            (101, base - 7 * HOUR, base),
+            (102, base + 20_000, base + 20_000),
+            (103, base + HOUR, base + HOUR),
+            (104, base + 2 * HOUR, base + 2 * HOUR),
+            (105, base + DAY, base + DAY),
+            (106, base + DAY - 40 * 60_000, base + DAY),
         ]
         .into_iter()
-        .map(|(number, t)| facts::BlockFacts {
+        .map(|(number, timestamp_ms, chain_time_ms)| facts::BlockFacts {
             number,
-            timestamp_ms: t,
-            chain_time_ms: t,
+            timestamp_ms,
+            chain_time_ms,
             ..Default::default()
         })
         .collect();
@@ -10036,15 +10044,28 @@ mod tests {
             tx(2, 1, &[0x05], true, &[("utxoswap", "swap")], TAG_PROTOCOL),
             tx(3, 0, &[0x01], false, &[], 0),
             tx(3, 1, &[0x02, 0x06], false, &[], 0),
+            // Hour 08: a cellbase and a prefix-only tx — no Lock address.
             tx(4, 0, &[0x01], false, &[], 0),
+            tx(4, 1, &[0x08], true, &[("utxoswap", "swap")], TAG_PROTOCOL),
+            // Day two: likewise only a cellbase, a prefix-only tx and a
+            // cellbase-only block.
             tx(5, 0, &[0x01], false, &[], 0),
-            tx(5, 1, &[0x07], false, &[], TAG_TYPE_CALL),
+            tx(5, 1, &[0x09], true, &[("utxoswap", "swap")], TAG_TYPE_CALL),
+            tx(6, 0, &[0x01], false, &[], 0),
         ];
 
-        // The oracle: every transaction folded into its day and its hour.
+        // The oracle: every transaction folded into its block's chain-time
+        // day and hour.
+        let chain_time_of = |number: i64| {
+            blocks
+                .iter()
+                .find(|block| block.number == number)
+                .expect("fixture block")
+                .chain_time_ms
+        };
         let mut oracle = ActivityStatsAccumulator::default();
         for tx in &list {
-            let t = tx.timestamp;
+            let t = chain_time_of(tx.block_number);
             let date = ckbadger_common::stats_bucket::stats_date_key(t).unwrap();
             let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(t).unwrap();
             oracle
@@ -10074,32 +10095,58 @@ mod tests {
                 }
             }
         }
-        let expected = oracle.build_rows().unwrap();
-        assert_eq!(
-            expected.len(),
-            2 * 2 + 3 * 2,
-            "two days and three hours, each with stats and an address set"
-        );
-
-        let mut one_shot = ActivityStatsAccumulator::default();
-        one_shot.apply_tx_actions(&list).unwrap();
-        assert_eq!(one_shot.build_rows().unwrap(), expected, "one batch");
-
-        // Three batches: the first hour seals after the second batch, the
-        // first day and the second hour after the third.
-        let mut batched = ActivityStatsAccumulator::default();
-        let mut actual = batched.apply_batch(&blocks[0..3], &list[0..7]).unwrap();
-        actual.extend(batched.apply_batch(&blocks[3..4], &list[7..9]).unwrap());
-        actual.extend(batched.apply_batch(&blocks[4..6], &list[9..]).unwrap());
-        assert!(!actual.is_empty(), "the batches seal rows");
-        actual.extend(batched.build_rows().unwrap());
-        let mut expected_sorted = expected;
         let sort_rows = |rows: &mut Vec<materialize::MaterializedRow>| {
             rows.sort_by(|a, b| (a.cf_name, &a.key).cmp(&(b.cf_name, &b.key)));
         };
+        let mut expected = oracle.build_rows().unwrap();
+        sort_rows(&mut expected);
+
+        let key = |prefix: u8, bucket: String| keys::encode_stats_key(prefix, bucket.as_bytes());
+        let day = |t: i64| ckbadger_common::stats_bucket::stats_date_key(t).unwrap();
+        let hour = |t: i64| ckbadger_common::stats_bucket::stats_hour_utc8_key(t).unwrap();
+        let row_keys: Vec<Vec<u8>> = expected.iter().map(|row| row.key.clone()).collect();
+        use keys::stats_prefix::{
+            ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_SET,
+        };
+        let mut wanted = vec![
+            key(ACTIVITY_DAILY, day(base)),
+            key(ACTIVITY_DAILY_ADDR_SET, day(base)),
+            key(ACTIVITY_DAILY, day(base + DAY)),
+            key(ACTIVITY_HOURLY, hour(base)),
+            key(ACTIVITY_HOURLY_ADDR_SET, hour(base)),
+            key(ACTIVITY_HOURLY, hour(base + HOUR)),
+            key(ACTIVITY_HOURLY_ADDR_SET, hour(base + HOUR)),
+            key(ACTIVITY_HOURLY, hour(base + 2 * HOUR)),
+            key(ACTIVITY_HOURLY, hour(base + DAY)),
+        ];
+        wanted.sort();
+        let mut got = row_keys.clone();
+        got.sort();
+        assert_eq!(
+            got, wanted,
+            "chain-time buckets only (none for 101's or 106's raw hour or day), and no \
+             address-set row for hour 08 or day two, whose only participants are \
+             cellbase or prefix-only"
+        );
+
+        // Production path, one batch: the hour and day boundaries fall
+        // inside it, so it lands several runs and seals the first day.
+        let mut single = ActivityStatsAccumulator::default();
+        let mut actual = single.apply_batch(&blocks, &list).unwrap();
+        assert!(!actual.is_empty(), "the batch seals day one");
+        actual.extend(single.build_rows().unwrap());
         sort_rows(&mut actual);
-        sort_rows(&mut expected_sorted);
-        assert_eq!(actual, expected_sorted, "three batches with sealing");
+        assert_eq!(actual, expected, "one batch");
+
+        // Three batches: hours 06 and 07 seal after the second, day one and
+        // hour 08 after the third.
+        let mut batched = ActivityStatsAccumulator::default();
+        let mut actual = batched.apply_batch(&blocks[0..3], &list[0..7]).unwrap();
+        actual.extend(batched.apply_batch(&blocks[3..5], &list[7..11]).unwrap());
+        actual.extend(batched.apply_batch(&blocks[5..7], &list[11..]).unwrap());
+        actual.extend(batched.build_rows().unwrap());
+        sort_rows(&mut actual);
+        assert_eq!(actual, expected, "three batches with sealing");
     }
 
     /// J15: a transaction reaches its collection's `collection_activity_daily`
