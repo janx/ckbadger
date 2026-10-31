@@ -181,7 +181,8 @@ export const handlers = [
   http.get(`${API_BASE}/statistics/network`, () => {
     return HttpResponse.json({
       latestBlock: 1000000,
-      avgBlockTime: '8.5',
+      // The API's own form: exact ratio, two decimals, then "s" (statistics.rs).
+      avgBlockTime: '8.50s',
       hashRate: '1.5 PH/s',
       difficulty: '0x1000000000',
       epoch: '100(50/1000)',
