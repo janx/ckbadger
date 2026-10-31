@@ -319,7 +319,7 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         &config.ckb_network,
     )
     .unwrap();
-    Arc::new(AppState {
+    let state = Arc::new(AppState {
         store: config.store,
         append_only_store: config.append_only_store,
         network_store: config.network_store,
@@ -353,7 +353,20 @@ pub fn test_app_state(config: AppConfig) -> Arc<AppState> {
         dao_capacity_memo: Arc::new(ckbadger_api::routes::DaoCapacityMemo::new()),
         fork_view: Arc::new(ckbadger_api::cache::TipMemo::new()),
         fiber_view: Arc::new(ckbadger_api::cache::TipMemo::new()),
-    })
+        store_readiness: Arc::new(ckbadger_api::store_readiness::StoreReadiness::new()),
+    });
+    // The first catch-up production runs before it serves (on these primaries
+    // a no-op advance), so routers over this state pass the readiness gate.
+    state
+        .store_readiness
+        .run_round(&ckbadger_api::store_readiness::ProcessSecondaries::of(
+            &state,
+        ));
+    state
+        .store_readiness
+        .check()
+        .expect("test stores catch up on the first round");
+    state
 }
 
 pub fn create_router_without_warmup(config: AppConfig) -> axum::Router {
@@ -372,9 +385,10 @@ pub async fn create_router_with_state(state: Arc<AppState>) -> axum::Router {
 /// can install a tx-pool snapshot (or any other in-memory state) first.
 pub fn router_from_state(state: Arc<AppState>) -> axum::Router {
     axum::Router::new()
-        .nest("/api/v1", api_routes())
-        // Same read-view pin production mounts, so integration tests exercise
-        // handlers under a pinned view rather than a bare router.
+        // Same store-readiness gate and read-view pin production mounts, so
+        // integration tests exercise handlers behind both rather than a bare
+        // router.
+        .nest("/api/v1", ckbadger_api::api_v1_routes(&state))
         .layer(axum::middleware::from_fn(ckbadger_api::pin_read_view))
         .with_state(state)
 }

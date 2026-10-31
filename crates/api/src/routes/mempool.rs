@@ -10,12 +10,18 @@ use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
 use crate::utils::exact_fee::{median_rate, FeeRate};
 use crate::AppState;
 
-pub fn routes() -> Router<Arc<AppState>> {
+/// Routes answered from the node's RPC alone: they read no secondary store,
+/// so they stay up while the store-readiness gate is closed.
+pub fn node_rpc_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/mempool/info", get(get_mempool_info))
         .route("/mempool/transactions", get(get_mempool_transactions))
         .route("/mempool/blocks", get(get_mempool_blocks))
-        .route("/mempool/pending-proposals", get(get_pending_proposals))
+}
+
+/// Routes that read the domain store (the persisted proposal zones).
+pub fn store_routes() -> Router<Arc<AppState>> {
+    Router::new().route("/mempool/pending-proposals", get(get_pending_proposals))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

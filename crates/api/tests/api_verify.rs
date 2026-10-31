@@ -1011,6 +1011,9 @@ async fn indexed_calendar_and_entities_share_the_secondary_view_without_writes()
     let secondary = Arc::new(
         CkbadgerStore::open_test_unified_secondary(&primary_path, &secondary_path).unwrap(),
     );
+    // The router catches the secondary up once before it serves (J7); the
+    // indexer's next block lands after that, so only the next catch-up shows it.
+    let app = create_router_without_warmup(test_config(secondary.clone()));
     seed_calendar_headers(&primary, &[(1, utc_ms("2026-01-02T00:00:00Z"))]);
     primary
         .put_token_daily_delta(
@@ -1026,7 +1029,6 @@ async fn indexed_calendar_and_entities_share_the_secondary_view_without_writes()
         .unwrap();
     primary.flush_all_memtables().unwrap();
     let before = store_files(&primary_path);
-    let app = create_router_without_warmup(test_config(secondary.clone()));
     let (status, body) = post(app.clone(), calendar_request()).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["anchor"]["blockNumber"], 0);

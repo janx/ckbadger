@@ -38,6 +38,7 @@ use cycles::CyclesClient;
 use middleware::IpRateLimitLayer;
 use pool::PoolMirror;
 use response::{ApiError, ApiRouteError};
+use store_readiness::StoreReadiness;
 use warmup::SporeCache;
 use ws::WsManager;
 
@@ -125,6 +126,9 @@ pub struct AppState {
     pub fork_view: Arc<cache::TipMemo<routes::ForkView>>,
     /// The Fiber channels and network of one canonical tip (`routes::FiberView`).
     pub fiber_view: Arc<cache::TipMemo<routes::FiberView>>,
+    /// Whether the secondaries have caught up enough to serve data (J7): set by
+    /// the store refresh loop, checked by the one gate over the store routes.
+    pub store_readiness: Arc<StoreReadiness>,
 }
 
 impl AppState {
@@ -291,7 +295,12 @@ pub struct AppConfig {
 /// - `defer == false` (tests / embedded use without loops): no loop will seed
 ///   the caches, so run the warmup synchronously before the first request is
 ///   served, surfacing progress via the `cache_warmup` task.
+///
+/// Either way nothing is warmed before the secondaries' first successful
+/// catch-up (J7): a freshly opened secondary's column families can disagree,
+/// and a warmup invariant would then fail on healthy data.
 pub async fn dispatch_initial_warmup(state: Arc<AppState>, defer: bool) {
+    state.store_readiness.caught_up_once().await;
     if defer {
         tracing::info!(
             "API accepting connections; asset caches warming in background via refresh loops \
@@ -328,10 +337,6 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
 
     let cache = CacheBackend::new();
     tracing::info!("In-memory cache initialized");
-
-    let broadcaster_store = config.store.clone();
-    let broadcaster_ao_store = config.append_only_store.clone();
-    let broadcaster_rpc_url = config.ckb_rpc_url.clone();
 
     let cycles_client = CyclesClient::new(config.cycles_request_dir.clone());
 
@@ -386,9 +391,26 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
         dao_evidence: Arc::new(cache::TipMemo::new()),
         fork_view: Arc::new(cache::TipMemo::new()),
         fiber_view: Arc::new(cache::TipMemo::new()),
+        store_readiness: Arc::new(StoreReadiness::new()),
     });
 
-    dispatch_initial_warmup(state.clone(), config.start_background_tasks).await;
+    // The refresh loop's first round is the initial catch-up: it runs at once
+    // and repeats every second until it succeeds. Until then the store routes
+    // answer 503 `store_catching_up` and nothing below reads a secondary.
+    let secondaries: Arc<dyn store_readiness::SecondaryCatchUp> = match config.secondary_catch_up {
+        Some(injected) => injected,
+        None => Arc::new(store_readiness::ProcessSecondaries::of(&state)),
+    };
+    tokio::spawn(store_readiness::run_store_refresh_loop(
+        state.store_readiness.clone(),
+        secondaries,
+    ));
+
+    if config.start_background_tasks {
+        tokio::spawn(start_background_tasks(state.clone(), pool_poll_interval));
+    } else {
+        dispatch_initial_warmup(state.clone(), false).await;
+    }
 
     let cors = CorsLayer::new()
         .allow_origin(Any)
@@ -404,59 +426,6 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
         rate_limit_per_second,
         rate_limit_burst
     );
-
-    if config.start_background_tasks {
-        let warmup_state = state.clone();
-        tokio::spawn(async move {
-            warmup::warmup_chart_caches(warmup_state).await;
-        });
-
-        let broadcaster_ws = state.ws_manager.clone();
-        let broadcaster_network = state.ckb_network.clone();
-        tokio::spawn(async move {
-            ws::start_block_broadcaster(
-                broadcaster_store,
-                broadcaster_ao_store,
-                broadcaster_ws,
-                broadcaster_rpc_url,
-                broadcaster_network,
-            )
-            .await;
-        });
-
-        let reorg_broadcaster_store = state.store.clone();
-        let reorg_broadcaster_ws = state.ws_manager.clone();
-        tokio::spawn(async move {
-            ws::start_reorg_broadcaster(reorg_broadcaster_store, reorg_broadcaster_ws).await;
-        });
-
-        let assets_state = state.clone();
-        tokio::spawn(async move {
-            warmup::refresh_assets_cache_loop(assets_state).await;
-        });
-
-        let script_cache_state = state.clone();
-        tokio::spawn(async move {
-            warmup::refresh_script_cache_loop(script_cache_state).await;
-        });
-
-        let address_cache_state = state.clone();
-        tokio::spawn(async move {
-            warmup::refresh_address_cache_loop(address_cache_state).await;
-        });
-
-        let pool_mirror_state = state.clone();
-        tokio::spawn(async move {
-            pool::refresh_pool_mirror_loop(pool_mirror_state, pool_poll_interval).await;
-        });
-    }
-
-    // Spawn periodic store refresh for secondary instances.
-    let secondaries: Arc<dyn store_readiness::SecondaryCatchUp> = match config.secondary_catch_up {
-        Some(injected) => injected,
-        None => Arc::new(store_readiness::ProcessSecondaries::of(&state)),
-    };
-    tokio::spawn(store_readiness::run_store_refresh_loop(secondaries));
 
     let slow_threshold = std::time::Duration::from_millis(config.slow_request_threshold_ms);
 
@@ -475,10 +444,12 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
         .on_failure(DefaultOnFailure::new().level(Level::ERROR));
 
     let router = Router::new()
-        .nest("/api/v1", routes::api_routes())
+        .nest("/api/v1", api_v1_routes(&state))
         .route("/ws", get(ws::ws_handler))
         // Innermost layer: pin the read view around handler execution only,
-        // after rate limiting has already rejected what it will reject.
+        // after rate limiting has already rejected what it will reject. The
+        // store-readiness gate is a route layer, so it runs inside this pin
+        // and its verdict and the handler's reads share one view.
         .layer(axum::middleware::from_fn(pin_read_view))
         .layer(rate_limit_layer)
         .layer(cors)
@@ -490,6 +461,44 @@ pub async fn try_create_app(config: AppConfig) -> anyhow::Result<(Arc<AppState>,
         .layer(trace_layer)
         .with_state(state.clone());
     Ok((state, router))
+}
+
+/// Production's background tasks: chart warmup, the asset/script/address
+/// cache loops, the WebSocket broadcasters and the tx-pool mirror. Each reads
+/// the secondaries, so none starts before their first successful catch-up.
+async fn start_background_tasks(state: Arc<AppState>, pool_poll_interval: std::time::Duration) {
+    dispatch_initial_warmup(state.clone(), true).await;
+
+    tokio::spawn(warmup::warmup_chart_caches(state.clone()));
+    tokio::spawn(ws::start_block_broadcaster(
+        state.store.clone(),
+        state.append_only_store.clone(),
+        state.ws_manager.clone(),
+        state.ckb_rpc_url.clone(),
+        state.ckb_network.clone(),
+    ));
+    tokio::spawn(ws::start_reorg_broadcaster(
+        state.store.clone(),
+        state.ws_manager.clone(),
+    ));
+    tokio::spawn(warmup::refresh_assets_cache_loop(state.clone()));
+    tokio::spawn(warmup::refresh_script_cache_loop(state.clone()));
+    tokio::spawn(warmup::refresh_address_cache_loop(state.clone()));
+    tokio::spawn(pool::refresh_pool_mirror_loop(state, pool_poll_interval));
+}
+
+/// Every `/api/v1` route, the ones that read a secondary behind the
+/// store-readiness gate (503 `store_catching_up` until the stores have caught
+/// up, see [`store_readiness`]). Node-RPC-only routes are not gated.
+///
+/// Public so test routers mount the production gate too.
+pub fn api_v1_routes(state: &AppState) -> Router<Arc<AppState>> {
+    routes::store_routes()
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.store_readiness.clone(),
+            store_readiness::require_caught_up_stores,
+        ))
+        .merge(routes::node_rpc_routes())
 }
 
 /// Unwrap wrapper for tests and callers that already assume valid metadata.

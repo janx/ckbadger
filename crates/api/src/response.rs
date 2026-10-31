@@ -55,6 +55,17 @@ impl ApiError {
         )
     }
 
+    /// The API's secondary stores have not caught up with the indexer: before
+    /// the first successful catch-up, or after repeated failed ones
+    /// (`store_readiness`). Transient: the refresh loop keeps retrying, and
+    /// the message names the store and its last error.
+    pub fn store_catching_up(message: impl Into<String>) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self::new("store_catching_up", message)),
+        )
+    }
+
     /// The resource exists but cannot be served YET: something it is derived
     /// from has not reached the node (e.g. an uncommitted transaction's
     /// parent). Transient by definition, so the caller retries — the response
