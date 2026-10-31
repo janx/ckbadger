@@ -56,9 +56,27 @@ pub(crate) struct SporeBatchState {
     dotcell_namespaces_loaded: bool,
     dotcell_rings: HashMap<[u8; 20], DotCellRingRoot>,
     pub(super) undo_seq_by_block: SharedUndoSeq,
+    /// `.bit Cell` identity entry transitions, in write order, for the derived
+    /// `bit_cell_by_account` index.
+    bit_cell_transitions: Vec<IdentityTransition>,
+}
+
+/// One identity entry transition: the entry before (`None` = created) and
+/// after a write in `block`.
+#[derive(Debug, Clone)]
+pub struct IdentityTransition {
+    pub block: i64,
+    pub identity_id: Vec<u8>,
+    pub old: Option<IdentityEntry>,
+    pub new: IdentityEntry,
 }
 
 impl SporeBatchState {
+    /// The `.bit Cell` transitions this batch made, in write order.
+    pub(crate) fn take_bit_cell_transitions(&mut self) -> Vec<IdentityTransition> {
+        std::mem::take(&mut self.bit_cell_transitions)
+    }
+
     fn get_spore(&mut self, store: &CkbadgerStore, spore_id: &[u8]) -> Result<Option<ObjectEntry>> {
         if let Some(cached) = self.spores.get(spore_id) {
             return Ok(cached.clone());
@@ -1069,6 +1087,12 @@ impl BatchWriter {
             },
         };
         batch.put_identity(identity_id, &identity);
+        state.bit_cell_transitions.push(IdentityTransition {
+            block: block_number,
+            identity_id: identity_id.to_vec(),
+            old: existing.clone(),
+            new: identity.clone(),
+        });
         state.put_identity(identity_id, identity);
         self.put_object_outpoint_rows(
             identity_id,
@@ -1171,9 +1195,18 @@ impl BatchWriter {
             );
             let old_owner = identity.owner_lock_hash.clone();
             let identity_standard = identity.standard;
+            let before = identity.clone();
             identity.is_live = false;
             identity.owner_lock_hash = None;
             batch.put_identity(spore_id, &identity);
+            if identity_standard == IdentityStandard::BitCell {
+                state.bit_cell_transitions.push(IdentityTransition {
+                    block: block_number,
+                    identity_id: spore_id.to_vec(),
+                    old: Some(before),
+                    new: identity.clone(),
+                });
+            }
             state.put_identity(spore_id, identity);
 
             // Update the aggregate belonging to the stored identity standard.
@@ -1676,6 +1709,120 @@ mod tests {
             rollback_to(&store, 199);
             assert!(store.get_identity(&identity_id).unwrap().is_none());
             assert_no_outpoint_rows(&store, &writer, &identity_id, &tx_hash, ".bit Cell");
+        }
+
+        fn bit_cell_index_rows(store: &CkbadgerStore) -> Vec<Vec<u8>> {
+            let mut rows = Vec::new();
+            store
+                .scan_derived_prefix(ckbadger_store::CF_BIT_CELL_BY_ACCOUNT, &[], |key, value| {
+                    assert_eq!(value, vec![1]);
+                    rows.push(key.to_vec());
+                    Ok(())
+                })
+                .unwrap();
+            rows
+        }
+
+        /// One live batch through the production writer functions: the
+        /// entity writes, then the derived deltas of the transitions they
+        /// reported, in the same domain batch.
+        fn write_bit_cell_block(
+            store: &Arc<CkbadgerStore>,
+            writer: &BatchWriter,
+            block: i64,
+            write: impl FnOnce(&mut StoreBatch, &mut SporeBatchState) -> Result<()>,
+        ) {
+            let mut batch = StoreBatch::new(writer.store());
+            let mut state = new_state(writer);
+            write(&mut batch, &mut state).unwrap();
+            let transitions = state.take_bit_cell_transitions();
+            let blocks = [crate::derive::LiveBlockPoint {
+                number: block,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1,
+            }];
+            let ctx = crate::derive::LiveDeriveCtx {
+                store: store.as_ref(),
+                blocks: &blocks,
+                dao_transitions: &[],
+                object_collection_activity_rows: &[],
+                identity_transitions: &transitions,
+            };
+            let failures = crate::derive::apply_live_batch(
+                store.as_ref(),
+                &crate::derive::registry(),
+                &ctx,
+                &mut batch,
+                &state.undo_seq_by_block,
+            )
+            .unwrap();
+            assert!(failures.is_empty(), "{failures:?}");
+            batch.commit().unwrap();
+        }
+
+        /// L3 (J3): the `.bit Cell` transitions the live writer reports keep
+        /// `bit_cell_by_account` exact — a mint adds account → cell, a cell
+        /// re-created with data naming another account moves to it, a consume
+        /// removes it — each equal to a from-scratch rebuild, and undo replay
+        /// restores the rows of every earlier block.
+        #[test]
+        fn bit_cell_transitions_maintain_the_account_index() {
+            use ckbadger_store::derive_ops::bit_cell_by_account;
+            let (store, writer, _dir) = store_with_headers();
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            let identity_id = vec![0xC4u8; 32];
+            let parsed = |account: u8| crate::parser::ParsedBitCell {
+                identity_id: identity_id.clone(),
+                account_id: vec![account; 20],
+                account: "example.bit".to_string(),
+                expired_at: 1_900_000_000,
+                type_script_hash: vec![0x99; 32],
+                owner_lock_hash: vec![0x32; 32],
+            };
+            let key = |account: u8| bit_cell_by_account::key(&[account; 20], &identity_id).unwrap();
+            let rebuilt = |store: &Arc<CkbadgerStore>| {
+                let live = bit_cell_index_rows(store);
+                crate::derive::rederive_to_completion(store.as_ref()).unwrap();
+                assert_eq!(
+                    bit_cell_index_rows(store),
+                    live,
+                    "rebuild equals the live rows"
+                );
+                live
+            };
+
+            write_bit_cell_block(&store, &writer, 200, |batch, state| {
+                writer.insert_bit_cell(&parsed(0xD4), &[0x92; 32], 0, 200, batch, state)
+            });
+            assert_eq!(rebuilt(&store), vec![key(0xD4)], "mint at 200");
+
+            write_bit_cell_block(&store, &writer, 201, |batch, state| {
+                writer.consume_spore(&identity_id, 201, &[0x93; 32], batch, state)?;
+                writer.insert_bit_cell(&parsed(0xD5), &[0x93; 32], 0, 201, batch, state)
+            });
+            assert_eq!(rebuilt(&store), vec![key(0xD5)], "re-pointed at 201");
+
+            write_bit_cell_block(&store, &writer, 202, |batch, state| {
+                writer
+                    .consume_spore(&identity_id, 202, &[0x94; 32], batch, state)
+                    .map(|_| ())
+            });
+            assert_eq!(rebuilt(&store), Vec::<Vec<u8>>::new(), "burnt at 202");
+
+            // Undo replay alone restores each earlier block's rows (the
+            // fixture's headers already reach 202, so the reset-or-replay rule
+            // of `invalidate_for_rollback` is the framework tests' to pin).
+            for (fork_point, expected) in [(201, vec![key(0xD5)]), (200, vec![key(0xD4)])] {
+                store
+                    .rollback_via_undo_log(store.as_ref(), fork_point)
+                    .unwrap();
+                assert_eq!(
+                    bit_cell_index_rows(&store),
+                    expected,
+                    "fork_point={fork_point}"
+                );
+            }
         }
 
         #[test]

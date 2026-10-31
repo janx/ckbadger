@@ -6278,6 +6278,148 @@ impl Check for ClusterActivitiesCountConsistency {
     }
 }
 
+// ── Derived .bit → .bit Cell index (round 3 L3) ────────────────────────────
+
+/// `bit_cell_by_account` agrees with the `.bit Cell` items it is derived
+/// from, both ways. For a sample of `.bit Cell` items: a live one names its
+/// account (`blake2b(name)[..20]`, the `.bit` identity id), and that `.bit`
+/// identity's `bitCells` lists it; every `.bit Cell` a sampled `.bit`
+/// identity lists is live and names that account.
+pub struct BitCellAccountIndexConsistency;
+
+const BIT_CELL_SAMPLE_CAP: usize = 20;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentityItemRecord {
+    nft_id: String,
+    name: Option<String>,
+    is_live: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BitCellRefRecord {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotbitDetailRecord {
+    bit_cells: Vec<BitCellRefRecord>,
+}
+
+/// The `.bit` account id a `.bit Cell` names: `blake2b(account)[..20]`.
+fn dotbit_account_id(account: &str) -> String {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(account.as_bytes());
+    let mut hash = [0u8; 32];
+    hasher.finalize(&mut hash);
+    format!("0x{}", hex::encode(&hash[..20]))
+}
+
+impl Check for BitCellAccountIndexConsistency {
+    fn name(&self) -> &'static str {
+        "bit_cell_account_index_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "The derived .bit → .bit Cell index lists exactly the live .bit Cells naming each sampled account"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(BIT_CELL_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "bit_cell_account_index_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let cap = ctx.sample_count.min(BIT_CELL_SAMPLE_CAP);
+        let page: CursorPage<IdentityItemRecord> = api_get(
+            ctx,
+            &format!("assets/identities/bit_cell/items?limit={cap}"),
+        )?;
+        let mut findings = Vec::new();
+        let mut checked = 0u64;
+        let mut unindexed_accounts = Vec::new();
+        for item in page.data.iter().take(cap) {
+            let Some(account) = item.name.as_deref() else {
+                findings.push(Finding {
+                    entity: format!("bit_cell={}", item.nft_id),
+                    details: vec!["the .bit Cell carries no account name".to_string()],
+                });
+                continue;
+            };
+            let account_id = dotbit_account_id(account);
+            let Some(dotbit) = api_get_or_not_found::<DotbitDetailRecord>(
+                ctx,
+                &format!("assets/identities/dotbit/items/{account_id}"),
+            )?
+            else {
+                // The account has no .bit AccountCell on this chain: the index
+                // row exists but no detail serves it.
+                unindexed_accounts.push(account.to_string());
+                checked += 1;
+                progress.inc(1);
+                continue;
+            };
+            let listed = dotbit
+                .bit_cells
+                .iter()
+                .any(|cell| cell.id.eq_ignore_ascii_case(&item.nft_id));
+            if listed != item.is_live {
+                findings.push(Finding {
+                    entity: format!("bit_cell={}", item.nft_id),
+                    details: vec![format!(
+                        "isLive={} but .bit {account} ({account_id}) {} it in bitCells",
+                        item.is_live,
+                        if listed { "lists" } else { "does not list" }
+                    )],
+                });
+            }
+            for cell in &dotbit.bit_cells {
+                let detail: IdentityItemRecord = api_get(
+                    ctx,
+                    &format!("assets/identities/bit-cell/items/{}", cell.id),
+                )?;
+                if !detail.is_live || detail.name.as_deref() != Some(account) {
+                    findings.push(Finding {
+                        entity: format!("dotbit={account_id}"),
+                        details: vec![format!(
+                            "bitCells lists {} (isLive={}, name={:?}), which is not a live .bit Cell naming {account}",
+                            cell.id, detail.is_live, detail.name
+                        )],
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled .bit Cells");
+        if !unindexed_accounts.is_empty() {
+            detail.push_str(&format!(
+                "; {} name an account with no .bit identity: {}",
+                unindexed_accounts.len(),
+                unindexed_accounts.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -6324,6 +6466,7 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DotCellRecordsHashParity),
         Box::new(DaoDepositorAggregateConsistency),
         Box::new(ClusterActivitiesCountConsistency),
+        Box::new(BitCellAccountIndexConsistency),
     ]
 }
 
@@ -6522,7 +6665,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 40);
+        assert_eq!(checks.len(), 43);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -6554,6 +6697,29 @@ mod tests {
         assert!(names.contains(&"dotcell_id_is_label_hash"));
         assert!(names.contains(&"dotcell_owner_index_consistency"));
         assert!(names.contains(&"dotcell_records_hash_parity"));
+        assert!(names.contains(&"dao_depositor_aggregate_consistency"));
+        assert!(names.contains(&"cluster_activities_count_consistency"));
+        assert!(names.contains(&"bit_cell_account_index_consistency"));
+    }
+
+    /// The derived-aggregate checks (round 3 L1–L3) are Sampling, read only
+    /// the API, and sample.
+    #[test]
+    fn derived_aggregate_checks_declare_their_tier_and_needs() {
+        let checks = api_checks();
+        for name in [
+            "dao_depositor_aggregate_consistency",
+            "cluster_activities_count_consistency",
+            "bit_cell_account_index_consistency",
+        ] {
+            let check = checks
+                .iter()
+                .find(|c| c.name() == name)
+                .unwrap_or_else(|| panic!("missing check {name}"));
+            assert_eq!(check.tier(), CheckTier::Sampling, "{name}");
+            assert!(!check.requires_rpc(), "{name}");
+            assert!(check.requires_sampling(), "{name}");
+        }
     }
 
     /// The `.cell` checks are Sampling, and only the one that reads cells and
@@ -6611,7 +6777,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 33);
+        assert_eq!(sampling_count, 36);
     }
 
     #[test]

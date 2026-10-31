@@ -834,6 +834,7 @@ mod status_model_tests {
             "dotcell_records_hash_parity",
             "dao_depositor_aggregate_consistency",
             "cluster_activities_count_consistency",
+            "bit_cell_account_index_consistency",
         ];
         let mut declared = declared;
         declared.sort_unstable();

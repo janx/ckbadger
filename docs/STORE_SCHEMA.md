@@ -594,6 +594,14 @@ reads it for Spore collections, whose `cluster_agg` row is bulk-written and stay
 The rebuild counts the CF; live sync adds one per row `ObjectCollectionActivityAccumulator::flush`
 writes; rollback deletes rows and the undo log restores the count.
 
+**`bit_cell_by_account`** (L3, J3). Key = account_id (20B) + `.bit Cell` identity id (32B) →
+`[1]` for every live `.bit Cell` whose data names that `.bit` account; a prefix scan on the
+account lists them. Source rows: `identity_data` entries of standard `.bit Cell`. Live sync folds
+the entry transitions `insert_bit_cell` and the identity branch of `consume_spore` report: a mint
+adds the row, a consume removes it, and a `.bit Cell` re-created with data naming another account
+moves between accounts (`f(new) − f(old)`); the completion check requires every value to be
+exactly `[1]`.
+
 **Writers.** The indexer only: the scheduler (rebuild chunks, meta), `apply_live_batch` (live
 deltas + `Derived` undo entries, in the live batch), undo replay (rollback). The API reads the
 meta and the rows in the request's pinned view and serves an aggregate only when its meta is

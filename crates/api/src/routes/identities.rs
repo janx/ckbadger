@@ -422,10 +422,101 @@ async fn list_identity_collection_items(
 
 // -- Identity item detail endpoints (moved from assets.rs) --
 
+/// One live `.bit Cell` that names a `.bit` account (J3).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BitCellRef {
+    /// The `.bit Cell` identity id (`/assets/identities/bit-cell/items/{id}`).
+    pub id: String,
+    pub name: Option<String>,
+    pub owner_lock_hash: Option<String>,
+    pub owner_address: Option<String>,
+    pub expired_at: u64,
+}
+
+/// `.bit` account detail: the item plus the live `.bit Cells` naming it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DotbitItemDetailResponse {
+    #[serde(flatten)]
+    pub item: CollectionItemResponse,
+    /// Every live `.bit Cell` whose account is this one, from the derived
+    /// `bit_cell_by_account` index, by `.bit Cell` id; `[]` when none.
+    pub bit_cells: Vec<BitCellRef>,
+}
+
+/// The live `.bit Cells` naming `account_id`: a prefix scan of the derived
+/// `bit_cell_by_account` index (`503 derive_pending` until it is derived),
+/// each resolved to its identity entry.
+fn bit_cells_of_account(
+    state: &AppState,
+    account_id: &[u8],
+) -> Result<Vec<BitCellRef>, ApiRouteError> {
+    use ckbadger_store::derive_ops::BIT_CELL_BY_ACCOUNT;
+    crate::derived::require_derived(&state.store, &BIT_CELL_BY_ACCOUNT)?;
+    let mut ids = Vec::new();
+    state
+        .store
+        .scan_derived_prefix(BIT_CELL_BY_ACCOUNT.cf_name, account_id, |key, value| {
+            anyhow::ensure!(
+                key.len() == ckbadger_store::derive_ops::bit_cell_by_account::KEY_LEN
+                    && value == [1],
+                "invalid bit_cell_by_account row 0x{}: {value:?}",
+                hex::encode(key)
+            );
+            ids.push(key[account_id.len()..].to_vec());
+            Ok(())
+        })
+        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    let mut cells = Vec::with_capacity(ids.len());
+    for id in ids {
+        let entry = state
+            .store
+            .get_identity(&id)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "bit_cell_by_account names .bit Cell 0x{} with no identity entry",
+                    hex::encode(&id)
+                ))
+            })?;
+        let expired_at = match (&entry.standard, entry.is_live, &entry.extra) {
+            (
+                ckbadger_store::types::IdentityStandard::BitCell,
+                true,
+                ckbadger_store::types::IdentityExtra::BitCell {
+                    account_id: named,
+                    expired_at,
+                },
+            ) if named.as_slice() == account_id => *expired_at,
+            _ => {
+                return Err(ApiError::internal(format!(
+                    "bit_cell_by_account row for account 0x{} names 0x{}, which is not a live .bit Cell of that account",
+                    hex::encode(account_id),
+                    hex::encode(&id)
+                )))
+            }
+        };
+        let (owner_lock_hash, owner_address) = super::assets::item_owner(
+            state.store.as_ref(),
+            entry.owner_lock_hash.as_deref(),
+            &state.ckb_network,
+        )?;
+        cells.push(BitCellRef {
+            id: format!("0x{}", hex::encode(&id)),
+            name: entry.name,
+            owner_lock_hash,
+            owner_address,
+            expired_at,
+        });
+    }
+    Ok(cells)
+}
+
 async fn get_dotbit_item_detail(
     State(state): State<Arc<AppState>>,
     Path(identity_id): Path<String>,
-) -> ApiResult<CollectionItemResponse> {
+) -> ApiResult<DotbitItemDetailResponse> {
     let identity_id_bytes = decode_item_id(&identity_id)?;
     let store = state.store.clone();
     let identity_id_bytes_c = identity_id_bytes.clone();
@@ -483,21 +574,30 @@ async fn get_dotbit_item_detail(
         entry.owner_lock_hash.as_deref(),
         &state.ckb_network,
     )?;
-    ok(CollectionItemResponse {
-        nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
-        name: entry.name,
-        standard: entry.standard.asset_standard().to_string(),
-        owner_lock_hash,
-        owner_address,
-        owner_hash_prefix: None,
-        did: None,
-        is_live: entry.is_live,
-        created_at_block: entry.created_at_block,
-        expired_at,
-        registered_at,
-        status,
-        tx_hash,
-        output_index,
+    let bit_cells_state = state.clone();
+    let account_id = identity_id_bytes.clone();
+    let bit_cells =
+        tokio::task::spawn_blocking(move || bit_cells_of_account(&bit_cells_state, &account_id))
+            .await
+            .map_err(|e| ApiError::internal(e.to_string()))??;
+    ok(DotbitItemDetailResponse {
+        item: CollectionItemResponse {
+            nft_id: format!("0x{}", hex::encode(&identity_id_bytes)),
+            name: entry.name,
+            standard: entry.standard.asset_standard().to_string(),
+            owner_lock_hash,
+            owner_address,
+            owner_hash_prefix: None,
+            did: None,
+            is_live: entry.is_live,
+            created_at_block: entry.created_at_block,
+            expired_at,
+            registered_at,
+            status,
+            tx_hash,
+            output_index,
+        },
+        bit_cells,
     })
 }
 

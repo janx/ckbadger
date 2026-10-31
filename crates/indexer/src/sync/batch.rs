@@ -2496,6 +2496,9 @@ impl Indexer {
         // `(collection id, block)` of every object collection activity row,
         // for the derived per-collection row count.
         let mut derive_collection_activity_rows: Vec<(Vec<u8>, i64)> = Vec::new();
+        // `.bit Cell` identity transitions, for the derived account index.
+        let mut derive_identity_transitions: Vec<crate::db::writer::IdentityTransition> =
+            Vec::new();
         let mut identity_activity_batch = StoreBatch::new(self.writer.store());
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Every collection activity row this batch writes, folded per
@@ -3285,6 +3288,7 @@ impl Indexer {
 
             mnft_state.extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
             spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
+            derive_identity_transitions.extend(spore_state.take_bit_cell_transitions());
 
             // Apply cumulative capacity deltas to cluster aggregates
             if !cluster_daily_changes.is_empty() {
@@ -4087,6 +4091,7 @@ impl Indexer {
                     blocks: &derive_blocks,
                     dao_transitions: live_dao.transitions(),
                     object_collection_activity_rows: &derive_collection_activity_rows,
+                    identity_transitions: &derive_identity_transitions,
                 };
                 crate::derive::apply_live_batch(
                     self.writer.store(),

@@ -1992,6 +1992,88 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
     assert_eq!(json["outputIndex"], nft_a_output_index);
 }
 
+/// J3: a `.bit` account's detail lists the live `.bit Cells` naming it
+/// (`bitCells`), read from the derived `bit_cell_by_account` index — a burnt
+/// one and one naming another account are not listed — and answers
+/// `503 derive_pending` until the indexer has derived it.
+#[tokio::test]
+async fn dotbit_detail_lists_the_live_bit_cells_naming_the_account() {
+    use ckbadger_store::types::{IdentityEntry, IdentityExtra, IdentityStandard};
+    let store = test_store();
+    let account_id = vec![0xA7u8; 20];
+    let bit_cell = |id: u8, account: &[u8], is_live: bool| IdentityEntry {
+        standard: IdentityStandard::BitCell,
+        owner_lock_hash: is_live.then(|| vec![0x33; 32]),
+        name: Some("alice.bit".to_string()),
+        is_live,
+        created_at_block: 5,
+        created_at_tx: vec![id; 32],
+        extra: IdentityExtra::BitCell {
+            account_id: account.to_vec(),
+            expired_at: 1_900_000_000 + u64::from(id),
+        },
+    };
+    {
+        let mut batch = StoreBatch::new(store.as_ref());
+        batch.put_identity(
+            &account_id,
+            &IdentityEntry {
+                standard: IdentityStandard::DotBit,
+                owner_lock_hash: None,
+                name: Some("alice.bit".to_string()),
+                is_live: false,
+                created_at_block: 3,
+                created_at_tx: vec![0x01; 32],
+                extra: IdentityExtra::DotBit {
+                    expired_at: Some(1_900_000_000),
+                    registered_at: Some(1_600_000_000),
+                    status: Some(0),
+                },
+            },
+        );
+        batch.put_identity(&[0xB2; 32], &bit_cell(0xB2, &account_id, true));
+        batch.put_identity(&[0xB1; 32], &bit_cell(0xB1, &account_id, true));
+        batch.put_identity(&[0xB3; 32], &bit_cell(0xB3, &account_id, false));
+        batch.put_identity(&[0xB4; 32], &bit_cell(0xB4, &[0xEE; 20], true));
+        batch.commit().unwrap();
+    }
+    let path = format!(
+        "/assets/identities/dotbit/items/0x{}",
+        hex::encode(&account_id)
+    );
+
+    let app = create_router(test_config_underived(store.clone())).await;
+    let (status, json) = get_json(&app, &path).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{json}");
+    assert_eq!(json["error"], "derive_pending", "{json}");
+    assert_eq!(json["derive"]["aggregate"], "bit_cell_by_account", "{json}");
+
+    ckbadger_indexer::derive::derive_to_completion(&store).unwrap();
+    let (status, json) = get_json(&app, &path).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["name"], "alice.bit");
+    let ids: Vec<&str> = json["bitCells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cell| cell["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            format!("0x{}", hex::encode([0xB1; 32])),
+            format!("0x{}", hex::encode([0xB2; 32]))
+        ],
+        "{json}"
+    );
+    assert_eq!(json["bitCells"][0]["name"], "alice.bit");
+    assert_eq!(json["bitCells"][0]["expiredAt"], 1_900_000_000u64 + 0xB1);
+    assert_eq!(
+        json["bitCells"][0]["ownerLockHash"],
+        format!("0x{}", hex::encode([0x33; 32]))
+    );
+}
+
 /// The `.bit Cell` item activities route had no coverage at all, so nothing
 /// pinned that it resolves the identity, enforces the standard, or orders and
 /// filters the lifecycle actions the way its dotbit/did siblings do.

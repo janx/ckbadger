@@ -36,6 +36,9 @@ pub struct LiveDeriveCtx<'a> {
     /// Every `object_collection_activities` row the batch writes, as
     /// `(collection id, block)`.
     pub object_collection_activity_rows: &'a [(Vec<u8>, i64)],
+    /// Every `.bit Cell` identity entry transition of the batch, in write
+    /// order (`insert_bit_cell`, the identity branch of `consume_spore`).
+    pub identity_transitions: &'a [crate::db::writer::IdentityTransition],
 }
 
 /// Add this batch's deltas to every aggregate live sync maintains (state
@@ -223,6 +226,7 @@ pub(crate) mod tests {
             blocks: &points,
             dao_transitions: &[],
             object_collection_activity_rows: &[],
+            identity_transitions: &[],
         };
         let failures = apply_live_batch(
             store,

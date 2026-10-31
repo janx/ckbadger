@@ -232,6 +232,7 @@ pub(crate) use cells::is_cross_store_inconsistency;
 pub use dao::DaoTransition;
 pub(crate) use dao::LiveDaoBatch;
 pub use reorg::ReorgResult;
+pub use spore::IdentityTransition;
 pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;
 

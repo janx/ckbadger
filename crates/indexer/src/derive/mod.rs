@@ -25,6 +25,7 @@
 //!
 //! The persisted state machine is `ckbadger_store::derive_ops::DeriveMeta`.
 
+pub mod bit_cell;
 pub mod collection_activity;
 pub mod dao;
 pub mod live;
@@ -164,6 +165,7 @@ pub fn registry() -> Vec<Box<dyn DerivedAggregate>> {
     vec![
         Box::new(dao::DaoLiveAgg),
         Box::new(collection_activity::ObjectCollectionActivityCount),
+        Box::new(bit_cell::BitCellByAccount),
     ]
 }
 

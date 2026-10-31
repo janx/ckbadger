@@ -172,6 +172,29 @@ pub mod dao_live_agg {
     }
 }
 
+/// Key layout of `bit_cell_by_account` (L3): `account_id(20) +
+/// bit_cell_identity_id(32)` → `[1]` for every live `.bit Cell` that names
+/// that `.bit` account. A prefix scan on the account lists its `.bit Cells`.
+pub mod bit_cell_by_account {
+    pub const ACCOUNT_ID_LEN: usize = 20;
+    pub const BIT_CELL_ID_LEN: usize = 32;
+    pub const KEY_LEN: usize = ACCOUNT_ID_LEN + BIT_CELL_ID_LEN;
+
+    pub fn key(account_id: &[u8], bit_cell_id: &[u8]) -> anyhow::Result<Vec<u8>> {
+        anyhow::ensure!(
+            account_id.len() == ACCOUNT_ID_LEN && bit_cell_id.len() == BIT_CELL_ID_LEN,
+            "bit_cell_by_account key needs a {ACCOUNT_ID_LEN}-byte account id and a \
+             {BIT_CELL_ID_LEN}-byte .bit Cell id, got {} and {}",
+            account_id.len(),
+            bit_cell_id.len()
+        );
+        let mut key = Vec::with_capacity(KEY_LEN);
+        key.extend_from_slice(account_id);
+        key.extend_from_slice(bit_cell_id);
+        Ok(key)
+    }
+}
+
 /// Upper bound passed to `delete_range` when a derivation clears its column
 /// family: longer than any derived key, so it sorts after every one of them.
 const DERIVED_CLEAR_END: [u8; 128] = [0xFF; 128];
