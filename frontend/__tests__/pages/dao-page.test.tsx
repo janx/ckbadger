@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
@@ -101,6 +101,33 @@ describe('DaoPage', () => {
       nextCursor: null,
       limit: 12,
     });
+  });
+
+  it('waits for the derived DAO evidence behind the banner, never its error (L1, L0)', async () => {
+    // A plain error object: this file mocks '@/lib/api' without ApiRequestError; the predicates
+    // and the banner read only its fields.
+    vi.mocked(api.getDaoEvidence)
+      .mockRejectedValueOnce(
+        Object.assign(new Error('API error: 503'), {
+          status: 503,
+          code: 'derive_pending',
+          apiMessage: 'dao_live_agg is being derived by the indexer',
+          derive: {
+            aggregate: 'dao_live_agg',
+            state: 'running',
+            rowsDone: 12000,
+            derivedFromTip: 20912345,
+          },
+        })
+      )
+      .mockResolvedValue(evidence);
+    render(<DaoPage />);
+    expect(await screen.findByRole('status', { name: 'Being derived' })).toHaveTextContent(
+      'The indexer is deriving the DAO depositor totals: 12,000 source rows folded, from the chain at block #20,912,345.'
+    );
+    expect(screen.queryByText(/DAO chain evidence could not be loaded/)).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Being derived' })).toBeNull());
+    expect(screen.queryByText(/DAO chain evidence could not be loaded/)).toBeNull();
   });
 
   it('renders the API-produced epoch, owner, AR and raw DAO evidence', async () => {
