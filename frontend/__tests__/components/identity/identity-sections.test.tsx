@@ -109,7 +109,7 @@ function dotcellHistory(): Extract<ItemProtocol, { kind: 'dotcell' }> {
 
 describe('DotcellRoles (ID-DC4)', () => {
   it('shows owner and manager cards and every owner so far, newest last', () => {
-    render(<DotcellRoles protocol={dotcellHistory()} />);
+    render(<DotcellRoles protocol={dotcellHistory()} ownerNameCount={1} />);
     const section = screen.getByRole('region', { name: 'Owner and manager' });
     const owner = within(section).getByLabelText('Owner · holds the name');
     expect(owner).toHaveTextContent('since 2026-09-23');
@@ -126,6 +126,59 @@ describe('DotcellRoles (ID-DC4)', () => {
     expect(steps.map((s) => s.getAttribute('data-owner-step'))).toEqual(['registered', '', 'now']);
     expect(steps[0]).toHaveTextContent('2026-09-20');
     expect(steps[0]).toHaveTextContent('secp256k1');
+  });
+});
+
+// Round 3 (contracts R-A · R-5, ID-DC4): the card sub-lines the board has.
+describe('DotcellRoles sub-lines (R-5)', () => {
+  const managerParty = {
+    hashPrefix: '0x' + '1e'.repeat(20),
+    lockHash: '0x' + '1e'.repeat(32),
+    address: 'ckb1manager',
+    scriptName: 'JoyID',
+  };
+  const withEdits = (last: unknown) => ({
+    ...dotcellHistory(),
+    recordEdits: { count: 3, last } as Extract<ItemProtocol, { kind: 'dotcell' }>['recordEdits'],
+  });
+  const edit = (editor: typeof managerParty, editorRun: number) => ({
+    editor,
+    editorRun,
+    txHash: '0x' + 'ed'.repeat(32),
+    blockNumber: 18_100_000,
+    timestamp: String(Date.parse('2026-09-24T00:00:00Z')),
+  });
+  it('says how many names the owner holds and that the manager made the last edits', () => {
+    render(<DotcellRoles protocol={withEdits(edit(managerParty, 2))} ownerNameCount={1} />);
+    const section = screen.getByRole('region', { name: 'Owner and manager' });
+    expect(within(section).getByLabelText('Owner · holds the name')).toHaveTextContent(
+      'since 2026-09-23 · this address holds 1 cell'
+    );
+    expect(within(section).getByLabelText('Manager · edits its records')).toHaveTextContent(
+      /since \d{4}-\d{2}-\d{2} · made the last 2 record edits$/
+    );
+  });
+  it('names the earlier manager who made the last edit, and a name never edited', () => {
+    const earlier = { ...managerParty, hashPrefix: '0x' + '57'.repeat(20), address: 'ckb1old' };
+    const { unmount } = render(
+      <DotcellRoles protocol={withEdits(edit(earlier, 1))} ownerNameCount={4} />
+    );
+    expect(screen.getByLabelText('Owner · holds the name')).toHaveTextContent(
+      'this address holds 4 cells'
+    );
+    expect(screen.getByLabelText('Manager · edits its records')).toHaveTextContent(
+      'the last record edit was made by an earlier manager, ckb1old'
+    );
+    unmount();
+    render(
+      <DotcellRoles
+        protocol={{ ...dotcellHistory(), recordEdits: { count: 0, last: null } }}
+        ownerNameCount={1}
+      />
+    );
+    expect(screen.getByLabelText('Manager · edits its records')).toHaveTextContent(
+      'no record edit yet'
+    );
   });
 });
 

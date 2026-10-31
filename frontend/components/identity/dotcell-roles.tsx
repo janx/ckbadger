@@ -15,7 +15,36 @@ function partyShort(party: DotCellPartyRef): string {
  * prefixes in its data, each from when it took over, and every owner so far. A prefix the API
  * could not resolve to exactly one lock stays a prefix, never an address.
  */
-export function DotcellRoles({ protocol }: { protocol: DotcellProtocol }) {
+/** Round 3 (R-5): the manager card's sub-line from `/protocol` `recordEdits` (ID-DC4). */
+function recordEditsLine(protocol: DotcellProtocol, manager: DotCellPartyRef): string {
+  const last = protocol.recordEdits.last;
+  if (last === null) {
+    if (protocol.recordEdits.count !== 0)
+      throw new Error(`${protocol.itemId}: ${protocol.recordEdits.count} record edits but no last`);
+    return 'no record edit yet';
+  }
+  if (!Number.isSafeInteger(last.editorRun) || last.editorRun < 1)
+    throw new Error(`${protocol.itemId}: invalid record editor run ${last.editorRun}`);
+  if (last.editor.hashPrefix === manager.hashPrefix)
+    return last.editorRun === 1
+      ? 'made the last record edit'
+      : `made the last ${last.editorRun.toLocaleString('en-US')} record edits`;
+  return `the last record edit was made by an earlier manager, ${partyShort(last.editor)}`;
+}
+
+/**
+ * The cards also carry the round-3 facts (contracts R-A · R-5): how many live names the owner
+ * prefix holds (`ownerNameCount`, from the name's detail) and who made the last record edits.
+ */
+export function DotcellRoles({
+  protocol,
+  ownerNameCount,
+}: {
+  protocol: DotcellProtocol;
+  ownerNameCount: number;
+}) {
+  if (!Number.isSafeInteger(ownerNameCount) || ownerNameCount < 0)
+    throw new Error(`${protocol.itemId}: invalid owner name count ${ownerNameCount}`);
   const versions = protocol.versions;
   const current = versions.at(-1);
   if (!current) throw new Error(`${protocol.itemId}: .cell name has no versions`);
@@ -27,12 +56,14 @@ export function DotcellRoles({ protocol }: { protocol: DotcellProtocol }) {
       label: 'Owner · holds the name',
       party: current.decoded.owner,
       since: owner.since.cell.timestamp,
+      note: `this address holds ${ownerNameCount.toLocaleString('en-US')} ${ownerNameCount === 1 ? 'cell' : 'cells'}`,
       accent: true,
     },
     {
       label: 'Manager · edits its records',
       party: current.decoded.manager,
       since: manager.since.cell.timestamp,
+      note: recordEditsLine(protocol, current.decoded.manager),
       accent: false,
     },
   ];
@@ -59,7 +90,9 @@ export function DotcellRoles({ protocol }: { protocol: DotcellProtocol }) {
             <span>
               <PartyLine party={c.party} size={14} />
             </span>
-            <span className="text-text-dim text-[12px]">since {formatUtc8Date(c.since)}</span>
+            <span className="text-text-dim text-[12px]">
+              since {formatUtc8Date(c.since)} · {c.note}
+            </span>
           </div>
         ))}
       </div>

@@ -125,6 +125,11 @@ function termNote(term: Extract<IdentityTerm, { kind: 'term' }>, kind: IdentityK
   return `${kind === 'bit-cell' ? 'held from minting' : 'paid at registration'} · ${renewals}`;
 }
 
+function required<T>(value: T | undefined, id: string, what: string): T {
+  if (value === undefined) throw new Error(`${id}: missing ${what}`);
+  return value;
+}
+
 export function CanonicalIdentityDetail({
   kind,
   id,
@@ -322,7 +327,10 @@ export function CanonicalIdentityDetail({
               manager: p.versions.at(-1)!.decoded.manager,
             }}
           />
-          <DotcellRoles protocol={p} />
+          <DotcellRoles
+            protocol={p}
+            ownerNameCount={required(dotcell, id, '.cell detail').ownerNameCount}
+          />
         </>
       )}
       {termSection}
