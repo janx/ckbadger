@@ -64,6 +64,26 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(screen.getByRole('button', { name: 'Next 50 →' })).toBeInTheDocument();
   });
 
+  it('waits behind the catching-up banner while the store catches up, never the error (contracts S)', async () => {
+    vi.mocked(api.getDaoDepositors)
+      .mockRejectedValueOnce(
+        new ApiRequestError(
+          503,
+          'store_catching_up',
+          "the API's secondary stores have not caught up with the indexer yet: attempt 1 failed"
+        )
+      )
+      .mockResolvedValueOnce(page([1, 2], null));
+    render(<DaoDepositorsPage />);
+    expect(await screen.findByRole('status', { name: 'Catching up' })).toHaveTextContent(
+      'attempt 1 failed'
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
   it('folds each depositor into a two-line card on phones, not a five-fact sheet', async () => {
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
     render(<DaoDepositorsPage />);

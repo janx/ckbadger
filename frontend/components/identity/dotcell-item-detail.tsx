@@ -10,6 +10,7 @@ import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { NamedParty } from '@/components/asset/identity-document';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { retryTransientOnly } from '@/lib/query-client';
 function nameHref(id: string) {
   return `/identities/dotcell/${encodeURIComponent(id)}`;
 }
@@ -34,7 +35,7 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
     initialPageParam: item.childrenNextCursor,
     getNextPageParam: (lastPage) => lastPage.nextCursor,
     enabled: wantsMore,
-    retry: false,
+    retry: retryTransientOnly,
   });
 
   const appended = more.data ? more.data.pages.flatMap((page) => page.data) : [];
@@ -82,12 +83,12 @@ function ScopedName({ itemRef }: { itemRef: string }) {
   const detail = useQuery({
     queryKey: ['dotcell-item-detail', itemRef],
     queryFn: () => api.getDotCellItemDetail(itemRef),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const ring = useQuery({
     queryKey: ['dotcell-ring'],
     queryFn: () => api.getDotCellRing(),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const item = detail.data;
   if (!item && isNotFoundApiError(detail.error)) {

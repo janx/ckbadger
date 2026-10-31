@@ -31,6 +31,7 @@ import type { CompositionTier } from '@/lib/asset-utils';
 import { collectionFeedHeadline } from '@/lib/feed-headlines';
 import { readErrorText } from '@/lib/read-error';
 import { IdentityPositioning, type IdentityStandard } from '@/components/identity/identity-header';
+import { retryTransientOnly } from '@/lib/query-client';
 
 // ── F2 identities (round 2) ──
 const IDENTITY_STANDARDS: readonly IdentityStandard[] = [
@@ -120,12 +121,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     queryKey: ['cluster-protocol', id],
     queryFn: () => api.getSporeClusterProtocol(id),
     enabled: kind === 'spore',
-    retry: false,
+    retry: retryTransientOnly,
   });
   const insights = useQuery({
     queryKey: ['collection-insights', kind, id],
     queryFn: () => api.getCollectionInsights(id, kind),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const chart = useQuery({
     queryKey: ['collection-capacity', kind, id],

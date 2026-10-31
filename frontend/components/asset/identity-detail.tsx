@@ -41,6 +41,7 @@ import { identityTerm, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { readDidDocument, splitHandle } from '@/lib/did-document';
 import { formatStandard } from '@/components/activity-event-row';
+import { retryTransientOnly } from '@/lib/query-client';
 
 type IdentityKind = Extract<ItemKind, 'dotbit' | 'bit-cell' | 'did' | 'dotcell'>;
 export interface CanonicalIdentityDetailProps {
@@ -159,7 +160,7 @@ export function CanonicalIdentityDetail({
   const protocol = useQuery({
     queryKey: ['item-protocol', kind, id],
     queryFn: () => api.getItemProtocol(kind, id),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const pds = useQuery({
     queryKey: ['did-pds'],

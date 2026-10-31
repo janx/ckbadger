@@ -6,6 +6,7 @@ import { normalizeAssetId } from '@/lib/asset-utils';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { NotFoundPage } from '@/components/not-found-page';
+import { retryTransientOnly } from '@/lib/query-client';
 export interface IdentityItemDetailConfig {
   standard: 'dotbit' | 'did_ckb' | 'bit_cell';
   fetchDetail: (identityId: string) => Promise<CollectionItem>;
@@ -40,7 +41,7 @@ function ScopedIdentity({ config, identityId }: Props) {
   const detail = useQuery({
     queryKey: [`${config.standard}-item-detail`, identityId],
     queryFn: () => config.fetchDetail(identityId),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const item = detail.data;
   if (!item && isNotFoundApiError(detail.error)) {

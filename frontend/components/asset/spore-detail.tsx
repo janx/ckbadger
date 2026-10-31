@@ -29,6 +29,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
+import { retryTransientOnly } from '@/lib/query-client';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -48,7 +49,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   const protocol = useQuery({
     queryKey: ['item-protocol', 'spore', id],
     queryFn: () => api.getItemProtocol('spore', id),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const cluster = useQuery({
     queryKey: ['cluster', object.clusterId],
@@ -64,19 +65,19 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
     queryKey: ['collection-insights', object.clusterId],
     queryFn: () => api.getCollectionInsights(object.clusterId!),
     enabled: isDob && object.clusterId !== null,
-    retry: false,
+    retry: retryTransientOnly,
   });
   const genetics = useQuery({
     queryKey: ['object-genetics', id],
     queryFn: () => api.getObjectGenetics(id),
     enabled: isDob,
-    retry: false,
+    retry: retryTransientOnly,
   });
   const decoded = useQuery({
     queryKey: ['spore-dob-decoded', id],
     queryFn: () => api.getSporeObjectDecoded(id),
     enabled: isDob,
-    retry: false,
+    retry: retryTransientOnly,
     refetchInterval: (q) =>
       q.state.status !== 'error' && q.state.data?.status === 'pending' ? 2000 : false,
   });

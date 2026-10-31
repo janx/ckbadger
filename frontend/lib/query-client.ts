@@ -1,5 +1,12 @@
 import { QueryClient } from '@tanstack/react-query';
-import { isWarmupPendingError, isNetworkInitializingError } from '@/lib/api';
+import {
+  isDerivePendingError,
+  isNetworkInitializingError,
+  isStoreCatchingUpError,
+  isTransientApiError,
+  isWarmupPendingError,
+  type ApiRequestError,
+} from '@/lib/api';
 import { isNotFoundApiError } from '@/lib/api-errors';
 
 export const WARMUP_PENDING_RETRY_DELAY_MS = 2000;
@@ -51,6 +58,10 @@ export function createAppQueryClient(options: CreateAppQueryClientOptions = {}):
           if (isNetworkInitializingError(error)) {
             return true; // keep retrying: the network will start when its turn comes
           }
+          // Round 3 (contracts S / L0): both clear on their own; the banners say what is awaited.
+          if (isStoreCatchingUpError(error) || isDerivePendingError(error)) {
+            return true;
+          }
           if (isWarmupPendingError(error)) {
             return failureCount < warmupRetryLimit;
           }
@@ -59,13 +70,14 @@ export function createAppQueryClient(options: CreateAppQueryClientOptions = {}):
           return shouldRetryNonWarmup(failureCount, options.nonWarmupRetry);
         },
         retryDelay: (attemptIndex, error) => {
-          if (isNetworkInitializingError(error)) {
+          // A store that keeps failing its catch-up can stay so for long: back off like initializing.
+          if (isNetworkInitializingError(error) || isStoreCatchingUpError(error)) {
             return Math.min(
               warmupRetryDelayMs * 2 ** attemptIndex,
               NETWORK_INITIALIZING_MAX_RETRY_DELAY_MS
             );
           }
-          if (isWarmupPendingError(error)) {
+          if (isWarmupPendingError(error) || isDerivePendingError(error)) {
             return warmupRetryDelayMs;
           }
           return Math.min(1000 * (attemptIndex + 1), 3000);
@@ -76,6 +88,44 @@ export function createAppQueryClient(options: CreateAppQueryClientOptions = {}):
       },
     },
   });
+}
+
+/**
+ * For a query that must fail at once on a real error (`retry: false` before round 3): it still
+ * waits through the API's transient 503 kinds (contracts S / L0), so a store that is catching up or
+ * an aggregate being derived never shows that page's error screen. Delays come from the client's
+ * default `retryDelay`.
+ */
+export function retryTransientOnly(failureCount: number, error: Error): boolean {
+  if (isWarmupPendingError(error)) return failureCount < DEFAULT_WARMUP_RETRY_LIMIT;
+  return isTransientApiError(error);
+}
+
+function firstQueryError<T>(
+  queryClient: QueryClient,
+  pick: (error: unknown) => T | null
+): T | null {
+  for (const query of queryClient.getQueryCache().getAll()) {
+    const fetchFailureReason = (query.state as { fetchFailureReason?: unknown }).fetchFailureReason;
+    for (const candidate of [fetchFailureReason, query.state.error]) {
+      const picked = pick(candidate);
+      if (picked !== null) return picked;
+    }
+  }
+  return null;
+}
+
+/** The API message of the first query waiting on `store_catching_up` (contracts S), else null. */
+export function getStoreCatchingUpQueryMessage(queryClient: QueryClient): string | null {
+  return firstQueryError(queryClient, (e) => (isStoreCatchingUpError(e) ? e.apiMessage : null));
+}
+
+/**
+ * The error of the first query waiting on `derive_pending` (contracts L0), else null. The error
+ * object itself is returned so the snapshot stays referentially stable between failures.
+ */
+export function getDerivePendingQueryError(queryClient: QueryClient): ApiRequestError | null {
+  return firstQueryError(queryClient, (e) => (isDerivePendingError(e) ? e : null));
 }
 
 function warmupMessageFromError(error: unknown): string | null {

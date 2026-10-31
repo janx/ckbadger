@@ -13,20 +13,59 @@ function activeApiBase(): string {
 interface ApiErrorPayload {
   error?: unknown;
   message?: unknown;
+  derive?: unknown;
+}
+
+/**
+ * Round 3 (contracts.md L0): which indexer-derived aggregate a `503 derive_pending` waits for, and
+ * how far the indexer got. `rowsDone` / `derivedFromTip` are numbers only while `running`.
+ */
+export interface DeriveProgress {
+  aggregate: 'dao_live_agg' | 'object_collection_activity_count' | 'bit_cell_by_account';
+  state: 'not_started' | 'running' | 'outdated';
+  rowsDone: number | null;
+  derivedFromTip: number | null;
 }
 
 export class ApiRequestError extends Error {
   status: number;
   code: string;
   apiMessage: string;
+  /** Only on `503 derive_pending` (contracts L0). */
+  derive?: DeriveProgress;
 
-  constructor(status: number, code: string, apiMessage: string) {
+  constructor(status: number, code: string, apiMessage: string, derive?: DeriveProgress) {
     super(apiMessage ? `API error: ${status} - ${apiMessage}` : `API error: ${status}`);
     this.name = 'ApiRequestError';
     this.status = status;
     this.code = code;
     this.apiMessage = apiMessage;
+    if (derive) this.derive = derive;
   }
+}
+
+const DERIVE_AGGREGATES = new Set<DeriveProgress['aggregate']>([
+  'dao_live_agg',
+  'object_collection_activity_count',
+  'bit_cell_by_account',
+]);
+const DERIVE_STATES = new Set<DeriveProgress['state']>(['not_started', 'running', 'outdated']);
+
+/** The `derive` field of a `derive_pending` body, checked against contracts L0 (throws otherwise). */
+function parseDeriveProgress(raw: unknown): DeriveProgress {
+  const d = raw as Partial<DeriveProgress> | null;
+  const nullableCount = (v: unknown) => v === null || (typeof v === 'number' && v >= 0);
+  if (
+    !d ||
+    typeof d !== 'object' ||
+    !DERIVE_AGGREGATES.has(d.aggregate as DeriveProgress['aggregate']) ||
+    !DERIVE_STATES.has(d.state as DeriveProgress['state']) ||
+    !nullableCount(d.rowsDone) ||
+    !nullableCount(d.derivedFromTip)
+  ) {
+    throw new Error(`derive_pending carries a malformed derive field: ${JSON.stringify(raw)}`);
+  }
+  return d as DeriveProgress;
 }
 
 function parseApiErrorPayload(
@@ -41,7 +80,11 @@ function parseApiErrorPayload(
     typeof payload?.message === 'string' && payload.message.trim().length > 0
       ? payload.message.trim()
       : '';
-  return new ApiRequestError(status, code, apiMessage);
+  const derive =
+    code === 'derive_pending' && payload?.derive !== undefined
+      ? parseDeriveProgress(payload.derive)
+      : undefined;
+  return new ApiRequestError(status, code, apiMessage, derive);
 }
 
 async function readApiErrorPayload(res: Response): Promise<ApiErrorPayload | undefined> {
@@ -74,6 +117,41 @@ export function isNetworkInitializingError(error: unknown): error is ApiRequestE
   }
   const candidate = error as Partial<ApiRequestError>;
   return candidate.code === 'initializing' && candidate.status === 503;
+}
+
+/**
+ * Round 3 (contracts.md S): the API's secondary stores have not caught up with the indexer (at
+ * startup, or after 3 consecutive failed catch-ups). Transient: retry behind the "catching up"
+ * banner, never the error screen. It can precede `warmup_pending` on the same endpoint.
+ */
+export function isStoreCatchingUpError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'store_catching_up' && candidate.status === 503;
+}
+
+/**
+ * Round 3 (contracts.md L0): an indexer-derived aggregate is not derived yet. Transient: retry,
+ * show "being derived" + the progress in `derive`, never a stand-in value.
+ */
+export function isDerivePendingError(error: unknown): error is ApiRequestError {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+  const candidate = error as Partial<ApiRequestError>;
+  return candidate.code === 'derive_pending' && candidate.status === 503;
+}
+
+/** Every 503 kind that means "not yet, retry" for the whole API (one list, used by the retry policy). */
+export function isTransientApiError(error: unknown): error is ApiRequestError {
+  return (
+    isNetworkInitializingError(error) ||
+    isWarmupPendingError(error) ||
+    isStoreCatchingUpError(error) ||
+    isDerivePendingError(error)
+  );
 }
 
 /**

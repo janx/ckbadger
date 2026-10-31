@@ -9,6 +9,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { ApiRequestError, api, type DaoDepositorRow } from '@/lib/api';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
+import { retryTransientOnly } from '@/lib/query-client';
 
 const PAGE = 50;
 
@@ -74,7 +75,7 @@ export default function DaoDepositorsPage() {
   const query = useQuery({
     queryKey: ['dao-depositors', cursor],
     queryFn: () => api.getDaoDepositors({ limit: PAGE, cursor }),
-    retry: false,
+    retry: retryTransientOnly,
   });
   const page = query.data;
   const client = useQueryClient();

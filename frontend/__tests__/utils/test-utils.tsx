@@ -2,6 +2,7 @@ import { render, RenderOptions } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { ReactNode, ReactElement } from 'react';
 import { WarmupPendingBanner } from '@/components/ui/warmup-pending-banner';
+import { DerivePendingBanner, StoreCatchingUpBanner } from '@/components/ui/store-state-banner';
 import { createAppQueryClient } from '@/lib/query-client';
 
 function createTestQueryClient() {
@@ -23,6 +24,8 @@ function AllProviders({ children }: AllProvidersProps) {
   return (
     <QueryClientProvider client={queryClient}>
       <WarmupPendingBanner />
+      <StoreCatchingUpBanner />
+      <DerivePendingBanner />
       {children}
     </QueryClientProvider>
   );

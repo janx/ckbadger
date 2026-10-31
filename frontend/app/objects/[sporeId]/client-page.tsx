@@ -8,6 +8,7 @@ import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shel
 import { NotFoundPage } from '@/components/not-found-page';
 import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
+import { retryTransientOnly } from '@/lib/query-client';
 export interface SporeDetailPageProps {
   sporeId: string;
 }
@@ -23,7 +24,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     queryKey: ['spore', id],
     queryFn: () => api.getSporeObject(id),
     enabled: route.kind === 'spore-object',
-    retry: false,
+    retry: retryTransientOnly,
   });
   // A 32-byte ID names either namespace; only an explicit absent object permits collection lookup.
   const collectionEnabled =
@@ -32,7 +33,7 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
     queryKey: ['object-collection', id],
     queryFn: () => api.getObjectCollection(id),
     enabled: collectionEnabled,
-    retry: false,
+    retry: retryTransientOnly,
   });
   if (redirect) return null;
   if (object.data) return <SporeDetailView key={id} object={object.data} error={object.error} />;

@@ -2,6 +2,7 @@
 import { QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useState, type ReactNode } from 'react';
 import { NetworkInitializingBanner } from '@/components/ui/network-initializing-banner';
+import { DerivePendingBanner, StoreCatchingUpBanner } from '@/components/ui/store-state-banner';
 import { WarmupPendingBanner } from '@/components/ui/warmup-pending-banner';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { useRecentBlocksStore } from '@/hooks/useRecentBlocksStore';
@@ -28,6 +29,8 @@ function ScopedQueryClient({ children }: { children: ReactNode }) {
     <QueryClientProvider client={queryClient}>
       <WarmupPendingBanner />
       <NetworkInitializingBanner />
+      <StoreCatchingUpBanner />
+      <DerivePendingBanner />
       {children}
     </QueryClientProvider>
   );

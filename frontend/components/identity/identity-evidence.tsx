@@ -9,6 +9,7 @@ import { AssetReadState } from '@/components/asset/detail-shell';
 import { truncateRecordHex } from '@/components/asset/identity-document';
 import type { IdentityStandard } from '@/components/identity/identity-header';
 import { formatUtc8DateTime, cn } from '@/lib/utils';
+import { retryTransientOnly } from '@/lib/query-client';
 
 type Of<K extends ItemProtocol['kind']> = Extract<ItemProtocol, { kind: K }>;
 
@@ -249,7 +250,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
     queryKey: ['dotcell-item-detail', d.nextId],
     queryFn: () => api.getDotCellItemDetail(d.nextId),
     enabled: !ZERO_ID.test(d.nextId),
-    retry: false,
+    retry: retryTransientOnly,
   });
   return (
     <>
