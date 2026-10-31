@@ -169,3 +169,32 @@ it('preserves prior gallery data while reporting a refetch error', async () => {
   );
   expect(within(gallery).getAllByText(/Genes #/).length).toBeGreaterThan(0);
 });
+
+// Round 3 (contracts L2 / L0): while the collection activity count is derived the detail is a
+// 503 derive_pending — the page waits behind the banner, then shows the derived count.
+it('waits for the derived activity count instead of showing an error (L2)', async () => {
+  const { ApiRequestError } = await import('@/lib/api');
+  vi.mocked(api.getSporeCluster)
+    .mockRejectedValueOnce(
+      new ApiRequestError(
+        503,
+        'derive_pending',
+        'object_collection_activity_count is being derived',
+        {
+          aggregate: 'object_collection_activity_count',
+          state: 'running',
+          rowsDone: 1200,
+          derivedFromTip: 20900000,
+        }
+      )
+    )
+    .mockResolvedValue(clusterDetailProducer);
+  render(<ClusterPage clusterId={id} />);
+  expect(await screen.findByRole('status', { name: 'Being derived' })).toHaveTextContent(
+    'The indexer is deriving the collection activity counts: 1,200 source rows folded'
+  );
+  expect(await screen.findByRole('heading', { name: 'Genes' })).toBeInTheDocument();
+  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent(
+    clusterDetailProducer.activitiesCount.toLocaleString('en-US')
+  );
+});

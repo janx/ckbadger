@@ -85,6 +85,31 @@ describe('Inventory rows', () => {
     expect(within(table).getByText('19')).toBeInTheDocument();
     expect(within(table).getByText('Decode pending')).toHaveClass('text-text-dim');
   });
+  it('leaves the Activity cell empty while a collection count is not derived yet (L2)', () => {
+    render(
+      <InventoryRows
+        assetType="object"
+        rows={[
+          {
+            ...asset,
+            assetType: 'object',
+            standard: 'spore',
+            symbol: null,
+            liveCount: 3,
+            totalSupply: '7',
+            activitiesCount: null,
+            compositionTier: 'pure_ckb',
+          },
+        ]}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Object collections' });
+    const header = within(table).getByRole('columnheader', { name: 'Activity' });
+    const column = Array.from(header.parentElement!.children).indexOf(header);
+    const cell = within(table).getAllByRole('row')[1].children[column];
+    // Unknown is said by nothing, never by 0 or a stand-in word.
+    expect(cell).toBeEmptyDOMElement();
+  });
   it('rejects an impossible occupied partition with the asset identifier', () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(() =>

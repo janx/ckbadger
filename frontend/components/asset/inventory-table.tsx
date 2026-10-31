@@ -210,16 +210,19 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
       label: assetType === 'token' ? 'Transfers' : 'Activity',
       minWidth: 100,
       numeric: true,
-      render: (a) => (
-        <>
-          <AssetCount value={assetType === 'token' ? a.transfersCount : a.activitiesCount} />
-          {assetType === 'token' && (
-            <span className="text-text-dim block text-[11px]">
-              <AssetCount value={a.transfers24h} /> in 24 h
-            </span>
-          )}
-        </>
-      ),
+      render: (a) =>
+        // Round 3 (contracts L2): a collection's count is null (unknown) on the cached list until
+        // the indexer has derived it — say nothing rather than a stand-in.
+        assetType !== 'token' && a.activitiesCount === null ? null : (
+          <>
+            <AssetCount value={assetType === 'token' ? a.transfersCount : a.activitiesCount} />
+            {assetType === 'token' && (
+              <span className="text-text-dim block text-[11px]">
+                <AssetCount value={a.transfers24h} /> in 24 h
+              </span>
+            )}
+          </>
+        ),
     });
   if (assetType === 'token')
     columns.push({
