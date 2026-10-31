@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use anyhow::{anyhow, Result};
-use ckbadger_store::derive_ops::{encode_derived_value, DeriveMeta, DeriveState};
+use ckbadger_store::derive_ops::{encode_derived_value, DeriveMeta};
 use ckbadger_store::keys::UndoSeqScope;
 use ckbadger_store::types::{UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::{CkbadgerStore, StoreBatch};
@@ -145,7 +145,7 @@ fn stage_one(
             rows.insert(key, next);
         }
     }
-    if matches!(meta.state, DeriveState::Complete { .. }) {
+    if meta.checks_rows() {
         for (key, value) in &rows {
             if let Some(value) = value {
                 aggregate.check_row(key, value).map_err(|e| {
@@ -193,6 +193,7 @@ pub(crate) mod tests {
     use super::super::test_support::*;
     use super::super::{DeriveScheduler, DerivedAggregate};
     use super::*;
+    use ckbadger_store::derive_ops::DeriveState;
 
     fn blocks(range: std::ops::RangeInclusive<i64>) -> Vec<LiveBlockPoint> {
         range

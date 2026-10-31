@@ -95,6 +95,7 @@ mod tests {
     fn pending_until_complete_then_served() {
         let running = DeriveState::Running {
             derived_from_tip: 50,
+            phase: ckbadger_store::derive_ops::RebuildPhase::Folding,
             cursor: None,
             rows_done: 7,
         };

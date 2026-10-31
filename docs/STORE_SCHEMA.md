@@ -554,7 +554,7 @@ finished_at_ms }`, with `state` one of:
 | State                                                     | Meaning                                                                                                                    |
 | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `NotStarted`                                              | rows absent or garbage; not maintained, not served                                                                         |
-| `Running { derived_from_tip: H, cursor, rows_done }`      | rebuild in flight over the snapshot at `H`; live deltas above `H` applied; `cursor` is progress only                       |
+| `Running { derived_from_tip: H, phase, cursor, rows_done }` | rebuild in flight over the snapshot at `H`; live deltas above `H` applied. `phase` `Folding`: source rows being folded (rows may be negative); `Validating`: source exhausted, rows exact, being checked in chunks and live writes checked; `cursor` is progress only |
 | `Complete { derived_from_tip: H, completed_at_tip: C, … }` | rows equal a from-scratch derivation at the sync tip; exact since block `C` (the tip when the last chunk committed)        |
 | `Failed { error }`                                        | written only by an indexer that is stopping on an invariant violation of this aggregate (rebuild or live write), so the TUI / API can say why; reset at the next start |
 
@@ -562,8 +562,11 @@ Transitions: on indexer start (before the first live batch) a missing meta, a `v
 than the current one, `Running` (its snapshot died with the process) or `Failed` → rows cleared,
 `NotStarted`; `Complete` is kept (and must have `C` ≤ the sync tip). Once sync is within
 `bulk_sync_threshold` of the tip, the scheduler starts the first not-complete aggregate in
-registry order: rows cleared + `Running{H}` in one write, then the snapshot. When its source is
-exhausted, every row is checked and the state becomes `Complete{H, C}`. A rollback resets
+registry order: rows cleared + `Running{H, Folding}` in one write, then the snapshot. Each chunk
+folds at most 20,000 source rows / 4,096 distinct keys / ~150 ms. When the source is exhausted
+the phase becomes `Validating`: the rows are checked against the aggregate's invariant in chunks
+of the same size (live writes are checked from then on, since every row is exact), and after the
+last row the state becomes `Complete{H, C}`. A rollback resets
 (`NotStarted` + clear + deletion of its `Derived` undo entries above the target, committed
 **before** undo replay) a `Running` derivation whenever it removes a block, and a `Complete` one
 when its target is below `C`; otherwise undo replay restores the rows exactly. Aggregates that are

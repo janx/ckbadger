@@ -46,7 +46,7 @@ impl DerivedAggregate for ObjectCollectionActivityCount {
                 hex::encode(&key)
             );
             add_delta(out, key[..32].to_vec(), &[1])?;
-            if budget.tick() {
+            if budget.tick(out.len()) {
                 return Ok(Some(key.to_vec()));
             }
         }

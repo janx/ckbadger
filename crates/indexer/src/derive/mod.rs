@@ -96,7 +96,6 @@ pub struct ChunkBudget {
     started: Instant,
     max_time: Duration,
     max_rows: u64,
-    #[allow(dead_code)]
     max_keys: usize,
     rows: u64,
 }
@@ -118,10 +117,13 @@ impl ChunkBudget {
         self
     }
 
-    /// Count one folded source row; `true` once the chunk must stop.
-    pub fn tick(&mut self) -> bool {
+    /// Count one folded source row, with `keys` distinct output keys pending
+    /// so far; `true` once the chunk must stop. The key bound is what bounds
+    /// the chunk's read-modify-write of the rows, which runs after the fold.
+    pub fn tick(&mut self, keys: usize) -> bool {
         self.rows += 1;
         self.rows >= self.max_rows
+            || keys >= self.max_keys
             || (self.rows.is_multiple_of(64) && self.started.elapsed() >= self.max_time)
     }
 
@@ -358,7 +360,7 @@ pub(crate) mod test_support {
                 let header: CachedBlockHeader = bincode::deserialize(&value)?;
                 let number = ckbadger_store::keys::decode_block_num(&key);
                 add_delta(out, self.key_of(number, header.epoch_number), &[1])?;
-                if budget.tick() {
+                if budget.tick(out.len()) {
                     return Ok(Some(key.to_vec()));
                 }
             }
@@ -526,6 +528,7 @@ mod tests {
                     version: TOY.version,
                     state: DeriveState::Running {
                         derived_from_tip: 10,
+                        phase: ckbadger_store::derive_ops::RebuildPhase::Folding,
                         cursor: None,
                         rows_done: 0,
                     },

@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Result};
 use ckbadger_common::BackgroundTaskState;
-use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, ReadSnapshot};
+use ckbadger_store::derive_ops::{DeriveMeta, DeriveState, ReadSnapshot, RebuildPhase};
 use ckbadger_store::{CkbadgerStore, StoreBatch};
 use tracing::info;
 
@@ -40,6 +40,7 @@ pub enum StepOutcome {
 struct ActiveRebuild<'s> {
     index: usize,
     run: u64,
+    phase: RebuildPhase,
     snapshot: ReadSnapshot<'s>,
     derived_from_tip: i64,
     cursor: Option<Vec<u8>>,
@@ -56,7 +57,6 @@ pub struct DeriveScheduler<'s> {
     active: Option<ActiveRebuild<'s>>,
     chunk_time: Duration,
     chunk_rows: u64,
-    #[allow(dead_code)]
     chunk_keys: usize,
 }
 
@@ -194,6 +194,7 @@ impl<'s> DeriveScheduler<'s> {
             version: id.version,
             state: DeriveState::Running {
                 derived_from_tip: tip,
+                phase: RebuildPhase::Folding,
                 cursor: None,
                 rows_done: 0,
             },
@@ -235,6 +236,7 @@ impl<'s> DeriveScheduler<'s> {
         self.active = Some(ActiveRebuild {
             index,
             run,
+            phase: RebuildPhase::Folding,
             snapshot,
             derived_from_tip: tip,
             cursor: None,
@@ -249,9 +251,13 @@ impl<'s> DeriveScheduler<'s> {
             .active
             .as_mut()
             .expect("chunk() is only called with a rebuild in flight");
+        if active.phase == RebuildPhase::Validating {
+            return self.validate_chunk();
+        }
         let aggregate = &self.aggregates[active.index];
         let id = aggregate.id();
-        let mut budget = ChunkBudget::new(self.chunk_time, self.chunk_rows);
+        let mut budget =
+            ChunkBudget::new(self.chunk_time, self.chunk_rows).with_max_keys(self.chunk_keys);
         let mut out = DeltaMap::new();
         let next = match aggregate.rebuild_chunk(
             &active.snapshot,
@@ -262,8 +268,9 @@ impl<'s> DeriveScheduler<'s> {
             Ok(next) => next,
             Err(err) => return self.fail(err.context(format!("{} rebuild chunk", id.name))),
         };
-        // Fold the chunk into the rows. Live deltas may already sit on them
-        // (signed sums commute), so read-modify-write against the primary.
+        // Fold the chunk into the rows (at most `chunk_keys` of them). Live
+        // deltas may already sit on them (signed sums commute), so
+        // read-modify-write against the primary.
         let mut batch = StoreBatch::new(self.store);
         for (key, delta) in &out {
             let current = self.store.get_derived_value(id.cf_name, key)?;
@@ -271,41 +278,112 @@ impl<'s> DeriveScheduler<'s> {
             batch.put_derived_value(id.cf_name, key, value.as_deref())?;
         }
         active.rows_done += budget.rows();
-        active.cursor = next.clone();
-        let running = DeriveMeta {
-            version: id.version,
-            state: DeriveState::Running {
-                derived_from_tip: active.derived_from_tip,
-                cursor: next.clone(),
-                rows_done: active.rows_done,
-            },
-            run: active.run,
-            started_at_ms: self
-                .store
-                .get_derive_meta(id.name)?
-                .and_then(|meta| meta.started_at_ms),
-            finished_at_ms: None,
+        // Source exhausted: every row is now exact at the sync tip. The rows
+        // are checked next, in chunks, and live writes are checked from the
+        // commit of this phase change on.
+        let phase = if next.is_some() {
+            RebuildPhase::Folding
+        } else {
+            RebuildPhase::Validating
         };
-        batch.put_derive_meta(id.name, &running);
+        active.phase = phase;
+        active.cursor = next;
+        let started_at_ms = self
+            .store
+            .get_derive_meta(id.name)?
+            .and_then(|meta| meta.started_at_ms);
+        batch.put_derive_meta(
+            id.name,
+            &DeriveMeta {
+                version: id.version,
+                state: DeriveState::Running {
+                    derived_from_tip: active.derived_from_tip,
+                    phase,
+                    cursor: active.cursor.clone(),
+                    rows_done: active.rows_done,
+                },
+                run: active.run,
+                started_at_ms,
+                finished_at_ms: None,
+            },
+        );
         batch.commit()?;
         let elapsed = active.started.elapsed();
         let rows_done = active.rows_done;
-        if next.is_some() {
-            self.store
-                .update_background_task(&task_name(id.name), |entry| {
-                    entry.progress_current = Some(rows_done);
-                    entry.elapsed_ms = Some(elapsed.as_secs_f64() * 1000.0);
-                    entry.rate = (elapsed.as_secs_f64() > 0.0)
-                        .then(|| rows_done as f64 / elapsed.as_secs_f64());
+        self.store
+            .update_background_task(&task_name(id.name), |entry| {
+                entry.progress_current = Some(rows_done);
+                entry.elapsed_ms = Some(elapsed.as_secs_f64() * 1000.0);
+                entry.rate =
+                    (elapsed.as_secs_f64() > 0.0).then(|| rows_done as f64 / elapsed.as_secs_f64());
+                if phase == RebuildPhase::Validating {
+                    entry.message = Some("Checking the derived rows".to_string());
+                }
+            })?;
+        Ok(StepOutcome::Chunk)
+    }
+
+    /// Check up to one chunk of rows against the aggregate's invariant; on
+    /// the last one, the derivation is complete.
+    fn validate_chunk(&mut self) -> Result<StepOutcome> {
+        let active = self.active.as_mut().expect("rebuild in flight");
+        let aggregate = &self.aggregates[active.index];
+        let id = aggregate.id();
+        let mut budget = ChunkBudget::new(self.chunk_time, self.chunk_rows);
+        let start = super::resume_key(active.cursor.as_deref());
+        let mut last: Option<Vec<u8>> = None;
+        let mut more = false;
+        let checked = self
+            .store
+            .scan_derived_from(id.cf_name, &start, |key, value| {
+                aggregate.check_row(key, &value).map_err(|e| {
+                    e.context(format!(
+                        "{} row 0x{} at completion",
+                        id.name,
+                        hex::encode(key)
+                    ))
                 })?;
-            return Ok(StepOutcome::Chunk);
-        }
-        // Source exhausted: every row must satisfy the aggregate's invariant
-        // before the rows are served.
-        if let Err(err) = self.validate_rows(active_index(&self.active)) {
+                last = Some(key.to_vec());
+                if budget.tick(0) {
+                    more = true;
+                    return Ok(false);
+                }
+                Ok(true)
+            });
+        if let Err(err) = checked {
             return self.fail(err);
         }
+        if more {
+            active.cursor = last;
+            let started_at_ms = self
+                .store
+                .get_derive_meta(id.name)?
+                .and_then(|meta| meta.started_at_ms);
+            let mut batch = StoreBatch::new(self.store);
+            batch.put_derive_meta(
+                id.name,
+                &DeriveMeta {
+                    version: id.version,
+                    state: DeriveState::Running {
+                        derived_from_tip: active.derived_from_tip,
+                        phase: RebuildPhase::Validating,
+                        cursor: active.cursor.clone(),
+                        rows_done: active.rows_done,
+                    },
+                    run: active.run,
+                    started_at_ms,
+                    finished_at_ms: None,
+                },
+            );
+            batch.commit()?;
+            return Ok(StepOutcome::Chunk);
+        }
         let active = self.active.take().expect("rebuild in flight");
+        let elapsed = active.started.elapsed();
+        let started_at_ms = self
+            .store
+            .get_derive_meta(id.name)?
+            .and_then(|meta| meta.started_at_ms);
         let completed_at_tip = committed_tip(self.store)?;
         let finished_at_ms = chrono::Utc::now().timestamp_millis();
         let mut batch = StoreBatch::new(self.store);
@@ -319,7 +397,7 @@ impl<'s> DeriveScheduler<'s> {
                     rows_done: active.rows_done,
                 },
                 run: active.run,
-                started_at_ms: running.started_at_ms,
+                started_at_ms,
                 finished_at_ms: Some(finished_at_ms),
             },
         );
@@ -349,21 +427,6 @@ impl<'s> DeriveScheduler<'s> {
         Ok(StepOutcome::Completed)
     }
 
-    fn validate_rows(&self, index: usize) -> Result<()> {
-        let aggregate = &self.aggregates[index];
-        let id = aggregate.id();
-        self.store
-            .scan_derived_prefix(id.cf_name, &[], |key, value| {
-                aggregate.check_row(key, &value).map_err(|e| {
-                    e.context(format!(
-                        "{} row 0x{} at completion",
-                        id.name,
-                        hex::encode(key)
-                    ))
-                })
-            })
-    }
-
     /// Fail fast: mark the aggregate `Failed` (what the stopping indexer
     /// leaves for the TUI and the API) and return the error, which stops the
     /// writer loop and the indexer.
@@ -379,10 +442,6 @@ impl<'s> DeriveScheduler<'s> {
             id.name
         )))
     }
-}
-
-fn active_index(active: &Option<ActiveRebuild<'_>>) -> usize {
-    active.as_ref().expect("rebuild in flight").index
 }
 
 /// `derive_to_completion` over `aggregates` (tests).
@@ -535,6 +594,7 @@ mod tests {
                     TOY.version,
                     DeriveState::Running {
                         derived_from_tip: 5,
+                        phase: RebuildPhase::Folding,
                         cursor: Some(vec![1]),
                         rows_done: 2,
                     },
@@ -682,6 +742,64 @@ mod tests {
         run_to_completion(&mut scheduler);
         assert_eq!(stored_rows(&store, &TOY), expected_rows(30));
         assert_eq!(store.get_derive_meta(TOY.name).unwrap().unwrap().run, 2);
+    }
+
+    /// Review P3: the fold's read-modify-write is bounded per chunk — a
+    /// source whose every row lands on its own key yields after the key
+    /// budget, not after the whole source.
+    #[test]
+    fn a_fold_with_many_distinct_keys_yields_within_the_key_budget() {
+        let (_dir, store) = toy_store();
+        commit_headers(&store, 0..=40);
+        let toy: Vec<Box<dyn DerivedAggregate>> = vec![Box::new(ToyHeadersPerEpoch {
+            key_by_block: true,
+            ..Default::default()
+        })];
+        let mut scheduler = DeriveScheduler::with_aggregates(&store, toy)
+            .with_chunk_rows(1_000)
+            .with_chunk_keys(5);
+        scheduler.normalize_on_startup().unwrap();
+        let mut previous = 0;
+        while scheduler.has_pending_work().unwrap() {
+            scheduler.step().unwrap();
+            let rows = store
+                .get_derive_meta(TOY.name)
+                .unwrap()
+                .unwrap()
+                .rows_done()
+                .unwrap_or(0);
+            assert!(
+                rows - previous <= 5,
+                "one chunk folded {} distinct keys",
+                rows - previous
+            );
+            previous = rows;
+        }
+        assert_eq!(previous, 41);
+    }
+
+    /// Review P3: the completion validation is chunked like the fold — no
+    /// step checks more rows than the chunk budget.
+    #[test]
+    fn completion_validation_is_chunked() {
+        let (_dir, store) = toy_store();
+        commit_headers(&store, 0..=40);
+        let toy = ToyHeadersPerEpoch {
+            key_by_block: true,
+            ..Default::default()
+        };
+        let checks = toy.checks.clone();
+        let mut scheduler =
+            DeriveScheduler::with_aggregates(&store, vec![Box::new(toy)]).with_chunk_rows(4);
+        scheduler.normalize_on_startup().unwrap();
+        let mut seen = 0;
+        while scheduler.has_pending_work().unwrap() {
+            scheduler.step().unwrap();
+            let now = checks.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(now - seen <= 4, "one step validated {} rows", now - seen);
+            seen = now;
+        }
+        assert_eq!(seen, 41, "every row was validated once");
     }
 
     /// Ruling A: a rebuild invariant violation stops the scheduler (the

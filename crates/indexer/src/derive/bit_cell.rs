@@ -63,7 +63,7 @@ impl DerivedAggregate for BitCellByAccount {
             if let Some(key) = bit_cell_contribution(&identity_id, &entry)? {
                 add_delta(out, key, &[1])?;
             }
-            if budget.tick() {
+            if budget.tick(out.len()) {
                 return Ok(Some(identity_id.to_vec()));
             }
         }
