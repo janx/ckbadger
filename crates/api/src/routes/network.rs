@@ -8,11 +8,14 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use chrono::NaiveDate;
+use ckbadger_common::stats_bucket::{stats_day, utc8_day_end_ms, DAY_MS};
 use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
 use ckbadger_store::{
     ActiveCandidateState, AddressObservationHistogram, AddressProbeEvidence, AddressProbeResult,
     CrawlCandidate, CrawlProgress, DirectSessionEvidence, DirectSessionObservationSummary,
-    DiscoveryEvidence, LatestStatus, LocalObserverEvidence, NodeRecord, SessionInitiator,
+    DiscoveryEvidence, HistoryPoint, LatestStatus, LocalObserverEvidence, NodeRecord,
+    SessionInitiator,
 };
 
 use crate::response::{ok, ApiError, ApiResult, ApiRouteError};
@@ -688,62 +691,168 @@ pub struct DayCoverageResponse {
     pub rounds_per_day: Option<u64>,
 }
 
+/// The UTC+8 calendar day (D2) of a unix-seconds instant, through the API's
+/// one UTC+8 day boundary (`stats_bucket::stats_day`).
+fn utc8_day_of_secs(secs: u64) -> anyhow::Result<NaiveDate> {
+    let ms = secs
+        .checked_mul(1_000)
+        .and_then(|ms| i64::try_from(ms).ok())
+        .ok_or_else(|| anyhow::anyhow!("time {secs} s does not fit a millisecond instant"))?;
+    stats_day(ms)
+}
+
+/// Unix seconds of the UTC+8 midnight that starts `day`.
+fn utc8_day_start_secs(day: NaiveDate) -> Result<u64, ApiRouteError> {
+    utc8_day_end_ms(day)
+        .ok()
+        .and_then(|end_ms| end_ms.checked_sub(DAY_MS))
+        .and_then(|start_ms| u64::try_from(start_ms / 1_000).ok())
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "network daily history: UTC+8 day {day} has no unix-seconds start"
+            ))
+        })
+}
+
+/// The day after `day`, as an error rather than a wrap at the calendar's end.
+fn next_day(day: NaiveDate) -> Result<NaiveDate, ApiRouteError> {
+    day.succ_opt()
+        .ok_or_else(|| ApiError::internal(format!("network daily history: no day after {day}")))
+}
+
+/// Day-by-day coverage of `days` (the UTC+8 days that have a point), from
+/// `start_day` through `end_day`.
 fn daily_coverage(
-    points: &[HistoryPointResponse],
-    requested_from: Option<u64>,
-    last_complete_day: u64,
+    days: &BTreeMap<NaiveDate, ()>,
+    start_day: NaiveDate,
+    end_day: NaiveDate,
 ) -> Result<Vec<DayCoverageResponse>, ApiRouteError> {
-    let Some(start_day) = requested_from
-        .map(|ts| ts / 86_400)
-        .or_else(|| points.first().map(|point| point.ts / 86_400))
-    else {
-        return Ok(Vec::new());
-    };
-    if start_day > last_complete_day {
+    if start_day > end_day {
         return Ok(Vec::new());
     }
-    let day_count = last_complete_day - start_day + 1;
+    let day_count = (end_day - start_day).num_days() + 1;
     if day_count > 10_000 {
         return Err(ApiError::bad_request(format!(
-            "network daily coverage window is too wide: from_day={start_day}, to_day={last_complete_day}, max_days=10000"
+            "network daily coverage window is too wide: from_day={start_day}, to_day={end_day}, max_days=10000"
         )));
     }
-    let mut by_day = BTreeMap::new();
-    for point in points {
-        if point.ts % 86_400 != 0 || by_day.insert(point.ts, ()).is_some() {
-            return Err(ApiError::internal(format!(
-                "network daily history has invalid or duplicate day timestamp: ts={}",
-                point.ts
-            )));
-        }
-    }
     let mut coverage = Vec::new();
-    let mut ts = start_day.checked_mul(86_400).ok_or_else(|| {
-        ApiError::internal(format!(
-            "network coverage start timestamp overflow: day={start_day}"
-        ))
-    })?;
-    let end_ts = last_complete_day.checked_mul(86_400).ok_or_else(|| {
-        ApiError::internal(format!(
-            "network coverage end timestamp overflow: day={last_complete_day}"
-        ))
-    })?;
+    let mut day = start_day;
     loop {
         coverage.push(DayCoverageResponse {
-            ts,
-            has_retained_observation: by_day.contains_key(&ts),
+            ts: utc8_day_start_secs(day)?,
+            has_retained_observation: days.contains_key(&day),
             rounds_per_day: None,
         });
-        if ts == end_ts {
+        if day == end_day {
             break;
         }
-        ts = ts.checked_add(86_400).ok_or_else(|| {
-            ApiError::internal(format!(
-                "network daily coverage timestamp overflow: ts={ts}"
-            ))
-        })?;
+        day = next_day(day)?;
     }
     Ok(coverage)
+}
+
+/// One history row as served: `ts` is the bucket start in unix seconds.
+fn history_point_response(ts: u64, point: HistoryPoint) -> HistoryPointResponse {
+    HistoryPointResponse {
+        ts,
+        scalar: point.scalar,
+        buckets: point
+            .buckets
+            .into_iter()
+            .map(|(label, count)| LabelCount { label, count })
+            .collect(),
+    }
+}
+
+/// Unix seconds of an hourly bucket's start.
+fn hour_start_secs(metric: Metric, bucket: u64) -> Result<u64, ApiRouteError> {
+    bucket.checked_mul(Granularity::Hour.seconds()).ok_or_else(|| {
+        ApiError::internal(format!(
+            "network history timestamp overflow: metric={:?}, granularity={:?}, bucket={}, seconds={}",
+            metric,
+            Granularity::Hour,
+            bucket,
+            Granularity::Hour.seconds()
+        ))
+    })
+}
+
+/// D2: the daily series by UTC+8 calendar day. Every stored point is the
+/// snapshot of the last crawl round that completed in its bucket (each round
+/// overwrites its hour and day bucket), and a UTC+8 day starts on a UTC hour
+/// boundary, so a day's point is exactly its latest retained hourly point.
+/// The crawler's UTC-day rows cannot be re-cut into UTC+8 days (the round
+/// time inside a day is not stored) and are not read. Days run through the
+/// last complete UTC+8 day by the wall clock; a day whose hours are no longer
+/// retained has no point (a gap, never zero).
+fn utc8_daily_history(
+    store: Option<&ckbadger_store::CkbadgerStore>,
+    metric: Metric,
+    from: Option<u64>,
+    to: Option<u64>,
+) -> Result<(Vec<HistoryPointResponse>, Vec<DayCoverageResponse>), ApiRouteError> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|error| ApiError::internal(format!("system clock before UNIX epoch: {error}")))?
+        .as_secs();
+    let today = utc8_day_of_secs(now)
+        .map_err(|error| ApiError::internal(format!("network daily history clock: {error:#}")))?;
+    let last_complete_day = today.pred_opt().ok_or_else(|| {
+        ApiError::internal(format!("network daily history: no day before {today}"))
+    })?;
+    let query_day = |secs: u64, name: &str| {
+        utc8_day_of_secs(secs).map_err(|error| {
+            ApiError::bad_request(format!("invalid network history `{name}`: {error:#}"))
+        })
+    };
+    let from_day = from.map(|secs| query_day(secs, "from")).transpose()?;
+    let end_day = match to {
+        Some(secs) => query_day(secs, "to")?.min(last_complete_day),
+        None => last_complete_day,
+    };
+    let mut by_day: BTreeMap<NaiveDate, (u64, HistoryPoint)> = BTreeMap::new();
+    if let Some(store) = store {
+        if from_day.is_none_or(|from_day| from_day <= end_day) {
+            let first_hour = match from_day {
+                Some(day) => utc8_day_start_secs(day)? / Granularity::Hour.seconds(),
+                None => 0,
+            };
+            let last_hour = (utc8_day_start_secs(next_day(end_day)?)?
+                / Granularity::Hour.seconds())
+            .checked_sub(1)
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "network daily history: day {end_day} ends at the epoch"
+                ))
+            })?;
+            let rows = store
+                .scan_history(metric, Granularity::Hour, first_hour, last_hour)
+                .map_err(|error| ApiError::internal(error.to_string()))?;
+            for (bucket, point) in rows {
+                let ts = hour_start_secs(metric, bucket)?;
+                let day = utc8_day_of_secs(ts).map_err(|error| {
+                    ApiError::internal(format!(
+                        "network history hour bucket {bucket} has no UTC+8 day: {error:#}"
+                    ))
+                })?;
+                // The latest hour of the day holds the day's last round.
+                if by_day.get(&day).is_none_or(|(hour, _)| *hour < bucket) {
+                    by_day.insert(day, (bucket, point));
+                }
+            }
+        }
+    }
+    let days: BTreeMap<NaiveDate, ()> = by_day.keys().map(|day| (*day, ())).collect();
+    let points = by_day
+        .into_iter()
+        .map(|(day, (_, point))| Ok(history_point_response(utc8_day_start_secs(day)?, point)))
+        .collect::<Result<Vec<_>, ApiRouteError>>()?;
+    let coverage = match from_day.or_else(|| days.keys().next().copied()) {
+        Some(start_day) => daily_coverage(&days, start_day, end_day)?,
+        None => Vec::new(),
+    };
+    Ok((points, coverage))
 }
 
 fn parse_metric(metric: &str) -> Option<Metric> {
@@ -773,71 +882,36 @@ async fn history(
     let granularity = parse_granularity(&query.granularity).ok_or_else(|| {
         ApiError::bad_request(format!("unknown granularity '{}'", query.granularity))
     })?;
-    let last_complete_day = if granularity == Granularity::Day {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|error| {
-                ApiError::internal(format!("system clock before UNIX epoch: {error}"))
-            })?
-            .as_secs();
-        bucket_of(now, Granularity::Day).checked_sub(1)
-    } else {
-        None
-    };
-    let points = match state.network_store.load_full() {
-        None => Vec::new(),
-        Some(store) => {
-            let from = query
-                .from
-                .map(|timestamp| bucket_of(timestamp, granularity))
-                .unwrap_or(0);
-            let to = query
-                .to
-                .map(|timestamp| bucket_of(timestamp, granularity))
-                .unwrap_or(u64::MAX);
-            let mut rows = store
-                .scan_history(metric, granularity, from, to)
-                .map_err(|error| ApiError::internal(error.to_string()))?;
-            if granularity == Granularity::Day {
-                rows.retain(|(bucket, _)| last_complete_day.is_some_and(|day| *bucket <= day));
-            }
-            rows.into_iter()
-                .map(|(bucket, point)| {
-                    let ts = bucket.checked_mul(granularity.seconds()).ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "network history timestamp overflow: metric={:?}, granularity={:?}, bucket={}, seconds={}",
-                            metric,
-                            granularity,
-                            bucket,
-                            granularity.seconds()
-                        ))
-                    })?;
-                    Ok(HistoryPointResponse {
-                        ts,
-                        scalar: point.scalar,
-                        buckets: point
-                            .buckets
-                            .into_iter()
-                            .map(|(label, count)| LabelCount { label, count })
-                            .collect(),
-                    })
-                })
-                .collect::<Result<Vec<_>, _>>()?
+    let store = state.network_store.load_full();
+    let (points, daily_coverage) = match granularity {
+        Granularity::Hour => {
+            let points = match store.as_deref() {
+                None => Vec::new(),
+                Some(store) => {
+                    let from = query
+                        .from
+                        .map(|timestamp| bucket_of(timestamp, granularity))
+                        .unwrap_or(0);
+                    let to = query
+                        .to
+                        .map(|timestamp| bucket_of(timestamp, granularity))
+                        .unwrap_or(u64::MAX);
+                    store
+                        .scan_history(metric, granularity, from, to)
+                        .map_err(|error| ApiError::internal(error.to_string()))?
+                        .into_iter()
+                        .map(|(bucket, point)| {
+                            Ok(history_point_response(
+                                hour_start_secs(metric, bucket)?,
+                                point,
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, ApiRouteError>>()?
+                }
+            };
+            (points, Vec::new())
         }
-    };
-    let daily_coverage = if granularity == Granularity::Day {
-        match last_complete_day {
-            Some(last_complete_day) => {
-                let coverage_end = query
-                    .to
-                    .map(|to| bucket_of(to, Granularity::Day).min(last_complete_day))
-                    .unwrap_or(last_complete_day);
-                daily_coverage(&points, query.from, coverage_end)?
-            }
-            None => Vec::new(),
-        }
-    } else {
-        Vec::new()
+        Granularity::Day => utc8_daily_history(store.as_deref(), metric, query.from, query.to)?,
     };
     let coverage_from = daily_coverage.first().map(|day| day.ts);
     let coverage_to = daily_coverage.last().map(|day| day.ts);

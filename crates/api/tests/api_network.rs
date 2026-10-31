@@ -303,25 +303,94 @@ async fn map_point_alias_is_the_latest_verified_dial_alias() {
     );
 }
 
-#[tokio::test]
-async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() {
-    use ckbadger_store::network_keys::{Granularity, Metric};
-    use ckbadger_store::{CkbadgerStore, HistoryPoint};
-    let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
-    std::mem::forget(dir);
-    for day in [10, 12] {
+/// One completed crawl round finishing at `finished` (unix seconds), written
+/// the way the crawler publishes it: the round's snapshot overwrites the hour
+/// and the day bucket it finished in (`bucket_of(finished, …)`).
+fn put_round(network: &ckbadger_store::CkbadgerStore, finished: u64, scalar: u64) {
+    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
+    for granularity in [Granularity::Hour, Granularity::Day] {
         network
             .put_history_point(
                 Metric::VerifiedPeers,
-                Granularity::Day,
-                day,
-                &HistoryPoint {
-                    scalar: 7,
+                granularity,
+                bucket_of(finished, granularity),
+                &ckbadger_store::HistoryPoint {
+                    scalar,
                     buckets: vec![],
                 },
             )
             .unwrap();
+    }
+}
+
+/// Unix seconds of an RFC 3339 instant.
+fn unix(instant: &str) -> u64 {
+    chrono::DateTime::parse_from_rfc3339(instant)
+        .unwrap()
+        .timestamp() as u64
+}
+
+/// D2: daily network history is bucketed by UTC+8 calendar day. A round whose
+/// UTC day and UTC+8 day differ lands in its UTC+8 day, each day shows the
+/// last round that finished inside it, and `ts` is the UTC+8 midnight.
+#[tokio::test]
+async fn daily_history_buckets_rounds_by_utc8_calendar_day() {
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    // UTC day 10-23 holds rounds of two UTC+8 days.
+    put_round(&network, unix("2026-10-23T10:00:00Z"), 11); // 10-23 18:00 UTC+8
+    put_round(&network, unix("2026-10-23T20:00:00Z"), 12); // 10-24 04:00 UTC+8
+    put_round(&network, unix("2026-10-24T03:00:00Z"), 13); // 10-24 11:00 UTC+8 (later)
+    let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
+    let (status, history) = get_json(
+        &app,
+        &format!(
+            "/network/history?metric=verifiedPeers&granularity=day&from={}&to={}",
+            unix("2026-10-23T00:00:00+08:00"),
+            unix("2026-10-24T00:00:00+08:00")
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{history}");
+    let points: Vec<(u64, u64)> = history["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|point| {
+            (
+                point["ts"].as_u64().unwrap(),
+                point["scalar"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        points,
+        vec![
+            (unix("2026-10-23T00:00:00+08:00"), 11),
+            (unix("2026-10-24T00:00:00+08:00"), 13),
+        ]
+    );
+    assert_eq!(history["coverageFrom"], unix("2026-10-23T00:00:00+08:00"));
+    assert_eq!(history["coverageTo"], unix("2026-10-24T00:00:00+08:00"));
+    assert_eq!(
+        history["dailyCoverage"],
+        serde_json::json!([
+            { "ts": unix("2026-10-23T00:00:00+08:00"), "hasRetainedObservation": true, "roundsPerDay": null },
+            { "ts": unix("2026-10-24T00:00:00+08:00"), "hasRetainedObservation": true, "roundsPerDay": null },
+        ])
+    );
+}
+
+#[tokio::test]
+async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() {
+    let dir = tempfile::tempdir().unwrap();
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
+    std::mem::forget(dir);
+    // D2: one round on UTC+8 days 10 and 12 (UTC midnight is 08:00 UTC+8, the
+    // same calendar day); a UTC+8 day starts at `day * 86_400 - 28_800`.
+    for day in [10u64, 12] {
+        put_round(&network, day * 86_400, 7);
     }
     let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
     let (code, history) = get_json(
@@ -338,8 +407,8 @@ async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() 
     assert_eq!(coverage[1]["hasRetainedObservation"], false);
     assert_eq!(coverage[2]["hasRetainedObservation"], true);
     assert!(coverage.iter().all(|day| day["roundsPerDay"].is_null()));
-    assert_eq!(history["coverageFrom"], 864000);
-    assert_eq!(history["coverageTo"], 1036800);
+    assert_eq!(history["coverageFrom"], 864000 - 28_800);
+    assert_eq!(history["coverageTo"], 1036800 - 28_800);
     let (_, bounded) = get_json(
         &app,
         "/network/history?metric=verifiedPeers&granularity=day&from=777600&to=1382400",
@@ -347,41 +416,30 @@ async fn daily_history_reports_retained_gaps_without_fabricating_round_counts() 
     .await;
     let bounded_days = bounded["dailyCoverage"].as_array().unwrap();
     assert_eq!(bounded_days.len(), 8);
-    assert_eq!(bounded["coverageFrom"], 777600);
-    assert_eq!(bounded["coverageTo"], 1382400);
+    assert_eq!(bounded["coverageFrom"], 777600 - 28_800);
+    assert_eq!(bounded["coverageTo"], 1382400 - 28_800);
     assert_eq!(bounded_days[0]["hasRetainedObservation"], false);
     assert_eq!(bounded_days[7]["hasRetainedObservation"], false);
 }
 
 #[tokio::test]
 async fn daily_history_future_to_never_includes_the_incomplete_or_future_day() {
-    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
-    use ckbadger_store::{CkbadgerStore, HistoryPoint};
-
     let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
     std::mem::forget(dir);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let current = bucket_of(now, Granularity::Day);
-    for (bucket, scalar) in [(current - 1, 5), (current, 99), (current + 1, 100)] {
-        network
-            .put_history_point(
-                Metric::VerifiedPeers,
-                Granularity::Day,
-                bucket,
-                &HistoryPoint {
-                    scalar,
-                    buckets: vec![],
-                },
-            )
-            .unwrap();
+    // D2: today's UTC+8 day index, and the unix second its midnight falls on.
+    let current = (now + 28_800) / 86_400;
+    let day_start = |day: u64| day * 86_400 - 28_800;
+    for (day, scalar) in [(current - 1, 5), (current, 99), (current + 1, 100)] {
+        put_round(&network, day_start(day) + 3_600, scalar);
     }
     let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
-    let from = (current - 2) * 86_400;
-    let to = (current + 2) * 86_400;
+    let from = day_start(current - 2);
+    let to = day_start(current + 2);
     let (status, body) = get_json(
         &app,
         &format!("/network/history?metric=verifiedPeers&granularity=day&from={from}&to={to}"),
@@ -392,7 +450,7 @@ async fn daily_history_future_to_never_includes_the_incomplete_or_future_day() {
     assert_eq!(body["points"].as_array().unwrap().len(), 1);
     assert_eq!(body["points"][0]["scalar"], 5);
     assert_eq!(body["coverageFrom"], from);
-    assert_eq!(body["coverageTo"], (current - 1) * 86_400);
+    assert_eq!(body["coverageTo"], day_start(current - 1));
     assert_eq!(body["dailyCoverage"].as_array().unwrap().len(), 2);
     assert_eq!(body["dailyCoverage"][0]["hasRetainedObservation"], false);
     assert_eq!(body["dailyCoverage"][1]["hasRetainedObservation"], true);
@@ -595,30 +653,16 @@ async fn history_uses_verified_peer_metric_names() {
 
 #[tokio::test]
 async fn history_day_excludes_the_incomplete_current_day() {
-    use ckbadger_store::network_keys::{bucket_of, Granularity, Metric};
-    use ckbadger_store::{CkbadgerStore, HistoryPoint};
-
     let dir = tempfile::tempdir().unwrap();
-    let network = Arc::new(CkbadgerStore::open_test_network(dir.path()).unwrap());
+    let network = Arc::new(ckbadger_store::CkbadgerStore::open_test_network(dir.path()).unwrap());
     std::mem::forget(dir);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    let current = bucket_of(now, Granularity::Day);
-    for (bucket, scalar) in [(current, 99), (current - 1, 5)] {
-        network
-            .put_history_point(
-                Metric::VerifiedPeers,
-                Granularity::Day,
-                bucket,
-                &HistoryPoint {
-                    scalar,
-                    buckets: vec![],
-                },
-            )
-            .unwrap();
-    }
+    // D2: a round now (today, UTC+8) and one 24 h earlier (yesterday, UTC+8).
+    put_round(&network, now, 99);
+    put_round(&network, now - 86_400, 5);
     let app = create_router_without_warmup(test_config_with_network(test_store(), network, true));
     let (_, body) = get_json(
         &app,
