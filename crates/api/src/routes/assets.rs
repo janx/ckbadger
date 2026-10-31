@@ -2149,6 +2149,79 @@ async fn get_object_item_detail(
     })
 }
 
+/// The cell of an m-NFT item's class that one transaction outputs (OB-M10):
+/// the party whose lock this is "holds the class cell" on that row.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MnftClassCellRef {
+    pub output_index: i16,
+    pub lock_hash: String,
+    pub address: String,
+}
+
+/// The cell of class `class_id` that transaction `tx_hash` outputs, read
+/// from that transaction's indexed class outputs (one prefix seek) and the
+/// output's own payload. An m-NFT mint carries its class cell from input to
+/// output (`issued` + 1); class cells are indexed by the transaction that
+/// creates them, so the output is the side the stored rows give exactly.
+/// `None` when the transaction outputs no cell of this class.
+pub(crate) fn mnft_class_cell_of_tx(
+    state: &AppState,
+    tx_hash: &[u8],
+    class_id: &[u8],
+) -> anyhow::Result<Option<MnftClassCellRef>> {
+    let context = || {
+        format!(
+            "class=0x{} tx=0x{}",
+            hex::encode(class_id),
+            hex::encode(tx_hash)
+        )
+    };
+    let outputs: Vec<i16> = state
+        .store
+        .list_mnft_class_outputs_of_tx(tx_hash)?
+        .into_iter()
+        .filter(|(_, id)| id.as_slice() == class_id)
+        .map(|(index, _)| index)
+        .collect();
+    let output_index = match outputs.as_slice() {
+        [] => return Ok(None),
+        [index] => *index,
+        many => anyhow::bail!(
+            "transaction outputs {} cells of one class: {}",
+            many.len(),
+            context()
+        ),
+    };
+    let key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
+    let cell = state
+        .append_only_store
+        .get_cell_by_outpoint_key(&key)?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "class outpoint index row has no cell payload: {} output={output_index}",
+                context()
+            )
+        })?;
+    anyhow::ensure!(
+        cell.type_args.as_deref() == Some(class_id),
+        "class outpoint index row disagrees with its cell's type args: {} output={output_index}",
+        context()
+    );
+    let address = crate::utils::address::encode_lock_address(
+        &cell.lock_script_hash,
+        &cell.lock_code_hash,
+        cell.lock_hash_type,
+        &cell.lock_args,
+        &state.ckb_network,
+    )?;
+    Ok(Some(MnftClassCellRef {
+        output_index,
+        lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
+        address,
+    }))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum NftLifecycleStandard {
     MnftToken,

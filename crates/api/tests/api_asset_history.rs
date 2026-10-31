@@ -780,6 +780,141 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
 }
 
+/// An m-NFT token minted in transaction 0x71…: the token cell is output 0;
+/// with `class_in_tx` the transaction also outputs its class's cell (output
+/// 1, held by lock args 0x09…) and another class's cell (output 2).
+async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Vec<u8>) {
+    let store = test_store();
+    let class_id = vec![0x5c; 24];
+    let other_class = vec![0x5d; 24];
+    let token_id = [class_id.as_slice(), &[0, 0, 0, 0]].concat();
+    let mint = vec![0x71; 32];
+    seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
+    let header = store.get_block_header(100).unwrap().unwrap();
+    let with_type = |id: &[u8], owner: u8, type_code: u8| {
+        let mut payload = cell(id, 300_00000000, owner);
+        payload.type_code_hash = Some(vec![type_code; 32]);
+        payload.type_script_hash = Some(compute_script_hash(&[type_code; 32], 1, id));
+        payload.occupied_capacity = ((8 + 53 + 33 + id.len()) as i64) * 100_000000;
+        payload
+    };
+    let token_cell = with_type(&token_id, 2, 0x42);
+    let class_cell = with_type(&class_id, 9, 0x43);
+    let other_class_cell = with_type(&other_class, 8, 0x43);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_mnft(
+        &token_id,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftToken,
+            collection_id: Some(class_id.clone()),
+            token_id: Some(token_id.clone()),
+            owner_lock_hash: Some(token_cell.lock_script_hash.clone()),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: mint.clone(),
+            extra: ObjectExtra::MnftToken {
+                token_index: 0,
+                characteristic: vec![0; 8],
+                configure: 0,
+                state: 0,
+            },
+        },
+    );
+    batch.put_mnft_token_outpoint(&mint, 0, &token_id);
+    batch.put_cell(&mint, 0, &token_cell, 100);
+    if class_in_tx {
+        batch.put_mnft_class_outpoint(&mint, 1, &class_id);
+        batch.put_cell(&mint, 1, &class_cell, 100);
+        batch.put_mnft_class_outpoint(&mint, 2, &other_class);
+        batch.put_cell(&mint, 2, &other_class_cell, 100);
+    }
+    batch.put_tx_hash_map(&mint, 100, 1);
+    batch.put_tx_index(
+        100,
+        1,
+        &TxIndexEntry {
+            tx_hash: mint.as_slice().try_into().unwrap(),
+            is_cellbase: false,
+            timestamp: 1_700_000_000_100,
+            inputs_count: 1,
+            outputs_count: if class_in_tx { 3 } else { 1 },
+            fee: 0,
+            tx_size: 400,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_actions(&make_test_tx_actions(
+        &class_cell.lock_script_hash,
+        &mint,
+        &header.hash,
+        100,
+        1,
+        0,
+        0,
+    ));
+    batch.commit().unwrap();
+    (
+        create_router(test_config(store)).await,
+        token_id,
+        class_cell.lock_script_hash,
+    )
+}
+
+/// OB-M10 (round 3, R-4): an m-NFT item's mint row could not say which party
+/// "holds the class cell". The mint row's `itemContext.classCell` now names
+/// the cell of the item's own class that the mint transaction outputs — its
+/// output index, lock hash and address (the participant with that lock is the
+/// holder) — read from that transaction's indexed class outputs; another
+/// class's cell in the same transaction is not it. A mint transaction that
+/// outputs no cell of the item's class has `classCell: null`.
+#[tokio::test]
+async fn mnft_mint_row_names_the_class_cell_it_carries() {
+    let (app, token_id, class_lock) = mnft_mint_feed_fixture(true).await;
+    let base = format!("/assets/objects/items/0x{}", hex::encode(&token_id));
+    for path in [
+        format!("{base}/activity-feed"),
+        format!("{base}/transactions"),
+    ] {
+        let (status, feed) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {feed}");
+        let context = &feed["data"][0]["itemContext"];
+        assert_eq!(context["action"], "mint", "{path}: {feed}");
+        let class_cell = &context["classCell"];
+        assert_eq!(class_cell["outputIndex"], 1, "{path}: {feed}");
+        assert_eq!(
+            class_cell["lockHash"],
+            format!("0x{}", hex::encode(&class_lock)),
+            "{path}: {feed}"
+        );
+        assert!(
+            class_cell["address"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("ckb1")),
+            "{path}: {feed}"
+        );
+    }
+
+    let (app, token_id, _) = mnft_mint_feed_fixture(false).await;
+    let (status, feed) = get_json(
+        &app,
+        &format!(
+            "/assets/objects/items/0x{}/activity-feed",
+            hex::encode(&token_id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    let context = feed["data"][0]["itemContext"].as_object().unwrap();
+    assert_eq!(context["action"], "mint", "{feed}");
+    assert!(
+        context.get("classCell").is_some_and(|cell| cell.is_null()),
+        "a mint without its class cell must say so (null), not omit it: {feed}"
+    );
+}
+
 /// Every `.cell` item feed row says what the transaction meant for this name,
 /// computed once by the API's lifecycle classification: the name's own
 /// `dotcell` actions in protocol order (`protocolActions`), or — when the tx

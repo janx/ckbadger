@@ -44,6 +44,23 @@ fn item_feed(
         lifecycle.iter().map(|row| row.tx_hash.clone()),
     )
     .map_err(|e| ApiError::internal(format!("item=0x{}: {e:#}", hex::encode(&id))))?;
+    // An m-NFT token's class: its mint row names the class cell it carries.
+    let mnft_class = match standard {
+        NftLifecycleStandard::MnftToken => Some(
+            state
+                .store
+                .get_mnft(&id)
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .and_then(|entry| entry.collection_id)
+                .ok_or_else(|| {
+                    ApiError::internal(format!(
+                        "m-NFT token 0x{} has no class id",
+                        hex::encode(&id)
+                    ))
+                })?,
+        ),
+        _ => None,
+    };
     let mut result = if transactions {
         serde_json::to_value(
             asset_feed::transactions(state, scope, params.limit, params.cursor.as_deref())?.0,
@@ -57,7 +74,9 @@ fn item_feed(
     for row in result["data"].as_array_mut().expect("canonical feed array") {
         let hash = row[if transactions { "hash" } else { "txHash" }]
             .as_str()
-            .ok_or_else(|| ApiError::internal("canonical asset feed transaction hash missing"))?;
+            .ok_or_else(|| ApiError::internal("canonical asset feed transaction hash missing"))?
+            .to_string();
+        let hash = hash.as_str();
         let meaning = lifecycle_by_tx
             .get(hash)
             .ok_or_else(|| ApiError::internal("canonical item feed action missing"))?;
@@ -105,6 +124,15 @@ fn item_feed(
             "consumedCell": consumed.first(),
             "versionDiff": version_diff,
         });
+        if let (Some(class_id), "mint") = (&mnft_class, meaning.action) {
+            let tx_hash = hex::decode(hash.trim_start_matches("0x"))
+                .map_err(|e| ApiError::internal(format!("feed transaction hash {hash}: {e}")))?;
+            let class_cell =
+                assets::mnft_class_cell_of_tx(state, &tx_hash, class_id).map_err(|e| {
+                    ApiError::internal(format!("item=0x{} mint {hash}: {e:#}", hex::encode(&id)))
+                })?;
+            row["itemContext"]["classCell"] = json!(class_cell);
+        }
     }
     ok(result)
 }

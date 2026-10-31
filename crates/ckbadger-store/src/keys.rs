@@ -1135,6 +1135,22 @@ pub fn encode_mnft_class_outpoint_key(
     key
 }
 
+/// The prefix of every mNFT class outpoint key one transaction created:
+/// prefix(1B) + tx_hash(32B). The outpoint's tx hash leads, so a prefix seek
+/// lists exactly that transaction's class outputs.
+pub fn encode_mnft_class_outpoint_tx_prefix(tx_hash: &[u8]) -> [u8; 33] {
+    assert_key_component_len(
+        "encode_mnft_class_outpoint_tx_prefix",
+        "tx_hash",
+        tx_hash.len(),
+        HASH32_LEN,
+    );
+    let mut prefix = [0u8; 33];
+    prefix[0] = STATS_PREFIX_MNFT_CLASS_OUTPOINT;
+    prefix[1..].copy_from_slice(tx_hash);
+    prefix
+}
+
 /// mNFT token outpoint lookup key: prefix(1B) + outpoint(34B)
 pub const MNFT_TOKEN_OUTPOINT_KEY_SIZE: usize = 35;
 
@@ -3633,6 +3649,14 @@ mod tests {
                 expected: 32,
                 call: |h| {
                     let _ = encode_outpoint(h, 0);
+                },
+            },
+            FixedWidthCase {
+                encoder: "encode_mnft_class_outpoint_tx_prefix",
+                component: "tx_hash",
+                expected: 32,
+                call: |h| {
+                    let _ = encode_mnft_class_outpoint_tx_prefix(h);
                 },
             },
             FixedWidthCase {
