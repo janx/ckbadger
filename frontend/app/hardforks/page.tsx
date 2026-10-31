@@ -140,30 +140,15 @@ function EditionCard({
   );
 }
 
-/** The genesis and tip header times bound the axis; both are ordinary block reads. */
-function useChainSpan(tipBlock: number | undefined) {
-  const genesis = useQuery({
-    queryKey: ['block', '0'],
-    queryFn: () => api.getBlock(0),
-    staleTime: Infinity,
-  });
-  const tip = useQuery({
-    queryKey: ['block', String(tipBlock)],
-    queryFn: () => api.getBlock(tipBlock!),
-    enabled: tipBlock !== undefined,
-    staleTime: 60_000,
-  });
-  const ms = (timestamp: string | undefined, which: string) => {
-    if (timestamp === undefined) return null;
-    const value = new Date(timestamp).getTime();
-    if (!Number.isFinite(value)) throw new Error(`invalid ${which} header time ${timestamp}`);
-    return value;
-  };
-  return {
-    genesisMs: ms(genesis.data?.timestamp, 'genesis'),
-    tipMs: ms(tip.data?.timestamp, 'tip'),
-    error: genesis.error ?? tip.error,
-  };
+/**
+ * The genesis and tip header times bound the axis (round 3, contracts R-B · R-10: served on
+ * `/hardforks` itself; both null while the store has no indexed header). Exact ms, no block read.
+ */
+function chainSpan(data: { genesisTimestampMs: number | null; tipTimestampMs: number | null }) {
+  const { genesisTimestampMs: genesisMs, tipTimestampMs: tipMs } = data;
+  if ((genesisMs === null) !== (tipMs === null))
+    throw new Error(`hardforks: genesis time ${genesisMs} and tip time ${tipMs} disagree`);
+  return { genesisMs, tipMs };
 }
 
 export default function HardforksPage() {
@@ -173,7 +158,7 @@ export default function HardforksPage() {
     queryFn: () => api.getHardforks({ network }),
     staleTime: 60_000,
   });
-  const span = useChainSpan(data?.tipBlock);
+  const span = data ? chainSpan(data) : null;
   const events = data?.events ?? [];
   const mirana = events.find((event) => event.id === 'mirana-2021');
   const meepo = events.find((event) => event.id === 'meepo-2024');
@@ -241,12 +226,10 @@ export default function HardforksPage() {
                   </span>
                 }
               >
-                {span.error ? (
-                  <p role="alert" className="text-negative text-[12px]">
-                    Chain time span unavailable: {span.error.message}
+                {span === null || span.genesisMs === null || span.tipMs === null ? (
+                  <p className="text-text-dim text-[12px]">
+                    The index holds no block header yet; the timeline draws once it does.
                   </p>
-                ) : span.genesisMs === null || span.tipMs === null ? (
-                  <p className="text-text-dim text-[12px]">Loading the chain&apos;s time span…</p>
                 ) : span.tipMs <= dayStartMs(meepo.activationDate) ? (
                   <p className="text-text-dim text-[12px]">
                     The index has not reached the latest edition yet; the timeline draws once it
@@ -276,7 +259,7 @@ export default function HardforksPage() {
               </DetailSection>
               <div className="grid min-w-0 items-start gap-12 md:grid-cols-2">
                 {events.map((event) => (
-                  <EditionCard key={event.id} event={event} timeline={data} tipMs={span.tipMs} />
+                  <EditionCard key={event.id} event={event} timeline={data} tipMs={span!.tipMs} />
                 ))}
               </div>
               <DetailSection title="As this node's consensus states it">

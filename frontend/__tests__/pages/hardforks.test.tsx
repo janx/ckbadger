@@ -41,7 +41,13 @@ const features = [
   { rfc: '0048', activationEpoch: 12293 },
   { rfc: '0049', activationEpoch: 12293 },
 ];
+// R-10: the timeline's ends ride on /hardforks (the captured producer payloads predate them).
+const ends = {
+  genesisTimestampMs: Date.parse('2019-11-15T21:49:50.812Z'),
+  tipTimestampMs: Date.parse('2026-10-30T00:00:00.000Z'),
+};
 const mockTimeline = {
+  ...ends,
   network: 'mainnet',
   hashTypeLanes: lanes,
   consensusFeatures: features,
@@ -80,20 +86,45 @@ describe('HardforksPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     stubChartWidth(1200);
-    getBlockMock.mockImplementation(async (id: string | number) => ({
-      timestamp: String(id) === '0' ? '2019-11-15T21:49:50.812Z' : '2026-10-30T00:00:00.000Z',
-    }));
+    // R-10: the page must not read /blocks/0 or /blocks/{tip} for the timeline's ends any more.
+    getBlockMock.mockRejectedValue(new Error('the hardforks page read a block'));
   });
 
   it('renders the mainnet consensus producer payload at its unsynced tip', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
-    getHardforksMock.mockResolvedValue({ ...producerMainnet, hashTypeLanes: lanes });
+    getHardforksMock.mockResolvedValue({ ...producerMainnet, ...ends, hashTypeLanes: lanes });
     render(<HardforksPage />);
     expect(await screen.findByText('CKB Edition Mirana')).toBeInTheDocument();
     expect(screen.getAllByText('RFC 0049').length).toBeGreaterThan(0);
     expect(screen.getByText(/mainnet · tip epoch 0/)).toBeInTheDocument();
     // No activation block indexed yet: no block link is invented.
     expect(screen.queryByRole('link', { name: /^block #/ })).not.toBeInTheDocument();
+  });
+
+  it('draws the VM timeline from the response’s genesis and tip times, reading no block (R-10)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    render(<HardforksPage />);
+    expect(
+      await screen.findByRole('img', { name: /Which VM each hash type runs/ }, { timeout: 5000 })
+    ).toBeInTheDocument();
+    expect(getBlockMock).not.toHaveBeenCalled();
+  });
+
+  it('says the index has no header yet when both ends are null (R-10)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue({
+      ...mockTimeline,
+      genesisTimestampMs: null,
+      tipTimestampMs: null,
+    });
+    render(<HardforksPage />);
+    expect(
+      await screen.findByText(
+        'The index holds no block header yet; the timeline draws once it does.'
+      )
+    ).toBeInTheDocument();
+    expect(getBlockMock).not.toHaveBeenCalled();
   });
 
   it('renders timeline rows from API data', async () => {
@@ -133,6 +164,7 @@ describe('HardforksPage', () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue({
       ...producerDeployments,
+      ...ends,
       hashTypeLanes: lanes,
       scriptDeployments: producerDeployments.scriptDeployments.map((d) => ({
         ...d,
@@ -250,7 +282,8 @@ describe('HardforksPage', () => {
     expect(mirana).not.toHaveTextContent('RFC 0049');
     const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo' });
     expect(meepo).toHaveTextContent(/with the Spawn syscalls/);
-    expect(meepo).toHaveTextContent('No script CKBadger knows uses data2 yet.');
+    // R-10: the tip time arrives with the timeline, so the story counts the days since Meepo (CH-42).
+    expect(meepo).toHaveTextContent('No script CKBadger knows uses data2 yet, 486 days on.');
     expect(meepo).toHaveTextContent('RFC 0049CKB-VM version 2');
     expect(
       screen.getByText(
@@ -263,6 +296,7 @@ describe('HardforksPage', () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
     getHardforksMock.mockResolvedValue({
       ...producerDeployments,
+      ...ends,
       hashTypeLanes: lanes,
       scriptDeployments: producerDeployments.scriptDeployments.map((d) => ({
         ...d,
@@ -325,7 +359,7 @@ describe('HardforksPage', () => {
 
   it('refuses deployments without their registered hash types', async () => {
     const { default: HardforksPage } = await import('@/app/hardforks/page');
-    getHardforksMock.mockResolvedValue({ ...producerDeployments, hashTypeLanes: lanes });
+    getHardforksMock.mockResolvedValue({ ...producerDeployments, ...ends, hashTypeLanes: lanes });
     render(<HardforksPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/has no registered hash types/);
   });
