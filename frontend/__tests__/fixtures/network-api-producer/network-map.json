@@ -4,6 +4,10 @@
   "points": [
     {
       "advertiserCount": 0,
+      "alias": {
+        "address": "addrpeerA",
+        "verifiedAt": 200
+      },
       "asn": "AS65000 Ex",
       "clientVersion": "0.119.0",
       "country": "US",
