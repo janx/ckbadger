@@ -446,10 +446,18 @@ pub(crate) fn parse_block_to_facts(
                 // These tags are fully represented by the scalar fields above.
                 // Keep this match exhaustive so adding a protocol-backed semantic
                 // tag cannot silently drop its protocol facts again.
-                CellSemanticTag::Plain
-                | CellSemanticTag::Dao
-                | CellSemanticTag::Sudt
-                | CellSemanticTag::Xudt => None,
+                // Witnesses are read only for an extension in witness mode.
+                CellSemanticTag::Xudt => {
+                    super::facts::xudt_extension_facts(type_args_bytes.as_deref(), || {
+                        (0..witnesses.len()).map(|i| {
+                            witnesses
+                                .get(i)
+                                .expect("witness index below the vector length")
+                                .raw_data()
+                        })
+                    })
+                }
+                CellSemanticTag::Plain | CellSemanticTag::Dao | CellSemanticTag::Sudt => None,
             };
 
             // -- Interned identities (after protocol_facts to avoid ownership conflict) --

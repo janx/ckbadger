@@ -714,14 +714,26 @@ fn parse_single_block(
                     &parsed_tx.hash,
                     output_index_i16,
                 )?,
-                protocol_facts: parse_protocol_facts(
-                    cell,
-                    semantic_tag,
-                    &witness_bundle,
-                    own_witness.as_deref(),
-                    &parsed_tx.hash,
-                    output_index_i16,
-                )?,
+                protocol_facts: if matches!(semantic_tag, CellSemanticTag::Xudt) {
+                    // Witnesses are read only for an extension in witness mode.
+                    crate::sync::bulk_build::facts::xudt_extension_facts(
+                        cell.type_args.as_deref(),
+                        || {
+                            tx.witnesses
+                                .iter()
+                                .map(|witness| crate::rpc::parse_hex_to_bytes(witness))
+                        },
+                    )
+                } else {
+                    parse_protocol_facts(
+                        cell,
+                        semantic_tag,
+                        &witness_bundle,
+                        own_witness.as_deref(),
+                        &parsed_tx.hash,
+                        output_index_i16,
+                    )?
+                },
             });
         }
 

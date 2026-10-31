@@ -14,7 +14,7 @@ use super::{BulkReducer, ReducerContext};
 use crate::parser::{ParsedUdtCell, UdtParser};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{
-    CellFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
+    CellFacts, CellProtocolFacts, CellSemanticTag, ResolvedInputFacts, ResolvedTxFacts,
 };
 use crate::sync::bulk_build::interner::IdentityInterner;
 use crate::sync::bulk_build::materialize::{MaterializedRow, Materializer};
@@ -31,10 +31,13 @@ pub(crate) struct TokenOwner {
     /// `pipeline::token_daily_member`), while holders, supply, transfers and
     /// the token row need a u128 amount.
     daily_deltas: FxHashMap<Vec<u8>, FxHashMap<u32, TokenDailyDelta>>,
-    /// On-chain max_supply observations collected from omnilock supply info cells.
+    /// On-chain max-supply claims (Omnilock supply-info cells, extension-bound
+    /// Unique Cells): the first claim per token, as live keeps it.
     max_supply_observations: FxHashMap<Vec<u8>, u128>,
-    /// On-chain token info collected from xUDT Unique Cells (keyed by unique type_args, 20 bytes).
-    unique_cell_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::UniqueTokenInfo>,
+    /// The current transaction's Unique Cell infos (by 20-byte type args), in
+    /// output order: an extension binds only within the creating transaction,
+    /// as live binds it. Cleared and reused per transaction.
+    tx_unique_infos: Vec<(InternId, crate::sync::token_helpers::UniqueTokenInfo)>,
     /// Resolved on-chain token info (keyed by token type_hash).
     token_onchain_info: FxHashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
     /// One transaction's `TOKEN_DAILY` contribution per token, folded here
@@ -71,22 +74,13 @@ impl TokenOwner {
         ) + crate::sync::bulk_build::accounting::hash_map_bytes(
             &self.max_supply_observations,
             |k, _| crate::sync::bulk_build::accounting::bytes_vec_bytes(k) + 16,
-        ) + crate::sync::bulk_build::accounting::hash_map_bytes(&self.unique_cell_info, |k, v| {
+        ) + crate::sync::bulk_build::accounting::hash_map_bytes(&self.token_onchain_info, |k, v| {
             crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
                 + 1
-                + v.name.len() as u64
-                + v.symbol.len() as u64
-                + 17
-        }) + crate::sync::bulk_build::accounting::hash_map_bytes(
-            &self.token_onchain_info,
-            |k, v| {
-                crate::sync::bulk_build::accounting::bytes_vec_bytes(k)
-                    + 1
-                    + v.info.name.len() as u64
-                    + v.info.symbol.len() as u64
-                    + 18
-            },
-        )
+                + v.info.name.len() as u64
+                + v.info.symbol.len() as u64
+                + 18
+        })
     }
 
     fn observe_max_supply_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
@@ -112,8 +106,10 @@ impl TokenOwner {
         else {
             return;
         };
+        // The first claim wins, as `token_helpers::observe_max_supply` keeps it.
         self.max_supply_observations
-            .insert(token_type_hash.to_vec(), max_supply);
+            .entry(token_type_hash.to_vec())
+            .or_insert(max_supply);
     }
 
     fn observe_unique_cell_from_output(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
@@ -128,62 +124,50 @@ impl TokenOwner {
         else {
             return;
         };
-        self.unique_cell_info.insert(type_args.to_vec(), info);
+        self.tx_unique_infos.push((type_args_id, info));
     }
 
+    /// The extension binding, by the live rule
+    /// (`token_helpers::collect_token_onchain_info`): an xUDT output whose
+    /// extension scripts (facts-time `XudtExtensions`, args or witness mode)
+    /// name a Unique Cell created by the SAME transaction binds that cell's
+    /// info, displacing any co-occurrence binding; the bound cell's total
+    /// supply is a max-supply claim
+    /// (`token_helpers::collect_token_max_supply_observations`).
     fn resolve_unique_cell_for_xudt(&mut self, cell: &CellFacts, ctx: &ReducerContext<'_>) {
-        let Some(type_code_hash_id) = cell.type_code_hash_id else {
+        let Some(CellProtocolFacts::XudtExtensions(extension_args)) = &cell.protocol_facts else {
             return;
         };
-        let Some(type_hash_type) = cell.type_hash_type else {
-            return;
-        };
-        let type_code_hash = ctx.resolve_identity(type_code_hash_id);
-        if !matches!(
-            crate::parser::UdtParser::is_udt_code_hash_bytes(type_code_hash, type_hash_type),
-            Some(crate::parser::udt::UdtStandard::Xudt)
-        ) {
-            return;
-        }
-        let Some(type_args_id) = cell.type_args_id else {
-            return;
-        };
-        let type_args = ctx.resolve_identity(type_args_id);
         let Some(type_hash_id) = cell.type_script_hash_id else {
             return;
         };
         let token_type_hash = ctx.resolve_identity(type_hash_id);
 
-        // Pass empty witnesses — bulk-build has no witnesses, so only extension_in_args (0x1) resolved.
-        let Some(extensions) =
-            crate::sync::token_helpers::extract_xudt_extension_scripts(type_args, &[])
-        else {
-            return;
-        };
-
-        for ext in extensions {
-            if ext.args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
+        for args in extension_args {
+            if args.len() != crate::sync::token_helpers::UNIQUE_TYPE_ARGS_LEN {
                 continue;
             }
-            if let Some(info) = self.unique_cell_info.get(&ext.args) {
-                // The bound Unique Cell's total supply is the token's max
-                // supply, as the live path observes it
-                // (`token_helpers::collect_token_max_supply_observations`).
-                // Only on a binding, so ordinary cells pay nothing.
-                if let Some(total_supply) = info.total_supply {
-                    self.max_supply_observations
-                        .insert(token_type_hash.to_vec(), total_supply);
-                }
-                // Unconditional: an extension binding displaces any earlier
-                // co-occurrence binding for the same token.
-                self.token_onchain_info.insert(
-                    token_type_hash.to_vec(),
-                    crate::sync::token_helpers::OnchainTokenInfo {
-                        info: info.clone(),
-                        binding: crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
-                    },
-                );
+            // Last Unique Cell output with these args, as live's per-tx map.
+            let Some((_, info)) = self
+                .tx_unique_infos
+                .iter()
+                .rev()
+                .find(|(id, _)| ctx.resolve_identity(*id) == args.as_slice())
+            else {
+                continue;
+            };
+            if let Some(total_supply) = info.total_supply {
+                self.max_supply_observations
+                    .entry(token_type_hash.to_vec())
+                    .or_insert(total_supply);
             }
+            self.token_onchain_info.insert(
+                token_type_hash.to_vec(),
+                crate::sync::token_helpers::OnchainTokenInfo {
+                    info: info.clone(),
+                    binding: crate::sync::token_helpers::OnchainInfoBinding::XudtExtension,
+                },
+            );
         }
     }
 
@@ -353,13 +337,18 @@ impl BulkReducer for TokenOwner {
             self.observe_max_supply_from_output(cell, ctx);
         }
 
-        // Collect unique cell info from outputs
+        // This transaction's Unique Cell outputs, then the extension bindings
+        // that name one of them (none without a Unique Cell output).
+        if !self.tx_unique_infos.is_empty() {
+            self.tx_unique_infos.clear();
+        }
         for cell in tx.cells.iter() {
             self.observe_unique_cell_from_output(cell, ctx);
         }
-        // Resolve unique cell → token associations (extension-script path)
-        for cell in tx.cells.iter() {
-            self.resolve_unique_cell_for_xudt(cell, ctx);
+        if !self.tx_unique_infos.is_empty() {
+            for cell in tx.cells.iter() {
+                self.resolve_unique_cell_for_xudt(cell, ctx);
+            }
         }
         // Same-tx issuance co-occurrence binding (no extension flags)
         self.resolve_unique_info_by_issuance_cooccurrence(tx, ctx);
@@ -595,12 +584,14 @@ impl TokenOwner {
                 info.chain_metadata = existing.chain_metadata.clone();
             }
 
-            // max_supply: an on-chain observation (omnilock supply info cell)
-            // is canonical, the stored value only fills the gap.
+            // max_supply: the stored value, then the first on-chain claim by
+            // the live rule (`udt::apply_observed_max_supply`: a claim fills an
+            // unknown value; a conflicting one keeps the stored value).
+            info.max_supply = existing.and_then(|existing| existing.max_supply);
             if let Some(&observed) = self.max_supply_observations.get(type_hash) {
-                info.max_supply = Some(observed);
-            } else if let Some(existing) = existing {
-                info.max_supply = existing.max_supply;
+                crate::db::writer::udt::apply_observed_max_supply(
+                    type_hash, &mut info, observed, true,
+                );
             }
 
             // Name/symbol/decimals from the token's Unique Cell, merged by the

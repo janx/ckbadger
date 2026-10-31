@@ -323,6 +323,9 @@ fn protocol_facts_heap_bytes(facts: &CellProtocolFacts) -> u64 {
                     })
                     .sum::<u64>()
         }
+        CellProtocolFacts::XudtExtensions(args) => {
+            args.iter().map(|arg| arg.capacity() as u64).sum::<u64>()
+        }
     }
 }
 

@@ -4912,7 +4912,8 @@ fn build_history_rows_for_block(
                     facts::CellProtocolFacts::DotCell(_) => {}
                     facts::CellProtocolFacts::Cluster(_)
                     | facts::CellProtocolFacts::MnftIssuer(_)
-                    | facts::CellProtocolFacts::MnftClass(_) => {}
+                    | facts::CellProtocolFacts::MnftClass(_)
+                    | facts::CellProtocolFacts::XudtExtensions(_) => {}
                 }
             }
 
@@ -4981,7 +4982,8 @@ fn build_history_rows_for_block(
                     facts::CellProtocolFacts::DotCell(_) => {}
                     facts::CellProtocolFacts::Cluster(_)
                     | facts::CellProtocolFacts::MnftIssuer(_)
-                    | facts::CellProtocolFacts::MnftClass(_) => {}
+                    | facts::CellProtocolFacts::MnftClass(_)
+                    | facts::CellProtocolFacts::XudtExtensions(_) => {}
                 }
             }
 

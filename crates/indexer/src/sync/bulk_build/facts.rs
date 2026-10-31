@@ -136,6 +136,40 @@ pub(crate) enum CellProtocolFacts {
     Dotbit(DotbitProtocolFacts),
     BitCell(BitCellProtocolFacts),
     DotCell(DotCellProtocolFacts),
+    /// An xUDT output's extension-script args (flags 0x1: from its args;
+    /// flags 0x2: from the witness its args hash), resolved at facts time
+    /// where the witnesses are at hand. Only the output's own transaction reads
+    /// them (the extension binding), so a consumed cell does not carry them.
+    XudtExtensions(Vec<Vec<u8>>),
+}
+
+impl CellProtocolFacts {
+    /// What a created cell's facts leave in the live set for the transaction
+    /// that later consumes it.
+    pub(crate) fn kept_while_live(facts: &Option<CellProtocolFacts>) -> Option<CellProtocolFacts> {
+        match facts {
+            Some(CellProtocolFacts::XudtExtensions(_)) | None => None,
+            Some(other) => Some(other.clone()),
+        }
+    }
+}
+
+/// An xUDT output's extension-script args, by the live rule
+/// (`token_helpers::extract_xudt_extension_scripts_with`). Callers pass xUDT
+/// outputs only; `witnesses` is called only for flags 0x2.
+pub(crate) fn xudt_extension_facts<W, I>(
+    type_args: Option<&[u8]>,
+    witnesses: impl FnOnce() -> I,
+) -> Option<CellProtocolFacts>
+where
+    W: AsRef<[u8]>,
+    I: IntoIterator<Item = W>,
+{
+    let scripts =
+        crate::sync::token_helpers::extract_xudt_extension_scripts_with(type_args?, witnesses)?;
+    Some(CellProtocolFacts::XudtExtensions(
+        scripts.into_iter().map(|script| script.args).collect(),
+    ))
 }
 
 #[derive(Debug, Clone, Default)]

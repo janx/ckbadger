@@ -148,7 +148,7 @@ impl BulkSequencer {
                     cell.outpoint,
                     LiveCellSlot::from_cell_facts(cell)?,
                     LiveCellExtras::from_cell_facts(cell, request_output_ars[output_pos]),
-                    cell.protocol_facts.clone(),
+                    super::facts::CellProtocolFacts::kept_while_live(&cell.protocol_facts),
                 )?;
             }
 

@@ -13467,6 +13467,293 @@ mod tests {
             assert_eq!(live.chain_metadata, bulk.chain_metadata);
         }
 
+        // ── D-3: live ↔ bulk parity on the token row (byte-identical) ─────
+
+        /// The token row each path stores, compared byte for byte.
+        async fn assert_bulk_row_equals_live(
+            blocks: &[BlockResponseWithCycles],
+            live_batches: &[Vec<BlockResponseWithCycles>],
+            type_hash: &[u8],
+        ) -> TokenInfo {
+            let store = write_batches_live(live_batches, None).await;
+            let live = store
+                .get_token(type_hash)
+                .unwrap()
+                .expect("the token must be indexed on the live path");
+            let bulk_snapshot =
+                materialize_bulk_artifacts_for_test(blocks).expect("bulk build must succeed");
+            let bulk = bulk_snapshot
+                .core
+                .token_state
+                .tokens
+                .get(type_hash)
+                .expect("the token must be indexed on the bulk path")
+                .clone();
+            assert_eq!(bulk, live, "bulk must store the live token row");
+            assert_eq!(
+                bincode::serialize(&bulk).unwrap(),
+                bincode::serialize(&live).unwrap()
+            );
+            live
+        }
+
+        fn per_block(blocks: &[BlockResponseWithCycles]) -> Vec<Vec<BlockResponseWithCycles>> {
+            blocks.iter().cloned().map(|b| vec![b]).collect()
+        }
+
+        fn d3_tx(
+            hash: u8,
+            inputs: Vec<CellInput>,
+            outputs: Vec<(CellOutput, String)>,
+            witnesses: Vec<String>,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs,
+                outputs: outputs.iter().map(|(o, _)| o.clone()).collect(),
+                outputs_data: outputs.into_iter().map(|(_, d)| d).collect(),
+                witnesses,
+            }
+        }
+
+        fn d3_block(number: u64, tx: TransactionView) -> BlockResponseWithCycles {
+            let cellbase = cellbase_tx(0xc0 + u8::try_from(number - 100).unwrap(), 500_00000000);
+            block(number, AR, vec![cellbase, tx])
+        }
+
+        /// A Unique Cell payload: the RGB++ name/symbol/decimals plus a total
+        /// supply.
+        fn unique_data_with(total_supply: u128) -> String {
+            let mut data = hex::decode(RGBPP_UNIQUE_CELL_DATA_HEX).unwrap();
+            data.extend_from_slice(&1u32.to_le_bytes());
+            data.extend_from_slice(&16u32.to_le_bytes());
+            data.extend_from_slice(&total_supply.to_le_bytes());
+            format!("0x{}", hex::encode(data))
+        }
+
+        /// The `ScriptVec` naming the fixture's Unique Cell
+        /// (`unique_type_script()` args), real molecule layout.
+        fn script_vec_naming_unique_cell() -> Vec<u8> {
+            let unique_args = [0x9au8; 20];
+            let mut args_bytes = 20u32.to_le_bytes().to_vec();
+            args_bytes.extend_from_slice(&unique_args);
+            molecule_table(&[molecule_table(&[vec![0xcc; 32], vec![1], args_bytes])])
+        }
+
+        /// xUDT whose extension scripts travel in the witness (flags 0x2): the
+        /// args carry only their blake160.
+        fn xudt_witness_ext_type_script() -> Script {
+            let mut args = vec![0xb7; 32];
+            args.extend_from_slice(&2u32.to_le_bytes());
+            args.extend_from_slice(&crate::sync::helpers::blake160(
+                &script_vec_naming_unique_cell(),
+            ));
+            Script {
+                code_hash: XUDT_CODE_HASH_TYPE.to_string(),
+                hash_type: "type".to_string(),
+                args: format!("0x{}", hex::encode(args)),
+            }
+        }
+
+        /// `WitnessArgs { input_type: XudtWitness { raw_extension_data:
+        /// Some(script_vec) } }`, serialized by ckb-types.
+        fn xudt_extension_witness() -> String {
+            use ckb_types::{bytes::Bytes, packed, prelude::*};
+            let xudt_witness = molecule_table(&[
+                Vec::new(),
+                Vec::new(),
+                script_vec_naming_unique_cell(),
+                4u32.to_le_bytes().to_vec(),
+            ]);
+            let witness = packed::WitnessArgs::new_builder()
+                .input_type(Some(Bytes::from(xudt_witness)).pack())
+                .build();
+            format!("0x{}", hex::encode(witness.as_slice()))
+        }
+
+        /// D-3 (a): a witness-mode extension binding (flags 0x2) names the
+        /// token and sets its max supply on both paths.
+        #[tokio::test]
+        async fn bulk_resolves_a_witness_mode_extension_binding_like_live() {
+            let token = Some(xudt_witness_ext_type_script());
+            let issue = d3_tx(
+                0xe1,
+                vec![input(0xc0, 0)],
+                vec![
+                    (
+                        output(CELL_CAPACITY, lock_script(), token.clone()),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(FUNDING_CAPACITY - CELL_CAPACITY, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let bind = d3_tx(
+                0xe2,
+                vec![input(0xe1, 0), input(0xe1, 1)],
+                vec![
+                    (
+                        output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                        unique_data_with(TOKEN_MAX_SUPPLY),
+                    ),
+                    (
+                        output(CELL_CAPACITY, lock_script_b(), token),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(FUNDING_CAPACITY - 3 * CELL_CAPACITY, lock_script(), None),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec![xudt_extension_witness()],
+            );
+            let blocks = vec![funding_block(), d3_block(101, issue), d3_block(102, bind)];
+            let type_hash = ScriptParser::compute_script_hash(&xudt_witness_ext_type_script());
+
+            let row = assert_bulk_row_equals_live(&blocks, &per_block(&blocks), &type_hash).await;
+
+            assert_eq!(
+                row.name.as_deref(),
+                Some("RGB++ Protocol"),
+                "fixture: live binds"
+            );
+            assert_eq!(
+                row.max_supply,
+                Some(TOKEN_MAX_SUPPLY),
+                "fixture: live max supply"
+            );
+        }
+
+        /// D-3 (b): a Unique Cell created in an EARLIER transaction does not
+        /// bind — live binds only within the transaction that creates it.
+        #[tokio::test]
+        async fn bulk_does_not_bind_a_unique_cell_from_an_earlier_transaction() {
+            let unique_only = d3_tx(
+                0xe2,
+                vec![input(0xe1, 1)],
+                vec![
+                    (
+                        output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                        unique_data_with(TOKEN_MAX_SUPPLY),
+                    ),
+                    (
+                        output(
+                            FUNDING_CAPACITY - EXT_CELL_CAPACITY - 2 * CELL_CAPACITY,
+                            lock_script(),
+                            None,
+                        ),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let transfer = d3_tx(
+                0xe3,
+                vec![input(0xe1, 0)],
+                vec![(
+                    output(
+                        EXT_CELL_CAPACITY - 1_00000000,
+                        lock_script_b(),
+                        Some(xudt_ext_type_script()),
+                    ),
+                    amount_data(TOKEN_AMOUNT),
+                )],
+                vec!["0x".to_string()],
+            );
+            let blocks = vec![
+                funding_block(),
+                ext_issuance_block(),
+                d3_block(102, unique_only),
+                d3_block(103, transfer),
+            ];
+
+            let row =
+                assert_bulk_row_equals_live(&blocks, &per_block(&blocks), &ext_type_hash()).await;
+
+            assert_eq!(
+                row.name, None,
+                "fixture: live does not bind across transactions"
+            );
+            assert_eq!(row.max_supply, None);
+        }
+
+        /// D-3 (c): two conflicting max-supply claims, in two blocks — the
+        /// first claim wins inside a batch and the stored value wins across
+        /// batches, so both live batch shapes and bulk keep the first.
+        #[tokio::test]
+        async fn bulk_keeps_the_first_of_two_conflicting_max_supply_claims_like_live() {
+            let token = Some(xudt_ext_type_script());
+            let first_claim = d3_tx(
+                0xe1,
+                vec![input(0xc0, 0)],
+                vec![
+                    (
+                        output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                        unique_data_with(TOKEN_MAX_SUPPLY),
+                    ),
+                    (
+                        output(EXT_CELL_CAPACITY, lock_script(), token.clone()),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(
+                            FUNDING_CAPACITY - CELL_CAPACITY - EXT_CELL_CAPACITY,
+                            lock_script(),
+                            None,
+                        ),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let second_claim = d3_tx(
+                0xe2,
+                vec![input(0xe1, 1), input(0xe1, 2)],
+                vec![
+                    (
+                        output(CELL_CAPACITY, lock_script(), Some(unique_type_script())),
+                        unique_data_with(2 * TOKEN_MAX_SUPPLY),
+                    ),
+                    (
+                        output(EXT_CELL_CAPACITY, lock_script_b(), token),
+                        amount_data(TOKEN_AMOUNT),
+                    ),
+                    (
+                        output(
+                            FUNDING_CAPACITY - 2 * CELL_CAPACITY - 2 * EXT_CELL_CAPACITY,
+                            lock_script(),
+                            None,
+                        ),
+                        "0x".to_string(),
+                    ),
+                ],
+                vec!["0x".to_string()],
+            );
+            let blocks = vec![
+                funding_block(),
+                d3_block(101, first_claim),
+                d3_block(102, second_claim),
+            ];
+
+            let across_batches =
+                assert_bulk_row_equals_live(&blocks, &per_block(&blocks), &ext_type_hash()).await;
+            let one_batch = assert_bulk_row_equals_live(
+                &blocks,
+                &[vec![funding_block()], blocks[1..].to_vec()],
+                &ext_type_hash(),
+            )
+            .await;
+
+            assert_eq!(across_batches.max_supply, Some(TOKEN_MAX_SUPPLY));
+            assert_eq!(one_batch.max_supply, Some(TOKEN_MAX_SUPPLY));
+        }
+
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback
         /// restores every metadata field, `metadata_source` and
         /// `chain_metadata` included, and the transfer count.

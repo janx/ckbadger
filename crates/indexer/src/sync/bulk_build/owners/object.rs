@@ -751,6 +751,8 @@ impl ObjectOwner {
             CellProtocolFacts::Dotbit(dotbit) => self.consume_dotbit(&dotbit.account_id),
             CellProtocolFacts::BitCell(bit_cell) => self.consume_bit_cell(&bit_cell.identity_id),
             CellProtocolFacts::DotCell(facts) => self.consume_dotcell(&facts.name.id),
+            // Token facts; never kept on a live cell (`kept_while_live`).
+            CellProtocolFacts::XudtExtensions(_) => Ok(()),
         }
     }
 
@@ -828,6 +830,8 @@ impl ObjectOwner {
                     .map(|input| input.state),
             ),
             CellProtocolFacts::DotCell(facts) => self.insert_dotcell(facts, cell, tx),
+            // Token facts: the token owner reads them.
+            CellProtocolFacts::XudtExtensions(_) => Ok(()),
         }
     }
 
@@ -2976,7 +2980,8 @@ fn classify_nft_collection_from_protocol(
         CellProtocolFacts::Spore(_)
         | CellProtocolFacts::Cluster(_)
         | CellProtocolFacts::MnftIssuer(_)
-        | CellProtocolFacts::MnftClass(_) => None,
+        | CellProtocolFacts::MnftClass(_)
+        | CellProtocolFacts::XudtExtensions(_) => None,
     }
 }
 
