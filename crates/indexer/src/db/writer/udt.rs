@@ -495,29 +495,31 @@ impl BatchWriter {
 
         Ok(())
     }
+}
 
-    /// The first observed max supply fills an unknown one; a conflicting
-    /// observation keeps the stored value (reported once, by the final row).
-    fn apply_observed_max_supply(
-        type_hash: &[u8],
-        info: &mut TokenInfo,
-        observed: u128,
-        report: bool,
-    ) {
-        match info.max_supply {
-            Some(existing) if existing != observed => {
-                if report {
-                    warn!(
-                        token_type_hash = %hex::encode(type_hash),
-                        existing_max_supply = existing,
-                        observed_max_supply = observed,
-                        "conflicting on-chain max supply observation; keeping existing value"
-                    );
-                }
+/// The first observed max supply fills an unknown one; a conflicting
+/// observation keeps the stored value (reported once, by the final row).
+/// Both sync paths apply on-chain max-supply claims through this rule: live
+/// from the batch writer, bulk from `TokenOwner::emit_snapshot_rows`.
+pub(crate) fn apply_observed_max_supply(
+    type_hash: &[u8],
+    info: &mut TokenInfo,
+    observed: u128,
+    report: bool,
+) {
+    match info.max_supply {
+        Some(existing) if existing != observed => {
+            if report {
+                warn!(
+                    token_type_hash = %hex::encode(type_hash),
+                    existing_max_supply = existing,
+                    observed_max_supply = observed,
+                    "conflicting on-chain max supply observation; keeping existing value"
+                );
             }
-            _ => {
-                info.max_supply = Some(observed);
-            }
+        }
+        _ => {
+            info.max_supply = Some(observed);
         }
     }
 }
@@ -621,12 +623,7 @@ impl TokenRowThroughBatch<'_> {
             .max_supply
             .filter(|observed| observed.block_number <= block_number)
         {
-            BatchWriter::apply_observed_max_supply(
-                self.type_hash,
-                &mut row,
-                observed.max_supply,
-                report,
-            );
+            apply_observed_max_supply(self.type_hash, &mut row, observed.max_supply, report);
         }
         if let Some(bound) = self
             .onchain

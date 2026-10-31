@@ -186,13 +186,16 @@ pub(crate) fn extract_xudt_witness_extension_script_vec(xudt_witness: &[u8]) -> 
     }
 }
 
-pub(crate) fn extract_xudt_extension_scripts_from_witnesses(
-    witnesses: &[String],
+/// The extension scripts in a transaction's witnesses for an xUDT in flags-0x2
+/// mode: the first `WitnessArgs` whose `input_type` or `output_type` holds an
+/// `XudtWitness` whose `raw_extension_data` hashes to the args' blake160.
+fn extension_scripts_from_witnesses<W: AsRef<[u8]>>(
+    witnesses: impl IntoIterator<Item = W>,
     expected_script_vec_hash: &[u8; 20],
 ) -> Option<Vec<XudtExtensionScript>> {
-    for witness_hex in witnesses {
-        let witness_bytes = crate::rpc::parse_hex_to_bytes(witness_hex);
-        let witness_fields = match parse_table_fields_exact(&witness_bytes, 3) {
+    for witness in witnesses {
+        let witness_bytes = witness.as_ref();
+        let witness_fields = match parse_table_fields_exact(witness_bytes, 3) {
             Some(fields) => fields,
             None => continue,
         };
@@ -220,10 +223,20 @@ pub(crate) fn extract_xudt_extension_scripts_from_witnesses(
     None
 }
 
-pub(crate) fn extract_xudt_extension_scripts(
+/// An xUDT's extension scripts, by its RFC-0052 flags (`type_args[32..36]`):
+/// in the args for flags 0x1, in the witness the args hash for flags 0x2.
+///
+/// The one rule for both sync paths. `witnesses` is called only for flags
+/// 0x2, the one mode that reads a witness: live passes the transaction's hex
+/// witnesses, bulk its raw witnesses at facts time.
+pub(crate) fn extract_xudt_extension_scripts_with<W, I>(
     type_args: &[u8],
-    witnesses: &[String],
-) -> Option<Vec<XudtExtensionScript>> {
+    witnesses: impl FnOnce() -> I,
+) -> Option<Vec<XudtExtensionScript>>
+where
+    W: AsRef<[u8]>,
+    I: IntoIterator<Item = W>,
+{
     if type_args.len() < XUDT_TYPE_ARGS_MIN_LEN {
         return None;
     }
@@ -232,9 +245,7 @@ pub(crate) fn extract_xudt_extension_scripts(
             .try_into()
             .ok()?,
     );
-    let extension_mode = flags & XUDT_FLAGS_EXTENSION_MASK;
-
-    match extension_mode {
+    match flags & XUDT_FLAGS_EXTENSION_MASK {
         XUDT_FLAGS_EXTENSION_IN_ARGS => {
             parse_xudt_extension_scripts_from_script_vec(&type_args[XUDT_TYPE_ARGS_MIN_LEN..])
         }
@@ -245,10 +256,23 @@ pub(crate) fn extract_xudt_extension_scripts(
             }
             let mut expected = [0u8; XUDT_FLAGS_WITNESS_SCRIPT_HASH_LEN];
             expected.copy_from_slice(&tail[..XUDT_FLAGS_WITNESS_SCRIPT_HASH_LEN]);
-            extract_xudt_extension_scripts_from_witnesses(witnesses, &expected)
+            extension_scripts_from_witnesses(witnesses(), &expected)
         }
         _ => None,
     }
+}
+
+/// [`extract_xudt_extension_scripts_with`] over a live transaction's hex
+/// witnesses.
+pub(crate) fn extract_xudt_extension_scripts(
+    type_args: &[u8],
+    witnesses: &[String],
+) -> Option<Vec<XudtExtensionScript>> {
+    extract_xudt_extension_scripts_with(type_args, || {
+        witnesses
+            .iter()
+            .map(|witness| crate::rpc::parse_hex_to_bytes(witness))
+    })
 }
 
 // ---------------------------------------------------------------------------
