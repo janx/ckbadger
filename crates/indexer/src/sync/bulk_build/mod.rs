@@ -1406,8 +1406,6 @@ impl ActivityStatsAccumulator {
                 })
             })
             .transpose()?;
-        let mut block_timestamps = FxHashMap::default();
-        let mut block_chain_times = FxHashMap::default();
         for block in blocks {
             if block.timestamp_ms < 0 {
                 bail!(
@@ -1426,16 +1424,6 @@ impl ActivityStatsAccumulator {
                     );
                 }
             }
-            if block_timestamps
-                .insert(block.number, block.timestamp_ms)
-                .is_some()
-            {
-                bail!(
-                    "activity accumulator received duplicate block number: block={}",
-                    block.number
-                );
-            }
-            block_chain_times.insert(block.number, block.chain_time_ms);
             expected_number = Some(block.number.checked_add(1).ok_or_else(|| {
                 anyhow!(
                     "activity accumulator block number overflow at block={}",
@@ -1443,6 +1431,14 @@ impl ActivityStatsAccumulator {
                 )
             })?);
         }
+        // Contiguous, as just checked (so no number repeats): a block's
+        // position in `blocks` is its number minus the first block's, and an
+        // action finds its block by index instead of through a per-batch
+        // block map.
+        let first_number = blocks[0].number;
+        let block_of = |number: i64| -> Option<&facts::BlockFacts> {
+            blocks.get(usize::try_from(number.checked_sub(first_number)?).ok()?)
+        };
 
         // A bucket sealed by the previous batch's chain time cannot receive
         // another block. Treat such input as a chain/order invariant
@@ -1457,16 +1453,15 @@ impl ActivityStatsAccumulator {
                     continue;
                 }
                 checked_block = Some(actions.block_number);
-                let chain_time =
-                    *block_chain_times
-                        .get(&actions.block_number)
-                        .ok_or_else(|| {
-                            anyhow!(
+                let chain_time = block_of(actions.block_number)
+                    .ok_or_else(|| {
+                        anyhow!(
                             "activity action references block outside batch: block={} tx_index={}",
                             actions.block_number,
                             actions.tx_index
                         )
-                        })?;
+                    })?
+                    .chain_time_ms;
                 for (kind, end_ms) in [
                     ("hourly", bucket_end_ms(chain_time, HOUR_MS)?),
                     ("daily", bucket_end_ms(chain_time, DAY_MS)?),
@@ -1486,26 +1481,18 @@ impl ActivityStatsAccumulator {
             }
         }
 
-        // Every action carries its block's timestamp; the block's is looked
-        // up once per block, not once per action.
-        let mut current_block: Option<(i64, i64)> = None;
         for actions in tx_actions_list {
-            let expected_timestamp = match current_block {
-                Some((number, timestamp)) if number == actions.block_number => timestamp,
-                _ => {
-                    let timestamp = *block_timestamps.get(&actions.block_number).ok_or_else(|| {
-                        anyhow!(
-                            "activity action references block outside current batch: block={} tx_index={} batch_first={} batch_last={}",
-                            actions.block_number,
-                            actions.tx_index,
-                            blocks.first().expect("non-empty checked").number,
-                            blocks.last().expect("non-empty checked").number
-                        )
-                    })?;
-                    current_block = Some((actions.block_number, timestamp));
-                    timestamp
-                }
-            };
+            let expected_timestamp = block_of(actions.block_number)
+                .ok_or_else(|| {
+                    anyhow!(
+                        "activity action references block outside current batch: block={} tx_index={} batch_first={} batch_last={}",
+                        actions.block_number,
+                        actions.tx_index,
+                        blocks.first().expect("non-empty checked").number,
+                        blocks.last().expect("non-empty checked").number
+                    )
+                })?
+                .timestamp_ms;
             if actions.timestamp != expected_timestamp {
                 bail!(
                     "activity action timestamp differs from owning block: block={} tx_index={} action_timestamp_ms={} block_timestamp_ms={}",
@@ -1517,7 +1504,9 @@ impl ActivityStatsAccumulator {
             }
         }
 
-        self.accumulate_tx_actions(tx_actions_list, &block_chain_times)?;
+        self.accumulate_tx_actions(tx_actions_list, |number| {
+            block_of(number).map(|block| block.chain_time_ms)
+        })?;
 
         let mut next_watermark = self.sealed_through_ms;
         for block in blocks {
@@ -1556,7 +1545,7 @@ impl ActivityStatsAccumulator {
     fn accumulate_tx_actions(
         &mut self,
         tx_actions_list: &[TxActions],
-        block_chain_times: &FxHashMap<i64, i64>,
+        chain_time_of: impl Fn(i64) -> Option<i64>,
     ) -> Result<()> {
         let mut cached_block = None;
         let mut cached_ts = i64::MIN;
@@ -1565,16 +1554,13 @@ impl ActivityStatsAccumulator {
         for tx_actions in tx_actions_list {
             if cached_block != Some(tx_actions.block_number) {
                 cached_block = Some(tx_actions.block_number);
-                let chain_time =
-                    *block_chain_times
-                        .get(&tx_actions.block_number)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "missing chain time for activity action: block={} tx_index={}",
-                                tx_actions.block_number,
-                                tx_actions.tx_index
-                            )
-                        })?;
+                let chain_time = chain_time_of(tx_actions.block_number).ok_or_else(|| {
+                    anyhow!(
+                        "missing chain time for activity action: block={} tx_index={}",
+                        tx_actions.block_number,
+                        tx_actions.tx_index
+                    )
+                })?;
                 if chain_time != cached_ts {
                     cached_ts = chain_time;
                     let date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
@@ -1649,11 +1635,11 @@ impl ActivityStatsAccumulator {
 
     #[cfg(test)]
     fn apply_tx_actions(&mut self, tx_actions_list: &[TxActions]) -> Result<()> {
-        let times = tx_actions_list
+        let times: FxHashMap<i64, i64> = tx_actions_list
             .iter()
             .map(|action| (action.block_number, action.timestamp))
             .collect();
-        self.accumulate_tx_actions(tx_actions_list, &times)
+        self.accumulate_tx_actions(tx_actions_list, |number| times.get(&number).copied())
     }
 
     /// Fold one batch's collection activity rows into their open days
@@ -10255,5 +10241,78 @@ mod tests {
                 block.number
             );
         }
+    }
+
+    /// The batch invariants of `ActivityStatsAccumulator::apply_batch` fail
+    /// fast naming the block and action: an action of a block outside the
+    /// batch, an action whose timestamp is not its block's, a block-number
+    /// gap, and an action landing in an hour an earlier batch sealed.
+    #[test]
+    fn activity_batch_rejects_actions_that_do_not_belong_to_its_blocks() {
+        let block = |number, t| facts::BlockFacts {
+            number,
+            timestamp_ms: t,
+            chain_time_ms: t,
+            ..Default::default()
+        };
+        let action = |block_number, tx_index, timestamp| TxActions {
+            tx_hash: vec![0x11; 32],
+            block_hash: vec![0x22; 32],
+            block_number,
+            tx_index,
+            timestamp,
+            is_cellbase: tx_index == 0,
+            protocol_actions: vec![],
+            type_calls: vec![],
+            lock_calls: vec![],
+            participants: vec![],
+        };
+        let error = |blocks: &[facts::BlockFacts], actions: &[TxActions]| {
+            ActivityStatsAccumulator::default()
+                .apply_batch(blocks, actions)
+                .unwrap_err()
+                .to_string()
+        };
+
+        let outside = error(
+            &[block(10, 1_000), block(11, 2_000)],
+            &[action(10, 0, 1_000), action(12, 0, 3_000)],
+        );
+        assert!(
+            outside.contains("outside current batch: block=12 tx_index=0"),
+            "{outside}"
+        );
+        let skewed = error(
+            &[block(10, 1_000), block(11, 2_000)],
+            &[
+                action(10, 0, 1_000),
+                action(11, 0, 2_000),
+                action(11, 1, 2_500),
+            ],
+        );
+        assert!(
+            skewed.contains("timestamp differs from owning block: block=11 tx_index=1"),
+            "{skewed}"
+        );
+        let gap = error(&[block(10, 1_000), block(12, 2_000)], &[]);
+        assert!(
+            gap.contains("discontinuity: expected=11 actual=12"),
+            "{gap}"
+        );
+
+        let mut acc = ActivityStatsAccumulator::default();
+        acc.apply_batch(
+            &[block(0, 0), block(1, 7_200_000), block(2, 10_800_000)],
+            &[action(0, 0, 0)],
+        )
+        .unwrap();
+        let late = acc
+            .apply_batch(&[block(3, 0)], &[action(3, 0, 0)])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            late.contains("late action: kind=hourly block=3 tx_index=0"),
+            "{late}"
+        );
     }
 }
