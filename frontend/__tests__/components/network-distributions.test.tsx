@@ -98,14 +98,41 @@ describe('NetworkTrends', () => {
       await screen.findByRole('img', { name: 'Verified and reachable peers, peers' })
     ).toBeInTheDocument();
     expect(container.querySelector('[data-chart-gap="no rounds 01-12"]')).not.toBeNull();
+    // D2: the API's days are UTC+8 calendar days, and the page says so.
+    expect(screen.getByText('Retained peers per completed UTC+8 day')).toBeInTheDocument();
+    expect(screen.queryByText(/UTC day/)).toBeNull();
+    expect(screen.getByText(/Coverage: 1970-01-11 through 1970-01-13\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Days older than the crawler's hourly retention show as gaps, never zero\./)
+    ).toBeInTheDocument();
     const verifiedLine = container.querySelectorAll('path[fill="none"]')[1].getAttribute('d')!;
     expect(verifiedLine.match(/M/g)).toHaveLength(2);
     expect(screen.getByText(/Shaded days have no retained round observation/)).toBeInTheDocument();
     expect(screen.getByText(/Rounds per day are unavailable/i)).toBeInTheDocument();
   });
 
+  it('refuses a daily point that is not a UTC+8 midnight (D2)', async () => {
+    const utcMidnight = 1751328000; // 2025-07-01 00:00 UTC, i.e. 08:00 UTC+8
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric') ?? '';
+        return HttpResponse.json({
+          ...observedVerified([utcMidnight]),
+          metric,
+          points: [{ ts: utcMidnight, scalar: metric === 'reachablePeers' ? 5 : 8, buckets: [] }],
+        });
+      })
+    );
+    render(<NetworkTrends />);
+    // Said where the chart would be (and where the coverage line would be), never drawn.
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Invalid peer history: network history day 1751328000 is not a UTC+8 midnight'
+    );
+    expect(screen.queryByRole('img', { name: 'Verified and reachable peers, peers' })).toBeNull();
+  });
+
   it('draws gapless history on the shared chart without the shaded-day note (CH-50)', async () => {
-    const days = [1751328000, 1751414400];
+    const days = [1751299200, 1751385600];
     server.use(
       http.get(`${API_BASE}/network/history`, ({ request }) => {
         const metric = new URL(request.url).searchParams.get('metric') ?? '';
@@ -152,7 +179,7 @@ describe('NetworkTrends', () => {
     server.use(
       http.get(`${API_BASE}/network/history`, async ({ request }) => {
         const metric = new URL(request.url).searchParams.get('metric') ?? '';
-        if (metric === 'verifiedPeers') return HttpResponse.json(observedVerified([1751328000]));
+        if (metric === 'verifiedPeers') return HttpResponse.json(observedVerified([1751299200]));
         if (metric === 'reachablePeers') return new Promise<never>(() => {});
         return HttpResponse.json({ metric, granularity: 'day', points: [] });
       })
@@ -168,7 +195,7 @@ describe('NetworkTrends', () => {
     server.use(
       http.get(`${API_BASE}/network/history`, ({ request }) => {
         const metric = new URL(request.url).searchParams.get('metric') ?? '';
-        if (metric === 'verifiedPeers') return HttpResponse.json(observedVerified([1751328000]));
+        if (metric === 'verifiedPeers') return HttpResponse.json(observedVerified([1751299200]));
         if (metric === 'reachablePeers')
           return HttpResponse.json({ error: 'unavailable' }, { status: 500 });
         return HttpResponse.json({ metric, granularity: 'day', points: [] });
@@ -183,20 +210,20 @@ describe('NetworkTrends', () => {
       {
         metric: 'verifiedPeers',
         granularity: 'day',
-        dailyCoverage: [{ ts: 1751328000, hasRetainedObservation: true, roundsPerDay: null }],
-        coverageFrom: 1751328000,
-        coverageTo: 1751328000,
+        dailyCoverage: [{ ts: 1751299200, hasRetainedObservation: true, roundsPerDay: null }],
+        coverageFrom: 1751299200,
+        coverageTo: 1751299200,
         roundCountAvailability: 'notRecorded',
-        points: [{ ts: 1751328000, scalar: 100, buckets: [] }],
+        points: [{ ts: 1751299200, scalar: 100, buckets: [] }],
       },
       {
         metric: 'reachablePeers',
         granularity: 'day',
-        dailyCoverage: [{ ts: 1751328000, hasRetainedObservation: true, roundsPerDay: null }],
-        coverageFrom: 1751328000,
-        coverageTo: 1751328000,
+        dailyCoverage: [{ ts: 1751299200, hasRetainedObservation: true, roundsPerDay: null }],
+        coverageFrom: 1751299200,
+        coverageTo: 1751299200,
         roundCountAvailability: 'notRecorded',
-        points: [{ ts: 1751328000, scalar: 60, buckets: [] }],
+        points: [{ ts: 1751299200, scalar: 60, buckets: [] }],
       }
     );
 
@@ -205,14 +232,14 @@ describe('NetworkTrends', () => {
     expect(merged.error).toBeNull();
     expect(merged.data[0]).toEqual({
       label: '2025-07-01',
-      x: 1751328000,
+      x: 1751299200,
       values: { reachable: '60', verified: '100' },
     });
   });
 
   it('renders daily peer state and retained version/country counts without invented shares', async () => {
     // Points already exclude the current day (mirrors the server dropping the current-day bucket).
-    const days = [1751328000, 1751414400, 1751500800];
+    const days = [1751299200, 1751385600, 1751472000];
     const coverage = {
       dailyCoverage: days.map((ts) => ({ ts, hasRetainedObservation: true, roundsPerDay: null })),
       coverageFrom: days[0],
@@ -328,14 +355,14 @@ describe('NetworkTrends', () => {
           return HttpResponse.json({
             metric,
             granularity: 'day',
-            points: [{ ts: 1751328000, scalar: 4, buckets: [] }],
+            points: [{ ts: 1751299200, scalar: 4, buckets: [] }],
           });
         }
         if (metric === 'reachablePeers') {
           return HttpResponse.json({
             metric,
             granularity: 'day',
-            points: [{ ts: 1751328000, scalar: 5, buckets: [] }],
+            points: [{ ts: 1751299200, scalar: 5, buckets: [] }],
           });
         }
         return HttpResponse.json({ metric, granularity: 'day', points: [] });

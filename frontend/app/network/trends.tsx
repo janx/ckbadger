@@ -7,14 +7,21 @@ import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/compo
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { axisTicks } from '@/components/charts/chart-model';
+import { formatUtc8Date } from '@/lib/utils';
 
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+/**
+ * D2 (round 3, contracts R-C · D2): a daily `ts` is the unix second of a UTC+8 midnight; the day is
+ * named on the site's one clock. Any other instant breaks the contract and is refused.
+ */
 function formatDay(ts: number): string {
-  return new Date(ts * 1000).toISOString().slice(0, 10);
+  if (!Number.isSafeInteger(ts) || (ts + 8 * 3600) % 86_400 !== 0)
+    throw new Error(`network history day ${ts} is not a UTC+8 midnight`);
+  return formatUtc8Date(ts * 1000);
 }
 
 // Merge the two independent verified-peer histories into a same-axis dataset keyed by day.
@@ -60,8 +67,14 @@ export function mergePeerCounts(
     }
     reachableByTs.delete(point.ts);
     // Verified is the whole retained set; reachable is the part answering now (CH-50).
+    let label: string;
+    try {
+      label = formatDay(point.ts);
+    } catch (cause) {
+      return { data: [], error: `Invalid peer history: ${(cause as Error).message}` };
+    }
     data.push({
-      label: formatDay(point.ts),
+      label,
       x: point.ts,
       values: { reachable: String(reachableCount), verified: String(point.scalar) },
     });
@@ -105,6 +118,15 @@ export function peerGaps(history: NetworkHistory): ChartGap[] {
     i = j;
   }
   return gaps;
+}
+
+/** "Coverage: <day> through <day>." — or, for bounds off the UTC+8 clock, why not (D2). */
+function coverageLine(from: number, to: number): string {
+  try {
+    return `Coverage: ${formatDay(from)} through ${formatDay(to)}.`;
+  } catch (cause) {
+    return `Coverage unreadable: ${(cause as Error).message}.`;
+  }
 }
 
 function TrendPanel({ title, children }: { title: string; children: ReactNode }) {
@@ -206,14 +228,11 @@ export function NetworkTrends() {
     <section className="space-y-4">
       <h2 className="text-text-bright font-mono text-[15px] font-medium">Over time</h2>
       <p className="text-text-dim font-mono text-xs">
-        Daily history of retained verified peers. The current (incomplete) day is excluded. Round
-        counts were not recorded.
+        Daily history of retained verified peers, by UTC+8 day. The current (incomplete) day is
+        excluded. Round counts were not recorded. Days older than the crawler&apos;s hourly
+        retention show as gaps, never zero.
         {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
-          <>
-            {' '}
-            Coverage: {formatDay(verifiedPeers.data.coverageFrom)} through{' '}
-            {formatDay(verifiedPeers.data.coverageTo)}.
-          </>
+          <> {coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo)}</>
         )}
       </p>
 
@@ -234,7 +253,7 @@ export function NetworkTrends() {
           <>
             <Chart
               title="Verified and reachable peers"
-              subtitle="Retained peers per completed UTC day"
+              subtitle="Retained peers per completed UTC+8 day"
               data={peerCounts.data}
               series={peerSeries}
               unit="peers"

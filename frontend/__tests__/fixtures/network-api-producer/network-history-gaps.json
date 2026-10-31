@@ -1,21 +1,21 @@
 {
-  "coverageFrom": 864000,
-  "coverageTo": 1036800,
+  "coverageFrom": 835200,
+  "coverageTo": 1008000,
   "dailyCoverage": [
     {
       "hasRetainedObservation": true,
       "roundsPerDay": null,
-      "ts": 864000
+      "ts": 835200
     },
     {
       "hasRetainedObservation": false,
       "roundsPerDay": null,
-      "ts": 950400
+      "ts": 921600
     },
     {
       "hasRetainedObservation": true,
       "roundsPerDay": null,
-      "ts": 1036800
+      "ts": 1008000
     }
   ],
   "granularity": "day",
@@ -24,12 +24,12 @@
     {
       "buckets": [],
       "scalar": 7,
-      "ts": 864000
+      "ts": 835200
     },
     {
       "buckets": [],
       "scalar": 7,
-      "ts": 1036800
+      "ts": 1008000
     }
   ],
   "roundCountAvailability": "notRecorded"

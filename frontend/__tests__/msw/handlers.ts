@@ -766,8 +766,9 @@ export const handlers = [
 
   http.get(`${API_BASE}/network/history`, ({ request }) => {
     const metric = new URL(request.url).searchParams.get('metric') ?? 'verifiedPeers';
-    // Canned daily points that already exclude the current (incomplete) day.
-    const days = [1751328000, 1751414400, 1751500800];
+    // Canned daily points that already exclude the current (incomplete) day; D2: each `ts` is a
+    // UTC+8 midnight (2025-07-01 … 07-03 00:00 UTC+8).
+    const days = [1751299200, 1751385600, 1751472000];
     const coverage = {
       dailyCoverage: days.map((ts) => ({ ts, hasRetainedObservation: true, roundsPerDay: null })),
       coverageFrom: days[0],
