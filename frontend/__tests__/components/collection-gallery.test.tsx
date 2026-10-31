@@ -48,3 +48,47 @@ it('resets server pagination when search or status changes and preserves item-sp
     })
   );
 });
+
+// Round 3 (contracts R-A · R-1, OB-K3): an m-NFT class row reads "<class name> #<token index>".
+it('names m-NFT class rows by the class name and the token index', async () => {
+  const mnft = (tokenIndex: number, name: string | null) => ({
+    nftId: `0x8f67${'00'.repeat(24)}${String(tokenIndex).padStart(8, '0')}`,
+    name,
+    standard: 'm-nft',
+    ownerLockHash: `0x${'12'.repeat(32)}`,
+    ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq4s93hhsj',
+    tokenIndex,
+    isLive: true,
+    createdAtBlock: 7_000_000,
+  });
+  vi.mocked(api.getObjectCollectionItems).mockResolvedValue(
+    emptyPage([mnft(0, 'Santa Claus'), mnft(1, null)])
+  );
+  render(<CollectionItems id="class" kind="object" />);
+  expect(await screen.findByRole('link', { name: 'Santa Claus #0' })).toHaveAttribute(
+    'href',
+    `/mainnet/objects/mnft/${mnft(0, null).nftId}`
+  );
+  // A class without an on-chain name: the index alone, no invented name.
+  expect(screen.getByRole('link', { name: '#1' })).toBeInTheDocument();
+});
+
+it('refuses an m-NFT row without its token index', async () => {
+  vi.mocked(api.getObjectCollectionItems).mockResolvedValue(
+    emptyPage([
+      {
+        nftId: `0x8f67${'00'.repeat(28)}`,
+        name: 'Santa Claus',
+        standard: 'm-nft',
+        ownerLockHash: null,
+        ownerAddress: null,
+        isLive: false,
+        createdAtBlock: 7_000_000,
+      },
+    ])
+  );
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  render(<CollectionItems id="class" kind="object" />);
+  expect(await screen.findByText(/m-NFT item 0x8f67.* has no tokenIndex/)).toBeInTheDocument();
+  log.mockRestore();
+});

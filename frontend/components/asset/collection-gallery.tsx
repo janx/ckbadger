@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type CollectionItem, type ItemStatusFilter } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -51,6 +51,20 @@ function ItemOwner({ item }: { item: CollectionItem }) {
       </span>
     );
   return <span className="text-text-dim text-[11px]">No live owner</span>;
+}
+
+/**
+ * Round 3 (contracts R-A · R-1, OB-K3): an m-NFT token has no name of its own; its row reads
+ * "<class name> #<token index>" (only "#<index>" for a class without an on-chain name).
+ */
+function mnftRowTitle(item: CollectionItem): ReactNode {
+  if (item.tokenIndex === undefined)
+    return (
+      <span role="alert" className="text-rouge font-mono text-xs">
+        m-NFT item {item.nftId} has no tokenIndex
+      </span>
+    );
+  return item.name === null ? `#${item.tokenIndex}` : `${item.name} #${item.tokenIndex}`;
 }
 
 export function CollectionItems({ id, kind }: CollectionItemsProps) {
@@ -124,9 +138,12 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
                 <div className="min-w-0">
                   <AppLink href={href(item)} className="text-text-bright break-words">
                     {/* F2 identities (round 2): a did:ckb row has no name but its DID (R2b-b-22). */}
-                    {item.name ?? item.did ?? (
-                      <Hash hash={item.nftId} copyable={false} className="text-[11px]" />
-                    )}
+                    {item.standard === 'm-nft'
+                      ? mnftRowTitle(item)
+                      : (item.name ??
+                        item.did ?? (
+                          <Hash hash={item.nftId} copyable={false} className="text-[11px]" />
+                        ))}
                   </AppLink>
                   <span className="text-text-dim mt-1 block text-[11px]">
                     {formatStandard(item.standard)} · {item.isLive ? 'Live' : 'Inactive'}
