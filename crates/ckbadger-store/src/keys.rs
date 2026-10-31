@@ -391,6 +391,10 @@ fn decode_desc_token_balance(bytes: &[u8]) -> TokenBalance {
 /// `script_hash` and `tx_hash` must each be exactly 32 bytes: the key window is
 /// fixed, so a longer hash is truncated into the block-number bytes of another
 /// script's row and the scan answers for a different cell owner.
+/// Width of a `cell_by_lock` / `cell_by_type` / `cell_by_data_hash` key:
+/// `hash(32) + block(8 BE) + outpoint(34)`.
+pub const CELL_INDEX_KEY_SIZE: usize = 74;
+
 pub fn encode_cell_index_key(
     script_hash: &[u8],
     block_num: i64,
@@ -409,7 +413,7 @@ pub fn encode_cell_index_key(
         tx_hash.len(),
         HASH32_LEN,
     );
-    let mut key = Vec::with_capacity(74);
+    let mut key = Vec::with_capacity(CELL_INDEX_KEY_SIZE);
     key.extend_from_slice(&script_hash[..32]);
     key.extend_from_slice(&block_num.to_be_bytes());
     key.extend_from_slice(&tx_hash[..32]);

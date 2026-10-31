@@ -4412,6 +4412,7 @@ impl CkbadgerStore {
         let mut holders_updated = 0u64;
         let mut holders_removed = 0u64;
         let mut tokens_updated = 0u64;
+        let mut tokens_removed = 0u64;
 
         // 9a. addr_balance
         // Collect all lock_hashes that need updating (from cell deltas OR addr_txs removals).
@@ -4985,42 +4986,72 @@ impl CkbadgerStore {
             }
         }
 
-        // 9d. token_info — transfer count is metadata; holder-derived aggregates are not cached.
+        // 9d. token_info — the transfer count. Holder-derived aggregates are not cached.
+        //
+        // Undo replay (which ran before this) owns the row's existence and metadata
+        // (J4): each live block that changed them recorded the row as of the end of
+        // the block before. Those pre-images carry the count of THEIR time, so the
+        // count is not reversed relative to the row: the `CF_STATS_TOKEN` counter is
+        // reversed by the deleted transfer rows, and the row takes its value — the
+        // same copy the forward write makes.
         for (type_hash, transfers_removed) in &transfer_count_deltas {
             if *transfers_removed == 0 {
                 continue;
             }
-            if let Some(mut ti) = self.get_token(type_hash)? {
-                ti.transfers_count = ti.transfers_count.checked_sub(*transfers_removed).ok_or_else(
-                    || {
-                        anyhow::anyhow!(
-                            "token transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+            let current_count = self.get_token_transfers_count(type_hash)?;
+            let new_count = current_count
+                .checked_sub(*transfers_removed)
+                .filter(|count| *count >= 0)
+                .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token stats transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+                    bytes_to_hex(type_hash),
+                    current_count,
+                    transfers_removed
+                )
+            })?;
+            let stats_key = keys::encode_token_transfers_key(type_hash);
+            match self.get_token(type_hash)? {
+                Some(mut ti) => {
+                    // The row is either untouched (its count is the counter's) or an
+                    // undo pre-image from a block after the fork point (its count lies
+                    // between the surviving and the current count).
+                    if ti.transfers_count < new_count || ti.transfers_count > current_count {
+                        anyhow::bail!(
+                            "token row transfers_count outside the rolled-back range: type_hash=0x{}, row={}, surviving={}, current={}, removed={}, rollback_to={}",
                             bytes_to_hex(type_hash),
                             ti.transfers_count,
-                            transfers_removed
-                        )
-                    },
-                )?;
-                batch.put_cf(
-                    self.cf_tokens(),
-                    type_hash.as_slice(),
-                    bincode::serialize(&ti).expect("serialize TokenInfo"),
-                );
-                // Also update CF_STATS_TOKEN total transfers count
-                if *transfers_removed != 0 {
-                    let current_count = self.get_token_transfers_count(type_hash)?;
-                    let new_count = current_count.checked_sub(*transfers_removed).ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "token stats transfers_count underflow during rollback: type_hash=0x{}, current={}, removed={}",
+                            new_count,
+                            current_count,
+                            transfers_removed,
+                            rollback_to
+                        );
+                    }
+                    ti.transfers_count = new_count;
+                    batch.put_cf(
+                        self.cf_tokens(),
+                        type_hash.as_slice(),
+                        bincode::serialize(&ti).expect("serialize TokenInfo"),
+                    );
+                    batch.put_cf(self.cf_stats_token(), &stats_key, new_count.to_le_bytes());
+                    tokens_updated += 1;
+                }
+                None => {
+                    // Undo replay removed a row a rolled-back block created, so every
+                    // transfer of the token was rolled back with it.
+                    if new_count != 0 {
+                        anyhow::bail!(
+                            "token row absent after undo replay but {} transfers survive the rollback: type_hash=0x{}, current={}, removed={}, rollback_to={}",
+                            new_count,
                             bytes_to_hex(type_hash),
                             current_count,
-                            transfers_removed
-                        )
-                    })?;
-                    let stats_key = keys::encode_token_transfers_key(type_hash);
-                    batch.put_cf(self.cf_stats_token(), &stats_key, new_count.to_le_bytes());
+                            transfers_removed,
+                            rollback_to
+                        );
+                    }
+                    batch.delete_cf(self.cf_stats_token(), &stats_key);
+                    tokens_removed += 1;
                 }
-                tokens_updated += 1;
             }
         }
 
@@ -5031,6 +5062,7 @@ impl CkbadgerStore {
             holders_updated,
             holders_removed,
             tokens_updated,
+            tokens_removed,
             "Rollback derived CF deltas applied"
         );
         stage.finish(
@@ -5039,7 +5071,8 @@ impl CkbadgerStore {
                 + script_refs_updated
                 + holders_updated
                 + holders_removed
-                + tokens_updated,
+                + tokens_updated
+                + tokens_removed,
         );
 
         // 10. Repair Spore/Object domain state for orphaned blocks and rebuild secondary indexes.
@@ -9500,11 +9533,11 @@ mod tests {
     /// descending by block within a type_hash prefix, so a prefix scan that
     /// stops at the fork point visits only the rolled-back rows. The token
     /// types to scan come from the same cells the cell rollback already loads.
-    #[test]
-    fn test_rollback_deletes_token_transfers_without_scanning_whole_cf() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
+    /// A token transfer rolled back at block 2 (two transfer rows) above one that
+    /// survives at block 1, beside `noise_count` unrelated tokens. The token row
+    /// and its `CF_STATS_TOKEN` counter both say 3, as the forward writer leaves
+    /// them. Returns the token's type hash.
+    fn seed_token_transfer_rollback_fixture(store: &CkbadgerStore, noise_count: usize) -> Vec<u8> {
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
             parent_hash: vec![0u8; 32],
@@ -9565,7 +9598,7 @@ mod tests {
             timestamp: 1_700_000_000_000,
         };
 
-        let mut batch = StoreBatch::new(&store);
+        let mut batch = StoreBatch::new(store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
         put_canonical_tx(&mut batch, 2, 1, &transfer_tx);
@@ -9594,7 +9627,6 @@ mod tests {
 
         // Transfer history for unrelated tokens, all below the fork point.
         // Reading any of these means the rollback is scanning the whole CF.
-        let noise_count = 400usize;
         for i in 0..noise_count {
             let mut other = vec![0x77u8; 32];
             other[0] = (i % 256) as u8;
@@ -9659,18 +9691,31 @@ mod tests {
                 chain_metadata: None,
             },
         );
+        // The forward writer stores the row's count and the CF_STATS_TOKEN
+        // counter together; the rollback reverses the counter.
+        batch.put_token_transfers_count(&type_hash, 3);
         batch.put_token_holder(&type_hash, &lock_b, 100);
         batch.put_token_holder_by_balance(&type_hash, &lock_b, 100);
         batch.put_addr_token_by_balance(&lock_b, &type_hash, 100);
         batch.commit().unwrap();
         seed_tx_address_history(
-            &store,
+            store,
             2,
             1,
             &transfer_tx,
             &[lock_a.as_slice(), lock_b.as_slice()],
         );
-        seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
+        seed_sync_status(store, 2, &header2.hash, 1, 1, 1);
+        type_hash
+    }
+
+    #[test]
+    fn test_rollback_deletes_token_transfers_without_scanning_whole_cf() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+
+        let noise_count = 400usize;
+        let type_hash = seed_token_transfer_rollback_fixture(&store, noise_count);
 
         let result = rollback_fixture(&store, 1).unwrap();
 
@@ -9691,6 +9736,7 @@ mod tests {
                 .transfers_count,
             1
         );
+        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 1);
 
         // Unrelated tokens are untouched.
         for i in 0..noise_count {
@@ -9711,6 +9757,49 @@ mod tests {
             "token_transfers rollback read {} keys with {} unrelated tokens in the CF — \
              cost must not scale with chain history",
             result.token_transfers_scanned, noise_count
+        );
+    }
+
+    /// J4: a token row is absent after undo replay only when a rolled-back
+    /// block created it, so none of its transfers can survive. A surviving
+    /// transfer under an absent row is a writer that created the row without
+    /// its undo pre-image: an error naming the token, never a skipped row.
+    #[test]
+    fn test_rollback_fails_when_a_token_row_is_absent_but_transfers_survive() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let type_hash = seed_token_transfer_rollback_fixture(&store, 0);
+        store.delete_cf(store.cf_tokens(), &type_hash).unwrap();
+
+        let error = rollback_fixture(&store, 1).unwrap_err().to_string();
+
+        assert!(
+            error.contains("token row absent after undo replay but 1 transfers survive")
+                && error.contains(&bytes_to_hex(&type_hash))
+                && error.contains("rollback_to=1"),
+            "{error}"
+        );
+    }
+
+    /// J4: the row's count is the counter's copy. A restored pre-image carries
+    /// the count of its own block — between the surviving and the current
+    /// count — and anything outside that range is a corrupt row.
+    #[test]
+    fn test_rollback_fails_when_a_token_row_count_is_outside_the_rolled_back_range() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let type_hash = seed_token_transfer_rollback_fixture(&store, 0);
+        let mut row = store.get_token(&type_hash).unwrap().unwrap();
+        row.transfers_count = 7;
+        store.put_token_direct(&type_hash, &row).unwrap();
+
+        let error = rollback_fixture(&store, 1).unwrap_err().to_string();
+
+        assert!(
+            error.contains("token row transfers_count outside the rolled-back range")
+                && error.contains(&bytes_to_hex(&type_hash))
+                && error.contains("row=7, surviving=1, current=3, removed=2"),
+            "{error}"
         );
     }
 

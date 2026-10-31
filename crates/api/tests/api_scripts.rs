@@ -3017,7 +3017,9 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     batch.put_script_version_by_family("retired-family", &active_binary);
     batch.put_script_reference_to_version(1, &reference, &active_binary);
+    // Consumed as the live writer consumes: marker and cell_by_type row together.
     batch.delete_cell(&[0x61; 32], 0);
+    batch.delete_cell_by_type(&reference, 20, &[0x61; 32], 0);
     let active_tx = vec![0x72; 32];
     batch.put_cell(
         &active_tx,
@@ -3145,6 +3147,7 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     batch.put_script_reference_to_version(1, &reference, &binary);
     batch.delete_cell(&[0x72; 32], 0);
+    batch.delete_cell_by_type(&reference, 30, &[0x72; 32], 0);
     let consuming_tx = vec![0x74; 32];
     batch.put_consumed_cell_meta(&[0x72; 32], 0, 30, 40, Some(&consuming_tx));
     put_canonical_script_tx(&mut batch, &consuming_tx, 40, 0, 1);
@@ -4479,7 +4482,10 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
             let previous = if active == Some(1) { 0 } else { 1 };
             let previous_tx = vec![0x81 + previous as u8; 32];
             let consuming_tx = vec![0x91 + previous as u8; 32];
+            // Consumed as the live writer consumes: marker and cell_by_type
+            // row together.
             batch.delete_cell(&previous_tx, 0);
+            batch.delete_cell_by_type(&reference, 10 + previous as i64, &previous_tx, 0);
             batch.put_consumed_cell_meta(
                 &previous_tx,
                 0,
@@ -5011,7 +5017,9 @@ async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_cod
         "{body}"
     );
     let mut batch = StoreBatch::new(store.as_ref());
+    // Consumed as the live writer consumes: marker and cell_by_type row together.
     batch.delete_cell(&[0x61; 32], 0);
+    batch.delete_cell_by_type(&reference, 10, &[0x61; 32], 0);
     batch.commit().unwrap();
     let response = app
         .oneshot(

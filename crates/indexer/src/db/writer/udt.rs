@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use tracing::warn;
 
 use ckbadger_common::TokenBalance;
@@ -7,6 +7,7 @@ use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{TokenInfo, TokenTransferRecord};
 
 use crate::parser::ParsedUdtTransfer;
+use crate::sync::token_helpers::{MaxSupplyObservation, OnchainTokenInfoTimeline};
 
 use ckbadger_store::keys;
 
@@ -207,8 +208,8 @@ impl BatchWriter {
     pub(crate) fn process_udt_transfers_batch_with_state(
         &self,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, u128>,
-        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
+        max_supply_observations: &HashMap<Vec<u8>, MaxSupplyObservation>,
+        onchain_token_info: &HashMap<Vec<u8>, OnchainTokenInfoTimeline>,
         block_timestamps: &HashMap<i64, i64>,
         block_chain_times_ms: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
@@ -224,14 +225,16 @@ impl BatchWriter {
             all_keys.extend(max_supply_observations.keys());
             all_keys.extend(onchain_token_info.keys());
             for type_hash in all_keys {
-                if let Some(mut info) = self.store.get_token(type_hash)? {
-                    Self::apply_observed_max_supply(type_hash, &mut info, max_supply_observations);
-                    apply_onchain_token_info(
+                if let Some(info) = self.store.get_token(type_hash)? {
+                    let updated = TokenRowThroughBatch {
                         type_hash,
-                        &mut info,
-                        onchain_token_info.get(type_hash),
-                    );
-                    batch.put_token(type_hash, &info);
+                        base: TokenRowBase::Stored(Box::new(info)),
+                        transfers: None,
+                        max_supply: max_supply_observations.get(type_hash).copied(),
+                        onchain: onchain_token_info.get(type_hash),
+                    }
+                    .stage(self, batch, &state.undo_seq)?;
+                    batch.put_token(type_hash, &updated);
                 }
             }
             return Ok(());
@@ -249,14 +252,16 @@ impl BatchWriter {
                 .or_insert_with(|| TokenUpdate {
                     transfer,
                     first_seen_block: *block_number,
-                    transfers_count: 0,
+                    transfers_by_block: BTreeMap::new(),
                 });
-            entry.transfers_count = entry.transfers_count.checked_add(1).ok_or_else(|| {
+            let in_block = entry.transfers_by_block.entry(*block_number).or_insert(0);
+            *in_block = in_block.checked_add(1).ok_or_else(|| {
                 anyhow::anyhow!(
-                    "token transfers_count overflow: type_hash=0x{}, tx_hash=0x{}, current={}",
+                    "token transfers_count overflow: type_hash=0x{}, tx_hash=0x{}, block={}, current={}",
                     hex::encode(&transfer.type_script_hash),
                     hex::encode(tx_hash),
-                    entry.transfers_count
+                    block_number,
+                    in_block
                 )
             })?;
 
@@ -284,49 +289,29 @@ impl BatchWriter {
         // Step 2: Upsert token metadata and transfer counts. Live supply and holder count
         // are derived exclusively from CF_TOKEN_HOLDERS.
         for (type_hash, update) in &token_updates {
-            let existing = self.store.get_token(type_hash)?;
-            let transfer = update.transfer;
-
-            // Read current total transfers count from stats CF
-            let current_total = self.store.get_token_transfers_count(type_hash)?;
-            let new_total = current_total
-                .checked_add(update.transfers_count)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "token total transfer count overflow: type_hash=0x{}, current={}, added={}",
-                        hex::encode(type_hash),
-                        current_total,
-                        update.transfers_count
-                    )
-                })?;
-
-            let mut updated = match existing {
-                Some(info) => info,
-                None => TokenInfo {
-                    type_code_hash: transfer.type_code_hash.clone(),
-                    hash_type: transfer.type_hash_type as u8,
-                    type_args: transfer.type_args.clone(),
-                    standard: transfer.standard.as_str().to_string(),
-                    name: None,
-                    symbol: None,
-                    decimals: None,
-                    max_supply: None,
-                    first_seen_block: update.first_seen_block,
-                    icon_url: None,
-                    description: None,
-                    transfers_count: 0,
-                    metadata_source: None,
-                    chain_metadata: None,
+            let base = match self.store.get_token(type_hash)? {
+                Some(info) => TokenRowBase::Stored(Box::new(info)),
+                None => TokenRowBase::CreatedBy {
+                    transfer: update.transfer,
+                    block_number: update.first_seen_block,
                 },
             };
-            Self::apply_observed_max_supply(type_hash, &mut updated, max_supply_observations);
-            apply_onchain_token_info(type_hash, &mut updated, onchain_token_info.get(type_hash));
-
-            updated.transfers_count = new_total;
+            // The stats CF counter is the source of truth for accumulation;
+            // the row's `transfers_count` is its copy.
+            let transfers_before = self.store.get_token_transfers_count(type_hash)?;
+            let updated = TokenRowThroughBatch {
+                type_hash,
+                base,
+                transfers: Some(TokenTransfersThroughBatch {
+                    before: transfers_before,
+                    by_block: &update.transfers_by_block,
+                }),
+                max_supply: max_supply_observations.get(type_hash).copied(),
+                onchain: onchain_token_info.get(type_hash),
+            }
+            .stage(self, batch, &state.undo_seq)?;
             batch.put_token(type_hash, &updated);
-
-            // Also write to stats CF (source of truth for accumulation)
-            batch.put_token_transfers_count(type_hash, new_total);
+            batch.put_token_transfers_count(type_hash, updated.transfers_count);
         }
 
         // Step 2.5: Apply observed max_supply to tokens not touched by transfers in this batch.
@@ -335,11 +320,18 @@ impl BatchWriter {
                 continue;
             }
 
-            if let Some(mut info) = self.store.get_token(type_hash)? {
+            if let Some(info) = self.store.get_token(type_hash)? {
                 let before = info.max_supply;
-                Self::apply_observed_max_supply(type_hash, &mut info, max_supply_observations);
-                if info.max_supply != before {
-                    batch.put_token(type_hash, &info);
+                let updated = TokenRowThroughBatch {
+                    type_hash,
+                    base: TokenRowBase::Stored(Box::new(info)),
+                    transfers: None,
+                    max_supply: max_supply_observations.get(type_hash).copied(),
+                    onchain: None,
+                }
+                .stage(self, batch, &state.undo_seq)?;
+                if updated.max_supply != before {
+                    batch.put_token(type_hash, &updated);
                 }
             }
         }
@@ -504,22 +496,24 @@ impl BatchWriter {
         Ok(())
     }
 
+    /// The first observed max supply fills an unknown one; a conflicting
+    /// observation keeps the stored value (reported once, by the final row).
     fn apply_observed_max_supply(
         type_hash: &[u8],
         info: &mut TokenInfo,
-        observations: &HashMap<Vec<u8>, u128>,
+        observed: u128,
+        report: bool,
     ) {
-        let Some(&observed) = observations.get(type_hash) else {
-            return;
-        };
         match info.max_supply {
             Some(existing) if existing != observed => {
-                warn!(
-                    token_type_hash = %hex::encode(type_hash),
-                    existing_max_supply = existing,
-                    observed_max_supply = observed,
-                    "conflicting on-chain max supply observation; keeping existing value"
-                );
+                if report {
+                    warn!(
+                        token_type_hash = %hex::encode(type_hash),
+                        existing_max_supply = existing,
+                        observed_max_supply = observed,
+                        "conflicting on-chain max supply observation; keeping existing value"
+                    );
+                }
             }
             _ => {
                 info.max_supply = Some(observed);
@@ -531,7 +525,176 @@ impl BatchWriter {
 struct TokenUpdate<'a> {
     transfer: &'a ParsedUdtTransfer,
     first_seen_block: i64,
-    transfers_count: i64,
+    /// Transfers of this token per block of the batch.
+    transfers_by_block: BTreeMap<i64, i64>,
+}
+
+/// Where a token's row starts from in this batch.
+enum TokenRowBase<'a> {
+    /// The row the store held before the batch.
+    Stored(Box<TokenInfo>),
+    /// No row yet: the token's first transfer in the batch creates it, at
+    /// that transfer's block.
+    CreatedBy {
+        transfer: &'a ParsedUdtTransfer,
+        block_number: i64,
+    },
+}
+
+/// The `CF_STATS_TOKEN` transfer counter before the batch, plus this batch's
+/// transfers per block.
+struct TokenTransfersThroughBatch<'a> {
+    before: i64,
+    by_block: &'a BTreeMap<i64, i64>,
+}
+
+impl TokenTransfersThroughBatch<'_> {
+    fn through(&self, type_hash: &[u8], block_number: i64) -> Result<i64> {
+        let mut total = self.before;
+        for (block, count) in self.by_block.range(..=block_number) {
+            total = total.checked_add(*count).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token total transfer count overflow: type_hash=0x{}, block={}, current={}, added={}",
+                    hex::encode(type_hash),
+                    block,
+                    total,
+                    count
+                )
+            })?;
+        }
+        Ok(total)
+    }
+}
+
+/// One token's row through one live batch (J4).
+///
+/// The live writer applies a batch's metadata observations batch-flat, but a
+/// shallow rollback can land on any block inside the batch. [`Self::row_through`]
+/// is the one rule for "the row as of the end of block N": the forward write
+/// stores `row_through(last block)`, and every block that changes the row's
+/// metadata — or creates it — records `row_through(N - 1)` as its undo pre-image,
+/// so undo replay restores the row exactly. A block that changes only the
+/// transfer count records nothing: rollback stage 9d reverses the count from
+/// the deleted transfer rows.
+struct TokenRowThroughBatch<'a> {
+    type_hash: &'a [u8],
+    base: TokenRowBase<'a>,
+    /// `None` for a row this batch does not count transfers into.
+    transfers: Option<TokenTransfersThroughBatch<'a>>,
+    max_supply: Option<MaxSupplyObservation>,
+    onchain: Option<&'a OnchainTokenInfoTimeline>,
+}
+
+impl TokenRowThroughBatch<'_> {
+    /// The row as of the end of `block_number`; `None` while it does not exist.
+    /// `report` logs conflicts and divergences — only for the final row, so
+    /// each is reported once.
+    fn row_through(&self, block_number: i64, report: bool) -> Result<Option<TokenInfo>> {
+        let mut row = match &self.base {
+            TokenRowBase::Stored(row) => TokenInfo::clone(row),
+            TokenRowBase::CreatedBy {
+                transfer,
+                block_number: created_at,
+            } => {
+                if block_number < *created_at {
+                    return Ok(None);
+                }
+                TokenInfo {
+                    type_code_hash: transfer.type_code_hash.clone(),
+                    hash_type: transfer.type_hash_type as u8,
+                    type_args: transfer.type_args.clone(),
+                    standard: transfer.standard.as_str().to_string(),
+                    name: None,
+                    symbol: None,
+                    decimals: None,
+                    max_supply: None,
+                    first_seen_block: *created_at,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 0,
+                    metadata_source: None,
+                    chain_metadata: None,
+                }
+            }
+        };
+        if let Some(observed) = self
+            .max_supply
+            .filter(|observed| observed.block_number <= block_number)
+        {
+            BatchWriter::apply_observed_max_supply(
+                self.type_hash,
+                &mut row,
+                observed.max_supply,
+                report,
+            );
+        }
+        if let Some(bound) = self
+            .onchain
+            .and_then(|timeline| timeline.winner_through(block_number))
+        {
+            if report {
+                apply_onchain_token_info(self.type_hash, &mut row, Some(bound));
+            } else {
+                row.merge_chain_metadata(&bound.chain_metadata());
+            }
+        }
+        if let Some(transfers) = &self.transfers {
+            row.transfers_count = transfers.through(self.type_hash, block_number)?;
+        }
+        Ok(Some(row))
+    }
+
+    /// Record one undo pre-image per block that changes the row's metadata or
+    /// creates it, and return the row after the whole batch.
+    fn stage(
+        &self,
+        writer: &BatchWriter,
+        batch: &mut StoreBatch,
+        undo_seq: &SharedUndoSeq,
+    ) -> Result<TokenInfo> {
+        let mut change_blocks = BTreeSet::new();
+        if let TokenRowBase::CreatedBy { block_number, .. } = &self.base {
+            change_blocks.insert(*block_number);
+        }
+        if let Some(observed) = self.max_supply {
+            change_blocks.insert(observed.block_number);
+        }
+        if let Some(timeline) = self.onchain {
+            change_blocks.extend(timeline.blocks());
+        }
+        for block_number in change_blocks {
+            let before = self.row_through(block_number - 1, false)?;
+            let after = self.row_through(block_number, false)?;
+            if without_transfer_count(&before) == without_transfer_count(&after) {
+                continue;
+            }
+            let pre_image = before
+                .map(|row| super::undo_pre_image(&row, "token", self.type_hash, block_number))
+                .transpose()?;
+            writer.record_object_undo(
+                batch,
+                block_number,
+                ckbadger_store::CF_TOKENS,
+                self.type_hash,
+                pre_image,
+                undo_seq,
+            );
+        }
+        self.row_through(i64::MAX, true)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "token row missing after the batch that writes it: type_hash=0x{}",
+                hex::encode(self.type_hash)
+            )
+        })
+    }
+}
+
+/// A row's metadata and existence: everything but the transfer count.
+fn without_transfer_count(row: &Option<TokenInfo>) -> Option<TokenInfo> {
+    row.clone().map(|mut row| {
+        row.transfers_count = 0;
+        row
+    })
 }
 
 /// How a token's on-chain Unique Cell metadata merges into the row about to
@@ -588,8 +751,8 @@ mod tests {
     fn process_transfers_in_one_batch(
         writer: &BatchWriter,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
-        max_supply_observations: &HashMap<Vec<u8>, u128>,
-        onchain_token_info: &HashMap<Vec<u8>, crate::sync::token_helpers::OnchainTokenInfo>,
+        max_supply_observations: &HashMap<Vec<u8>, MaxSupplyObservation>,
+        onchain_token_info: &HashMap<Vec<u8>, OnchainTokenInfoTimeline>,
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -1002,7 +1165,13 @@ mod tests {
         block_timestamps.insert(100i64, 1_700_000_000_000i64);
         let transfers = vec![(&transfer, tx_hash.as_slice(), 100i64)];
         let mut max_supply_observations = HashMap::new();
-        max_supply_observations.insert(type_hash.clone(), 1_000u128);
+        max_supply_observations.insert(
+            type_hash.clone(),
+            MaxSupplyObservation {
+                max_supply: 1_000,
+                block_number: 100,
+            },
+        );
 
         let mut batch = StoreBatch::new(&store);
         process_transfers_in_one_batch(
@@ -1386,7 +1555,13 @@ mod tests {
         let transfers: Vec<(&ParsedUdtTransfer, &[u8], i64)> = Vec::new();
         let block_timestamps = HashMap::new();
         let mut max_supply_observations = HashMap::new();
-        max_supply_observations.insert(type_hash.clone(), 1_000_000u128);
+        max_supply_observations.insert(
+            type_hash.clone(),
+            MaxSupplyObservation {
+                max_supply: 1_000_000,
+                block_number: 100,
+            },
+        );
 
         let mut batch = StoreBatch::new(&store);
         process_transfers_in_one_batch(

@@ -179,6 +179,25 @@ point means the writer that created it recorded no undo pre-image, so the rollba
 to delete in the repair scan. A crashed bulk build cannot reach this path, because startup fails
 fast on an incomplete bulk-session marker.
 
+**Token rows** (`CF_TOKENS`) are split between two owners by field, never by row. Undo replay
+owns a token's **existence and metadata** (`name`, `symbol`, `decimals`, `max_supply`,
+`metadata_source`, `chain_metadata`): the live UDT writer
+(`TokenRowThroughBatch` in `crates/indexer/src/db/writer/udt.rs`) records, under
+`UndoSeqScope::Object`, one pre-image per token per block that creates the row or changes one of
+those fields — the row as of the end of the previous block, or "absent" for the creating block. A
+live batch spans many blocks and applies its metadata observations batch-flat, so each
+observation keeps the block that carried it (`MaxSupplyObservation`, `OnchainTokenInfoTimeline`)
+and `row_through(block)` is the one rule for both the stored row (`row_through(last block)`) and
+every pre-image (`row_through(block - 1)`). A block that only moves the token records nothing.
+Stage 9d owns the **transfer count**: it reverses the `CF_STATS_TOKEN` transfer counter by the
+deleted `token_transfers` rows and writes the result into the row as well (the forward writer
+stores the same copy). A pre-image carries the count of its own block, so 9d never subtracts from
+the row's count; it fails when that count lies outside `[surviving, current]`, and when a row is
+absent after replay while transfers survive (a writer created the row without a pre-image). A row
+removed by replay has its counter deleted. Label import is not block-scoped: a pre-image recorded
+before a restart that changed a label restores the earlier label until the next start re-imports
+it.
+
 ### Direct Deletion (for activity/event CFs)
 
 Activity and event CFs are rolled back via full-CF scan and direct deletion of entries belonging to rolled-back blocks:
