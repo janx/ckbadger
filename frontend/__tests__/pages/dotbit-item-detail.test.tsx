@@ -250,21 +250,13 @@ it('says no .bit Cell names the account when there is none', async () => {
   const fact = await screen.findByText('.bit Cells', { selector: 'dt' });
   expect(fact.parentElement!.querySelector('dd')).toHaveTextContent('none');
 });
-it('waits behind the "being derived" banner while the .bit Cell index is derived (L0)', async () => {
-  vi.mocked(api.getDotbitItemDetail)
-    .mockRejectedValueOnce(
-      new ApiRequestError(503, 'derive_pending', 'bit_cell_by_account is being derived', {
-        aggregate: 'bit_cell_by_account',
-        state: 'running',
-        rowsDone: 4096,
-        derivedFromTip: 20900000,
-      })
-    )
-    .mockResolvedValue({ ...identityItem('dotbit'), bitCells: [bitCell(0xb1)] });
+it('says nothing of .bit Cells while the index is not derived (L3: bitCells null)', async () => {
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+    ...identityItem('dotbit'),
+    bitCells: null,
+  });
   render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByRole('status', { name: 'Being derived' })).toHaveTextContent(
-    'The indexer is deriving the .bit Cell index: 4,096 source rows folded, from the chain at block #20,900,000.'
-  );
+  expect(await screen.findByText('Registered', { selector: 'dt' })).toBeInTheDocument();
+  expect(screen.queryByText('.bit Cells', { selector: 'dt' })).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
-  expect(await screen.findByText('.bit Cells', { selector: 'dt' })).toBeInTheDocument();
 });

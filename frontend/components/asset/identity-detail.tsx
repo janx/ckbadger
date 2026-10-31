@@ -54,7 +54,7 @@ export interface CanonicalIdentityDetailProps {
   /** `.cell`: the name's detail — its state, grace, records, sub-names and sale. */
   dotcell?: DotCellItem;
   /** `.bit`: the live `.bit Cells` naming the account (contracts L3). */
-  bitCells?: DotbitBitCellRef[];
+  bitCells?: DotbitBitCellRef[] | null;
   /** Extra tier-1 sections after the standard's own (the `.cell` sale). */
   children?: ReactNode;
   /** Extra tier-2 sections (the `.cell` name relationships). */

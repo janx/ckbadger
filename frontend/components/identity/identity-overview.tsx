@@ -185,7 +185,7 @@ export interface IdentityFactsInput {
   /** `.cell`: the name's detail (records, sub-names, sale, grace). */
   dotcell?: DotCellItem;
   /** `.bit`: the live `.bit Cells` naming the account (contracts L3); the page always passes it. */
-  bitCells?: DotbitBitCellRef[];
+  bitCells?: DotbitBitCellRef[] | null;
 }
 
 /**
@@ -256,6 +256,7 @@ export function identityFacts({
           ),
         },
         ...subAccountsFact(protocol),
+        // null: the indexer has not derived the .bit Cell index yet — say nothing (L3 ruling).
         ...(bitCells ? [bitCellsFact(bitCells)] : []),
         heldFact(protocol, isLive),
       ];

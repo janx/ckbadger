@@ -227,22 +227,29 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           'Not recorded'
         ),
     },
-    {
-      label: 'Activity',
-      value: (
-        <>
-          {data.activitiesCount.toLocaleString('en-US')}
-          {mints !== undefined && transfers !== undefined && (
-            <span className="text-text-dim text-[12px]">
-              {' '}
-              · {mints.toLocaleString('en-US')} mint{mints === 1 ? '' : 's'},{' '}
-              {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'}
-              {insights.data?.completeThrough ? ` through ${insights.data.completeThrough}` : ''}
-            </span>
-          )}
-        </>
-      ),
-    },
+    // Round 3 (L2): the count is null while the indexer has not derived it — say nothing of it.
+    ...(data.activitiesCount === null && (mints === undefined || transfers === undefined)
+      ? []
+      : [
+          {
+            label: 'Activity',
+            value: (
+              <>
+                {data.activitiesCount !== null && data.activitiesCount.toLocaleString('en-US')}
+                {mints !== undefined && transfers !== undefined && (
+                  <span className="text-text-dim text-[12px]">
+                    {data.activitiesCount !== null && ' · '}
+                    {mints.toLocaleString('en-US')} mint{mints === 1 ? '' : 's'},{' '}
+                    {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'}
+                    {insights.data?.completeThrough
+                      ? ` through ${insights.data.completeThrough}`
+                      : ''}
+                  </span>
+                )}
+              </>
+            ),
+          },
+        ]),
     ...(cluster.data
       ? [
           {
@@ -285,7 +292,9 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       value: (data.totalCount - data.liveCount).toLocaleString('en-US'),
     },
     { label: 'Holders', value: data.holdersCount.toLocaleString('en-US') },
-    { label: 'Activities', value: data.activitiesCount.toLocaleString('en-US') },
+    ...(data.activitiesCount === null
+      ? []
+      : [{ label: 'Activities', value: data.activitiesCount.toLocaleString('en-US') }]),
     {
       label: 'CKB held',
       value:

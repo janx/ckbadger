@@ -3,6 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type {
   CollectionFeedActivity,
+  CollectionFeedPage,
   CursorPaginatedResponse,
   GlobalActivity,
   ItemActivity,
@@ -184,14 +185,15 @@ export interface AssetFeedProps {
   scope: string;
   initialActivityCursor?: string;
   onActivityCursorChange?: (cursor: string | undefined) => void;
+  /** A collection feed's `total` is null while its count is not derived (L2): say nothing. */
   loadActivities: (params: {
     limit: number;
     cursor?: string;
-  }) => Promise<CursorPaginatedResponse<GlobalActivity>>;
+  }) => Promise<CursorPaginatedResponse<GlobalActivity> | CollectionFeedPage<GlobalActivity>>;
   loadTransactions: (params: {
     limit: number;
     cursor?: string;
-  }) => Promise<CursorPaginatedResponse<Transaction>>;
+  }) => Promise<CursorPaginatedResponse<Transaction> | CollectionFeedPage<Transaction>>;
   token?: AssetTransactionsProps['token'];
   context?: AssetTransactionsProps['context'];
   /** One item's own feed: every row carries its item context (see itemFeedHeadline). */

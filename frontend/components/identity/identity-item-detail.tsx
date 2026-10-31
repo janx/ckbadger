@@ -14,8 +14,10 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { retryTransientOnly } from '@/lib/query-client';
 export interface IdentityItemDetailConfig {
   standard: 'dotbit' | 'did_ckb' | 'bit_cell';
-  /** `.bit` details also carry `bitCells` (contracts L3). */
-  fetchDetail: (identityId: string) => Promise<CollectionItem & { bitCells?: DotbitBitCellRef[] }>;
+  /** `.bit` details also carry `bitCells` (contracts L3; null while not derived). */
+  fetchDetail: (
+    identityId: string
+  ) => Promise<CollectionItem & { bitCells?: DotbitBitCellRef[] | null }>;
   detailEndpoint: (identityId: string) => string;
   fetchActivities: (
     identityId: string,
@@ -39,9 +41,12 @@ interface Props {
   config: IdentityItemDetailConfig;
   identityId: string;
 }
-/** A `.bit` detail always lists its `.bit Cells` (contracts L3); a response without them is wrong. */
-function dotbitBitCells(item: CollectionItem & { bitCells?: DotbitBitCellRef[] }) {
-  if (!item.bitCells) throw new Error(`.bit ${item.nftId}: detail has no bitCells`);
+/**
+ * A `.bit` detail always carries `bitCells` (contracts L3): the list, or null while the indexer has
+ * not derived the index (then the page says nothing of them). A response without the key is wrong.
+ */
+function dotbitBitCells(item: CollectionItem & { bitCells?: DotbitBitCellRef[] | null }) {
+  if (item.bitCells === undefined) throw new Error(`.bit ${item.nftId}: detail has no bitCells`);
   return item.bitCells;
 }
 

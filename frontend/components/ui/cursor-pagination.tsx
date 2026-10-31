@@ -4,7 +4,8 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 interface CursorPaginationProps {
-  total?: number;
+  /** null = the API does not know the count yet (round 3 L2): shown like no count at all. */
+  total?: number | null;
   totalLabel?: string;
   page?: number;
   pageSize?: number;
@@ -37,8 +38,10 @@ export function CursorPagination({
 }: CursorPaginationProps) {
   // An empty list has no pages: no pager, and never "Page 1 of 0" (FF-L5).
   if (total === 0 && !hasMore && !hasPrevious) return null;
+  // Unknown (null) and not given (undefined) both show no count.
+  const known = total === null ? undefined : total;
   const totalPages =
-    total !== undefined && total > 0 && pageSize ? Math.ceil(total / pageSize) : undefined;
+    known !== undefined && known > 0 && pageSize ? Math.ceil(known / pageSize) : undefined;
   const canShowRange = page !== undefined && pageSize !== undefined && currentCount !== undefined;
   const rangeStart = canShowRange && currentCount > 0 ? (page - 1) * pageSize + 1 : 0;
   const rangeEnd = canShowRange && currentCount > 0 ? rangeStart + currentCount - 1 : 0;
@@ -51,12 +54,12 @@ export function CursorPagination({
         ) : canShowRange ? (
           <>
             Showing {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()}
-            {total !== undefined ? ` of ${total.toLocaleString()}` : ''} {totalLabel}
+            {known !== undefined ? ` of ${known.toLocaleString()}` : ''} {totalLabel}
             {pageSize !== undefined ? `, ${pageSize} per page` : ''}
           </>
-        ) : total !== undefined ? (
+        ) : known !== undefined ? (
           <>
-            {total.toLocaleString()} {totalLabel}
+            {known.toLocaleString()} {totalLabel}
             {pageSize !== undefined ? `, ${pageSize} per page` : ''}
           </>
         ) : (

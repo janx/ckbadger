@@ -52,6 +52,25 @@ describe('CursorPagination', () => {
     expect(screen.getByText('Page 2 of 6')).toBeInTheDocument();
   });
 
+  it('shows no count and no page total for an unknown total (round 3 L2: total null)', () => {
+    render(
+      <CursorPagination
+        total={null}
+        totalLabel="activities"
+        page={1}
+        pageSize={50}
+        currentCount={50}
+        hasMore
+        hasPrevious={false}
+        onNext={() => {}}
+        onPrevious={() => {}}
+      />
+    );
+    expect(screen.getByText(/Showing 1-50/)).toHaveTextContent('Showing 1-50 activities');
+    expect(screen.queryByText(/ of /)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
+  });
+
   it('shows no pager for an empty list instead of "Page 1 of 0" (FF-L5)', () => {
     const { container } = render(
       <CursorPagination

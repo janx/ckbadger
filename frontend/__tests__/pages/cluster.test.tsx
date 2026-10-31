@@ -13,6 +13,7 @@ import { api } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import {
   clusterDetailProducer,
+  objectCollectionDetailProducer,
   collectionGalleryFilteredProducer,
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
@@ -170,31 +171,24 @@ it('preserves prior gallery data while reporting a refetch error', async () => {
   expect(within(gallery).getAllByText(/Genes #/).length).toBeGreaterThan(0);
 });
 
-// Round 3 (contracts L2 / L0): while the collection activity count is derived the detail is a
-// 503 derive_pending — the page waits behind the banner, then shows the derived count.
-it('waits for the derived activity count instead of showing an error (L2)', async () => {
-  const { ApiRequestError } = await import('@/lib/api');
-  vi.mocked(api.getSporeCluster)
-    .mockRejectedValueOnce(
-      new ApiRequestError(
-        503,
-        'derive_pending',
-        'object_collection_activity_count is being derived',
-        {
-          aggregate: 'object_collection_activity_count',
-          state: 'running',
-          rowsDone: 1200,
-          derivedFromTip: 20900000,
-        }
-      )
-    )
-    .mockResolvedValue(clusterDetailProducer);
+// Round 3 (contracts L2, coordinator ruling): while the indexer has not derived the collection
+// activity count the cluster detail serves `activitiesCount: null` and the feed `total: null`.
+it('says nothing of an activity count the indexer has not derived (L2)', async () => {
+  vi.mocked(api.getSporeCluster).mockResolvedValue({
+    ...clusterDetailProducer,
+    activitiesCount: null,
+  });
+  // The collection view of the same cluster (`/assets/objects/{id}`) is null too.
+  vi.mocked(api.getObjectCollection).mockResolvedValue({
+    ...objectCollectionDetailProducer,
+    activitiesCount: null,
+  });
   render(<ClusterPage clusterId={id} />);
-  expect(await screen.findByRole('status', { name: 'Being derived' })).toHaveTextContent(
-    'The indexer is deriving the collection activity counts: 1,200 source rows folded'
-  );
   expect(await screen.findByRole('heading', { name: 'Genes' })).toBeInTheDocument();
-  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent(
-    clusterDetailProducer.activitiesCount.toLocaleString('en-US')
-  );
+  const facts = screen.getByRole('complementary', { name: 'Facts' });
+  // Only the insights' exact mint / transfer counts remain; no count stands in for the unknown.
+  expect(facts).toHaveTextContent('Activity0 mints, 0 transfers');
+  expect(facts).not.toHaveTextContent('Activity0 ·');
+  expect(screen.queryByText('Activities', { selector: 'dt' })).toBeNull();
+  expect(screen.queryByRole('alert')).toBeNull();
 });

@@ -147,6 +147,15 @@ interface CursorPaginatedResponse<T> {
   pool?: PoolSummary;
 }
 
+/**
+ * A collection feed page (`/assets/objects/{id}/activity-feed`, `/transactions`, the Spore cluster
+ * feeds). Round 3 (contracts L2, coordinator ruling): `total` is null = unknown while the indexer
+ * has not derived the collection's activity count (say nothing, never 0).
+ */
+export type CollectionFeedPage<T> = Omit<CursorPaginatedResponse<T>, 'total'> & {
+  total: number | null;
+};
+
 /** One page of `/addresses/{addr}/activities` (contracts W5-1). */
 export interface AddressActivitiesPage extends CursorPaginatedResponse<Activity> {
   /**
@@ -2281,7 +2290,11 @@ interface SporeCluster {
   sporesCount: number;
   totalCount: number;
   holdersCount: number;
-  activitiesCount: number;
+  /**
+   * Round 3 (contracts L2, coordinator ruling): the derived `object_collection_activity_count`;
+   * null = unknown while the indexer has not derived it (say nothing, never 0).
+   */
+  activitiesCount: number | null;
   createdAtBlock: number | null;
   /** Shannons; null when the index holds no aggregate for the cluster. */
   ownedCapacity: string | null;
@@ -2380,7 +2393,8 @@ interface ObjectCollection {
   totalCount: number;
   liveCount: number;
   holdersCount: number;
-  activitiesCount: number;
+  /** Round 3 (L2): null = not derived yet for a Spore collection (m-NFT counts are persisted). */
+  activitiesCount: number | null;
   ownedCapacity: string | null;
   ownedKnowledge: string | null;
   composition?: {
@@ -2486,10 +2500,10 @@ export interface DotbitBitCellRef {
 /** `GET /assets/identities/dotbit/items/{accountId}`: the flat item plus its `.bit Cells` (L3). */
 export interface DotbitItemDetail extends CollectionItem {
   /**
-   * Every live `.bit Cell` naming this account, by id; `[]` when none. The route answers
-   * `503 derive_pending` (aggregate `bit_cell_by_account`) until the index is derived.
+   * Every live `.bit Cell` naming this account, by id; `[]` when none; `null` = unknown while
+   * the indexer has not derived `bit_cell_by_account` (coordinator ruling: say nothing).
    */
-  bitCells: DotbitBitCellRef[];
+  bitCells: DotbitBitCellRef[] | null;
 }
 
 interface CollectionHolder {
@@ -4538,13 +4552,13 @@ export const api = {
     kind: 'spore' | 'object' | 'identity',
     id: string,
     params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionFeedActivity>> =>
+  ): Promise<CollectionFeedPage<CollectionFeedActivity>> =>
     fetchApi(`${collectionReadPath(kind, id)}/activity-feed?${cursorReadQuery(params)}`),
   getCollectionTransactions: (
     kind: 'spore' | 'object' | 'identity',
     id: string,
     params: CursorQueryParams = {}
-  ): Promise<CursorPaginatedResponse<CollectionFeedTransaction>> =>
+  ): Promise<CollectionFeedPage<CollectionFeedTransaction>> =>
     fetchApi(`${collectionReadPath(kind, id)}/transactions?${cursorReadQuery(params)}`),
   getObjectGenetics: (id: string): Promise<ObjectGenetics> =>
     fetchApi(`/spore/objects/${encodeURIComponent(id)}/genetics`),
