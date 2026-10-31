@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { LockKind } from '@/components/ui/lock-kind';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -106,15 +107,18 @@ function ScopedCollectionHolders({
       label: 'Holder',
       minWidth: 210,
       render: (holder) => (
-        <DotCellParty
-          party={{
-            hashPrefix: holder.ownerHashPrefix ?? null,
-            lockHash: holder.lockScriptHash,
-            address: holder.address,
-          }}
-          truncate
-          className="max-w-full break-all [&>span]:text-xs"
-        />
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+          <DotCellParty
+            party={{
+              hashPrefix: holder.ownerHashPrefix ?? null,
+              lockHash: holder.lockScriptHash,
+              address: holder.address,
+            }}
+            truncate
+            className="max-w-full break-all [&>span]:text-xs"
+          />
+          <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
+        </span>
       ),
     },
     {

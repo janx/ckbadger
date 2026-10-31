@@ -65,6 +65,28 @@ describe('Collection holders', () => {
     expect(within(buckets).getAllByRole('row')).toHaveLength(5);
   });
 
+  it('names each holder lock by the registry, else by its code hash (R-2, OB-C7)', async () => {
+    const load = vi.fn().mockResolvedValue(
+      page([
+        { ...resolved, lockCodeHash: `0x${'9b'.repeat(32)}`, lockKind: 'JoyID' },
+        {
+          ...resolved,
+          lockScriptHash: `0x${'56'.repeat(32)}`,
+          lockCodeHash: `0x${'43'.repeat(32)}`,
+          lockKind: null,
+        },
+        named,
+      ])
+    );
+    render(<CollectionHolders load={load} queryKey="kinds" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    const rows = within(table).getAllByRole('row');
+    expect(rows[1]).toHaveTextContent('JoyID');
+    expect(rows[2]).toHaveTextContent('0x434343...4343');
+    // No indexed lock: neither a kind nor a code hash is shown.
+    expect(rows[3]).not.toHaveTextContent(/JoyID|0x4343/);
+  });
+
   it('uses backend ordering and cursor pages, and resets mode and cursor for a new collection', async () => {
     const load = vi
       .fn()

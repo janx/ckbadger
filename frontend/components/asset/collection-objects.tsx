@@ -17,7 +17,8 @@ import { alleleLanes, geneOrder, genotypePoints, traitDisplay } from '@/lib/dob-
 import { GEL_INK } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
-import { cn } from '@/lib/utils';
+import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { LockKind } from '@/components/ui/lock-kind';
 
 const NEWEST = 8;
 const ROW_GRID =
@@ -187,12 +188,15 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                   </span>
                   <span role="cell" className="min-w-0 truncate">
                     {item.ownerLockHash ? (
-                      <Address
-                        address={item.ownerAddress ?? item.ownerLockHash}
-                        startChars={12}
-                        endChars={6}
-                        className="text-[12px]"
-                      />
+                      <>
+                        <Address
+                          address={item.ownerAddress ?? item.ownerLockHash}
+                          startChars={12}
+                          endChars={6}
+                          className="text-[12px]"
+                        />{' '}
+                        <LockKind lockKind={item.lockKind} lockCodeHash={item.lockCodeHash} />
+                      </>
                     ) : (
                       <span className="text-text-dim">No live owner</span>
                     )}
@@ -209,8 +213,12 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                     )}
                   </span>
                   <span role="cell" className="text-text-dim sm:text-right">
-                    <AppLink href={`/blocks/${item.createdAtBlock}`}>
-                      {formatBlockNumber(item.createdAtBlock)}
+                    {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
+                    <AppLink
+                      href={`/blocks/${item.createdAtBlock}`}
+                      title={`${formatBlockNumber(item.createdAtBlock)} · ${formatUtc8DateTime(item.chainTime)}`}
+                    >
+                      {formatUtc8Date(item.chainTime)}
                     </AppLink>
                   </span>
                 </div>
