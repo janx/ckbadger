@@ -333,6 +333,11 @@ describe('Tokens Inventory Page', () => {
         { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
       ],
       fullyOnchainObjectsCount: 1000,
+      tokenStandards: [
+        { standard: 'sudt', count: 100 },
+        { standard: 'xudt', count: 398 },
+        { standard: 'xudt_compatible', count: 2 },
+      ],
       pendingItemsCount: 3,
     });
     mockReplace.mockClear();
@@ -552,6 +557,11 @@ describe('Objects Inventory Page', () => {
         { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
       ],
       fullyOnchainObjectsCount: 1000,
+      tokenStandards: [
+        { standard: 'sudt', count: 100 },
+        { standard: 'xudt', count: 398 },
+        { standard: 'xudt_compatible', count: 2 },
+      ],
       pendingItemsCount: 3,
     });
     mockReplace.mockClear();
@@ -661,6 +671,11 @@ describe('Identities Inventory Page', () => {
         { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
       ],
       fullyOnchainObjectsCount: 1000,
+      tokenStandards: [
+        { standard: 'sudt', count: 100 },
+        { standard: 'xudt', count: 398 },
+        { standard: 'xudt_compatible', count: 2 },
+      ],
       pendingItemsCount: 3,
     });
     mockReplace.mockClear();
@@ -744,6 +759,11 @@ describe('Inventory approved board regressions', () => {
         { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
       ],
       fullyOnchainObjectsCount: 1000,
+      tokenStandards: [
+        { standard: 'sudt', count: 100 },
+        { standard: 'xudt', count: 398 },
+        { standard: 'xudt_compatible', count: 2 },
+      ],
       pendingItemsCount: 3,
     });
     window.history.replaceState(null, '', '/inventory/objects');
@@ -783,6 +803,11 @@ describe('Inventory snapshot and pagination lifecycle', () => {
         { tier: 'centralized_mixture', collectionsCount: 180, liveCount: 900 },
       ],
       fullyOnchainObjectsCount: 1000,
+      tokenStandards: [
+        { standard: 'sudt', count: 100 },
+        { standard: 'xudt', count: 398 },
+        { standard: 'xudt_compatible', count: 2 },
+      ],
       pendingItemsCount: 3,
     });
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);

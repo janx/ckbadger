@@ -57,6 +57,8 @@ export const handlers = [
           nonce: '0x0',
           transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
           minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
+          // Round 3 (contracts R-C · R-12): no pools.toml entry names this miner.
+          minerPool: null,
           minerMessage: null,
           miningReward: '1000000000',
           miningRewardTxHash: '0x123...',
@@ -79,6 +81,8 @@ export const handlers = [
           nonce: '0x0',
           transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
           minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
+          // Round 3 (contracts R-C · R-12): no pools.toml entry names this miner.
+          minerPool: null,
           minerMessage: null,
           miningReward: '1000000000',
           miningRewardTxHash: '0x456...',
@@ -92,6 +96,27 @@ export const handlers = [
       nextCursor: '999998',
     });
   }),
+
+  // Round 3 (contracts R-B · R-10): the blocks of one UTC+8 day; 404 outside the indexed range.
+  http.get(`${API_BASE}/blocks/by-day/:date`, ({ params }) =>
+    params.date === '2024-01-15'
+      ? HttpResponse.json({
+          date: '2024-01-15',
+          startMs: 1705248000000,
+          endMs: 1705334400000,
+          first: { number: 999000, hash: `0x${'0d'.repeat(32)}` },
+          last: {
+            number: 1000000,
+            hash: '0xabc123def456789012345678901234567890123456789012345678901234abcd',
+          },
+          blocksCount: 1001,
+          complete: true,
+        })
+      : HttpResponse.json(
+          { error: 'not_found', message: `no indexed block falls on ${params.date} (UTC+8)` },
+          { status: 404 }
+        )
+  ),
 
   http.get(`${API_BASE}/blocks/:id/uncles/:index`, ({ params }) =>
     params.id === String(blockUncle.includedBy.number) && params.index === '0'
@@ -120,6 +145,7 @@ export const handlers = [
       nonce: '0x0',
       transactionsRoot: '0x0000000000000000000000000000000000000000000000000000000000000000',
       minerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq...',
+      minerPool: null,
       minerMessage: null,
       miningReward: '1000000000',
       miningRewardTxHash: '0x123...',
@@ -141,6 +167,8 @@ export const handlers = [
           fee: '100000',
           isCellbase: false,
           timestamp: '2024-01-15T10:30:00Z',
+          // Round 3 (contracts R-B · R-6a): only a cellbase pays a block.
+          pays: null,
         },
       ],
       total: 5000000,
@@ -587,6 +615,16 @@ export const handlers = [
       isLive: true,
       createdAtBlock: 100000,
       expiredAt: 1750000000,
+      // Round 3 (contracts L3): the live .bit Cells naming this account.
+      bitCells: [
+        {
+          id: `0x${'b1'.repeat(32)}`,
+          name: 'alice.bit',
+          ownerLockHash: '0xownerhash789',
+          ownerAddress: null,
+          expiredAt: 1900000000,
+        },
+      ],
     });
   }),
 
@@ -638,6 +676,8 @@ export const handlers = [
         address: null,
         scriptName: null,
       },
+      // Round 3 (contracts R-A · R-5): live names this owner prefix holds, this one included.
+      ownerNameCount: 1,
       sale: null,
       records: [],
       recordsHash: `0x${'0'.repeat(64)}`,
@@ -710,6 +750,14 @@ export const handlers = [
           lastSeen: 1751500800,
           advertiserCount: 2,
           localSessionObserved: true,
+          // Round 3 (contracts R-C · R-13), same clock as lastSeen.
+          alias: { address: '/ip4/203.0.113.7/tcp/8115', verifiedAt: 1751500700 },
+          localSession: {
+            connectedDurationMs: 3725000,
+            lastPingDurationMs: 42,
+            observedAt: 1751500800,
+            initiator: 'observerInitiated',
+          },
         },
       ],
     })

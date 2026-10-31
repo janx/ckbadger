@@ -23,7 +23,9 @@
         "timestampGapMs": 50,
         "uncleInBlock": 12,
         "oldMinerAddress": null,
-        "competingMinerAddress": null
+        "oldMinerPool": null,
+        "competingMinerAddress": null,
+        "competingMinerPool": null
       },
       "previewStatus": "available",
       "resolutionAction": null,

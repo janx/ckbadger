@@ -39,6 +39,8 @@ describe('EpochTimeLengthPage', () => {
       scriptDeployments: [],
       tipEpoch: 13000,
       tipBlock: 19000000,
+      genesisTimestampMs: null,
+      tipTimestampMs: null,
       events: [
         {
           id: 'mirana-2021',

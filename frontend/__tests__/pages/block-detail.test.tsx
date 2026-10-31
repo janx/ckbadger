@@ -62,6 +62,7 @@ const mockBlock = {
   nonce: '0x1',
   transactionsRoot: `0x${'cc'.repeat(32)}`,
   minerAddress: 'ckb1qyqz683v8g0kz6r2gz7g3q6v3c4x4cv8j7ysf30a0g',
+  minerPool: null,
   minerMessage: '0x636b6220302e3231302e30',
   miningReward: '10000000000',
   miningRewardTxHash: `0x${'dd'.repeat(32)}`,
@@ -141,6 +142,8 @@ describe('BlockDetailPage', () => {
       scriptDeployments: [],
       tipEpoch: 13000,
       tipBlock: 19000000,
+      genesisTimestampMs: null,
+      tipTimestampMs: null,
       events: [],
     });
   });
@@ -274,6 +277,8 @@ describe('BlockDetailPage', () => {
       scriptDeployments: [],
       tipEpoch: 13000,
       tipBlock: 19000000,
+      genesisTimestampMs: null,
+      tipTimestampMs: null,
       events: [
         {
           id: 'meepo-2024',

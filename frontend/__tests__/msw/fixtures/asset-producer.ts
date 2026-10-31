@@ -629,6 +629,8 @@ export const inventoryProducer = {
       token: 0,
     },
     fullyOnchainObjectsCount: 2,
+    // Round 3 (contracts R-A · R-3): no catalog token, so no standard.
+    tokenStandards: [],
     objectComposition: [
       {
         collectionsCount: 0,

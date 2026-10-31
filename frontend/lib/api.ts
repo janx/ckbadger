@@ -103,56 +103,15 @@ async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
-export function isWarmupPendingError(error: unknown): error is ApiRequestError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const candidate = error as Partial<ApiRequestError>;
-  return candidate.code === 'warmup_pending' && candidate.status === 503;
-}
-
-export function isNetworkInitializingError(error: unknown): error is ApiRequestError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const candidate = error as Partial<ApiRequestError>;
-  return candidate.code === 'initializing' && candidate.status === 503;
-}
-
-/**
- * Round 3 (contracts.md S): the API's secondary stores have not caught up with the indexer (at
- * startup, or after 3 consecutive failed catch-ups). Transient: retry behind the "catching up"
- * banner, never the error screen. It can precede `warmup_pending` on the same endpoint.
- */
-export function isStoreCatchingUpError(error: unknown): error is ApiRequestError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const candidate = error as Partial<ApiRequestError>;
-  return candidate.code === 'store_catching_up' && candidate.status === 503;
-}
-
-/**
- * Round 3 (contracts.md L0): an indexer-derived aggregate is not derived yet. Transient: retry,
- * show "being derived" + the progress in `derive`, never a stand-in value.
- */
-export function isDerivePendingError(error: unknown): error is ApiRequestError {
-  if (!error || typeof error !== 'object') {
-    return false;
-  }
-  const candidate = error as Partial<ApiRequestError>;
-  return candidate.code === 'derive_pending' && candidate.status === 503;
-}
-
-/** Every 503 kind that means "not yet, retry" for the whole API (one list, used by the retry policy). */
-export function isTransientApiError(error: unknown): error is ApiRequestError {
-  return (
-    isNetworkInitializingError(error) ||
-    isWarmupPendingError(error) ||
-    isStoreCatchingUpError(error) ||
-    isDerivePendingError(error)
-  );
-}
+// The 503 kinds live in `@/lib/api-errors` (kept apart so the query client's retry rule does not
+// depend on how a test mocks this module); re-exported here for every other caller.
+export {
+  isDerivePendingError,
+  isNetworkInitializingError,
+  isStoreCatchingUpError,
+  isTransientApiError,
+  isWarmupPendingError,
+} from '@/lib/api-errors';
 
 /**
  * The resource exists but cannot be served YET (503 `service_unavailable`):
@@ -268,6 +227,11 @@ interface Block {
   nonce: string;
   transactionsRoot: string;
   minerAddress: string | null;
+  /**
+   * Round 3 (contracts R-C · R-12): the pool `pools.toml` names for this block's cellbase lock or
+   * raw message; null when no entry names it (and for genesis) — show the address tail, never guess.
+   */
+  minerPool: string | null;
   minerMessage: string | null;
   miningReward: string | null;
   miningRewardTxHash: string | null;
@@ -352,8 +316,11 @@ type TransactionActivityType =
 interface Transaction {
   value: string;
   outputCapacity?: string;
-  /** F2-tx (R2b-a 35): a cellbase's paid block (`null` for every other tx and blocks 0..=11). */
-  pays?: { number: number } | null;
+  /**
+   * F2-tx (R2b-a 35), round 3 (contracts R-B · R-6a): the block a cellbase pays, by number and the
+   * store's canonical hash; `null` for every other tx and for cellbases of blocks 1–11.
+   */
+  pays?: { number: number; hash: string } | null;
   activity?: GlobalActivity | null;
   proposalOrigin?: {
     blockNumber: number;
@@ -457,8 +424,12 @@ interface ReorgEvent {
     oldMinerLockHash: string | null;
     /** R2b-b: null exactly when the lock hash is null. */
     oldMinerAddress: string | null;
+    /** Round 3 (contracts R-C · R-12): `pools.toml` name of the dropped block's miner, else null. */
+    oldMinerPool: string | null;
     competingMinerLockHash: string | null;
     competingMinerAddress: string | null;
+    /** Round 3 (contracts R-C · R-12): `pools.toml` name of the competing block's miner, else null. */
+    competingMinerPool: string | null;
     fate: string;
     uncleInBlock: number | null;
     timestampGapMs: number | null;
@@ -476,6 +447,8 @@ interface OrphanedBlock {
   minerLockHash: string | null;
   /** R2b-b: null exactly when `minerLockHash` is null. */
   minerAddress: string | null;
+  /** Round 3 (contracts R-C · R-12): `pools.toml` name of the miner, else null. */
+  minerPool: string | null;
   fate:
     | 'canonical_now'
     | 'included_as_uncle'
@@ -496,6 +469,8 @@ interface CanonicalBranchBlock {
   minerLockHash: string | null;
   /** R2b-b: null exactly when `minerLockHash` is null. */
   minerAddress: string | null;
+  /** Round 3 (contracts R-C · R-12): `pools.toml` name of the miner, else null. */
+  minerPool: string | null;
 }
 
 interface OrphanedTransaction {
@@ -572,6 +547,12 @@ interface HardforkTimelineResponse {
   events: HardforkEvent[];
   consensusFeatures: Array<{ rfc: string; activationEpoch: number | null }>;
   scriptDeployments: HardforkScriptDeployment[];
+  /**
+   * Round 3 (contracts R-B · R-10): header timestamps (ms) of block 0 and of `tipBlock` (raw, not
+   * the running-max chain time) — the timeline's two ends. Both null while no header is indexed.
+   */
+  genesisTimestampMs: number | null;
+  tipTimestampMs: number | null;
   /**
    * F2 charts group (R11 contract, CH-41): always the four lanes, in VM order. Typed optional only
    * so older consumers' fixtures still compile; the Hardforks page rejects a response without it.
@@ -701,10 +682,13 @@ export interface CobuildAction {
   scriptInfoHash: string;
   scriptHash: string;
   data: string;
-  /** F2-tx (R2b-a 38): only for a Spore / Cluster action the API decoded. */
-  schema?: 'spore';
-  /** F2-tx (R2b-a 38): `MintSpore`, `TransferSpore`, … — present with `schema`. */
-  name?: string;
+  /**
+   * Round 3 (contracts R-B · R-7): the schema the scripts registry declares for the action's type
+   * script (`"spore"` for every family today); always present, null when unknown.
+   */
+  schema: string | null;
+  /** `MintSpore`, `MintProxy`, `TransferAgent`, …; null exactly when unknown (show the script info hash). */
+  name: string | null;
 }
 /** F2-tx (R2b-a 36): an input lock whose inputs hold more than the transaction returns to it. */
 export interface TransactionFeePayer {
@@ -807,8 +791,13 @@ interface TransactionDetail extends Omit<
     lock?: Script;
     type?: Script;
     address?: string;
-    /** F2-tx (R2b-a 39): the lock args through the API's one decoder; null for other families. */
-    lockArgsDecoded?: Record<string, ExactJson> | null;
+    /**
+     * F2-tx (R2b-a 39): the lock args through the API's one decoder; null for other families.
+     * Round 3 (contracts R-B · R-8) adds the registry field layouts, every field `0x`-hex in layout
+     * order: JoyID `{lock:"joyid", subType, pubkeyHash}`, Nervape Shadow Lock
+     * `{lock:"shadow-lock", prefix, ckbfsTypeHash}` (see `LockArgsDecoded`).
+     */
+    lockArgsDecoded?: LockArgsDecoded | null;
   }>;
   outputs?: Array<{
     capacity: string;
@@ -823,8 +812,14 @@ interface TransactionDetail extends Omit<
     address?: string;
     /** F2-tx (R2b-a 40): the output's lock is an input lock and it has no type script. */
     isChange: boolean;
+    /**
+     * Round 3 (contracts R-B · R-9): the output's data is the binary of this registry family
+     * version. Absent when it is not; `version` (1-based, by first indexed code cell) is null only
+     * for a binary with no indexed code cell yet.
+     */
+    codeCell?: { scriptName: string; versionHash: string; version: number | null };
     /** F2-tx (R2b-a 39): see `inputs[].lockArgsDecoded`. */
-    lockArgsDecoded?: Record<string, ExactJson> | null;
+    lockArgsDecoded?: LockArgsDecoded | null;
   }>;
   scriptGroups?: TransactionScriptGroup[];
   witnessDetails?: TransactionWitness[];
@@ -1335,8 +1330,14 @@ interface ActivityLockCall {
   scriptHash: string;
   scriptName?: string;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
-  decoded?: Record<string, ExactJson>;
+  decoded?: LockArgsDecoded;
 }
+
+/**
+ * The API's one lock-args decoder output (R2b-a 39 families + round 3 R-8 registry layouts).
+ * `lock` names the family; every other key is one decoded field.
+ */
+export type LockArgsDecoded = Record<string, ExactJson>;
 
 /**
  * Free-form JSON the API passes through (protocol-action metadata, decoded lock args): every
@@ -1554,6 +1555,11 @@ export interface InventorySummary {
   counts: { token: number; object: number; identity: number };
   objectStandards: { standard: string; collectionsCount: number; liveCount: number }[];
   objectComposition: { tier: string; collectionsCount: number; liveCount: number }[];
+  /**
+   * Round 3 (contracts R-A · R-3): catalog tokens per stored standard, sorted by standard; each
+   * equals `/assets?type=token&standard=<standard>`'s total and they sum to `counts.token`.
+   */
+  tokenStandards: { standard: string; count: number }[];
   fullyOnchainObjectsCount: number;
   pendingItemsCount: number;
 }
@@ -1706,6 +1712,12 @@ export interface GalleryObject extends SporeNft {
   number: string | null;
   traits: DobTrait[];
   decodeStatus: string;
+  /** Round 3 (contracts R-A · R-2): the minting block's indexed chain time, ms (string). */
+  chainTime: string;
+  /** Round 3 (contracts R-A · R-2): the live cell's lock code hash (the owner in `ownerAddress`). */
+  lockCodeHash: string;
+  /** Round 3 (contracts R-A · R-2): registry name for `lockCodeHash`; null = unnamed (show the hash). */
+  lockKind: string | null;
 }
 /** Who rewrote this item's cell as a ring neighbour, when the tx had no action of its own. */
 export interface ItemRingRelink {
@@ -1730,7 +1742,20 @@ export interface ItemFeedContext {
    * F2 identities (round 2) — R2b-b-19: what changed between the consumed and created version;
    * null without both. `ownerChanged` is null for `.cell` (its owner lives in the data).
    */
-  versionDiff?: { ownerChanged: boolean | null; dataChanged: boolean } | null;
+  versionDiff?: {
+    ownerChanged: boolean | null;
+    dataChanged: boolean;
+    /**
+     * Round 3 (contracts R-A · R-11), did:ckb rows only: the documents' `alsoKnownAs` differ.
+     * null = a document's handle cannot be located (say nothing). Other feeds have no key.
+     */
+    handleChanged?: boolean | null;
+  } | null;
+  /**
+   * Round 3 (contracts R-A · R-4), m-NFT `mint` rows only: the cell of the token's own class the
+   * mint outputs and the lock holding it; null = it outputs none. Absent on every other row.
+   */
+  classCell?: { outputIndex: number; lockHash: string; address: string } | null;
   createdCell: ItemCellVersion | null;
   consumedCell: ItemCellVersion | null;
 }
@@ -1844,7 +1869,27 @@ export type ItemProtocol =
   | { kind: 'dotbit'; itemId: string; versions: ProtocolVersion<DotbitProtocol>[] }
   | { kind: 'bit_cell'; itemId: string; versions: ProtocolVersion<BitCellProtocol>[] }
   | { kind: 'did_ckb'; itemId: string; versions: ProtocolVersion<DidProtocol>[] }
-  | { kind: 'dotcell'; itemId: string; versions: ProtocolVersion<DotCellProtocol>[] };
+  | {
+      kind: 'dotcell';
+      itemId: string;
+      versions: ProtocolVersion<DotCellProtocol>[];
+      /** Round 3 (contracts R-A · R-5): the name's record edits. */
+      recordEdits: DotCellRecordEdits;
+    };
+/** `.cell` `/protocol` `recordEdits` (contracts R-A · R-5, ID-DC4). */
+export interface DotCellRecordEdits {
+  count: number;
+  /** The newest edit; null when the name has no record edit. */
+  last: {
+    editor: DotCellPartyRef;
+    /** How many of the newest edits in a row this editor made (≥ 1). */
+    editorRun: number;
+    txHash: string;
+    blockNumber: number;
+    /** The newest edit's version timestamp, ms. */
+    timestamp: string;
+  } | null;
+}
 export interface DidPdsDistribution {
   source: 'currentCanonicalDocuments';
   totalLiveIdentities: number;
@@ -2399,11 +2444,52 @@ interface CollectionItem {
   ownerHashPrefix?: string;
   /** did:ckb rows only (R2b-b-22): the DID string, the protocol view's one encoder. */
   did?: string;
+  /**
+   * Round 3 (contracts R-A · R-1), m-NFT rows only: the token's index within its class; the row
+   * reads `${name} #${tokenIndex}` (`name` is the class's on-chain name there).
+   */
+  tokenIndex?: number;
   isLive: boolean;
   createdAtBlock: number;
   expiredAt?: number | null;
   txHash?: string | null;
   outputIndex?: number | null;
+}
+
+/** Round 3 (contracts R-B · R-10): `GET /blocks/by-day/{date}`, exact on the monotone chain time. */
+export interface BlocksByDay {
+  date: string;
+  /** Day start (inclusive) and next day start (exclusive), chain time ms. */
+  startMs: number;
+  endMs: number;
+  first: { number: number; hash: string };
+  last: { number: number; hash: string };
+  /** `last.number - first.number + 1`. */
+  blocksCount: number;
+  /** The tip's chain time has passed `endMs`: no later block can fall on the day. */
+  complete: boolean;
+}
+
+/**
+ * Round 3 (contracts L3): one live `.bit Cell` whose data names a `.bit` account; links to
+ * `/assets/identities/bit-cell/items/{id}`.
+ */
+export interface DotbitBitCellRef {
+  id: string;
+  name: string | null;
+  ownerLockHash: string | null;
+  ownerAddress: string | null;
+  /** Unix seconds, from the `.bit Cell` data. */
+  expiredAt: number;
+}
+
+/** `GET /assets/identities/dotbit/items/{accountId}`: the flat item plus its `.bit Cells` (L3). */
+export interface DotbitItemDetail extends CollectionItem {
+  /**
+   * Every live `.bit Cell` naming this account, by id; `[]` when none. Typed optional until lane L
+   * lands (the route answers `503 derive_pending` while `bit_cell_by_account` is being derived).
+   */
+  bitCells?: DotbitBitCellRef[];
 }
 
 interface CollectionHolder {
@@ -2416,6 +2502,13 @@ interface CollectionHolder {
   ownerHashPrefix?: string;
   address: string | null;
   itemCount: number;
+  /**
+   * Round 3 (contracts R-A · R-2): the holder lock's code hash; null only when the lock script is
+   * not indexed (then `address` is null too; `.cell`: also when the prefix resolves to no lock).
+   */
+  lockCodeHash: string | null;
+  /** Registry name for `lockCodeHash`; null when the registry names none — show the code hash. */
+  lockKind: string | null;
 }
 
 // ── `.cell` (DotCell) names ────────────────────────────────────────────────
@@ -2479,6 +2572,11 @@ interface DotCellItem {
   graceEndsAt: number;
   owner: DotCellPartyRef;
   manager: DotCellPartyRef;
+  /**
+   * Round 3 (contracts R-A · R-5): live `.cell` names the owner prefix holds (this one included when
+   * live) — equals that owner's holders-list `itemCount`.
+   */
+  ownerNameCount: number;
   sale: DotCellSale | null;
   records: DotCellRecord[];
   recordsHash: string;
@@ -3904,6 +4002,22 @@ export interface NetworkMap {
     lastSeen: number;
     advertiserCount: number;
     localSessionObserved: boolean;
+    /**
+     * Round 3 (contracts R-C · R-13): the dial alias this crawler last identified the peer through
+     * (greatest `verifiedAt`); absent when no retained alias was ever verified.
+     */
+    alias?: { address: string; verifiedAt: number };
+    /**
+     * Round 3 (contracts R-C · R-13): the configured node's session with the peer in the latest
+     * completed round, as of `observedAt` (not "now"); present exactly when `localSessionObserved`.
+     */
+    localSession?: {
+      connectedDurationMs: number;
+      /** Absent when the node reported no ping. */
+      lastPingDurationMs?: number;
+      observedAt: number;
+      initiator: 'observerInitiated' | 'peerInitiated';
+    };
   }>;
 }
 
@@ -4132,6 +4246,12 @@ export const api = {
 
   getBlock: (id: string | number): Promise<Block> => {
     return fetchApi(`/blocks/${id}`);
+  },
+
+  /** Round 3 (contracts R-B · R-10): the blocks of one UTC+8 calendar day (`YYYY-MM-DD`). */
+  getBlocksByDay: (date: string): Promise<BlocksByDay> => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`Not a YYYY-MM-DD day: ${date}`);
+    return fetchApi(`/blocks/by-day/${date}`);
   },
 
   getBlockFeeStats: (id: string | number): Promise<BlockFeeStats> => {
@@ -4803,7 +4923,7 @@ export const api = {
     );
   },
 
-  getDotbitItemDetail: (nftId: string): Promise<CollectionItem> => {
+  getDotbitItemDetail: (nftId: string): Promise<DotbitItemDetail> => {
     return fetchApi(`/assets/identities/dotbit/items/${encodeURIComponent(nftId)}`);
   },
 
@@ -5377,6 +5497,11 @@ export interface ForkEventRef {
   forkPointNumber: number;
   firstOrphanHash: string | null;
   firstOrphanStatus: ForkFirstOrphanStatus;
+  /**
+   * Round 3 (contracts R-C · R-6b): the REFERENCED event's new tip (the tip that switch adopted),
+   * never the row's own. On `revertedByEvent` it is the reversing switch's tip — the fork tree's ③.
+   */
+  newTip: { number: number; hash: string };
 }
 export interface ForkNodeRecord {
   observedSince: string | null;

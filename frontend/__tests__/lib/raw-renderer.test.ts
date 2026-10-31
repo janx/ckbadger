@@ -582,6 +582,7 @@ describe('renderRawPage', () => {
         scriptName: 'SECP256K1_BLAKE160',
       },
       sale: null,
+      ownerNameCount: 1,
       records: [],
       recordsHash: `0x${'0'.repeat(64)}`,
       nextId: '0x1e3a88ca5cc39f1bd38c091b53e33b7c29ebd019',

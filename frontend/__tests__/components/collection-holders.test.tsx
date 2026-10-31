@@ -24,8 +24,22 @@ const page = (
   nextCursor: null,
   ...extra,
 });
-const named = { lockScriptHash: null, address: null, ownerHashPrefix: prefix, itemCount: 6 };
-const resolved = { lockScriptHash: lock, address: null, itemCount: 2 };
+// Round 3 (contracts R-A · R-2): no indexed lock script → no address and no code hash either.
+const named = {
+  lockScriptHash: null,
+  address: null,
+  ownerHashPrefix: prefix,
+  itemCount: 6,
+  lockCodeHash: null,
+  lockKind: null,
+};
+const resolved = {
+  lockScriptHash: lock,
+  address: null,
+  itemCount: 2,
+  lockCodeHash: null,
+  lockKind: null,
+};
 // Unmodified holderDistribution from the real collection-insights producer.
 const distribution = [
   { holders: 0, items: 0, range: '1' },

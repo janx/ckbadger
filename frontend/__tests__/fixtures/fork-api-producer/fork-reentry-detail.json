@@ -6,7 +6,8 @@
       "number": 11,
       "timestamp": "2023-11-14T22:13:20.100+00:00",
       "transactionsCount": 0,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     }
   ],
   "canonicalBranch": [
@@ -16,7 +17,8 @@
       "number": 11,
       "timestamp": "2023-11-14T22:13:20+00:00",
       "transactionsCount": 0,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     }
   ],
   "canonicalTipNumber": 11,
@@ -44,7 +46,11 @@
     "revertedByEvent": {
       "forkPointNumber": 10,
       "firstOrphanHash": "0x8ee026e324d5c5473cea2f388969a9c9b1f992b837370f112f1da2f0cb72fb03",
-      "firstOrphanStatus": "recorded"
+      "firstOrphanStatus": "recorded",
+      "newTip": {
+        "number": 11,
+        "hash": "0x028ea506691ad1f3e4a9ddecbd1c1ec412612afb4067d7f10d6fcddb1e7189ef"
+      }
     },
     "supersededByTipHash": null,
     "reconcileInterrupted": false,
@@ -63,7 +69,8 @@
       "timestampGapMs": null,
       "transactionsCount": 0,
       "uncleIn": null,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     }
   ],
   "orphanedTransactions": []

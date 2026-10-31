@@ -8,7 +8,17 @@ const ADDRESS = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq';
 
 describe('HolderLabel', () => {
   it('links a holder with an address to its address page, showing the address', () => {
-    render(<HolderLabel holder={{ lockScriptHash: LOCK_HASH, address: ADDRESS, itemCount: 1 }} />);
+    render(
+      <HolderLabel
+        holder={{
+          lockScriptHash: LOCK_HASH,
+          address: ADDRESS,
+          itemCount: 1,
+          lockCodeHash: `0x${'9b'.repeat(32)}`,
+          lockKind: 'SECP256K1/blake160',
+        }}
+      />
+    );
     expect(screen.getByRole('link', { name: ADDRESS })).toHaveAttribute(
       'href',
       `/mainnet/address/${ADDRESS}`
@@ -16,7 +26,17 @@ describe('HolderLabel', () => {
   });
 
   it('links a holder whose lock encodes to no address by its lock hash', () => {
-    render(<HolderLabel holder={{ lockScriptHash: LOCK_HASH, address: null, itemCount: 1 }} />);
+    render(
+      <HolderLabel
+        holder={{
+          lockScriptHash: LOCK_HASH,
+          address: null,
+          itemCount: 1,
+          lockCodeHash: null,
+          lockKind: null,
+        }}
+      />
+    );
     expect(screen.getByRole('link')).toHaveAttribute('href', `/mainnet/address/${LOCK_HASH}`);
   });
 
@@ -28,6 +48,8 @@ describe('HolderLabel', () => {
           ownerHashPrefix: `0x${'cd'.repeat(20)}`,
           address: null,
           itemCount: 1,
+          lockCodeHash: null,
+          lockKind: null,
         }}
       />
     );

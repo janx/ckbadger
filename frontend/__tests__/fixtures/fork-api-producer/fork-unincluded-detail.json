@@ -6,7 +6,8 @@
       "number": 11,
       "timestamp": "2023-11-14T22:13:20+00:00",
       "transactionsCount": 1,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     },
     {
       "hash": "0x772d52182c3ac62d7d01c29e4864f70029ed0202d8caf7b2ffe180673c422c88",
@@ -14,7 +15,8 @@
       "number": 12,
       "timestamp": "2023-11-14T22:13:21+00:00",
       "transactionsCount": 1,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     }
   ],
   "canonicalBranch": [
@@ -24,7 +26,8 @@
       "number": 11,
       "timestamp": "2023-11-14T22:13:20+00:00",
       "transactionsCount": 1,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     },
     {
       "hash": "0x772d52182c3ac62d7d01c29e4864f70029ed0202d8caf7b2ffe180673c422c88",
@@ -32,7 +35,8 @@
       "number": 12,
       "timestamp": "2023-11-14T22:13:21+00:00",
       "transactionsCount": 1,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     }
   ],
   "canonicalTipNumber": 12,
@@ -71,7 +75,8 @@
         "number": 11,
         "timestamp": "2023-11-14T22:13:20+00:00",
         "transactionsCount": 1,
-        "minerAddress": null
+        "minerAddress": null,
+        "minerPool": null
       },
       "fate": "not_included_as_uncle",
       "hash": "0x36bac5b43aa2f1e91c21b692d0c17ce2a701962e6314d32d5fa4e0fba529440e",
@@ -82,7 +87,8 @@
       "timestampGapMs": 10,
       "transactionsCount": 2,
       "uncleIn": null,
-      "minerAddress": null
+      "minerAddress": null,
+      "minerPool": null
     }
   ],
   "orphanedTransactions": [

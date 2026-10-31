@@ -148,6 +148,7 @@ describe('renderMarkdownPage', () => {
           nonce: '0x0',
           transactionsRoot: `0x${'c'.repeat(64)}`,
           minerAddress: null,
+          minerPool: null,
           minerMessage: null,
           miningReward: null,
           miningRewardTxHash: null,

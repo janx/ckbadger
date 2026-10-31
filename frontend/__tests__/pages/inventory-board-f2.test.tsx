@@ -46,6 +46,11 @@ const summary: InventorySummary = {
     { tier: 'unknown', collectionsCount: 30, liveCount: 6297 },
   ],
   fullyOnchainObjectsCount: 26880,
+  tokenStandards: [
+    { standard: 'sudt', count: 94 },
+    { standard: 'xudt', count: 629 },
+    { standard: 'xudt_compatible', count: 4 },
+  ],
   pendingItemsCount: 0,
 };
 const base = {

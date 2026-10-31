@@ -20,6 +20,7 @@ export const emptyPage = <T>(data: T[] = []): CursorPaginatedResponse<T> => ({
   hasMore: false,
   nextCursor: null,
 });
+const SECP_CODE_HASH = '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8';
 export const protocols: Record<ItemKind, ItemProtocol> = {
   spore: producer.sporeProtocolProducer,
   mnft: producer.mnftProtocolProducer,
@@ -64,6 +65,8 @@ export function dotcellItem(): DotCellItem {
     graceEndsAt: 1902592000,
     owner: d.owner,
     manager: d.manager,
+    // Round 3 (contracts R-A · R-5): the owner holds this one live name.
+    ownerNameCount: 1,
     sale: null,
     records: d.records,
     recordsHash: d.recordsHash,
@@ -131,8 +134,21 @@ export function mockItemReads() {
   vi.spyOn(api, 'getIdentityCollectionCapacityChart').mockResolvedValue(chart);
   const holder = producer.sporeCellVersionsProducer.data[0];
   const holders = emptyPage([
-    { lockScriptHash: holder.ownerLockHash, address: holder.ownerAddress, itemCount: 6 },
-    { lockScriptHash: '0x' + '50'.repeat(32), address: null, itemCount: 2 },
+    {
+      lockScriptHash: holder.ownerLockHash,
+      address: holder.ownerAddress,
+      itemCount: 6,
+      lockCodeHash: SECP_CODE_HASH,
+      lockKind: 'SECP256K1/blake160',
+    },
+    // Round 3 (contracts R-A · R-2): an unindexed lock has neither address nor code hash.
+    {
+      lockScriptHash: '0x' + '50'.repeat(32),
+      address: null,
+      itemCount: 2,
+      lockCodeHash: null,
+      lockKind: null,
+    },
   ]);
   vi.spyOn(api, 'getSporeClusterHolders').mockResolvedValue(holders);
   vi.spyOn(api, 'getObjectCollectionHolders').mockResolvedValue(holders);

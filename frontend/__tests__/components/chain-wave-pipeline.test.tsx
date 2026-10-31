@@ -20,6 +20,7 @@ function mockBlock(number: number): Block {
     nonce: '0x0',
     transactionsRoot: '0xroot',
     minerAddress: null,
+    minerPool: null,
     minerMessage: null,
     miningReward: null,
     miningRewardTxHash: null,

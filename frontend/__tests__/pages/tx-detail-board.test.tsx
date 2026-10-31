@@ -504,7 +504,7 @@ describe('Transaction variants (D4)', () => {
       witnesses: ['0x00'],
       cellbaseWitness: { lock: lockScript(`0x${'ab'.repeat(20)}`), message },
       feePaidBy: [],
-      pays: { number: 89 },
+      pays: { number: 89, hash: '0x' + '89'.repeat(32) },
     } as TransactionDetail);
     vi.mocked(api.getBlock).mockResolvedValue({
       number: 101,

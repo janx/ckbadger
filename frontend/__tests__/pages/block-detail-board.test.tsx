@@ -61,6 +61,7 @@ const block = {
   nonce: '0x1',
   transactionsRoot: h('40'),
   minerAddress: MINER,
+  minerPool: null,
   minerMessage: '0x302e3231302e30',
   minerMessageText: '0.210.0 (2592ddf 2026-09-17)',
   miningReward: '68432120795',

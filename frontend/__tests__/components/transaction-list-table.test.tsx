@@ -70,7 +70,7 @@ const cellbase: Transaction = {
   txSize: 360,
   cycles: 0,
   activity: null,
-  pays: { number: 20829764 },
+  pays: { number: 20829764, hash: '0x' + '64'.repeat(32) },
 };
 
 describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => {

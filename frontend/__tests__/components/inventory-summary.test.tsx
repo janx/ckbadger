@@ -13,6 +13,11 @@ export const summary: InventorySummary = {
     { tier: 'centralized_mixture', collectionsCount: 110, liveCount: 1000 },
   ],
   fullyOnchainObjectsCount: 4200,
+  tokenStandards: [
+    { standard: 'sudt', count: 100 },
+    { standard: 'xudt', count: 398 },
+    { standard: 'xudt_compatible', count: 2 },
+  ],
   pendingItemsCount: 17,
 };
 describe('Inventory global summary', () => {

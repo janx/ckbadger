@@ -1,13 +1,13 @@
 import { QueryClient } from '@tanstack/react-query';
+import type { ApiRequestError } from '@/lib/api';
 import {
   isDerivePendingError,
   isNetworkInitializingError,
+  isNotFoundApiError,
   isStoreCatchingUpError,
   isTransientApiError,
   isWarmupPendingError,
-  type ApiRequestError,
-} from '@/lib/api';
-import { isNotFoundApiError } from '@/lib/api-errors';
+} from '@/lib/api-errors';
 
 export const WARMUP_PENDING_RETRY_DELAY_MS = 2000;
 /**
