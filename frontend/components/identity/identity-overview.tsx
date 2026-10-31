@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import type { DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
+import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
 import { Address } from '@/components/ui/address';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -8,7 +8,7 @@ import { ownerRun, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { describeIdentityRecords } from '@/lib/identity-records';
 import { readDidDocument } from '@/lib/did-document';
 import { formatBlockNumber } from '@/lib/format-block';
-import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 
 export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind: 'm-nft' }>;
 
@@ -184,6 +184,36 @@ export interface IdentityFactsInput {
   createdAtBlock: number;
   /** `.cell`: the name's detail (records, sub-names, sale, grace). */
   dotcell?: DotCellItem;
+  /** `.bit`: the live `.bit Cells` naming the account (contracts L3); the page always passes it. */
+  bitCells?: DotbitBitCellRef[];
+}
+
+/**
+ * Round 3 (contracts L3, ID-B-N1): the reverse of the `.bit Cell` page's ".bit account" fact —
+ * every live `.bit Cell` whose data names this account, by id, each linked to its page.
+ */
+function bitCellsFact(bitCells: DotbitBitCellRef[]) {
+  return {
+    label: '.bit Cells',
+    value:
+      bitCells.length === 0 ? (
+        <span className="text-text-dim">none</span>
+      ) : (
+        <span className="flex flex-col gap-0.5">
+          {bitCells.map((c) => (
+            <span key={c.id}>
+              <AppLink href={`/identities/bit-cell/${c.id}`}>
+                {c.name ?? truncateHash(c.id, 10, 4)}
+              </AppLink>
+              <span className="text-text-dim font-normal">
+                {' '}
+                · expires {formatUtc8Date(c.expiredAt * 1000)}
+              </span>
+            </span>
+          ))}
+        </span>
+      ),
+  };
 }
 
 /** The facts rail of an identity, in its own domain's words (ID-C6, IdentityBit/BitCell/Did/Dotcell). */
@@ -194,6 +224,7 @@ export function identityFacts({
   isLive,
   createdAtBlock,
   dotcell,
+  bitCells,
 }: IdentityFactsInput): { label: string; value: ReactNode }[] {
   switch (protocol.kind) {
     case 'dotbit': {
@@ -225,6 +256,7 @@ export function identityFacts({
           ),
         },
         ...subAccountsFact(protocol),
+        ...(bitCells ? [bitCellsFact(bitCells)] : []),
         heldFact(protocol, isLive),
       ];
     }

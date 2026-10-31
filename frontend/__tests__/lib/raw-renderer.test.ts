@@ -467,6 +467,7 @@ describe('renderRawPage', () => {
 
   it('renders dotbit item raw with default profile', async () => {
     vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+      bitCells: [],
       nftId: '0xdotbit',
       name: 'alice.bit',
       standard: 'dotbit',

@@ -1,6 +1,11 @@
 'use client';
 import { useQuery } from '@tanstack/react-query';
-import type { CursorPaginatedResponse, MnftItemActivity, CollectionItem } from '@/lib/api';
+import type {
+  CursorPaginatedResponse,
+  MnftItemActivity,
+  CollectionItem,
+  DotbitBitCellRef,
+} from '@/lib/api';
 import { isNotFoundApiError } from '@/lib/api';
 import { normalizeAssetId } from '@/lib/asset-utils';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
@@ -9,7 +14,8 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { retryTransientOnly } from '@/lib/query-client';
 export interface IdentityItemDetailConfig {
   standard: 'dotbit' | 'did_ckb' | 'bit_cell';
-  fetchDetail: (identityId: string) => Promise<CollectionItem>;
+  /** `.bit` details also carry `bitCells` (contracts L3). */
+  fetchDetail: (identityId: string) => Promise<CollectionItem & { bitCells?: DotbitBitCellRef[] }>;
   detailEndpoint: (identityId: string) => string;
   fetchActivities: (
     identityId: string,
@@ -33,6 +39,12 @@ interface Props {
   config: IdentityItemDetailConfig;
   identityId: string;
 }
+/** A `.bit` detail always lists its `.bit Cells` (contracts L3); a response without them is wrong. */
+function dotbitBitCells(item: CollectionItem & { bitCells?: DotbitBitCellRef[] }) {
+  if (!item.bitCells) throw new Error(`.bit ${item.nftId}: detail has no bitCells`);
+  return item.bitCells;
+}
+
 export function IdentityItemDetail({ config, identityId }: Props) {
   const id = normalizeAssetId(identityId);
   return <ScopedIdentity key={id} config={config} identityId={id} />;
@@ -79,6 +91,7 @@ function ScopedIdentity({ config, identityId }: Props) {
       isLive={item.isLive}
       createdAtBlock={item.createdAtBlock}
       error={detail.error}
+      bitCells={config.standard === 'dotbit' ? dotbitBitCells(item) : undefined}
     />
   );
 }

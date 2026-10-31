@@ -3,7 +3,7 @@ import { useState, useCallback, type ReactNode } from 'react';
 import { useSearchParams, usePathname, useRouter } from '@/src/navigation';
 import { parseActivityCursor } from '@/lib/asset-utils';
 import { useQuery } from '@tanstack/react-query';
-import { api, type DotCellItem, type ItemKind } from '@/lib/api';
+import { api, type DotbitBitCellRef, type DotCellItem, type ItemKind } from '@/lib/api';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
@@ -53,6 +53,8 @@ export interface CanonicalIdentityDetailProps {
   error: Error | null;
   /** `.cell`: the name's detail — its state, grace, records, sub-names and sale. */
   dotcell?: DotCellItem;
+  /** `.bit`: the live `.bit Cells` naming the account (contracts L3). */
+  bitCells?: DotbitBitCellRef[];
   /** Extra tier-1 sections after the standard's own (the `.cell` sale). */
   children?: ReactNode;
   /** Extra tier-2 sections (the `.cell` name relationships). */
@@ -131,6 +133,7 @@ export function CanonicalIdentityDetail({
   createdAtBlock,
   error,
   dotcell,
+  bitCells,
   children,
   tier2Extra,
 }: CanonicalIdentityDetailProps) {
@@ -238,7 +241,7 @@ export function CanonicalIdentityDetail({
       }
       facts={
         p && term
-          ? identityFacts({ protocol: p, term, now, isLive, createdAtBlock, dotcell })
+          ? identityFacts({ protocol: p, term, now, isLive, createdAtBlock, dotcell, bitCells })
           : undefined
       }
       feed={

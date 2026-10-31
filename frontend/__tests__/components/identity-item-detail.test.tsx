@@ -51,7 +51,7 @@ const didCkbConfig: IdentityItemDetailConfig = {
 beforeEach(() => {
   mockItemReads();
   mockFetchDetail.mockReset();
-  mockFetchDetail.mockResolvedValue(identityItem('dotbit'));
+  mockFetchDetail.mockResolvedValue({ ...identityItem('dotbit'), bitCells: [] });
 });
 it('uses the canonical item outpoint and protocol instead of resolving an owner balance', async () => {
   render(<IdentityItemDetail config={dotbitConfig} identityId={dotbitV4ProtocolProducer.itemId} />);
@@ -83,7 +83,7 @@ it('retains configuration-specific not-found semantics', async () => {
   expect(await screen.findByText('/assets/identities/did/items/0xabc')).toBeInTheDocument();
 });
 it('resets the independent activity cursor when navigating to another identity', async () => {
-  const first = identityItem('dotbit'),
+  const first = { ...identityItem('dotbit'), bitCells: [] },
     second = { ...first, nftId: '0x' + 'ee'.repeat(20), name: 'bob.bit' };
   mockFetchDetail.mockImplementation(async (id: string) => (id === first.nftId ? first : second));
   vi.mocked(api.getItemActivityFeed).mockResolvedValue({
@@ -110,6 +110,7 @@ it('resets the independent activity cursor when navigating to another identity',
 it('keeps recycled identities inspectable without claiming a live cell', async () => {
   mockFetchDetail.mockResolvedValue({
     ...identityItem('dotbit'),
+    bitCells: [],
     isLive: false,
     ownerLockHash: null,
   });

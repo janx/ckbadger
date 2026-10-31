@@ -2486,10 +2486,10 @@ export interface DotbitBitCellRef {
 /** `GET /assets/identities/dotbit/items/{accountId}`: the flat item plus its `.bit Cells` (L3). */
 export interface DotbitItemDetail extends CollectionItem {
   /**
-   * Every live `.bit Cell` naming this account, by id; `[]` when none. Typed optional until lane L
-   * lands (the route answers `503 derive_pending` while `bit_cell_by_account` is being derived).
+   * Every live `.bit Cell` naming this account, by id; `[]` when none. The route answers
+   * `503 derive_pending` (aggregate `bit_cell_by_account`) until the index is derived.
    */
-  bitCells?: DotbitBitCellRef[];
+  bitCells: DotbitBitCellRef[];
 }
 
 interface CollectionHolder {

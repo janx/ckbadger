@@ -169,7 +169,11 @@ export function mockItemReads() {
     ownedKnowledge: '20400000000',
   });
   vi.spyOn(api, 'getDidPdsDistribution').mockResolvedValue(producer.didPdsProducer);
-  vi.spyOn(api, 'getDotbitItemDetail').mockResolvedValue(identityItem('dotbit'));
+  // Round 3 (contracts L3): no live .bit Cell names this account.
+  vi.spyOn(api, 'getDotbitItemDetail').mockResolvedValue({
+    ...identityItem('dotbit'),
+    bitCells: [],
+  });
   vi.spyOn(api, 'getDidCkbItemDetail').mockResolvedValue(identityItem('did'));
   vi.spyOn(api, 'getBitCellItemDetail').mockResolvedValue(identityItem('bit-cell'));
   vi.spyOn(api, 'getDotCellItemDetail').mockResolvedValue(dotcellItem());

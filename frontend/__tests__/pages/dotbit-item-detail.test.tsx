@@ -41,6 +41,7 @@ it('renders exact canonical protocol, whole cell history and raw bytes for dotbi
 it('keeps recycled identity history while showing no live capacity', async () => {
   vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
     ...identityItem('dotbit'),
+    bitCells: [],
     isLive: false,
     ownerLockHash: null,
     txHash: null,
@@ -125,7 +126,11 @@ it('starts a new identity on its own first cursor page', async () => {
     })
   );
   const next = '0x' + '66'.repeat(32);
-  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({ ...identityItem('dotbit'), nftId: next });
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+    ...identityItem('dotbit'),
+    bitCells: [],
+    nftId: next,
+  });
   query = '';
   rerender(<Page identityId={next} />);
   await waitFor(() =>
@@ -145,7 +150,7 @@ it('reports missing identity and unavailable raw evidence without inventing a do
     `/assets/identities/dotbit/items/${evidence.itemId}`
   );
   unmount();
-  vi.mocked(api.getDotbitItemDetail).mockResolvedValue(identityItem('dotbit'));
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({ ...identityItem('dotbit'), bitCells: [] });
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));
   render(<Page identityId={evidence.itemId} />);
   expect(
@@ -186,6 +191,8 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
     'Expires',
     'Registered',
     'Records',
+    // Round 3 (L3): the reverse link to the .bit Cells naming the account.
+    '.bit Cells',
     'CKB held in its cell',
   ]);
   // The record is named by its coin (ID-DC1 rule, shared by .bit).
@@ -209,4 +216,55 @@ it('puts the facts rail right after the header in reading order (ID-C11)', async
   const facts = await screen.findByRole('complementary', { name: 'Facts' }, { timeout: 4000 });
   const term = screen.getByRole('heading', { name: /^Held until/ });
   expect(facts.compareDocumentPosition(term) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+});
+
+// Round 3 (contracts L3, ID-B-N1): the .bit page links back to the .bit Cells naming it.
+const bitCell = (n: number, over: Record<string, unknown> = {}) => ({
+  id: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
+  name: 'alice.bit',
+  ownerLockHash: `0x${'12'.repeat(32)}`,
+  ownerAddress: 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq4s93hhsj',
+  // 2030-03-17 17:46:40 UTC = 2030-03-18 01:46:40 UTC+8
+  expiredAt: 1900000000,
+  ...over,
+});
+it('lists every live .bit Cell that names the account, linked to its page (L3)', async () => {
+  vi.mocked(api.getDotbitItemDetail).mockResolvedValue({
+    ...identityItem('dotbit'),
+    bitCells: [bitCell(0xb1), bitCell(0xb2, { name: null })],
+  });
+  render(<Page identityId={evidence.itemId} />);
+  const fact = await screen.findByText('.bit Cells', { selector: 'dt' });
+  const value = fact.parentElement!.querySelector('dd')!;
+  const links = Array.from(value.querySelectorAll('a'));
+  expect(links.map((a) => a.getAttribute('href'))).toEqual([
+    `/mainnet/identities/bit-cell/0x${'b1'.repeat(32)}`,
+    `/mainnet/identities/bit-cell/0x${'b2'.repeat(32)}`,
+  ]);
+  expect(value).toHaveTextContent('alice.bit · expires 2030-03-18');
+  // A .bit Cell whose data names no account text is named by its id.
+  expect(value).toHaveTextContent('0xb2b2b2b2...b2b2');
+});
+it('says no .bit Cell names the account when there is none', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  const fact = await screen.findByText('.bit Cells', { selector: 'dt' });
+  expect(fact.parentElement!.querySelector('dd')).toHaveTextContent('none');
+});
+it('waits behind the "being derived" banner while the .bit Cell index is derived (L0)', async () => {
+  vi.mocked(api.getDotbitItemDetail)
+    .mockRejectedValueOnce(
+      new ApiRequestError(503, 'derive_pending', 'bit_cell_by_account is being derived', {
+        aggregate: 'bit_cell_by_account',
+        state: 'running',
+        rowsDone: 4096,
+        derivedFromTip: 20900000,
+      })
+    )
+    .mockResolvedValue({ ...identityItem('dotbit'), bitCells: [bitCell(0xb1)] });
+  render(<Page identityId={evidence.itemId} />);
+  expect(await screen.findByRole('status', { name: 'Being derived' })).toHaveTextContent(
+    'The indexer is deriving the .bit Cell index: 4,096 source rows folded, from the chain at block #20,900,000.'
+  );
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(await screen.findByText('.bit Cells', { selector: 'dt' })).toBeInTheDocument();
 });
