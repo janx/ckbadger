@@ -4511,6 +4511,36 @@ fn bincode_serialize_presized<T: serde::Serialize>(value: &T) -> Result<Vec<u8>>
     Ok(buf)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test-only: `fold_collection_activity_row` calls per (padded
+    /// collection id, day) on this thread.
+    static COLLECTION_DAY_FOLDS: std::cell::RefCell<FxHashMap<([u8; 32], u32), u32>> =
+        std::cell::RefCell::new(FxHashMap::default());
+}
+
+/// Fold one collection activity row into its block's
+/// `collection_activity_daily` day (`CollectionActivityDailyDeltas::add_row`,
+/// the rule live sync uses). A row is one (collection, transaction): the
+/// object / identity accumulators group a transaction's item deltas first, and
+/// `.bit` / `.cell` write one row per transaction, so a transaction reaches a
+/// collection's day once however many of its items it moves.
+fn fold_collection_activity_row(
+    daily: &mut ckbadger_store::CollectionActivityDailyDeltas,
+    collection_id: &[u8],
+    day: u32,
+    actions: &[ckbadger_store::types::AssetAction],
+) -> Result<()> {
+    #[cfg(test)]
+    COLLECTION_DAY_FOLDS.with(|folds| {
+        *folds
+            .borrow_mut()
+            .entry((keys::pad_id_32(collection_id), day))
+            .or_default() += 1;
+    });
+    daily.add_row(collection_id, day, actions)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_history_rows_for_block(
     block: &facts::BlockFacts,
@@ -4779,7 +4809,8 @@ fn build_history_rows_for_block(
                 &tx_actions.tx_hash,
             );
             rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
-            collection_activity_daily.add_row(
+            fold_collection_activity_row(
+                &mut collection_activity_daily,
                 &DOTCELL_SENTINEL_COLLECTION,
                 collection_day,
                 &entry.actions,
@@ -4960,7 +4991,8 @@ fn build_history_rows_for_block(
                     &tx.tx_hash,
                 );
                 rows.push_serialized(CF_IDENTITY_COLLECTION_ACTIVITIES, &activity_key, &entry)?;
-                collection_activity_daily.add_row(
+                fold_collection_activity_row(
+                    &mut collection_activity_daily,
                     &DOTBIT_SENTINEL_COLLECTION,
                     collection_day,
                     &entry.actions,
@@ -5000,7 +5032,8 @@ fn build_history_rows_for_block(
                 &activity_key,
                 &resolved_entry.entry,
             )?;
-            collection_activity_daily.add_row(
+            fold_collection_activity_row(
+                &mut collection_activity_daily,
                 &resolved_entry.collection_id,
                 collection_day,
                 &resolved_entry.entry.actions,
@@ -5029,7 +5062,8 @@ fn build_history_rows_for_block(
                 &activity_key,
                 &resolved_entry.entry,
             )?;
-            collection_activity_daily.add_row(
+            fold_collection_activity_row(
+                &mut collection_activity_daily,
                 &resolved_entry.collection_id,
                 collection_day,
                 &resolved_entry.entry.actions,
@@ -10056,5 +10090,170 @@ mod tests {
         sort_rows(&mut actual);
         sort_rows(&mut expected_sorted);
         assert_eq!(actual, expected_sorted, "three batches with sealing");
+    }
+
+    /// J15: a transaction reaches its collection's `collection_activity_daily`
+    /// day once, however many of the collection's items it moves — the
+    /// object accumulator groups the item deltas into one (collection, tx)
+    /// row first. Block A mints spores S1–S3 of cluster C in one tx; block B
+    /// moves S1, burns S2 and S3 and mints S4 in one tx. Counted on the
+    /// production per-block path (`build_history_rows_for_block`).
+    #[test]
+    fn collection_activity_day_is_folded_once_per_collection_per_transaction() {
+        use ckbadger_store::CollectionActivityDailyCounts;
+        let cluster_id = [0x61; 32];
+        let spore = |id: u8| [id; 32];
+        let lock = |byte: &str| fixture_lock_script(&format!("0x{}", byte.repeat(20)));
+        let spore_output = |id: u8, lock_byte: &str| {
+            (
+                CellOutput {
+                    capacity: format!("0x{:x}", 200_00000000u64),
+                    lock: lock(lock_byte),
+                    type_: Some(create_spore_type_script(&spore(id))),
+                },
+                format!(
+                    "0x{}",
+                    hex::encode(create_spore_data("image/png", &[id], Some(&cluster_id)))
+                ),
+            )
+        };
+        let cellbase_input = CellInput {
+            since: "0x0".to_string(),
+            previous_output: OutPoint {
+                tx_hash: format!("0x{}", "00".repeat(32)),
+                index: "0xffffffff".to_string(),
+            },
+        };
+        let mut mint_outputs = vec![(
+            CellOutput {
+                capacity: format!("0x{:x}", 200_00000000u64),
+                lock: lock("01"),
+                type_: Some(create_cluster_type_script(&cluster_id)),
+            },
+            format!(
+                "0x{}",
+                hex::encode(create_cluster_data("C", "{\"dob\":{\"ver\":1}}"))
+            ),
+        )];
+        mint_outputs.extend([
+            spore_output(0x71, "01"),
+            spore_output(0x72, "01"),
+            spore_output(0x73, "01"),
+        ]);
+        let mint = TransactionView {
+            hash: format!("0x{}", "d1".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![cellbase_input.clone()],
+            outputs: mint_outputs.iter().map(|(cell, _)| cell.clone()).collect(),
+            outputs_data: mint_outputs.iter().map(|(_, data)| data.clone()).collect(),
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+        };
+        let cellbase_b = TransactionView {
+            hash: format!("0x{}", "d2".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: vec![cellbase_input],
+            outputs: vec![CellOutput {
+                capacity: format!("0x{:x}", 500_00000000u64),
+                lock: lock("09"),
+                type_: None,
+            }],
+            outputs_data: vec!["0x".to_string()],
+            witnesses: vec![TEST_CELLBASE_WITNESS.to_string()],
+        };
+        let moved_outputs = [spore_output(0x71, "02"), spore_output(0x74, "02")];
+        let shuffle = TransactionView {
+            hash: format!("0x{}", "d3".repeat(32)),
+            version: "0x0".to_string(),
+            cell_deps: vec![],
+            header_deps: vec![],
+            inputs: (1..=3)
+                .map(|index| CellInput {
+                    since: "0x0".to_string(),
+                    previous_output: OutPoint {
+                        tx_hash: mint.hash.clone(),
+                        index: format!("0x{index:x}"),
+                    },
+                })
+                .collect(),
+            outputs: moved_outputs.iter().map(|(cell, _)| cell.clone()).collect(),
+            outputs_data: moved_outputs.iter().map(|(_, data)| data.clone()).collect(),
+            witnesses: vec!["0x".to_string()],
+        };
+        let blocks = vec![
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header_with_timestamp(14_002_000, 0x91, 1_700_000_000_000),
+                    uncles: vec![],
+                    transactions: vec![mint],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+            BlockResponseWithCycles {
+                block: BlockView {
+                    header: fixture_header_with_timestamp(14_002_001, 0x92, 1_700_000_010_000),
+                    uncles: vec![],
+                    transactions: vec![cellbase_b, shuffle],
+                    proposals: vec![],
+                },
+                cycles: None,
+            },
+        ];
+
+        let interner = interner::IdentityInterner::default();
+        let (arena, _) =
+            crate::sync::pipeline::build_bulk_facts_arena_from_blocks(&blocks, &interner)
+                .expect("facts arena");
+        let resolved = sequencer::BulkSequencer::default()
+            .resolve(&arena)
+            .expect("resolved txs");
+        let frozen = interner.snapshot_for_reads();
+        let detectors =
+            build_activity_protocol_detectors(&resolved, &frozen, true).expect("detectors");
+        let key = (
+            cluster_id,
+            keys::stats_day_yyyymmdd(1_700_000_000_000).unwrap(),
+        );
+        let expected = [
+            CollectionActivityDailyCounts {
+                mint_transactions: 1,
+                ..Default::default()
+            },
+            CollectionActivityDailyCounts {
+                mint_transactions: 1,
+                transfer_transactions: 1,
+                burn_transactions: 1,
+            },
+        ];
+        for (block, expected) in arena.blocks.iter().zip(expected) {
+            COLLECTION_DAY_FOLDS.with(|folds| folds.borrow_mut().clear());
+            let rows = build_history_rows_for_block(
+                block,
+                &arena.txs[block.tx_range.clone()],
+                &resolved[block.tx_range.clone()],
+                &arena.cells,
+                &frozen,
+                &detectors,
+                &FxHashMap::default(),
+            )
+            .expect("history rows");
+            let folds = COLLECTION_DAY_FOLDS.with(|folds| folds.borrow().clone());
+            assert_eq!(
+                folds.into_iter().collect::<Vec<_>>(),
+                vec![(key, 1)],
+                "block {}: one fold of (C, day) for its one transaction",
+                block.number
+            );
+            assert_eq!(
+                rows.collection_activity_daily.iter().collect::<Vec<_>>(),
+                vec![(&key, &expected)],
+                "block {}",
+                block.number
+            );
+        }
     }
 }
