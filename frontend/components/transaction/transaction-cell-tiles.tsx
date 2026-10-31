@@ -120,6 +120,8 @@ export function cellTiles(
       kind: kindOf(cell),
       content: cell.display ? (
         <TransactionCellContent display={cell.display} cellHref={`/cell/${tx.hash}-${i}`} />
+      ) : cell.codeCell ? (
+        <CodeCellContent codeCell={cell.codeCell} />
       ) : (
         content(cell)
       ),
@@ -131,6 +133,28 @@ export function cellTiles(
       state: required(cell.status, tx.hash, `output ${i} status`),
     })),
   };
+}
+
+/**
+ * Round 3 (contracts R-B · R-9, SC-K5): an output whose data is a registry script's binary, as
+ * the CellCode board's tiles say it ("code JoyID v5"). `version` is the API's first-deployment
+ * place; null means no indexed code cell carries this binary yet (a pending deployment).
+ */
+function CodeCellContent({
+  codeCell,
+}: {
+  codeCell: NonNullable<NonNullable<TransactionDetail['outputs']>[number]['codeCell']>;
+}) {
+  return (
+    <span title={codeCell.versionHash}>
+      code{' '}
+      <span className="text-text-dim">
+        {codeCell.version === null
+          ? `${codeCell.scriptName}, new version, not indexed yet`
+          : `${codeCell.scriptName} v${codeCell.version}`}
+      </span>
+    </span>
+  );
 }
 
 // F2-tx (TX-22): "Default Lock · change" (Main.dc.html out #2).
