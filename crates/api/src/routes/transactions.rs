@@ -753,8 +753,12 @@ pub struct TransactionInputResponse {
     pub cell_type: Option<String>,
     pub display: Option<super::transaction_cells::CellDisplay>,
     /// The lock's args decoded by its family's layout (TX-20); `null` for a
-    /// lock family without a known layout, and for the cellbase's null input.
+    /// lock family without a known layout, for args that do not fit it, and
+    /// for the cellbase's null input.
     pub lock_args_decoded: Option<serde_json::Value>,
+    /// Why `lockArgsDecoded` is null although the lock's registry entry
+    /// declares an args layout (R-8); `null` otherwise.
+    pub lock_args_decode_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -788,8 +792,11 @@ pub struct TransactionOutputResponse {
     /// [`settle_fee_payers_and_change`].
     pub is_change: bool,
     /// The lock's args decoded by its family's layout (TX-20); `null` for a
-    /// lock family without a known layout.
+    /// lock family without a known layout, and for args that do not fit it.
     pub lock_args_decoded: Option<serde_json::Value>,
+    /// Why `lockArgsDecoded` is null although the lock's registry entry
+    /// declares an args layout (R-8); `null` otherwise.
+    pub lock_args_decode_error: Option<String>,
     /// R-9 (SC-K5): this output's data is a registry family version's binary
     /// — which script and version it is. Absent for every other output.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -828,7 +835,8 @@ fn identify_code_cells(
 }
 
 /// Decode every input and output lock's args through the one lock-args
-/// decoder activity lock calls use ([`super::activities::decode_lock_args`]).
+/// decoder activity lock calls use ([`super::activities::decode_lock_args`]);
+/// args that do not fit their registry layout get the reason, not an error.
 fn decode_detail_lock_args(
     inputs: &mut [TransactionInputResponse],
     outputs: &mut [TransactionOutputResponse],
@@ -836,7 +844,7 @@ fn decode_detail_lock_args(
 ) -> Result<(), ApiRouteError> {
     let decode = |lock: Option<&ScriptResponse>, at: &str| {
         let Some(lock) = lock else {
-            return Ok(None);
+            return Ok(super::activities::DecodedLockArgs::default());
         };
         let code_hash =
             decode_hex_bytes_with_context(&lock.code_hash, "lock code hash", at, Some(32))?;
@@ -845,10 +853,14 @@ fn decode_detail_lock_args(
             .map_err(|e| ApiError::internal(format!("{at}: {e}")))
     };
     for (index, input) in inputs.iter_mut().enumerate() {
-        input.lock_args_decoded = decode(input.lock.as_ref(), &format!("{tx} input {index}"))?;
+        let read = decode(input.lock.as_ref(), &format!("{tx} input {index}"))?;
+        input.lock_args_decoded = read.decoded;
+        input.lock_args_decode_error = read.error;
     }
     for (index, output) in outputs.iter_mut().enumerate() {
-        output.lock_args_decoded = decode(output.lock.as_ref(), &format!("{tx} output {index}"))?;
+        let read = decode(output.lock.as_ref(), &format!("{tx} output {index}"))?;
+        output.lock_args_decoded = read.decoded;
+        output.lock_args_decode_error = read.error;
     }
     Ok(())
 }
@@ -1871,6 +1883,7 @@ fn build_inputs_outputs_from_pool_tx(
                 // The cellbase pseudo-input spends no cell.
                 return Ok(TransactionInputResponse {
                     lock_args_decoded: None,
+                    lock_args_decode_error: None,
                     display: None,
                     previous_output,
                     since: input.since.clone(),
@@ -1945,6 +1958,7 @@ fn build_inputs_outputs_from_pool_tx(
 
             Ok(TransactionInputResponse {
                 lock_args_decoded: None,
+                lock_args_decode_error: None,
                 display: None,
                 previous_output,
                 since: input.since.clone(),
@@ -2037,6 +2051,7 @@ fn build_inputs_outputs_from_pool_tx(
                 is_change: false,
                 code_cell: None,
                 lock_args_decoded: None,
+                lock_args_decode_error: None,
                 capacity: cell.capacity.to_string(),
                 used_capacity: occupied.to_string(),
                 virtual_used_capacity: virtual_occupied_capacity,
@@ -2302,6 +2317,7 @@ fn build_inputs_outputs_from_ckb(
 
             Ok(TransactionInputResponse {
                 lock_args_decoded: None,
+                lock_args_decode_error: None,
                 display,
                 previous_output: Some(PreviousOutput {
                     tx_hash: prev_tx_hash_hex.clone(),
@@ -2430,6 +2446,7 @@ fn build_inputs_outputs_from_ckb(
                     is_change: false,
                     code_cell: None,
                     lock_args_decoded: None,
+                    lock_args_decode_error: None,
                     capacity: cap.to_string(),
                     used_capacity: occ.to_string(),
                     virtual_used_capacity: virtual_occupied_capacity,
@@ -3175,6 +3192,7 @@ mod tests {
     fn test_transaction_input_response_serializes_type_script() {
         let input = TransactionInputResponse {
             lock_args_decoded: None,
+            lock_args_decode_error: None,
             display: None,
             used_capacity: Some("61".into()),
             cell_type: Some("plain".into()),

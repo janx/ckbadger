@@ -744,10 +744,15 @@ calls and the transaction detail's `lockArgsDecoded`) reads it; route code holds
 An entry declares exactly one of:
 
 - `codec = "<name>"` — a layout implemented in `activities.rs` from its spec (flag-driven optional
-  fields, variable tails). A codec returns `null` for args that do not fit it.
+  fields, variable tails).
 - `fields = [{ name, bytes, equals? }, …]` — a fixed field layout; the decoded object is
-  `{"lock": "<slug>", "<name>": "0x…", …}`. Args that are not exactly the layout's total length, or a
-  fixed (`equals`) field holding another value, are an error naming the script and the length.
+  `{"lock": "<slug>", "<name>": "0x…", …}`; the args must be exactly the layout's total length.
+
+The shape of on-chain lock args is not an indexer invariant: args that do not fit their layout (either
+kind) leave the decoded value `null` and state why — `decodeError` on a lock call,
+`lockArgsDecodeError` on a transaction detail input / output, e.g. `"JoyID: args are 23 bytes, layout
+subType(2) + pubkeyHash(20) expects 22"`. The response is still a 200. A lock with no registry layout
+has neither a value nor a reason.
 
 | Lock Script         | Layout                                            | Decoder Output                                                     |
 | ------------------- | ------------------------------------------------- | ------------------------------------------------------------------ |
@@ -760,7 +765,7 @@ An entry declares exactly one of:
 | Fiber locks         | codecs `fiber_funding`, `fiber_commitment`        | `{"protocol": "fiber", "action": …}`                               |
 | UTXOSwap Intent     | codec `utxoswap_intent`                           | `{"protocol": "utxoswap", …}`                                      |
 | JoyID               | fields `subType(2) + pubkeyHash(20)`              | `{"lock": "joyid", "subType": "0x0001", "pubkeyHash": "0x…"}`      |
-| Nervape Shadow Lock | fields `prefix(1) = 0x01 + ckbfsTypeHash(32)`     | `{"lock": "shadow-lock", "prefix": "0x01", "ckbfsTypeHash": "0x…"}` |
+| Nervape Shadow Lock | fields `prefix(1) + hash(32)` (raw, uninterpreted) | `{"lock": "shadow-lock", "prefix": "0x07", "hash": "0x…"}`         |
 
 **RGB++ decoder**: args[0..4] = out_index (u32 LE), args[4..36] = btc_txid (32 bytes LE, reversed for display). Minimum 36 bytes.
 

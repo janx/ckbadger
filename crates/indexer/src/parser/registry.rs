@@ -544,10 +544,10 @@ mod tests {
                 LockArgsField {
                     name: "prefix".into(),
                     bytes: 1,
-                    equals: Some(vec![0x01])
+                    equals: None
                 },
                 LockArgsField {
-                    name: "ckbfsTypeHash".into(),
+                    name: "hash".into(),
                     bytes: 32,
                     equals: None
                 },
