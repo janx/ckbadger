@@ -3789,3 +3789,115 @@ async fn detail_decodes_lock_args_of_known_lock_families() {
     );
     assert!(json["outputs"][1]["lockArgsDecoded"].is_null(), "{json}");
 }
+
+// ---------------------------------------------------------------------------
+// Lane R-B · R-8: lock args read by the layout the scripts registry declares.
+// ---------------------------------------------------------------------------
+
+/// JoyID (mainnet, `docs/metadata/scripts/joyid.toml`).
+const JOYID_LOCK_CODE_HASH: &str =
+    "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323";
+/// Nervape Shadow Lock (mainnet, `docs/metadata/scripts/shadow-lock.toml`).
+const SHADOW_LOCK_CODE_HASH: &str =
+    "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24";
+
+/// A pending transaction spending the pending fixture's parent into one output
+/// per `(code hash, hash type, args)` lock.
+async fn lock_args_fixture(locks: &[(&str, &str, Vec<u8>)]) -> (axum::Router, String) {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let hash = pending_tx_hash_hex();
+    let outputs = locks
+        .iter()
+        .map(|(code_hash, hash_type, args)| {
+            serde_json::json!({
+                "capacity": "0x0",
+                "lock": {
+                    "code_hash": code_hash,
+                    "hash_type": hash_type,
+                    "args": format!("0x{}", hex::encode(args)),
+                },
+                "type": null,
+            })
+        })
+        .collect::<Vec<_>>();
+    let data = vec!["0x".to_string(); outputs.len()];
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(&hash, &[(&parent, 0)], outputs, data, "pending", None),
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    (create_router(config).await, hash)
+}
+
+/// R-8 (TX-20): JoyID args (22 B: the 2-byte sub-type, then the 20-byte
+/// pubkey hash) and Nervape Shadow Lock args (`0x01`, then the 32-byte CKBFS
+/// type hash) decode by the field layout their registry entries declare —
+/// the same decoder path every other lock family goes through.
+#[tokio::test]
+async fn detail_decodes_joyid_and_shadow_lock_args_by_registry_layout() {
+    let joyid = [vec![0x00, 0x01], vec![0xea; 20]].concat();
+    let shadow = [vec![0x01], vec![0x31; 32]].concat();
+    let (app, hash) = lock_args_fixture(&[
+        (JOYID_LOCK_CODE_HASH, "type", joyid),
+        (SHADOW_LOCK_CODE_HASH, "data1", shadow),
+    ])
+    .await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["outputs"][0]["lockArgsDecoded"],
+        serde_json::json!({
+            "lock": "joyid",
+            "subType": "0x0001",
+            "pubkeyHash": format!("0x{}", "ea".repeat(20)),
+        }),
+        "{json}"
+    );
+    assert_eq!(
+        json["outputs"][1]["lockArgsDecoded"],
+        serde_json::json!({
+            "lock": "shadow-lock",
+            "prefix": "0x01",
+            "ckbfsTypeHash": format!("0x{}", "31".repeat(32)),
+        }),
+        "{json}"
+    );
+}
+
+/// R-8: args that do not fit the registry layout are an error naming the
+/// script and the length (or the fixed byte), never a silent `null`.
+#[tokio::test]
+async fn detail_refuses_lock_args_that_do_not_fit_the_registry_layout() {
+    for (code_hash, hash_type, args, needles) in [
+        (
+            JOYID_LOCK_CODE_HASH,
+            "type",
+            vec![0x00; 21],
+            &["JoyID", "21 bytes", "22 bytes"][..],
+        ),
+        (
+            SHADOW_LOCK_CODE_HASH,
+            "data1",
+            [vec![0x02], vec![0x31; 32]].concat(),
+            &["Nervape Shadow Lock", "prefix", "0x02", "0x01"][..],
+        ),
+    ] {
+        let (app, hash) = lock_args_fixture(&[(code_hash, hash_type, args)]).await;
+        let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        let message = json["message"].as_str().unwrap();
+        for needle in needles {
+            assert!(message.contains(needle), "{needle:?} in {message}");
+        }
+    }
+}

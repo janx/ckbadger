@@ -1,6 +1,10 @@
 name = "Anyone-Can-Pay Lock"
 description = "anyone_can_pay allows a recipient to provide cell capacity in asset transfer."
 
+# How this lock's args read (R-8): the `anyone_can_pay` codec, RFC-0026: the 20-byte pubkey hash, then optional CKB / UDT minimum exponents.
+[lock_args]
+codec = "anyone_can_pay"
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354"

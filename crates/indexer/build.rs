@@ -44,6 +44,105 @@ struct ScriptMetadata {
     mainnet: Option<ScriptNetworkMetadata>,
     #[serde(default)]
     testnet: Option<ScriptNetworkMetadata>,
+    /// How a lock's args read (`[lock_args]`, R-8).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    lock_args: Option<LockArgsMetadata>,
+    /// The CoBuild action schema a type script's actions use (`[cobuild]`, R-7).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cobuild: Option<CobuildMetadata>,
+}
+
+/// `[lock_args]`: exactly one of `codec` (a layout the API decoder implements
+/// from its spec, e.g. flag-driven optional fields) or `fields` (a fixed
+/// sequence of byte fields; the args must be exactly their total length).
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LockArgsMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    codec: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    fields: Vec<LockArgsFieldMetadata>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LockArgsFieldMetadata {
+    name: String,
+    bytes: usize,
+    /// The field's only valid value, `0x`-hex of exactly `bytes` bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    equals: Option<String>,
+}
+
+/// `[cobuild]`: a type script's CoBuild `Action.data` is the molecule union
+/// `schema`; the script emits exactly the listed items.
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CobuildMetadata {
+    schema: String,
+    actions: Vec<CobuildActionMetadata>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CobuildActionMetadata {
+    /// Union item id.
+    id: u32,
+    name: String,
+    /// Field count of the item's molecule table.
+    fields: usize,
+}
+
+fn is_hex_of_len(value: &str, bytes: usize) -> bool {
+    value
+        .strip_prefix("0x")
+        .is_some_and(|hex| hex.len() == bytes * 2 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Fail the build on a `[lock_args]` / `[cobuild]` table the decoders could
+/// not read exactly.
+fn validate_layouts(path: &Path, script: &ScriptMetadata) {
+    let at = path.display();
+    if let Some(layout) = &script.lock_args {
+        match (&layout.codec, layout.fields.is_empty()) {
+            (Some(codec), true) if !codec.trim().is_empty() => {}
+            (None, false) => {
+                let mut names = HashSet::new();
+                for field in &layout.fields {
+                    if field.name.trim().is_empty() || !names.insert(field.name.as_str()) {
+                        panic!("{at}: [lock_args] field names must be non-empty and unique");
+                    }
+                    if field.bytes == 0 {
+                        panic!("{at}: [lock_args] field `{}` has 0 bytes", field.name);
+                    }
+                    if let Some(equals) = &field.equals {
+                        if !is_hex_of_len(equals, field.bytes) {
+                            panic!(
+                                "{at}: [lock_args] field `{}` equals `{equals}`, not 0x-hex of {} bytes",
+                                field.name, field.bytes
+                            );
+                        }
+                    }
+                }
+            }
+            _ => panic!("{at}: [lock_args] needs exactly one of a non-empty `codec` or `fields`"),
+        }
+    }
+    if let Some(cobuild) = &script.cobuild {
+        if cobuild.schema.trim().is_empty() || cobuild.actions.is_empty() {
+            panic!("{at}: [cobuild] needs a schema and at least one action");
+        }
+        let mut ids = HashSet::new();
+        let mut names = HashSet::new();
+        for action in &cobuild.actions {
+            if !ids.insert(action.id)
+                || action.name.trim().is_empty()
+                || !names.insert(action.name.as_str())
+            {
+                panic!("{at}: [cobuild] action ids and names must be unique and non-empty");
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -209,6 +308,7 @@ fn main() {
                 .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e));
             let mut script = toml::from_str::<ScriptMetadata>(&content)
                 .unwrap_or_else(|e| panic!("failed to parse {}: {}", path.display(), e));
+            validate_layouts(&path, &script);
             script.metadata_slug = Some(
                 path.file_stem()
                     .unwrap_or_else(|| panic!("missing file stem for {}", path.display()))

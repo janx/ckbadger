@@ -2,6 +2,10 @@ name = "Fiber Commitment Lock"
 description = "Fiber payment-channel commitment lock."
 website = "https://www.fiber.world/"
 
+# How this lock's args read (R-8): the `fiber_commitment` codec, pubkey hash, delay epoch and version, optionally the settlement hash and flag.
+[lock_args]
+codec = "fiber_commitment"
+
 [mainnet]
 [[mainnet.versions]]
 # Code cell 0x95006eee7b4c0c8ad66e0514c88ed0ae43fc8db27793427de86a348ec720b9d6:2

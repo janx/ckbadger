@@ -212,6 +212,162 @@ impl ProtocolRegistry {
 pub static PROTOCOL_REGISTRY: LazyLock<ProtocolRegistry> =
     LazyLock::new(ProtocolRegistry::from_bundled);
 
+// ── Script layouts (R-7, R-8) ────────────────────────────────────────────
+// What the registry says about how a script's bytes read: a lock's args
+// layout (`[lock_args]`) and a type script's CoBuild action schema
+// (`[cobuild]`). Read-path data only: the API decodes with it; no indexer
+// stage consults it.
+
+/// How a lock's args read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockArgsLayout {
+    /// A layout the API implements from its spec (flag-driven optional
+    /// fields, variable tails), named by the registry entry.
+    Codec(String),
+    /// A fixed sequence of byte fields; the args are exactly their total
+    /// length.
+    Fields(Vec<LockArgsField>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockArgsField {
+    pub name: String,
+    pub bytes: usize,
+    /// The field's only valid value, when the layout fixes it.
+    pub equals: Option<Vec<u8>>,
+}
+
+/// A type script's CoBuild actions: `Action.data` is the molecule union
+/// `schema`, of which the script emits exactly `actions`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CobuildSchema {
+    pub schema: String,
+    pub actions: Vec<CobuildActionItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CobuildActionItem {
+    /// Union item id.
+    pub id: u32,
+    pub name: String,
+    /// Field count of the item's molecule table.
+    pub fields: usize,
+}
+
+/// One registry entry's layouts, with the names that identify it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptLayout {
+    /// `docs/metadata/scripts/<slug>.toml` file stem.
+    pub slug: String,
+    pub name: String,
+    pub lock_args: Option<LockArgsLayout>,
+    pub cobuild: Option<CobuildSchema>,
+}
+
+/// Every registry entry that declares a layout, keyed by each code hash its
+/// deployments reference (`canonical_ref_hash`, or a pseudo `code_hash`), on
+/// both networks.
+pub struct ScriptLayouts {
+    by_code_hash: HashMap<Vec<u8>, std::sync::Arc<ScriptLayout>>,
+}
+
+fn decode_layout_hex(value: &str, at: &str) -> Vec<u8> {
+    hex::decode(value.trim_start_matches("0x"))
+        .unwrap_or_else(|e| panic!("{at}: invalid hex `{value}`: {e} — build.rs validates this"))
+}
+
+impl ScriptLayouts {
+    fn from_bundled() -> Self {
+        let mut by_code_hash: HashMap<Vec<u8>, std::sync::Arc<ScriptLayout>> = HashMap::new();
+        for meta in script_labels() {
+            if meta.lock_args.is_none() && meta.cobuild.is_none() {
+                continue;
+            }
+            let slug = meta
+                .metadata_slug
+                .clone()
+                .expect("bundled script labels carry their file stem — build.rs bug");
+            let lock_args = meta.lock_args.as_ref().map(|layout| match &layout.codec {
+                Some(codec) => LockArgsLayout::Codec(codec.clone()),
+                None => LockArgsLayout::Fields(
+                    layout
+                        .fields
+                        .iter()
+                        .map(|field| LockArgsField {
+                            name: field.name.clone(),
+                            bytes: field.bytes,
+                            equals: field
+                                .equals
+                                .as_deref()
+                                .map(|value| decode_layout_hex(value, &slug)),
+                        })
+                        .collect(),
+                ),
+            });
+            let cobuild = meta.cobuild.as_ref().map(|cobuild| CobuildSchema {
+                schema: cobuild.schema.clone(),
+                actions: cobuild
+                    .actions
+                    .iter()
+                    .map(|action| CobuildActionItem {
+                        id: action.id,
+                        name: action.name.clone(),
+                        fields: action.fields,
+                    })
+                    .collect(),
+            });
+            let layout = std::sync::Arc::new(ScriptLayout {
+                slug: slug.clone(),
+                name: meta.name.clone(),
+                lock_args,
+                cobuild,
+            });
+            for net in [meta.mainnet.as_ref(), meta.testnet.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                for dep in net.import_deployments() {
+                    let code_hash_hex = match &dep {
+                        ImportDeployment::Version(version) => &version.canonical_ref_hash,
+                        ImportDeployment::Pseudo(pseudo) => &pseudo.code_hash,
+                    };
+                    let bytes = decode_layout_hex(code_hash_hex, &slug);
+                    if let Some(previous) = by_code_hash.insert(bytes.clone(), layout.clone()) {
+                        // Same file, another network or version: idempotent. A
+                        // different file on the same code hash is a data bug.
+                        assert_eq!(
+                            previous.slug,
+                            layout.slug,
+                            "script layout code_hash collision: 0x{} is declared by both {} and {}",
+                            hex::encode(&bytes),
+                            previous.slug,
+                            layout.slug
+                        );
+                    }
+                }
+            }
+        }
+        Self { by_code_hash }
+    }
+
+    /// The layouts of the registry entry a script with `code_hash` belongs
+    /// to; `None` when no entry for that code hash declares one.
+    pub fn get(&self, code_hash: &[u8]) -> Option<&ScriptLayout> {
+        self.by_code_hash
+            .get(code_hash)
+            .map(|layout| layout.as_ref())
+    }
+
+    /// Every `(code_hash, layout)` entry.
+    pub fn iter(&self) -> impl Iterator<Item = (&Vec<u8>, &ScriptLayout)> + '_ {
+        self.by_code_hash
+            .iter()
+            .map(|(code_hash, layout)| (code_hash, layout.as_ref()))
+    }
+}
+
+pub static SCRIPT_LAYOUTS: LazyLock<ScriptLayouts> = LazyLock::new(ScriptLayouts::from_bundled);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,6 +505,63 @@ mod tests {
         // registry slugs (the match is exhaustive; nothing maps to it).
         assert!(!by_slug.contains_key(ProtocolScript::SporeDid.slug()));
         assert_eq!(slug_to_protocol(ProtocolScript::SporeDid.slug()), None);
+    }
+
+    /// R-8: the JoyID and Nervape Shadow Lock entries declare their args
+    /// field layouts, reachable from every code hash their files list.
+    #[test]
+    fn script_layouts_read_lock_args_fields_from_the_registry() {
+        let joyid = SCRIPT_LAYOUTS
+            .get(&parse_hex_to_bytes(
+                "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            ))
+            .expect("JoyID layout");
+        assert_eq!(joyid.slug, "joyid");
+        assert_eq!(joyid.name, "JoyID");
+        assert_eq!(
+            joyid.lock_args,
+            Some(LockArgsLayout::Fields(vec![
+                LockArgsField {
+                    name: "subType".into(),
+                    bytes: 2,
+                    equals: None
+                },
+                LockArgsField {
+                    name: "pubkeyHash".into(),
+                    bytes: 20,
+                    equals: None
+                },
+            ]))
+        );
+        let shadow = SCRIPT_LAYOUTS
+            .get(&parse_hex_to_bytes(
+                "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+            ))
+            .expect("Nervape Shadow Lock layout");
+        assert_eq!(
+            shadow.lock_args,
+            Some(LockArgsLayout::Fields(vec![
+                LockArgsField {
+                    name: "prefix".into(),
+                    bytes: 1,
+                    equals: Some(vec![0x01])
+                },
+                LockArgsField {
+                    name: "ckbfsTypeHash".into(),
+                    bytes: 32,
+                    equals: None
+                },
+            ]))
+        );
+        // A codec-named family: every default-lock code hash.
+        assert_eq!(
+            SCRIPT_LAYOUTS
+                .get(&parse_hex_to_bytes(
+                    "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"
+                ))
+                .and_then(|layout| layout.lock_args.clone()),
+            Some(LockArgsLayout::Codec("secp256k1_blake160".into()))
+        );
     }
 
     #[test]

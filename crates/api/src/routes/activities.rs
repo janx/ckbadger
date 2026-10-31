@@ -12,7 +12,7 @@ use ckbadger_store::{
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use crate::pool::PoolTxRecord;
 use crate::response::{
@@ -487,121 +487,115 @@ fn convert_type_calls(
 
 type ArgsDecoder = fn(&[u8]) -> Option<serde_json::Value>;
 
-/// Parse a 0x-prefixed hex string into bytes. Panics on invalid hex (compile-time constants only).
+/// Parse a 0x-prefixed hex string into bytes. Panics on invalid hex (test constants only).
+#[cfg(test)]
 fn parse_hex_code_hash(hex_str: &str) -> Vec<u8> {
     let hex = hex_str.strip_prefix("0x").unwrap_or(hex_str);
     hex::decode(hex).expect("invalid hex in lock args decoder constant")
 }
 
-static LOCK_ARGS_DECODERS: LazyLock<HashMap<Vec<u8>, ArgsDecoder>> = LazyLock::new(|| {
-    let mut m: HashMap<Vec<u8>, ArgsDecoder> = HashMap::new();
-    // RGB++ lock
-    for hex in [
-        "0xbc6c568a1a0d0a09f6844dc9d74ddb4343c32143ff25f727c59edf4fb72d6936", // mainnet
-        "0x61ca7a4796a4eb19ca4f0d065cb9b10ddcf002f10f7cbb810c706cb6bb5c3248", // testnet
-        "0xd07598deec7ce7b5665310386b4abd06a6d48843e953c5cc2112ad0d5a220364", // signet
-    ] {
-        m.insert(
-            parse_hex_code_hash(hex),
-            decode_rgbpp_lock_args as ArgsDecoder,
-        );
-    }
-    // BTC time lock
-    for hex in [
-        "0x70d64497a075bd651e98ac030455ea200637ee325a12ad08aff03f1a117e5a62", // mainnet
-        "0x00cdf8fab0f8ac638758ebf5ea5e4052b1d71e8a77b9f43139718621f6849326", // testnet
-        "0x80a09eca26d77cea1f5a69471c59481be7404febf40ee90f886c36a948385b55", // signet
-    ] {
-        m.insert(
-            parse_hex_code_hash(hex),
-            decode_btc_time_lock_args as ArgsDecoder,
-        );
-    }
-    // Fiber funding lock
-    for hex in [
-        "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1", // mainnet
-        "0x6c67887fe201ee0c7853f1682c0b77c0e6214044c156c7558269390a8afa6d7c", // testnet
-    ] {
-        m.insert(
-            parse_hex_code_hash(hex),
-            decode_fiber_funding_lock_args as ArgsDecoder,
-        );
-    }
-    // Fiber commitment lock
-    for hex in [
-        "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c", // mainnet
-        "0x740dee83f87c6f309824d8fd3fbdd3c8380ee6fc9acc90b1a748438afcdf81d8", // testnet
-    ] {
-        m.insert(
-            parse_hex_code_hash(hex),
-            decode_fiber_commitment_lock_args as ArgsDecoder,
-        );
-    }
-    // UTXOSwap intent lock
-    for hex in [
-        "0x3547c9aa563804e47ba3ebd37e6012e447c91a238f7aa71b1a75319f11df060e", // mainnet
-        "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101", // testnet
-    ] {
-        m.insert(
-            parse_hex_code_hash(hex),
-            decode_utxoswap_intent_args as ArgsDecoder,
-        );
-    }
-    // The ordinary lock families (TX-20); each code hash is a
-    // `canonical_ref_hash` of its `docs/metadata/scripts/<slug>.toml`, which
-    // `lock_args_decoders_follow_the_script_registry` checks.
-    for (decoder, hexes) in [
-        (
-            decode_secp256k1_blake160_args as ArgsDecoder,
-            &["0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"][..], // default-lock
-        ),
-        (
-            decode_multisig_args as ArgsDecoder,
-            &[
-                "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
-                "0xd1a9f877aed3f5e07cb9c52b61ab96d06f250ae6883cc7f0a2423db0976fc821",
-                "0x36c971b8d41fbd94aabca77dc75e826729ac98447b46f91e00796155dddb0d29",
-                "0x765b3ed6ae264b335d07e73ac332bf2c0f38f8d3340ed521cb447b4c42dd5f09",
-            ][..], // default-multisig
-        ),
-        (
-            decode_anyone_can_pay_args as ArgsDecoder,
-            &[
-                "0xd369597ff47f29fbc0d47d2e3775370d1250b85140c670e4718af712983a2354",
-                "0x3419a1c09eb2567f6552ee7a8ecffd64155cffe0f1796e6e61ec088d740c1356",
-                "0x86a1c6987a4acbe1a887cca4c9dd2ac9fcb07405bbeda51b861b18bbf7492c4b",
-            ][..], // anyone-can-pay-lock
-        ),
-        (
-            decode_omnilock_args as ArgsDecoder,
-            &[
-                "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26",
-                "0xa4398768d87bd17aea1361edc3accd6a0117774dc4ebc813bfa173e8ac0d086d",
-                "0xf329effd1c475a2978453c8600e1eaf0bc2087ee093c3ee64cc96ec6847752cb",
-                "0x79f90bb5e892d80dd213439eeab551120eb417678824f282b4ffb5f21bad2e1e",
-            ][..], // omni-lock
-        ),
-    ] {
-        for hex in hexes {
-            m.insert(parse_hex_code_hash(hex), decoder);
-        }
-    }
-    m
-});
+/// The lock-args codecs a registry entry can name in `[lock_args] codec`
+/// (`docs/metadata/scripts/<slug>.toml`): layouts implemented here from their
+/// specs. Which lock uses which codec is registry data, never a code-hash
+/// table in this file.
+fn lock_args_codec(name: &str) -> Option<ArgsDecoder> {
+    Some(match name {
+        "secp256k1_blake160" => decode_secp256k1_blake160_args,
+        "multisig" => decode_multisig_args,
+        "anyone_can_pay" => decode_anyone_can_pay_args,
+        "omnilock" => decode_omnilock_args,
+        "rgbpp" => decode_rgbpp_lock_args,
+        "btc_time_lock" => decode_btc_time_lock_args,
+        "fiber_funding" => decode_fiber_funding_lock_args,
+        "fiber_commitment" => decode_fiber_commitment_lock_args,
+        "utxoswap_intent" => decode_utxoswap_intent_args,
+        _ => return None,
+    })
+}
 
 /// The one lock-args decoder (activity lock calls and the transaction
-/// detail): the decoded args of a lock with code hash `code_hash`, integers
-/// as exact strings; `None` for a lock family with no known args layout or
-/// args that do not fit it.
+/// detail): the args of a lock with code hash `code_hash`, read by the layout
+/// its scripts-registry entry declares (`[lock_args]`, R-8); integers as exact
+/// strings. `None` for a lock whose entry declares no layout. A codec returns
+/// `None` for args that do not fit it; args that do not fit a declared field
+/// layout are an error naming the script and the length.
 pub(crate) fn decode_lock_args(
     code_hash: &[u8],
     args: &[u8],
 ) -> Result<Option<serde_json::Value>, String> {
-    LOCK_ARGS_DECODERS
-        .get(code_hash)
-        .and_then(|decoder| decoder(args))
+    use ckbadger_indexer::parser::registry::{LockArgsLayout, SCRIPT_LAYOUTS};
+    let Some(script) = SCRIPT_LAYOUTS.get(code_hash) else {
+        return Ok(None);
+    };
+    let decoded = match &script.lock_args {
+        None => return Ok(None),
+        Some(LockArgsLayout::Codec(codec)) => {
+            let decoder = lock_args_codec(codec).ok_or_else(|| {
+                format!(
+                    "scripts registry entry {} ({}) names lock-args codec `{codec}`, which no \
+                     decoder implements",
+                    script.name, script.slug
+                )
+            })?;
+            decoder(args)
+        }
+        Some(LockArgsLayout::Fields(fields)) => Some(decode_lock_args_fields(
+            &script.name,
+            &script.slug,
+            fields,
+            args,
+        )?),
+    };
+    decoded
         .map(|decoded| integers_as_strings(decoded, "decoded lock args"))
         .transpose()
+}
+
+/// Read `args` as the registry's fixed field layout: `{ "lock": <slug>,
+/// <field>: "0x…", … }`. The args must be exactly the layout's total length
+/// and every fixed field must hold its declared value.
+fn decode_lock_args_fields(
+    name: &str,
+    slug: &str,
+    fields: &[ckbadger_indexer::parser::registry::LockArgsField],
+    args: &[u8],
+) -> Result<serde_json::Value, String> {
+    let total: usize = fields.iter().map(|field| field.bytes).sum();
+    if args.len() != total {
+        let layout = fields
+            .iter()
+            .map(|field| format!("{}({})", field.name, field.bytes))
+            .collect::<Vec<_>>()
+            .join(" + ");
+        return Err(format!(
+            "lock args of {name} ({slug}) are {} bytes; its registry layout {layout} is \
+             {total} bytes",
+            args.len()
+        ));
+    }
+    let mut decoded = serde_json::Map::new();
+    decoded.insert("lock".into(), serde_json::json!(slug));
+    let mut offset = 0;
+    for field in fields {
+        let bytes = &args[offset..offset + field.bytes];
+        offset += field.bytes;
+        if let Some(expected) = &field.equals {
+            if bytes != expected.as_slice() {
+                return Err(format!(
+                    "lock args of {name} ({slug}): field {} is 0x{}; its registry layout fixes \
+                     it to 0x{}",
+                    field.name,
+                    hex::encode(bytes),
+                    hex::encode(expected)
+                ));
+            }
+        }
+        decoded.insert(
+            field.name.clone(),
+            serde_json::json!(format!("0x{}", hex::encode(bytes))),
+        );
+    }
+    Ok(serde_json::Value::Object(decoded))
 }
 
 /// secp256k1-blake160-sighash-all: args are the 20-byte blake160 of the
@@ -2003,17 +1997,30 @@ mod tests {
         assert!(result.get("settlementFlag").is_none());
     }
 
+    /// Every codec the scripts registry names is implemented, and each
+    /// ordinary lock family's registry entry names its codec on every code
+    /// hash its file lists (the hard-coded table this replaced held exactly
+    /// these hashes).
     #[test]
-    fn lock_args_decoders_follow_the_script_registry() {
-        // Every ordinary-family code hash in the table is a canonical_ref_hash
-        // of the registry file named beside it.
+    fn lock_args_codecs_follow_the_script_registry() {
+        use ckbadger_indexer::parser::registry::{LockArgsLayout, SCRIPT_LAYOUTS};
+        for (code_hash, script) in SCRIPT_LAYOUTS.iter() {
+            if let Some(LockArgsLayout::Codec(codec)) = &script.lock_args {
+                assert!(
+                    lock_args_codec(codec).is_some(),
+                    "{} (0x{}) names unknown codec {codec}",
+                    script.slug,
+                    hex::encode(code_hash)
+                );
+            }
+        }
         let registry = |toml: &str| -> Vec<Vec<u8>> {
             toml.lines()
                 .filter_map(|line| line.trim().strip_prefix("canonical_ref_hash = \""))
                 .map(|rest| parse_hex_code_hash(rest.trim_end_matches('"')))
                 .collect()
         };
-        for (toml, family) in [
+        for (toml, codec) in [
             (
                 include_str!("../../../../docs/metadata/scripts/default-lock.toml"),
                 "secp256k1_blake160",
@@ -2030,33 +2037,74 @@ mod tests {
                 include_str!("../../../../docs/metadata/scripts/omni-lock.toml"),
                 "omnilock",
             ),
+            (
+                include_str!("../../../../docs/metadata/scripts/rgb.toml"),
+                "rgbpp",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/btc-time-lock.toml"),
+                "btc_time_lock",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/fiber-funding-lock.toml"),
+                "fiber_funding",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/fiber-commitment-lock.toml"),
+                "fiber_commitment",
+            ),
+            (
+                include_str!("../../../../docs/metadata/scripts/utxoswap-intent-lock.toml"),
+                "utxoswap_intent",
+            ),
         ] {
             let hashes = registry(toml);
-            assert!(!hashes.is_empty(), "{family}");
-            let table: Vec<&Vec<u8>> = LOCK_ARGS_DECODERS
-                .iter()
-                .filter(|(_, decoder)| {
-                    let probe = decoder(&[0u8; 22]).or_else(|| decoder(&[0u8; 20]));
-                    probe.is_some_and(|value| value["lock"] == family)
-                })
-                .map(|(hash, _)| hash)
-                .collect();
+            assert!(!hashes.is_empty(), "{codec}");
             for hash in &hashes {
-                assert!(
-                    table.contains(&hash),
-                    "{family}: 0x{} not decoded",
+                assert_eq!(
+                    SCRIPT_LAYOUTS
+                        .get(hash)
+                        .and_then(|script| script.lock_args.clone()),
+                    Some(LockArgsLayout::Codec(codec.into())),
+                    "{codec}: 0x{}",
                     hex::encode(hash)
                 );
             }
-            assert_eq!(
-                table.len(),
-                hashes
-                    .iter()
-                    .collect::<std::collections::HashSet<_>>()
-                    .len(),
-                "{family}"
-            );
         }
+    }
+
+    /// R-8: a registry field layout decodes exactly its total length, names
+    /// the script and length otherwise, and refuses a fixed field's other
+    /// values.
+    #[test]
+    fn registry_field_layouts_decode_exactly_or_name_the_script() {
+        let joyid = parse_hex_code_hash(
+            "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+        );
+        let args = [[0x00u8, 0x01].as_slice(), &[0xab; 20]].concat();
+        assert_eq!(
+            decode_lock_args(&joyid, &args).unwrap(),
+            Some(serde_json::json!({
+                "lock": "joyid",
+                "subType": "0x0001",
+                "pubkeyHash": format!("0x{}", "ab".repeat(20)),
+            }))
+        );
+        let error = decode_lock_args(&joyid, &args[..21]).unwrap_err();
+        assert_eq!(
+            error,
+            "lock args of JoyID (joyid) are 21 bytes; its registry layout subType(2) + \
+             pubkeyHash(20) is 22 bytes"
+        );
+        let shadow = parse_hex_code_hash(
+            "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+        );
+        let error =
+            decode_lock_args(&shadow, &[[0x00u8].as_slice(), &[1; 32]].concat()).unwrap_err();
+        assert!(error.contains("field prefix is 0x00"), "{error}");
+        assert!(decode_lock_args(&shadow, &[0x01; 32]).is_err());
+        // A lock no registry entry lays out stays raw.
+        assert_eq!(decode_lock_args(&[0x99; 32], &[1, 2, 3]).unwrap(), None);
     }
 
     #[test]
@@ -2084,15 +2132,28 @@ mod tests {
 
     #[test]
     fn test_fiber_locks_have_decoders() {
-        // Verify Fiber code hashes are registered in LOCK_ARGS_DECODERS
+        // The Fiber lock code hashes decode through their registry codecs.
         let funding_mainnet = parse_hex_code_hash(
             "0xe45b1f8f21bff23137035a3ab751d75b36a981deec3e7820194b9c042967f4f1",
         );
         let commitment_mainnet = parse_hex_code_hash(
             "0x2d45c4d3ed3e942f1945386ee82a5d1b7e4bb16d7fe1ab015421174ab747406c",
         );
-        assert!(LOCK_ARGS_DECODERS.contains_key(&funding_mainnet));
-        assert!(LOCK_ARGS_DECODERS.contains_key(&commitment_mainnet));
+        assert_eq!(
+            decode_lock_args(&funding_mainnet, &[7; 20])
+                .unwrap()
+                .unwrap()["action"],
+            "funding"
+        );
+        let commitment = [
+            [7u8; 20].as_slice(),
+            &42u64.to_le_bytes(),
+            &3u64.to_be_bytes(),
+        ]
+        .concat();
+        assert!(decode_lock_args(&commitment_mainnet, &commitment)
+            .unwrap()
+            .is_some());
     }
 
     /// Real mainnet swap intent args (tx 0x44f659be…, block 13,845,652).
@@ -2206,8 +2267,10 @@ mod tests {
         let testnet = parse_hex_code_hash(
             "0x4e9c30c8d6ce275740fbe69eae49c3d8c213578c5bd066f4938fe3c7dec6e101",
         );
-        assert!(LOCK_ARGS_DECODERS.contains_key(&mainnet));
-        assert!(LOCK_ARGS_DECODERS.contains_key(&testnet));
+        let args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
+        for code_hash in [mainnet, testnet] {
+            assert!(decode_lock_args(&code_hash, &args).unwrap().is_some());
+        }
     }
 
     #[test]

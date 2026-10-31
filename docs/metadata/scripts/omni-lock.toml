@@ -1,6 +1,10 @@
 name = "OMNI Lock"
 description = "Omnilock is a lock script designed for interoperability. It comes with built-in support for verification of transaction signing methods used in Bitcoin, Ethereum, EOS, and Dogecoin. Omnilock is also extensible, so more verification algorithms can be added in future."
 
+# How this lock's args read (R-8): the `omnilock` codec, RFC-0042: 21-byte auth, the flags byte, then the optional fields the flags turn on.
+[lock_args]
+codec = "omnilock"
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26"

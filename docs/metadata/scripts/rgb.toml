@@ -1,6 +1,10 @@
 name = "RGB++"
 description = "RGB++ Lock"
 
+# How this lock's args read (R-8): the `rgbpp` codec, the BTC output index (u32 LE), then the BTC txid.
+[lock_args]
+codec = "rgbpp"
+
 [mainnet]
 [[mainnet.versions]]
 # Code cell 0xcb4d9f9726e66306bfda6359d39d3bea8b4e5345d0f95f26a3e51626ebe82a63:0

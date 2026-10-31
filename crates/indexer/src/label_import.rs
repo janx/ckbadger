@@ -71,6 +71,43 @@ pub(crate) struct ScriptMetadata {
     pub mainnet: Option<ScriptNetworkMetadata>,
     #[serde(default)]
     pub testnet: Option<ScriptNetworkMetadata>,
+    /// `[lock_args]`: how this lock's args read (validated by `build.rs`;
+    /// read by [`crate::parser::registry::SCRIPT_LAYOUTS`], not by import).
+    #[serde(default)]
+    pub lock_args: Option<LockArgsMetadata>,
+    /// `[cobuild]`: the CoBuild action schema of this type script's actions
+    /// (validated by `build.rs`; read by `SCRIPT_LAYOUTS`, not by import).
+    #[serde(default)]
+    pub cobuild: Option<CobuildMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LockArgsMetadata {
+    #[serde(default)]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub fields: Vec<LockArgsFieldMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct LockArgsFieldMetadata {
+    pub name: String,
+    pub bytes: usize,
+    #[serde(default)]
+    pub equals: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CobuildMetadata {
+    pub schema: String,
+    pub actions: Vec<CobuildActionMetadata>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CobuildActionMetadata {
+    pub id: u32,
+    pub name: String,
+    pub fields: usize,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2302,6 +2339,8 @@ canonical_hash_type = "data1"
                 }],
                 pseudo: None,
             }),
+            lock_args: None,
+            cobuild: None,
         };
 
         upsert_script_label(&store, &script, "mainnet").unwrap();
@@ -2359,6 +2398,8 @@ canonical_hash_type = "data1"
                 pseudo: None,
             }),
             testnet: None,
+            lock_args: None,
+            cobuild: None,
         };
         upsert_script_label(&store, &original, "mainnet").unwrap();
 
@@ -2388,6 +2429,8 @@ canonical_hash_type = "data1"
                 pseudo: None,
             }),
             testnet: None,
+            lock_args: None,
+            cobuild: None,
         };
         upsert_script_label(&store, &renamed, "mainnet").unwrap();
 
@@ -2482,6 +2525,8 @@ canonical_hash_type = "data1"
                 }),
             }),
             testnet: None,
+            lock_args: None,
+            cobuild: None,
         };
 
         // Should succeed — no error returned.
@@ -2589,6 +2634,8 @@ canonical_hash_type = "data1"
                 pseudo: None,
             }),
             testnet: None,
+            lock_args: None,
+            cobuild: None,
         };
 
         upsert_script_label(&store, &script, "mainnet").unwrap();
@@ -2662,6 +2709,8 @@ canonical_hash_type = "data1"
                 }],
                 pseudo: None,
             }),
+            lock_args: None,
+            cobuild: None,
         };
 
         upsert_script_label(&store, &script, "mainnet").unwrap();
@@ -3154,6 +3203,8 @@ mod version_identity_tests {
                 pseudo: None,
             }),
             testnet: None,
+            lock_args: None,
+            cobuild: None,
         }
     }
 
@@ -3251,6 +3302,8 @@ mod version_identity_tests {
                 pseudo: None,
             }),
             testnet: None,
+            lock_args: None,
+            cobuild: None,
         };
 
         let (result, logs) = capture_warnings(|| upsert_script_label(&store, &script, "mainnet"));
