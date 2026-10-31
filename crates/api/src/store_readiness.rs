@@ -278,6 +278,11 @@ impl StoreReadiness {
 
     /// Record a finished round's outcomes.
     pub fn record_round(&self, outcomes: &[CatchUpOutcome]) {
+        if outcomes.is_empty() {
+            // Every round advances at least append-only and domain.
+            self.record_failed_round("the round advanced no secondary");
+            return;
+        }
         let mut phase = self.phase.write().expect("store readiness poisoned");
         match &mut *phase {
             Phase::FirstCatchUp { last_attempt } => {
@@ -288,13 +293,7 @@ impl StoreReadiness {
                         Err(error) => Some(format!("{} store: {error}", outcome.store.name())),
                     })
                     .collect();
-                if outcomes.is_empty() {
-                    // Every round advances at least append-only and domain.
-                    let attempt =
-                        Failures::record(last_attempt.take(), "the round advanced no secondary");
-                    log_failed_first_catch_up(&attempt);
-                    *last_attempt = Some(attempt);
-                } else if failed.is_empty() {
+                if failed.is_empty() {
                     let attempts = match last_attempt {
                         None => 1,
                         Some(failed) => failed.consecutive + 1,
@@ -339,7 +338,8 @@ impl StoreReadiness {
         }
     }
 
-    /// Record a round that ended with no outcome (its task panicked).
+    /// Record a round that ended with no outcome (its task panicked, or it
+    /// advanced no secondary).
     pub fn record_failed_round(&self, error: &str) {
         let mut phase = self.phase.write().expect("store readiness poisoned");
         match &mut *phase {
@@ -550,6 +550,12 @@ mod tests {
     fn a_round_that_advanced_nothing_is_not_a_catch_up() {
         let readiness = StoreReadiness::new();
         readiness.record_round(&[]);
+        assert!(rejection(&readiness).contains("the round advanced no secondary"));
+
+        let readiness = caught_up();
+        for _ in 0..CATCH_UP_FAILURE_STRIKES {
+            readiness.record_round(&[]);
+        }
         assert!(rejection(&readiness).contains("the round advanced no secondary"));
     }
 
