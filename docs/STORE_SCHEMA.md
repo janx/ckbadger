@@ -564,9 +564,10 @@ than the current one, `Running` (its snapshot died with the process) or `Failed`
 `bulk_sync_threshold` of the tip, the scheduler starts the first not-complete aggregate in
 registry order: rows cleared + `Running{H}` in one write, then the snapshot. When its source is
 exhausted, every row is checked and the state becomes `Complete{H, C}`. A rollback resets
-(`NotStarted` + clear, committed **before** undo replay) a `Running` derivation whenever it
-removes a block, and a `Complete` one when its target is below `C`; otherwise undo replay
-restores the rows exactly. **Fail fast:** a live delta that cannot be computed or a row that
+(`NotStarted` + clear + deletion of its `Derived` undo entries above the target, committed
+**before** undo replay) a `Running` derivation whenever it removes a block, and a `Complete` one
+when its target is below `C`; otherwise undo replay restores the rows exactly. Aggregates that are
+not maintained have their entries above the target dropped the same way. **Fail fast:** a live delta that cannot be computed or a row that
 breaks its invariant fails the live batch as a pre-commit invariant (nothing of the batch is
 committed) and a rebuild-chunk or validation error propagates out of the scheduler — either way
 the indexer stops, after writing the aggregate's `Failed` marker. There is no degraded

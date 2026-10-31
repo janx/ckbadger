@@ -42,6 +42,8 @@ use tracing::warn;
 pub(crate) use live::apply_live_batch;
 pub use live::{LiveBlockPoint, LiveDeriveCtx};
 pub use scheduler::{derive_to_completion, rederive_to_completion, DeriveScheduler, StepOutcome};
+#[cfg(test)]
+pub(crate) use scheduler::{derive_to_completion_with, rederive_to_completion_with};
 
 /// Derived key → signed contribution, one map per chunk or per block.
 pub type DeltaMap = BTreeMap<Vec<u8>, Vec<i128>>;
@@ -204,33 +206,42 @@ pub(crate) fn invalidate_registered_for_rollback(
     let tip = committed_tip(store)?;
     let mut batch = StoreBatch::new(store);
     let mut reset = Vec::new();
+    // Undo replay owns an aggregate's rollback only while it is complete at
+    // or below the target; every other aggregate's `Derived` pre-images above
+    // the target would write stale rows into a CF that is (or is about to be)
+    // empty, so they are dropped with the reset.
+    let mut not_replayed: Vec<&'static str> = Vec::new();
     for aggregate in aggregates {
         let id = aggregate.id();
-        let Some(meta) = store.get_derive_meta(id.name)? else {
-            continue;
-        };
-        if meta.version != id.version {
-            continue;
-        }
-        let corrupted = match meta.state {
-            DeriveState::Running { .. } => rollback_to < tip,
-            DeriveState::Complete {
+        let meta = store.get_derive_meta(id.name)?;
+        let current = meta.as_ref().filter(|meta| meta.version == id.version);
+        let (corrupted, replay_owns) = match current.map(|meta| &meta.state) {
+            Some(DeriveState::Running { .. }) => (rollback_to < tip, false),
+            Some(DeriveState::Complete {
                 completed_at_tip, ..
-            } => rollback_to < completed_at_tip,
-            DeriveState::NotStarted | DeriveState::Failed { .. } => false,
+            }) => (
+                rollback_to < *completed_at_tip,
+                rollback_to >= *completed_at_tip,
+            ),
+            Some(DeriveState::NotStarted | DeriveState::Failed { .. }) | None => (false, false),
         };
         if corrupted {
-            stage_reset(&mut batch, &id, Some(&meta))?;
+            stage_reset(&mut batch, &id, meta.as_ref())?;
             reset.push(id.name);
         }
+        if !replay_owns {
+            not_replayed.push(id.cf_name);
+        }
     }
-    if !reset.is_empty() {
+    let dropped = store.stage_delete_derived_undo_above(&mut batch, &not_replayed, rollback_to)?;
+    if !reset.is_empty() || dropped > 0 {
         batch.commit()?;
         tracing::info!(
             target: "derive",
             rollback_to,
             tip,
             aggregates = ?reset,
+            dropped_undo_entries = dropped,
             "derived aggregates reset before rollback; they are derived again"
         );
     }
@@ -531,6 +542,30 @@ mod tests {
                 "target={target}: {meta:?}"
             );
         }
+    }
+
+    /// Review P2: a reset must leave the aggregate's CF empty through the
+    /// rollback that follows it — undo replay must not write the aggregate's
+    /// `Derived` pre-images above the target back into the cleared CF.
+    #[test]
+    fn a_reset_aggregate_stays_empty_through_the_undo_replay() {
+        let (_dir, store) = toy_store();
+        commit_headers(&store, 0..=10);
+        crate::derive::derive_to_completion_with(&store, toy()).unwrap();
+        super::live::tests::write_live_batch(&store, &toy(), 11..=16);
+        // Derived again at 16: a rollback to 13 is below the completion tip.
+        crate::derive::rederive_to_completion_with(&store, toy()).unwrap();
+        invalidate_registered_for_rollback(&store, &toy(), 13).unwrap();
+        assert!(
+            stored_rows(&store, &TOY).is_empty(),
+            "the reset cleared the rows"
+        );
+        store.rollback_via_undo_log(&store, 13).unwrap();
+        assert_eq!(
+            stored_rows(&store, &TOY),
+            Vec::new(),
+            "undo replay wrote stale derived rows into a reset aggregate"
+        );
     }
 
     #[test]
