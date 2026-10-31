@@ -231,6 +231,17 @@ describe('Block board · first tier', () => {
     );
   });
 
+  it('says which pool mined the block when pools.toml names it (R-12)', async () => {
+    vi.mocked(api.getBlock).mockResolvedValue({ ...block, minerPool: 'Example Pool' });
+    render(<BlockDetailPage />);
+    const summary = await screen.findByTestId('block-summary');
+    expect(summary).toHaveTextContent(/^4 transactions, mined by Example Pool on 2026-10-25/);
+    expect(within(summary).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
+      'href',
+      `/mainnet/address/${block.minerAddress}`
+    );
+  });
+
   it('counts both views in quiet 12 px beside 15 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
     render(<BlockDetailPage />);
     const views = await screen.findByRole('group', { name: 'Block contents' });

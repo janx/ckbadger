@@ -169,28 +169,36 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
   const {
     oldMinerLockHash: dropped,
     oldMinerAddress,
+    oldMinerPool,
     competingMinerLockHash: winner,
     competingMinerAddress,
+    competingMinerPool,
     fate,
   } = event.preview;
-  const side = (hash: string | null, address: string | null, fallback: string) => {
+  const side = (
+    hash: string | null,
+    address: string | null,
+    pool: string | null,
+    fallback: string
+  ) => {
     if ((hash === null) !== (address === null))
       throw new Error(
         `Fork ${formatBlockNumber(event.forkPointNumber)}: miner lock ${hash} and address ${address} disagree`
       );
     return address ? (
-      <MinerLink address={address} />
+      <MinerLink address={address} pool={pool} />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
   };
   return (
     <span>
-      {side(dropped, oldMinerAddress, 'witness unavailable')}{' '}
+      {side(dropped, oldMinerAddress, oldMinerPool, 'witness unavailable')}{' '}
       <span className="text-[#4b5266]">vs</span>{' '}
       {side(
         winner,
         competingMinerAddress,
+        competingMinerPool,
         fate === 'canonical_now' ? 'the same block now' : 'witness unavailable'
       )}
       {dropped && dropped === winner && (

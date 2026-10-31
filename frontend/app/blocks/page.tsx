@@ -8,6 +8,7 @@ import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
+import { MinerLink } from '@/components/forks/miner-link';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   BlockContents,
@@ -72,7 +73,18 @@ export default function BlocksPage() {
       className: 'whitespace-nowrap',
       render: (block) =>
         block.minerAddress ? (
-          <Address address={block.minerAddress} startChars={10} endChars={6} className="text-xs" />
+          <MinerLink
+            address={block.minerAddress}
+            pool={block.minerPool}
+            unnamed={
+              <Address
+                address={block.minerAddress}
+                startChars={10}
+                endChars={6}
+                className="text-xs"
+              />
+            }
+          />
         ) : (
           <span className="text-text-dim">Genesis</span>
         ),

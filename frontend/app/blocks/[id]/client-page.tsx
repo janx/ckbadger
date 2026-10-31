@@ -8,6 +8,7 @@ import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
+import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -559,7 +560,12 @@ export default function BlockDetailPage() {
                 {formatCount(block.transactionsCount, 'transaction')}
                 {block.minerAddress && (
                   <>
-                    , mined by <Address address={block.minerAddress} />
+                    , mined by{' '}
+                    <MinerLink
+                      address={block.minerAddress}
+                      pool={block.minerPool}
+                      unnamed={<Address address={block.minerAddress} />}
+                    />
                   </>
                 )}{' '}
                 on {formatUtc8Date(block.timestamp)} at {formatUtc8Time(block.timestamp)}.
@@ -685,7 +691,15 @@ export default function BlockDetailPage() {
                 <div>
                   <dt className="text-text-dim mb-1">Miner</dt>
                   <dd>
-                    {block.minerAddress ? <Address address={block.minerAddress} /> : 'Genesis'}
+                    {block.minerAddress ? (
+                      <MinerLink
+                        address={block.minerAddress}
+                        pool={block.minerPool}
+                        unnamed={<Address address={block.minerAddress} />}
+                      />
+                    ) : (
+                      'Genesis'
+                    )}
                   </dd>
                 </div>
                 <div>

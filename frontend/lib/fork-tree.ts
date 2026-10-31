@@ -8,6 +8,8 @@ export interface ForkTreeTile {
   minerLockHash: string | null;
   /** R2b-b: null exactly when `minerLockHash` is null. */
   minerAddress: string | null;
+  /** Round 3 (R-12): the miner's `pools.toml` name; null when none names it. */
+  minerPool: string | null;
   transactionsCount: number | null;
 }
 
@@ -39,6 +41,7 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
       timestamp: null,
       minerLockHash: null,
       minerAddress: null,
+      minerPool: null,
       transactionsCount: null,
     },
     ...data.canonicalBranch,
@@ -70,6 +73,7 @@ export function forkTreeModel(data: ReorgDetail): ForkTreeModel {
         timestamp: null,
         minerLockHash: null,
         minerAddress: null,
+        minerPool: null,
         transactionsCount: null,
       });
   }

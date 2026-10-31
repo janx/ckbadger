@@ -186,6 +186,36 @@ describe('ForksPage', () => {
     expect(miners[0]).toHaveAttribute('href', `/mainnet/address/${address}`);
   });
 
+  it('names a miner by its pool when pools.toml does, else by address tail (R-12)', async () => {
+    const event = list().data[0];
+    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw93hhsj';
+    vi.mocked(api.getForks).mockResolvedValue({
+      ...list(),
+      data: [
+        {
+          ...event,
+          preview: {
+            ...event.preview!,
+            oldMinerLockHash: `0x${'ab'.repeat(32)}`,
+            oldMinerAddress: address,
+            oldMinerPool: 'Example Pool',
+            competingMinerLockHash: `0x${'cd'.repeat(32)}`,
+            competingMinerAddress: address.replace('w93hhsj', 'q2cdyx8'),
+            competingMinerPool: null,
+          },
+        },
+      ],
+    });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(within(table()).getByRole('link', { name: 'Example Pool' })).toHaveAttribute(
+      'href',
+      `/mainnet/address/${address}`
+    );
+    expect(within(table()).getByRole('link', { name: '…2cdyx8' })).toBeInTheDocument();
+  });
+
   it('links a row from firstOrphanHash even without the node preview', async () => {
     const event = list().data[0];
     vi.mocked(api.getForks).mockResolvedValue({

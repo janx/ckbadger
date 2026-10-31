@@ -218,6 +218,20 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(link.closest('td')).toHaveClass('whitespace-nowrap');
   });
 
+  it('names the miner by its pool when pools.toml does, linked to the address (R-12)', async () => {
+    vi.mocked(api.getBlocks).mockResolvedValue({
+      ...page,
+      data: [{ ...page.data[0], minerPool: 'Example Pool' }, page.data[1]],
+    });
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const pool = within(table).getByRole('link', { name: 'Example Pool' });
+    expect(pool).toHaveAttribute('href', `/mainnet/address/${miner}`);
+    expect(pool).toHaveAttribute('title', miner);
+    // The unnamed miner keeps its address tail; nothing is guessed for it.
+    expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c...93hhsj' })).toHaveLength(1);
+  });
+
   it('pages as newest first: "2 newest of 20,828,902", Newer and Older (BA-06)', async () => {
     render(<BlocksPage />);
     expect(await screen.findByText('2 newest of 20,828,902')).toBeInTheDocument();

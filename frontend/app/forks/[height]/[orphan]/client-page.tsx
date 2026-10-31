@@ -29,11 +29,16 @@ import {
   orphanFateWords,
   parseForkRoute,
 } from '@/lib/fork-format';
-import { MinerLink } from '@/components/forks/miner-link';
+import { MinerLink, minerName } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
 import { formatUtc8Date, formatUtc8DateTime, formatUtc8Time } from '@/lib/utils';
 
-type MinerBlock = { number: number; minerLockHash: string | null; minerAddress: string | null };
+type MinerBlock = {
+  number: number;
+  minerLockHash: string | null;
+  minerAddress: string | null;
+  minerPool: string | null;
+};
 
 /** A block's miner address; the API gives one exactly when it knows the miner's lock (R2b-b-12). */
 function minerAddressOf(block: MinerBlock): string {
@@ -47,7 +52,7 @@ function minerAddressOf(block: MinerBlock): string {
 function Miner({ block }: { block: MinerBlock }) {
   if (block.minerLockHash === null && block.minerAddress === null)
     return <span className="text-text-dim">witness unavailable</span>;
-  return <MinerLink address={minerAddressOf(block)} />;
+  return <MinerLink address={minerAddressOf(block)} pool={block.minerPool} />;
 }
 const hashShort = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 const blockAt = (number: number) => (
@@ -218,7 +223,7 @@ function narrative(data: ReorgDetail): string[] {
         block.minerLockHash !== null && block.competingBlock!.minerLockHash === block.minerLockHash;
       const miner = same
         ? i === 0
-          ? `, both by the same miner (…${minerAddressOf(block).slice(-6)})`
+          ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool)})`
           : ', again both by it'
         : '';
       parts.push(
@@ -300,6 +305,7 @@ interface BlockRow {
   timestamp: string;
   minerLockHash: string | null;
   minerAddress: string | null;
+  minerPool: string | null;
   transactionsCount: number;
   dropped: boolean;
   fate: ReactNode;
@@ -326,6 +332,7 @@ function blockRows(data: ReorgDetail): BlockRow[] {
         timestamp: block.timestamp,
         minerLockHash: block.minerLockHash,
         minerAddress: block.minerAddress,
+        minerPool: block.minerPool,
         transactionsCount: block.transactionsCount,
         dropped: true,
         fate: block.uncleIn ? (

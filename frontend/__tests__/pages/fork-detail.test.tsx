@@ -219,6 +219,33 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
   });
 
+  it('names pool-mined blocks by their pool in the table, the tree and the narrative (R-12)', async () => {
+    const lock = `0x${'ab'.repeat(32)}`;
+    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqw93hhsj';
+    const pooled = (block: Record<string, unknown>) => ({
+      ...block,
+      minerLockHash: lock,
+      minerAddress: address,
+      minerPool: 'Example Pool',
+    });
+    const orphan = uncleFixture.orphanedBlocks[0];
+    vi.mocked(api.getForkAt).mockResolvedValue(
+      fixture({
+        ...uncleFixture,
+        orphanedBlocks: [{ ...pooled(orphan), competingBlock: pooled(orphan.competingBlock) }],
+        canonicalBranch: uncleFixture.canonicalBranch.map(pooled),
+        adoptedBranch: uncleFixture.adoptedBranch.map(pooled),
+      })
+    );
+    const { container } = render(<ForkDetailPage />);
+    expect(await screen.findByTestId('fork-narrative')).toHaveTextContent(
+      'both by the same miner (Example Pool).'
+    );
+    const table = screen.getByRole('table', { name: 'Blocks' });
+    expect(within(table).getAllByRole('link', { name: 'Example Pool' })).toHaveLength(3);
+    expect(container.querySelector('svg[data-fork-tree]')).toHaveTextContent('Example Pool');
+  });
+
   it('links the switch that later reversed this one by its D7 address (R2b-b)', async () => {
     at('10', '028ea506');
     vi.mocked(api.getForkAt).mockResolvedValue(fixture(reentryFixture));

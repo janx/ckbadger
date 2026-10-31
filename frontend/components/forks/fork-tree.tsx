@@ -6,6 +6,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { blockClock } from '@/lib/fork-format';
 import type { ForkTreeModel, ForkTreeTile } from '@/lib/fork-tree';
 import { formatUtc8DateTime } from '@/lib/utils';
+import { minerName } from '@/components/forks/miner-link';
 
 const CW = 112;
 const TW = 96;
@@ -79,7 +80,7 @@ export function ForkTree({ model }: { model: ForkTreeModel }) {
         )}
         {t.minerAddress && (
           <text x={tx + 8} y={y + 47} fontSize="10" fill={FORK_COLORS.tick}>
-            …{t.minerAddress.slice(-6)}
+            {minerName(t.minerAddress, t.minerPool)}
           </text>
         )}
       </g>
