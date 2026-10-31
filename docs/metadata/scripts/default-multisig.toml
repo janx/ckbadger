@@ -1,6 +1,10 @@
 name = "Default Multisig"
 description = "SECP256K1/multisig is a script which allows a group of users to sign a single transaction."
 
+# How this lock's args read (R-8): the `multisig` codec, the 20-byte multisig script hash, optionally an 8-byte since (u64 LE).
+[lock_args]
+codec = "multisig"
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8"

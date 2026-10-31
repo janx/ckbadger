@@ -2365,12 +2365,15 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
     let store = test_store();
     let mut first = [0x45; 32];
     first[..4].copy_from_slice(&1i32.to_be_bytes());
-    seed_committed_activity(&store, &[0x21; 32], &first, 100, 1, 1000, TAG_TOKEN);
+    // Blocks 11 and 10: their cellbases pay no reward yet (each target would be
+    // genesis or earlier), so their `pays` is null and the store holds exactly
+    // these two cellbases with no reward-target header to read (R-6a).
+    seed_committed_activity(&store, &[0x21; 32], &first, 11, 1, 1000, TAG_TOKEN);
     let (_, _, template) = store.get_tx_by_hash(&first).unwrap().unwrap();
     let mut batch = StoreBatch::new(store.as_ref());
-    let mut header = store.get_block_header(100).unwrap().unwrap();
+    let mut header = store.get_block_header(11).unwrap().unwrap();
     header.transactions_count = 261;
-    batch.put_block_header(100, &header);
+    batch.put_block_header(11, &header);
     let cell = LiveCellInfo {
         capacity: 10_000_000_000,
         lock_script_hash: vec![0x21; 32],
@@ -2394,9 +2397,9 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
         } else {
             TAG_TYPE_CALL
         };
-        batch.put_tx_hash_map(&hash, 100, index);
+        batch.put_tx_hash_map(&hash, 11, index);
         batch.put_tx_index(
-            100,
+            11,
             index,
             &TxIndexEntry {
                 tx_hash: hash,
@@ -2407,18 +2410,18 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
             &[0x21; 32],
             &hash,
             &[0xba; 32],
-            100,
+            11,
             index,
             1000,
             tags,
         ));
-        batch.put_cell(&hash, 0, &cell, 100);
+        batch.put_cell(&hash, 0, &cell, 11);
     }
     let cellbase_hash = [0xcb; 32];
     // Production deliberately omits cellbase from CF_TX_ACTIONS.
-    batch.put_tx_hash_map(&cellbase_hash, 100, 0);
+    batch.put_tx_hash_map(&cellbase_hash, 11, 0);
     batch.put_tx_index(
-        100,
+        11,
         0,
         &TxIndexEntry {
             tx_hash: cellbase_hash,
@@ -2427,16 +2430,16 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
             ..template
         },
     );
-    batch.put_cell(&cellbase_hash, 0, &cell, 100);
+    batch.put_cell(&cellbase_hash, 0, &cell, 11);
     let older_hash = [0xca; 32];
     let older_header = CachedBlockHeader {
         hash: vec![0xb9; 32],
-        ..store.get_block_header(100).unwrap().unwrap()
+        ..store.get_block_header(11).unwrap().unwrap()
     };
-    batch.put_block_header(99, &older_header);
-    batch.put_tx_hash_map(&older_hash, 99, 0);
+    batch.put_block_header(10, &older_header);
+    batch.put_tx_hash_map(&older_hash, 10, 0);
     batch.put_tx_index(
-        99,
+        10,
         0,
         &TxIndexEntry {
             tx_hash: older_hash,
@@ -2450,10 +2453,10 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
             semantic_tags: 0,
         },
     );
-    batch.put_cell(&older_hash, 0, &cell, 99);
+    batch.put_cell(&older_hash, 0, &cell, 10);
     batch.commit().unwrap();
     assert!(store
-        .get_tx_actions(100, 0, &cellbase_hash)
+        .get_tx_actions(11, 0, &cellbase_hash)
         .unwrap()
         .is_none());
     let app = create_router(test_config(store)).await;
@@ -2488,15 +2491,16 @@ async fn transaction_class_filter_pages_across_sparse_action_chunks() {
     assert_eq!(body["data"].as_array().unwrap().len(), 1);
     assert_eq!(body["data"][0]["cycles"], 0);
     assert_eq!(body["data"][0]["cyclesStatus"], "complete");
-    assert_eq!(body["data"][0]["blockNumber"], 100);
-    assert_eq!(body["nextCursor"], "100:0");
+    assert_eq!(body["data"][0]["blockNumber"], 11);
+    assert!(body["data"][0]["pays"].is_null(), "{body}");
+    assert_eq!(body["nextCursor"], "11:0");
     let (status, older) = get_json(
         &app,
-        "/transactions?activity_type=cellbase&limit=1&cursor=100:0",
+        "/transactions?activity_type=cellbase&limit=1&cursor=11:0",
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{older}");
-    assert_eq!(older["data"][0]["blockNumber"], 99);
+    assert_eq!(older["data"][0]["blockNumber"], 10);
     assert!(older["nextCursor"].is_null());
     assert_eq!(
         get_json(&app, "/transactions?activity_type=nft").await.0,
@@ -3120,6 +3124,9 @@ async fn committed_detail_lists_header_deps_and_decodes_cellbase_witness() {
 // TX-25).
 // ---------------------------------------------------------------------------
 
+/// The canonical hash of block 489 in [`cellbase_pays_fixture`]'s store.
+const CELLBASE_PAYS_TARGET_HASH: [u8; 32] = [0x89; 32];
+
 /// Block 500 on the node and in the store: a cellbase and one plain
 /// transaction (block 500's cellbase pays block 489's reward on the mainnet
 /// window).
@@ -3166,6 +3173,62 @@ async fn cellbase_pays_fixture() -> (axum::Router, [u8; 32], [u8; 32]) {
     let chain = seed_ckb_chain(&[block]);
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_block_header(500, &detail_fixture_header(block_hash, 1_700_000_000_000));
+    // R-6a: the block 500's cellbase pays (489) is canonical in the store, so
+    // `pays` can name its hash. A canonical block has its cellbase, which pays
+    // its own target in turn: seed that chain of cellbases down to block 5,
+    // whose target would be genesis or earlier (it pays nothing).
+    let mut paid = 489i64;
+    while paid > 0 {
+        let hash = if paid == 489 {
+            CELLBASE_PAYS_TARGET_HASH
+        } else {
+            let mut hash = [0xbbu8; 32];
+            hash[..8].copy_from_slice(&paid.to_be_bytes());
+            hash
+        };
+        let mut header = detail_fixture_header(hash, 1_700_000_000_000 - (500 - paid) * 10_000);
+        header.transactions_count = 1;
+        batch.put_block_header(paid, &header);
+        let mut tx_hash = [0xcbu8; 32];
+        tx_hash[..8].copy_from_slice(&paid.to_be_bytes());
+        batch.put_tx_hash_map(&tx_hash, paid, 0);
+        batch.put_tx_index(
+            paid,
+            0,
+            &TxIndexEntry {
+                tx_hash,
+                is_cellbase: true,
+                timestamp: header.timestamp,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 100,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+        batch.put_cell(
+            &tx_hash,
+            0,
+            &LiveCellInfo {
+                capacity: 100_000_000_000,
+                lock_script_hash: vec![0x77; 32],
+                lock_code_hash: vec![0x9b; 32],
+                lock_hash_type: 1,
+                lock_args: vec![0x42; 20],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 0,
+                occupied_capacity: 6_100_000_000,
+                udt_amount: None,
+                data_hash: None,
+            },
+            paid,
+        );
+        paid -= 11;
+    }
     let mut hashes = [[0u8; 32]; 2];
     for (index, tx, is_cellbase) in [(0, &cellbase, true), (1, &plain, false)] {
         let tx_hash: [u8; 32] = tx.hash().unpack();
@@ -3234,7 +3297,12 @@ async fn cellbase_pays_fixture() -> (axum::Router, [u8; 32], [u8; 32]) {
 #[tokio::test]
 async fn cellbase_rows_and_detail_name_the_block_they_pay() {
     let (app, cellbase, plain) = cellbase_pays_fixture().await;
-    let pays = serde_json::json!({"number": 489});
+    // R-6a (TX-23 / TX-25 / BA-12): the hash too, read from the store's
+    // canonical header of the target — the block page's `cellbasePays` path.
+    let pays = serde_json::json!({
+        "number": 489,
+        "hash": format!("0x{}", hex::encode(CELLBASE_PAYS_TARGET_HASH)),
+    });
     let (status, json) =
         get_json(&app, &format!("/transactions/0x{}", hex::encode(cellbase))).await;
     assert_eq!(status, StatusCode::OK, "{json}");
@@ -3270,6 +3338,81 @@ async fn cellbase_rows_and_detail_name_the_block_they_pay() {
     .await;
     assert_eq!(status, StatusCode::OK, "{detail}");
     assert!(detail["pays"].is_null(), "{detail}");
+}
+
+/// R-6a: a cellbase the node has committed and this store has not indexed
+/// yet still names the block it pays, `{ number, hash }`. That branch reads
+/// the node only (the store may lag the target too), so the target's hash is
+/// the node's canonical header at that height.
+#[tokio::test]
+async fn awaiting_index_cellbase_names_the_hash_of_the_block_it_pays() {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::TransactionBuilder;
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x9b; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::from(vec![0x42; 20]).pack())
+        .build();
+    let cellbase = TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(500))
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity(100_000_000_000u64.pack())
+                .lock(lock.clone())
+                .build(),
+        )
+        .output_data(Bytes::new().pack())
+        .witness(
+            packed::CellbaseWitness::new_builder()
+                .lock(lock)
+                .build()
+                .as_bytes()
+                .pack(),
+        )
+        .build();
+    let hash = format!("0x{}", hex::encode(cellbase.hash().raw_data()));
+    let rpc_tx: ckb_jsonrpc_types::TransactionView = cellbase.clone().into();
+    let response = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "transaction": rpc_tx.inner,
+            "cycles": null,
+            "fee": null,
+            "time_added_to_pool": null,
+            "min_replace_fee": null,
+            "tx_status": {
+                "status": "committed",
+                "block_hash": format!("0x{}", "50".repeat(32)),
+                "block_number": "0x1f4",
+                "reason": null
+            }
+        }
+    });
+    let server = MockServer::start().await;
+    let mut response = response;
+    response["result"]["transaction"]["hash"] = serde_json::json!(hash);
+    mount_transaction_rpc(&server, response).await;
+    let target_hash = format!("0x{}", "48".repeat(32));
+    mount_header_rpc(&server, 489, &target_hash, 1).await;
+
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(json["poolStatus"], "committed_awaiting_index", "{json}");
+    assert_eq!(
+        json["pays"],
+        serde_json::json!({"number": 489, "hash": target_hash}),
+        "{json}"
+    );
 }
 
 /// TX-18 / TX-22: one rule each, decided in the API. The fee is paid by the
@@ -3561,9 +3704,96 @@ async fn detail_names_cobuild_actions_of_a_known_schema() {
     assert_eq!(actions.len(), 2, "{json}");
     assert_eq!(actions[0]["schema"], "spore", "{json}");
     assert_eq!(actions[0]["name"], "TransferSpore", "{json}");
-    assert!(actions[1].get("schema").is_none(), "{json}");
-    assert!(actions[1].get("name").is_none(), "{json}");
+    // R-7: an unknown schema is stated, not omitted: `schema` and `name` are
+    // null and the action is identified by its `scriptInfoHash`.
+    assert_eq!(
+        actions[1].get("schema"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1].get("name"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        actions[1]["scriptInfoHash"],
+        format!("0x{}", "11".repeat(32))
+    );
     assert_eq!(actions[1]["data"], "0x01000000aa", "{json}");
+}
+
+/// R-7 (TX-36): every schema the scripts registry declares names its
+/// actions through the one registry lookup — here a Spore Cluster Proxy
+/// (`SporeAction::MintProxy`, union item 5, a 3-field table), which no
+/// hard-coded family table knew.
+#[tokio::test]
+async fn detail_names_cobuild_actions_of_every_registry_schema() {
+    // Spore Cluster Proxy (testnet, `docs/metadata/scripts/spore-cluster-proxy.toml`).
+    let proxy_code =
+        hex::decode("4349889bda064adab8f49f7dd8810d217917f7df28e9b2a1df0b74442399670a").unwrap();
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let proxy_args = [0x51u8; 32];
+    let proxy_hash = ckbadger_api::utils::address::compute_script_hash(&proxy_code, 2, &proxy_args);
+    let lock = r2b_table(&[
+        hex::decode(TEST_SECP_LOCK_CODE_HASH.trim_start_matches("0x")).unwrap(),
+        vec![1],
+        r2b_bytes(&[0x44; 20]),
+    ]);
+    let address = [0u32.to_le_bytes().to_vec(), lock].concat();
+    // SporeAction::MintProxy (item 5) { cluster_id, proxy_id, to }.
+    let mint_proxy = [
+        5u32.to_le_bytes().to_vec(),
+        r2b_table(&[vec![0x61; 32], proxy_args.to_vec(), address]),
+    ]
+    .concat();
+    let action = r2b_table(&[vec![0x12; 32], proxy_hash.to_vec(), r2b_bytes(&mint_proxy)]);
+    let message = r2b_table(&[r2b_table(&[action])]);
+    let witness = [
+        0xff000001u32.to_le_bytes().to_vec(),
+        r2b_table(&[vec![0, 0, 0, 0], message]),
+    ]
+    .concat();
+    let hash = pending_tx_hash_hex();
+    let mut response = transaction_rpc_response(
+        &hash,
+        &[(&parent, 0)],
+        vec![serde_json::json!({
+            "capacity": "0x174876e400",
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": format!("0x{}", "44".repeat(20)),
+            },
+            "type": {
+                "code_hash": format!("0x{}", hex::encode(&proxy_code)),
+                "hash_type": "data1",
+                "args": format!("0x{}", hex::encode(proxy_args)),
+            },
+        })],
+        vec![format!("0x{}", "61".repeat(32))],
+        "pending",
+        None,
+    );
+    response["result"]["transaction"]["witnesses"] =
+        serde_json::json!([format!("0x{}", hex::encode(&witness))]);
+    mount_transaction_rpc(&server, response).await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let action = &json["witnessDetails"][0]["actions"][0];
+    assert_eq!(action["schema"], "spore", "{json}");
+    assert_eq!(action["name"], "MintProxy", "{json}");
 }
 
 /// TX-20: the detail decodes each input and output lock's args for the lock
@@ -3645,4 +3875,412 @@ async fn detail_decodes_lock_args_of_known_lock_families() {
         "{json}"
     );
     assert!(json["outputs"][1]["lockArgsDecoded"].is_null(), "{json}");
+}
+
+// ---------------------------------------------------------------------------
+// Lane R-B · R-8: lock args read by the layout the scripts registry declares.
+// ---------------------------------------------------------------------------
+
+/// JoyID (mainnet, `docs/metadata/scripts/joyid.toml`).
+const JOYID_LOCK_CODE_HASH: &str =
+    "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323";
+/// Nervape Shadow Lock (mainnet, `docs/metadata/scripts/shadow-lock.toml`).
+const SHADOW_LOCK_CODE_HASH: &str =
+    "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24";
+
+/// A pending transaction spending the pending fixture's parent into one output
+/// per `(code hash, hash type, args)` lock.
+async fn lock_args_fixture(locks: &[(&str, &str, Vec<u8>)]) -> (axum::Router, String) {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let hash = pending_tx_hash_hex();
+    let outputs = locks
+        .iter()
+        .map(|(code_hash, hash_type, args)| {
+            serde_json::json!({
+                "capacity": "0x0",
+                "lock": {
+                    "code_hash": code_hash,
+                    "hash_type": hash_type,
+                    "args": format!("0x{}", hex::encode(args)),
+                },
+                "type": null,
+            })
+        })
+        .collect::<Vec<_>>();
+    let data = vec!["0x".to_string(); outputs.len()];
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(&hash, &[(&parent, 0)], outputs, data, "pending", None),
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    (create_router(config).await, hash)
+}
+
+/// R-8 (TX-20): JoyID args (22 B: the 2-byte sub-type, then the 20-byte
+/// pubkey hash) and Nervape Shadow Lock args (`0x01`, then the 32-byte CKBFS
+/// type hash) decode by the field layout their registry entries declare —
+/// the same decoder path every other lock family goes through.
+#[tokio::test]
+async fn detail_decodes_joyid_and_shadow_lock_args_by_registry_layout() {
+    let joyid = [vec![0x00, 0x01], vec![0xea; 20]].concat();
+    let shadow = [vec![0x01], vec![0x31; 32]].concat();
+    let (app, hash) = lock_args_fixture(&[
+        (JOYID_LOCK_CODE_HASH, "type", joyid),
+        (SHADOW_LOCK_CODE_HASH, "data1", shadow),
+    ])
+    .await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["outputs"][0]["lockArgsDecoded"],
+        serde_json::json!({
+            "lock": "joyid",
+            "subType": "0x0001",
+            "pubkeyHash": format!("0x{}", "ea".repeat(20)),
+        }),
+        "{json}"
+    );
+    assert_eq!(
+        json["outputs"][1]["lockArgsDecoded"],
+        serde_json::json!({
+            "lock": "shadow-lock",
+            "prefix": "0x01",
+            "ckbfsTypeHash": format!("0x{}", "31".repeat(32)),
+        }),
+        "{json}"
+    );
+}
+
+/// R-8: args that do not fit the registry layout are an error naming the
+/// script and the length (or the fixed byte), never a silent `null`.
+#[tokio::test]
+async fn detail_refuses_lock_args_that_do_not_fit_the_registry_layout() {
+    for (code_hash, hash_type, args, needles) in [
+        (
+            JOYID_LOCK_CODE_HASH,
+            "type",
+            vec![0x00; 21],
+            &["JoyID", "21 bytes", "22 bytes"][..],
+        ),
+        (
+            SHADOW_LOCK_CODE_HASH,
+            "data1",
+            [vec![0x02], vec![0x31; 32]].concat(),
+            &["Nervape Shadow Lock", "prefix", "0x02", "0x01"][..],
+        ),
+    ] {
+        let (app, hash) = lock_args_fixture(&[(code_hash, hash_type, args)]).await;
+        let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+        let message = json["message"].as_str().unwrap();
+        for needle in needles {
+            assert!(message.contains(needle), "{needle:?} in {message}");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lane R-B · R-9: an output that is a registry family's code says so (SC-K5).
+// ---------------------------------------------------------------------------
+
+/// A family "Fixture Lock" with two registered versions whose code cells are
+/// indexed — v1 at block 5, v2 at block 9 — plus a binary the store observed
+/// but no registry family claims. Returns the three binaries' bytes.
+fn seed_code_cell_family(store: &Arc<CkbadgerStore>) -> [Vec<u8>; 3] {
+    let binaries = [
+        vec![0x7fu8, b'E', b'L', b'F', 1],
+        vec![0x7f, b'E', b'L', b'F', 2],
+        vec![0x7f, b'E', b'L', b'F', 3],
+    ];
+    let hashes: Vec<Vec<u8>> = binaries
+        .iter()
+        .map(|binary| compute_blake2b_data_hash(binary))
+        .collect();
+    store
+        .put_script_family_direct(
+            "fixture-lock",
+            &ScriptFamilyInfo {
+                family_id: "fixture-lock".into(),
+                name: "Fixture Lock".into(),
+                versions_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_family_name_direct("Fixture Lock", "fixture-lock")
+        .unwrap();
+    for (index, hash) in hashes.iter().enumerate() {
+        store
+            .put_script_version(
+                hash,
+                &ScriptVersionInfo {
+                    version_hash: hash.clone(),
+                    family_id: (index < 2).then(|| "fixture-lock".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        if index < 2 {
+            store
+                .put_script_version_by_family_direct("fixture-lock", hash)
+                .unwrap();
+        }
+    }
+    // Index v2's code cell first in the batch: numbering is by deployment
+    // position, not by write or hash order.
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (block, hash) in [(9i64, &hashes[1]), (5, &hashes[0]), (7, &hashes[2])] {
+        let tx = [block as u8; 32];
+        batch.put_block_header(
+            block,
+            &CachedBlockHeader {
+                hash: vec![0xb0 + block as u8; 32],
+                parent_hash: vec![0; 32],
+                timestamp: 1_700_000_000_000 + block * 10_000,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1_700_000_000_000 + block * 10_000,
+            },
+        );
+        batch.put_cell(
+            &tx,
+            0,
+            &LiveCellInfo {
+                capacity: 10_000_000_000,
+                lock_script_hash: vec![0x10; 32],
+                lock_code_hash: vec![0x20; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 5,
+                occupied_capacity: 4_600_000_000,
+                udt_amount: None,
+                data_hash: Some(hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_data_hash(hash, block, &tx, 0);
+        batch.put_tx_hash_map(&tx, block, 0);
+        batch.put_tx_index(
+            block,
+            0,
+            &TxIndexEntry {
+                tx_hash: tx,
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000 + block * 10_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    binaries
+}
+
+/// R-9 (SC-K5): an output whose data is a registry family version's binary
+/// carries `codeCell { scriptName, versionHash, version }` — `version` is the
+/// binary's place among the family's versions in deployment order (v1 =
+/// first deployed). Any other output — plain data, or a binary no registry
+/// family claims — has no `codeCell`.
+#[tokio::test]
+async fn detail_outputs_name_the_script_and_version_a_code_cell_holds() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let binaries = seed_code_cell_family(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let output = || {
+        serde_json::json!({
+            "capacity": "0x0",
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": format!("0x{}", "44".repeat(20)),
+            },
+            "type": null,
+        })
+    };
+    let hash = pending_tx_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &hash,
+            &[(&parent, 0)],
+            vec![output(), output(), output(), output()],
+            vec![
+                format!("0x{}", hex::encode(&binaries[1])),
+                format!("0x{}", hex::encode(&binaries[0])),
+                format!("0x{}", hex::encode(&binaries[2])),
+                "0x0102".to_string(),
+            ],
+            "pending",
+            None,
+        ),
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let code_cell = |index: usize| json["outputs"][index].get("codeCell").cloned();
+    assert_eq!(
+        code_cell(0),
+        Some(serde_json::json!({
+            "scriptName": "Fixture Lock",
+            "versionHash": format!("0x{}", hex::encode(compute_blake2b_data_hash(&binaries[1]))),
+            "version": 2,
+        })),
+        "{json}"
+    );
+    assert_eq!(code_cell(1).unwrap()["version"], 1, "{json}");
+    assert_eq!(code_cell(2), None, "unregistered binary: {json}");
+    assert_eq!(code_cell(3), None, "plain data: {json}");
+}
+
+/// R-9 on the committed detail (the store-indexed path): the same one
+/// `codeCell` rule as the pending detail.
+#[tokio::test]
+async fn committed_detail_outputs_name_the_script_and_version_a_code_cell_holds() {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let binaries = seed_code_cell_family(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x9b; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::from(vec![0x42; 20]).pack())
+        .build();
+    let output = packed::CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack())
+        .lock(lock.clone())
+        .build();
+    let cellbase = TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(20))
+        .witness(
+            packed::CellbaseWitness::new_builder()
+                .lock(lock)
+                .build()
+                .as_bytes()
+                .pack(),
+        )
+        .build();
+    let deploy = TransactionBuilder::default()
+        .output(output)
+        .output_data(Bytes::from(binaries[0].clone()).pack())
+        .build();
+    let block = BlockBuilder::default()
+        .number(20u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(cellbase.clone())
+        .transaction(deploy.clone())
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let deploy_hash: [u8; 32] = deploy.hash().unpack();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(20, &detail_fixture_header(block_hash, 1_700_000_500_000));
+    batch.put_tx_hash_map(&deploy_hash, 20, 1);
+    batch.put_tx_index(
+        20,
+        1,
+        &TxIndexEntry {
+            tx_hash: deploy_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_500_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_cell(
+        &deploy_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 100_000_000_000,
+            lock_script_hash: vec![0x77; 32],
+            lock_code_hash: vec![0x9b; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x42; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: binaries[0].len() as i32,
+            occupied_capacity: 6_600_000_000,
+            udt_amount: None,
+            data_hash: Some(compute_blake2b_data_hash(&binaries[0])),
+        },
+        20,
+    );
+    batch.put_tx_actions(&make_test_tx_actions(
+        &[0x77; 32],
+        &deploy_hash,
+        &block_hash,
+        20,
+        1,
+        0,
+        0,
+    ));
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(deploy_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["outputs"][0]["codeCell"],
+        serde_json::json!({
+            "scriptName": "Fixture Lock",
+            "versionHash": format!("0x{}", hex::encode(compute_blake2b_data_hash(&binaries[0]))),
+            "version": 1,
+        }),
+        "{json}"
+    );
 }

@@ -3,6 +3,17 @@ description = "Spore Protocol infuses digital assets with enduring value backed 
 website = "https://spore.pro/"
 category = "spore"
 
+# CoBuild actions this type script emits (R-7): `Action.data` is
+# spore-contract `action.mol` `union SporeAction` (schema id "spore");
+# the Spore type uses these items (union item id, table field count).
+[cobuild]
+schema = "spore"
+actions = [
+  { id = 0, name = "MintSpore", fields = 3 },
+  { id = 1, name = "TransferSpore", fields = 3 },
+  { id = 2, name = "BurnSpore", fields = 2 },
+]
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5"

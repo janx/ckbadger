@@ -46,6 +46,13 @@ pub struct HardforkTimelineResponse {
     pub network: String,
     pub tip_epoch: i64,
     pub tip_block: i64,
+    /// Header timestamp (ms) of the genesis block — the clock
+    /// `scriptDeployments[].timestampMs` uses; `null` while the store has no
+    /// indexed header (R-10, the timeline's left end).
+    pub genesis_timestamp_ms: Option<i64>,
+    /// Header timestamp (ms) of the indexed tip block `tipBlock`; `null`
+    /// while the store has no indexed header (R-10, the timeline's right end).
+    pub tip_timestamp_ms: Option<i64>,
     pub events: Vec<HardforkEventResponse>,
     pub consensus_features: Vec<HardforkFeature>,
     pub script_deployments: Vec<ScriptDeploymentMarkerResponse>,
@@ -218,9 +225,19 @@ async fn list_hardforks(
     let network_owned = network.to_string();
     let hardforks_owned: Vec<_> = hardforks.to_vec();
     let result = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let (tip_block, tip_epoch) = store
-            .get_sync_tip_block()?
-            .map_or((0i64, 0i64), |(num, header)| (num, header.epoch_number));
+        let tip = store.get_sync_tip_block()?;
+        let (tip_block, tip_epoch) = tip
+            .as_ref()
+            .map_or((0i64, 0i64), |(num, header)| (*num, header.epoch_number));
+        let (genesis_timestamp_ms, tip_timestamp_ms) = match &tip {
+            None => (None, None),
+            Some((number, header)) => {
+                let genesis = store.get_block_header(0)?.ok_or_else(|| {
+                    anyhow::anyhow!("store has indexed tip block {number} but no genesis header")
+                })?;
+                (Some(genesis.timestamp), Some(header.timestamp))
+            }
+        };
 
         let mut events = Vec::with_capacity(hardforks_owned.len());
         for spec in &hardforks_owned {
@@ -313,6 +330,8 @@ async fn list_hardforks(
             network: network_owned,
             tip_epoch,
             tip_block,
+            genesis_timestamp_ms,
+            tip_timestamp_ms,
             events,
             consensus_features,
             script_deployments,

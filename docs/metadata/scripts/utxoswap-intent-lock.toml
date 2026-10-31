@@ -2,6 +2,10 @@ name = "UTXOSwap Intent Lock"
 description = "UTXOSwap v1 intent lock. On-chain verified as authentic but the v1 generation is superseded; the current production lock is served from a gated API and is undocumented."
 website = "https://utxoswap.xyz/"
 
+# How this lock's args read (R-8): the `utxoswap_intent` codec, the UTXOSwap intent layout.
+[lock_args]
+codec = "utxoswap_intent"
+
 [mainnet]
 [[mainnet.versions]]
 # Code cell 0x5292c77c62f108e3a33e54ed3bdcc4457a9d7d88be0c6ef3c1811f473394e2f7:0

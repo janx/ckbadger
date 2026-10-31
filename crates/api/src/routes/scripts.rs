@@ -1898,6 +1898,98 @@ fn load_family_versions(
     Ok(versions)
 }
 
+/// What a code cell's binary is, by the scripts registry (R-9, SC-K5): the
+/// family whose version it is, and which version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodeCellIdentity {
+    /// The registry family's name.
+    pub script_name: String,
+    /// The binary's data hash: the version's identity.
+    pub version_hash: String,
+    /// The version's place among the family's versions in deployment order
+    /// (v1 = first deployed; [`family_version_numbers`]). `null` only while
+    /// the binary has no indexed code cell yet (a pending deployment).
+    pub version: Option<usize>,
+}
+
+/// Per-request memo of [`family_version_numbers`], by family id.
+#[derive(Default)]
+pub(crate) struct FamilyVersionNumbers(HashMap<String, HashMap<Vec<u8>, usize>>);
+
+/// The registry family version a cell with `data` holds, if any: its data
+/// hash is a script version bound to a family (registered, or observed on the
+/// family's Type ID lineage). Empty data and binaries no family claims are
+/// not code cells of any script.
+pub(crate) fn code_cell_identity(
+    state: &Arc<AppState>,
+    data: &[u8],
+    memo: &mut FamilyVersionNumbers,
+) -> Result<Option<CodeCellIdentity>, ApiRouteError> {
+    if data.is_empty() {
+        return Ok(None);
+    }
+    let version_hash = ckb_hash::blake2b_256(data).to_vec();
+    let Some(info) = state
+        .store
+        .get_script_version(&version_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let Some(family_id) = info.family_id.as_deref() else {
+        return Ok(None);
+    };
+    let family = state
+        .store
+        .get_script_family(family_id)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "script version 0x{} points to missing family {family_id}",
+                hex::encode(&version_hash)
+            ))
+        })?;
+    if !memo.0.contains_key(family_id) {
+        let numbers = family_version_numbers(state, family_id)?;
+        memo.0.insert(family_id.to_string(), numbers);
+    }
+    Ok(Some(CodeCellIdentity {
+        script_name: family.name,
+        version: memo.0[family_id].get(&version_hash).copied(),
+        version_hash: format!("0x{}", hex::encode(&version_hash)),
+    }))
+}
+
+/// The family's versions numbered in deployment order: by each version's
+/// first indexed code cell (block, transaction index, output index), from 1.
+/// A version with no indexed code cell has no number.
+pub(crate) fn family_version_numbers(
+    state: &Arc<AppState>,
+    family_id: &str,
+) -> Result<HashMap<Vec<u8>, usize>, ApiRouteError> {
+    let mut deployed = Vec::new();
+    for (version_hash, _) in load_family_versions(state, family_id)? {
+        let code_cells =
+            list_version_code_cells(&state.store, &state.append_only_store, &version_hash)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        if let Some(first) = first_code_cell_deployment(state, &version_hash, &code_cells)
+            .map_err(|e| ApiError::internal(e.to_string()))?
+        {
+            deployed.push((
+                (first.block_number, first.tx_index, first.output_index),
+                version_hash,
+            ));
+        }
+    }
+    deployed.sort();
+    Ok(deployed
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, version_hash))| (version_hash, index + 1))
+        .collect())
+}
+
 fn resolved_version_name(
     state: &AppState,
     version_hash: &[u8],

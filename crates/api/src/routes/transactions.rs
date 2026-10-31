@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
-    Extension, Router,
+    Extension, Json, Router,
 };
 use ckb_store_reader::RpcTransactionView;
 use serde::{Deserialize, Serialize};
@@ -136,31 +136,11 @@ pub struct TransactionResponse {
     pub cycles_status: String,
     pub is_cellbase: bool,
     pub timestamp: String,
-    /// For a cellbase, the block whose reward it pays (TX-23 / TX-25, the same
-    /// rule as the block page's `cellbasePays`); `null` for every other
+    /// For a cellbase, the block whose reward it pays, `{ number, hash }`
+    /// (TX-23 / TX-25 / R-6a): the block page's `cellbasePays`, read by the
+    /// same [`super::blocks::cellbase_pays`]; `null` for every other
     /// transaction and for cellbases too close to genesis to pay any reward.
-    pub pays: Option<CellbasePaysResponse>,
-}
-
-/// The block a cellbase pays the reward of: its own block number minus the
-/// finalization delay ([`cellbase_reward_target`]) — read-time arithmetic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CellbasePaysResponse {
-    pub number: i64,
-}
-
-/// `pays` of a transaction at `block`: `None` unless it is a cellbase that
-/// pays a reward.
-fn cellbase_pays_response(
-    is_cellbase: bool,
-    window: ProposalWindow,
-    block: i64,
-) -> Option<CellbasePaysResponse> {
-    if !is_cellbase {
-        return None;
-    }
-    cellbase_reward_target(window, block).map(|number| CellbasePaysResponse { number })
+    pub pays: Option<super::blocks::BlockRefResponse>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -333,7 +313,7 @@ pub(crate) fn transaction_response(
                 hex::encode(entry.tx_hash)
             ))
         })?;
-        cellbase_pays_response(true, window, block)
+        super::blocks::cellbase_pays(&state.store, window, block)?
     } else {
         None
     };
@@ -810,6 +790,41 @@ pub struct TransactionOutputResponse {
     /// The lock's args decoded by its family's layout (TX-20); `null` for a
     /// lock family without a known layout.
     pub lock_args_decoded: Option<serde_json::Value>,
+    /// R-9 (SC-K5): this output's data is a registry family version's binary
+    /// — which script and version it is. Absent for every other output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_cell: Option<super::scripts::CodeCellIdentity>,
+}
+
+/// Name the script and version each output's data is the code of
+/// ([`super::scripts::code_cell_identity`]); `outputs_data[i]` is output
+/// `i`'s data.
+fn identify_code_cells(
+    state: &Arc<AppState>,
+    outputs: &mut [TransactionOutputResponse],
+    outputs_data: &[&[u8]],
+    tx: &str,
+) -> Result<(), ApiRouteError> {
+    if outputs.len() != outputs_data.len() {
+        return Err(ApiError::internal(format!(
+            "transaction {tx}: {} outputs but {} outputs_data",
+            outputs.len(),
+            outputs_data.len()
+        )));
+    }
+    let mut memo = super::scripts::FamilyVersionNumbers::default();
+    for (index, (output, data)) in outputs.iter_mut().zip(outputs_data).enumerate() {
+        output.code_cell = super::scripts::code_cell_identity(state, data, &mut memo).map_err(
+            |(status, Json(mut error))| {
+                error.message = format!(
+                    "transaction {tx} output {index} code cell: {}",
+                    error.message
+                );
+                (status, Json(error))
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Decode every input and output lock's args through the one lock-args
@@ -903,8 +918,9 @@ pub struct TransactionDetailResponse {
     /// A cellbase's decoded witness 0 (miner lock and client message); `null`
     /// for every other transaction.
     pub cellbase_witness: Option<super::transaction_structure::CellbaseWitnessResponse>,
-    /// For a cellbase, the block whose reward it pays (TX-23); `null` otherwise.
-    pub pays: Option<CellbasePaysResponse>,
+    /// For a cellbase, the block whose reward it pays, `{ number, hash }`
+    /// (TX-23 / R-6a); `null` otherwise.
+    pub pays: Option<super::blocks::BlockRefResponse>,
     /// Who paid the fee (TX-18): every input lock whose inputs hold more than
     /// the transaction returns to it, largest outflow first. Empty when no
     /// lock's balance fell — a cellbase, or a DAO withdrawal whose fee comes
@@ -1247,6 +1263,46 @@ fn occupied_capacity_bytes(
     8 + 32 + 1 + lock_args_len + type_size + data_size
 }
 
+/// `pays` of a cellbase the node committed at `number` but this store has
+/// not indexed: the target [`cellbase_reward_target`] names, hashed by the
+/// node's canonical header at that height. A node without that header is an
+/// error naming both blocks (the target is below a block the node committed).
+async fn node_cellbase_pays(
+    source: &crate::pool::HttpPoolSource,
+    window: ProposalWindow,
+    number: i64,
+    tx: &str,
+) -> Result<Option<super::blocks::BlockRefResponse>, ApiRouteError> {
+    use crate::pool::PoolSource;
+    let Some(target) = cellbase_reward_target(window, number) else {
+        return Ok(None);
+    };
+    let height = u64::try_from(target).map_err(|_| {
+        ApiError::internal(format!(
+            "cellbase {tx} at block {number}: reward target {target} is negative"
+        ))
+    })?;
+    let header = source
+        .get_header_by_number(height)
+        .await
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "cellbase {tx} at block {number}: node header of its reward target \
+                 block {target}: {e}"
+            ))
+        })?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "cellbase {tx} at block {number}: the node has no canonical header for \
+                 its reward target block {target}"
+            ))
+        })?;
+    Ok(Some(super::blocks::BlockRefResponse {
+        number: target,
+        hash: format!("0x{}", hex::encode(header.hash)),
+    }))
+}
+
 #[instrument(skip(state, read_view), level = "debug")]
 async fn get_transaction_detail(
     State(state): State<Arc<AppState>>,
@@ -1460,12 +1516,15 @@ async fn get_transaction_detail(
         })?;
         let fee_paid_by = settle_fee_payers_and_change(&io.inputs, &mut io.outputs, &hash)?;
         decode_detail_lock_args(&mut io.inputs, &mut io.outputs, &hash)?;
+        identify_code_cells(&state, &mut io.outputs, &outputs_data, &hash)?;
         // A cellbase is never pending; one the node has committed and this
-        // store has not indexed yet still names the block it pays.
+        // store has not indexed yet still names the block it pays. This
+        // branch reads the node only (the store may lag the target as well),
+        // so the target's hash is the node's canonical header at that height.
         let pays = match (pool_is_cellbase, tx_lookup.block_number) {
             (true, Some(number)) => {
                 let window = state.consensus().await?.tx_proposal_window;
-                cellbase_pays_response(true, window, number)
+                node_cellbase_pays(&pool_source, window, number, &hash).await?
             }
             _ => None,
         };
@@ -1700,9 +1759,11 @@ async fn get_transaction_detail(
     let cellbase_witness = cellbase_witness_response(is_cellbase, &witnesses, &tx_hash_hex)?;
     let fee_paid_by = settle_fee_payers_and_change(&inputs, &mut outputs, &tx_hash_hex)?;
     decode_detail_lock_args(&mut inputs, &mut outputs, &tx_hash_hex)?;
+    let output_data_slices: Vec<&[u8]> = outputs_data.iter().map(|data| data.as_ref()).collect();
+    identify_code_cells(&state, &mut outputs, &output_data_slices, &tx_hash_hex)?;
     let pays = if is_cellbase {
         let window = state.consensus().await?.tx_proposal_window;
-        cellbase_pays_response(true, window, block_number)
+        super::blocks::cellbase_pays(&state.store, window, block_number)?
     } else {
         None
     };
@@ -1974,6 +2035,7 @@ fn build_inputs_outputs_from_pool_tx(
                 status: Some("pending".into()),
                 consumed_by_tx: None,
                 is_change: false,
+                code_cell: None,
                 lock_args_decoded: None,
                 capacity: cell.capacity.to_string(),
                 used_capacity: occupied.to_string(),
@@ -2366,6 +2428,7 @@ fn build_inputs_outputs_from_ckb(
                     status: None,
                     consumed_by_tx: None,
                     is_change: false,
+                    code_cell: None,
                     lock_args_decoded: None,
                     capacity: cap.to_string(),
                     used_capacity: occ.to_string(),

@@ -2,6 +2,15 @@ name = "JoyID"
 description = "An universal Account Protocol for Web3 Mass-adoption."
 website = "https://joy.id/"
 
+# How this lock's args read (R-8): 22 bytes, the 2-byte sub-type (`0x0001`
+# on JoyID addresses; shown as raw bytes, not interpreted) then the 20-byte
+# blake160 hash of the public key.
+[lock_args]
+fields = [
+  { name = "subType", bytes = 2 },
+  { name = "pubkeyHash", bytes = 20 },
+]
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323"

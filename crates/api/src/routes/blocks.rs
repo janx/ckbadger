@@ -33,6 +33,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/blocks", get(list_blocks))
         .route("/blocks/{id}", get(get_block))
+        .route("/blocks/by-day/{date}", get(get_blocks_by_day))
         .route("/blocks/{id}/fee-stats", get(get_block_fee_stats))
         .route("/blocks/{id}/proposals", get(get_block_proposals))
         .route("/blocks/{id}/proposal-fees", get(get_block_proposal_fees))
@@ -925,6 +926,105 @@ async fn resolve_canonical_block(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .map_err(|e| ApiError::internal(e.to_string()))
     }
+}
+
+/// The canonical blocks of one UTC+8 calendar day (R-10, CH-27 "Blocks of
+/// <date>"), on the monotone chain clock (`chain_time_ms`, the running maximum
+/// of header timestamps — raw timestamps may step back).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlocksByDayResponse {
+    /// The UTC+8 calendar day, `YYYY-MM-DD`.
+    pub date: String,
+    /// The day's start (inclusive) and end (exclusive), chain time in ms.
+    pub start_ms: i64,
+    pub end_ms: i64,
+    /// The first block whose chain time is at or after `startMs`.
+    pub first: BlockRefResponse,
+    /// The last block whose chain time is before `endMs`.
+    pub last: BlockRefResponse,
+    /// `last.number - first.number + 1`.
+    pub blocks_count: i64,
+    /// Whether the indexed tip's chain time has reached `endMs`, i.e. no
+    /// later block can still fall on this day.
+    pub complete: bool,
+}
+
+/// `GET /blocks/by-day/{date}`: exact, by two binary searches over the
+/// indexed headers' chain time (O(log n) header reads each). A day before
+/// genesis, after the indexed tip, or with no block is a 404 naming it.
+async fn get_blocks_by_day(
+    State(state): State<Arc<AppState>>,
+    Path(date): Path<String>,
+) -> ApiResult<BlocksByDayResponse> {
+    use ckbadger_common::stats_bucket::{is_bucket_complete, utc8_day_end_ms, DAY_MS};
+
+    let day = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")
+        .ok()
+        .filter(|day| day.format("%Y-%m-%d").to_string() == date)
+        .ok_or_else(|| {
+            ApiError::bad_request(format!("invalid date '{date}' (expected YYYY-MM-DD)"))
+        })?;
+    let end_ms = utc8_day_end_ms(day).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    let start_ms = end_ms
+        .checked_sub(DAY_MS)
+        .ok_or_else(|| ApiError::bad_request(format!("day {date} starts before i64 ms")))?;
+    let store = &state.store;
+    let first = store
+        .find_first_block_at_or_after_chain_time_ms(start_ms)
+        .map_err(|e| ApiError::internal(format!("blocks of {date}: first-block search: {e}")))?
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "no indexed block on or after {date} (UTC+8): the day is after the indexed tip"
+            ))
+        })?;
+    let last = store
+        .find_last_block_at_or_before_chain_time_ms(end_ms - 1)
+        .map_err(|e| ApiError::internal(format!("blocks of {date}: last-block search: {e}")))?
+        .ok_or_else(|| {
+            ApiError::not_found(format!(
+                "no indexed block before the end of {date} (UTC+8): the day is before genesis"
+            ))
+        })?;
+    if first > last {
+        return Err(ApiError::not_found(format!(
+            "no block on {date} (UTC+8): block {last} is before it and block {first} after it"
+        )));
+    }
+    let block_ref = |number: i64| -> Result<BlockRefResponse, ApiRouteError> {
+        let header = store
+            .get_block_header(number)
+            .map_err(|e| ApiError::internal(format!("blocks of {date}: header {number}: {e}")))?
+            .ok_or_else(|| {
+                ApiError::internal(format!(
+                    "blocks of {date}: the chain-time search named block {number}, which has \
+                     no canonical header"
+                ))
+            })?;
+        Ok(BlockRefResponse {
+            number,
+            hash: format_hash(&header.hash),
+        })
+    };
+    let (_, tip) = store
+        .get_sync_tip_block()
+        .map_err(|e| ApiError::internal(format!("blocks of {date}: tip read: {e}")))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "blocks of {date}: the searches found blocks {first}..={last}, yet the store \
+                 has no tip"
+            ))
+        })?;
+    let (first, last) = (block_ref(first)?, block_ref(last)?);
+    ok(BlocksByDayResponse {
+        date,
+        start_ms,
+        end_ms,
+        blocks_count: last.number - first.number + 1,
+        first,
+        last,
+        complete: is_bucket_complete(end_ms, tip.chain_time_ms),
+    })
 }
 
 async fn get_block(

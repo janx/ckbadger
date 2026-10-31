@@ -1,6 +1,10 @@
 name = "Default Lock"
 description = "SECP256K1/blake160 is the default lock script to verify CKB transaction signature."
 
+# How this lock's args read (R-8): the `secp256k1_blake160` codec, the 20-byte blake160 of the public key.
+[lock_args]
+codec = "secp256k1_blake160"
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8"

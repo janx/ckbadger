@@ -2,6 +2,10 @@ name = "Fiber Funding Lock"
 description = "Fiber payment-channel funding lock."
 website = "https://www.fiber.world/"
 
+# How this lock's args read (R-8): the `fiber_funding` codec, the 20-byte pubkey hash.
+[lock_args]
+codec = "fiber_funding"
+
 [mainnet]
 [[mainnet.versions]]
 # Code cell 0x95006eee7b4c0c8ad66e0514c88ed0ae43fc8db27793427de86a348ec720b9d6:1

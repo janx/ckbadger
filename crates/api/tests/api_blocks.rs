@@ -1721,3 +1721,85 @@ async fn block_proposal_fees_say_when_the_window_is_still_open() {
     assert_eq!(json["fees"], "10000", "{json}");
     assert_eq!(json["committedIn"], serde_json::json!([103]));
 }
+
+// ---------------------------------------------------------------------------
+// Lane R-B · R-10: blocks of one UTC+8 calendar day (CH-27 "Blocks of <date>").
+// ---------------------------------------------------------------------------
+
+/// Headers around the 2024-03-01 UTC+8 day (which starts at
+/// 2024-02-29T16:00:00Z). Block 3's raw timestamp steps back into the previous
+/// day, which CKB allows; its monotone chain time (the running maximum) keeps
+/// it on 2024-03-01. No block falls on 2024-03-03.
+fn seed_blocks_by_day_fixture(store: &CkbadgerStore) {
+    seed_block_headers_at(
+        store,
+        &[
+            (0, utc_ms("2024-02-28T15:00:00Z")),     // 2024-02-28 23:00 UTC+8
+            (1, utc_ms("2024-02-29T15:59:59.999Z")), // 2024-02-29 23:59:59.999
+            (2, utc_ms("2024-02-29T16:00:00Z")),     // 2024-03-01 00:00
+            (3, utc_ms("2024-02-29T15:59:00Z")),     // raw: 02-29; chain time: 03-01
+            (4, utc_ms("2024-03-01T15:59:59.999Z")), // 2024-03-01 23:59:59.999
+            (5, utc_ms("2024-03-01T16:00:00Z")),     // 2024-03-02 00:00
+            (6, utc_ms("2024-03-03T17:00:00Z")),     // 2024-03-04 01:00, the tip
+        ],
+    );
+}
+
+fn block_ref(number: i64) -> serde_json::Value {
+    serde_json::json!({
+        "number": number,
+        "hash": format!("0x{}", hex::encode([(number % 251) as u8; 32])),
+    })
+}
+
+/// R-10: the first block whose chain time is at or after the day's start and
+/// the last block whose chain time is before the next day's start, exactly —
+/// on the monotone chain clock, so a raw timestamp that steps back stays on
+/// its chain-time day.
+#[tokio::test]
+async fn blocks_by_day_names_the_first_and_last_block_of_a_utc8_day() {
+    let store = test_store();
+    seed_blocks_by_day_fixture(&store);
+    let app = create_router(test_config(store)).await;
+
+    for (date, first, last, complete) in [
+        ("2024-02-28", 0, 0, true),
+        ("2024-02-29", 1, 1, true),
+        ("2024-03-01", 2, 4, true),
+        ("2024-03-02", 5, 5, true),
+        ("2024-03-04", 6, 6, false),
+    ] {
+        let (status, json) = get_json(&app, &format!("/blocks/by-day/{date}")).await;
+        assert_eq!(status, StatusCode::OK, "{date}: {json}");
+        assert_eq!(json["date"], date, "{json}");
+        assert_eq!(json["first"], block_ref(first), "{date}: {json}");
+        assert_eq!(json["last"], block_ref(last), "{date}: {json}");
+        assert_eq!(json["blocksCount"], last - first + 1, "{date}: {json}");
+        assert_eq!(json["complete"], complete, "{date}: {json}");
+    }
+    let (_, day) = get_json(&app, "/blocks/by-day/2024-03-01").await;
+    assert_eq!(day["startMs"], utc_ms("2024-02-29T16:00:00Z"), "{day}");
+    assert_eq!(day["endMs"], utc_ms("2024-03-01T16:00:00Z"), "{day}");
+}
+
+/// R-10: a day before genesis, after the indexed tip, or inside the indexed
+/// range with no block is a 404 naming the day; a malformed date is a 400.
+#[tokio::test]
+async fn blocks_by_day_refuses_days_without_blocks_and_malformed_dates() {
+    let store = test_store();
+    seed_blocks_by_day_fixture(&store);
+    let app = create_router(test_config(store)).await;
+
+    for date in ["2024-02-27", "2024-03-03", "2024-03-05"] {
+        let (status, json) = get_json(&app, &format!("/blocks/by-day/{date}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{date}: {json}");
+        assert!(
+            json["message"].as_str().unwrap().contains(date),
+            "{date}: {json}"
+        );
+    }
+    for date in ["2024-13-01", "20240301", "2024-03-01T00:00"] {
+        let (status, json) = get_json(&app, &format!("/blocks/by-day/{date}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{date}: {json}");
+    }
+}

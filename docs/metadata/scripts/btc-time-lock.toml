@@ -1,6 +1,10 @@
 name = "Btc Time Lock"
 description = "A lock require n confirmations of Bitcoin transaction to unlock the cell."
 
+# How this lock's args read (R-8): the `btc_time_lock` codec, the BTC txid is the last 32 bytes.
+[lock_args]
+codec = "btc_time_lock"
+
 [mainnet]
 [[mainnet.versions]]
 canonical_ref_hash = "0x70d64497a075bd651e98ac030455ea200637ee325a12ad08aff03f1a117e5a62"
