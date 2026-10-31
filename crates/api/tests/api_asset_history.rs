@@ -303,6 +303,24 @@ async fn spore_genetics_fixture_options(
     duplicate_traits: bool,
     extra_steps: bool,
 ) -> axum::Router {
+    spore_genetics_fixture_seeded(
+        pending,
+        ordinary_count,
+        duplicate_traits,
+        extra_steps,
+        |_| {},
+    )
+    .await
+}
+/// The genetics fixture with `seed` run on its store just before the router
+/// opens it, for a test that needs rows the shared fixture does not carry.
+async fn spore_genetics_fixture_seeded(
+    pending: bool,
+    ordinary_count: u8,
+    duplicate_traits: bool,
+    extra_steps: bool,
+    seed: impl FnOnce(&Arc<CkbadgerStore>),
+) -> axum::Router {
     use ckb_types::{
         bytes::Bytes,
         core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
@@ -542,6 +560,11 @@ async fn spore_genetics_fixture_options(
             .transactions(transactions)
             .build(),
     ]);
+    // A synced store has a header for every block from genesis to its tip
+    // (`seed_tx` stamps transactions at 1_700_000_000_000 + block).
+    let headers: Vec<(i64, i64)> = (0..=100).map(|n| (n, 1_700_000_000_000 + n)).collect();
+    seed_block_headers_at(&store, &headers);
+    seed(&store);
     create_router(test_config_with_ckb_db_path(
         store.clone(),
         store,
@@ -605,6 +628,53 @@ async fn collection_insights_count_full_scope_and_gallery_filters_before_cursor(
         genetics["cachedVmTraits"]["originalDecoderHashRecorded"],
         false
     );
+}
+
+/// OB-C3 (round 3, R-2): the collection's Newest rows (the gallery) showed the
+/// minting block but no time, and an owner address without its lock kind.
+/// Each row now carries `chainTime` — its minting block's indexed chain time
+/// (ms), the clock the collection's calendar files it under (block 100's raw
+/// timestamp is earlier than block 99's, so its chain time is block 99's) —
+/// and the live cell's lock `lockCodeHash` with the registry's `lockKind`.
+#[tokio::test]
+async fn collection_gallery_rows_carry_mint_chain_time_and_owner_lock_kind() {
+    let lock_code = vec![0x41; 32];
+    let registered = lock_code.clone();
+    let app = spore_genetics_fixture_seeded(false, 0, false, false, move |store| {
+        seed_block_headers_at(store, &[(99, 1_700_000_000_500), (100, 1_700_000_000_100)]);
+        let mut batch = StoreBatch::new(store);
+        batch.put_script_info(
+            &registered,
+            &ckbadger_store::types::ScriptInfo {
+                code_hash: registered.clone(),
+                hash_type: 1,
+                name: Some("JoyID".into()),
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+    })
+    .await;
+    let (status, gallery) = get_json(
+        &app,
+        &format!(
+            "/spore/clusters/0x{}/gallery?limit=100",
+            hex::encode([0x77; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{gallery}");
+    let rows = gallery["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 8, "{gallery}");
+    for row in rows {
+        assert_eq!(row["chainTime"], "1700000000500", "{row}");
+        assert_eq!(row["lockKind"], "JoyID", "{row}");
+        assert_eq!(
+            row["lockCodeHash"],
+            format!("0x{}", hex::encode(&lock_code)),
+            "{row}"
+        );
+    }
 }
 
 #[tokio::test]

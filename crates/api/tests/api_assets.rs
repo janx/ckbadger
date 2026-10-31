@@ -5844,6 +5844,135 @@ async fn mnft_class_item_rows_carry_token_index_and_class_name() {
     assert_eq!(read, ["Santa Claus #0", "Santa Claus #7"], "{items}");
 }
 
+/// OB-C3 / OB-C7 (round 3, R-2): collection holder rows named an address but
+/// not what kind of lock holds the objects ("RGB++ · on Bitcoin"). Every
+/// holder row of every collection source (m-NFT class, Spore cluster,
+/// identity collection, `.cell` by owner prefix) now carries the owner lock's
+/// `lockCodeHash` and, when the scripts registry names that code hash, its
+/// `lockKind`. A lock the registry does not name gets the code hash and no
+/// kind — never a label guessed from its args (the unnamed lock below has a
+/// secp-shaped 20-byte args).
+#[tokio::test]
+async fn collection_holder_rows_carry_registry_lock_kind() {
+    let store = test_store();
+    let secp =
+        hex::decode("9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8").unwrap();
+    let unnamed = vec![0x99; 32];
+    let class_id = [0x6au8; 24];
+    let cluster_id = [0x6bu8; 32];
+    let dotbit = ckbadger_store::types::DOTBIT_SENTINEL_COLLECTION;
+    let dotcell = ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION;
+    let named_holder = [0x44u8; 32];
+    let unnamed_holder = [0x55u8; 32];
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_script_info(
+        &secp,
+        &ckbadger_store::types::ScriptInfo {
+            code_hash: secp.clone(),
+            hash_type: 1,
+            name: Some("SECP256K1/blake160".into()),
+            ..Default::default()
+        },
+    );
+    for (holder, code) in [(named_holder, &secp), (unnamed_holder, &unnamed)] {
+        batch.put_lock_script(
+            &holder,
+            &ckbadger_store::types::LockScriptEntry {
+                code_hash: code.clone(),
+                hash_type: 1,
+                args: vec![holder[0]; 20],
+            },
+        );
+    }
+    batch.put_mnft_collection_aggregate(
+        &class_id,
+        &MnftCollectionAggregate {
+            name: Some("Kinds".to_string()),
+            standard: ObjectStandard::MnftClass,
+            total_count: 3,
+            live_count: 3,
+            holders_count: 2,
+            activities_count: 0,
+            ..Default::default()
+        },
+    );
+    batch.put_mnft_collection_owner_count(&class_id, &named_holder, 2);
+    batch.put_mnft_collection_owner_count(&class_id, &unnamed_holder, 1);
+    batch.put_cluster_owner_count(&cluster_id, &named_holder, 2);
+    batch.put_cluster_owner_count(&cluster_id, &unnamed_holder, 1);
+    for (collection, standard) in [
+        (dotbit, IdentityStandard::DotBit),
+        (dotcell, IdentityStandard::DotCell),
+    ] {
+        batch.put_identity_collection_aggregate(
+            &collection,
+            &IdentityCollectionAggregate {
+                name: None,
+                standard,
+                total_count: 3,
+                live_count: 3,
+                holders_count: 2,
+                activities_count: 0,
+            },
+        );
+    }
+    batch.put_identity_owner_count(&dotbit, &named_holder, 2);
+    batch.put_identity_owner_count(&dotbit, &unnamed_holder, 1);
+    // `.cell` names its owner by the first 20 bytes of the lock hash.
+    batch.put_identity_owner20_count(&dotcell, &named_holder[..20], 2);
+    batch.put_identity_owner20_count(&dotcell, &unnamed_holder[..20], 1);
+    batch.commit().unwrap();
+    store
+        .put_spore_direct(
+            &cluster_id,
+            &ObjectEntry {
+                standard: ObjectStandard::SporeCluster,
+                collection_id: None,
+                token_id: None,
+                owner_lock_hash: Some(named_holder.to_vec()),
+                name: Some("Kinds Cluster".to_string()),
+                description: None,
+                is_live: true,
+                created_at_block: 1,
+                created_at_tx: vec![0x33; 32],
+                extra: ObjectExtra::SporeCluster,
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+
+    for path in [
+        format!("/assets/objects/0x{}/holders", hex::encode(class_id)),
+        format!("/spore/clusters/0x{}/holders", hex::encode(cluster_id)),
+        "/assets/identities/dotbit/holders".to_string(),
+        "/assets/identities/dotcell/holders".to_string(),
+    ] {
+        let (status, holders) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {holders}");
+        let rows = holders["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{path}: {holders}");
+        // Ranked by item count: the named holder (2) leads.
+        assert_eq!(
+            rows[0]["lockKind"], "SECP256K1/blake160",
+            "{path}: {holders}"
+        );
+        assert_eq!(
+            rows[0]["lockCodeHash"],
+            format!("0x{}", hex::encode(&secp)),
+            "{path}: {holders}"
+        );
+        assert!(
+            rows[1]["lockKind"].is_null(),
+            "{path}: an unregistered lock is named from its args: {holders}"
+        );
+        assert_eq!(
+            rows[1]["lockCodeHash"],
+            format!("0x{}", hex::encode(&unnamed)),
+            "{path}: {holders}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn mnft_class_insights_serve_real_holder_distribution_and_weekly_rows() {
     let (store, class_id) = mnft_insights_fixture(6);

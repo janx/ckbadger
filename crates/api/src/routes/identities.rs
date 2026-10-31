@@ -268,24 +268,26 @@ async fn list_identity_collection_holders(
                         hex::encode(&collection_id_bytes)
                     ))
                 })?;
-            let party = resolver.resolve(&owner20)?;
+            let (party, lock) = resolver.resolve_with_lock(&owner20)?;
+            let lock_code_hash = lock.as_ref().map(|lock| &lock.entry.code_hash);
             rows.push(CollectionHolderResponse {
                 lock_script_hash: party.lock_hash,
                 owner_hash_prefix: Some(party.hash_prefix),
                 address: party.address,
+                lock_code_hash: lock_code_hash.map(|code| format!("0x{}", hex::encode(code))),
+                lock_kind: lock_code_hash
+                    .map(|code| super::assets::lock_kind(state.store.as_ref(), code))
+                    .transpose()?
+                    .flatten(),
                 item_count: *count,
             });
         } else {
-            rows.push(CollectionHolderResponse {
-                lock_script_hash: Some(format!("0x{}", hex::encode(owner_segment))),
-                owner_hash_prefix: None,
-                address: super::assets::lock_address(
-                    state.store.as_ref(),
-                    owner_segment,
-                    &state.ckb_network,
-                )?,
-                item_count: *count,
-            });
+            rows.push(super::assets::holder_row(
+                state.store.as_ref(),
+                owner_segment,
+                *count,
+                &state.ckb_network,
+            )?);
         }
     }
 

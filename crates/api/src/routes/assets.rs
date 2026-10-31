@@ -546,7 +546,77 @@ pub struct CollectionHolderResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_hash_prefix: Option<String>,
     pub address: Option<String>,
+    /// The holder lock's code hash; `None` when its script is not indexed.
+    pub lock_code_hash: Option<String>,
+    /// The scripts registry's name for `lock_code_hash` (OB-C7); `None` when
+    /// the registry names none — never a label guessed from the args.
+    pub lock_kind: Option<String>,
     pub item_count: i64,
+}
+
+/// A holder's or object owner's lock as one row shows it: its address, its
+/// code hash and the scripts registry's name for that code hash.
+pub(super) struct OwnerLock {
+    pub(super) address: String,
+    pub(super) lock_code_hash: String,
+    pub(super) lock_kind: Option<String>,
+}
+
+/// The lock kind of a code hash: the scripts registry's name for it, through
+/// `utils::registered_script_name` (the one name rule `/cells` and the
+/// activity participants use). `None` when the registry names none.
+pub(super) fn lock_kind(
+    store: &CkbadgerStore,
+    code_hash: &[u8],
+) -> Result<Option<String>, ApiRouteError> {
+    crate::utils::registered_script_name(store, code_hash).map_err(|e| {
+        ApiError::internal(format!(
+            "lock code hash 0x{} registry name: {e:#}",
+            hex::encode(code_hash)
+        ))
+    })
+}
+
+/// [`OwnerLock`] of `lock_hash` from one `CF_LOCK_SCRIPTS` read; `None` when
+/// the lock's script is not indexed.
+pub(super) fn owner_lock(
+    store: &CkbadgerStore,
+    lock_hash: &[u8],
+    network: &str,
+) -> Result<Option<OwnerLock>, ApiRouteError> {
+    let Some(resolved) = crate::utils::address::resolve_lock_address(store, lock_hash, network)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "owner lock 0x{} address: {e:#}",
+                hex::encode(lock_hash)
+            ))
+        })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(OwnerLock {
+        lock_kind: lock_kind(store, &resolved.entry.code_hash)?,
+        lock_code_hash: format!("0x{}", hex::encode(&resolved.entry.code_hash)),
+        address: resolved.address,
+    }))
+}
+
+/// The wire holder row of a holder named by its full lock hash.
+pub(super) fn holder_row(
+    store: &CkbadgerStore,
+    lock_hash: &[u8],
+    item_count: i64,
+    network: &str,
+) -> Result<CollectionHolderResponse, ApiRouteError> {
+    let owner = owner_lock(store, lock_hash, network)?;
+    Ok(CollectionHolderResponse {
+        lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
+        owner_hash_prefix: None,
+        address: owner.as_ref().map(|owner| owner.address.clone()),
+        lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+        lock_kind: owner.and_then(|owner| owner.lock_kind),
+        item_count,
+    })
 }
 
 /// The address of `lock_hash`, through the site's one lock → address
@@ -3801,12 +3871,7 @@ async fn list_object_collection_holders(
     let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
         .map(|(lock_hash, count)| {
-            Ok(CollectionHolderResponse {
-                lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
-                owner_hash_prefix: None,
-                address: lock_address(state.store.as_ref(), lock_hash, &state.ckb_network)?,
-                item_count: *count,
-            })
+            holder_row(state.store.as_ref(), lock_hash, *count, &state.ckb_network)
         })
         .collect::<Result<_, ApiRouteError>>()?;
 

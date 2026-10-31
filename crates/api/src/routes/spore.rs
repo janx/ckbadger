@@ -301,6 +301,10 @@ fn spore_cell_type_script_hash(
 pub struct ClusterHolderResponse {
     pub lock_script_hash: String,
     pub address: Option<String>,
+    /// The holder lock's code hash; `None` when its script is not indexed.
+    pub lock_code_hash: Option<String>,
+    /// The scripts registry's name for `lock_code_hash` (OB-C7).
+    pub lock_kind: Option<String>,
     pub item_count: i64,
 }
 
@@ -884,16 +888,12 @@ async fn get_cluster_holders(
     let response_rows: Vec<ClusterHolderResponse> = page
         .into_iter()
         .map(|(lock_hash, count)| {
-            let address = crate::utils::address::resolve_lock_address(
-                &state.store,
-                lock_hash,
-                &state.ckb_network,
-            )
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .map(|resolved| resolved.address);
+            let owner = super::assets::owner_lock(&state.store, lock_hash, &state.ckb_network)?;
             Ok(ClusterHolderResponse {
                 lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
-                address,
+                address: owner.as_ref().map(|owner| owner.address.clone()),
+                lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+                lock_kind: owner.and_then(|owner| owner.lock_kind),
                 item_count: *count,
             })
         })
