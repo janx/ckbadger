@@ -21,7 +21,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
+import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
@@ -72,7 +72,15 @@ export function tokenMoved(transaction: Transaction, typeHash: string): string {
 export interface AssetTransactionsProps {
   rows: readonly Transaction[];
   token?: { typeHash: string; symbol: string | null; decimals: number | null };
-  context?: { label: string; render: (tx: Transaction) => ReactNode };
+  /**
+   * A feed-specific column: an item's "where it went" at the row's end (OB-13), or a collection's
+   * own column right after Cells, titled by the collection (OB-C9, `placement: 'after-cells'`).
+   */
+  context?: {
+    label: string;
+    render: (tx: Transaction) => ReactNode;
+    placement?: 'end' | 'after-cells';
+  };
 }
 export function AssetTransactions({ rows, token, context }: AssetTransactionsProps) {
   for (const tx of rows) {
@@ -116,6 +124,16 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
       render: (r) => `${r.inputsCount} → ${r.outputsCount}`,
     },
   ];
+  const contextColumn: ListColumn<Transaction> | null = context
+    ? {
+        key: 'context',
+        label: context.label,
+        minWidth: context.placement === 'after-cells' ? 110 : 180,
+        numeric: context.placement === 'after-cells',
+        render: context.render,
+      }
+    : null;
+  if (contextColumn && context?.placement === 'after-cells') columns.push(contextColumn);
   if (token)
     columns.push({
       key: 'moved',
@@ -149,6 +167,8 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
     {
       key: 'size',
       label: 'Size',
+      // OB-13: the header carries the scale every bar in the column shares.
+      header: sizeScale > 0 ? <ScaleHeader label="Size, bytes" scale={sizeScale} /> : undefined,
       minWidth: 112,
       render: (r) => (
         <ResourceBar value={r.txSize!} scale={sizeScale} label="Serialized bytes" stacked />
@@ -157,6 +177,7 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
     {
       key: 'cycles',
       label: 'Cycles',
+      header: cycleScale > 0 ? <ScaleHeader label="Cycles" scale={cycleScale} /> : undefined,
       minWidth: 120,
       render: (r) =>
         r.cycles === null ? (
@@ -168,8 +189,7 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
         ),
     }
   );
-  if (context)
-    columns.push({ key: 'context', label: context.label, minWidth: 180, render: context.render });
+  if (contextColumn && context?.placement !== 'after-cells') columns.push(contextColumn);
   return (
     <ListTable
       label="Asset transactions"

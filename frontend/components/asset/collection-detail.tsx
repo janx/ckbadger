@@ -391,8 +391,10 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           mark={kind === 'identity' ? undefined : 'objects'}
           loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
           loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
+          // OB-C9 (CollectionTxs board): the collection's own column, named by it, after Cells.
           context={{
-            label: 'For this collection',
+            label: title,
+            placement: 'after-cells',
             render: (tx) => (
               <span className="text-text-bright">
                 {collectionFeedHeadline(
