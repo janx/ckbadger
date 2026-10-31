@@ -13,19 +13,31 @@ import { InventoryRows, AssetCount } from '@/components/asset/inventory-table';
 import { AddressLoadState, AddressStaleNotice } from '@/components/address/address-holdings';
 import { formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
-import { api, type Asset } from '@/lib/api';
+import { api, type Asset, type InventorySummary } from '@/lib/api';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 
 export type AssetType = Asset['assetType'];
 type AssetSortKey = NonNullable<Parameters<typeof api.getAssets>[0]>['sortKey'];
-// F2 objects (IV-03, IV-12): the board offers standard chips on Tokens only (xUDT-compatible
-// included); Objects filter by composition, Identities list their four systems plainly.
-const standards: Record<AssetType, string[]> = {
-  token: ['xudt', 'sudt', 'xudt_compatible'],
-  object: [],
-  identity: [],
-};
+// F2 objects (IV-03, IV-12): the board offers standard chips on Tokens only; Objects filter by
+// composition, Identities list their four systems plainly. Round 3 (contracts R-A · R-3): the
+// chips are the summary's `tokenStandards` (each count equals that filter's total), in the
+// board's order; a standard the summary does not list has no catalog token and no chip.
+const TOKEN_CHIP_ORDER = ['xudt', 'sudt', 'xudt_compatible'];
+function tokenStandardChips(summary: InventorySummary): InventorySummary['tokenStandards'] {
+  const sum = summary.tokenStandards.reduce((total, s) => total + s.count, 0);
+  if (sum !== summary.counts.token)
+    throw new Error(
+      `Inventory summary: token standards sum to ${sum}, not the ${summary.counts.token} catalog tokens`
+    );
+  const place = (standard: string) => {
+    const i = TOKEN_CHIP_ORDER.indexOf(standard);
+    return i < 0 ? TOKEN_CHIP_ORDER.length : i;
+  };
+  return [...summary.tokenStandards].sort(
+    (a, b) => place(a.standard) - place(b.standard) || a.standard.localeCompare(b.standard)
+  );
+}
 interface InventoryPageClientProps {
   assetType: AssetType;
   title?: string;
@@ -165,9 +177,12 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               onSelect={(tier) => filter('compositionTier', tier)}
             />
           )}
-          {standards[assetType].length > 0 && (
+          {assetType === 'token' && (
             <div className="flex flex-wrap gap-2" role="group" aria-label="Standard filters">
-              {['', ...standards[assetType]].map((s) => (
+              {[
+                { standard: '', count: null as number | null },
+                ...(summary.data ? tokenStandardChips(summary.data) : []),
+              ].map(({ standard: s, count }) => (
                 <button
                   key={s}
                   type="button"
@@ -176,7 +191,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   onClick={() => filter('standard', s)}
                 >
                   {s ? (
-                    formatStandard(s)
+                    <>
+                      {formatStandard(s)} <AssetCount value={count!} />
+                    </>
                   ) : (
                     <>
                       All

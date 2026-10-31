@@ -221,7 +221,28 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
       within(chips)
         .getAllByRole('button')
         .map((b) => b.textContent)
-    ).toEqual(['All 727', 'xUDT', 'sUDT', 'xUDT-compatible']);
+    ).toEqual(['All 727', 'xUDT 629', 'sUDT 94', 'xUDT-compatible 4']);
+  });
+  it('counts each standard chip from the summary, which sums to All (R-3, IV-03)', async () => {
+    vi.mocked(api.getInventorySummary).mockResolvedValue({
+      ...summary,
+      counts: { ...summary.counts, token: 723 },
+      tokenStandards: [
+        { standard: 'sudt', count: 94 },
+        { standard: 'xudt', count: 629 },
+      ],
+    });
+    render(<TokensPage />);
+    await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
+    const chips = screen.getByRole('group', { name: 'Standard filters' });
+    // A standard absent from the summary has no catalog token, so it has no chip.
+    await waitFor(() =>
+      expect(
+        within(chips)
+          .getAllByRole('button')
+          .map((b) => b.textContent)
+      ).toEqual(['All 723', 'xUDT 629', 'sUDT 94'])
+    );
   });
   it('draws CKB held as an azure bar relative to the largest, and occupied in whole CKB', async () => {
     render(<TokensPage />);

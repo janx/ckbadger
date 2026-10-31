@@ -515,7 +515,7 @@ describe('Tokens Inventory Page', () => {
       );
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'xUDT' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'xUDT 398' }));
 
     await waitFor(() => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
@@ -834,7 +834,7 @@ describe('Inventory snapshot and pagination lifecycle', () => {
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 'older' }))
     );
-    fireEvent.click(screen.getByRole('button', { name: 'sUDT' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'sUDT 100' }));
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(
         expect.objectContaining({ standard: 'sudt', cursor: undefined })
