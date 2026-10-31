@@ -42,7 +42,6 @@ import {
   type ItemDelta,
   type ParticipantInfo,
   type TransactionFeePayer,
-  type ExactJson,
 } from '@/lib/api';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import {
@@ -65,6 +64,7 @@ import {
   type TxLinkSets,
 } from '@/lib/tx-detail-model';
 import dynamic from '@/lib/dynamic-client';
+import { decodedLockArgsText, isFieldLayoutLock } from '@/lib/lock-args';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 
@@ -428,17 +428,6 @@ function BalanceChanges({
 }
 
 /** `pubkey hash 0x111111...1111`: the API's decoded lock args, as words. */
-function decodedArgsText(decoded: Record<string, ExactJson>): string {
-  return Object.entries(decoded)
-    .filter(([key]) => key !== 'lock')
-    .map(([key, value]) => {
-      const words = key.replace(/([A-Z])/g, ' $1').toLowerCase();
-      const text = typeof value === 'string' ? value : JSON.stringify(value);
-      return `${words} ${/^0x[0-9a-f]{16,}$/i.test(text) ? truncateHash(text, 8, 4) : text}`;
-    })
-    .join(' · ');
-}
-
 function witnessKindLabel(kind: TransactionWitness['kind']): string {
   switch (kind) {
     case 'witness_args':
@@ -942,7 +931,7 @@ export default function TransactionDetailPage() {
       mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
       sub: (() => {
         const decoded = g.kind === 'lock' ? firstCell?.lockArgsDecoded : null;
-        return decoded ? decodedArgsText(decoded) : `args ${truncateHash(g.script.args, 6, 4)}`;
+        return decoded ? decodedLockArgsText(decoded) : `args ${truncateHash(g.script.args, 6, 4)}`;
       })(),
       ran: g.ran,
       cellIds: groupCells(g),
@@ -1663,6 +1652,30 @@ export default function TransactionDetailPage() {
               )}
             </dd>
           </div>
+          {(tx.outputs ?? []).flatMap((cell, i) =>
+            cell.lockArgsDecoded && isFieldLayoutLock(cell.lockArgsDecoded) && cell.lock
+              ? [
+                  // Round 3 (R-8, TX-20): a lock whose args follow a registry field layout, read
+                  // from the API's decoded fields (Main.dc.html "New owner of the Spore").
+                  <div
+                    key={`lock-${i}`}
+                    data-testid={`tx-fact-output-lock-${i}`}
+                    className="flex flex-col gap-0.5"
+                  >
+                    <dt className="text-text-dim">
+                      {cell.display?.kind === 'object'
+                        ? `New owner of the object in output ${i}`
+                        : `Lock of output ${i}`}
+                    </dt>
+                    <dd>
+                      {registeredName(lookup, cell.lock.codeHash) ??
+                        truncateHash(cell.lock.codeHash, 10, 6)}
+                      , {decodedLockArgsText(cell.lockArgsDecoded)}
+                    </dd>
+                  </div>,
+                ]
+              : []
+          )}
           <div className="flex flex-col gap-0.5 sm:col-span-2">
             <dt className="text-text-dim">Capacity</dt>
             <dd>{capacityFact}</dd>

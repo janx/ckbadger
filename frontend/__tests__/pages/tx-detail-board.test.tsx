@@ -563,6 +563,93 @@ describe('Transaction board, R2b-a fields', () => {
     );
   });
 
+  it('reads a Shadow Lock and a JoyID lock by their registry layouts (R-8, TX-20)', async () => {
+    const base = committed();
+    const shadow = `0x31da${'00'.repeat(28)}5d74`;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...base,
+      inputs: [
+        {
+          ...base.inputs![0],
+          lockArgsDecoded: { lock: 'joyid', subType: '0x0001', pubkeyHash: `0x${'55'.repeat(20)}` },
+        },
+      ],
+      outputs: [
+        {
+          ...base.outputs![0],
+          isChange: false,
+          display: {
+            kind: 'object',
+            standard: 'spore',
+            id: `0x${'51'.repeat(32)}`,
+            name: null,
+            collectionId: null,
+            collectionName: null,
+            symbol: null,
+            decimals: null,
+            amount: null,
+            compositionTier: null,
+          },
+          lockArgsDecoded: { lock: 'shadow-lock', prefix: '0x01', ckbfsTypeHash: shadow },
+        },
+      ],
+    } as TransactionDetail);
+    render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-io-output-0', {}, SLOW);
+    // The raw sub type bytes are shown as they are, not interpreted.
+    await waitFor(
+      () =>
+        expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveTextContent(
+          'args sub type 0x0001 + pubkey hash 0x555555...5555'
+        ),
+      SLOW
+    );
+    expect(
+      document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
+    ).toHaveTextContent('args 0x01 + CKBFS type hash 0x31da00...5d74');
+    const owner = screen.getByTestId('tx-fact-output-lock-0');
+    expect(owner).toHaveTextContent('New owner of the object in output 0');
+    expect(owner).toHaveTextContent('args 0x01 + CKBFS type hash 0x31da00...5d74');
+  });
+
+  it('names a CoBuild proxy action and shows the script info hash of an undeclared one (R-7, TX-36)', async () => {
+    const base = committed();
+    vi.mocked(api.getTransactionDetail).mockResolvedValue({
+      ...base,
+      witnessDetails: [
+        base.witnessDetails![0],
+        {
+          ...base.witnessDetails![1],
+          actions: [
+            {
+              scriptInfoHash: `0x${'44'.repeat(32)}`,
+              scriptHash: '0xtypescript',
+              data: '0x01',
+              schema: 'spore',
+              name: 'MintProxy',
+            },
+            {
+              scriptInfoHash: `0x${'45'.repeat(32)}`,
+              scriptHash: '0xtypescript',
+              data: '0x02',
+              schema: null,
+              name: null,
+            },
+          ],
+        },
+      ],
+    } as TransactionDetail);
+    render(<TransactionDetailPage />);
+    const w1 = await screen.findByTestId('tx-witness-item-1', {}, SLOW);
+    await waitFor(
+      () =>
+        expect(w1).toHaveTextContent(
+          'message: 2 actions for Spore: MintProxy, Spore (script info 0x454545...4545)'
+        ),
+      SLOW
+    );
+  });
+
   it('names the type scripts a plain script call ran (TX-11)', async () => {
     vi.mocked(api.getTransactionActivity).mockResolvedValue({
       ...feedSamples.objectTransfer,
