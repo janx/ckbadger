@@ -2451,6 +2451,16 @@ impl Indexer {
         let disk_device = crate::sys_info::detect_disk_device(&self.config.domain_data_path);
         let mut disk_tracker = crate::sys_info::DiskStatsTracker::new(disk_device);
 
+        // Background derivations (round 3 lane L) run HERE, on the writer
+        // task, one bounded chunk per loop iteration between live batches —
+        // so a chunk and a live batch can never write the same rows at once.
+        // The startup rule resets interrupted / outdated derivations before
+        // the first live batch can maintain them.
+        let mut derive_scheduler = crate::derive::DeriveScheduler::new(self.writer.store());
+        derive_scheduler
+            .normalize_on_startup()
+            .context("derived aggregate startup check")?;
+
         loop {
             if self.is_shutdown_requested() {
                 info!(run_id = %self.run_id, "Shutdown requested, aborting pipeline");
@@ -2481,6 +2491,21 @@ impl Indexer {
                 }
                 sleep(Duration::from_secs(30)).await;
                 continue;
+            }
+
+            // Derivations start only once sync is within the bulk threshold of
+            // the tip (the DOB worker's gate). While one is pending, the loop
+            // folds one chunk per iteration and goes straight back for the
+            // next one unless a parsed batch is waiting: live batches wait at
+            // most one chunk (`CHUNK_MAX_TIME`), and an idle writer derives
+            // continuously.
+            if self.progress.blocks_remaining() <= self.config.bulk_sync_threshold
+                && derive_scheduler.has_pending_work()?
+            {
+                derive_scheduler.step()?;
+                if parse_rx.is_empty() {
+                    continue;
+                }
             }
 
             let recv_timeout = Duration::from_millis(self.config.poll_interval_ms * 2);

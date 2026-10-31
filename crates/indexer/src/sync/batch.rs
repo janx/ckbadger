@@ -2493,6 +2493,12 @@ impl Indexer {
 
         let mut object_activity_batch = StoreBatch::new(self.writer.store());
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
+        // `(collection id, block)` of every object collection activity row,
+        // for the derived per-collection row count.
+        let mut derive_collection_activity_rows: Vec<(Vec<u8>, i64)> = Vec::new();
+        // `.bit Cell` identity transitions, for the derived account index.
+        let mut derive_identity_transitions: Vec<crate::db::writer::IdentityTransition> =
+            Vec::new();
         let mut identity_activity_batch = StoreBatch::new(self.writer.store());
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Every collection activity row this batch writes, folded per
@@ -3250,13 +3256,14 @@ impl Indexer {
             }
             // Object/identity collection activities are now in domain store;
             // rollback deletes entries directly (no undo log needed)
-            for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
-                object_activity_acc.flush(
+            for (collection_id, block_number, _tx_idx, _block_hash, _tx_hash) in object_activity_acc
+                .flush(
                     &mut object_activity_batch,
                     &mut collection_daily,
                     &collection_day_of_block,
                 )?
             {
+                derive_collection_activity_rows.push((collection_id.clone(), block_number));
                 let delta = object_activity_count_deltas
                     .entry(collection_id)
                     .or_insert(0);
@@ -3281,6 +3288,7 @@ impl Indexer {
 
             mnft_state.extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
             spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
+            derive_identity_transitions.extend(spore_state.take_bit_cell_transitions());
 
             // Apply cumulative capacity deltas to cluster aggregates
             if !cluster_daily_changes.is_empty() {
@@ -4063,6 +4071,43 @@ impl Indexer {
             // and undo entries are not committed yet. A batch longer than the
             // undo window leaves some of its own entries below the floor its
             // tip implies; the next batch, built on this tip, prunes them.
+            // Derived aggregates (round 3 lane L): this batch's signed
+            // deltas for every derivation that is running or complete, in
+            // this same atomic write, with per-block undo pre-images.
+            let derive_failures = if bulk_sync_mode {
+                Vec::new()
+            } else {
+                let derive_blocks: Vec<crate::derive::LiveBlockPoint> = all_parsed_blocks
+                    .iter()
+                    .map(|parsed| crate::derive::LiveBlockPoint {
+                        number: parsed.number,
+                        epoch_number: parsed.epoch_number,
+                        epoch_index: parsed.epoch_index,
+                        epoch_length: parsed.epoch_length,
+                    })
+                    .collect();
+                let derive_ctx = crate::derive::LiveDeriveCtx {
+                    store: self.writer.store(),
+                    blocks: &derive_blocks,
+                    dao_transitions: live_dao.transitions(),
+                    object_collection_activity_rows: &derive_collection_activity_rows,
+                    identity_transitions: &derive_identity_transitions,
+                };
+                crate::derive::apply_live_batch(
+                    self.writer.store(),
+                    &crate::derive::registry(),
+                    &derive_ctx,
+                    &mut data_batch,
+                    &batch_undo_seq,
+                )
+                .with_context(|| {
+                    format!(
+                        "derived aggregate live maintenance failed for blocks {}-{}",
+                        first_block, last_block
+                    )
+                })?
+            };
+
             let retention_request =
                 HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
             if !bulk_sync_mode {
@@ -4204,6 +4249,7 @@ impl Indexer {
             })?;
             retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
+            crate::derive::report_live_failures(self.writer.store(), &derive_failures)?;
             // Debug-build invariant (plan Task 5.3): rollback replays a block's
             // undo entries scope-major, which is exact only while each key the
             // block mutates is recorded by one scope.
@@ -8052,6 +8098,206 @@ mod tests {
             (store, indexer)
         }
 
+        fn dao_live_agg_rows(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<i128>)> {
+            let mut rows = Vec::new();
+            store
+                .scan_derived_prefix(ckbadger_store::CF_DAO_LIVE_AGG, &[], |key, value| {
+                    rows.push((key.to_vec(), value));
+                    Ok(())
+                })
+                .unwrap();
+            rows
+        }
+
+        fn dao_live_agg_meta(store: &CkbadgerStore) -> ckbadger_store::derive_ops::DeriveMeta {
+            store
+                .get_derive_meta(ckbadger_store::derive_ops::DAO_LIVE_AGG.name)
+                .unwrap()
+                .expect("dao_live_agg meta")
+        }
+
+        /// Clear the derived rows and derive them again from the store as it
+        /// stands: the rows a from-scratch derivation produces at this tip.
+        fn rederive_dao_live_agg(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<i128>)> {
+            let mut batch = StoreBatch::new(store);
+            batch.put_derive_meta(
+                ckbadger_store::derive_ops::DAO_LIVE_AGG.name,
+                &ckbadger_store::derive_ops::DeriveMeta::not_started(0, 0),
+            );
+            batch.commit().unwrap();
+            let states = crate::derive::derive_to_completion(store).unwrap();
+            assert!(
+                states.iter().all(|(_, state)| matches!(
+                    state,
+                    ckbadger_store::derive_ops::DeriveState::Complete { .. }
+                )),
+                "{states:?}"
+            );
+            dao_live_agg_rows(store)
+        }
+
+        fn epoch_of_block(
+            store: &CkbadgerStore,
+            block: i64,
+        ) -> ckbadger_store::derive_ops::dao_live_agg::EpochPoint {
+            let header = store.get_block_header(block).unwrap().unwrap();
+            crate::derive::dao::header_epoch(&header, block).unwrap()
+        }
+
+        /// L1 (b)+(c): with the derivation complete before the DAO blocks, the
+        /// live writer maintains `dao_live_agg`; the rows equal a from-scratch
+        /// rebuild at every tip, do not depend on batch boundaries, and undo
+        /// replay restores the rows of the block before at each step.
+        #[tokio::test]
+        async fn test_live_dao_aggregate_equals_rebuild_and_rolls_back_per_block() {
+            use ckbadger_store::derive_ops::dao_live_agg;
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let mut blocks = phase_setup_blocks();
+            blocks.push(completion_block(527));
+
+            let (unbatched, unbatched_indexer) = live_dao_fixture_store();
+            seed_secp_script_info(unbatched.as_ref());
+            seed_script_info(unbatched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
+            crate::derive::derive_to_completion(unbatched.as_ref()).unwrap();
+            assert!(dao_live_agg_meta(&unbatched)
+                .is_complete(&ckbadger_store::derive_ops::DAO_LIVE_AGG));
+            assert!(dao_live_agg_rows(&unbatched).is_empty());
+
+            let mut rows_by_tip = Vec::new();
+            for single in blocks.clone() {
+                write_live_blocks_with_parser_script_deltas(&unbatched_indexer, vec![single])
+                    .await
+                    .unwrap();
+                rows_by_tip.push(dao_live_agg_rows(&unbatched));
+            }
+            // Block 101 deposits DEPOSIT_CAPACITY; 102 requests it; 103 completes it.
+            let capacity = i128::from(DEPOSIT_CAPACITY as i64);
+            let lock_hash =
+                crate::parser::script::ScriptParser::compute_script_hash(&lock_script());
+            let deposit_epoch = epoch_of_block(&unbatched, 101);
+            let request_epoch = epoch_of_block(&unbatched, 102);
+            let mut after_deposit = vec![
+                (dao_live_agg::global_key(), vec![capacity, 1, 0, 0]),
+                (
+                    dao_live_agg::depositor_key(&lock_hash).unwrap(),
+                    vec![capacity, 1],
+                ),
+                (
+                    dao_live_agg::phase0_epoch_key(deposit_epoch),
+                    vec![capacity, 1],
+                ),
+            ];
+            after_deposit.sort();
+            let mut after_request = vec![
+                (dao_live_agg::global_key(), vec![0, 0, capacity, 1]),
+                (
+                    dao_live_agg::phase1_epochs_key(deposit_epoch, request_epoch),
+                    vec![capacity, 1],
+                ),
+            ];
+            after_request.sort();
+            assert_eq!(rows_by_tip[0], Vec::new(), "block 100 has no DAO cell");
+            assert_eq!(
+                rows_by_tip[1], after_deposit,
+                "after the deposit (block 101)"
+            );
+            assert_eq!(
+                rows_by_tip[2], after_request,
+                "after the request (block 102)"
+            );
+            assert_eq!(
+                rows_by_tip[3],
+                Vec::new(),
+                "the completion leaves no live DAO cell"
+            );
+
+            // One batch over the same blocks writes the same rows.
+            let (batched, batched_indexer) = live_dao_fixture_store();
+            seed_secp_script_info(batched.as_ref());
+            seed_script_info(batched.as_ref(), crate::parser::dao::DAO_CODE_HASH);
+            crate::derive::derive_to_completion(batched.as_ref()).unwrap();
+            write_live_blocks_with_parser_script_deltas(&batched_indexer, blocks[..3].to_vec())
+                .await
+                .unwrap();
+            assert_eq!(
+                dao_live_agg_rows(&batched),
+                after_request,
+                "one batch 100..=102"
+            );
+
+            // Undo replay restores each previous block's rows (fork points
+            // inside the 100..=102 batch included).
+            for (fork_point, expected) in [(101, &after_deposit), (100, &Vec::new())] {
+                crate::derive::invalidate_for_rollback(batched.as_ref(), fork_point).unwrap();
+                batched
+                    .rollback_via_undo_log(batched.as_ref(), fork_point)
+                    .unwrap();
+                assert!(
+                    dao_live_agg_meta(&batched)
+                        .is_complete(&ckbadger_store::derive_ops::DAO_LIVE_AGG),
+                    "a rollback above the completion tip is the undo log's"
+                );
+                assert_eq!(
+                    &dao_live_agg_rows(&batched),
+                    expected,
+                    "fork_point={fork_point}"
+                );
+            }
+
+            // Live-maintained rows equal a from-scratch derivation at the tip.
+            let (rebuilt, rebuilt_indexer) = live_dao_fixture_store();
+            seed_secp_script_info(rebuilt.as_ref());
+            seed_script_info(rebuilt.as_ref(), crate::parser::dao::DAO_CODE_HASH);
+            crate::derive::derive_to_completion(rebuilt.as_ref()).unwrap();
+            write_live_blocks_with_parser_script_deltas(&rebuilt_indexer, blocks[..2].to_vec())
+                .await
+                .unwrap();
+            let live = dao_live_agg_rows(&rebuilt);
+            assert_eq!(live, after_deposit);
+            assert_eq!(rederive_dao_live_agg(&rebuilt), live, "rebuild at tip 101");
+            write_live_blocks_with_parser_script_deltas(&rebuilt_indexer, vec![blocks[2].clone()])
+                .await
+                .unwrap();
+            let live = dao_live_agg_rows(&rebuilt);
+            assert_eq!(rederive_dao_live_agg(&rebuilt), live, "rebuild at tip 102");
+            assert_eq!(live, after_request);
+        }
+
+        /// L1 (d): rows written under an older `version` are cleared and
+        /// derived again at startup.
+        #[tokio::test]
+        async fn test_dao_live_agg_version_bump_rebuilds_the_rows() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let (store, indexer) = live_dao_fixture_store();
+            seed_secp_script_info(store.as_ref());
+            seed_script_info(store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
+            write_live_blocks_with_parser_script_deltas(
+                &indexer,
+                phase_setup_blocks()[..2].to_vec(),
+            )
+            .await
+            .unwrap();
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            let expected = dao_live_agg_rows(&store);
+            assert_eq!(expected.len(), 3, "{expected:?}");
+            let mut meta = dao_live_agg_meta(&store);
+            meta.version -= 1;
+            let mut batch = StoreBatch::new(store.as_ref());
+            batch.put_derive_meta(ckbadger_store::derive_ops::DAO_LIVE_AGG.name, &meta);
+            batch
+                .put_derived_value(ckbadger_store::CF_DAO_LIVE_AGG, &[0x01; 33], Some(&[5, 5]))
+                .unwrap();
+            batch.commit().unwrap();
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            assert_eq!(dao_live_agg_rows(&store), expected);
+            assert_eq!(
+                dao_live_agg_meta(&store).version,
+                ckbadger_store::derive_ops::DAO_LIVE_AGG.version
+            );
+        }
+
         /// The incident's shape: the deposit is committed by an earlier batch,
         /// then the withdraw request (block 102) and the withdrawal completion
         /// (block 103) are written by one batch. The completion must move the
@@ -11391,6 +11637,88 @@ mod tests {
             )
         }
 
+        fn derived_activity_count(store: &CkbadgerStore) -> Option<Vec<i128>> {
+            store
+                .get_derived_value(
+                    ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+                    &ckbadger_store::keys::encode_object_collection_activity_prefix(&class_id()),
+                )
+                .unwrap()
+        }
+
+        /// L2 (J5): the derived per-collection activity row count is kept by
+        /// the live writer (one per collection activity row), equals a
+        /// from-scratch rebuild at the tip, and undo replay restores the
+        /// count of the fork block.
+        #[tokio::test]
+        async fn derived_collection_activity_count_is_maintained_live_and_rolls_back() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            seed_pre_parent_header(store.as_ref());
+            seed_secp_script_info(store.as_ref());
+            for code_hash in [
+                MNFT_ISSUER_CODE_HASH,
+                MNFT_CLASS_CODE_HASH,
+                MNFT_TOKEN_CODE_HASH,
+            ] {
+                seed_script_info(store.as_ref(), code_hash);
+            }
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            let mut counts = Vec::new();
+            for b in [
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                mint_block(),
+                transfer_block(),
+                burn_block(),
+            ] {
+                write_live_block(&indexer, b).await.unwrap();
+                counts.push(derived_activity_count(&store));
+            }
+            assert_eq!(
+                counts,
+                vec![None, Some(vec![1]), Some(vec![2]), Some(vec![3])],
+                "mint, transfer and burn each add one collection activity row"
+            );
+            // The derivation completed at 99, below every live block: undo
+            // replay owns this rollback and restores the fork block's count.
+            crate::derive::invalidate_for_rollback(store.as_ref(), 102).unwrap();
+            rollback_to(store.as_ref(), 102);
+            assert_eq!(
+                derived_activity_count(&store),
+                Some(vec![2]),
+                "undo replay to 102"
+            );
+            crate::derive::rederive_to_completion(store.as_ref()).unwrap();
+            assert_eq!(
+                derived_activity_count(&store),
+                Some(vec![2]),
+                "rebuild at tip 102"
+            );
+
+            // Now complete at 102: a rollback below it resets the derivation
+            // (the rows are cleared and derived again), never replays it.
+            crate::derive::invalidate_for_rollback(store.as_ref(), 101).unwrap();
+            assert_eq!(
+                derived_activity_count(&store),
+                None,
+                "reset before the rollback"
+            );
+            rollback_to(store.as_ref(), 101);
+            crate::derive::derive_to_completion(store.as_ref()).unwrap();
+            assert_eq!(
+                derived_activity_count(&store),
+                Some(vec![1]),
+                "derived again at 101"
+            );
+        }
+
         /// ID-COL: `collection_activity_daily` — one row per (collection,
         /// UTC+8 day) with the day's mint / transfer / burn transactions —
         /// is byte-identical from bulk build, a block-at-a-time live sync and
@@ -13077,6 +13405,192 @@ mod tests {
 
             rollback_to(&store, 100);
             assert_eq!(token_state(&store, &ext_type_hash()), (None, None));
+        }
+    }
+
+    /// A rollback must leave the cell indexes exactly as a store that never saw
+    /// the orphaned blocks. `cell_by_data_hash` keeps a row when its cell is
+    /// consumed (code-cell resolution reads consumed deployments), so a cell
+    /// created AND consumed inside the rolled-back range must lose that row
+    /// with its consumed meta — on the tx-context path and on the full-scan
+    /// fallback alike.
+    mod rollback_cell_index_rows {
+        use super::live_dao_fee::{block, cellbase_tx, indexer_for_live_write_test, lock_script};
+        use super::*;
+        use crate::rpc::{CellInput, CellOutput, OutPoint, Script, TransactionView};
+
+        const AR: u64 = 10_000_000_000_000_000;
+        const FUNDING_CAPACITY: u64 = 3000_00000000;
+        const DATA_CELL_CAPACITY: u64 = 200_00000000;
+        const FEE: u64 = 1_00000000;
+
+        fn lock_script_b() -> Script {
+            Script {
+                args: format!("0x{}", "02".repeat(20)),
+                ..lock_script()
+            }
+        }
+
+        fn input(tx_hash_byte: u8, index: u32) -> CellInput {
+            CellInput {
+                since: "0x0".to_string(),
+                previous_output: OutPoint {
+                    tx_hash: format!("0x{}", hex::encode([tx_hash_byte; 32])),
+                    index: format!("0x{index:x}"),
+                },
+            }
+        }
+
+        fn output(capacity: u64, lock: Script) -> CellOutput {
+            CellOutput {
+                capacity: format!("0x{capacity:x}"),
+                lock,
+                type_: None,
+            }
+        }
+
+        fn tx(
+            hash_byte: u8,
+            inputs: Vec<CellInput>,
+            outputs: Vec<(CellOutput, &str)>,
+        ) -> TransactionView {
+            TransactionView {
+                hash: format!("0x{}", hex::encode([hash_byte; 32])),
+                version: "0x0".to_string(),
+                cell_deps: vec![],
+                header_deps: vec![],
+                inputs,
+                outputs: outputs.iter().map(|(o, _)| o.clone()).collect(),
+                outputs_data: outputs.iter().map(|(_, d)| d.to_string()).collect(),
+                witnesses: vec!["0x".to_string()],
+            }
+        }
+
+        /// Block 100 funds, block 101 creates a cell carrying data (so it has a
+        /// `cell_by_data_hash` row), block 102 consumes it.
+        fn blocks() -> Vec<BlockResponseWithCycles> {
+            let create = tx(
+                0xe1,
+                vec![input(0xc0, 0)],
+                vec![
+                    (output(DATA_CELL_CAPACITY, lock_script()), "0xdeadbeefcafe"),
+                    (
+                        output(FUNDING_CAPACITY - DATA_CELL_CAPACITY, lock_script()),
+                        "0x",
+                    ),
+                ],
+            );
+            let consume = tx(
+                0xe2,
+                vec![input(0xe1, 0)],
+                vec![(output(DATA_CELL_CAPACITY - FEE, lock_script_b()), "0x")],
+            );
+            vec![
+                block(100, AR, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+                block(101, AR, vec![cellbase_tx(0xc1, 500_00000000), create]),
+                block(102, AR, vec![cellbase_tx(0xc2, 500_00000000), consume]),
+            ]
+        }
+
+        async fn write_live(blocks: &[BlockResponseWithCycles]) -> Arc<CkbadgerStore> {
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            std::mem::forget(dir);
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            super::live_dao_fee::seed_pre_parent_header(store.as_ref());
+            super::live_dao_fee::seed_secp_script_info(store.as_ref());
+            let indexer = indexer_for_live_write_test(store.clone());
+            for block in blocks {
+                super::live_dao_fee::write_live_blocks_with_parser_token_daily(
+                    &indexer,
+                    vec![block.clone()],
+                )
+                .await
+                .unwrap();
+            }
+            store
+        }
+
+        /// Roll back by the undo log's tx-contexts, or — `use_tx_contexts =
+        /// false` — by the full-scan fallback (no contexts handed over).
+        fn rollback_to(store: &CkbadgerStore, fork_point: i64, use_tx_contexts: bool) {
+            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
+            let contexts = if use_tx_contexts {
+                undo.tx_contexts
+            } else {
+                Vec::new()
+            };
+            store
+                .rollback_to_block_with_tx_contexts(fork_point, Some(store), contexts)
+                .unwrap();
+        }
+
+        /// Every row of every cell-state CF.
+        fn cell_rows(store: &CkbadgerStore) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+            let mut rows = Vec::new();
+            for (name, cf) in [
+                ("live_cells", store.cf_live_cells()),
+                ("consumed_cells", store.cf_consumed_cells()),
+                ("cell_by_lock", store.cf_cell_by_lock()),
+                ("cell_by_type", store.cf_cell_by_type()),
+                ("cell_by_lock_code", store.cf_cell_by_lock_code()),
+                ("cell_by_type_code", store.cf_cell_by_type_code()),
+                ("cell_by_data_hash", store.cf_cell_by_data_hash()),
+            ] {
+                for item in store.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+                    let (key, value) = item.unwrap();
+                    rows.push((name, key.to_vec(), value.to_vec()));
+                }
+            }
+            rows
+        }
+
+        fn data_hash_rows(store: &CkbadgerStore) -> usize {
+            store
+                .iterator_cf(store.cf_cell_by_data_hash(), rocksdb::IteratorMode::Start)
+                .count()
+        }
+
+        async fn assert_rollback_matches_reference(use_tx_contexts: bool) {
+            let all = blocks();
+            let store = write_live(&all).await;
+            assert_eq!(
+                data_hash_rows(&store),
+                1,
+                "fixture: the consumed data cell keeps its data-hash row"
+            );
+
+            // Fork after block 101: the cell survives, its consumption does not.
+            rollback_to(&store, 101, use_tx_contexts);
+            let through_101 = write_live(&all[..2]).await;
+            assert_eq!(
+                cell_rows(&store),
+                cell_rows(&through_101),
+                "use_tx_contexts={use_tx_contexts}: rollback to 101"
+            );
+
+            // Fork after block 100 on a fresh store: the cell was created AND
+            // consumed in the rolled-back range, so nothing of it may remain.
+            let store = write_live(&all).await;
+            rollback_to(&store, 100, use_tx_contexts);
+            let through_100 = write_live(&all[..1]).await;
+            assert_eq!(
+                cell_rows(&store),
+                cell_rows(&through_100),
+                "use_tx_contexts={use_tx_contexts}: rollback to 100"
+            );
+        }
+
+        #[tokio::test]
+        async fn rollback_by_tx_contexts_removes_a_created_and_consumed_cells_data_hash_row() {
+            assert_rollback_matches_reference(true).await;
+        }
+
+        #[tokio::test]
+        async fn rollback_by_full_scan_removes_a_created_and_consumed_cells_data_hash_row() {
+            assert_rollback_matches_reference(false).await;
         }
     }
     mod all_stats_dao_parity {

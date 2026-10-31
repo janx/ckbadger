@@ -288,6 +288,11 @@ pub enum UndoSeqScope {
     /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
     /// can prune exactly these entries without touching the other three.
     EntityStats = 0x0004,
+    /// Derived aggregate rows (`dao_live_agg`, `object_collection_activity_count`,
+    /// `bit_cell_by_account`), written by the live maintenance of the
+    /// indexer's background derivations. Pruned behind the same coverage
+    /// floor as `EntityStats`.
+    Derived = 0x0005,
 }
 
 impl UndoSeqScope {
@@ -1635,6 +1640,9 @@ pub fn decode_script_daily_key(key: &[u8]) -> (Vec<u8>, u8, bool, u32) {
     (code_hash, hash_type, is_type, date)
 }
 
+/// Width of a `token_transfers` key (see [`encode_token_transfer_key`]).
+pub const TOKEN_TRANSFER_KEY_SIZE: usize = 44;
+
 /// Token transfer key: type_hash(32B) + block_num_desc(8B BE) + tx_idx_desc(4B BE) = 44 bytes
 /// Uses descending block_num and tx_idx so newest transfers come first in prefix scan.
 pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) -> Vec<u8> {
@@ -1644,7 +1652,7 @@ pub fn encode_token_transfer_key(type_hash: &[u8], block_num: i64, tx_idx: i32) 
         type_hash.len(),
         HASH32_LEN,
     );
-    let mut key = Vec::with_capacity(44);
+    let mut key = Vec::with_capacity(TOKEN_TRANSFER_KEY_SIZE);
     key.extend_from_slice(&type_hash[..32]);
     key.extend_from_slice(&encode_desc_block_num(block_num));
     key.extend_from_slice(&encode_desc_tx_idx(tx_idx));
@@ -2102,6 +2110,16 @@ pub mod sync_meta_keys {
     /// Per-family hourly retention state (bincode `HourlyRetentionState`).
     /// The family name is appended: `hourly_retention_state:token`.
     pub const HOURLY_RETENTION_STATE_PREFIX: &[u8] = b"hourly_retention_state:";
+    /// One derived aggregate's derivation state (bincode `DeriveMeta`). The
+    /// aggregate name is appended: `derive:dao_live_agg`.
+    pub const DERIVE_META_PREFIX: &[u8] = b"derive:";
+}
+
+/// `sync_meta` key of one derived aggregate's `DeriveMeta`.
+pub fn encode_derive_meta_key(aggregate: &str) -> Vec<u8> {
+    let mut key = sync_meta_keys::DERIVE_META_PREFIX.to_vec();
+    key.extend_from_slice(aggregate.as_bytes());
+    key
 }
 
 /// `sync_meta` key for one hourly family's retention state.
@@ -4304,6 +4322,7 @@ mod tests {
             (UndoSeqScope::DotBit, 0x0002),
             (UndoSeqScope::Object, 0x0003),
             (UndoSeqScope::EntityStats, 0x0004),
+            (UndoSeqScope::Derived, 0x0005),
         ];
         for (scope, bits) in table {
             assert_eq!(scope.seq_base(), bits << 48, "{scope:?}");
@@ -4317,7 +4336,7 @@ mod tests {
             }
         }
         // A counter that overflowed into the scope bits is no scope's entry.
-        assert!(!UndoSeqScope::EntityStats.owns(5 << 48));
+        assert!(!UndoSeqScope::EntityStats.owns(6 << 48));
         assert!(!UndoSeqScope::TxContext.owns(0));
     }
 

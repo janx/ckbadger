@@ -754,7 +754,9 @@ async fn the_export_writes_nothing() {
     let files_before = store_files(dir.path());
     let rows_before = store.list_token_daily_deltas(&hash).unwrap();
 
-    let app = create_router_without_warmup(test_config(store.clone()));
+    // The export reads no derived aggregate; the underived config keeps the
+    // test harness itself from writing (deriving) between the two snapshots.
+    let app = create_router_without_warmup(test_config_underived(store.clone()));
     let (status, _) = post(
         app,
         serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&hash) }] }),

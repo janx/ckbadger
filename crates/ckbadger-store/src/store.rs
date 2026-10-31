@@ -439,6 +439,17 @@ pub const CF_TX_ACTIONS_BY_BUCKET: &str = "tx_actions_by_bucket";
 /// YYYYMMDD (u32 BE) -> `CollectionActivityDailyCounts`. One row per
 /// (collection, day) with a mint, transfer or burn row.
 pub const CF_COLLECTION_ACTIVITY_DAILY: &str = "collection_activity_daily";
+/// Derived aggregate (indexer background derivation, never bulk-written):
+/// rows over the live NervosDAO cells — one global row, one per phase-0
+/// depositor lock, one per phase-0 deposit epoch and one per phase-1
+/// (deposit epoch, request epoch). See `derive_ops.rs`.
+pub const CF_DAO_LIVE_AGG: &str = "dao_live_agg";
+/// Derived aggregate: `object_collection_activities` row count per padded
+/// collection id. See `derive_ops.rs`.
+pub const CF_OBJECT_COLLECTION_ACTIVITY_COUNT: &str = "object_collection_activity_count";
+/// Derived aggregate: live `.bit Cell` items per `.bit` account id:
+/// account_id(20) + bit cell identity id(32). See `derive_ops.rs`.
+pub const CF_BIT_CELL_BY_ACCOUNT: &str = "bit_cell_by_account";
 pub const CF_CLUSTER_AGG: &str = "cluster_agg";
 pub const CF_MNFT_COLLECTION_AGG: &str = "mnft_collection_agg";
 pub const CF_OBJECT_COLLECTION_ACTIVITIES: &str = "object_collection_activities";
@@ -505,6 +516,11 @@ const CF_WRITE_POLICY_BULK_DISABLED: &[&str] = &[
     CF_REORG_UNDO_LOG_BY_BLOCK,
     CF_PENDING_PROPOSALS,
     CF_DOB_DECODED,
+    // Derived aggregates: written only by the indexer's background
+    // derivation and its live maintenance, never by bulk build.
+    CF_DAO_LIVE_AGG,
+    CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+    CF_BIT_CELL_BY_ACCOUNT,
 ];
 
 const CF_WRITE_POLICY_FINAL_SNAPSHOT: &[&str] = &[
@@ -660,6 +676,9 @@ pub const ALL_CFS: &[&str] = &[
     CF_DOTCELL_RING,
     CF_TX_ACTIONS_BY_BUCKET,
     CF_COLLECTION_ACTIVITY_DAILY,
+    CF_DAO_LIVE_AGG,
+    CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+    CF_BIT_CELL_BY_ACCOUNT,
 ];
 
 /// Column families intended for the domain mutable store.
@@ -730,6 +749,9 @@ pub const DOMAIN_CFS: &[&str] = &[
     CF_DOTCELL_RING,
     CF_TX_ACTIONS_BY_BUCKET,
     CF_COLLECTION_ACTIVITY_DAILY,
+    CF_DAO_LIVE_AGG,
+    CF_OBJECT_COLLECTION_ACTIVITY_COUNT,
+    CF_BIT_CELL_BY_ACCOUNT,
 ];
 
 /// Column families for the append-only store (immutable, hash-keyed cell payloads).
@@ -1776,6 +1798,15 @@ impl CkbadgerStore {
     }
     pub fn cf_collection_activity_daily(&self) -> &ColumnFamily {
         self.cf(CF_COLLECTION_ACTIVITY_DAILY)
+    }
+    pub fn cf_dao_live_agg(&self) -> &ColumnFamily {
+        self.cf(CF_DAO_LIVE_AGG)
+    }
+    pub fn cf_object_collection_activity_count(&self) -> &ColumnFamily {
+        self.cf(CF_OBJECT_COLLECTION_ACTIVITY_COUNT)
+    }
+    pub fn cf_bit_cell_by_account(&self) -> &ColumnFamily {
+        self.cf(CF_BIT_CELL_BY_ACCOUNT)
     }
 
     // ---- Raw DB operations ----
@@ -3297,7 +3328,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 65);
+        assert_eq!(DOMAIN_CFS.len(), 68);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 

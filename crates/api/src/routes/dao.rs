@@ -30,7 +30,7 @@ mod dao_epoch;
 #[path = "dao_evidence.rs"]
 mod dao_evidence;
 pub(crate) use dao_evidence::dao_header_fields;
-pub use dao_evidence::DaoEvidenceMemo;
+pub use dao_evidence::DaoDepositorRanking;
 
 const CHART_CACHE_TTL: Duration = Duration::from_secs(3600);
 const DAO_STATS_CACHE_TTL: Duration = Duration::from_secs(30);

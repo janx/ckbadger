@@ -347,6 +347,25 @@ impl<'a> StoreBatch<'a> {
         Ok(())
     }
 
+    /// Delete every key in `[start, end)` of one domain column family. The
+    /// append-only store has no range deletes.
+    pub fn delete_range_raw_cf_by_name(
+        &mut self,
+        cf_name: &str,
+        start: &[u8],
+        end: &[u8],
+    ) -> anyhow::Result<()> {
+        if !self.store.has_cf(cf_name) {
+            anyhow::bail!("CF '{}' is not available in this store batch", cf_name);
+        }
+        if crate::store::is_append_only_cf_name(cf_name) || self.store.is_append_only_store() {
+            anyhow::bail!("range delete refused on append-only CF '{}'", cf_name);
+        }
+        let cf = self.store.cf(cf_name);
+        self.batch.delete_range_cf(cf, start, end);
+        Ok(())
+    }
+
     fn delete_cf<K: AsRef<[u8]>>(&mut self, cf: &ColumnFamily, key: K) {
         let key_ref = key.as_ref();
         if self.store.is_append_only_store() {

@@ -74,9 +74,10 @@ impl CkbadgerStore {
     ///
     /// Entries are replayed in reverse sequence order (LIFO) per block range so
     /// the original write order is inverted correctly.
-    /// Drop `EntityStats` undo entries for blocks in `(from_block, to_block]`.
+    /// Drop `EntityStats` and `Derived` undo entries for blocks in
+    /// `(from_block, to_block]`.
     ///
-    /// Only that scope: the `TxContext`, `DotBit` and `Object` scopes have
+    /// Only those scopes: the `TxContext`, `DotBit` and `Object` scopes have
     /// different lifetimes and are pruned only by replay. Entries are staged
     /// into `batch` so the new coverage floor and the deletions it describes
     /// commit together — a floor that advanced without its deletions, or
@@ -119,8 +120,9 @@ impl CkbadgerStore {
             if block_num > to_block {
                 break;
             }
-            // Only `EntityStats` entries are retention's to prune.
-            if keys::UndoSeqScope::EntityStats.owns(seq) {
+            // Only `EntityStats` and `Derived` entries are retention's to
+            // prune; one coverage floor governs both.
+            if keys::UndoSeqScope::EntityStats.owns(seq) || keys::UndoSeqScope::Derived.owns(seq) {
                 batch.delete_reorg_undo_log_key(&key);
                 pruned += 1;
             }
@@ -549,6 +551,61 @@ mod tests {
             contract.version,
             crate::types::ENTITY_STATS_UNDO_CONTRACT_VERSION
         );
+    }
+
+    /// Round 3 L0: derived-aggregate undo entries are pruned behind the same
+    /// coverage floor as `EntityStats` — a reorg below the floor is refused by
+    /// the shared coverage check, so nothing below it is ever replayed, and
+    /// without the prune they would accumulate forever.
+    #[test]
+    fn test_prune_retained_undo_also_drops_derived_entries_below_the_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        const DERIVED: u64 = keys::UndoSeqScope::Derived.seq_base();
+        const OBJECT: u64 = keys::UndoSeqScope::Object.seq_base();
+        {
+            let mut batch = StoreBatch::new(&store);
+            for block in 1..=10i64 {
+                for (seq, cf) in [
+                    (DERIVED, crate::store::CF_DAO_LIVE_AGG),
+                    (OBJECT, crate::store::CF_MNFT_DATA),
+                ] {
+                    batch.put_reorg_undo_log_by_block(
+                        block,
+                        seq,
+                        &UndoLogEntry::KeyMutation {
+                            target_store: UndoLogStoreTarget::Domain,
+                            cf_name: cf.to_string(),
+                            key: vec![block as u8; 8],
+                            previous_value: None,
+                        },
+                    );
+                }
+            }
+            batch.commit().unwrap();
+        }
+        let mut batch = StoreBatch::new(&store);
+        let pruned = store
+            .prune_entity_stats_undo_below(&mut batch, 0, 4)
+            .unwrap();
+        batch.commit().unwrap();
+        assert_eq!(pruned, 4, "one Derived entry per block 1..=4");
+        let mut derived_blocks = Vec::new();
+        let mut other = 0;
+        for item in store.iterator_cf(
+            store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::Start,
+        ) {
+            let (key, _) = item.unwrap();
+            let (block, seq) = keys::decode_reorg_undo_log_key(&key);
+            if keys::UndoSeqScope::Derived.owns(seq) {
+                derived_blocks.push(block);
+            } else {
+                other += 1;
+            }
+        }
+        assert_eq!(derived_blocks, (5..=10).collect::<Vec<_>>());
+        assert_eq!(other, 10, "Object entries are untouched by retention");
     }
 
     #[test]
