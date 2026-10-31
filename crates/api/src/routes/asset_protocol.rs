@@ -142,8 +142,18 @@ pub(crate) fn did_ckb_string(id: &[u8]) -> Result<String> {
     ))
 }
 
-fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
-    anyhow::ensure!(id.len() >= 20, "DID type args shorter than 20 bytes");
+/// A did:ckb cell's data decoded: its CBOR document, the document's raw
+/// bytes and its local id.
+struct DidCell<'a> {
+    document: ciborium::Value,
+    raw: &'a [u8],
+    local_id: Option<String>,
+}
+
+/// The one decoder of a did:ckb cell's data (union 0: table of the CBOR
+/// document bytes and the local id), shared by `/protocol`, the PDS
+/// grouping and the feed's `versionDiff.handleChanged`.
+fn did_cell(data: &[u8]) -> Result<DidCell<'_>> {
     anyhow::ensure!(data.len() >= 4, "DID union tag missing");
     let tag = u32le(&data[..4])?;
     anyhow::ensure!(tag == 0, "unsupported DID document union {tag}");
@@ -154,17 +164,48 @@ fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
     );
     let raw = molecule_bytes(fields[0])?;
     let mut cursor = std::io::Cursor::new(raw);
-    let cbor: ciborium::Value = ciborium::from_reader(&mut cursor)?;
+    let document: ciborium::Value = ciborium::from_reader(&mut cursor)?;
     anyhow::ensure!(
         cursor.position() == raw.len() as u64,
         "trailing DID CBOR bytes"
     );
-    let document = json_cbor(cbor)?;
     let local_id = if fields[1].is_empty() {
         None
     } else {
         Some(std::str::from_utf8(molecule_bytes(fields[1])?)?.to_string())
     };
+    Ok(DidCell {
+        document,
+        raw,
+        local_id,
+    })
+}
+
+/// A did:ckb document's handle: the value of its `alsoKnownAs` entry
+/// (`Ok(Some(None))` when it has none). `Ok(None)` when the handle cannot be
+/// located — the document is not a CBOR map, or names `alsoKnownAs` twice.
+fn did_handle(data: &[u8]) -> Result<Option<Option<ciborium::Value>>> {
+    let ciborium::Value::Map(entries) = did_cell(data)?.document else {
+        return Ok(None);
+    };
+    let mut handles = entries.into_iter().filter_map(|(key, value)| {
+        matches!(&key, ciborium::Value::Text(text) if text == "alsoKnownAs").then_some(value)
+    });
+    let handle = handles.next();
+    if handles.next().is_some() {
+        return Ok(None);
+    }
+    Ok(Some(handle))
+}
+
+fn did_document(data: &[u8], id: &[u8]) -> Result<Value> {
+    anyhow::ensure!(id.len() >= 20, "DID type args shorter than 20 bytes");
+    let DidCell {
+        document,
+        raw,
+        local_id,
+    } = did_cell(data)?;
+    let document = json_cbor(document)?;
     let did = did_ckb_string(id)?;
     let mut pds = Vec::new();
     if let Some(services) = document.get("services").and_then(Value::as_object) {
@@ -214,6 +255,105 @@ pub(crate) struct ProtocolResponse {
     kind: String,
     item_id: String,
     versions: Vec<ProtocolVersion>,
+    /// `.cell` only: the name's record edits, from the versions above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record_edits: Option<DotCellRecordEdits>,
+}
+
+/// A `.cell` name's record edits (ID-DC4): every transaction the indexer
+/// classified `edit_records` for the name, and who made the newest.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DotCellRecordEdits {
+    count: usize,
+    last: Option<DotCellLastRecordEdit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DotCellLastRecordEdit {
+    /// The manager named by the version the edit consumed — the authority
+    /// over the name's records when it was edited.
+    editor: super::identities::PartyRef,
+    /// How many of the newest record edits in a row this editor made.
+    editor_run: usize,
+    tx_hash: String,
+    block_number: i64,
+    timestamp: String,
+}
+
+/// What [`dotcell_record_edits`] reads from one decoded `.cell` version.
+struct DotCellVersionFacts {
+    tx_hash: String,
+    consumed_by_tx: Option<String>,
+    manager_hash20: [u8; 20],
+    block_number: i64,
+    timestamp: String,
+}
+
+/// The record edits of `.cell` name `id` over its decoded versions (chain
+/// order). A record edit is a transition: a version whose creating
+/// transaction consumed exactly one earlier version of the name and whose own
+/// actions for the name (the classification its item feed rows carry)
+/// include `edit_records`. Its editor is the manager of the version it
+/// consumed. A version that consumed none (a registration) is no edit and
+/// needs no classification read.
+fn dotcell_record_edits(
+    state: &crate::AppState,
+    id: &[u8],
+    versions: &[DotCellVersionFacts],
+) -> std::result::Result<DotCellRecordEdits, crate::response::ApiRouteError> {
+    use crate::response::ApiError;
+    let mut edits: Vec<(&DotCellVersionFacts, [u8; 20])> = Vec::new();
+    for version in versions {
+        let consumed: Vec<&DotCellVersionFacts> = versions
+            .iter()
+            .filter(|previous| previous.consumed_by_tx.as_deref() == Some(version.tx_hash.as_str()))
+            .collect();
+        let previous = match consumed.as_slice() {
+            [] => continue,
+            [previous] => previous,
+            many => {
+                return Err(ApiError::internal(format!(
+                    ".cell 0x{} transaction {} consumed {} versions of the name",
+                    hex::encode(id),
+                    version.tx_hash,
+                    many.len()
+                )))
+            }
+        };
+        let tx_hash = hex::decode(version.tx_hash.trim_start_matches("0x")).map_err(|e| {
+            ApiError::internal(format!(".cell version hash {}: {e}", version.tx_hash))
+        })?;
+        let own = super::assets::dotcell_own_actions(state, id, &tx_hash)?;
+        if own.iter().any(|action| action == "edit_records") {
+            edits.push((version, previous.manager_hash20));
+        }
+    }
+    let last = match edits.last() {
+        None => None,
+        Some((version, editor)) => {
+            let resolver = super::identities::DotCellPartyResolver {
+                store: &state.store,
+                network: &state.ckb_network,
+            };
+            Some(DotCellLastRecordEdit {
+                editor: resolver.resolve(editor)?,
+                editor_run: edits
+                    .iter()
+                    .rev()
+                    .take_while(|(_, made_by)| made_by == editor)
+                    .count(),
+                tx_hash: version.tx_hash.clone(),
+                block_number: version.block_number,
+                timestamp: version.timestamp.clone(),
+            })
+        }
+    };
+    Ok(DotCellRecordEdits {
+        count: edits.len(),
+        last,
+    })
 }
 
 fn field(data: &[u8], name: &str, start: usize, end: usize) -> Result<ProtocolField> {
@@ -406,12 +546,19 @@ fn dotbit_lock(args: &[u8]) -> Result<(Value, Value)> {
 ///   `null` for `.cell`, whose owner is a prefix inside the name's data (its
 ///   moves are its `protocolActions`).
 /// - `dataChanged`: the cell data hash differs.
+/// - `handleChanged` (did:ckb only): the documents' `alsoKnownAs` differ —
+///   `false` without a node read when the data is unchanged, else both
+///   documents decoded by [`did_cell`]; `null` when either document's handle
+///   cannot be located (not a CBOR map, or `alsoKnownAs` twice).
 pub(crate) fn version_diff(
+    state: &crate::AppState,
     standard: super::assets::NftLifecycleStandard,
-    old: &super::asset_history::CellVersion,
-    new: &super::asset_history::CellVersion,
+    old_version: &super::asset_history::CanonicalCellVersion,
+    new_version: &super::asset_history::CanonicalCellVersion,
 ) -> Result<Value> {
     use super::assets::NftLifecycleStandard as S;
+    let (old, new) = (&old_version.response, &new_version.response);
+    let data_changed = old.data_hash != new.data_hash;
     let owner_changed = match standard {
         S::DotBit => {
             let owner = |version: &super::asset_history::CellVersion| -> Result<Value> {
@@ -433,10 +580,33 @@ pub(crate) fn version_diff(
         S::DotCell => Value::Null,
         _ => Value::Bool(old.owner_lock_hash != new.owner_lock_hash),
     };
-    Ok(serde_json::json!({
+    let mut diff = serde_json::json!({
         "ownerChanged": owner_changed,
-        "dataChanged": old.data_hash != new.data_hash,
-    }))
+        "dataChanged": data_changed,
+    });
+    if matches!(standard, S::DidCkb) {
+        // Identical data bytes hold the identical document; otherwise both
+        // documents are decoded from the node's creation transactions.
+        let handle_changed = if !data_changed {
+            Value::Bool(false)
+        } else {
+            let handle = |version: &super::asset_history::CanonicalCellVersion| {
+                let tx = raw_transaction(state, version)?;
+                let index = usize::try_from(version.response.output_index)?;
+                let data = tx.outputs_data.get(index).ok_or_else(|| {
+                    anyhow::anyhow!("DID data missing: {}:{index}", version.response.tx_hash)
+                })?;
+                did_handle(&hex::decode(data.trim_start_matches("0x"))?)
+                    .with_context(|| format!("DID document {}:{index}", version.response.tx_hash))
+            };
+            match (handle(old_version)?, handle(new_version)?) {
+                (Some(before), Some(after)) => Value::Bool(before != after),
+                _ => Value::Null,
+            }
+        };
+        diff["handleChanged"] = handle_changed;
+    }
+    Ok(diff)
 }
 
 fn dotbit_account_witness(
@@ -555,6 +725,7 @@ pub(crate) fn protocol(
     let id = super::asset_history::parse_item_id(raw, standard)?;
     let versions = super::asset_history::checked_versions(state, &id, standard)?;
     let mut response = Vec::new();
+    let mut dotcell_versions: Vec<DotCellVersionFacts> = Vec::new();
     for version in versions {
         let parsed=(||->Result<ProtocolVersion>{
             let tx=raw_transaction(state,&version)?;let index=version.response.output_index as usize;
@@ -603,6 +774,7 @@ pub(crate) fn protocol(
                 },
                 S::DotCell=>{
                     let name=ckbadger_indexer::parser::DotCellParser::parse_name_data(&data)?;anyhow::ensure!(name.id.as_slice()==id,".cell payload identity mismatch");
+                    dotcell_versions.push(DotCellVersionFacts{tx_hash:version.response.tx_hash.clone(),consumed_by_tx:version.response.consumed_by_tx.clone(),manager_hash20:name.manager_hash20,block_number:version.response.block_number,timestamp:version.response.timestamp.clone()});
                     let witness=tx.witnesses.get(index).ok_or_else(||anyhow::anyhow!(".cell records witness missing at output {index}"))?;
                     let records=ckbadger_indexer::parser::DotCellParser::parse_witness_records(witness,&name.records_hash)?;
                     let resolver=super::identities::DotCellPartyResolver{store:&state.store,network:&state.ckb_network};
@@ -624,10 +796,15 @@ pub(crate) fn protocol(
         S::BitCell => "bit_cell",
         S::DotCell => "dotcell",
     };
+    let record_edits = match standard {
+        S::DotCell => Some(dotcell_record_edits(state, &id, &dotcell_versions)?),
+        _ => None,
+    };
     ok(ProtocolResponse {
         kind: kind.to_string(),
         item_id: format!("0x{}", hex::encode(id)),
         versions: response,
+        record_edits,
     })
 }
 pub(crate) async fn pds_groups(
@@ -959,5 +1136,46 @@ mod tests {
         assert_eq!(parsed["did"], "did:ckb:ceirceirceirceirceirceirceirceir");
         assert_eq!(parsed["itemId"], format!("0x{}", hex::encode([0x11; 32])));
         assert!(did_document(&data[..data.len() - 1], &[0x11; 32]).is_err());
+    }
+
+    /// R-11: the handle is the document map's one `alsoKnownAs` value; a
+    /// document whose handle cannot be located says so (`None`) rather than
+    /// reading as "no handle".
+    #[test]
+    fn did_handle_locates_also_known_as_or_reports_it_unlocatable() {
+        use ciborium::Value as C;
+        let data = |document: C| {
+            let mut cbor = Vec::new();
+            ciborium::into_writer(&document, &mut cbor).unwrap();
+            let mut data = 0u32.to_le_bytes().to_vec();
+            data.extend(table(&[bytes(&cbor), Vec::new()]));
+            data
+        };
+        let aka = |handle: &str| {
+            (
+                C::Text("alsoKnownAs".into()),
+                C::Array(vec![C::Text(handle.into())]),
+            )
+        };
+        assert_eq!(
+            did_handle(&data(C::Map(vec![aka("at://alice.test")]))).unwrap(),
+            Some(Some(C::Array(vec![C::Text("at://alice.test".into())])))
+        );
+        assert_eq!(
+            did_handle(&data(C::Map(vec![(
+                C::Text("services".into()),
+                C::Map(vec![])
+            )])))
+            .unwrap(),
+            Some(None)
+        );
+        assert_eq!(did_handle(&data(C::Array(vec![]))).unwrap(), None);
+        assert_eq!(
+            did_handle(&data(C::Map(vec![aka("at://a.test"), aka("at://b.test")]))).unwrap(),
+            None
+        );
+        let mut truncated = data(C::Map(vec![aka("at://alice.test")]));
+        truncated.pop();
+        assert!(did_handle(&truncated).is_err());
     }
 }

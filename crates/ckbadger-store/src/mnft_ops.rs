@@ -29,6 +29,45 @@ impl CkbadgerStore {
         }
     }
 
+    /// The mNFT class cells transaction `tx_hash` created, as
+    /// `(output_index, class_id)` in output order: one prefix seek on the
+    /// class-outpoint index, bounded by that transaction's outputs.
+    pub fn list_mnft_class_outputs_of_tx(
+        &self,
+        tx_hash: &[u8],
+    ) -> anyhow::Result<Vec<(i16, Vec<u8>)>> {
+        let prefix = keys::encode_mnft_class_outpoint_tx_prefix(tx_hash);
+        let mut outputs = Vec::new();
+        for item in self.prefix_iterator_cf(self.cf_stats_mnft(), &prefix) {
+            let (key, value) = item.map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to iterate mnft class outpoints of tx 0x{}: {}",
+                    bytes_to_hex(tx_hash),
+                    e
+                )
+            })?;
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            anyhow::ensure!(
+                key.len() == keys::MNFT_CLASS_OUTPOINT_KEY_SIZE,
+                "invalid mnft class outpoint key length: expected {}, got {} (tx 0x{})",
+                keys::MNFT_CLASS_OUTPOINT_KEY_SIZE,
+                key.len(),
+                bytes_to_hex(tx_hash)
+            );
+            let (_, output_index) = keys::decode_outpoint(&key[1..35]);
+            anyhow::ensure!(
+                !value.is_empty(),
+                "empty mnft class id for outpoint: tx_hash=0x{}, output_index={}",
+                bytes_to_hex(tx_hash),
+                output_index
+            );
+            outputs.push((output_index, value.to_vec()));
+        }
+        Ok(outputs)
+    }
+
     pub fn get_mnft_token_id_by_outpoint(
         &self,
         tx_hash: &[u8],
@@ -238,6 +277,37 @@ mod tests {
         assert_eq!(mnft_results[0].0, tx_a.to_vec());
         assert_eq!(mnft_results[0].1, 4);
         assert_eq!(mnft_results[0].2, mnft_token_id.to_vec());
+    }
+
+    /// R-4: one transaction's class outputs come from one prefix seek on the
+    /// class-outpoint index, in output order; another transaction's class
+    /// cells (a lexicographic neighbour included) are never listed.
+    #[test]
+    fn test_mnft_class_outputs_of_tx_lists_only_that_transaction() {
+        let (_dir, store) = test_store();
+        let tx = [0xC1u8; 32];
+        let mut next = tx;
+        next[31] = 0xC2;
+        let mut batch = StoreBatch::new(&store);
+        batch.put_mnft_class_outpoint(&tx, 7, &[0x31u8; 24]);
+        batch.put_mnft_class_outpoint(&tx, 2, &[0x32u8; 24]);
+        batch.put_mnft_class_outpoint(&next, 0, &[0x33u8; 24]);
+        batch.put_mnft_token_outpoint(&tx, 1, &[0x41u8; 28]);
+        batch.commit().unwrap();
+
+        assert_eq!(
+            store.list_mnft_class_outputs_of_tx(&tx).unwrap(),
+            vec![(2, vec![0x32u8; 24]), (7, vec![0x31u8; 24])]
+        );
+        assert!(store
+            .list_mnft_class_outputs_of_tx(&[0xC0u8; 32])
+            .unwrap()
+            .is_empty());
+
+        let key = keys::encode_mnft_class_outpoint_key(&next, 3);
+        store.put_cf(store.cf_stats_mnft(), &key, b"").unwrap();
+        let err = store.list_mnft_class_outputs_of_tx(&next).unwrap_err();
+        assert!(err.to_string().contains("empty mnft class id"), "{err}");
     }
 
     #[test]

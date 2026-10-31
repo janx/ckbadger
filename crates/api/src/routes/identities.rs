@@ -268,24 +268,26 @@ async fn list_identity_collection_holders(
                         hex::encode(&collection_id_bytes)
                     ))
                 })?;
-            let party = resolver.resolve(&owner20)?;
+            let (party, lock) = resolver.resolve_with_lock(&owner20)?;
+            let lock_code_hash = lock.as_ref().map(|lock| &lock.entry.code_hash);
             rows.push(CollectionHolderResponse {
                 lock_script_hash: party.lock_hash,
                 owner_hash_prefix: Some(party.hash_prefix),
                 address: party.address,
+                lock_code_hash: lock_code_hash.map(|code| format!("0x{}", hex::encode(code))),
+                lock_kind: lock_code_hash
+                    .map(|code| super::assets::lock_kind(state.store.as_ref(), code))
+                    .transpose()?
+                    .flatten(),
                 item_count: *count,
             });
         } else {
-            rows.push(CollectionHolderResponse {
-                lock_script_hash: Some(format!("0x{}", hex::encode(owner_segment))),
-                owner_hash_prefix: None,
-                address: super::assets::lock_address(
-                    state.store.as_ref(),
-                    owner_segment,
-                    &state.ckb_network,
-                )?,
-                item_count: *count,
-            });
+            rows.push(super::assets::holder_row(
+                state.store.as_ref(),
+                owner_segment,
+                *count,
+                &state.ckb_network,
+            )?);
         }
     }
 
@@ -498,6 +500,7 @@ async fn get_dotbit_item_detail(
         status,
         tx_hash,
         output_index,
+        token_index: None,
     })
 }
 
@@ -558,6 +561,7 @@ async fn get_did_ckb_item_detail(
             .as_ref()
             .map(|(hash, _)| format!("0x{}", hex::encode(hash))),
         output_index: current.map(|(_, index)| index),
+        token_index: None,
     })
 }
 
@@ -626,6 +630,7 @@ async fn get_bit_cell_item_detail(
         status: None,
         tx_hash,
         output_index,
+        token_index: None,
     })
 }
 
@@ -819,6 +824,10 @@ pub struct DotCellItemResponse {
     pub state: &'static str,
     pub grace_ends_at: u64,
     pub owner: PartyRef,
+    /// The live `.cell` names the owner prefix holds, this one included when
+    /// it is live (ID-DC4 "this address holds 1 cell"): the per-owner counter
+    /// the holders list ranks by.
+    pub owner_name_count: i64,
     pub manager: PartyRef,
     pub sale: Option<DotCellSaleResponse>,
     pub records: Vec<DotCellRecordResponse>,
@@ -1130,6 +1139,17 @@ async fn get_dotcell_item_detail(
     };
     let (owner, owner_lock) = resolver.resolve_with_lock(&owner_hash20)?;
     let manager = resolver.resolve(&manager_hash20)?;
+    let owner_name_count = store
+        .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &owner_hash20)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if owner_name_count < i64::from(entry.is_live) {
+        return Err(ApiError::internal(format!(
+            ".cell owner counter disagrees with the name: {label}.cell (0x{}) is_live={} but its owner 0x{} holds {owner_name_count}",
+            hex::encode(identity_id),
+            entry.is_live,
+            hex::encode(owner_hash20)
+        )));
+    }
 
     // A name is for sale when its owner prefix IS a Sale Lock instance's hash
     // prefix — a property of the name, never of an offer cell's existence.
@@ -1226,6 +1246,7 @@ async fn get_dotcell_item_detail(
         state: dotcell_state(entry.is_live, expired_at, grace_ends_at, tip_seconds),
         grace_ends_at,
         owner,
+        owner_name_count,
         manager,
         sale,
         records: records.iter().map(dotcell_record_response).collect(),

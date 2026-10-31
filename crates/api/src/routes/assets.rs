@@ -435,6 +435,8 @@ pub struct NftCollectionDetailResponse {
 #[serde(rename_all = "camelCase")]
 pub struct CollectionItemResponse {
     pub nft_id: String,
+    /// The item's name. An m-NFT token has none of its own: its row carries
+    /// its class's on-chain name, read with `token_index` ("Santa Claus #0").
     pub name: Option<String>,
     pub standard: String,
     /// The owner's full lock hash. For `.cell` it is the lock the owner's
@@ -458,6 +460,9 @@ pub struct CollectionItemResponse {
     pub status: Option<u8>,
     pub tx_hash: Option<String>,
     pub output_index: Option<i16>,
+    /// m-NFT rows only: the token's index within its class (OB-K3).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_index: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -541,7 +546,77 @@ pub struct CollectionHolderResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub owner_hash_prefix: Option<String>,
     pub address: Option<String>,
+    /// The holder lock's code hash; `None` when its script is not indexed.
+    pub lock_code_hash: Option<String>,
+    /// The scripts registry's name for `lock_code_hash` (OB-C7); `None` when
+    /// the registry names none — never a label guessed from the args.
+    pub lock_kind: Option<String>,
     pub item_count: i64,
+}
+
+/// A holder's or object owner's lock as one row shows it: its address, its
+/// code hash and the scripts registry's name for that code hash.
+pub(super) struct OwnerLock {
+    pub(super) address: String,
+    pub(super) lock_code_hash: String,
+    pub(super) lock_kind: Option<String>,
+}
+
+/// The lock kind of a code hash: the scripts registry's name for it, through
+/// `utils::registered_script_name` (the one name rule `/cells` and the
+/// activity participants use). `None` when the registry names none.
+pub(super) fn lock_kind(
+    store: &CkbadgerStore,
+    code_hash: &[u8],
+) -> Result<Option<String>, ApiRouteError> {
+    crate::utils::registered_script_name(store, code_hash).map_err(|e| {
+        ApiError::internal(format!(
+            "lock code hash 0x{} registry name: {e:#}",
+            hex::encode(code_hash)
+        ))
+    })
+}
+
+/// [`OwnerLock`] of `lock_hash` from one `CF_LOCK_SCRIPTS` read; `None` when
+/// the lock's script is not indexed.
+pub(super) fn owner_lock(
+    store: &CkbadgerStore,
+    lock_hash: &[u8],
+    network: &str,
+) -> Result<Option<OwnerLock>, ApiRouteError> {
+    let Some(resolved) = crate::utils::address::resolve_lock_address(store, lock_hash, network)
+        .map_err(|e| {
+            ApiError::internal(format!(
+                "owner lock 0x{} address: {e:#}",
+                hex::encode(lock_hash)
+            ))
+        })?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(OwnerLock {
+        lock_kind: lock_kind(store, &resolved.entry.code_hash)?,
+        lock_code_hash: format!("0x{}", hex::encode(&resolved.entry.code_hash)),
+        address: resolved.address,
+    }))
+}
+
+/// The wire holder row of a holder named by its full lock hash.
+pub(super) fn holder_row(
+    store: &CkbadgerStore,
+    lock_hash: &[u8],
+    item_count: i64,
+    network: &str,
+) -> Result<CollectionHolderResponse, ApiRouteError> {
+    let owner = owner_lock(store, lock_hash, network)?;
+    Ok(CollectionHolderResponse {
+        lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
+        owner_hash_prefix: None,
+        address: owner.as_ref().map(|owner| owner.address.clone()),
+        lock_code_hash: owner.as_ref().map(|owner| owner.lock_code_hash.clone()),
+        lock_kind: owner.and_then(|owner| owner.lock_kind),
+        item_count,
+    })
 }
 
 /// The address of `lock_hash`, through the site's one lock → address
@@ -2074,6 +2149,79 @@ async fn get_object_item_detail(
     })
 }
 
+/// The cell of an m-NFT item's class that one transaction outputs (OB-M10):
+/// the party whose lock this is "holds the class cell" on that row.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MnftClassCellRef {
+    pub output_index: i16,
+    pub lock_hash: String,
+    pub address: String,
+}
+
+/// The cell of class `class_id` that transaction `tx_hash` outputs, read
+/// from that transaction's indexed class outputs (one prefix seek) and the
+/// output's own payload. An m-NFT mint carries its class cell from input to
+/// output (`issued` + 1); class cells are indexed by the transaction that
+/// creates them, so the output is the side the stored rows give exactly.
+/// `None` when the transaction outputs no cell of this class.
+pub(crate) fn mnft_class_cell_of_tx(
+    state: &AppState,
+    tx_hash: &[u8],
+    class_id: &[u8],
+) -> anyhow::Result<Option<MnftClassCellRef>> {
+    let context = || {
+        format!(
+            "class=0x{} tx=0x{}",
+            hex::encode(class_id),
+            hex::encode(tx_hash)
+        )
+    };
+    let outputs: Vec<i16> = state
+        .store
+        .list_mnft_class_outputs_of_tx(tx_hash)?
+        .into_iter()
+        .filter(|(_, id)| id.as_slice() == class_id)
+        .map(|(index, _)| index)
+        .collect();
+    let output_index = match outputs.as_slice() {
+        [] => return Ok(None),
+        [index] => *index,
+        many => anyhow::bail!(
+            "transaction outputs {} cells of one class: {}",
+            many.len(),
+            context()
+        ),
+    };
+    let key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
+    let cell = state
+        .append_only_store
+        .get_cell_by_outpoint_key(&key)?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "class outpoint index row has no cell payload: {} output={output_index}",
+                context()
+            )
+        })?;
+    anyhow::ensure!(
+        cell.type_args.as_deref() == Some(class_id),
+        "class outpoint index row disagrees with its cell's type args: {} output={output_index}",
+        context()
+    );
+    let address = crate::utils::address::encode_lock_address(
+        &cell.lock_script_hash,
+        &cell.lock_code_hash,
+        cell.lock_hash_type,
+        &cell.lock_args,
+        &state.ckb_network,
+    )?;
+    Ok(Some(MnftClassCellRef {
+        output_index,
+        lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
+        address,
+    }))
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) enum NftLifecycleStandard {
     MnftToken,
@@ -2400,6 +2548,50 @@ pub(super) fn nft_item_tx_meaning(
     })
 }
 
+/// The protocol actions of one lifecycle transaction of item `item_id`,
+/// from its canonical activity row.
+fn item_tx_protocol_actions(
+    state: &AppState,
+    item_id: &[u8],
+    tx_hash: &[u8],
+) -> Result<Vec<ckbadger_store::types::ProtocolAction>, ApiRouteError> {
+    let (block, index) = state
+        .store
+        .get_tx_location(tx_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing lifecycle transaction 0x{} of item 0x{}",
+                hex::encode(tx_hash),
+                hex::encode(item_id)
+            ))
+        })?;
+    Ok(state
+        .store
+        .get_tx_actions(block, index, tx_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
+                hex::encode(tx_hash),
+                hex::encode(item_id)
+            ))
+        })?
+        .protocol_actions)
+}
+
+/// A `.cell` name's own protocol actions in one of its lifecycle
+/// transactions — the classification its item feed rows carry as
+/// `protocolActions`.
+pub(super) fn dotcell_own_actions(
+    state: &AppState,
+    item_id: &[u8],
+    tx_hash: &[u8],
+) -> Result<Vec<String>, ApiRouteError> {
+    let actions = item_tx_protocol_actions(state, item_id, tx_hash)?;
+    Ok(dotcell_lifecycle_action(item_id, tx_hash, &actions)?.protocol_actions)
+}
+
 pub(super) fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
@@ -2461,29 +2653,7 @@ pub(super) fn collect_nft_item_lifecycle_actions(
             standard,
             NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
         ) {
-            let (block, index) = state
-                .store
-                .get_tx_location(&tx_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "missing lifecycle transaction 0x{} of item 0x{}",
-                        hex::encode(&tx_hash),
-                        hex::encode(nft_id_bytes)
-                    ))
-                })?;
-            state
-                .store
-                .get_tx_actions(block, index, &tx_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
-                        hex::encode(&tx_hash),
-                        hex::encode(nft_id_bytes)
-                    ))
-                })?
-                .protocol_actions
+            item_tx_protocol_actions(state, nft_id_bytes, &tx_hash)?
         } else {
             Vec::new()
         };
@@ -3132,6 +3302,7 @@ pub(crate) fn list_identity_items_inner(
                 status,
                 tx_hash,
                 output_index,
+                token_index: None,
             });
         }
     } else if identity_standard == IdentityStandard::BitCell {
@@ -3190,6 +3361,7 @@ pub(crate) fn list_identity_items_inner(
                 status: None,
                 tx_hash,
                 output_index,
+                token_index: None,
             });
         }
     } else if identity_standard == IdentityStandard::DotCell {
@@ -3251,6 +3423,7 @@ pub(crate) fn list_identity_items_inner(
                 status: None,
                 tx_hash,
                 output_index,
+                token_index: None,
             });
         }
     } else {
@@ -3282,6 +3455,7 @@ pub(crate) fn list_identity_items_inner(
                 status: None,
                 tx_hash: None,
                 output_index: None,
+                token_index: None,
             });
         }
     }
@@ -3407,6 +3581,7 @@ fn list_spore_cluster_items(
                 // /spore/clusters/{id}/spores; ObjectEntry has no output_index.
                 tx_hash: Some(format!("0x{}", hex::encode(&entry.created_at_tx))),
                 output_index: None,
+                token_index: None,
             })
         })
         .collect::<Result<_, ApiRouteError>>()?;
@@ -3595,27 +3770,38 @@ async fn list_object_collection_items(
         .get_live_mnft_token_outpoints_by_token_ids(&mnft_live_token_ids, &state.append_only_store)
         .map_err(|e| ApiError::internal(e.to_string()))?;
 
+    // An m-NFT token has no name of its own; its row reads as its class's
+    // name and its index ("Santa Claus #0", OB-K3) — the class name the
+    // collection detail reports.
+    let class_name =
+        resolve_object_collection_name(agg.standard.asset_standard(), agg.name.as_deref());
     let mut rows = Vec::with_capacity(page_items.len());
     for (nft_id, entry) in &page_items {
-        let (tx_hash, output_index) = match entry.standard {
-            ckbadger_store::types::ObjectStandard::MnftToken => {
-                if entry.is_live {
-                    let (tx_hash, output_index) = mnft_live_outpoints.get(nft_id).ok_or_else(|| {
-                        ApiError::internal(format!(
-                            "live mNFT token missing outpoint index: collection_id=0x{}, nft_id=0x{}",
-                            hex::encode(&collection_id_bytes),
-                            hex::encode(nft_id)
-                        ))
-                    })?;
-                    (
-                        Some(format!("0x{}", hex::encode(tx_hash))),
-                        Some(*output_index),
-                    )
-                } else {
-                    (None, None)
-                }
+        // A class's member index lists only its tokens (both sync paths).
+        let token_index = match &entry.extra {
+            ckbadger_store::types::ObjectExtra::MnftToken { token_index, .. } => *token_index,
+            other => {
+                return Err(ApiError::internal(format!(
+                    "mNFT class member is not a token: collection_id=0x{}, nft_id=0x{}, extra={other:?}",
+                    hex::encode(&collection_id_bytes),
+                    hex::encode(nft_id)
+                )))
             }
-            _ => (None, None),
+        };
+        let (tx_hash, output_index) = if entry.is_live {
+            let (tx_hash, output_index) = mnft_live_outpoints.get(nft_id).ok_or_else(|| {
+                ApiError::internal(format!(
+                    "live mNFT token missing outpoint index: collection_id=0x{}, nft_id=0x{}",
+                    hex::encode(&collection_id_bytes),
+                    hex::encode(nft_id)
+                ))
+            })?;
+            (
+                Some(format!("0x{}", hex::encode(tx_hash))),
+                Some(*output_index),
+            )
+        } else {
+            (None, None)
         };
 
         let (owner_lock_hash, owner_address) = item_owner(
@@ -3625,7 +3811,7 @@ async fn list_object_collection_items(
         )?;
         rows.push(CollectionItemResponse {
             nft_id: format!("0x{}", hex::encode(nft_id)),
-            name: entry.name.clone(),
+            name: class_name.clone(),
             standard: entry.standard.asset_standard().to_string(),
             owner_lock_hash,
             owner_address,
@@ -3638,6 +3824,7 @@ async fn list_object_collection_items(
             status: None,
             tx_hash,
             output_index,
+            token_index: Some(token_index),
         });
     }
 
@@ -3779,12 +3966,7 @@ async fn list_object_collection_holders(
     let rows: Vec<CollectionHolderResponse> = page
         .into_iter()
         .map(|(lock_hash, count)| {
-            Ok(CollectionHolderResponse {
-                lock_script_hash: Some(format!("0x{}", hex::encode(lock_hash))),
-                owner_hash_prefix: None,
-                address: lock_address(state.store.as_ref(), lock_hash, &state.ckb_network)?,
-                item_count: *count,
-            })
+            holder_row(state.store.as_ref(), lock_hash, *count, &state.ckb_network)
         })
         .collect::<Result<_, ApiRouteError>>()?;
 

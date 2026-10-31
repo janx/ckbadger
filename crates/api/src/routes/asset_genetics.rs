@@ -462,8 +462,28 @@ fn gallery_read(
     } else {
         None
     };
+    // OB-C3: each row's minting time is its minting block's indexed chain
+    // time — the clock the collection's calendar files it under. One header
+    // read per page.
+    let mut mint_blocks: Vec<i64> = selected
+        .iter()
+        .map(|(_, e, _)| e.created_at_block)
+        .collect();
+    mint_blocks.sort_unstable();
+    mint_blocks.dedup();
+    let headers = state
+        .store
+        .get_block_headers_batch(&mint_blocks)
+        .map_err(|e| ApiError::internal(format!("gallery minting headers: {e:#}")))?;
     let mut data = Vec::new();
     for (item_id, entry, traits) in selected {
+        let mint_header = headers.get(&entry.created_at_block).ok_or_else(|| {
+            ApiError::internal(format!(
+                "gallery item 0x{} minting block {} has no header",
+                hex::encode(&item_id),
+                entry.created_at_block
+            ))
+        })?;
         let parsed =
             spore_content(&state, &item_id).map_err(|e| ApiError::internal(format!("{e:#}")))?;
         let (dna, number) = item_dna_number(&parsed.content_type, &parsed.content);
@@ -481,6 +501,22 @@ fn gallery_read(
         object.insert("traits".into(), traits["traits"].clone());
         object.insert("decodeStatus".into(), traits["status"].clone());
         object.insert("ownerAddress".into(), json!(current.response.owner_address));
+        // OB-C3: the live cell's lock, named by the scripts registry only.
+        object.insert(
+            "lockCodeHash".into(),
+            json!(format!("0x{}", hex::encode(&current.cell.lock_code_hash))),
+        );
+        object.insert(
+            "lockKind".into(),
+            json!(super::assets::lock_kind(
+                &state.store,
+                &current.cell.lock_code_hash
+            )?),
+        );
+        object.insert(
+            "chainTime".into(),
+            json!(mint_header.chain_time_ms.to_string()),
+        );
         object.insert("txHash".into(), json!(current.response.tx_hash));
         object.insert("outputIndex".into(), json!(current.response.output_index));
         data.push(item);

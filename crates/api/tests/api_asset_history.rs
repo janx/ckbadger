@@ -303,6 +303,24 @@ async fn spore_genetics_fixture_options(
     duplicate_traits: bool,
     extra_steps: bool,
 ) -> axum::Router {
+    spore_genetics_fixture_seeded(
+        pending,
+        ordinary_count,
+        duplicate_traits,
+        extra_steps,
+        |_| {},
+    )
+    .await
+}
+/// The genetics fixture with `seed` run on its store just before the router
+/// opens it, for a test that needs rows the shared fixture does not carry.
+async fn spore_genetics_fixture_seeded(
+    pending: bool,
+    ordinary_count: u8,
+    duplicate_traits: bool,
+    extra_steps: bool,
+    seed: impl FnOnce(&Arc<CkbadgerStore>),
+) -> axum::Router {
     use ckb_types::{
         bytes::Bytes,
         core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
@@ -542,6 +560,11 @@ async fn spore_genetics_fixture_options(
             .transactions(transactions)
             .build(),
     ]);
+    // A synced store has a header for every block from genesis to its tip
+    // (`seed_tx` stamps transactions at 1_700_000_000_000 + block).
+    let headers: Vec<(i64, i64)> = (0..=100).map(|n| (n, 1_700_000_000_000 + n)).collect();
+    seed_block_headers_at(&store, &headers);
+    seed(&store);
     create_router(test_config_with_ckb_db_path(
         store.clone(),
         store,
@@ -605,6 +628,53 @@ async fn collection_insights_count_full_scope_and_gallery_filters_before_cursor(
         genetics["cachedVmTraits"]["originalDecoderHashRecorded"],
         false
     );
+}
+
+/// OB-C3 (round 3, R-2): the collection's Newest rows (the gallery) showed the
+/// minting block but no time, and an owner address without its lock kind.
+/// Each row now carries `chainTime` — its minting block's indexed chain time
+/// (ms), the clock the collection's calendar files it under (block 100's raw
+/// timestamp is earlier than block 99's, so its chain time is block 99's) —
+/// and the live cell's lock `lockCodeHash` with the registry's `lockKind`.
+#[tokio::test]
+async fn collection_gallery_rows_carry_mint_chain_time_and_owner_lock_kind() {
+    let lock_code = vec![0x41; 32];
+    let registered = lock_code.clone();
+    let app = spore_genetics_fixture_seeded(false, 0, false, false, move |store| {
+        seed_block_headers_at(store, &[(99, 1_700_000_000_500), (100, 1_700_000_000_100)]);
+        let mut batch = StoreBatch::new(store);
+        batch.put_script_info(
+            &registered,
+            &ckbadger_store::types::ScriptInfo {
+                code_hash: registered.clone(),
+                hash_type: 1,
+                name: Some("JoyID".into()),
+                ..Default::default()
+            },
+        );
+        batch.commit().unwrap();
+    })
+    .await;
+    let (status, gallery) = get_json(
+        &app,
+        &format!(
+            "/spore/clusters/0x{}/gallery?limit=100",
+            hex::encode([0x77; 32])
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{gallery}");
+    let rows = gallery["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 8, "{gallery}");
+    for row in rows {
+        assert_eq!(row["chainTime"], "1700000000500", "{row}");
+        assert_eq!(row["lockKind"], "JoyID", "{row}");
+        assert_eq!(
+            row["lockCodeHash"],
+            format!("0x{}", hex::encode(&lock_code)),
+            "{row}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -708,6 +778,141 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
     );
     let (status, error) = get_json(&app, &format!("{base}/activity-feed?cursor=100:3")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+}
+
+/// An m-NFT token minted in transaction 0x71…: the token cell is output 0;
+/// with `class_in_tx` the transaction also outputs its class's cell (output
+/// 1, held by lock args 0x09…) and another class's cell (output 2).
+async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Vec<u8>) {
+    let store = test_store();
+    let class_id = vec![0x5c; 24];
+    let other_class = vec![0x5d; 24];
+    let token_id = [class_id.as_slice(), &[0, 0, 0, 0]].concat();
+    let mint = vec![0x71; 32];
+    seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
+    let header = store.get_block_header(100).unwrap().unwrap();
+    let with_type = |id: &[u8], owner: u8, type_code: u8| {
+        let mut payload = cell(id, 300_00000000, owner);
+        payload.type_code_hash = Some(vec![type_code; 32]);
+        payload.type_script_hash = Some(compute_script_hash(&[type_code; 32], 1, id));
+        payload.occupied_capacity = ((8 + 53 + 33 + id.len()) as i64) * 100_000000;
+        payload
+    };
+    let token_cell = with_type(&token_id, 2, 0x42);
+    let class_cell = with_type(&class_id, 9, 0x43);
+    let other_class_cell = with_type(&other_class, 8, 0x43);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_mnft(
+        &token_id,
+        &ObjectEntry {
+            standard: ObjectStandard::MnftToken,
+            collection_id: Some(class_id.clone()),
+            token_id: Some(token_id.clone()),
+            owner_lock_hash: Some(token_cell.lock_script_hash.clone()),
+            name: None,
+            description: None,
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: mint.clone(),
+            extra: ObjectExtra::MnftToken {
+                token_index: 0,
+                characteristic: vec![0; 8],
+                configure: 0,
+                state: 0,
+            },
+        },
+    );
+    batch.put_mnft_token_outpoint(&mint, 0, &token_id);
+    batch.put_cell(&mint, 0, &token_cell, 100);
+    if class_in_tx {
+        batch.put_mnft_class_outpoint(&mint, 1, &class_id);
+        batch.put_cell(&mint, 1, &class_cell, 100);
+        batch.put_mnft_class_outpoint(&mint, 2, &other_class);
+        batch.put_cell(&mint, 2, &other_class_cell, 100);
+    }
+    batch.put_tx_hash_map(&mint, 100, 1);
+    batch.put_tx_index(
+        100,
+        1,
+        &TxIndexEntry {
+            tx_hash: mint.as_slice().try_into().unwrap(),
+            is_cellbase: false,
+            timestamp: 1_700_000_000_100,
+            inputs_count: 1,
+            outputs_count: if class_in_tx { 3 } else { 1 },
+            fee: 0,
+            tx_size: 400,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_tx_actions(&make_test_tx_actions(
+        &class_cell.lock_script_hash,
+        &mint,
+        &header.hash,
+        100,
+        1,
+        0,
+        0,
+    ));
+    batch.commit().unwrap();
+    (
+        create_router(test_config(store)).await,
+        token_id,
+        class_cell.lock_script_hash,
+    )
+}
+
+/// OB-M10 (round 3, R-4): an m-NFT item's mint row could not say which party
+/// "holds the class cell". The mint row's `itemContext.classCell` now names
+/// the cell of the item's own class that the mint transaction outputs — its
+/// output index, lock hash and address (the participant with that lock is the
+/// holder) — read from that transaction's indexed class outputs; another
+/// class's cell in the same transaction is not it. A mint transaction that
+/// outputs no cell of the item's class has `classCell: null`.
+#[tokio::test]
+async fn mnft_mint_row_names_the_class_cell_it_carries() {
+    let (app, token_id, class_lock) = mnft_mint_feed_fixture(true).await;
+    let base = format!("/assets/objects/items/0x{}", hex::encode(&token_id));
+    for path in [
+        format!("{base}/activity-feed"),
+        format!("{base}/transactions"),
+    ] {
+        let (status, feed) = get_json(&app, &path).await;
+        assert_eq!(status, StatusCode::OK, "{path}: {feed}");
+        let context = &feed["data"][0]["itemContext"];
+        assert_eq!(context["action"], "mint", "{path}: {feed}");
+        let class_cell = &context["classCell"];
+        assert_eq!(class_cell["outputIndex"], 1, "{path}: {feed}");
+        assert_eq!(
+            class_cell["lockHash"],
+            format!("0x{}", hex::encode(&class_lock)),
+            "{path}: {feed}"
+        );
+        assert!(
+            class_cell["address"]
+                .as_str()
+                .is_some_and(|a| a.starts_with("ckb1")),
+            "{path}: {feed}"
+        );
+    }
+
+    let (app, token_id, _) = mnft_mint_feed_fixture(false).await;
+    let (status, feed) = get_json(
+        &app,
+        &format!(
+            "/assets/objects/items/0x{}/activity-feed",
+            hex::encode(&token_id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    let context = feed["data"][0]["itemContext"].as_object().unwrap();
+    assert_eq!(context["action"], "mint", "{feed}");
+    assert!(
+        context.get("classCell").is_some_and(|cell| cell.is_null()),
+        "a mint without its class cell must say so (null), not omit it: {feed}"
+    );
 }
 
 /// Every `.cell` item feed row says what the transaction meant for this name,
@@ -1125,6 +1330,374 @@ async fn protocol_fixture(
         .await,
         hash,
     )
+}
+
+/// One version of an item's cell for [`seed_item_versions`].
+struct ItemVersion {
+    data: Vec<u8>,
+    witness: Option<Vec<u8>>,
+    protocol_actions: Vec<ckbadger_store::ProtocolAction>,
+    /// The per-outpoint lifecycle action identity standards record.
+    item_action: Option<AssetAction>,
+}
+
+/// Seed an item's versions the way a synced store and its node hold them:
+/// version k is output 0 of its own transaction in block 100 + k, consumed by
+/// version k + 1's transaction; the last is live. Every version's cell is
+/// under lock args 0x01… and type `type_code` with args = `id`. Returns the
+/// node chain and the version transaction hashes.
+fn seed_item_versions(
+    store: &Arc<CkbadgerStore>,
+    id: &[u8],
+    type_code: [u8; 32],
+    versions: &[ItemVersion],
+) -> (TestCkbChain, Vec<Vec<u8>>) {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let script = |code: &[u8], args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code).unwrap())
+            .hash_type(1u8.into())
+            .args(Bytes::copy_from_slice(args).pack())
+            .build()
+    };
+    let headers: Vec<(i64, i64)> = (0..100 + versions.len() as i64)
+        .map(|n| (n, 1_700_000_000_000 + n))
+        .collect();
+    seed_block_headers_at(store, &headers);
+    let mut blocks = Vec::new();
+    let mut payloads = Vec::new();
+    let mut hashes = Vec::new();
+    for (k, version) in versions.iter().enumerate() {
+        let mut payload = cell(id, 1000_00000000, 1);
+        payload.type_code_hash = Some(type_code.to_vec());
+        payload.type_script_hash = Some(compute_script_hash(&type_code, 1, id));
+        payload.data_size = version.data.len() as i32;
+        payload.occupied_capacity =
+            ((8 + 53 + 33 + id.len() + version.data.len()) as i64) * 100_000000;
+        payload.data_hash = Some(ckb_hash::blake2b_256(&version.data).to_vec());
+        let tx = TransactionBuilder::default()
+            .output(
+                packed::CellOutput::new_builder()
+                    .capacity((payload.capacity as u64).pack())
+                    .lock(script(&payload.lock_code_hash, &payload.lock_args))
+                    .type_(Some(script(&type_code, id)).pack())
+                    .build(),
+            )
+            .output_data(Bytes::from(version.data.clone()).pack())
+            .witnesses(
+                version
+                    .witness
+                    .iter()
+                    .map(|w| Bytes::from(w.clone()).pack())
+                    .collect::<Vec<_>>(),
+            )
+            .build();
+        hashes.push(tx.hash().as_slice().to_vec());
+        blocks.push(
+            BlockBuilder::default()
+                .number((100 + k as u64).pack())
+                .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+                .transaction(tx)
+                .build(),
+        );
+        payloads.push(payload);
+    }
+    let mut batch = StoreBatch::new(store);
+    for (k, version) in versions.iter().enumerate() {
+        let (hash, block) = (&hashes[k], 100 + k as i64);
+        seed_tx(&mut batch, hash, block, 0);
+        let header = store.get_block_header(block).unwrap().unwrap();
+        let mut actions = make_test_tx_actions(
+            &payloads[k].lock_script_hash,
+            hash,
+            &header.hash,
+            block,
+            0,
+            0,
+            0,
+        );
+        actions.protocol_actions = version.protocol_actions.clone();
+        batch.put_tx_actions(&actions);
+        batch.put_spore_outpoint(hash, 0, id);
+        if let Some(action) = version.item_action {
+            batch
+                .put_raw_cf_by_name(
+                    ckbadger_store::CF_STATS_SPORE,
+                    &ckbadger_store::keys::encode_spore_outpoint_by_id_key(id, hash, 0),
+                    &[action.compact()],
+                )
+                .unwrap();
+        }
+        match hashes.get(k + 1) {
+            Some(consumer) => batch.put_consumed_cell_with_consumer(
+                hash,
+                0,
+                &payloads[k],
+                block,
+                block + 1,
+                Some(consumer),
+            ),
+            None => batch.put_cell(hash, 0, &payloads[k], block),
+        }
+    }
+    batch.commit().unwrap();
+    (seed_ckb_chain(&blocks), hashes)
+}
+
+/// A `.cell` records payload holding one `profile.email` record.
+fn dotcell_email_records(email: &str) -> Vec<u8> {
+    let mut out = 1u16.to_le_bytes().to_vec();
+    out.push(13);
+    out.extend(b"profile.email");
+    out.push(0);
+    out.extend((email.len() as u16).to_le_bytes());
+    out.extend(email.as_bytes());
+    out.extend(300u32.to_le_bytes());
+    out
+}
+
+/// ID-DC4 (round 3, R-5): the manager card's "made the last two record
+/// edits" had no fact behind it. The `.cell` `/protocol` response — which
+/// already decodes every version of the name — now carries `recordEdits`:
+/// how many record edits the name's history holds (transactions the indexer
+/// classified `edit_records` for it) and who made the newest: the manager
+/// named by the version each edit consumed (the authority over records),
+/// with how many of the newest edits in a row that party made. Here manager
+/// 0x62… made one edit, handed the name to 0x63… (`edit_manager`, not a
+/// record edit), and 0x63… made the last two.
+#[tokio::test]
+async fn dotcell_protocol_names_who_made_the_last_record_edits() {
+    use ckbadger_indexer::parser::DotCellParser;
+    let id = DotCellParser::derive_id("alice").to_vec();
+    let item = format!("0x{}", hex::encode(&id));
+    let owner = [0x61u8; 20];
+    let (first_manager, second_manager) = ([0x62u8; 20], [0x63u8; 20]);
+    let version = |email: &str, manager: [u8; 20], action: &str, changes: &[&str]| {
+        let records = dotcell_email_records(email);
+        let mut data = vec![3];
+        data.extend(DotCellParser::records_hash(&records));
+        data.extend([0; 20]);
+        data.extend(&1_900_000_000u64.to_le_bytes()[..5]);
+        data.extend(owner);
+        data.extend(manager);
+        data.extend(b"alice");
+        ItemVersion {
+            data,
+            witness: Some(mol_table(&[vec![], vec![], mol_bytes(&records)])),
+            protocol_actions: vec![ckbadger_store::ProtocolAction::new(
+                "dotcell",
+                action,
+                serde_json::json!({"id": item, "label": "alice", "changes": changes}),
+            )],
+            item_action: None,
+        }
+    };
+    let versions = [
+        version("a@x", first_manager, "register", &["created"]),
+        version("b@x", first_manager, "edit_records", &["records"]),
+        version("b@x", second_manager, "edit_manager", &["manager"]),
+        version("c@x", second_manager, "edit_records", &["records"]),
+        version("d@x", second_manager, "edit_records", &["records"]),
+    ];
+    let store = test_store();
+    let (chain, hashes) = seed_item_versions(&store, &id, [0x41; 32], &versions);
+    let last = versions.last().unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some("alice.cell".into()),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: hashes[0].clone(),
+            extra: IdentityExtra::DotCell {
+                label: "alice".into(),
+                namespace_args: [0x45; 20],
+                layout_version: 3,
+                expired_at: 1_900_000_000,
+                owner_hash20: owner,
+                manager_hash20: second_manager,
+                next_id: [0; 20],
+                records_hash: last.data[1..33].try_into().unwrap(),
+                records: vec![],
+                parent_id: None,
+            },
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    let (status, json) =
+        get_json(&app, "/assets/identities/dotcell/items/alice.cell/protocol").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let edits = &json["recordEdits"];
+    assert_eq!(edits["count"], 3, "{edits}");
+    assert_eq!(
+        edits["last"]["editor"]["hashPrefix"],
+        format!("0x{}", hex::encode(second_manager)),
+        "{edits}"
+    );
+    assert_eq!(edits["last"]["editorRun"], 2, "{edits}");
+    assert_eq!(
+        edits["last"]["txHash"],
+        format!("0x{}", hex::encode(&hashes[4])),
+        "{edits}"
+    );
+    assert_eq!(edits["last"]["blockNumber"], 104, "{edits}");
+}
+
+/// A did:ckb cell's data: union 0 + table(document Bytes, local_id Bytes).
+fn did_data(document: &serde_json::Value) -> Vec<u8> {
+    let mut cbor = Vec::new();
+    ciborium::into_writer(document, &mut cbor).unwrap();
+    let mut raw = 0u32.to_le_bytes().to_vec();
+    raw.extend(mol_table(&[mol_bytes(&cbor), mol_bytes(b"local-1")]));
+    raw
+}
+
+/// A did:ckb item whose document went from `first` to `second`, served with
+/// its node chain.
+async fn did_two_version_app(
+    first: serde_json::Value,
+    second: serde_json::Value,
+) -> (axum::Router, Vec<u8>) {
+    let id = vec![0x2d; 20];
+    let versions = [
+        ItemVersion {
+            data: did_data(&first),
+            witness: None,
+            protocol_actions: vec![],
+            item_action: Some(AssetAction::Mint),
+        },
+        ItemVersion {
+            data: did_data(&second),
+            witness: None,
+            protocol_actions: vec![],
+            item_action: Some(AssetAction::Update),
+        },
+    ];
+    let store = test_store();
+    let (chain, hashes) = seed_item_versions(&store, &id, [0x42; 32], &versions);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(cell(&id, 1000_00000000, 1).lock_script_hash),
+            name: None,
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: hashes[0].clone(),
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    (app, id)
+}
+
+/// ID-C1 (round 3, R-11): a did:ckb feed row could not say "Handle changed".
+/// Every row that joins two versions now carries `versionDiff.handleChanged`:
+/// whether the documents' handle (`alsoKnownAs`) differs, read by the one
+/// did:ckb document decoder `/protocol` uses. A document update that keeps the
+/// handle is `false`; the mint row (no predecessor) has no `versionDiff`.
+#[tokio::test]
+async fn did_feed_rows_say_whether_the_handle_changed() {
+    for (second, changed) in [
+        (serde_json::json!({"alsoKnownAs": ["at://bob.test"]}), true),
+        (
+            serde_json::json!({
+                "alsoKnownAs": ["at://alice.test"],
+                "services": {"atproto_pds": {"type": "AtprotoPersonalDataServer", "endpoint": "https://pds.example"}}
+            }),
+            false,
+        ),
+    ] {
+        let (app, id) = did_two_version_app(
+            serde_json::json!({"alsoKnownAs": ["at://alice.test"]}),
+            second,
+        )
+        .await;
+        let (status, feed) = get_json(
+            &app,
+            &format!(
+                "/assets/identities/did/items/0x{}/activity-feed",
+                hex::encode(&id)
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        let rows = feed["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{feed}");
+        let diff = &rows[0]["itemContext"]["versionDiff"];
+        assert_eq!(diff["dataChanged"], true, "{feed}");
+        assert_eq!(diff["handleChanged"], changed, "{feed}");
+        assert!(rows[1]["itemContext"]["versionDiff"].is_null(), "{feed}");
+    }
+}
+
+/// R-11: two versions with the same data bytes hold the same document, so
+/// their handle is unchanged — known without reading the node (this fixture
+/// has no node chain at all).
+#[tokio::test]
+async fn did_feed_row_with_unchanged_data_has_an_unchanged_handle() {
+    let (store, id) = history_fixture();
+    seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
+    let header = store.get_block_header(100).unwrap().unwrap();
+    let mut batch = StoreBatch::new(&store);
+    for (index, hash, action) in [
+        (1, [0x51; 32], AssetAction::Mint),
+        (2, [0x52; 32], AssetAction::Transfer),
+    ] {
+        batch.put_tx_actions(&make_test_tx_actions(
+            &cell(&id, 320_00000000, 2).lock_script_hash,
+            &hash,
+            &header.hash,
+            100,
+            index,
+            100,
+            0,
+        ));
+        batch
+            .put_raw_cf_by_name(
+                ckbadger_store::CF_STATS_SPORE,
+                &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
+                &[action.compact()],
+            )
+            .unwrap();
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, feed) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/activity-feed",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    let diff = &feed["data"][0]["itemContext"]["versionDiff"];
+    assert_eq!(diff["dataChanged"], false, "{feed}");
+    assert_eq!(diff["handleChanged"], false, "{feed}");
 }
 
 #[tokio::test]

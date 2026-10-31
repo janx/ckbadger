@@ -14,6 +14,8 @@ pub(super) struct Summary {
     source: &'static str,
     anchor: Option<Anchor>,
     counts: Counts,
+    /// Catalog tokens per stored standard (IV-03), sorted by standard.
+    token_standards: Vec<TokenStandardCount>,
     object_standards: Vec<StandardCount>,
     object_composition: Vec<CompositionCount>,
     fully_onchain_objects_count: i64,
@@ -30,6 +32,12 @@ struct Counts {
     token: i64,
     object: i64,
     identity: i64,
+}
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenStandardCount {
+    standard: String,
+    count: i64,
 }
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -63,6 +71,38 @@ pub(super) async fn get(State(state): State<Arc<AppState>>) -> ApiResult<Summary
             object: 0,
             identity: 0,
         };
+        // The catalog membership `counts.token` counts, grouped by the stored
+        // standard `/assets?type=token&standard=` filters on (ASCII case
+        // folded there), so each chip equals its list's total.
+        let mut token_standards = BTreeMap::<String, i64>::new();
+        for (hash, info) in &catalog.tokens {
+            ensure!(
+                !info.standard.trim().is_empty(),
+                "catalog token 0x{} has an empty standard",
+                hex::encode(hash)
+            );
+            if let Some(other) = token_standards
+                .keys()
+                .find(|known| known.eq_ignore_ascii_case(&info.standard) && **known != info.standard)
+            {
+                anyhow::bail!(
+                    "catalog token 0x{} standard {:?} differs only in case from {other:?}; the token list filter folds case",
+                    hex::encode(hash),
+                    info.standard
+                );
+            }
+            let count = token_standards.entry(info.standard.clone()).or_default();
+            *count = count.checked_add(1).context("token standard count overflow")?;
+        }
+        let standard_total = token_standards
+            .values()
+            .try_fold(0i64, |total, count| total.checked_add(*count))
+            .context("token standard total overflow")?;
+        ensure!(
+            standard_total == counts.token,
+            "token standard counts sum to {standard_total}, catalog has {} tokens",
+            counts.token
+        );
         let mut standards = BTreeMap::<String, (i64, i64)>::new();
         let mut tiers: BTreeMap<String, (i64, i64)> = [
             "pure_ckb",
@@ -114,6 +154,10 @@ pub(super) async fn get(State(state): State<Arc<AppState>>) -> ApiResult<Summary
             source: "canonical_asset_indexes",
             anchor,
             counts,
+            token_standards: token_standards
+                .into_iter()
+                .map(|(standard, count)| TokenStandardCount { standard, count })
+                .collect(),
             object_standards: standards
                 .into_iter()
                 .map(
