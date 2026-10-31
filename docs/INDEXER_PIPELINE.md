@@ -159,6 +159,18 @@ type ParsedBatch = (
 4. Update sync_status LAST (crash recovery guarantee)
 5. Trigger periodic DAO statistics recalculation
 
+#### Background Derivations
+
+The writer loop also runs the indexer's **background derivations** (`crates/indexer/src/derive/`,
+`docs/STORE_SCHEMA.md` → Derived Aggregates). `DeriveScheduler` lives on the writer task: once
+`blocks_remaining() <= bulk_sync_threshold` (the DOB worker's gate), each loop iteration folds one
+bounded rebuild chunk (≤ `CHUNK_MAX_TIME` = 150 ms or 20,000 source rows) through a snapshot taken
+at the sync tip, then goes straight back for the next chunk unless a parsed batch is waiting. A
+live batch therefore waits at most one chunk, an idle writer derives continuously, and a chunk
+and a batch never write the same rows at once. Inside `write_parsed_batch`, `apply_live_batch`
+adds each block's deltas for every running or complete derivation to the batch's own domain
+write, with per-block undo pre-images. Bulk build runs none of this.
+
 #### Commit Window Timing
 
 The commit window was one wide `write_commit_ms` measurement that covered a great deal of
@@ -468,7 +480,7 @@ to the runtime-status part alone: sync progress and memory stats are still stage
 id cannot make the indexer look dead to every reader.
 
 The sweep behind `get_memory_stats()` reads ~8 RocksDB properties across every column family of
-**both** chain stores — `ckbadger_store::ALL_CFS`, the 65 domain CFs plus the append-only `cells`
+**both** chain stores — `ckbadger_store::ALL_CFS`, the 68 domain CFs plus the append-only `cells`
 (the 3 network-store CFs belong to the crawler's store and are not swept). Live sync resamples it
 every 30 s (`MEMORY_STATS_LIVE_SAMPLE_INTERVAL`), while `SYNC_PROGRESS` — what the TUI and API
 read — keeps the 3-second cadence. Bulk sync still samples every tick: its perf heartbeat and

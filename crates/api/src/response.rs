@@ -5,6 +5,25 @@ use serde::{Deserialize, Serialize};
 pub struct ApiError {
     pub error: String,
     pub message: String,
+    /// Set only on `derive_pending`: which indexer derivation the endpoint
+    /// waits for, and how far it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derive: Option<Box<DerivePending>>,
+}
+
+/// Progress of the indexer derivation a `503 derive_pending` waits for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DerivePending {
+    /// The derived aggregate, e.g. `dao_live_agg`.
+    pub aggregate: String,
+    /// `not_started` | `running` | `outdated` (the rows predate this
+    /// API's version; the indexer derives them again).
+    pub state: String,
+    /// Source rows folded so far (running only).
+    pub rows_done: Option<u64>,
+    /// The sync tip the running derivation's snapshot was taken at.
+    pub derived_from_tip: Option<i64>,
 }
 
 impl ApiError {
@@ -12,7 +31,31 @@ impl ApiError {
         Self {
             error: error.into(),
             message: message.into(),
+            derive: None,
         }
+    }
+
+    /// The endpoint reads an indexer-derived aggregate that is not complete
+    /// yet. Transient: the indexer is deriving it (or will once sync is near
+    /// the tip); nothing stands in for the rows meanwhile.
+    pub fn derive_pending(pending: DerivePending) -> (StatusCode, Json<Self>) {
+        let message = format!(
+            "{} is being derived by the indexer (state={}{}); retry later",
+            pending.aggregate,
+            pending.state,
+            pending
+                .rows_done
+                .map(|rows| format!(", {rows} source rows folded"))
+                .unwrap_or_default()
+        );
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self {
+                error: "derive_pending".to_string(),
+                message,
+                derive: Some(Box::new(pending)),
+            }),
+        )
     }
 
     pub fn not_found(message: impl Into<String>) -> (StatusCode, Json<Self>) {

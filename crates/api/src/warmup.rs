@@ -1,6 +1,6 @@
 use crate::cache::CacheTtl;
 use crate::response::ChartResponse;
-use crate::routes::assets::{count_nft_collection_activities_cached, AssetResponse};
+use crate::routes::assets::AssetResponse;
 use crate::routes::statistics::{
     build_address_cohort_response, build_block_time_distribution_response, build_cell_size_response,
 };
@@ -608,7 +608,6 @@ fn refresh_spore_cache_sync(state: &AppState) -> anyhow::Result<()> {
     state.spore_cache.store(Arc::new(Some(cache)));
 
     warmup_cluster_daily_deltas_sync(state);
-    warmup_cluster_activity_counts_sync(state);
 
     Ok(())
 }
@@ -646,42 +645,26 @@ fn warmup_cluster_daily_deltas_sync(state: &AppState) {
     );
 }
 
-fn warmup_cluster_activity_counts_sync(state: &AppState) {
-    let clusters = match state.store.list_cluster_aggregates() {
-        Ok(clusters) => clusters,
-        Err(e) => {
-            tracing::warn!(
-                "Failed to list cluster aggregates for activity count warmup: {}",
-                e
-            );
-            return;
+/// A cluster row's `activitiesCount` in the cached asset list: the derived
+/// count, or absent (unknown) while the indexer is still deriving it — the
+/// list is not withheld for one column, and the next refresh fills it in. A
+/// derivation that FAILED is an invariant violation and fails the warmup.
+fn cluster_activity_count_for_list(
+    state: &AppState,
+    cluster_id: &[u8],
+) -> anyhow::Result<Option<i64>> {
+    match crate::routes::assets::derived_collection_activity_count(&state.store, cluster_id) {
+        Ok(count) => Ok(Some(count)),
+        Err((status, body)) if status == axum::http::StatusCode::SERVICE_UNAVAILABLE => {
+            tracing::debug!(message = %body.message, "cluster activity counts not derived yet");
+            Ok(None)
         }
-    };
-
-    let mut warmed = 0usize;
-    for (cluster_id, _agg) in &clusters {
-        match count_nft_collection_activities_cached(
-            state.store.as_ref(),
-            state.store.as_ref(),
-            &state.mem_cache,
-            cluster_id,
-        ) {
-            Ok(_) => warmed += 1,
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to warm activity count for cluster 0x{}: {}",
-                    hex::encode(cluster_id),
-                    e
-                );
-            }
-        }
+        Err((_, body)) => Err(anyhow::anyhow!(
+            "cluster 0x{} activity count: {}",
+            hex::encode(cluster_id),
+            body.message
+        )),
     }
-
-    info!(
-        clusters_warmed = warmed,
-        clusters_total = clusters.len(),
-        "Warmed cluster activity count caches"
-    );
 }
 
 fn refresh_named_script_cache_sync(state: &AppState) -> anyhow::Result<()> {
@@ -858,14 +841,7 @@ fn build_asset_caches_sync(
             holders_count: agg.owner_count,
             transfers_count: agg.total_count,
             live_count: Some(agg.live_count),
-            activities_count: Some(
-                crate::routes::assets::count_nft_collection_activities_cached(
-                    &state.store,
-                    &state.append_only_store,
-                    &state.mem_cache,
-                    cluster_id_bytes,
-                )?,
-            ),
+            activities_count: cluster_activity_count_for_list(state, cluster_id_bytes)?,
             transfers_24h,
             decimals: None,
             total_supply: Some(agg.total_count.to_string()),

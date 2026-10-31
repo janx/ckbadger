@@ -2,6 +2,7 @@ mod asset_catalog;
 pub mod cache;
 pub mod consensus;
 pub mod cycles;
+pub mod derived;
 pub mod embedded_frontend;
 pub mod entry;
 mod frontend_formats;
@@ -124,7 +125,7 @@ pub struct AppState {
     /// Upper bound on mirrored pool transactions (`[api] pool_max_tracked_txs`).
     pub pool_max_tracked_txs: std::num::NonZeroUsize,
     /// `/dao/evidence` for the current canonical tip (API memory only; DAO-17).
-    pub dao_evidence: Arc<cache::TipMemo<routes::DaoEvidenceMemo>>,
+    pub dao_evidence: Arc<cache::TipMemo<routes::DaoDepositorRanking>>,
     /// The fork history of one canonical tip (`routes::ForkView`).
     pub fork_view: Arc<cache::TipMemo<routes::ForkView>>,
     /// The Fiber channels and network of one canonical tip (`routes::FiberView`).

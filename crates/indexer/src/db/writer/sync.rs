@@ -233,6 +233,7 @@ impl BatchWriter {
             // so that the subsequent canonical rollback rebuilds aggregates from
             // correct entity state.  This matches the normal reorg path ordering
             // in execute_reorg().
+            crate::derive::invalidate_for_rollback(&self.store, rollback_target)?;
             self.begin_rollback(RollbackCause::Cleanup {
                 target: rollback_target,
             })?;
@@ -359,6 +360,7 @@ impl BatchWriter {
         // used by execute_reorg and init_sync_start. Entity mutations (Spore,
         // mNFT, dotbit) are reverted first so the subsequent domain rollback
         // can rebuild aggregates from correct entity state.
+        crate::derive::invalidate_for_rollback(&self.store, cleanup_tip)?;
         self.begin_rollback(RollbackCause::Cleanup {
             target: cleanup_tip,
         })?;

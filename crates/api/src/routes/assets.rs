@@ -84,7 +84,8 @@ impl From<MnftCollectionAggregate> for CollectionAggregate {
 /// The owning source of a count, never a synthetic zero for unavailable data.
 enum CollectionActivityCount {
     Persisted(i64),
-    CanonicalHistory,
+    /// A Spore cluster: the indexer-derived `object_collection_activity_count`.
+    Derived,
 }
 
 pub(super) struct ResolvedCollection {
@@ -95,24 +96,26 @@ pub(super) struct ResolvedCollection {
 
 impl ResolvedCollection {
     /// The collection's one activity count: detail and the collection feeds'
-    /// `total` (persisted for identity / m-NFT, the cached canonical count for
-    /// a Spore cluster). Source discovery, item/holder pages and charts do not
-    /// pay for it.
-    pub(super) fn activities_count(&self, state: &AppState, id: &[u8]) -> anyhow::Result<i64> {
+    /// `total` (persisted for identity / m-NFT, the indexer-derived count for a
+    /// Spore cluster — `503 derive_pending` until it is derived). Source
+    /// discovery, item/holder pages and charts do not pay for it.
+    pub(super) fn activities_count(
+        &self,
+        state: &AppState,
+        id: &[u8],
+    ) -> Result<i64, ApiRouteError> {
         let count = match self.activities {
             CollectionActivityCount::Persisted(count) => count,
-            CollectionActivityCount::CanonicalHistory => count_nft_collection_activities_cached(
-                &state.store,
-                &state.append_only_store,
-                &state.mem_cache,
-                id,
-            )?,
+            CollectionActivityCount::Derived => {
+                derived_collection_activity_count(state.store.as_ref(), id)?
+            }
         };
-        anyhow::ensure!(
-            count >= 0,
-            "invalid object collection activities_count: collection_id=0x{}, activities_count={count}",
-            hex::encode(id)
-        );
+        if count < 0 {
+            return Err(ApiError::internal(format!(
+                "invalid object collection activities_count: collection_id=0x{}, activities_count={count}",
+                hex::encode(id)
+            )));
+        }
         Ok(count)
     }
 }
@@ -177,7 +180,7 @@ pub(super) fn get_collection_aggregate(
     Ok(Some(ResolvedCollection {
         source: ObjectCollectionSource::SporeCluster,
         aggregate,
-        activities: CollectionActivityCount::CanonicalHistory,
+        activities: CollectionActivityCount::Derived,
     }))
 }
 
@@ -220,8 +223,6 @@ fn collection_capacity_deltas(
     }
 }
 
-const NFT_ACTIVITY_SCAN_CHUNK_SIZE: usize = 128;
-const NFT_ACTIVITY_COUNT_CACHE_TTL: Duration = Duration::from_secs(300);
 const NFT_HOLDER_LIST_CACHE_TTL: Duration = Duration::from_secs(30);
 
 type CellOutpoint = (Vec<u8>, i16);
@@ -1643,57 +1644,35 @@ fn completed_week_calendar(
     })
 }
 
-pub(crate) fn count_canonical_nft_collection_activities(
+/// A Spore cluster's (or the Sole Spores collection's) activity count: its
+/// `object_collection_activity_count` row, derived by the indexer from the
+/// `object_collection_activities` rows (J5). `503 derive_pending` until the
+/// derivation is complete; there is no walk of the activity rows to fall
+/// back to. A complete aggregate stores no row for an all-zero sum, so a
+/// collection without activity rows has none.
+pub(crate) fn derived_collection_activity_count(
     store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
     collection_id: &[u8],
-) -> anyhow::Result<i64> {
-    let mut total = 0i64;
-    let mut cursor = None;
-    loop {
-        let rows = list_canonical_nft_collection_activities_page(
-            store,
-            append_only_store,
-            collection_id,
-            NFT_ACTIVITY_SCAN_CHUNK_SIZE,
-            cursor,
-            None,
-        )?;
-        let rows_len = rows.len();
-        total = total.checked_add(i64::try_from(rows_len)?).ok_or_else(|| {
-            anyhow::anyhow!(
-                "canonical object collection activity count overflow: collection_id=0x{}",
+) -> Result<i64, ApiRouteError> {
+    use ckbadger_store::derive_ops::OBJECT_COLLECTION_ACTIVITY_COUNT;
+    crate::derived::require_derived(store, &OBJECT_COLLECTION_ACTIVITY_COUNT)?;
+    let key = ckbadger_store::keys::encode_object_collection_activity_prefix(collection_id);
+    let value = store
+        .get_derived_value(OBJECT_COLLECTION_ACTIVITY_COUNT.cf_name, &key)
+        .map_err(|e| ApiError::internal(format!("{e:#}")))?;
+    match value.as_deref() {
+        None => Ok(0),
+        Some([count]) if *count > 0 => i64::try_from(*count).map_err(|_| {
+            ApiError::internal(format!(
+                "collection activity count exceeds i64: collection_id=0x{}",
                 hex::encode(collection_id)
-            )
-        })?;
-        let Some((block, index, _)) = rows.last() else {
-            break;
-        };
-        if rows_len < NFT_ACTIVITY_SCAN_CHUNK_SIZE {
-            break;
-        }
-        cursor = Some((*block, *index));
+            ))
+        }),
+        Some(other) => Err(ApiError::internal(format!(
+            "invalid object_collection_activity_count row: collection_id=0x{}, value={other:?}",
+            hex::encode(collection_id)
+        ))),
     }
-    Ok(total)
-}
-
-pub(crate) fn count_nft_collection_activities_cached(
-    store: &CkbadgerStore,
-    append_only_store: &CkbadgerStore,
-    mem_cache: &InMemoryCache,
-    collection_id: &[u8],
-) -> anyhow::Result<i64> {
-    let cache_key = format!(
-        "assets:nft_collection_activities_count:0x{}",
-        hex::encode(collection_id)
-    );
-    if let Some(cached) = mem_cache.get::<i64>(&cache_key) {
-        return Ok(cached);
-    }
-
-    let total = count_canonical_nft_collection_activities(store, append_only_store, collection_id)?;
-    mem_cache.set(&cache_key, &total, NFT_ACTIVITY_COUNT_CACHE_TTL);
-    Ok(total)
 }
 
 pub(crate) fn normalize_nft_items_search(search: Option<&str>) -> Option<String> {
@@ -2828,9 +2807,7 @@ fn object_collection_detail(
     let agg = get_collection_aggregate(state.store.as_ref(), &collection_id_bytes)
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let resolved = agg.ok_or_else(|| ApiError::not_found("Object collection not found"))?;
-    let activities_count = resolved
-        .activities_count(state, &collection_id_bytes)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let activities_count = resolved.activities_count(state, &collection_id_bytes)?;
     let agg = resolved.aggregate;
 
     let daily = collection_capacity_deltas(
@@ -4800,30 +4777,24 @@ mod tests {
         // Per REORG_HANDLING.md rollback deletes a rolled-back block's
         // collection rows, so a row whose transaction is not canonical is a
         // rollback bug: the feed and the count name it instead of hiding it.
-        for error in [
-            list_canonical_nft_collection_activities_page(
-                &domain,
-                &domain,
-                &collection_id,
-                3,
-                None,
-                None,
-            )
-            .map(|_| ())
-            .unwrap_err(),
-            count_canonical_nft_collection_activities(&domain, &domain, &collection_id)
-                .map(|_| ())
-                .unwrap_err(),
-        ] {
-            let message = format!("{error:#}");
-            assert!(
-                message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
-                    && message.contains("block=30")
-                    && message.contains(&format!("tx=0x{}", hex::encode(&stale_tx)))
-                    && message.contains("not canonical"),
-                "{message}"
-            );
-        }
+        let error = list_canonical_nft_collection_activities_page(
+            &domain,
+            &domain,
+            &collection_id,
+            3,
+            None,
+            None,
+        )
+        .map(|_| ())
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
+                && message.contains("block=30")
+                && message.contains(&format!("tx=0x{}", hex::encode(&stale_tx)))
+                && message.contains("not canonical"),
+            "{message}"
+        );
 
         // The rows that are canonical list and count as before.
         domain
@@ -4852,34 +4823,6 @@ mod tests {
         assert_eq!(listed[1].0, 10);
         assert_eq!(listed[0].2.tx_hash, canonical_tx_new);
         assert_eq!(listed[1].2.tx_hash, canonical_tx_old);
-
-        let count =
-            count_canonical_nft_collection_activities(&domain, &domain, &collection_id).unwrap();
-        assert_eq!(count, 2);
-
-        let mem_cache = InMemoryCache::new();
-        let canonical_cached =
-            count_nft_collection_activities_cached(&domain, &domain, &mem_cache, &collection_id)
-                .unwrap();
-        assert_eq!(canonical_cached, 2);
-
-        let mut domain_batch2 = StoreBatch::new(&domain);
-        domain_batch2.put_object_collection_activity(
-            &collection_id,
-            40,
-            0,
-            &make_collection_activity(
-                &[0x40; 32],
-                &[0x40; 32],
-                1_700_000_040_000,
-                AssetAction::Mint,
-            ),
-        );
-        domain_batch2.commit().unwrap();
-        let cached_count =
-            count_nft_collection_activities_cached(&domain, &domain, &mem_cache, &collection_id)
-                .unwrap();
-        assert_eq!(cached_count, 2);
     }
 
     #[test]
@@ -4930,30 +4873,24 @@ mod tests {
 
         // The 0xAA row names a block hash that is not the canonical header at
         // block 20: an abandoned branch's row that rollback should have deleted.
-        for error in [
-            list_canonical_nft_collection_activities_page(
-                &domain,
-                &domain,
-                &collection_id,
-                10,
-                None,
-                None,
-            )
-            .map(|_| ())
-            .unwrap_err(),
-            count_canonical_nft_collection_activities(&domain, &domain, &collection_id)
-                .map(|_| ())
-                .unwrap_err(),
-        ] {
-            let message = format!("{error:#}");
-            assert!(
-                message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
-                    && message.contains("block=20")
-                    && message.contains(&format!("tx=0x{}", hex::encode(&tx_hash)))
-                    && message.contains(&format!("block_hash=0x{}", hex::encode([0xAA; 32]))),
-                "{message}"
-            );
-        }
+        let error = list_canonical_nft_collection_activities_page(
+            &domain,
+            &domain,
+            &collection_id,
+            10,
+            None,
+            None,
+        )
+        .map(|_| ())
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains(&format!("collection=0x{}", hex::encode(collection_id)))
+                && message.contains("block=20")
+                && message.contains(&format!("tx=0x{}", hex::encode(&tx_hash)))
+                && message.contains(&format!("block_hash=0x{}", hex::encode([0xAA; 32]))),
+            "{message}"
+        );
     }
 
     #[test]

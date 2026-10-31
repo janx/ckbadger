@@ -119,6 +119,19 @@ pub(crate) struct LiveDaoBatch {
     deposits_created: u64,
     /// Withdraw-request cells this batch consumed by a completion.
     withdrawals_completed: u64,
+    /// Every lifecycle transition, in chain order, with the entry before and
+    /// after it — what the derived DAO aggregate folds per block.
+    transitions: Vec<DaoTransition>,
+}
+
+/// One lifecycle transition of one deposit: creation (`old = None`), the
+/// phase-1 withdraw request, or the phase-2 completion.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DaoTransition {
+    pub block: i64,
+    pub deposit_key: [u8; 34],
+    pub old: Option<DaoDepositCacheEntry>,
+    pub new: DaoDepositCacheEntry,
 }
 
 /// The outputs of one transaction as the DAO lifecycle sees them.
@@ -175,6 +188,11 @@ impl LiveDaoBatch {
     /// The withdraw-request outpoints this batch consumes (phase-2 inputs).
     pub(crate) fn withdraw_request_outpoints(&self) -> HashSet<(Vec<u8>, i16)> {
         self.compensations.keys().cloned().collect()
+    }
+
+    /// Every lifecycle transition of the batch, in chain order.
+    pub(crate) fn transitions(&self) -> &[DaoTransition] {
+        &self.transitions
     }
 
     /// The net change this batch makes to the number of live DAO cells: a
@@ -378,18 +396,22 @@ impl LiveDaoBatch {
                     output_index
                 );
             }
-            self.entries.insert(
+            let entry = build_dao_cache_entry(
+                &deposit,
+                tx.block_number,
+                block_ar,
+                tx.timestamp.timestamp_millis(),
+                *chain_times.get(&tx.block_number).ok_or_else(|| {
+                    anyhow!("missing DAO deposit chain time: block={}", tx.block_number)
+                })?,
+            )?;
+            self.transitions.push(DaoTransition {
+                block: tx.block_number,
                 deposit_key,
-                build_dao_cache_entry(
-                    &deposit,
-                    tx.block_number,
-                    block_ar,
-                    tx.timestamp.timestamp_millis(),
-                    *chain_times.get(&tx.block_number).ok_or_else(|| {
-                        anyhow!("missing DAO deposit chain time: block={}", tx.block_number)
-                    })?,
-                )?,
-            );
+                old: None,
+                new: entry.clone(),
+            });
+            self.entries.insert(deposit_key, entry);
             self.lifecycle_in_batch.insert(deposit_key);
             self.deposits_created += 1;
         }
@@ -452,6 +474,7 @@ impl LiveDaoBatch {
             deposit_outpoint.clone(),
             dao_cache_entry_to_row(deposit_outpoint.0, deposit_outpoint.1, entry.clone()),
         );
+        let before = entry.clone();
 
         entry.status = 1;
         entry.withdraw_request_block = Some(tx.block_number);
@@ -481,6 +504,12 @@ impl LiveDaoBatch {
             request_output.output_index,
             deposit_key,
         ));
+        self.transitions.push(DaoTransition {
+            block: tx.block_number,
+            deposit_key,
+            old: Some(before),
+            new: entry.clone(),
+        });
         self.entries.insert(deposit_key, entry);
         self.lifecycle_in_batch.insert(deposit_key);
         Ok(())
@@ -558,6 +587,7 @@ impl LiveDaoBatch {
             dao_cache_entry_to_row(deposit_tx, deposit_index, entry.clone()),
         );
         self.compensations.insert(request_outpoint, compensation);
+        let before = entry.clone();
 
         entry.status = 2;
         entry.withdraw_block = Some(tx.block_number);
@@ -569,6 +599,12 @@ impl LiveDaoBatch {
         entry.compensation = Some(compensation);
         self.open_requests.remove(&request_key);
         self.spent_requests.insert(request_key);
+        self.transitions.push(DaoTransition {
+            block: tx.block_number,
+            deposit_key,
+            old: Some(before),
+            new: entry.clone(),
+        });
         self.entries.insert(deposit_key, entry);
         self.withdrawals_completed += 1;
         Ok(())

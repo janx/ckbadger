@@ -832,6 +832,9 @@ mod status_model_tests {
             "token_live_cells_consistency",
             "collection_daily_activity_consistency",
             "dotcell_records_hash_parity",
+            "dao_depositor_aggregate_consistency",
+            "cluster_activities_count_consistency",
+            "bit_cell_account_index_consistency",
         ];
         let mut declared = declared;
         declared.sort_unstable();

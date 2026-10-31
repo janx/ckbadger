@@ -288,6 +288,11 @@ pub enum UndoSeqScope {
     /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
     /// can prune exactly these entries without touching the other three.
     EntityStats = 0x0004,
+    /// Derived aggregate rows (`dao_live_agg`, `object_collection_activity_count`,
+    /// `bit_cell_by_account`), written by the live maintenance of the
+    /// indexer's background derivations. Pruned behind the same coverage
+    /// floor as `EntityStats`.
+    Derived = 0x0005,
 }
 
 impl UndoSeqScope {
@@ -2105,6 +2110,16 @@ pub mod sync_meta_keys {
     /// Per-family hourly retention state (bincode `HourlyRetentionState`).
     /// The family name is appended: `hourly_retention_state:token`.
     pub const HOURLY_RETENTION_STATE_PREFIX: &[u8] = b"hourly_retention_state:";
+    /// One derived aggregate's derivation state (bincode `DeriveMeta`). The
+    /// aggregate name is appended: `derive:dao_live_agg`.
+    pub const DERIVE_META_PREFIX: &[u8] = b"derive:";
+}
+
+/// `sync_meta` key of one derived aggregate's `DeriveMeta`.
+pub fn encode_derive_meta_key(aggregate: &str) -> Vec<u8> {
+    let mut key = sync_meta_keys::DERIVE_META_PREFIX.to_vec();
+    key.extend_from_slice(aggregate.as_bytes());
+    key
 }
 
 /// `sync_meta` key for one hourly family's retention state.
@@ -4307,6 +4322,7 @@ mod tests {
             (UndoSeqScope::DotBit, 0x0002),
             (UndoSeqScope::Object, 0x0003),
             (UndoSeqScope::EntityStats, 0x0004),
+            (UndoSeqScope::Derived, 0x0005),
         ];
         for (scope, bits) in table {
             assert_eq!(scope.seq_base(), bits << 48, "{scope:?}");
@@ -4320,7 +4336,7 @@ mod tests {
             }
         }
         // A counter that overflowed into the scope bits is no scope's entry.
-        assert!(!UndoSeqScope::EntityStats.owns(5 << 48));
+        assert!(!UndoSeqScope::EntityStats.owns(6 << 48));
         assert!(!UndoSeqScope::TxContext.owns(0));
     }
 

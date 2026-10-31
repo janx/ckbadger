@@ -5889,6 +5889,537 @@ impl Check for DotCellRecordsHashParity {
     }
 }
 
+// ── Derived DAO aggregate (round 3 L1) ─────────────────────────────────────
+
+/// `dao_live_agg` agrees with the DAO lifecycle rows it is derived from.
+///
+/// One walk of `/dao/depositors` (every page at one anchor tip `T`) must sum
+/// to `/dao/evidence`'s phase-0 totals at `T` and count its current
+/// depositors (the global row equals the sum of the depositor rows). Then,
+/// for a sample of depositors (the largest and the smallest), the depositor
+/// row must equal that lock's deposits that were phase-0 at `T`, read from
+/// `/dao/deposits/{lock}`: deposited at or before `T` and not requested by
+/// `T` (each row's own transition blocks give its state at `T`, so a tip that
+/// moves during the walk is not a finding).
+pub struct DaoDepositorAggregateConsistency;
+
+const DAO_DEPOSITOR_SAMPLE_CAP: usize = 20;
+const DAO_DEPOSITOR_WALK_ATTEMPTS: usize = 3;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoAnchorRecord {
+    block_number: i64,
+    block_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoDepositorRecord {
+    rank: usize,
+    lock_script_hash: String,
+    capacity: String,
+    deposit_count: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoDepositorsPage {
+    anchor: DaoAnchorRecord,
+    data: Vec<DaoDepositorRecord>,
+    total: usize,
+    next_cursor: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoEvidenceAmount {
+    capacity: String,
+    count: u64,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoEvidenceConcentration {
+    current_depositors: usize,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoEvidenceRecord {
+    tip_block_number: i64,
+    phase0: DaoEvidenceAmount,
+    concentration: DaoEvidenceConcentration,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaoLockDepositRecord {
+    capacity: String,
+    deposit_block_number: i64,
+    withdraw_request_block: Option<i64>,
+}
+
+/// Every `/dao/depositors` page, provided all pages were ranked at one tip.
+fn walk_dao_depositors(
+    ctx: &CheckContext,
+) -> anyhow::Result<Option<(DaoAnchorRecord, usize, Vec<DaoDepositorRecord>)>> {
+    let mut rows = Vec::new();
+    let mut anchor: Option<DaoAnchorRecord> = None;
+    let mut total = 0;
+    let mut cursor: Option<String> = None;
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!("dao/depositors?limit=100&cursor={cursor}"),
+            None => "dao/depositors?limit=100".to_string(),
+        };
+        let page: DaoDepositorsPage = api_get(ctx, &path)?;
+        match &anchor {
+            Some(first) if first.block_hash != page.anchor.block_hash => return Ok(None),
+            Some(_) => {}
+            None => {
+                total = page.total;
+                anchor = Some(page.anchor);
+            }
+        }
+        rows.extend(page.data);
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => {
+                let anchor = anchor.expect("at least one page was read");
+                return Ok(Some((anchor, total, rows)));
+            }
+        }
+    }
+    anyhow::bail!("dao/depositors walk did not terminate within {DAO_DEPOSITS_MAX_PAGES} pages")
+}
+
+/// One lock's phase-0 capacity and cells at block `tip`, from its lifecycle
+/// rows.
+fn dao_lock_phase0_at(
+    ctx: &CheckContext,
+    lock_hash: &str,
+    tip: i64,
+) -> anyhow::Result<(i128, u64)> {
+    let mut capacity = 0i128;
+    let mut cells = 0u64;
+    let mut cursor: Option<String> = None;
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!("dao/deposits/{lock_hash}?limit=100&cursor={cursor}"),
+            None => format!("dao/deposits/{lock_hash}?limit=100"),
+        };
+        let page: CursorPage<DaoLockDepositRecord> = api_get(ctx, &path)?;
+        for row in page.data {
+            let requested_by_tip = row.withdraw_request_block.is_some_and(|block| block <= tip);
+            if row.deposit_block_number <= tip && !requested_by_tip {
+                capacity += row
+                    .capacity
+                    .parse::<i128>()
+                    .map_err(|e| anyhow::anyhow!("deposit capacity {:?}: {e}", row.capacity))?;
+                cells += 1;
+            }
+        }
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return Ok((capacity, cells)),
+        }
+    }
+    anyhow::bail!("dao/deposits/{lock_hash} walk did not terminate")
+}
+
+impl Check for DaoDepositorAggregateConsistency {
+    fn name(&self) -> &'static str {
+        "dao_depositor_aggregate_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "The derived DAO depositor rows sum to the global row and equal each sampled depositor's phase-0 lifecycle rows"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(DAO_DEPOSITOR_SAMPLE_CAP) as u64 + 1)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "dao_depositor_aggregate_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let mut walked = None;
+        for _ in 0..DAO_DEPOSITOR_WALK_ATTEMPTS {
+            if let Some(found) = walk_dao_depositors(ctx)? {
+                walked = Some(found);
+                break;
+            }
+        }
+        let Some((anchor, total, rows)) = walked else {
+            return Ok(CheckResult::inconclusive(format!(
+                "the tip moved during each of {DAO_DEPOSITOR_WALK_ATTEMPTS} /dao/depositors walks"
+            )));
+        };
+        let evidence: DaoEvidenceRecord = api_get(ctx, "dao/evidence")?;
+        let mut findings = Vec::new();
+        let mut sum = 0i128;
+        let mut cells = 0u64;
+        for (index, row) in rows.iter().enumerate() {
+            if row.rank != index + 1 {
+                findings.push(Finding {
+                    entity: format!("depositor={}", row.lock_script_hash),
+                    details: vec![format!("rank {} at position {}", row.rank, index + 1)],
+                });
+            }
+            sum += row
+                .capacity
+                .parse::<i128>()
+                .map_err(|e| anyhow::anyhow!("depositor capacity {:?}: {e}", row.capacity))?;
+            cells += row.deposit_count;
+        }
+        if total != rows.len() {
+            findings.push(Finding {
+                entity: "dao/depositors".to_string(),
+                details: vec![format!("total={total} but {} rows were listed", rows.len())],
+            });
+        }
+        if evidence.tip_block_number == anchor.block_number {
+            let phase0 = evidence
+                .phase0
+                .capacity
+                .parse::<i128>()
+                .map_err(|e| anyhow::anyhow!("evidence phase0 capacity: {e}"))?;
+            let mut details = Vec::new();
+            if phase0 != sum || evidence.phase0.count != cells {
+                details.push(format!(
+                    "global phase-0 row = {phase0} shannons in {} cells, depositor rows sum to {sum} in {cells}",
+                    evidence.phase0.count
+                ));
+            }
+            if evidence.concentration.current_depositors != rows.len() {
+                details.push(format!(
+                    "currentDepositors={} but {} depositor rows",
+                    evidence.concentration.current_depositors,
+                    rows.len()
+                ));
+            }
+            if !details.is_empty() {
+                findings.push(Finding {
+                    entity: format!("dao/evidence@{}", anchor.block_number),
+                    details,
+                });
+            }
+        }
+        progress.inc(1);
+        let cap = ctx.sample_count.min(DAO_DEPOSITOR_SAMPLE_CAP);
+        let mut sample: Vec<&DaoDepositorRecord> = rows.iter().take(cap.div_ceil(2)).collect();
+        sample.extend(rows.iter().rev().take(cap / 2));
+        sample.sort_by_key(|row| row.rank);
+        sample.dedup_by_key(|row| row.rank);
+        for row in &sample {
+            let (capacity, count) =
+                dao_lock_phase0_at(ctx, &row.lock_script_hash, anchor.block_number)?;
+            let served: i128 = row
+                .capacity
+                .parse()
+                .map_err(|e| anyhow::anyhow!("depositor capacity {:?}: {e}", row.capacity))?;
+            if served != capacity || row.deposit_count != count {
+                findings.push(Finding {
+                    entity: format!("depositor={}", row.lock_script_hash),
+                    details: vec![format!(
+                        "aggregate row = {served} shannons in {} cells, its lifecycle rows phase-0 at block {} = {capacity} in {count}",
+                        row.deposit_count, anchor.block_number
+                    )],
+                });
+            }
+            progress.inc(1);
+        }
+        let checked = 1 + sample.len() as u64;
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        Ok(CheckResult::pass_with_detail(
+            checked,
+            format!(
+                "{} depositors at block {} sum to the global row; {} sampled depositors match their lifecycle rows",
+                rows.len(),
+                anchor.block_number,
+                sample.len()
+            ),
+        ))
+    }
+}
+
+// ── Derived cluster activity count (round 3 L2) ────────────────────────────
+
+/// Each sampled Spore cluster's `activitiesCount` — the derived
+/// `object_collection_activity_count` row — equals the cluster's activity
+/// rows listed by `/spore/clusters/{id}/activities`, the same form as the
+/// collection calendar check's count assertion.
+pub struct ClusterActivitiesCountConsistency;
+
+const CLUSTER_ACTIVITY_SAMPLE_CAP: usize = 10;
+const CLUSTER_ACTIVITY_MAX_ROWS_PER_CLUSTER: i64 = 5_000;
+const CLUSTER_ACTIVITY_MAX_ROWS_TOTAL: i64 = 20_000;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ObjectAssetRecord {
+    id: String,
+    standard: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ClusterActivitiesCountRecord {
+    activities_count: i64,
+}
+
+fn count_cluster_activity_rows(ctx: &CheckContext, id: &str) -> anyhow::Result<i64> {
+    let mut rows = 0i64;
+    let mut cursor: Option<String> = None;
+    for _ in 0..DAO_DEPOSITS_MAX_PAGES {
+        let path = match cursor.as_deref() {
+            Some(cursor) => format!("spore/clusters/{id}/activities?limit=100&cursor={cursor}"),
+            None => format!("spore/clusters/{id}/activities?limit=100"),
+        };
+        let page: CursorPage<serde_json::Value> = api_get(ctx, &path)?;
+        rows += page.data.len() as i64;
+        match page.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => return Ok(rows),
+        }
+    }
+    anyhow::bail!("spore/clusters/{id}/activities walk did not terminate")
+}
+
+impl Check for ClusterActivitiesCountConsistency {
+    fn name(&self) -> &'static str {
+        "cluster_activities_count_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "Each sampled Spore cluster's derived activitiesCount equals its listed activity rows"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(CLUSTER_ACTIVITY_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "cluster_activities_count_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let page: CursorPage<ObjectAssetRecord> = api_get(ctx, "assets?type=object&limit=100")?;
+        let cap = ctx.sample_count.min(CLUSTER_ACTIVITY_SAMPLE_CAP);
+        let mut findings = Vec::new();
+        let mut checked = 0u64;
+        let mut listed_total = 0i64;
+        let mut not_sampled = Vec::new();
+        for asset in page.data.iter().filter(|asset| asset.standard == "spore") {
+            if checked as usize >= cap {
+                break;
+            }
+            let id = asset.id.as_str();
+            let before: ClusterActivitiesCountRecord =
+                api_get(ctx, &format!("spore/clusters/{id}"))?;
+            let count = before.activities_count;
+            if count > CLUSTER_ACTIVITY_MAX_ROWS_PER_CLUSTER
+                || listed_total + count > CLUSTER_ACTIVITY_MAX_ROWS_TOTAL
+            {
+                not_sampled.push(format!("{id} ({count} rows)"));
+                continue;
+            }
+            let listed = count_cluster_activity_rows(ctx, id)?;
+            listed_total += listed;
+            if listed != count {
+                // The tip may have moved while paging: only a count the
+                // detail confirms after the walk is a finding.
+                let after: ClusterActivitiesCountRecord =
+                    api_get(ctx, &format!("spore/clusters/{id}"))?;
+                if after.activities_count == count {
+                    findings.push(Finding {
+                        entity: format!("cluster={id}"),
+                        details: vec![format!(
+                            "activitiesCount={count} != activity rows listed={listed}"
+                        )],
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled clusters, {listed_total} activity rows");
+        if !not_sampled.is_empty() {
+            detail.push_str(&format!(
+                "; over the {CLUSTER_ACTIVITY_MAX_ROWS_PER_CLUSTER}-row / {CLUSTER_ACTIVITY_MAX_ROWS_TOTAL}-total budget, not sampled: {}",
+                not_sampled.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
+// ── Derived .bit → .bit Cell index (round 3 L3) ────────────────────────────
+
+/// `bit_cell_by_account` agrees with the `.bit Cell` items it is derived
+/// from, both ways. For a sample of `.bit Cell` items: a live one names its
+/// account (`blake2b(name)[..20]`, the `.bit` identity id), and that `.bit`
+/// identity's `bitCells` lists it; every `.bit Cell` a sampled `.bit`
+/// identity lists is live and names that account.
+pub struct BitCellAccountIndexConsistency;
+
+const BIT_CELL_SAMPLE_CAP: usize = 20;
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentityItemRecord {
+    nft_id: String,
+    name: Option<String>,
+    is_live: bool,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BitCellRefRecord {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DotbitDetailRecord {
+    bit_cells: Vec<BitCellRefRecord>,
+}
+
+/// The `.bit` account id a `.bit Cell` names: `blake2b(account)[..20]`.
+fn dotbit_account_id(account: &str) -> String {
+    let mut hasher = ckb_hash::new_blake2b();
+    hasher.update(account.as_bytes());
+    let mut hash = [0u8; 32];
+    hasher.finalize(&mut hash);
+    format!("0x{}", hex::encode(&hash[..20]))
+}
+
+impl Check for BitCellAccountIndexConsistency {
+    fn name(&self) -> &'static str {
+        "bit_cell_account_index_consistency"
+    }
+    fn description(&self) -> &'static str {
+        "The derived .bit → .bit Cell index lists exactly the live .bit Cells naming each sampled account"
+    }
+    fn tier(&self) -> CheckTier {
+        CheckTier::Sampling
+    }
+    fn requires_rpc(&self) -> bool {
+        false
+    }
+    fn requires_sampling(&self) -> bool {
+        true
+    }
+    fn estimated_total(&self, ctx: &CheckContext) -> Option<u64> {
+        Some(ctx.sample_count.min(BIT_CELL_SAMPLE_CAP) as u64)
+    }
+    fn run(&self, ctx: &CheckContext, progress: &ProgressReporter) -> anyhow::Result<CheckResult> {
+        if ctx.sample_count == 0 {
+            anyhow::bail!(
+                "bit_cell_account_index_consistency was run with --sample-count 0: an empty \
+                 sample verifies nothing"
+            );
+        }
+        let cap = ctx.sample_count.min(BIT_CELL_SAMPLE_CAP);
+        let page: CursorPage<IdentityItemRecord> = api_get(
+            ctx,
+            &format!("assets/identities/bit_cell/items?limit={cap}"),
+        )?;
+        let mut findings = Vec::new();
+        let mut checked = 0u64;
+        let mut unindexed_accounts = Vec::new();
+        for item in page.data.iter().take(cap) {
+            let Some(account) = item.name.as_deref() else {
+                findings.push(Finding {
+                    entity: format!("bit_cell={}", item.nft_id),
+                    details: vec!["the .bit Cell carries no account name".to_string()],
+                });
+                continue;
+            };
+            let account_id = dotbit_account_id(account);
+            let Some(dotbit) = api_get_or_not_found::<DotbitDetailRecord>(
+                ctx,
+                &format!("assets/identities/dotbit/items/{account_id}"),
+            )?
+            else {
+                // The account has no .bit AccountCell on this chain: the index
+                // row exists but no detail serves it.
+                unindexed_accounts.push(account.to_string());
+                checked += 1;
+                progress.inc(1);
+                continue;
+            };
+            let listed = dotbit
+                .bit_cells
+                .iter()
+                .any(|cell| cell.id.eq_ignore_ascii_case(&item.nft_id));
+            if listed != item.is_live {
+                findings.push(Finding {
+                    entity: format!("bit_cell={}", item.nft_id),
+                    details: vec![format!(
+                        "isLive={} but .bit {account} ({account_id}) {} it in bitCells",
+                        item.is_live,
+                        if listed { "lists" } else { "does not list" }
+                    )],
+                });
+            }
+            for cell in &dotbit.bit_cells {
+                let detail: IdentityItemRecord = api_get(
+                    ctx,
+                    &format!("assets/identities/bit-cell/items/{}", cell.id),
+                )?;
+                if !detail.is_live || detail.name.as_deref() != Some(account) {
+                    findings.push(Finding {
+                        entity: format!("dotbit={account_id}"),
+                        details: vec![format!(
+                            "bitCells lists {} (isLive={}, name={:?}), which is not a live .bit Cell naming {account}",
+                            cell.id, detail.is_live, detail.name
+                        )],
+                    });
+                }
+            }
+            checked += 1;
+            progress.inc(1);
+        }
+        if !findings.is_empty() {
+            return Ok(CheckResult::fail(checked, findings));
+        }
+        let mut detail = format!("{checked} sampled .bit Cells");
+        if !unindexed_accounts.is_empty() {
+            detail.push_str(&format!(
+                "; {} name an account with no .bit identity: {}",
+                unindexed_accounts.len(),
+                unindexed_accounts.join(", ")
+            ));
+        }
+        Ok(CheckResult::pass_with_detail(checked, detail))
+    }
+}
+
 pub fn api_checks() -> Vec<Box<dyn Check>> {
     vec![
         // Fast
@@ -5933,6 +6464,9 @@ pub fn api_checks() -> Vec<Box<dyn Check>> {
         Box::new(DotCellIdIsLabelHash),
         Box::new(DotCellOwnerIndexConsistency),
         Box::new(DotCellRecordsHashParity),
+        Box::new(DaoDepositorAggregateConsistency),
+        Box::new(ClusterActivitiesCountConsistency),
+        Box::new(BitCellAccountIndexConsistency),
     ]
 }
 
@@ -6131,7 +6665,7 @@ mod tests {
     #[test]
     fn test_api_checks_registered() {
         let checks = api_checks();
-        assert_eq!(checks.len(), 40);
+        assert_eq!(checks.len(), 43);
         // Verify names are unique
         let names: Vec<&str> = checks.iter().map(|c| c.name()).collect();
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
@@ -6163,6 +6697,29 @@ mod tests {
         assert!(names.contains(&"dotcell_id_is_label_hash"));
         assert!(names.contains(&"dotcell_owner_index_consistency"));
         assert!(names.contains(&"dotcell_records_hash_parity"));
+        assert!(names.contains(&"dao_depositor_aggregate_consistency"));
+        assert!(names.contains(&"cluster_activities_count_consistency"));
+        assert!(names.contains(&"bit_cell_account_index_consistency"));
+    }
+
+    /// The derived-aggregate checks (round 3 L1–L3) are Sampling, read only
+    /// the API, and sample.
+    #[test]
+    fn derived_aggregate_checks_declare_their_tier_and_needs() {
+        let checks = api_checks();
+        for name in [
+            "dao_depositor_aggregate_consistency",
+            "cluster_activities_count_consistency",
+            "bit_cell_account_index_consistency",
+        ] {
+            let check = checks
+                .iter()
+                .find(|c| c.name() == name)
+                .unwrap_or_else(|| panic!("missing check {name}"));
+            assert_eq!(check.tier(), CheckTier::Sampling, "{name}");
+            assert!(!check.requires_rpc(), "{name}");
+            assert!(check.requires_sampling(), "{name}");
+        }
     }
 
     /// The `.cell` checks are Sampling, and only the one that reads cells and
@@ -6220,7 +6777,7 @@ mod tests {
             .filter(|c| c.tier() == CheckTier::Sampling)
             .count();
         assert_eq!(fast_count, 7);
-        assert_eq!(sampling_count, 33);
+        assert_eq!(sampling_count, 36);
     }
 
     #[test]
