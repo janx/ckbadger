@@ -268,8 +268,12 @@ pub struct LockCallResponse {
     pub script_hash: String,
     pub script_name: Option<String>,
     /// Decoded lock args; every integer in it is an exact decimal string
-    /// (`utils::exact_json`).
+    /// (`utils::exact_json`). `null` when the lock's registry entry declares
+    /// no args layout, or the args do not fit it (then `decodeError` says why).
     pub decoded: Option<serde_json::Value>,
+    /// Why `decoded` is null although the lock's registry entry declares an
+    /// args layout (R-8): `"<script>: args are N bytes, layout … expects …"`.
+    pub decode_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -496,64 +500,89 @@ fn parse_hex_code_hash(hex_str: &str) -> Vec<u8> {
 
 /// The lock-args codecs a registry entry can name in `[lock_args] codec`
 /// (`docs/metadata/scripts/<slug>.toml`): layouts implemented here from their
-/// specs. Which lock uses which codec is registry data, never a code-hash
-/// table in this file.
-fn lock_args_codec(name: &str) -> Option<ArgsDecoder> {
+/// specs, each with what it expects (the reason text when args do not fit).
+/// Which lock uses which codec is registry data, never a code-hash table in
+/// this file.
+fn lock_args_codec(name: &str) -> Option<(ArgsDecoder, &'static str)> {
     Some(match name {
-        "secp256k1_blake160" => decode_secp256k1_blake160_args,
-        "multisig" => decode_multisig_args,
-        "anyone_can_pay" => decode_anyone_can_pay_args,
-        "omnilock" => decode_omnilock_args,
-        "rgbpp" => decode_rgbpp_lock_args,
-        "btc_time_lock" => decode_btc_time_lock_args,
-        "fiber_funding" => decode_fiber_funding_lock_args,
-        "fiber_commitment" => decode_fiber_commitment_lock_args,
-        "utxoswap_intent" => decode_utxoswap_intent_args,
+        "secp256k1_blake160" => (decode_secp256k1_blake160_args, "20 bytes"),
+        "multisig" => (decode_multisig_args, "20 or 28 bytes"),
+        "anyone_can_pay" => (decode_anyone_can_pay_args, "20 to 22 bytes"),
+        "omnilock" => (
+            decode_omnilock_args,
+            "a 21-byte auth, a flags byte using only bits 0x01-0x08, then exactly the fields \
+             those flags turn on",
+        ),
+        "rgbpp" => (decode_rgbpp_lock_args, "at least 36 bytes"),
+        "btc_time_lock" => (decode_btc_time_lock_args, "at least 36 bytes"),
+        "fiber_funding" => (decode_fiber_funding_lock_args, "at least 20 bytes"),
+        "fiber_commitment" => (decode_fiber_commitment_lock_args, "at least 36 bytes"),
+        "utxoswap_intent" => (
+            decode_utxoswap_intent_args,
+            "at least 57 bytes with a known intent type at byte 56",
+        ),
         _ => return None,
     })
+}
+
+/// A lock's args read by its registry layout. `decoded` and `error` are
+/// never both set: a lock whose registry entry declares no layout has
+/// neither; args that do not fit the declared layout have `error` — why,
+/// naming the script — and no `decoded`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct DecodedLockArgs {
+    pub decoded: Option<serde_json::Value>,
+    pub error: Option<String>,
 }
 
 /// The one lock-args decoder (activity lock calls and the transaction
 /// detail): the args of a lock with code hash `code_hash`, read by the layout
 /// its scripts-registry entry declares (`[lock_args]`, R-8); integers as exact
-/// strings. `None` for a lock whose entry declares no layout. A codec returns
-/// `None` for args that do not fit it; args that do not fit a declared field
-/// layout are an error naming the script and the length.
-pub(crate) fn decode_lock_args(
-    code_hash: &[u8],
-    args: &[u8],
-) -> Result<Option<serde_json::Value>, String> {
+/// strings. The shape of on-chain lock args is not an indexer invariant, so
+/// args that do not fit are a stated `error`, never a failed response; `Err`
+/// is only a registry or encoding defect.
+pub(crate) fn decode_lock_args(code_hash: &[u8], args: &[u8]) -> Result<DecodedLockArgs, String> {
     use ckbadger_indexer::parser::registry::{LockArgsLayout, SCRIPT_LAYOUTS};
     let Some(script) = SCRIPT_LAYOUTS.get(code_hash) else {
-        return Ok(None);
+        return Ok(DecodedLockArgs::default());
     };
-    let decoded = match &script.lock_args {
-        None => return Ok(None),
+    let read = match &script.lock_args {
+        None => return Ok(DecodedLockArgs::default()),
         Some(LockArgsLayout::Codec(codec)) => {
-            let decoder = lock_args_codec(codec).ok_or_else(|| {
+            let (decoder, expects) = lock_args_codec(codec).ok_or_else(|| {
                 format!(
                     "scripts registry entry {} ({}) names lock-args codec `{codec}`, which no \
                      decoder implements",
                     script.name, script.slug
                 )
             })?;
-            decoder(args)
+            decoder(args).ok_or_else(|| {
+                format!(
+                    "{}: args are {} bytes, layout {codec} expects {expects}",
+                    script.name,
+                    args.len()
+                )
+            })
         }
-        Some(LockArgsLayout::Fields(fields)) => Some(decode_lock_args_fields(
-            &script.name,
-            &script.slug,
-            fields,
-            args,
-        )?),
+        Some(LockArgsLayout::Fields(fields)) => {
+            decode_lock_args_fields(&script.name, &script.slug, fields, args)
+        }
     };
-    decoded
-        .map(|decoded| integers_as_strings(decoded, "decoded lock args"))
-        .transpose()
+    Ok(match read {
+        Ok(decoded) => DecodedLockArgs {
+            decoded: Some(integers_as_strings(decoded, "decoded lock args")?),
+            error: None,
+        },
+        Err(error) => DecodedLockArgs {
+            decoded: None,
+            error: Some(error),
+        },
+    })
 }
 
 /// Read `args` as the registry's fixed field layout: `{ "lock": <slug>,
-/// <field>: "0x…", … }`. The args must be exactly the layout's total length
-/// and every fixed field must hold its declared value.
+/// <field>: "0x…", … }`. `Err` says why the args do not fit: not exactly the
+/// layout's total length, or a fixed field holding another value.
 fn decode_lock_args_fields(
     name: &str,
     slug: &str,
@@ -568,8 +597,7 @@ fn decode_lock_args_fields(
             .collect::<Vec<_>>()
             .join(" + ");
         return Err(format!(
-            "lock args of {name} ({slug}) are {} bytes; its registry layout {layout} is \
-             {total} bytes",
+            "{name}: args are {} bytes, layout {layout} expects {total}",
             args.len()
         ));
     }
@@ -582,11 +610,10 @@ fn decode_lock_args_fields(
         if let Some(expected) = &field.equals {
             if bytes != expected.as_slice() {
                 return Err(format!(
-                    "lock args of {name} ({slug}): field {} is 0x{}; its registry layout fixes \
-                     it to 0x{}",
+                    "{name}: field {}: expected 0x{}, got 0x{}",
                     field.name,
-                    hex::encode(bytes),
-                    hex::encode(expected)
+                    hex::encode(expected),
+                    hex::encode(bytes)
                 ));
             }
         }
@@ -800,6 +827,10 @@ fn convert_lock_call(
         &call.lock_args,
     );
     let script_name = cached_script_name(store, cache, &call.lock_code_hash)?;
+    let DecodedLockArgs {
+        decoded,
+        error: decode_error,
+    } = decode_lock_args(&call.lock_code_hash, &call.lock_args).map_err(anyhow::Error::msg)?;
 
     Ok(LockCallResponse {
         lock_code_hash: format!("0x{}", hex::encode(&call.lock_code_hash)),
@@ -807,8 +838,8 @@ fn convert_lock_call(
         lock_args: format!("0x{}", hex::encode(&call.lock_args)),
         script_hash: format!("0x{}", hex::encode(script_hash)),
         script_name,
-        decoded: decode_lock_args(&call.lock_code_hash, &call.lock_args)
-            .map_err(anyhow::Error::msg)?,
+        decoded,
+        decode_error,
     })
 }
 
@@ -2073,38 +2104,69 @@ mod tests {
         }
     }
 
-    /// R-8: a registry field layout decodes exactly its total length, names
-    /// the script and length otherwise, and refuses a fixed field's other
-    /// values.
+    /// R-8: a registry field layout decodes exactly its total length; args
+    /// that do not fit — a field layout or a codec — are a stated reason
+    /// naming the script, never an `Err` (the ruling of 2026-10-31).
     #[test]
-    fn registry_field_layouts_decode_exactly_or_name_the_script() {
+    fn registry_layouts_decode_exactly_or_state_why_not() {
         let joyid = parse_hex_code_hash(
             "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
         );
         let args = [[0x00u8, 0x01].as_slice(), &[0xab; 20]].concat();
         assert_eq!(
             decode_lock_args(&joyid, &args).unwrap(),
-            Some(serde_json::json!({
-                "lock": "joyid",
-                "subType": "0x0001",
-                "pubkeyHash": format!("0x{}", "ab".repeat(20)),
-            }))
+            DecodedLockArgs {
+                decoded: Some(serde_json::json!({
+                    "lock": "joyid",
+                    "subType": "0x0001",
+                    "pubkeyHash": format!("0x{}", "ab".repeat(20)),
+                })),
+                error: None,
+            }
         );
-        let error = decode_lock_args(&joyid, &args[..21]).unwrap_err();
         assert_eq!(
-            error,
-            "lock args of JoyID (joyid) are 21 bytes; its registry layout subType(2) + \
-             pubkeyHash(20) is 22 bytes"
+            decode_lock_args(&joyid, &[0; 23]).unwrap(),
+            DecodedLockArgs {
+                decoded: None,
+                error: Some(
+                    "JoyID: args are 23 bytes, layout subType(2) + pubkeyHash(20) expects 22"
+                        .into()
+                ),
+            }
         );
         let shadow = parse_hex_code_hash(
             "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
         );
-        let error =
-            decode_lock_args(&shadow, &[[0x00u8].as_slice(), &[1; 32]].concat()).unwrap_err();
-        assert!(error.contains("field prefix is 0x00"), "{error}");
-        assert!(decode_lock_args(&shadow, &[0x01; 32]).is_err());
-        // A lock no registry entry lays out stays raw.
-        assert_eq!(decode_lock_args(&[0x99; 32], &[1, 2, 3]).unwrap(), None);
+        for prefix in [0x00u8, 0x01, 0x07] {
+            let read =
+                decode_lock_args(&shadow, &[[prefix].as_slice(), &[1; 32]].concat()).unwrap();
+            assert_eq!(read.decoded.unwrap()["prefix"], format!("0x{prefix:02x}"));
+        }
+        let default_lock = parse_hex_code_hash(
+            "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        );
+        assert_eq!(
+            decode_lock_args(&default_lock, &[0; 21])
+                .unwrap()
+                .error
+                .as_deref(),
+            Some("Default Lock: args are 21 bytes, layout secp256k1_blake160 expects 20 bytes")
+        );
+        // A fixed field (`equals`) states the value it found.
+        let fixed = [ckbadger_indexer::parser::registry::LockArgsField {
+            name: "prefix".into(),
+            bytes: 1,
+            equals: Some(vec![0x01]),
+        }];
+        assert_eq!(
+            decode_lock_args_fields("Fixture Lock", "fixture", &fixed, &[0x07]).unwrap_err(),
+            "Fixture Lock: field prefix: expected 0x01, got 0x07"
+        );
+        // A lock no registry entry lays out has neither a value nor a reason.
+        assert_eq!(
+            decode_lock_args(&[0x99; 32], &[1, 2, 3]).unwrap(),
+            DecodedLockArgs::default()
+        );
     }
 
     #[test]
@@ -2142,6 +2204,7 @@ mod tests {
         assert_eq!(
             decode_lock_args(&funding_mainnet, &[7; 20])
                 .unwrap()
+                .decoded
                 .unwrap()["action"],
             "funding"
         );
@@ -2153,6 +2216,7 @@ mod tests {
         .concat();
         assert!(decode_lock_args(&commitment_mainnet, &commitment)
             .unwrap()
+            .decoded
             .is_some());
     }
 
@@ -2269,7 +2333,10 @@ mod tests {
         );
         let args = parse_hex_code_hash(REAL_SWAP_INTENT_ARGS);
         for code_hash in [mainnet, testnet] {
-            assert!(decode_lock_args(&code_hash, &args).unwrap().is_some());
+            assert!(decode_lock_args(&code_hash, &args)
+                .unwrap()
+                .decoded
+                .is_some());
         }
     }
 

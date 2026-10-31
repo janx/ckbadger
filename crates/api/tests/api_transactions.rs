@@ -3927,16 +3927,19 @@ async fn lock_args_fixture(locks: &[(&str, &str, Vec<u8>)]) -> (axum::Router, St
 }
 
 /// R-8 (TX-20): JoyID args (22 B: the 2-byte sub-type, then the 20-byte
-/// pubkey hash) and Nervape Shadow Lock args (`0x01`, then the 32-byte CKBFS
-/// type hash) decode by the field layout their registry entries declare —
-/// the same decoder path every other lock family goes through.
+/// pubkey hash) and Nervape Shadow Lock args (33 B: one raw prefix byte, then
+/// 32 bytes) decode by the field layout their registry entries declare — the
+/// same decoder path every other lock family goes through. Every Shadow Lock
+/// prefix observed on mainnet (0x00, 0x01, 0x07) decodes; none is fixed.
 #[tokio::test]
 async fn detail_decodes_joyid_and_shadow_lock_args_by_registry_layout() {
     let joyid = [vec![0x00, 0x01], vec![0xea; 20]].concat();
-    let shadow = [vec![0x01], vec![0x31; 32]].concat();
+    let shadow = |prefix: u8| [vec![prefix], vec![0x31; 32]].concat();
     let (app, hash) = lock_args_fixture(&[
         (JOYID_LOCK_CODE_HASH, "type", joyid),
-        (SHADOW_LOCK_CODE_HASH, "data1", shadow),
+        (SHADOW_LOCK_CODE_HASH, "data1", shadow(0x01)),
+        (SHADOW_LOCK_CODE_HASH, "data1", shadow(0x00)),
+        (SHADOW_LOCK_CODE_HASH, "data1", shadow(0x07)),
     ])
     .await;
     let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
@@ -3950,43 +3953,75 @@ async fn detail_decodes_joyid_and_shadow_lock_args_by_registry_layout() {
         }),
         "{json}"
     );
-    assert_eq!(
-        json["outputs"][1]["lockArgsDecoded"],
-        serde_json::json!({
-            "lock": "shadow-lock",
-            "prefix": "0x01",
-            "ckbfsTypeHash": format!("0x{}", "31".repeat(32)),
-        }),
-        "{json}"
-    );
+    for (index, prefix) in [(1, "0x01"), (2, "0x00"), (3, "0x07")] {
+        assert_eq!(
+            json["outputs"][index]["lockArgsDecoded"],
+            serde_json::json!({
+                "lock": "shadow-lock",
+                "prefix": prefix,
+                "hash": format!("0x{}", "31".repeat(32)),
+            }),
+            "{json}"
+        );
+    }
+    for index in 0..4 {
+        assert_eq!(
+            json["outputs"][index].get("lockArgsDecodeError"),
+            Some(&serde_json::Value::Null),
+            "{json}"
+        );
+    }
 }
 
-/// R-8: args that do not fit the registry layout are an error naming the
-/// script and the length (or the fixed byte), never a silent `null`.
+/// R-8 ruling (2026-10-31): the shape of on-chain lock args is not an
+/// indexer invariant, so args that do not fit their registry layout are no
+/// 500. The page still answers 200, `lockArgsDecoded` is null and
+/// `lockArgsDecodeError` says why — one rule for field layouts and codecs. A
+/// lock no registry entry lays out has neither.
 #[tokio::test]
-async fn detail_refuses_lock_args_that_do_not_fit_the_registry_layout() {
-    for (code_hash, hash_type, args, needles) in [
+async fn detail_states_why_lock_args_do_not_fit_their_registry_layout() {
+    let (app, hash) = lock_args_fixture(&[
+        // A real mainnet JoyID cell carries 23-byte args.
+        (JOYID_LOCK_CODE_HASH, "type", vec![0x00; 23]),
+        (SHADOW_LOCK_CODE_HASH, "data1", vec![0x01; 32]),
+        (TEST_SECP_LOCK_CODE_HASH, "type", vec![0x33; 21]),
         (
-            JOYID_LOCK_CODE_HASH,
+            "0x9999999999999999999999999999999999999999999999999999999999999999",
             "type",
-            vec![0x00; 21],
-            &["JoyID", "21 bytes", "22 bytes"][..],
+            vec![1],
+        ),
+    ])
+    .await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    for (index, error) in [
+        (
+            0,
+            "JoyID: args are 23 bytes, layout subType(2) + pubkeyHash(20) expects 22",
         ),
         (
-            SHADOW_LOCK_CODE_HASH,
-            "data1",
-            [vec![0x02], vec![0x31; 32]].concat(),
-            &["Nervape Shadow Lock", "prefix", "0x02", "0x01"][..],
+            1,
+            "Nervape Shadow Lock: args are 32 bytes, layout prefix(1) + hash(32) expects 33",
+        ),
+        (
+            2,
+            "Default Lock: args are 21 bytes, layout secp256k1_blake160 expects 20 bytes",
         ),
     ] {
-        let (app, hash) = lock_args_fixture(&[(code_hash, hash_type, args)]).await;
-        let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
-        let message = json["message"].as_str().unwrap();
-        for needle in needles {
-            assert!(message.contains(needle), "{needle:?} in {message}");
-        }
+        let output = &json["outputs"][index];
+        assert_eq!(
+            output.get("lockArgsDecoded"),
+            Some(&serde_json::Value::Null),
+            "{json}"
+        );
+        assert_eq!(output["lockArgsDecodeError"], error, "{json}");
     }
+    assert_eq!(
+        json["outputs"][3].get("lockArgsDecodeError"),
+        Some(&serde_json::Value::Null),
+        "no registry layout, nothing to explain: {json}"
+    );
+    assert!(json["outputs"][3]["lockArgsDecoded"].is_null(), "{json}");
 }
 
 // ---------------------------------------------------------------------------

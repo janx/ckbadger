@@ -1,13 +1,14 @@
 name = "Nervape Shadow Lock"
 description = "Generic ownership delegate/proxy lock used by Nervape composing flows."
 
-# How this lock's args read (R-8): 33 bytes, the byte `0x01` then a 32-byte
-# CKBFS type script hash. Any other first byte has no known meaning and is
-# refused.
+# How this lock's args read (R-8): 33 bytes, one prefix byte then 32 bytes.
+# No public source specifies these args, so neither part is interpreted: the
+# prefix is shown raw (a 2026-10-31 scan of mainnet's 2,438 live cells found
+# 0x00, 0x01 and 0x07) and the 32 bytes are named only `hash`.
 [lock_args]
 fields = [
-  { name = "prefix", bytes = 1, equals = "0x01" },
-  { name = "ckbfsTypeHash", bytes = 32 },
+  { name = "prefix", bytes = 1 },
+  { name = "hash", bytes = 32 },
 ]
 
 [mainnet]

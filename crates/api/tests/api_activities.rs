@@ -347,6 +347,52 @@ async fn test_activity_free_form_json_carries_integers_as_exact_strings() {
     assert_eq!(decoded["protocol"], "fiber", "{json}");
 }
 
+/// R-8 ruling: an activity lock call whose args do not fit the lock's
+/// registry layout is served (200) with `decoded: null` and a `decodeError`
+/// naming the script and the length, the same rule as the transaction detail.
+#[tokio::test]
+async fn test_activity_lock_call_states_why_its_args_do_not_decode() {
+    let lock_hash = vec![0x25; 32];
+    let mut actions = make_test_tx_actions(&lock_hash, &[0xab; 32], &[0xbc; 32], 88, 1, 100, 0);
+    actions.lock_calls = vec![
+        ckbadger_store::types::LockCallEntry {
+            // JoyID (mainnet): a real cell carries 23-byte args.
+            lock_code_hash: hex::decode(
+                "d00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            )
+            .unwrap(),
+            lock_hash_type: 1,
+            lock_args: vec![0; 23],
+        },
+        ckbadger_store::types::LockCallEntry {
+            lock_code_hash: hex::decode(
+                "d00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            )
+            .unwrap(),
+            lock_hash_type: 1,
+            lock_args: [vec![0x00, 0x01], vec![0x5a; 20]].concat(),
+        },
+    ];
+    let json = address_activities_json(&lock_hash, &actions).await;
+    let calls = &json["data"][0]["lockCalls"];
+    assert_eq!(
+        calls[0].get("decoded"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+    assert_eq!(
+        calls[0]["decodeError"],
+        "JoyID: args are 23 bytes, layout subType(2) + pubkeyHash(20) expects 22",
+        "{json}"
+    );
+    assert_eq!(calls[1]["decoded"]["subType"], "0x0001", "{json}");
+    assert_eq!(
+        calls[1].get("decodeError"),
+        Some(&serde_json::Value::Null),
+        "{json}"
+    );
+}
+
 #[tokio::test]
 async fn test_address_activities_rejects_unknown_filter() {
     let core_store = test_store();
