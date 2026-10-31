@@ -155,6 +155,71 @@ async fn catalog_visibility_ignores_zero_holders_but_finds_later_positive_holder
         .any(|row| row["id"] == format!("0x{}", hex::encode([1; 32]))));
 }
 
+/// IV-03 (round 3, R-3): the Inventory's token chips (xUDT / sUDT /
+/// xUDT-compatible) had no counts. `/assets/summary` now counts the catalog's
+/// tokens per stored standard — the same membership `counts.token` counts and
+/// the same standard `/assets?type=token&standard=` filters on, so each chip
+/// equals its list's total and the chips sum to the token count. A token
+/// outside the catalog (no name, no symbol, no positive holder) is in neither.
+#[tokio::test]
+async fn summary_counts_catalog_tokens_per_standard() {
+    let store = test_store();
+    let tokens: [(u8, &str, bool); 7] = [
+        (1, "xudt", true),
+        (2, "xudt", true),
+        (3, "xudt", true),
+        (4, "sudt", true),
+        (5, "sudt", true),
+        (6, "xudt_compatible", true),
+        // Outside the catalog: unnamed and no positive holder.
+        (7, "xudt", false),
+    ];
+    for (id, standard, named) in tokens {
+        store
+            .put_token_direct(
+                &[id; 32],
+                &TokenInfo {
+                    type_code_hash: vec![0x22; 32],
+                    hash_type: 1,
+                    type_args: vec![id; 32],
+                    standard: standard.into(),
+                    name: named.then(|| format!("Token {id}")),
+                    symbol: None,
+                    decimals: None,
+                    max_supply: None,
+                    first_seen_block: 0,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 0,
+                    metadata_source: named
+                        .then_some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
+                },
+            )
+            .unwrap();
+    }
+    let app = create_router(test_config(store)).await;
+    let (status, summary) = get_json(&app, "/assets/summary").await;
+    assert_eq!(status, StatusCode::OK, "{summary}");
+    assert_eq!(summary["counts"]["token"], 6, "{summary}");
+    assert_eq!(
+        summary["tokenStandards"],
+        serde_json::json!([
+            {"standard": "sudt", "count": 2},
+            {"standard": "xudt", "count": 3},
+            {"standard": "xudt_compatible", "count": 1},
+        ]),
+        "{summary}"
+    );
+    for chip in summary["tokenStandards"].as_array().unwrap() {
+        let standard = chip["standard"].as_str().unwrap();
+        let (status, list) =
+            get_json(&app, &format!("/assets?type=token&standard={standard}")).await;
+        assert_eq!(status, StatusCode::OK, "{list}");
+        assert_eq!(list["total"], chip["count"], "{standard}: {list}");
+    }
+}
+
 #[tokio::test]
 async fn standalone_dob_uses_writer_sentinel_and_is_in_inventory_scope() {
     use ckbadger_store::types::SOLE_SPORES_SENTINEL_COLLECTION;
