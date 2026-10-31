@@ -120,3 +120,58 @@ it('says where the object went in the Transactions column (OB-13)', () => {
     expect.stringContaining(`/address/${created.ownerAddress}`)
   );
 });
+
+// Round 3 (contracts R-A · R-4, OB-M10): the m-NFT mint row says who holds the class cell.
+describe('m-NFT mint row class cell (R-4)', () => {
+  const mint = (classCell: unknown) => ({
+    ...batch,
+    itemContext: {
+      itemId: obj(1, 1).objectId,
+      action: 'mint',
+      protocolActions: [],
+      ringRelink: null,
+      actedOn: 'self',
+      createdCell: null,
+      consumedCell: null,
+      versionDiff: null,
+      classCell,
+    },
+  });
+  const itemFeed = (row: unknown) =>
+    render(
+      <AssetFeed
+        queryKey={`class-cell-${JSON.stringify(row).length}`}
+        scope="Its whole life"
+        plain
+        item={{ kind: 'object' }}
+        loadActivities={async () => ({ ...page, data: [row as GlobalActivity] })}
+        loadTransactions={async () => ({ ...page, data: [] })}
+      />
+    );
+
+  it('notes "holds the class cell" on the participant whose lock holds it', async () => {
+    const { container } = itemFeed(
+      mint({ outputIndex: 1, lockHash: '0x' + '02'.repeat(32), address: 'ckb1qclass' })
+    );
+    await screen.findAllByText(/more objects/);
+    const notes = container.querySelectorAll('[data-role="participant-note"]');
+    expect([...notes].map((n) => n.textContent)).toEqual(['holds the class cell']);
+    expect(notes[0].closest('[data-party]')).toHaveAttribute(
+      'data-party',
+      `0x${'02'.repeat(32)}:1`
+    );
+  });
+
+  it('says nothing when the mint outputs no cell of its class', async () => {
+    const { container } = itemFeed(mint(null));
+    await screen.findAllByText(/more objects/);
+    expect(container.querySelector('[data-role="participant-note"]')).toBeNull();
+  });
+
+  it('reports a class cell held by no participant in place', async () => {
+    itemFeed(mint({ outputIndex: 1, lockHash: '0x' + '09'.repeat(32), address: 'ckb1qclass' }));
+    expect(await screen.findByTestId('activity-read-error')).toHaveTextContent(
+      `the class cell's lock 0x${'09'.repeat(32)} is no participant`
+    );
+  });
+});

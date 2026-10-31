@@ -41,6 +41,19 @@ export function itemFeedHeadline(activity: ItemActivity, item: ItemFeedSubject):
   );
 }
 
+/**
+ * Round 3 (contracts R-A · R-4, OB-M10): an m-NFT mint row's "holds the class cell", on the
+ * participant whose lock holds the class cell the mint outputs. Nothing when `classCell` is null
+ * or absent (every other row); a lock that is no participant of the row is a contract error.
+ */
+function classCellNote(activity: ItemActivity): ReadonlyMap<string, string> | undefined {
+  const cell = activity.itemContext.classCell;
+  if (!cell) return undefined;
+  if (!activity.participants.some((p) => p.lockHash === cell.lockHash))
+    throw new Error(`the class cell's lock ${cell.lockHash} is no participant of this row`);
+  return new Map([[cell.lockHash, 'holds the class cell']]);
+}
+
 export function tokenMoved(transaction: Transaction, typeHash: string): string {
   if (!transaction.activity)
     throw new Error(`${transaction.hash}: token transaction is missing its full activity`);
@@ -256,7 +269,9 @@ export function AssetFeed({
             acts.data!.data.length ? (
               acts.data!.data.map((a) => {
                 let headline: ItemFeedHeadline | undefined;
+                let notes: ReadonlyMap<string, string> | undefined;
                 try {
+                  notes = item ? classCellNote(a as ItemActivity) : undefined;
                   headline = item
                     ? itemFeedHeadline(a as ItemActivity, item)
                     : collection
@@ -288,6 +303,7 @@ export function AssetFeed({
                     lockColumn={plain}
                     foldObjects={plain}
                     focusItemId={focusItemId}
+                    participantNotes={notes}
                   />
                 );
               })

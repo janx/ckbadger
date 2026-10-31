@@ -238,12 +238,15 @@ function Participants({
   foldObjects = false,
   focusItemId,
   itemTone,
+  notes,
 }: {
   participants: ActivityParticipant[];
   lockColumn?: boolean;
   foldObjects?: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
+  /** A fact the API attaches to one participant, by its lock hash (R-4 "holds the class cell"). */
+  notes?: ReadonlyMap<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
@@ -258,6 +261,11 @@ function Participants({
             <ParticipantRefView participant={p} compact quiet />
             {!lockColumn && p.lockKind && (
               <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>
+            )}
+            {p.lockHash !== null && notes?.has(p.lockHash) && (
+              <span data-role="participant-note" className="text-text-dim ml-2 text-[11px]">
+                {notes.get(p.lockHash)}
+              </span>
             )}
           </div>
           {lockColumn && (
@@ -348,6 +356,8 @@ export type ActivityRowProps = {
   focusItemId?: string;
   /** Token amounts by sign (jade +, rouge −): only the Address board draws them so (BA-35). */
   itemTone?: 'plain' | 'sign';
+  /** Round 3 (R-4): a note the API attaches to one participant, keyed by its lock hash. */
+  participantNotes?: ReadonlyMap<string, string>;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -369,6 +379,7 @@ export function ActivityRow({
   foldObjects = false,
   focusItemId,
   itemTone = 'plain',
+  participantNotes,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -402,6 +413,7 @@ export function ActivityRow({
           foldObjects={foldObjects}
           focusItemId={focusItemId}
           itemTone={itemTone}
+          notes={participantNotes}
         />
       )}
     </article>
