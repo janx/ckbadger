@@ -67,32 +67,54 @@ fn open_network_secondary_if_present(
     .map(Some)
 }
 
+/// Opens the network secondary when its primary exists (`Ok(None)` until then).
+type OpenNetworkSecondary = Arc<dyn Fn() -> Result<Option<Arc<CkbadgerStore>>> + Send + Sync>;
+
 async fn wait_for_network_store_secondary(
     slot: Arc<ArcSwapOption<CkbadgerStore>>,
     primary_path: PathBuf,
-    runtime_config: StoreRuntimeConfig,
+    open: OpenNetworkSecondary,
     retry_interval: Duration,
 ) {
     let mut last_error = None;
+    let mut failed_catch_ups: u64 = 0;
     loop {
         if slot.load().is_some() {
             return;
         }
 
-        let open_primary_path = primary_path.clone();
-        let open_result = tokio::task::spawn_blocking(move || {
-            open_network_secondary_if_present(&open_primary_path, runtime_config)
-        })
-        .await;
+        let open_once = open.clone();
+        let open_result = tokio::task::spawn_blocking(move || open_once()).await;
 
         match open_result {
             Ok(Ok(Some(store))) => {
-                slot.store(Some(store));
-                info!(
-                    "Network store secondary attached after crawler startup: {}",
-                    primary_path.display()
-                );
-                return;
+                // A freshly opened secondary's column families can disagree
+                // until its first catch-up (J7), so readers get it only after
+                // one has succeeded; from then on the store refresh loop
+                // advances it with the others.
+                let catch_up_store = store.clone();
+                let catch_up = tokio::task::spawn_blocking(move || catch_up_store.refresh())
+                    .await
+                    .map_err(|error| anyhow::anyhow!("catch-up task failed: {error}"))
+                    .and_then(|result| result);
+                match catch_up {
+                    Ok(()) => {
+                        slot.store(Some(store));
+                        info!(
+                            "Network store secondary attached after crawler startup: {}",
+                            primary_path.display()
+                        );
+                        return;
+                    }
+                    Err(error) => {
+                        failed_catch_ups += 1;
+                        tracing::error!(
+                            attempt = failed_catch_ups,
+                            "network store secondary opened but its first catch-up failed; \
+                             not attached, will reopen and retry: {error:#}"
+                        );
+                    }
+                }
             }
             Ok(Ok(None)) => {}
             Ok(Err(error)) => {
@@ -221,10 +243,12 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
     let should_wait_for_network_store = initial_network_store.is_none();
     let network_store = Arc::new(ArcSwapOption::from(initial_network_store));
     if should_wait_for_network_store {
+        let open_primary_path = network_primary_path.clone();
+        let runtime_config = config.store_runtime_config;
         tokio::spawn(wait_for_network_store_secondary(
             network_store.clone(),
             network_primary_path,
-            config.store_runtime_config,
+            Arc::new(move || open_network_secondary_if_present(&open_primary_path, runtime_config)),
             NETWORK_STORE_RETRY_INTERVAL,
         ));
     }
@@ -249,6 +273,7 @@ pub async fn run_api(config: ApiServiceConfig) -> Result<()> {
         pool_mirror_enabled: config.pool_mirror_enabled,
         pool_poll_interval_ms: config.pool_poll_interval_ms,
         pool_max_tracked_txs: config.pool_max_tracked_txs,
+        secondary_catch_up: None,
     };
     let app = try_create_router(app_config).await?;
 
@@ -539,10 +564,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("network store tempdir");
         let primary_path = dir.path().join("network");
         let slot = Arc::new(ArcSwapOption::from(None));
+        let open_primary_path = primary_path.clone();
         let waiter = tokio::spawn(wait_for_network_store_secondary(
             slot.clone(),
             primary_path.clone(),
-            StoreRuntimeConfig::default(),
+            Arc::new(move || {
+                open_network_secondary_if_present(&open_primary_path, StoreRuntimeConfig::default())
+            }),
             Duration::from_millis(10),
         ));
 
@@ -574,6 +602,69 @@ mod tests {
                 .expect("network status exists")
                 .round_id,
             9
+        );
+    }
+
+    /// J7: a network secondary attached after startup serves no request before
+    /// its first catch-up — the waiter catches it up before publishing it.
+    #[tokio::test]
+    async fn network_secondary_is_caught_up_before_it_is_attached() {
+        use ckbadger_store::LatestStatus;
+
+        let dir = tempfile::tempdir().expect("network store tempdir");
+        let primary_path = dir.path().join("network");
+        let secondary_path = dir.path().join("secondary");
+        let primary = Arc::new(
+            CkbadgerStore::open_network_with_runtime(&primary_path, StoreRuntimeConfig::default())
+                .expect("open network primary"),
+        );
+        let status = |round_id| LatestStatus {
+            round_id,
+            started: 100,
+            finished: 200,
+            ..Default::default()
+        };
+        primary
+            .put_network_status(&status(1))
+            .expect("seed network status");
+
+        let open: OpenNetworkSecondary = {
+            let primary = primary.clone();
+            let primary_path = primary_path.clone();
+            Arc::new(move || {
+                let secondary = CkbadgerStore::open_network_secondary_with_runtime(
+                    &primary_path,
+                    &secondary_path,
+                    StoreRuntimeConfig::default(),
+                )?;
+                // The crawler commits its next round right after the secondary
+                // opened: only a catch-up shows it.
+                primary.put_network_status(&status(2))?;
+                Ok(Some(Arc::new(secondary)))
+            })
+        };
+        let slot = Arc::new(ArcSwapOption::from(None));
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            wait_for_network_store_secondary(
+                slot.clone(),
+                primary_path,
+                open,
+                Duration::from_millis(10),
+            ),
+        )
+        .await
+        .expect("secondary attachment timed out");
+
+        let attached = slot.load_full().expect("network secondary attached");
+        assert_eq!(
+            attached
+                .get_network_status()
+                .expect("read network status")
+                .expect("network status exists")
+                .round_id,
+            2,
+            "the attached secondary must have caught up with its primary"
         );
     }
 

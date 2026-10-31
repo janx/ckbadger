@@ -697,6 +697,32 @@ a primary, which every multi-CF read path already assumes:
 - Never hold a read view across `CkbadgerStore::refresh` on the same thread — that self-deadlocks.
   Catch-up runs on its own thread (`spawn_blocking` in the API), never inside a pinned scope.
 
+### Serving only caught-up views (`crates/api/src/store_readiness.rs`)
+
+A freshly opened secondary builds each column family's view at that CF's own latest complete
+point, so before its first catch-up two CFs the indexer commits together can disagree (round 2:
+`/tokens` answered 500 for three minutes after a restart because `CF_STATS_MNFT` lagged the
+collection aggregate CF and a correct warmup invariant fired on healthy data). The API's store
+refresh loop is therefore also its readiness authority, recorded in one `StoreReadiness` on
+`AppState` and enforced by one route layer over every route that reads a secondary:
+
+- **Startup rule.** The loop's first round runs as soon as the router is built and repeats every
+  second until one round has caught up every secondary the process reads (append-only, domain,
+  the CKB node DB reader, and the network store when present). Until then those routes answer
+  `503 store_catching_up` naming the attempt and the failing store's error, the cache warmup and
+  every other background reader (chart warmup, cache loops, WebSocket broadcasters, tx-pool
+  mirror) wait, and each failed attempt logs at `error!`.
+- **3-strike rule.** After that, three consecutive failed catch-ups of any one secondary turn those
+  routes into the same 503 with that secondary's last error. Failures one and two log at `warn!`
+  and keep serving the previous (coherent, stale) view; the third and every further one log at
+  `error!`; that secondary's next success clears it and logs at `info!`.
+- A network-store secondary attached after startup is caught up once before it is published to
+  readers, so it never serves its freshly opened view either.
+- Not gated: routes that read only the node's RPC (`/mempool/info`, `/mempool/transactions`,
+  `/mempool/blocks`) and the `/ws` upgrade (its broadcasters start after the first catch-up).
+- Warmup failures are unchanged: a named invariant still fails the warmup (`500` with the
+  invariant text) and the loop retries it.
+
 ## Memory Considerations
 
 Memory sizing is per network rather than a fixed host-wide peak:

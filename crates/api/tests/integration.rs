@@ -28,6 +28,7 @@ mod api_scripts;
 mod api_search;
 mod api_spore;
 mod api_statistics;
+mod api_store_readiness;
 mod api_token_redesign;
 mod api_tokens;
 mod api_transaction_cells;

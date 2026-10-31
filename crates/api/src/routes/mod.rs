@@ -48,7 +48,15 @@ pub use fiber::FiberView;
 pub use forks::ForkView;
 pub use pipeline::{PipelinePaysCache, PIPELINE_TIP_WAIT};
 
+/// Every `/api/v1` route.
 pub fn api_routes() -> Router<Arc<AppState>> {
+    store_routes().merge(node_rpc_routes())
+}
+
+/// Routes that read a secondary view (domain, append-only, network store or
+/// the node's RocksDB): production mounts them behind the store-readiness gate
+/// (`crate::api_v1_routes`).
+pub fn store_routes() -> Router<Arc<AppState>> {
     Router::new()
         .merge(activities::routes())
         .merge(assets::routes())
@@ -68,13 +76,19 @@ pub fn api_routes() -> Router<Arc<AppState>> {
         .merge(dao::routes())
         .merge(fiber::routes())
         .merge(spore::routes())
-        .merge(mempool::routes())
+        .merge(mempool::store_routes())
         .merge(network::routes())
         .merge(pipeline::routes())
         .merge(scripts::routes())
         .merge(forks::routes())
         .merge(verify::routes())
         .merge(vessels::routes())
+}
+
+/// Routes that read only the node's RPC and process memory — no secondary
+/// view — so they answer while the store-readiness gate is closed.
+pub fn node_rpc_routes() -> Router<Arc<AppState>> {
+    mempool::node_rpc_routes()
 }
 
 mod pool_transactions;
