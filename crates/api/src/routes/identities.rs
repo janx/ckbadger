@@ -824,6 +824,10 @@ pub struct DotCellItemResponse {
     pub state: &'static str,
     pub grace_ends_at: u64,
     pub owner: PartyRef,
+    /// The live `.cell` names the owner prefix holds, this one included when
+    /// it is live (ID-DC4 "this address holds 1 cell"): the per-owner counter
+    /// the holders list ranks by.
+    pub owner_name_count: i64,
     pub manager: PartyRef,
     pub sale: Option<DotCellSaleResponse>,
     pub records: Vec<DotCellRecordResponse>,
@@ -1135,6 +1139,17 @@ async fn get_dotcell_item_detail(
     };
     let (owner, owner_lock) = resolver.resolve_with_lock(&owner_hash20)?;
     let manager = resolver.resolve(&manager_hash20)?;
+    let owner_name_count = store
+        .get_dotcell_owner20_count(&DOTCELL_SENTINEL_COLLECTION, &owner_hash20)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    if owner_name_count < i64::from(entry.is_live) {
+        return Err(ApiError::internal(format!(
+            ".cell owner counter disagrees with the name: {label}.cell (0x{}) is_live={} but its owner 0x{} holds {owner_name_count}",
+            hex::encode(identity_id),
+            entry.is_live,
+            hex::encode(owner_hash20)
+        )));
+    }
 
     // A name is for sale when its owner prefix IS a Sale Lock instance's hash
     // prefix — a property of the name, never of an offer cell's existence.
@@ -1231,6 +1246,7 @@ async fn get_dotcell_item_detail(
         state: dotcell_state(entry.is_live, expired_at, grace_ends_at, tip_seconds),
         grace_ends_at,
         owner,
+        owner_name_count,
         manager,
         sale,
         records: records.iter().map(dotcell_record_response).collect(),

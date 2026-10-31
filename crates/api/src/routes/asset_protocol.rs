@@ -214,6 +214,105 @@ pub(crate) struct ProtocolResponse {
     kind: String,
     item_id: String,
     versions: Vec<ProtocolVersion>,
+    /// `.cell` only: the name's record edits, from the versions above.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record_edits: Option<DotCellRecordEdits>,
+}
+
+/// A `.cell` name's record edits (ID-DC4): every transaction the indexer
+/// classified `edit_records` for the name, and who made the newest.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DotCellRecordEdits {
+    count: usize,
+    last: Option<DotCellLastRecordEdit>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DotCellLastRecordEdit {
+    /// The manager named by the version the edit consumed — the authority
+    /// over the name's records when it was edited.
+    editor: super::identities::PartyRef,
+    /// How many of the newest record edits in a row this editor made.
+    editor_run: usize,
+    tx_hash: String,
+    block_number: i64,
+    timestamp: String,
+}
+
+/// What [`dotcell_record_edits`] reads from one decoded `.cell` version.
+struct DotCellVersionFacts {
+    tx_hash: String,
+    consumed_by_tx: Option<String>,
+    manager_hash20: [u8; 20],
+    block_number: i64,
+    timestamp: String,
+}
+
+/// The record edits of `.cell` name `id` over its decoded versions (chain
+/// order). A record edit is a transition: a version whose creating
+/// transaction consumed exactly one earlier version of the name and whose own
+/// actions for the name (the classification its item feed rows carry)
+/// include `edit_records`. Its editor is the manager of the version it
+/// consumed. A version that consumed none (a registration) is no edit and
+/// needs no classification read.
+fn dotcell_record_edits(
+    state: &crate::AppState,
+    id: &[u8],
+    versions: &[DotCellVersionFacts],
+) -> std::result::Result<DotCellRecordEdits, crate::response::ApiRouteError> {
+    use crate::response::ApiError;
+    let mut edits: Vec<(&DotCellVersionFacts, [u8; 20])> = Vec::new();
+    for version in versions {
+        let consumed: Vec<&DotCellVersionFacts> = versions
+            .iter()
+            .filter(|previous| previous.consumed_by_tx.as_deref() == Some(version.tx_hash.as_str()))
+            .collect();
+        let previous = match consumed.as_slice() {
+            [] => continue,
+            [previous] => previous,
+            many => {
+                return Err(ApiError::internal(format!(
+                    ".cell 0x{} transaction {} consumed {} versions of the name",
+                    hex::encode(id),
+                    version.tx_hash,
+                    many.len()
+                )))
+            }
+        };
+        let tx_hash = hex::decode(version.tx_hash.trim_start_matches("0x")).map_err(|e| {
+            ApiError::internal(format!(".cell version hash {}: {e}", version.tx_hash))
+        })?;
+        let own = super::assets::dotcell_own_actions(state, id, &tx_hash)?;
+        if own.iter().any(|action| action == "edit_records") {
+            edits.push((version, previous.manager_hash20));
+        }
+    }
+    let last = match edits.last() {
+        None => None,
+        Some((version, editor)) => {
+            let resolver = super::identities::DotCellPartyResolver {
+                store: &state.store,
+                network: &state.ckb_network,
+            };
+            Some(DotCellLastRecordEdit {
+                editor: resolver.resolve(editor)?,
+                editor_run: edits
+                    .iter()
+                    .rev()
+                    .take_while(|(_, made_by)| made_by == editor)
+                    .count(),
+                tx_hash: version.tx_hash.clone(),
+                block_number: version.block_number,
+                timestamp: version.timestamp.clone(),
+            })
+        }
+    };
+    Ok(DotCellRecordEdits {
+        count: edits.len(),
+        last,
+    })
 }
 
 fn field(data: &[u8], name: &str, start: usize, end: usize) -> Result<ProtocolField> {
@@ -555,6 +654,7 @@ pub(crate) fn protocol(
     let id = super::asset_history::parse_item_id(raw, standard)?;
     let versions = super::asset_history::checked_versions(state, &id, standard)?;
     let mut response = Vec::new();
+    let mut dotcell_versions: Vec<DotCellVersionFacts> = Vec::new();
     for version in versions {
         let parsed=(||->Result<ProtocolVersion>{
             let tx=raw_transaction(state,&version)?;let index=version.response.output_index as usize;
@@ -603,6 +703,7 @@ pub(crate) fn protocol(
                 },
                 S::DotCell=>{
                     let name=ckbadger_indexer::parser::DotCellParser::parse_name_data(&data)?;anyhow::ensure!(name.id.as_slice()==id,".cell payload identity mismatch");
+                    dotcell_versions.push(DotCellVersionFacts{tx_hash:version.response.tx_hash.clone(),consumed_by_tx:version.response.consumed_by_tx.clone(),manager_hash20:name.manager_hash20,block_number:version.response.block_number,timestamp:version.response.timestamp.clone()});
                     let witness=tx.witnesses.get(index).ok_or_else(||anyhow::anyhow!(".cell records witness missing at output {index}"))?;
                     let records=ckbadger_indexer::parser::DotCellParser::parse_witness_records(witness,&name.records_hash)?;
                     let resolver=super::identities::DotCellPartyResolver{store:&state.store,network:&state.ckb_network};
@@ -624,10 +725,15 @@ pub(crate) fn protocol(
         S::BitCell => "bit_cell",
         S::DotCell => "dotcell",
     };
+    let record_edits = match standard {
+        S::DotCell => Some(dotcell_record_edits(state, &id, &dotcell_versions)?),
+        _ => None,
+    };
     ok(ProtocolResponse {
         kind: kind.to_string(),
         item_id: format!("0x{}", hex::encode(id)),
         versions: response,
+        record_edits,
     })
 }
 pub(crate) async fn pds_groups(

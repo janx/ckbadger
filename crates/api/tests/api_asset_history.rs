@@ -1332,6 +1332,232 @@ async fn protocol_fixture(
     )
 }
 
+/// One version of an item's cell for [`seed_item_versions`].
+struct ItemVersion {
+    data: Vec<u8>,
+    witness: Option<Vec<u8>>,
+    protocol_actions: Vec<ckbadger_store::ProtocolAction>,
+    /// The per-outpoint lifecycle action identity standards record.
+    item_action: Option<AssetAction>,
+}
+
+/// Seed an item's versions the way a synced store and its node hold them:
+/// version k is output 0 of its own transaction in block 100 + k, consumed by
+/// version k + 1's transaction; the last is live. Every version's cell is
+/// under lock args 0x01… and type `type_code` with args = `id`. Returns the
+/// node chain and the version transaction hashes.
+fn seed_item_versions(
+    store: &Arc<CkbadgerStore>,
+    id: &[u8],
+    type_code: [u8; 32],
+    versions: &[ItemVersion],
+) -> (TestCkbChain, Vec<Vec<u8>>) {
+    use ckb_types::{
+        bytes::Bytes,
+        core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let script = |code: &[u8], args: &[u8]| {
+        packed::Script::new_builder()
+            .code_hash(packed::Byte32::from_slice(code).unwrap())
+            .hash_type(1u8.into())
+            .args(Bytes::copy_from_slice(args).pack())
+            .build()
+    };
+    let headers: Vec<(i64, i64)> = (0..100 + versions.len() as i64)
+        .map(|n| (n, 1_700_000_000_000 + n))
+        .collect();
+    seed_block_headers_at(store, &headers);
+    let mut blocks = Vec::new();
+    let mut payloads = Vec::new();
+    let mut hashes = Vec::new();
+    for (k, version) in versions.iter().enumerate() {
+        let mut payload = cell(id, 1000_00000000, 1);
+        payload.type_code_hash = Some(type_code.to_vec());
+        payload.type_script_hash = Some(compute_script_hash(&type_code, 1, id));
+        payload.data_size = version.data.len() as i32;
+        payload.occupied_capacity =
+            ((8 + 53 + 33 + id.len() + version.data.len()) as i64) * 100_000000;
+        payload.data_hash = Some(ckb_hash::blake2b_256(&version.data).to_vec());
+        let tx = TransactionBuilder::default()
+            .output(
+                packed::CellOutput::new_builder()
+                    .capacity((payload.capacity as u64).pack())
+                    .lock(script(&payload.lock_code_hash, &payload.lock_args))
+                    .type_(Some(script(&type_code, id)).pack())
+                    .build(),
+            )
+            .output_data(Bytes::from(version.data.clone()).pack())
+            .witnesses(
+                version
+                    .witness
+                    .iter()
+                    .map(|w| Bytes::from(w.clone()).pack())
+                    .collect::<Vec<_>>(),
+            )
+            .build();
+        hashes.push(tx.hash().as_slice().to_vec());
+        blocks.push(
+            BlockBuilder::default()
+                .number((100 + k as u64).pack())
+                .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+                .transaction(tx)
+                .build(),
+        );
+        payloads.push(payload);
+    }
+    let mut batch = StoreBatch::new(store);
+    for (k, version) in versions.iter().enumerate() {
+        let (hash, block) = (&hashes[k], 100 + k as i64);
+        seed_tx(&mut batch, hash, block, 0);
+        let header = store.get_block_header(block).unwrap().unwrap();
+        let mut actions = make_test_tx_actions(
+            &payloads[k].lock_script_hash,
+            hash,
+            &header.hash,
+            block,
+            0,
+            0,
+            0,
+        );
+        actions.protocol_actions = version.protocol_actions.clone();
+        batch.put_tx_actions(&actions);
+        batch.put_spore_outpoint(hash, 0, id);
+        if let Some(action) = version.item_action {
+            batch
+                .put_raw_cf_by_name(
+                    ckbadger_store::CF_STATS_SPORE,
+                    &ckbadger_store::keys::encode_spore_outpoint_by_id_key(id, hash, 0),
+                    &[action.compact()],
+                )
+                .unwrap();
+        }
+        match hashes.get(k + 1) {
+            Some(consumer) => batch.put_consumed_cell_with_consumer(
+                hash,
+                0,
+                &payloads[k],
+                block,
+                block + 1,
+                Some(consumer),
+            ),
+            None => batch.put_cell(hash, 0, &payloads[k], block),
+        }
+    }
+    batch.commit().unwrap();
+    (seed_ckb_chain(&blocks), hashes)
+}
+
+/// A `.cell` records payload holding one `profile.email` record.
+fn dotcell_email_records(email: &str) -> Vec<u8> {
+    let mut out = 1u16.to_le_bytes().to_vec();
+    out.push(13);
+    out.extend(b"profile.email");
+    out.push(0);
+    out.extend((email.len() as u16).to_le_bytes());
+    out.extend(email.as_bytes());
+    out.extend(300u32.to_le_bytes());
+    out
+}
+
+/// ID-DC4 (round 3, R-5): the manager card's "made the last two record
+/// edits" had no fact behind it. The `.cell` `/protocol` response — which
+/// already decodes every version of the name — now carries `recordEdits`:
+/// how many record edits the name's history holds (transactions the indexer
+/// classified `edit_records` for it) and who made the newest: the manager
+/// named by the version each edit consumed (the authority over records),
+/// with how many of the newest edits in a row that party made. Here manager
+/// 0x62… made one edit, handed the name to 0x63… (`edit_manager`, not a
+/// record edit), and 0x63… made the last two.
+#[tokio::test]
+async fn dotcell_protocol_names_who_made_the_last_record_edits() {
+    use ckbadger_indexer::parser::DotCellParser;
+    let id = DotCellParser::derive_id("alice").to_vec();
+    let item = format!("0x{}", hex::encode(&id));
+    let owner = [0x61u8; 20];
+    let (first_manager, second_manager) = ([0x62u8; 20], [0x63u8; 20]);
+    let version = |email: &str, manager: [u8; 20], action: &str, changes: &[&str]| {
+        let records = dotcell_email_records(email);
+        let mut data = vec![3];
+        data.extend(DotCellParser::records_hash(&records));
+        data.extend([0; 20]);
+        data.extend(&1_900_000_000u64.to_le_bytes()[..5]);
+        data.extend(owner);
+        data.extend(manager);
+        data.extend(b"alice");
+        ItemVersion {
+            data,
+            witness: Some(mol_table(&[vec![], vec![], mol_bytes(&records)])),
+            protocol_actions: vec![ckbadger_store::ProtocolAction::new(
+                "dotcell",
+                action,
+                serde_json::json!({"id": item, "label": "alice", "changes": changes}),
+            )],
+            item_action: None,
+        }
+    };
+    let versions = [
+        version("a@x", first_manager, "register", &["created"]),
+        version("b@x", first_manager, "edit_records", &["records"]),
+        version("b@x", second_manager, "edit_manager", &["manager"]),
+        version("c@x", second_manager, "edit_records", &["records"]),
+        version("d@x", second_manager, "edit_records", &["records"]),
+    ];
+    let store = test_store();
+    let (chain, hashes) = seed_item_versions(&store, &id, [0x41; 32], &versions);
+    let last = versions.last().unwrap();
+    let mut batch = StoreBatch::new(&store);
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DotCell,
+            owner_lock_hash: None,
+            name: Some("alice.cell".into()),
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: hashes[0].clone(),
+            extra: IdentityExtra::DotCell {
+                label: "alice".into(),
+                namespace_args: [0x45; 20],
+                layout_version: 3,
+                expired_at: 1_900_000_000,
+                owner_hash20: owner,
+                manager_hash20: second_manager,
+                next_id: [0; 20],
+                records_hash: last.data[1..33].try_into().unwrap(),
+                records: vec![],
+                parent_id: None,
+            },
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    let (status, json) =
+        get_json(&app, "/assets/identities/dotcell/items/alice.cell/protocol").await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let edits = &json["recordEdits"];
+    assert_eq!(edits["count"], 3, "{edits}");
+    assert_eq!(
+        edits["last"]["editor"]["hashPrefix"],
+        format!("0x{}", hex::encode(second_manager)),
+        "{edits}"
+    );
+    assert_eq!(edits["last"]["editorRun"], 2, "{edits}");
+    assert_eq!(
+        edits["last"]["txHash"],
+        format!("0x{}", hex::encode(&hashes[4])),
+        "{edits}"
+    );
+    assert_eq!(edits["last"]["blockNumber"], 104, "{edits}");
+}
+
 #[tokio::test]
 async fn mnft_protocol_exposes_exact_configure_state_and_characteristic() {
     let id = vec![0x12; 28];

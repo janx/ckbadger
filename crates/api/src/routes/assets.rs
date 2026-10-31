@@ -2548,6 +2548,50 @@ pub(super) fn nft_item_tx_meaning(
     })
 }
 
+/// The protocol actions of one lifecycle transaction of item `item_id`,
+/// from its canonical activity row.
+fn item_tx_protocol_actions(
+    state: &AppState,
+    item_id: &[u8],
+    tx_hash: &[u8],
+) -> Result<Vec<ckbadger_store::types::ProtocolAction>, ApiRouteError> {
+    let (block, index) = state
+        .store
+        .get_tx_location(tx_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing lifecycle transaction 0x{} of item 0x{}",
+                hex::encode(tx_hash),
+                hex::encode(item_id)
+            ))
+        })?;
+    Ok(state
+        .store
+        .get_tx_actions(block, index, tx_hash)
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| {
+            ApiError::internal(format!(
+                "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
+                hex::encode(tx_hash),
+                hex::encode(item_id)
+            ))
+        })?
+        .protocol_actions)
+}
+
+/// A `.cell` name's own protocol actions in one of its lifecycle
+/// transactions — the classification its item feed rows carry as
+/// `protocolActions`.
+pub(super) fn dotcell_own_actions(
+    state: &AppState,
+    item_id: &[u8],
+    tx_hash: &[u8],
+) -> Result<Vec<String>, ApiRouteError> {
+    let actions = item_tx_protocol_actions(state, item_id, tx_hash)?;
+    Ok(dotcell_lifecycle_action(item_id, tx_hash, &actions)?.protocol_actions)
+}
+
 pub(super) fn collect_nft_item_lifecycle_actions(
     state: &Arc<AppState>,
     nft_id_bytes: &[u8],
@@ -2609,29 +2653,7 @@ pub(super) fn collect_nft_item_lifecycle_actions(
             standard,
             NftLifecycleStandard::DotCell | NftLifecycleStandard::DotBit
         ) {
-            let (block, index) = state
-                .store
-                .get_tx_location(&tx_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "missing lifecycle transaction 0x{} of item 0x{}",
-                        hex::encode(&tx_hash),
-                        hex::encode(nft_id_bytes)
-                    ))
-                })?;
-            state
-                .store
-                .get_tx_actions(block, index, &tx_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
-                    ApiError::internal(format!(
-                        "missing canonical actions of lifecycle transaction 0x{} of item 0x{}",
-                        hex::encode(&tx_hash),
-                        hex::encode(nft_id_bytes)
-                    ))
-                })?
-                .protocol_actions
+            item_tx_protocol_actions(state, nft_id_bytes, &tx_hash)?
         } else {
             Vec::new()
         };

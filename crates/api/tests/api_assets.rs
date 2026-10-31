@@ -4293,6 +4293,60 @@ async fn test_assets_dotcell_item_detail_by_id_and_by_name() {
     assert_eq!(item["sale"], serde_json::Value::Null);
 }
 
+/// ID-DC4 (round 3, R-5): the owner card's "this address holds 1 cell" had no
+/// fact behind it. The `.cell` detail now carries `ownerNameCount`: the live
+/// names its owner prefix holds, from the per-owner counter the holders list
+/// ranks by (one point read). A live name whose owner the counter says holds
+/// none is a broken counter, reported — never served as 0.
+#[tokio::test]
+async fn dotcell_detail_counts_the_names_its_owner_holds() {
+    let store = test_store();
+    seed_dotcell_name(
+        &store,
+        hex20(SUPPORT_ID),
+        "support",
+        hex20(SUPPORT_OWNER20),
+        dotcell_extra("support", hex20(SUPPORT_OWNER20), hex20(SUPPORT_OWNER20)),
+        true,
+        1_700_000_000_000,
+    );
+    seed_owner_lock(&store);
+    // The same owner prefix holds two more live names.
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_owner20_count(
+        &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+        &hex20(SUPPORT_OWNER20),
+        3,
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store.clone())).await;
+    let (status, item) = dotcell_get(
+        app.clone(),
+        "/api/v1/assets/identities/dotcell/items/support",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{item}");
+    assert_eq!(item["ownerNameCount"], 3, "{item}");
+    let (status, holders) = dotcell_get(app, "/api/v1/assets/identities/dotcell/holders").await;
+    assert_eq!(status, StatusCode::OK, "{holders}");
+    assert_eq!(holders["data"][0]["itemCount"], item["ownerNameCount"]);
+
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_identity_owner20_count(
+        &ckbadger_store::types::DOTCELL_SENTINEL_COLLECTION,
+        &hex20(SUPPORT_OWNER20),
+        0,
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, body) = dotcell_get(app, "/api/v1/assets/identities/dotcell/items/support").await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["message"].as_str().unwrap().contains("support"),
+        "{body}"
+    );
+}
+
 #[tokio::test]
 async fn test_assets_dotcell_item_state_grace_free_and_recycled() {
     for (tip_secs, expected) in [
