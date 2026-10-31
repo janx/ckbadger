@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from '../utils/test-utils';
+import { act, fireEvent, render, screen } from '../utils/test-utils';
+import { OPEN_SHORTCUTS_EVENT } from '@/lib/search-focus';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 const pushMock = vi.hoisted(() => vi.fn());
@@ -192,5 +193,14 @@ describe('CommandPalette', () => {
     expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
     expect(screen.getByText('Open command palette')).toBeInTheDocument();
     expect(screen.getByText('Focus global search bar')).toBeInTheDocument();
+  });
+
+  // TX-04: the footer's "Keyboard shortcuts" asks for the same help the "?" key opens.
+  it('opens the keyboard shortcuts help when the footer asks for it', () => {
+    render(<CommandPalette />);
+    act(() => {
+      window.dispatchEvent(new Event(OPEN_SHORTCUTS_EVENT));
+    });
+    expect(screen.getByText('Keyboard Shortcuts')).toBeInTheDocument();
   });
 });

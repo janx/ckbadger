@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useRouter } from '@/src/navigation';
-import { focusGlobalSearchInput, isEditableElement } from '@/lib/search-focus';
+import {
+  focusGlobalSearchInput,
+  isEditableElement,
+  OPEN_SHORTCUTS_EVENT,
+} from '@/lib/search-focus';
 import { resolveSearchRoute } from '@/lib/search-routing';
 
 interface CommandItem {
@@ -161,6 +165,17 @@ export function CommandPalette() {
         window.clearTimeout(gotoTimerRef.current);
       }
     };
+  }, []);
+
+  // TX-04: the footer's "Keyboard shortcuts" opens the help the "?" key opens.
+  useEffect(() => {
+    const open = () => {
+      setQuery('');
+      setMode('shortcuts');
+      setIsOpen(true);
+    };
+    window.addEventListener(OPEN_SHORTCUTS_EVENT, open);
+    return () => window.removeEventListener(OPEN_SHORTCUTS_EVENT, open);
   }, []);
 
   useEffect(() => {

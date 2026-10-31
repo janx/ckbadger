@@ -2,66 +2,54 @@
 
 import Link from '@/components/ui/link';
 import { resolveBuildVersion } from '@/lib/runtime-config';
+import { openKeyboardShortcuts } from '@/lib/search-focus';
 
+const LINK = 'text-text hover:text-jade py-1 transition-colors';
+
+/**
+ * The release a build string names: its part before any semver build metadata ("+…") or commit
+ * ("@…") — "0.8.2" for "0.8.2@f8947b8d3915". The whole build string stays in the title.
+ */
+function releaseOf(buildVersion: string): string {
+  return buildVersion.split(/[+@]/)[0];
+}
+
+/**
+ * The site footer (Main.dc.html, TX-04): "CKBadger <release>" as plain text, then Hardforks ·
+ * Fiber dashboard · cknerv · Web5 · Keyboard shortcuts. No always-on pulse: whether updates are
+ * live is said only by the vitals strip, on a page that holds the realtime socket (TX-01).
+ */
 export function SiteFooter() {
   const buildVersion = resolveBuildVersion();
 
   return (
     <footer className="border-base-border bg-base-void/95 border-t">
-      <div className="container mx-auto grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-6 gap-y-3 px-4 py-3 font-mono text-[11px] leading-relaxed lg:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)]">
-        <a
-          href="https://github.com/janx/ckbadger"
-          target="_blank"
-          rel="noreferrer"
-          title={`CKBadger ${buildVersion}`}
-          className="text-text-dim hover:text-jade group flex min-w-0 max-w-full items-center gap-2 justify-self-start py-1 transition-colors"
-        >
-          <span className="live-dot shrink-0" aria-hidden="true" />
-          <span className="text-text group-hover:text-jade shrink-0 transition-colors">
-            CKBadger
-          </span>
-          <span className="truncate">{buildVersion}</span>
-        </a>
-
-        <nav
-          aria-label="Footer"
-          className="col-span-2 row-start-2 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 lg:col-span-1 lg:col-start-2 lg:row-start-1"
-        >
-          <Link href="/hardforks" className="text-text hover:text-jade py-1 transition-colors">
+      <div className="container mx-auto flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-[18px] font-mono text-[12px] leading-relaxed">
+        <span className="text-text-dim" title={`CKBadger ${buildVersion}`}>
+          CKBadger {releaseOf(buildVersion)}
+        </span>
+        <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-1">
+          <Link href="/hardforks" className={LINK}>
             Hardforks
           </Link>
           <a
             href="https://dashboard.fiber.channel/"
             target="_blank"
             rel="noreferrer"
-            className="text-text hover:text-jade py-1 transition-colors"
+            className={LINK}
           >
-            Fiber Dashboard
+            Fiber dashboard
           </a>
-          <a
-            href="https://cknerv.web5.info"
-            target="_blank"
-            rel="noreferrer"
-            className="text-text hover:text-jade py-1 transition-colors"
-          >
+          <a href="https://cknerv.web5.info" target="_blank" rel="noreferrer" className={LINK}>
             cknerv
           </a>
-          <a
-            href="https://web5.info"
-            target="_blank"
-            rel="noreferrer"
-            className="text-text hover:text-jade py-1 transition-colors"
-          >
+          <a href="https://web5.info" target="_blank" rel="noreferrer" className={LINK}>
             Web5
           </a>
+          <button type="button" onClick={openKeyboardShortcuts} className={LINK}>
+            Keyboard shortcuts
+          </button>
         </nav>
-
-        <span className="text-text-dim col-start-2 row-start-1 flex items-center gap-2 justify-self-end lg:col-start-3">
-          <kbd className="border-base-border text-text rounded border px-1.5 py-0.5 font-mono text-[10px]">
-            ?
-          </kbd>
-          <span>keys</span>
-        </span>
       </div>
     </footer>
   );

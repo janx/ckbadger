@@ -1,6 +1,7 @@
-import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { OPEN_SHORTCUTS_EVENT } from '@/lib/search-focus';
 
 describe('SiteFooter', () => {
   beforeEach(() => {
@@ -9,37 +10,40 @@ describe('SiteFooter', () => {
     };
   });
 
-  it('groups the quick links in footer navigation and keeps build and shortcut information', () => {
-    render(<SiteFooter />);
+  // TX-04 (Main.dc.html footer): "CKBadger 0.8.2" as text (the build string in its title), then
+  // Hardforks · Fiber dashboard · cknerv · Web5 · Keyboard shortcuts; no always-on pulse.
+  it('names the release, lists the board links and opens the keyboard shortcuts (TX-04)', () => {
+    const opened = vi.fn();
+    window.addEventListener(OPEN_SHORTCUTS_EVENT, opened);
+    const { container } = render(<SiteFooter />);
 
     const footer = screen.getByRole('contentinfo');
+    const version = within(footer).getByText('CKBadger 0.1.0');
+    expect(version.tagName).not.toBe('A');
+    expect(version).toHaveAttribute('title', 'CKBadger 0.1.0+feature/foo@abcdef123456');
+    expect(container.querySelector('.live-dot')).toBeNull();
+
     const navigation = within(footer).getByRole('navigation', { name: 'Footer' });
-    const hardforksLink = within(navigation).getByRole('link', { name: 'Hardforks' });
-    expect(hardforksLink).toHaveAttribute('href', '/mainnet/hardforks');
-    const versionLink = within(footer).getByRole('link', {
-      name: 'CKBadger 0.1.0+feature/foo@abcdef123456',
-    });
-    expect(versionLink).toHaveAttribute('href', 'https://github.com/janx/ckbadger');
-    expect(versionLink).toHaveAttribute('title', 'CKBadger 0.1.0+feature/foo@abcdef123456');
-    const fiberLink = within(navigation).getByRole('link', { name: 'Fiber Dashboard' });
-    expect(fiberLink).toHaveAttribute('href', 'https://dashboard.fiber.channel/');
-    const cknervLink = within(navigation).getByRole('link', { name: 'cknerv' });
-    expect(cknervLink).toHaveAttribute('href', 'https://cknerv.web5.info');
-    expect(cknervLink).toHaveAttribute('target', '_blank');
-    expect(cknervLink).toHaveAttribute('rel', 'noreferrer');
-    const web5Link = within(navigation).getByRole('link', { name: 'Web5' });
-    expect(web5Link).toHaveAttribute('href', 'https://web5.info');
-    expect(within(navigation).getAllByRole('link')).toEqual([
-      hardforksLink,
-      fiberLink,
-      cknervLink,
-      web5Link,
-    ]);
-    expect(navigation).not.toContainElement(versionLink);
-    const shortcutHint = within(footer).getByText('keys');
-    expect(shortcutHint).toBeInTheDocument();
-    expect(navigation).not.toContainElement(shortcutHint);
-    expect(within(footer).getByText('?').tagName).toBe('KBD');
+    expect(within(navigation).getByRole('link', { name: 'Hardforks' })).toHaveAttribute(
+      'href',
+      '/mainnet/hardforks'
+    );
+    const fiber = within(navigation).getByRole('link', { name: 'Fiber dashboard' });
+    expect(fiber).toHaveAttribute('href', 'https://dashboard.fiber.channel/');
+    const cknerv = within(navigation).getByRole('link', { name: 'cknerv' });
+    expect(cknerv).toHaveAttribute('href', 'https://cknerv.web5.info');
+    expect(cknerv).toHaveAttribute('target', '_blank');
+    expect(cknerv).toHaveAttribute('rel', 'noreferrer');
+    expect(within(navigation).getByRole('link', { name: 'Web5' })).toHaveAttribute(
+      'href',
+      'https://web5.info'
+    );
+    expect(
+      Array.from(navigation.querySelectorAll('a, button')).map((el) => el.textContent)
+    ).toEqual(['Hardforks', 'Fiber dashboard', 'cknerv', 'Web5', 'Keyboard shortcuts']);
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Keyboard shortcuts' }));
+    expect(opened).toHaveBeenCalledTimes(1);
+    window.removeEventListener(OPEN_SHORTCUTS_EVENT, opened);
   });
 
   it('omits the design and coding attribution', () => {

@@ -35,3 +35,13 @@ export function focusGlobalSearchInput(): boolean {
   target.select();
   return true;
 }
+
+/**
+ * TX-04: the footer's "Keyboard shortcuts" asks the command palette (mounted once, in the header)
+ * for the same help the "?" key opens.
+ */
+export const OPEN_SHORTCUTS_EVENT = 'ckbadger:open-shortcuts';
+
+export function openKeyboardShortcuts(): void {
+  window.dispatchEvent(new Event(OPEN_SHORTCUTS_EVENT));
+}
