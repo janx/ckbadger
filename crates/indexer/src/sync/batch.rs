@@ -13434,6 +13434,39 @@ mod tests {
             pre_images
         }
 
+        /// D-1: with the molecule `Bytes` header read as the content length,
+        /// the xUDT extension binding (flags 0x1) fires on the real layout, and
+        /// live and bulk store the same metadata for it — the binding's name,
+        /// symbol, decimals, source and chain values, and the max supply its
+        /// Unique Cell carries.
+        #[tokio::test]
+        async fn live_and_bulk_agree_on_extension_bound_metadata_and_max_supply() {
+            let blocks = vec![funding_block(), ext_issuance_block(), ext_naming_block()];
+            let batches: Vec<Vec<BlockResponseWithCycles>> =
+                blocks.iter().cloned().map(|b| vec![b]).collect();
+            let store = write_batches_live(&batches, None).await;
+            let live = store.get_token(&ext_type_hash()).unwrap().unwrap();
+            assert_eq!(live.name.as_deref(), Some("RGB++ Protocol"));
+            assert_eq!(live.max_supply, Some(TOKEN_MAX_SUPPLY));
+            assert_eq!(
+                live.chain_metadata.as_ref().map(|chain| chain.binding),
+                Some(ckbadger_store::types::OnchainInfoBinding::XudtExtension)
+            );
+
+            let bulk_snapshot =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            let bulk = bulk_snapshot
+                .core
+                .token_state
+                .tokens
+                .get(&ext_type_hash())
+                .expect("the token must be indexed on the bulk path");
+
+            assert_same_token_metadata(&live, bulk, "extension binding");
+            assert_eq!(live.metadata_source, bulk.metadata_source);
+            assert_eq!(live.chain_metadata, bulk.chain_metadata);
+        }
+
         /// J4 (1): the orphan names a token issued unnamed earlier; rollback
         /// restores every metadata field, `metadata_source` and
         /// `chain_metadata` included, and the transfer count.

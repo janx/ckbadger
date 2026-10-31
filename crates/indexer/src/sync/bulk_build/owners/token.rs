@@ -166,6 +166,14 @@ impl TokenOwner {
                 continue;
             }
             if let Some(info) = self.unique_cell_info.get(&ext.args) {
+                // The bound Unique Cell's total supply is the token's max
+                // supply, as the live path observes it
+                // (`token_helpers::collect_token_max_supply_observations`).
+                // Only on a binding, so ordinary cells pay nothing.
+                if let Some(total_supply) = info.total_supply {
+                    self.max_supply_observations
+                        .insert(token_type_hash.to_vec(), total_supply);
+                }
                 // Unconditional: an extension binding displaces any earlier
                 // co-occurrence binding for the same token.
                 self.token_onchain_info.insert(
