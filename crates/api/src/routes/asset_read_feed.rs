@@ -83,12 +83,10 @@ fn item_feed(
         let created: Vec<_> = versions
             .iter()
             .filter(|v| v.response.tx_hash == hash)
-            .map(|v| &v.response)
             .collect();
         let consumed: Vec<_> = versions
             .iter()
             .filter(|v| v.response.consumed_by_tx.as_deref() == Some(hash))
-            .map(|v| &v.response)
             .collect();
         if created.len() > 1 || consumed.len() > 1 {
             return Err(ApiError::internal(format!(
@@ -105,7 +103,7 @@ fn item_feed(
         // burn row has only one, so it has none.
         let version_diff = match (consumed.first(), created.first()) {
             (Some(old), Some(new)) => Some(
-                super::asset_protocol::version_diff(standard, old, new).map_err(|e| {
+                super::asset_protocol::version_diff(state, standard, old, new).map_err(|e| {
                     ApiError::internal(format!(
                         "item=0x{} transaction={hash}: {e:#}",
                         hex::encode(&id)
@@ -120,8 +118,8 @@ fn item_feed(
             "protocolActions": meaning.protocol_actions,
             "ringRelink": meaning.ring_relink,
             "actedOn": meaning.acted_on,
-            "createdCell": created.first(),
-            "consumedCell": consumed.first(),
+            "createdCell": created.first().map(|v| &v.response),
+            "consumedCell": consumed.first().map(|v| &v.response),
             "versionDiff": version_diff,
         });
         if let (Some(class_id), "mint") = (&mnft_class, meaning.action) {

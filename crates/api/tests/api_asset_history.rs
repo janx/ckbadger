@@ -1558,6 +1558,148 @@ async fn dotcell_protocol_names_who_made_the_last_record_edits() {
     assert_eq!(edits["last"]["blockNumber"], 104, "{edits}");
 }
 
+/// A did:ckb cell's data: union 0 + table(document Bytes, local_id Bytes).
+fn did_data(document: &serde_json::Value) -> Vec<u8> {
+    let mut cbor = Vec::new();
+    ciborium::into_writer(document, &mut cbor).unwrap();
+    let mut raw = 0u32.to_le_bytes().to_vec();
+    raw.extend(mol_table(&[mol_bytes(&cbor), mol_bytes(b"local-1")]));
+    raw
+}
+
+/// A did:ckb item whose document went from `first` to `second`, served with
+/// its node chain.
+async fn did_two_version_app(
+    first: serde_json::Value,
+    second: serde_json::Value,
+) -> (axum::Router, Vec<u8>) {
+    let id = vec![0x2d; 20];
+    let versions = [
+        ItemVersion {
+            data: did_data(&first),
+            witness: None,
+            protocol_actions: vec![],
+            item_action: Some(AssetAction::Mint),
+        },
+        ItemVersion {
+            data: did_data(&second),
+            witness: None,
+            protocol_actions: vec![],
+            item_action: Some(AssetAction::Update),
+        },
+    ];
+    let store = test_store();
+    let (chain, hashes) = seed_item_versions(&store, &id, [0x42; 32], &versions);
+    let mut batch = StoreBatch::new(&store);
+    batch.put_identity(
+        &id,
+        &IdentityEntry {
+            standard: IdentityStandard::DidCkb,
+            owner_lock_hash: Some(cell(&id, 1000_00000000, 1).lock_script_hash),
+            name: None,
+            is_live: true,
+            created_at_block: 100,
+            created_at_tx: hashes[0].clone(),
+            extra: IdentityExtra::DidCkb,
+        },
+    );
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path,
+        Some(chain.cleanup),
+    ))
+    .await;
+    (app, id)
+}
+
+/// ID-C1 (round 3, R-11): a did:ckb feed row could not say "Handle changed".
+/// Every row that joins two versions now carries `versionDiff.handleChanged`:
+/// whether the documents' handle (`alsoKnownAs`) differs, read by the one
+/// did:ckb document decoder `/protocol` uses. A document update that keeps the
+/// handle is `false`; the mint row (no predecessor) has no `versionDiff`.
+#[tokio::test]
+async fn did_feed_rows_say_whether_the_handle_changed() {
+    for (second, changed) in [
+        (serde_json::json!({"alsoKnownAs": ["at://bob.test"]}), true),
+        (
+            serde_json::json!({
+                "alsoKnownAs": ["at://alice.test"],
+                "services": {"atproto_pds": {"type": "AtprotoPersonalDataServer", "endpoint": "https://pds.example"}}
+            }),
+            false,
+        ),
+    ] {
+        let (app, id) = did_two_version_app(
+            serde_json::json!({"alsoKnownAs": ["at://alice.test"]}),
+            second,
+        )
+        .await;
+        let (status, feed) = get_json(
+            &app,
+            &format!(
+                "/assets/identities/did/items/0x{}/activity-feed",
+                hex::encode(&id)
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{feed}");
+        let rows = feed["data"].as_array().unwrap();
+        assert_eq!(rows.len(), 2, "{feed}");
+        let diff = &rows[0]["itemContext"]["versionDiff"];
+        assert_eq!(diff["dataChanged"], true, "{feed}");
+        assert_eq!(diff["handleChanged"], changed, "{feed}");
+        assert!(rows[1]["itemContext"]["versionDiff"].is_null(), "{feed}");
+    }
+}
+
+/// R-11: two versions with the same data bytes hold the same document, so
+/// their handle is unchanged — known without reading the node (this fixture
+/// has no node chain at all).
+#[tokio::test]
+async fn did_feed_row_with_unchanged_data_has_an_unchanged_handle() {
+    let (store, id) = history_fixture();
+    seed_block_headers_at(&store, &[(100, 1_700_000_000_100)]);
+    let header = store.get_block_header(100).unwrap().unwrap();
+    let mut batch = StoreBatch::new(&store);
+    for (index, hash, action) in [
+        (1, [0x51; 32], AssetAction::Mint),
+        (2, [0x52; 32], AssetAction::Transfer),
+    ] {
+        batch.put_tx_actions(&make_test_tx_actions(
+            &cell(&id, 320_00000000, 2).lock_script_hash,
+            &hash,
+            &header.hash,
+            100,
+            index,
+            100,
+            0,
+        ));
+        batch
+            .put_raw_cf_by_name(
+                ckbadger_store::CF_STATS_SPORE,
+                &ckbadger_store::keys::encode_spore_outpoint_by_id_key(&id, &hash, 0),
+                &[action.compact()],
+            )
+            .unwrap();
+    }
+    batch.commit().unwrap();
+    let app = create_router(test_config(store)).await;
+    let (status, feed) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/activity-feed",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{feed}");
+    let diff = &feed["data"][0]["itemContext"]["versionDiff"];
+    assert_eq!(diff["dataChanged"], false, "{feed}");
+    assert_eq!(diff["handleChanged"], false, "{feed}");
+}
+
 #[tokio::test]
 async fn mnft_protocol_exposes_exact_configure_state_and_characteristic() {
     let id = vec![0x12; 28];
