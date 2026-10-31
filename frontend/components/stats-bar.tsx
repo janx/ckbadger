@@ -9,9 +9,10 @@ import { parseEpoch, type EpochInfo } from '@/lib/epoch';
 import { formatBlockNumber } from '@/lib/format-block';
 
 /**
- * The chain vitals strip under the header, on every page: whether realtime updates are live (a dot
- * before the block), block, epoch progress, block time, hash rate and difficulty — one row on a
- * desktop. It replaces the homepage's old hero numbers, epoch card and floating LIVE pill.
+ * The chain vitals strip under the header, on every page: block, epoch progress, block time, hash
+ * rate and difficulty, then — on a page that holds the realtime socket — "● Live" at its right end
+ * (Main.dc.html, TX-01). One row on a desktop; one row that scrolls inside itself on a phone
+ * (TX-05). It replaces the homepage's old hero numbers, epoch card and floating LIVE pill.
  */
 export function VitalsStrip() {
   const { data: stats, error } = useQuery({
@@ -21,20 +22,22 @@ export function VitalsStrip() {
     refetchInterval: 10000,
   });
   const isConnected = useRealtimeStore((s) => s.isConnected);
+  const held = useRealtimeStore((s) => s.socketHeld);
 
   return (
     <section
       aria-label="Chain vitals"
       data-testid="vitals-strip"
-      className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-4 gap-y-1 py-2.5 font-mono md:gap-x-6 md:gap-y-2.5 md:py-3"
+      className="flex min-w-0 flex-1 flex-nowrap items-baseline gap-x-4 gap-y-1 overflow-x-auto whitespace-nowrap py-2.5 font-mono md:flex-wrap md:gap-x-6 md:gap-y-2.5 md:overflow-visible md:whitespace-normal md:py-3"
     >
       {error ? (
-        <VitalsError connected={isConnected} message={error.message} />
+        <VitalsError message={error.message} />
       ) : stats ? (
-        <Vitals stats={stats} connected={isConnected} />
+        <Vitals stats={stats} />
       ) : (
-        <VitalsLoading connected={isConnected} />
+        <VitalsLoading />
       )}
+      {held && <LiveMark connected={isConnected} />}
     </section>
   );
 }
@@ -63,34 +66,30 @@ function Vital({ label, href, children }: { label: string; href?: string; childr
 const DOT_BOX = 'h-[7px] w-[7px] shrink-0 self-center rounded-full';
 
 /**
- * The realtime dot and the item it leads, kept together so the dot never wraps alone. A page that
- * does not hold the realtime socket gets an empty box of the same size instead: no "Not live" for
- * a connection it never makes, and the strip lines up the same on every page.
+ * The API's average block time is a seconds string ("8.43s"); the board writes the unit apart
+ * ("8.43 s", TX-05). Anything else is refused, not reshaped.
  */
-function Lead({ connected, children }: { connected: boolean; children: ReactNode }) {
-  const held = useRealtimeStore((s) => s.socketHeld);
-  return (
-    <div className="flex items-baseline gap-2">
-      {held ? (
-        <LiveDot connected={connected} />
-      ) : (
-        <span aria-hidden="true" data-testid="vitals-live-spacer" className={DOT_BOX} />
-      )}
-      {children}
-    </div>
-  );
+function BlockTime({ value }: { value: string | null }) {
+  if (value === null) return <Vital label="Block time">—</Vital>;
+  const seconds = /^(\d+(?:\.\d+)?)s$/.exec(value);
+  if (!seconds)
+    return (
+      <div role="alert" data-testid="vitals-block-time-error" className="flex items-baseline gap-2">
+        <span className={LABEL}>Block time</span>
+        <span className="text-rouge text-xs">{`block time ${JSON.stringify(value)} is not <seconds>s`}</span>
+      </div>
+    );
+  return <Vital label="Block time">{seconds[1]} s</Vital>;
 }
 
-function Vitals({ stats, connected }: { stats: NetworkStats; connected: boolean }) {
+function Vitals({ stats }: { stats: NetworkStats }) {
   return (
     <>
-      <Lead connected={connected}>
-        <Vital label="Block" href={`/blocks/${stats.latestBlock}`}>
-          {formatBlockNumber(stats.latestBlock)}
-        </Vital>
-      </Lead>
+      <Vital label="Block" href={`/blocks/${stats.latestBlock}`}>
+        {formatBlockNumber(stats.latestBlock)}
+      </Vital>
       <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
-      <Vital label="Block time">{stats.avgBlockTime ?? '—'}</Vital>
+      <BlockTime value={stats.avgBlockTime} />
       <Vital label="Hash rate" href="/charts/hash-rate">
         {stats.hashRate ?? '—'}
       </Vital>
@@ -155,13 +154,11 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
  * A failed /statistics/network, said plainly: no stale or placeholder numbers. Like the homepage
  * figures, an error wins over data until a fetch succeeds again.
  */
-function VitalsError({ connected, message }: { connected: boolean; message: string }) {
+function VitalsError({ message }: { message: string }) {
   return (
-    <Lead connected={connected}>
-      <span role="alert" data-testid="vitals-error" className="text-rouge text-xs">
-        {`Chain vitals unavailable: ${message}`}
-      </span>
-    </Lead>
+    <span role="alert" data-testid="vitals-error" className="text-rouge text-xs">
+      {`Chain vitals unavailable: ${message}`}
+    </span>
   );
 }
 
@@ -179,14 +176,10 @@ function LoadingVital({ label }: { label: string }) {
   );
 }
 
-function VitalsLoading({ connected }: { connected: boolean }) {
-  const [first, ...rest] = LOADING_LABELS;
+function VitalsLoading() {
   return (
     <>
-      <Lead connected={connected}>
-        <LoadingVital label={first} />
-      </Lead>
-      {rest.map((label) => (
+      {LOADING_LABELS.map((label) => (
         <LoadingVital key={label} label={label} />
       ))}
     </>
@@ -194,20 +187,26 @@ function VitalsLoading({ connected }: { connected: boolean }) {
 }
 
 /**
- * Whether the page's realtime socket is up: a jade dot when it is, a dim one while it is not yet or
- * no longer connected. The word is its accessible name and tooltip.
+ * Whether the page's realtime socket is up (Main.dc.html "● Live", TX-01): a jade dot and "Live"
+ * when it is, a dim dot and "Not live" while it is not yet or no longer connected. Only a page
+ * that holds the socket shows it.
  */
-function LiveDot({ connected }: { connected: boolean }) {
+function LiveMark({ connected }: { connected: boolean }) {
   return (
     <span
       role="status"
       data-testid="vitals-live"
       data-live={connected}
-      aria-label={connected ? 'Live' : 'Not live'}
       title={
         connected ? 'Live: realtime updates connected' : 'Not live: realtime updates not connected'
       }
-      className={`${DOT_BOX} ${connected ? 'bg-jade' : 'bg-base-border'}`}
-    />
+      className={`ml-auto flex shrink-0 items-center gap-2 text-[12px] ${connected ? 'text-jade' : 'text-text-dim'}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`${DOT_BOX} ${connected ? 'bg-jade' : 'bg-base-border'}`}
+      />
+      {connected ? 'Live' : 'Not live'}
+    </span>
   );
 }

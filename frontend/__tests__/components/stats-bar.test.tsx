@@ -99,7 +99,7 @@ describe('VitalsStrip', () => {
     expect(epoch).toHaveTextContent('246 / 1,590');
     expect(epoch).toHaveTextContent('≈ 3h 8m left');
     expect(screen.getByTestId('vitals-epoch-progress').style.width).toBe(`${(246 / 1590) * 100}%`);
-    expect(strip).toHaveTextContent('Block time8.43s');
+    expect(strip).toHaveTextContent('Block time8.43 s');
     expect(screen.getByRole('link', { name: /Hash rate 93.91 PH\/s/ })).toHaveAttribute(
       'href',
       '/mainnet/charts/hash-rate'
@@ -121,46 +121,52 @@ describe('VitalsStrip', () => {
     expect(screen.queryByTestId('vitals-epoch-progress')).not.toBeInTheDocument();
   });
 
-  it('renders no live dot on a page that never opens the realtime socket', async () => {
+  // TX-01 (Main.dc.html vitals): "● Live" closes the strip, pushed to its right end, and only on
+  // a page that holds the realtime socket; elsewhere nothing claims or denies a live feed.
+  it('says nothing about live updates on a page that never opens the realtime socket (TX-01)', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
-
     expect(screen.queryByTestId('vitals-live')).not.toBeInTheDocument();
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Not live')).not.toBeInTheDocument();
-    // An empty box of the dot's size keeps the strip aligned with the homepage's.
-    const spacer = screen.getByTestId('vitals-live-spacer');
-    expect(spacer).toHaveAttribute('aria-hidden', 'true');
-    expect(spacer).toBeEmptyDOMElement();
-    expect(spacer.nextElementSibling).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
+    expect(screen.queryByTestId('vitals-live-spacer')).not.toBeInTheDocument();
+    expect(strip).not.toHaveTextContent(/Live/);
   });
 
-  it('leads with the realtime dot on the page holding the socket, labelled Live only while connected', async () => {
-    // The homepage: useRealtimeData is mounted, so the socket is held.
+  it('ends the strip with "● Live" on the page holding the socket, "Not live" while it is down (TX-01)', async () => {
     useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
-
-    // The dot sits immediately before the Block item, and is there whether or not the socket is
-    // up, so the strip does not shift when it connects.
-    const dot = screen.getByTestId('vitals-live');
-    const lead = strip.firstElementChild as HTMLElement;
-    expect(lead).toContainElement(dot);
-    expect(dot.nextElementSibling).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
-    expect(dot).toHaveAttribute('data-live', 'false');
-    expect(dot).toHaveAccessibleName('Not live');
-
+    const live = screen.getByTestId('vitals-live');
+    expect(strip.lastElementChild).toBe(live);
+    expect(live).toHaveClass('ml-auto');
+    expect(live).toHaveTextContent('Not live');
+    expect(live).toHaveAttribute('data-live', 'false');
     act(() => useRealtimeStore.setState({ isConnected: true }));
-    expect(dot).toHaveAttribute('data-live', 'true');
-    expect(dot).toHaveAccessibleName('Live');
-    expect(dot).toHaveAttribute('title', 'Live: realtime updates connected');
+    expect(live).toHaveTextContent(/^Live$/);
+    expect(live).toHaveAttribute('data-live', 'true');
+    expect(live).toHaveAttribute('title', 'Live: realtime updates connected');
+    // Nothing leads the Block item any more.
+    expect(strip.firstElementChild).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
+  });
 
-    act(() => useRealtimeStore.setState({ isConnected: false }));
-    expect(dot).toHaveAttribute('data-live', 'false');
+  it('writes the block time with a space before its unit and keeps one row on a phone (TX-05)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('Block time8.43 s'));
+    // Below md the strip is one row that scrolls inside itself; from md up it wraps as before.
+    expect(strip).toHaveClass('flex-nowrap', 'overflow-x-auto', 'md:flex-wrap');
+  });
+
+  it('refuses a block time that is not "<seconds>s" (TX-05)', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats({ avgBlockTime: '8.43 seconds' }));
+    render(<VitalsStrip />);
+    expect(await screen.findByTestId('vitals-block-time-error')).toHaveTextContent(
+      'block time "8.43 seconds" is not <seconds>s'
+    );
   });
 
   it('spaces the items 24 px apart from md up, with a 56 px epoch bar, so one row fits at 1280', async () => {
