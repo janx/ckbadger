@@ -1167,6 +1167,7 @@ mod tests {
             status: None,
             consumed_by_tx: None,
             is_change: false,
+            code_cell: None,
             lock_args_decoded: None,
         };
         let mut groups = script_groups(&[input.clone(), input], &[output]).unwrap();
@@ -1260,6 +1261,7 @@ mod tests {
             status: None,
             consumed_by_tx: None,
             is_change: false,
+            code_cell: None,
             lock_args_decoded: None,
         }
     }

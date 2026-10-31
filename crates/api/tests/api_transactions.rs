@@ -3988,3 +3988,299 @@ async fn detail_refuses_lock_args_that_do_not_fit_the_registry_layout() {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Lane R-B · R-9: an output that is a registry family's code says so (SC-K5).
+// ---------------------------------------------------------------------------
+
+/// A family "Fixture Lock" with two registered versions whose code cells are
+/// indexed — v1 at block 5, v2 at block 9 — plus a binary the store observed
+/// but no registry family claims. Returns the three binaries' bytes.
+fn seed_code_cell_family(store: &Arc<CkbadgerStore>) -> [Vec<u8>; 3] {
+    let binaries = [
+        vec![0x7fu8, b'E', b'L', b'F', 1],
+        vec![0x7f, b'E', b'L', b'F', 2],
+        vec![0x7f, b'E', b'L', b'F', 3],
+    ];
+    let hashes: Vec<Vec<u8>> = binaries
+        .iter()
+        .map(|binary| compute_blake2b_data_hash(binary))
+        .collect();
+    store
+        .put_script_family_direct(
+            "fixture-lock",
+            &ScriptFamilyInfo {
+                family_id: "fixture-lock".into(),
+                name: "Fixture Lock".into(),
+                versions_count: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .put_script_family_name_direct("Fixture Lock", "fixture-lock")
+        .unwrap();
+    for (index, hash) in hashes.iter().enumerate() {
+        store
+            .put_script_version(
+                hash,
+                &ScriptVersionInfo {
+                    version_hash: hash.clone(),
+                    family_id: (index < 2).then(|| "fixture-lock".to_string()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        if index < 2 {
+            store
+                .put_script_version_by_family_direct("fixture-lock", hash)
+                .unwrap();
+        }
+    }
+    // Index v2's code cell first in the batch: numbering is by deployment
+    // position, not by write or hash order.
+    let mut batch = StoreBatch::new(store.as_ref());
+    for (block, hash) in [(9i64, &hashes[1]), (5, &hashes[0]), (7, &hashes[2])] {
+        let tx = [block as u8; 32];
+        batch.put_block_header(
+            block,
+            &CachedBlockHeader {
+                hash: vec![0xb0 + block as u8; 32],
+                parent_hash: vec![0; 32],
+                timestamp: 1_700_000_000_000 + block * 10_000,
+                epoch_number: 1,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1_700_000_000_000 + block * 10_000,
+            },
+        );
+        batch.put_cell(
+            &tx,
+            0,
+            &LiveCellInfo {
+                capacity: 10_000_000_000,
+                lock_script_hash: vec![0x10; 32],
+                lock_code_hash: vec![0x20; 32],
+                lock_hash_type: 1,
+                lock_args: vec![],
+                type_script_hash: None,
+                type_code_hash: None,
+                type_hash_type: None,
+                type_args: None,
+                data_size: 5,
+                occupied_capacity: 4_600_000_000,
+                udt_amount: None,
+                data_hash: Some(hash.clone()),
+            },
+            block,
+        );
+        batch.put_cell_by_data_hash(hash, block, &tx, 0);
+        batch.put_tx_hash_map(&tx, block, 0);
+        batch.put_tx_index(
+            block,
+            0,
+            &TxIndexEntry {
+                tx_hash: tx,
+                is_cellbase: false,
+                timestamp: 1_700_000_000_000 + block * 10_000,
+                inputs_count: 1,
+                outputs_count: 1,
+                fee: 0,
+                tx_size: 1,
+                cycles: None,
+                semantic_tags: 0,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    binaries
+}
+
+/// R-9 (SC-K5): an output whose data is a registry family version's binary
+/// carries `codeCell { scriptName, versionHash, version }` — `version` is the
+/// binary's place among the family's versions in deployment order (v1 =
+/// first deployed). Any other output — plain data, or a binary no registry
+/// family claims — has no `codeCell`.
+#[tokio::test]
+async fn detail_outputs_name_the_script_and_version_a_code_cell_holds() {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let binaries = seed_code_cell_family(&store);
+    let server = MockServer::start().await;
+    let parent = pending_previous_output_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        funding_transaction_rpc_response("0x174876e800", &format!("0x{}", "33".repeat(20))),
+    )
+    .await;
+    let output = || {
+        serde_json::json!({
+            "capacity": "0x0",
+            "lock": {
+                "code_hash": TEST_SECP_LOCK_CODE_HASH,
+                "hash_type": "type",
+                "args": format!("0x{}", "44".repeat(20)),
+            },
+            "type": null,
+        })
+    };
+    let hash = pending_tx_hash_hex();
+    mount_transaction_rpc(
+        &server,
+        transaction_rpc_response(
+            &hash,
+            &[(&parent, 0)],
+            vec![output(), output(), output(), output()],
+            vec![
+                format!("0x{}", hex::encode(&binaries[1])),
+                format!("0x{}", hex::encode(&binaries[0])),
+                format!("0x{}", hex::encode(&binaries[2])),
+                "0x0102".to_string(),
+            ],
+            "pending",
+            None,
+        ),
+    )
+    .await;
+    let mut config = test_config(store);
+    config.ckb_rpc_url = server.uri();
+    let app = create_router(config).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let code_cell = |index: usize| json["outputs"][index].get("codeCell").cloned();
+    assert_eq!(
+        code_cell(0),
+        Some(serde_json::json!({
+            "scriptName": "Fixture Lock",
+            "versionHash": format!("0x{}", hex::encode(compute_blake2b_data_hash(&binaries[1]))),
+            "version": 2,
+        })),
+        "{json}"
+    );
+    assert_eq!(code_cell(1).unwrap()["version"], 1, "{json}");
+    assert_eq!(code_cell(2), None, "unregistered binary: {json}");
+    assert_eq!(code_cell(3), None, "plain data: {json}");
+}
+
+/// R-9 on the committed detail (the store-indexed path): the same one
+/// `codeCell` rule as the pending detail.
+#[tokio::test]
+async fn committed_detail_outputs_name_the_script_and_version_a_code_cell_holds() {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let binaries = seed_code_cell_family(&store);
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x9b; 32]))
+        .hash_type(ckb_types::core::ScriptHashType::Type.into())
+        .args(Bytes::from(vec![0x42; 20]).pack())
+        .build();
+    let output = packed::CellOutput::new_builder()
+        .capacity(100_000_000_000u64.pack())
+        .lock(lock.clone())
+        .build();
+    let cellbase = TransactionBuilder::default()
+        .input(packed::CellInput::new_cellbase_input(20))
+        .witness(
+            packed::CellbaseWitness::new_builder()
+                .lock(lock)
+                .build()
+                .as_bytes()
+                .pack(),
+        )
+        .build();
+    let deploy = TransactionBuilder::default()
+        .output(output)
+        .output_data(Bytes::from(binaries[0].clone()).pack())
+        .build();
+    let block = BlockBuilder::default()
+        .number(20u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(cellbase.clone())
+        .transaction(deploy.clone())
+        .build();
+    let block_hash: [u8; 32] = block.hash().unpack();
+    let chain = seed_ckb_chain(&[block]);
+    let deploy_hash: [u8; 32] = deploy.hash().unpack();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_block_header(20, &detail_fixture_header(block_hash, 1_700_000_500_000));
+    batch.put_tx_hash_map(&deploy_hash, 20, 1);
+    batch.put_tx_index(
+        20,
+        1,
+        &TxIndexEntry {
+            tx_hash: deploy_hash,
+            is_cellbase: false,
+            timestamp: 1_700_000_500_000,
+            inputs_count: 0,
+            outputs_count: 1,
+            fee: 0,
+            tx_size: 100,
+            cycles: None,
+            semantic_tags: 0,
+        },
+    );
+    batch.put_cell(
+        &deploy_hash,
+        0,
+        &LiveCellInfo {
+            capacity: 100_000_000_000,
+            lock_script_hash: vec![0x77; 32],
+            lock_code_hash: vec![0x9b; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0x42; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: binaries[0].len() as i32,
+            occupied_capacity: 6_600_000_000,
+            udt_amount: None,
+            data_hash: Some(compute_blake2b_data_hash(&binaries[0])),
+        },
+        20,
+    );
+    batch.put_tx_actions(&make_test_tx_actions(
+        &[0x77; 32],
+        &deploy_hash,
+        &block_hash,
+        20,
+        1,
+        0,
+        0,
+    ));
+    batch.commit().unwrap();
+    let app = create_router(test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    ))
+    .await;
+    let (status, json) = get_json(
+        &app,
+        &format!("/transactions/0x{}/detail", hex::encode(deploy_hash)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    assert_eq!(
+        json["outputs"][0]["codeCell"],
+        serde_json::json!({
+            "scriptName": "Fixture Lock",
+            "versionHash": format!("0x{}", hex::encode(compute_blake2b_data_hash(&binaries[0]))),
+            "version": 1,
+        }),
+        "{json}"
+    );
+}

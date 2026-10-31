@@ -1,7 +1,7 @@
 use axum::{
     extract::{Path, Query, State},
     routing::{get, post},
-    Extension, Router,
+    Extension, Json, Router,
 };
 use ckb_store_reader::RpcTransactionView;
 use serde::{Deserialize, Serialize};
@@ -790,6 +790,41 @@ pub struct TransactionOutputResponse {
     /// The lock's args decoded by its family's layout (TX-20); `null` for a
     /// lock family without a known layout.
     pub lock_args_decoded: Option<serde_json::Value>,
+    /// R-9 (SC-K5): this output's data is a registry family version's binary
+    /// — which script and version it is. Absent for every other output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_cell: Option<super::scripts::CodeCellIdentity>,
+}
+
+/// Name the script and version each output's data is the code of
+/// ([`super::scripts::code_cell_identity`]); `outputs_data[i]` is output
+/// `i`'s data.
+fn identify_code_cells(
+    state: &Arc<AppState>,
+    outputs: &mut [TransactionOutputResponse],
+    outputs_data: &[&[u8]],
+    tx: &str,
+) -> Result<(), ApiRouteError> {
+    if outputs.len() != outputs_data.len() {
+        return Err(ApiError::internal(format!(
+            "transaction {tx}: {} outputs but {} outputs_data",
+            outputs.len(),
+            outputs_data.len()
+        )));
+    }
+    let mut memo = super::scripts::FamilyVersionNumbers::default();
+    for (index, (output, data)) in outputs.iter_mut().zip(outputs_data).enumerate() {
+        output.code_cell = super::scripts::code_cell_identity(state, data, &mut memo).map_err(
+            |(status, Json(mut error))| {
+                error.message = format!(
+                    "transaction {tx} output {index} code cell: {}",
+                    error.message
+                );
+                (status, Json(error))
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// Decode every input and output lock's args through the one lock-args
@@ -1481,6 +1516,7 @@ async fn get_transaction_detail(
         })?;
         let fee_paid_by = settle_fee_payers_and_change(&io.inputs, &mut io.outputs, &hash)?;
         decode_detail_lock_args(&mut io.inputs, &mut io.outputs, &hash)?;
+        identify_code_cells(&state, &mut io.outputs, &outputs_data, &hash)?;
         // A cellbase is never pending; one the node has committed and this
         // store has not indexed yet still names the block it pays. This
         // branch reads the node only (the store may lag the target as well),
@@ -1723,6 +1759,8 @@ async fn get_transaction_detail(
     let cellbase_witness = cellbase_witness_response(is_cellbase, &witnesses, &tx_hash_hex)?;
     let fee_paid_by = settle_fee_payers_and_change(&inputs, &mut outputs, &tx_hash_hex)?;
     decode_detail_lock_args(&mut inputs, &mut outputs, &tx_hash_hex)?;
+    let output_data_slices: Vec<&[u8]> = outputs_data.iter().map(|data| data.as_ref()).collect();
+    identify_code_cells(&state, &mut outputs, &output_data_slices, &tx_hash_hex)?;
     let pays = if is_cellbase {
         let window = state.consensus().await?.tx_proposal_window;
         super::blocks::cellbase_pays(&state.store, window, block_number)?
@@ -1997,6 +2035,7 @@ fn build_inputs_outputs_from_pool_tx(
                 status: Some("pending".into()),
                 consumed_by_tx: None,
                 is_change: false,
+                code_cell: None,
                 lock_args_decoded: None,
                 capacity: cell.capacity.to_string(),
                 used_capacity: occupied.to_string(),
@@ -2389,6 +2428,7 @@ fn build_inputs_outputs_from_ckb(
                     status: None,
                     consumed_by_tx: None,
                     is_change: false,
+                    code_cell: None,
                     lock_args_decoded: None,
                     capacity: cap.to_string(),
                     used_capacity: occ.to_string(),
