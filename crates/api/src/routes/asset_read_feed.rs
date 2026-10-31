@@ -123,10 +123,8 @@ fn item_feed(
             "versionDiff": version_diff,
         });
         if let (Some(class_id), "mint") = (&mnft_class, meaning.action) {
-            let tx_hash = hex::decode(hash.trim_start_matches("0x"))
-                .map_err(|e| ApiError::internal(format!("feed transaction hash {hash}: {e}")))?;
-            let class_cell =
-                assets::mnft_class_cell_of_tx(state, &tx_hash, class_id).map_err(|e| {
+            let class_cell = assets::mnft_class_cell_of_tx(state, &meaning.tx_hash, class_id)
+                .map_err(|e| {
                     ApiError::internal(format!("item=0x{} mint {hash}: {e:#}", hex::encode(&id)))
                 })?;
             row["itemContext"]["classCell"] = json!(class_cell);
