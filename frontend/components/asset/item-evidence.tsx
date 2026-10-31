@@ -103,10 +103,13 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
 export function ItemTransactionContext({
   transaction,
   item,
+  part = 'all',
 }: {
   transaction: Transaction & { itemContext?: ItemFeedContext };
   /** Names the row's protocol actions as its Activities row does (ID-C4). */
   item: ItemFeedSubject;
+  /** ID-C8: the identity boards give the action and the cell after it a column each. */
+  part?: 'all' | 'action' | 'cell';
 }) {
   const context = (transaction as Transaction & { itemContext?: ItemFeedContext }).itemContext;
   if (!context)
@@ -125,10 +128,12 @@ export function ItemTransactionContext({
         headline.neighbour && 'opacity-[0.45]'
       )}
     >
-      <span className="text-text-bright">
-        <FeedHeadlineText headline={headline} />
-      </span>
-      {context.createdCell ? (
+      {part !== 'cell' && (
+        <span className="text-text-bright">
+          <FeedHeadlineText headline={headline} />
+        </span>
+      )}
+      {part === 'action' ? null : context.createdCell ? (
         <>
           {/* F2 objects (OB-13): where the object went, as the ObjectTxs board names it. */}
           {item.kind === 'object' && (

@@ -54,3 +54,35 @@ describe('AssetTransactions board columns', () => {
     expect(headers.at(-1)).toBe('Object · cell after');
   });
 });
+
+// ID-C8 (IdentityBit / BitCell / Did / Dotcell boards): an identity's Transactions read
+// Transaction · Block · date · <standard> action · Cells · Fee · Size · This name's cell after it —
+// no Output capacity and no Cycles columns.
+describe('AssetTransactions identity columns (ID-C8)', () => {
+  it('uses the identity boards’ columns, the block dated on the UTC+8 clock', () => {
+    render(
+      <AssetTransactions
+        rows={[tx(1, 1930, null)]}
+        identity={{ actionLabel: '.bit action', action: () => 'Renewed' }}
+        context={{ label: "This name's cell after it", render: () => 'Output 0 · cell after' }}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'Asset transactions' });
+    const headers = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent);
+    expect(headers.map((h) => h!.replace(/0[\d,]+$/, ''))).toEqual([
+      'Transaction',
+      'Block · date',
+      '.bit action',
+      'Cells',
+      'Fee',
+      'Size, bytes',
+      "This name's cell after it",
+    ]);
+    const row = within(table).getAllByRole('row')[1];
+    // 1700000000000 ms = 2023-11-15 06:13:20 UTC+8
+    expect(row).toHaveTextContent('#1,001 · 2023-11-15');
+    expect(row).toHaveTextContent('Renewed');
+  });
+});

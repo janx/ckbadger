@@ -26,7 +26,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { formatTimeAgo } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import type { AssetClass } from '@/lib/design-tokens';
@@ -81,8 +81,13 @@ export interface AssetTransactionsProps {
     render: (tx: Transaction) => ReactNode;
     placement?: 'end' | 'after-cells';
   };
+  /**
+   * ID-C8 (identity boards): the row's action in its own column after Block, the block dated
+   * (UTC+8) instead of aged, and no Output capacity / Cycles columns.
+   */
+  identity?: { actionLabel: string; action: (tx: Transaction) => ReactNode };
 }
-export function AssetTransactions({ rows, token, context }: AssetTransactionsProps) {
+export function AssetTransactions({ rows, token, context, identity }: AssetTransactionsProps) {
   for (const tx of rows) {
     if (tx.outputCapacity === undefined || !Number.isSafeInteger(tx.txSize) || tx.txSize! <= 0)
       throw new Error(`${tx.hash}: missing transaction capacity or size`);
@@ -106,16 +111,31 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
     },
     {
       key: 'block',
-      label: 'Block · age',
+      // ID-C8: the identity boards date the block (UTC+8); the other asset boards age it.
+      label: identity ? 'Block · date' : 'Block · age',
       minWidth: 160,
       render: (r) => (
         <>
           <AppLink href={`/blocks/${r.blockNumber}`}>{formatBlockNumber(r.blockNumber)}</AppLink>
-          <span className="text-text-dim"> · {formatTimeAgo(r.timestamp)}</span>
+          <span className="text-text-dim">
+            {' '}
+            · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
+          </span>
           <span className="text-text-dim block text-[11px]">tx {r.index} in block</span>
         </>
       ),
     },
+    ...(identity
+      ? [
+          {
+            key: 'action',
+            label: identity.actionLabel,
+            minWidth: 150,
+            className: '!whitespace-normal',
+            render: identity.action,
+          } satisfies ListColumn<Transaction>,
+        ]
+      : []),
     {
       key: 'cells',
       label: 'Cells',
@@ -189,12 +209,16 @@ export function AssetTransactions({ rows, token, context }: AssetTransactionsPro
         ),
     }
   );
-  if (contextColumn && context?.placement !== 'after-cells') columns.push(contextColumn);
+  // ID-C8: the identity boards carry no Output capacity or Cycles column.
+  const shown = identity
+    ? columns.filter((column) => column.key !== 'output' && column.key !== 'cycles')
+    : columns;
+  if (contextColumn && context?.placement !== 'after-cells') shown.push(contextColumn);
   return (
     <ListTable
       label="Asset transactions"
       rows={rows}
-      columns={columns}
+      columns={shown}
       rowKey={(r) => r.hash}
       empty="No transactions."
     />
@@ -216,6 +240,7 @@ export interface AssetFeedProps {
   }) => Promise<CursorPaginatedResponse<Transaction> | CollectionFeedPage<Transaction>>;
   token?: AssetTransactionsProps['token'];
   context?: AssetTransactionsProps['context'];
+  identity?: AssetTransactionsProps['identity'];
   /** One item's own feed: every row carries its item context (see itemFeedHeadline). */
   item?: ItemFeedSubject;
   /** A collection's feed: every row carries its collection context (OB-C13). */
@@ -237,6 +262,7 @@ export function AssetFeed({
   loadTransactions,
   token,
   context,
+  identity,
   initialActivityCursor,
   onActivityCursorChange,
   item,
@@ -333,7 +359,12 @@ export function AssetFeed({
               <p className="text-text-dim py-6 text-xs">No activities.</p>
             )
           ) : (
-            <AssetTransactions rows={txs.data!.data} token={token} context={context} />
+            <AssetTransactions
+              rows={txs.data!.data}
+              token={token}
+              context={context}
+              identity={identity}
+            />
           )}
           <CursorPagination
             total={current.data.total}

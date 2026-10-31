@@ -88,7 +88,7 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
     scroll: false,
   });
 });
-it('uses the independent Transactions layer and preserves unavailable cycles', async () => {
+it('uses the independent Transactions layer, without a Cycles column (ID-C8)', async () => {
   vi.mocked(api.getItemTransactions).mockResolvedValue({
     ...itemTransactionsProducer,
     data: itemTransactionsProducer.data.map((t) => ({
@@ -100,8 +100,12 @@ it('uses the independent Transactions layer and preserves unavailable cycles', a
   render(<Page identityId={evidence.itemId} />);
   fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
   await screen.findByRole('table', { name: 'Asset transactions' });
-  expect(screen.getByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
-    'Not computed'
+  // ID-C8: the identity boards carry no Cycles (or Output capacity) column, so a pending cycles
+  // count is not shown at all rather than as "Not computed".
+  const table = screen.getByRole('table', { name: 'Asset transactions' });
+  expect(table).not.toHaveTextContent('Not computed');
+  expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).not.toContain(
+    'Cycles'
   );
   expect(screen.getByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getItemTransactions).toHaveBeenCalledWith('bit-cell', evidence.itemId, {

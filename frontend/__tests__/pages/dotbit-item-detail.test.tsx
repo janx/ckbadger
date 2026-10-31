@@ -89,7 +89,7 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
     scroll: false,
   });
 });
-it('uses the independent Transactions layer and preserves unavailable cycles', async () => {
+it('uses the independent Transactions layer, without a Cycles column (ID-C8)', async () => {
   vi.mocked(api.getItemTransactions).mockResolvedValue({
     ...itemTransactionsProducer,
     data: itemTransactionsProducer.data.map((t) => ({
@@ -101,8 +101,12 @@ it('uses the independent Transactions layer and preserves unavailable cycles', a
   render(<Page identityId={evidence.itemId} />);
   fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
   await screen.findByRole('table', { name: 'Asset transactions' });
-  expect(screen.getByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
-    'Not computed'
+  // ID-C8: the identity boards carry no Cycles (or Output capacity) column, so a pending cycles
+  // count is not shown at all rather than as "Not computed".
+  const table = screen.getByRole('table', { name: 'Asset transactions' });
+  expect(table).not.toHaveTextContent('Not computed');
+  expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).not.toContain(
+    'Cycles'
   );
   expect(screen.getByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getItemTransactions).toHaveBeenCalledWith('dotbit', evidence.itemId, {
@@ -259,4 +263,26 @@ it('says nothing of .bit Cells while the index is not derived (L3: bitCells null
   expect(await screen.findByText('Registered', { selector: 'dt' })).toBeInTheDocument();
   expect(screen.queryByText('.bit Cells', { selector: 'dt' })).toBeNull();
   expect(screen.queryByRole('alert')).toBeNull();
+});
+
+// ID-C8 (IdentityBit board): the Transactions tab reads Transaction · Block · date · .bit action ·
+// Cells · Fee · Size · This name's cell after it.
+it('lays the .bit Transactions out in the board columns (ID-C8)', async () => {
+  render(<Page identityId={evidence.itemId} />);
+  fireEvent.click(await screen.findByRole('tab', { name: 'Transactions' }));
+  const table = await screen.findByRole('table', { name: 'Asset transactions' });
+  const headers = Array.from(table.querySelectorAll('th')).map((th) =>
+    th.textContent!.replace(/0[\d,]+$/, '')
+  );
+  expect(headers).toEqual([
+    'Transaction',
+    'Block · date',
+    '.bit action',
+    'Cells',
+    'Fee',
+    'Size, bytes',
+    "This name's cell after it",
+  ]);
+  const row = table.querySelector('tbody tr')!;
+  expect(row).toHaveTextContent(/cell after/);
 });

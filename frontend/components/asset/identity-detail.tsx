@@ -76,11 +76,19 @@ const FEED_SUBJECT: Record<IdentityKind, ItemFeedSubject> = {
   'bit-cell': { kind: 'identity', actionWords: IDENTITY_ACTION_WORDS.bit_cell },
 };
 
+/** ID-C8 (identity boards): the Transactions action column, named for the standard. */
 const ACTION_COLUMN: Record<IdentityKind, string> = {
-  dotbit: '.bit action · its cell after',
-  'bit-cell': 'Action · its cell after',
-  did: 'Action · its cell after',
-  dotcell: '.cell action · its cell after',
+  dotbit: '.bit action',
+  'bit-cell': 'Action',
+  did: 'Action',
+  dotcell: '.cell action',
+};
+/** ID-C8: the last column, the identity's own cell after the transaction. */
+const CELL_AFTER_COLUMN: Record<IdentityKind, string> = {
+  dotbit: "This name's cell after it",
+  'bit-cell': "This name's cell after it",
+  did: 'Its cell after it',
+  dotcell: "This name's cell after it",
 };
 
 /** The title's parts: the name, and the standard's suffix set in rose (ID-C10, ID-D1). */
@@ -259,9 +267,17 @@ export function CanonicalIdentityDetail({
           onActivityCursorChange={cursorChanged}
           loadActivities={(q) => api.getItemActivityFeed(kind, id, q)}
           loadTransactions={(q) => api.getItemTransactions(kind, id, q)}
+          identity={{
+            actionLabel: ACTION_COLUMN[kind],
+            action: (tx) => (
+              <ItemTransactionContext transaction={tx} item={feedSubject} part="action" />
+            ),
+          }}
           context={{
-            label: ACTION_COLUMN[kind],
-            render: (tx) => <ItemTransactionContext transaction={tx} item={feedSubject} />,
+            label: CELL_AFTER_COLUMN[kind],
+            render: (tx) => (
+              <ItemTransactionContext transaction={tx} item={feedSubject} part="cell" />
+            ),
           }}
         />
       }
