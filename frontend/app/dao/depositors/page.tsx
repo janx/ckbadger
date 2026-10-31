@@ -6,7 +6,7 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { ApiRequestError, api, type DaoDepositorRow } from '@/lib/api';
+import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { retryTransientOnly } from '@/lib/query-client';
@@ -24,6 +24,16 @@ function Ckb({ shannons }: { shannons: string }) {
   );
 }
 
+/** A depositor by address, or by its lock hash when the lock encodes to no address (L1). */
+function Depositor({ row }: { row: DaoDepositorRow }) {
+  const id = row.address ?? row.lockScriptHash;
+  return (
+    <Link href={`/address/${id}`} className="text-text-bright hover:underline" title={id}>
+      {id.slice(0, 12)}…{id.slice(-7)}
+    </Link>
+  );
+}
+
 const COLUMNS: ListColumn<DaoDepositorRow>[] = [
   {
     key: 'rank',
@@ -35,11 +45,7 @@ const COLUMNS: ListColumn<DaoDepositorRow>[] = [
     key: 'depositor',
     label: 'Depositor',
     minWidth: 260,
-    render: (d) => (
-      <Link href={`/address/${d.address}`} className="text-text-bright hover:underline">
-        {d.address.slice(0, 12)}…{d.address.slice(-7)}
-      </Link>
-    ),
+    render: (d) => <Depositor row={d} />,
   },
   {
     key: 'deposits',
@@ -65,9 +71,10 @@ const COLUMNS: ListColumn<DaoDepositorRow>[] = [
 ];
 
 /**
- * Every current (phase-0) depositor, ranked by CKB deposited (DAO-12, R2b-a 42). The cursor is bound
- * to the tip the ranking was made at; when the tip moves the API answers 400 and the page says so
- * and starts again from rank 1 rather than mixing two rankings.
+ * Every current (phase-0) depositor, ranked by CKB deposited (DAO-12, R2b-a 42). Round 3 (L1, J2):
+ * the cursor is the rank served so far, not bound to a tip; each page says the tip it was ranked
+ * at, and a page ranked after the tip moved says so (a depositor whose rank changed between pages
+ * can repeat or be missing — accepted by J2).
  */
 export default function DaoDepositorsPage() {
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
@@ -79,11 +86,11 @@ export default function DaoDepositorsPage() {
   });
   const page = query.data;
   const client = useQueryClient();
-  // The tip moved: every cached page belongs to the old ranking, so rank again from 1.
-  const restart = () => {
-    client.removeQueries({ queryKey: ['dao-depositors'] });
-    setCursors([undefined]);
-  };
+  const first = client.getQueryData<RankedPage>(['dao-depositors', undefined]);
+  const moved =
+    page && first && cursor !== undefined && first.anchor.blockNumber !== page.anchor.blockNumber
+      ? { from: first.anchor.blockNumber, to: page.anchor.blockNumber }
+      : null;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -109,26 +116,21 @@ export default function DaoDepositorsPage() {
           }
         >
           {query.isError ? (
-            <div role="alert" className="text-rouge space-y-2 text-xs">
-              <div>
-                {query.error instanceof ApiRequestError && query.error.status === 400 && cursor
-                  ? `The ranking moved with the chain tip: ${query.error.apiMessage}`
-                  : `DAO depositors could not be loaded: ${String(query.error)}`}
-              </div>
-              {cursor && (
-                <button
-                  type="button"
-                  onClick={restart}
-                  className="border-base-border text-text hover:text-text-bright h-8 rounded-md border px-3"
-                >
-                  Start again from rank 1
-                </button>
-              )}
+            <div role="alert" className="text-rouge text-xs">
+              DAO depositors could not be loaded: {String(query.error)}
             </div>
           ) : !page ? (
             <div className="text-text-dim py-6 text-xs">Ranking every depositor…</div>
           ) : (
             <>
+              {moved && (
+                <p data-testid="ranking-moved" className="text-text-dim mb-3 max-w-[80ch] text-xs">
+                  The chain tip moved since the first page (ranked at block{' '}
+                  {formatBlockNumber(moved.from)}): this page continues the ranking at block{' '}
+                  {formatBlockNumber(moved.to)}, so a depositor whose rank changed may repeat or be
+                  missing.
+                </p>
+              )}
               <ListTable
                 label="DAO depositors"
                 rows={page.data}
@@ -140,12 +142,7 @@ export default function DaoDepositorsPage() {
                     <div className="flex items-baseline justify-between gap-3">
                       <span className="min-w-0">
                         <span className="text-text-dim mr-2">{d.rank.toLocaleString('en-US')}</span>
-                        <Link
-                          href={`/address/${d.address}`}
-                          className="text-text-bright hover:underline"
-                        >
-                          {d.address.slice(0, 12)}…{d.address.slice(-7)}
-                        </Link>
+                        <Depositor row={d} />
                       </span>
                       <span className="text-text-dim shrink-0">{d.sharePercent}%</span>
                     </div>

@@ -5469,7 +5469,7 @@ export const api = {
     fetchApi(`/forks/${forkPointNumber}/${orphanPrefix}`),
 
   // ---- F2 group dao: lane R2b-a 42/43 (DAO-12, DAO-8) ----
-  /** Every current phase-0 depositor, ranked; the cursor is tied to the tip it was ranked at. */
+  /** Every current phase-0 depositor, ranked; the cursor is the rank served so far (L1). */
   getDaoDepositors: (
     params: { limit?: number; cursor?: string } = {}
   ): Promise<DaoDepositorsPage> => {
@@ -5559,14 +5559,21 @@ interface DaoAnchor {
 interface DaoDepositorRow {
   rank: number;
   lockScriptHash: string;
-  address: string;
+  /** Round 3 (contracts L1): null when the lock encodes to no address (name it by lock hash). */
+  address: string | null;
   /** Shannons. */
   capacity: string;
   depositCount: number;
   sharePercent: string;
 }
 
-/** `/dao/depositors`: ranked at `anchor`; a cursor from another tip answers 400 ("start again"). */
+/**
+ * `/dao/depositors` (round 3, contracts L1 / J2): ranked at `anchor`, the tip THIS page was ranked
+ * at. `nextCursor` is the number of depositors served so far (opaque to the page); it is not bound
+ * to a tip, so a page read after the tip moved continues the new tip's ranking. A cursor past the
+ * end gives `data: []`, `hasMore: false`, `nextCursor: null`. `503 derive_pending` (aggregate
+ * `dao_live_agg`) until the indexer has derived the depositor totals.
+ */
 interface DaoDepositorsPage {
   anchor: DaoAnchor;
   total: number;

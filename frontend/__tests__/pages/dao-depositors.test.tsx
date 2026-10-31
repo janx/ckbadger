@@ -20,8 +20,8 @@ const row = (rank: number) => ({
   depositCount: rank,
   sharePercent: '1.00',
 });
-const page = (rows: number[], nextCursor: string | null) => ({
-  anchor: { blockNumber: 20879205, blockHash: '0x' + 'a'.repeat(64) },
+const page = (rows: number[], nextCursor: string | null, tip = 20879205) => ({
+  anchor: { blockNumber: tip, blockHash: '0x' + 'a'.repeat(64) },
   total: 3,
   limit: 50,
   hasMore: nextCursor !== null,
@@ -34,9 +34,9 @@ describe('DAO depositors page (DAO-12)', () => {
     vi.mocked(api.getDaoDepositors).mockReset();
   });
 
-  it('lists every depositor ranked at one tip and pages with the tip-bound cursor', async () => {
+  it('lists every depositor ranked at one tip and pages by rank (L1)', async () => {
     vi.mocked(api.getDaoDepositors)
-      .mockResolvedValueOnce(page([1, 2], '20879205:2'))
+      .mockResolvedValueOnce(page([1, 2], '2'))
       .mockResolvedValueOnce(page([3], null));
     render(<DaoDepositorsPage />);
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Nervos DAO depositors');
@@ -49,7 +49,7 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 50, cursor: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Next 50 →' }));
     await waitFor(() =>
-      expect(api.getDaoDepositors).toHaveBeenLastCalledWith({ limit: 50, cursor: '20879205:2' })
+      expect(api.getDaoDepositors).toHaveBeenLastCalledWith({ limit: 50, cursor: '2' })
     );
     const next = await screen.findByRole('table', { name: 'DAO depositors' });
     await waitFor(() => expect(next.querySelector('tbody tr')).toHaveTextContent('997.00000000'));
@@ -93,28 +93,55 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(first).toHaveTextContent('1ckb1qzda0cr0…ssd2hqn1.00%999.00000000 CKB · 1 deposit');
   });
 
-  it('says the ranking moved with the tip and starts again from rank 1', async () => {
+  it('says which tip each page was ranked at when the tip moved between pages (L1, J2)', async () => {
     vi.mocked(api.getDaoDepositors)
-      .mockResolvedValueOnce(page([1, 2], '20879205:2'))
-      .mockRejectedValueOnce(
-        new ApiRequestError(
-          400,
-          'bad_request',
-          'depositor cursor ranks at block 20879205, not at the current tip; start again'
-        )
-      )
-      .mockResolvedValueOnce(page([1, 2], '20879300:2'));
+      .mockResolvedValueOnce(page([1, 2], '2'))
+      .mockResolvedValueOnce(page([3], null, 20879300));
     render(<DaoDepositorsPage />);
     await screen.findByRole('table', { name: 'DAO depositors' });
     fireEvent.click(screen.getByRole('button', { name: 'Next 50 →' }));
-    const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('not at the current tip; start again');
-    fireEvent.click(within(alert).getByRole('button', { name: 'Start again from rank 1' }));
-    // A fresh ranking at the new tip, not the cached first page of the old one.
-    await waitFor(() => expect(api.getDaoDepositors).toHaveBeenCalledTimes(3));
-    expect(api.getDaoDepositors).toHaveBeenLastCalledWith({ limit: 50, cursor: undefined });
-    expect(
-      await screen.findByText((_, el) => el?.getAttribute('data-role') === 'ranked-at')
-    ).toHaveTextContent('3 depositors ranked by CKB deposited at block #20,879,205');
+    await waitFor(() =>
+      expect(
+        screen.getByText((_, el) => el?.getAttribute('data-role') === 'ranked-at')
+      ).toHaveTextContent('3 depositors ranked by CKB deposited at block #20,879,300')
+    );
+    // The rank cursor continues the new tip's ranking; the page says the ranking moved.
+    expect(screen.getByTestId('ranking-moved')).toHaveTextContent(
+      'The chain tip moved since the first page (ranked at block #20,879,205): this page continues the ranking at block #20,879,300, so a depositor whose rank changed may repeat or be missing.'
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Start again from rank 1' })).toBeNull();
+  });
+
+  it('names a depositor without an address by its lock hash', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce({
+      ...page([1], null),
+      data: [{ ...row(1), address: null }],
+    });
+    render(<DaoDepositorsPage />);
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    expect(within(table).getByRole('link', { name: /^0x0000000000…0000001$/ })).toHaveAttribute(
+      'href',
+      `/mainnet/address/0x${'1'.padStart(64, '0')}`
+    );
+  });
+
+  it('waits behind the "being derived" banner while the depositor totals are derived (L0)', async () => {
+    vi.mocked(api.getDaoDepositors)
+      .mockRejectedValueOnce(
+        new ApiRequestError(503, 'derive_pending', 'dao_live_agg is being derived', {
+          aggregate: 'dao_live_agg',
+          state: 'not_started',
+          rowsDone: null,
+          derivedFromTip: null,
+        })
+      )
+      .mockResolvedValueOnce(page([1, 2], null));
+    render(<DaoDepositorsPage />);
+    expect(await screen.findByRole('status', { name: 'Being derived' })).toHaveTextContent(
+      'The indexer will derive the DAO depositor totals once its live sync starts.'
+    );
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(await screen.findByRole('table', { name: 'DAO depositors' })).toBeInTheDocument();
   });
 });
