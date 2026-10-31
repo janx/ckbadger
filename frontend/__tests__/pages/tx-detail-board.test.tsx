@@ -566,12 +566,15 @@ describe('Transaction board, R2b-a fields', () => {
   it('reads a Shadow Lock and a JoyID lock by their registry layouts (R-8, TX-20)', async () => {
     const base = committed();
     const shadow = `0x31da${'00'.repeat(28)}5d74`;
+    const joyidReason = 'JoyID: args are 23 bytes, layout subType(2) + pubkeyHash(20) expects 22';
     vi.mocked(api.getTransactionDetail).mockResolvedValue({
       ...base,
       inputs: [
         {
           ...base.inputs![0],
-          lockArgsDecoded: { lock: 'joyid', subType: '0x0001', pubkeyHash: `0x${'55'.repeat(20)}` },
+          // Pass 3 (revised R-8): a real 23-byte JoyID args — not decoded, the reason served.
+          lockArgsDecoded: null,
+          lockArgsDecodeError: joyidReason,
         },
       ],
       outputs: [
@@ -590,26 +593,28 @@ describe('Transaction board, R2b-a fields', () => {
             amount: null,
             compositionTier: null,
           },
-          lockArgsDecoded: { lock: 'shadow-lock', prefix: '0x01', ckbfsTypeHash: shadow },
+          lockArgsDecoded: { lock: 'shadow-lock', prefix: '0x07', hash: shadow },
+          lockArgsDecodeError: null,
         },
       ],
     } as TransactionDetail);
     render(<TransactionDetailPage />);
     await screen.findByTestId('tx-io-output-0', {}, SLOW);
-    // The raw sub type bytes are shown as they are, not interpreted.
+    // A misfit lock says why its args were not decoded, quietly, in place of the fields.
     await waitFor(
       () =>
         expect(document.querySelector('[data-group-row="lock:run:0xinputlock"]')).toHaveTextContent(
-          'args sub type 0x0001 + pubkey hash 0x555555...5555'
+          `args not decoded: ${joyidReason}`
         ),
       SLOW
     );
     expect(
       document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
-    ).toHaveTextContent('args 0x01 + CKBFS type hash 0x31da00...5d74');
+    ).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
     const owner = screen.getByTestId('tx-fact-output-lock-0');
     expect(owner).toHaveTextContent('New owner of the object in output 0');
-    expect(owner).toHaveTextContent('args 0x01 + CKBFS type hash 0x31da00...5d74');
+    expect(owner).toHaveTextContent('args 0x07 + hash 0x31da00...5d74');
+    expect(owner).not.toHaveTextContent(/CKBFS|held through/);
   });
 
   it('names a CoBuild proxy action and shows the script info hash of an undeclared one (R-7, TX-36)', async () => {

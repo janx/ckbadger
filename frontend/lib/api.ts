@@ -803,10 +803,15 @@ interface TransactionDetail extends Omit<
     /**
      * F2-tx (R2b-a 39): the lock args through the API's one decoder; null for other families.
      * Round 3 (contracts R-B · R-8) adds the registry field layouts, every field `0x`-hex in layout
-     * order: JoyID `{lock:"joyid", subType, pubkeyHash}`, Nervape Shadow Lock
-     * `{lock:"shadow-lock", prefix, ckbfsTypeHash}` (see `LockArgsDecoded`).
+     * order, raw: JoyID `{lock:"joyid", subType, pubkeyHash}`, Nervape Shadow Lock
+     * `{lock:"shadow-lock", prefix, hash}` (see `LockArgsDecoded`).
      */
     lockArgsDecoded?: LockArgsDecoded | null;
+    /**
+     * Revised R-8: why `lockArgsDecoded` is null although the registry declares a layout
+     * ("JoyID: args are 23 bytes, layout … expects 22"); null otherwise. Never both non-null.
+     */
+    lockArgsDecodeError?: string | null;
   }>;
   outputs?: Array<{
     capacity: string;
@@ -829,6 +834,8 @@ interface TransactionDetail extends Omit<
     codeCell?: { scriptName: string; versionHash: string; version: number | null };
     /** F2-tx (R2b-a 39): see `inputs[].lockArgsDecoded`. */
     lockArgsDecoded?: LockArgsDecoded | null;
+    /** Revised R-8: see `inputs[].lockArgsDecodeError`. */
+    lockArgsDecodeError?: string | null;
   }>;
   scriptGroups?: TransactionScriptGroup[];
   witnessDetails?: TransactionWitness[];
@@ -1339,7 +1346,9 @@ interface ActivityLockCall {
   scriptHash: string;
   scriptName?: string;
   /** Decoded lock args (see ExactJson): integers are exact decimal strings. */
-  decoded?: LockArgsDecoded;
+  decoded?: LockArgsDecoded | null;
+  /** Revised R-8: why `decoded` is null although the registry declares a layout; else null. */
+  decodeError?: string | null;
 }
 
 /**

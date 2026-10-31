@@ -64,7 +64,7 @@ import {
   type TxLinkSets,
 } from '@/lib/tx-detail-model';
 import dynamic from '@/lib/dynamic-client';
-import { decodedLockArgsText, isFieldLayoutLock } from '@/lib/lock-args';
+import { isFieldLayoutLock, lockArgsLine } from '@/lib/lock-args';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 
@@ -930,8 +930,11 @@ export default function TransactionDetailPage() {
       href: groupHref(g, lookup),
       mark: mark && mark !== 'ckb' && mark !== 'other' ? mark : null,
       sub: (() => {
-        const decoded = g.kind === 'lock' ? firstCell?.lockArgsDecoded : null;
-        return decoded ? decodedLockArgsText(decoded) : `args ${truncateHash(g.script.args, 6, 4)}`;
+        const line =
+          g.kind === 'lock' && firstCell
+            ? lockArgsLine(firstCell.lockArgsDecoded, firstCell.lockArgsDecodeError)
+            : null;
+        return line ?? `args ${truncateHash(g.script.args, 6, 4)}`;
       })(),
       ran: g.ran,
       cellIds: groupCells(g),
@@ -1652,30 +1655,38 @@ export default function TransactionDetailPage() {
               )}
             </dd>
           </div>
-          {(tx.outputs ?? []).flatMap((cell, i) =>
-            cell.lockArgsDecoded && isFieldLayoutLock(cell.lockArgsDecoded) && cell.lock
-              ? [
-                  // Round 3 (R-8, TX-20): a lock whose args follow a registry field layout, read
-                  // from the API's decoded fields (Main.dc.html "New owner of the Spore").
-                  <div
-                    key={`lock-${i}`}
-                    data-testid={`tx-fact-output-lock-${i}`}
-                    className="flex flex-col gap-0.5"
-                  >
-                    <dt className="text-text-dim">
-                      {cell.display?.kind === 'object'
-                        ? `New owner of the object in output ${i}`
-                        : `Lock of output ${i}`}
-                    </dt>
-                    <dd>
-                      {registeredName(lookup, cell.lock.codeHash) ??
-                        truncateHash(cell.lock.codeHash, 10, 6)}
-                      , {decodedLockArgsText(cell.lockArgsDecoded)}
-                    </dd>
-                  </div>,
-                ]
-              : []
-          )}
+          {(tx.outputs ?? []).flatMap((cell, i) => {
+            // R-8 (TX-20): an output lock read by a registry field layout, or — revised R-8 — one
+            // whose args do not fit its layout, with the API's reason in place of the fields.
+            const line = lockArgsLine(cell.lockArgsDecoded, cell.lockArgsDecodeError);
+            const shown =
+              cell.lock &&
+              line !== null &&
+              (cell.lockArgsDecodeError ||
+                (cell.lockArgsDecoded && isFieldLayoutLock(cell.lockArgsDecoded)));
+            if (!shown || !cell.lock) return [];
+            return [
+              <div
+                key={`lock-${i}`}
+                data-testid={`tx-fact-output-lock-${i}`}
+                className="flex flex-col gap-0.5"
+              >
+                <dt className="text-text-dim">
+                  {cell.display?.kind === 'object'
+                    ? `New owner of the object in output ${i}`
+                    : `Lock of output ${i}`}
+                </dt>
+                <dd>
+                  {registeredName(lookup, cell.lock.codeHash) ??
+                    truncateHash(cell.lock.codeHash, 10, 6)}
+                  ,{' '}
+                  <span className={cell.lockArgsDecodeError ? 'text-text-dim' : undefined}>
+                    {line}
+                  </span>
+                </dd>
+              </div>,
+            ];
+          })}
           <div className="flex flex-col gap-0.5 sm:col-span-2">
             <dt className="text-text-dim">Capacity</dt>
             <dd>{capacityFact}</dd>

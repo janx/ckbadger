@@ -7,14 +7,14 @@ import { truncateHash } from '@/lib/utils';
 
 /**
  * Registry field layouts (contracts R-B · R-8): the args are these fields back to back, so they
- * read "args <field> + <field>". `prefix` is a fixed byte and is written as its value alone.
+ * read "args <field> + <field>". `prefix` (the Shadow Lock's first byte, raw) is written as its
+ * value alone; the Shadow Lock's 32 bytes are only a `hash` — nothing names what they are.
  */
 const FIELD_LAYOUT_LOCKS = new Set(['joyid', 'shadow-lock']);
 
 const FIELD_WORDS: Record<string, string> = {
   subType: 'sub type',
   pubkeyHash: 'pubkey hash',
-  ckbfsTypeHash: 'CKBFS type hash',
 };
 
 function fieldValue(value: ExactJson): string {
@@ -36,6 +36,22 @@ export function isFieldLayoutLock(decoded: LockArgsDecoded): boolean {
  * order, e.g. JoyID's `subType` is shown as given, not interpreted); "pubkey hash 0x…" (fields
  * joined by " · ") for the other decoded families.
  */
+/**
+ * The one lock line for a lock's args as the API stated them (pass 3, revised R-8): the decoded
+ * fields; or, when the args do not fit the registry layout, "args not decoded: <the API's
+ * reason>"; or null when the registry declares no layout for the lock (say nothing).
+ */
+export function lockArgsLine(
+  decoded: LockArgsDecoded | null | undefined,
+  decodeError: string | null | undefined
+): string | null {
+  if (decoded && decodeError)
+    throw new Error(`lock args both decoded and not decoded (${decodeError})`);
+  if (decoded) return decodedLockArgsText(decoded);
+  if (decodeError) return `args not decoded: ${decodeError}`;
+  return null;
+}
+
 export function decodedLockArgsText(decoded: LockArgsDecoded): string {
   const fields = Object.entries(decoded).filter(([key]) => key !== 'lock');
   if (isFieldLayoutLock(decoded))

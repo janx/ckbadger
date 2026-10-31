@@ -1,6 +1,7 @@
 'use client';
 
 import { Fragment } from 'react';
+import { lockArgsLine } from '@/lib/lock-args';
 import Link from '@/components/ui/link';
 import {
   getScriptDetailHref,
@@ -158,7 +159,10 @@ export function TypeCallExpr({ sc, quiet = false }: { sc: ActivityTypeCall; quie
 // ---------------------------------------------------------------------------
 
 export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quiet?: boolean }) {
-  return (
+  // Revised R-8: args that do not fit the lock's registry layout carry the API's reason; it is
+  // said once, quietly, after the call (decoded fields are not drawn on activity rows).
+  const notDecoded = lockArgsLine(lc.decoded, lc.decodeError);
+  const call = (
     <CallExpr
       name={formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName })}
       href={getScriptDetailHref({
@@ -170,6 +174,12 @@ export function LockCallExpr({ lc, quiet = false }: { lc: ActivityLockCall; quie
       args={lc.lockArgs === '0x' ? null : truncateHash(lc.lockArgs, 6, 4)}
       quiet={quiet}
     />
+  );
+  if (!lc.decodeError) return call;
+  return (
+    <>
+      {call} <span className="text-text-dim">{notDecoded}</span>
+    </>
   );
 }
 

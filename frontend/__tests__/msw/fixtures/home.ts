@@ -435,9 +435,12 @@ export const feedSamples = {
       {
         lockCodeHash: '0xnervape',
         lockHashType: 'type',
-        lockArgs: `0x0131da${'00'.repeat(14)}5d74`,
+        // Revised R-8: 33 bytes — a raw prefix byte and a raw 32-byte hash.
+        lockArgs: `0x0131da${'00'.repeat(28)}5d74`,
         scriptHash: '0xl1',
         scriptName: 'Nervape Shadow Lock',
+        decoded: { lock: 'shadow-lock', prefix: '0x01', hash: `0x31da${'00'.repeat(28)}5d74` },
+        decodeError: null,
       },
     ],
     participants: [
@@ -457,6 +460,9 @@ export const feedSamples = {
         lockHashType: 'type',
         lockArgs: `0x4b0000${'00'.repeat(14)}838e`,
         scriptHash: `0x43b2924e${'00'.repeat(26)}895d`,
+        // An unregistered lock: no registry layout, so neither decoded nor a reason (R-8).
+        decoded: null,
+        decodeError: null,
       },
     ],
     participants: [

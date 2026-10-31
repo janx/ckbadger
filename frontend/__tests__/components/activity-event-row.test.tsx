@@ -675,6 +675,26 @@ describe('quiet call expressions', () => {
   });
 });
 
+// Pass 3 (revised R-8): a lock call whose args do not fit its registry layout says why, quietly.
+describe('LockCallExpr decode error (R-8)', () => {
+  const lc = {
+    lockCodeHash: '0xjoyid',
+    lockHashType: 'type',
+    lockArgs: '0x0001' + '55'.repeat(21),
+    scriptHash: '0xj',
+    scriptName: 'JoyID',
+  };
+  it('adds the reason after the call when the API could not decode the args', () => {
+    const reason = 'JoyID: args are 23 bytes, layout subType(2) + pubkeyHash(20) expects 22';
+    render(<LockCallExpr lc={{ ...lc, decodeError: reason }} />);
+    expect(screen.getByText(`args not decoded: ${reason}`)).toHaveClass('text-text-dim');
+  });
+  it('says nothing more for decoded args or a lock with no layout', () => {
+    const { container } = render(<LockCallExpr lc={{ ...lc, decodeError: null }} />);
+    expect(container).not.toHaveTextContent('not decoded');
+  });
+});
+
 describe('ExactCkb', () => {
   it('wraps exact amounts at the decimal or unit without dropping digits', () => {
     const { container } = render(
