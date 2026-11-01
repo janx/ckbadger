@@ -175,6 +175,10 @@ describe('exact capacity and cell anatomy', () => {
 });
 
 describe('byte and DNA inspection', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   const fields = [
     {
       id: 'flags',
@@ -229,6 +233,8 @@ describe('byte and DNA inspection', () => {
   // F2 objects (round 2): the single-object gel moved from `ui/allele-gel` (now the collection's
   // allele gel) to `ui/sequencing-gel`; the same linking contract is kept here.
   it('links a decoded trait to its gene bands without inventing a decode', () => {
+    // the gel lays itself out for its measured box (V3); 896 px holds the side-by-side map
+    stubChartWidth(896);
     const onHover = vi.fn();
     const gene = (key: string, name: string, offset: number, length: number, value: string) => ({
       key,
