@@ -76,7 +76,8 @@ export function DetailLayout({
           </div>
         )}
         {facts && (
-          <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
+          // One column until md: at 640 a two-column grid wrapped labels into three lines.
+          <dl className="mt-6 grid grid-cols-1 gap-x-12 gap-y-3 md:grid-cols-2">
             {facts.map(({ label, value }) => (
               <div
                 key={label}

@@ -33,6 +33,38 @@ describe('Asset history', () => {
     }
   });
 
+  it('sizes the shared gutter of its aligned charts from their longest tick (responsive B#17)', () => {
+    // The token page printed ".0k transactions": a fixed 100 px gutter cut "10k transactions".
+    stubChartWidth(358);
+    try {
+      render(
+        <AssetHistory
+          weeklyNoun="transactions"
+          daily={daily}
+          weekly={[{ weekStart: '2024-01-01', count: 8000 }]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'RGB++', decimals: 8 }}
+        />
+      );
+      const plots = screen.getAllByRole('img');
+      expect(plots).toHaveLength(3);
+      // Every tick label starts inside its chart.
+      const top = [...plots[2].querySelectorAll('text')].find(
+        (n) => n.textContent === '10k transactions'
+      )!;
+      expect(top.getAttribute('text-anchor')).toBe('end');
+      expect(Number(top.getAttribute('x')) - '10k transactions'.length * 6).toBeGreaterThanOrEqual(
+        0
+      );
+      // The three plots still share one left edge, so their days line up.
+      const lefts = plots.map((plot) => plot.querySelector('line')!.getAttribute('x1'));
+      expect(new Set(lefts).size).toBe(1);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('uses jade for occupied capacity and neutral ink for free capacity', () => {
     render(
       <AssetHistory weeklyNoun="transfers" daily={daily} weekly={[]} completeThrough="2024-01-08" />

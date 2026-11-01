@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { Chart } from '@/components/ui/chart';
@@ -58,6 +58,37 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(text(container)).toContain('target 4 %');
     // The axis grows to hold the target even though no point reaches it.
     expect(text(container).some((t) => t === '4 %')).toBe(true);
+  });
+
+  it('keys a target line above the plot, clear of the data and the hardfork names (C#16)', () => {
+    // Responsive review C#16: "target 2.50 %" sat on the noisy data line at the right edge.
+    const { container } = render(
+      <Chart
+        title="Uncle rate"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="%"
+        referenceLines={[{ value: 2.5, label: 'target 2.50 %' }]}
+        markers={[{ index: 3, label: 'Meepo', plotLabel: 'Meepo', href: '/hardforks' }]}
+        formatValue={(v) => v}
+      />
+    );
+    const key = container.querySelector('[data-reference-key="target 2.50 %"]')!;
+    expect(key.querySelector('text')).toHaveTextContent('target 2.50 %');
+    expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('3 3');
+    // The plot starts below the key: every grid line and the marker's name are under it.
+    const keyY = Number(key.querySelector('text')!.getAttribute('y'));
+    const gridYs = [...container.querySelectorAll('svg line[stroke="#1a1f30"]')].map((n) =>
+      Number(n.getAttribute('y1'))
+    );
+    expect(Math.min(...gridYs) - keyY).toBeGreaterThanOrEqual(10);
+    const marker = [...container.querySelectorAll('svg text')].find(
+      (n) => n.textContent === 'Meepo'
+    )!;
+    expect(Number(marker.getAttribute('y')) - keyY).toBeGreaterThanOrEqual(10);
+    // The line itself carries no label in the plot.
+    expect(container.querySelector('[data-reference-line="target 2.50 %"] text')).toBeNull();
   });
 
   it('labels the x axis at the given ticks instead of only the first and last label (CH-24)', () => {
@@ -192,6 +223,121 @@ describe('shared Chart encodings for the charts boards', () => {
     );
     const ticks = [...container.querySelectorAll('[data-x-tick]')].map((n) => n.textContent);
     expect(ticks).toEqual(['10k-100k', '>=1m']);
+  });
+
+  it('keeps every label of a categorical axis, on a second row when one cannot hold them', () => {
+    // Responsive review C#6: at 640 the Cell size card showed three of its six bucket labels.
+    stubChartWidth(284);
+    const labels = ['<100', '100-1k', '1k-10k', '10k-100k', '100k-1m', '>=1m'];
+    const buckets = labels.map((label, i) => ({ label, values: { primary: String(6 - i) } }));
+    const { container } = render(
+      <Chart
+        title="Cell size"
+        subtitle="buckets"
+        data={buckets}
+        series={series}
+        unit="cells"
+        kind="bars"
+        height={120}
+        slotBars
+        categoricalX
+        xTicks={labels.map((label, index) => ({ index, label }))}
+        formatValue={(v) => v}
+      />
+    );
+    const ticks = [...container.querySelectorAll('[data-x-tick]')];
+    expect(ticks.map((n) => n.textContent)).toEqual(labels);
+    const rows = new Set(ticks.map((n) => n.getAttribute('y')));
+    expect(rows.size).toBe(2);
+    // The second row is added below the plot, not taken from it.
+    expect(container.querySelector('svg[role="img"]')).toHaveAttribute('height', '132');
+  });
+
+  it('refuses a categorical axis that does not name every bar', () => {
+    stubChartWidth(600);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const buckets = ['a', 'b', 'c'].map((label) => ({ label, values: { primary: '1' } }));
+    expect(() =>
+      render(
+        <Chart
+          title="Cell size"
+          subtitle="buckets"
+          data={buckets}
+          series={series}
+          unit="cells"
+          kind="bars"
+          slotBars
+          categoricalX
+          xTicks={[
+            { index: 0, label: 'a' },
+            { index: 2, label: 'c' },
+          ]}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow(/categorical axis/);
+  });
+
+  it('refuses a fixed gutter narrower than its longest tick, instead of cutting the tick', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const weeks = ['2024-01-01', '2024-01-08'].map((label, i) => ({
+      label,
+      values: { count: ['8000', '120'][i] },
+    }));
+    expect(() =>
+      render(
+        <Chart
+          title="Transactions per week"
+          subtitle="weekly"
+          data={weeks}
+          series={[{ key: 'count', label: 'Transactions', color: '#2edba3' }]}
+          unit="transactions"
+          kind="bars"
+          plotLeft={100}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow(/plotLeft 100.*"10k transactions" needs 104/);
+  });
+
+  it('keys many bands with a compact swatch legend instead of headline numbers (C#5, C#9)', () => {
+    // Responsive review C#5: 21 script bands were read out as right-aligned 18 px numbers before
+    // the chart, ~800 px tall at 390, with no swatch tying a band to its name.
+    const names = Array.from({ length: 21 }, (_, i) => `Script ${i + 1}`);
+    const bands = names.map((label, i) => ({
+      key: `s${i}`,
+      label,
+      color: `#${(0x203040 + i * 0x050403).toString(16)}`,
+    }));
+    const rows = ['2024-01-01', '2024-01-02'].map((label, d) => ({
+      label,
+      values: Object.fromEntries(bands.map((b, i) => [b.key, String((i + 1) * (d + 1))])),
+    }));
+    const { container } = render(
+      <Chart
+        title="Occupied common knowledge"
+        subtitle="daily"
+        data={rows}
+        series={bands}
+        unit="CKB"
+        kind="stacked"
+        seriesLegend
+        formatValue={(v) => v}
+      />
+    );
+    const legend = screen.getByRole('list', { name: 'Occupied common knowledge legend' });
+    const items = within(legend).getAllByRole('listitem');
+    expect(items).toHaveLength(21);
+    items.forEach((item, i) => {
+      // Band order, each with its band's colour, its name and its latest value.
+      expect(item.querySelector('[data-swatch]')).toHaveStyle({ backgroundColor: bands[i].color });
+      expect(item).toHaveTextContent(`${names[i]}${String((i + 1) * 2)} CKB`);
+    });
+    expect(legend).toHaveClass('text-[13px]');
+    // The legend follows the plot, and the caption carries no headline numbers.
+    const plot = container.querySelector('svg[role="img"]')!;
+    expect(plot.compareDocumentPosition(legend) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('figcaption .text-\\[18px\\]')).toBeNull();
   });
 
   it('gives bars a hover dot and reading but no end dot (visual pass)', () => {

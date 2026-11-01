@@ -1222,88 +1222,25 @@ export default function TransactionDetailPage() {
           Unable to refresh transaction: {error.message}. Showing previously loaded data.
         </p>
       )}
-      {/* Tier 1: what happened, to whom, for how much, and which cells changed hands. */}
-      <div data-tier="1" className="flex flex-wrap items-start gap-x-14 gap-y-8">
-        <div className="flex min-w-0 flex-[999_1_640px] flex-col gap-8">
-          <header className="flex flex-col gap-2">
-            <span className="text-text-dim text-xs">Transaction</span>
-            <h1 className="text-text-bright break-words text-[26px] font-medium">{headline}</h1>
-            {summary}
-            <div className="flex min-w-0 items-center gap-0.5 text-xs">
-              <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
-              <CopyHash hash={tx.hash} />
-            </div>
-          </header>
-          {activity && (
-            <BalanceChanges
-              activity={activity}
-              fee={tx.fee}
-              compensation={compensation ?? null}
-              genesis={genesis}
-            />
-          )}
-          {tiles && (
-            <DetailSection
-              title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
-              actions={
-                legend.length > 0 && (
-                  <span className="text-text-dim flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px]">
-                    {legend.map((l) => (
-                      <button
-                        key={l.label}
-                        type="button"
-                        onMouseEnter={() =>
-                          setHover({ t: 'cells', ids: l.links.flatMap((x) => [x.from, x.to]) })
-                        }
-                        onMouseLeave={() => setHover(null)}
-                        onFocus={() =>
-                          setHover({ t: 'cells', ids: l.links.flatMap((x) => [x.from, x.to]) })
-                        }
-                        onBlur={() => setHover(null)}
-                        className="hover:text-text flex items-center gap-1.5"
-                      >
-                        <svg aria-hidden="true" width="22" height="6" className="shrink-0">
-                          <path
-                            d="M0 3h22"
-                            stroke={continuityColor(l.links[0].kind)}
-                            strokeWidth="1.3"
-                            strokeDasharray="4 3"
-                          />
-                        </svg>
-                        {l.label}
-                      </button>
-                    ))}
-                  </span>
-                )
-              }
-            >
-              <p className="text-text-dim -mt-2 mb-4 text-xs">
-                {tx.isCellbase
-                  ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
-                  : compensation
-                    ? 'A transaction spends whole cells and creates new ones. The Nervos DAO adds the compensation; the rest of the difference is the fee.'
-                    : 'A transaction spends whole cells and creates new ones. Capacity is conserved; the difference is the fee.'}
-              </p>
-              <TxStructure
-                txHash={hash}
-                inputs={tiles.inputs}
-                outputs={tiles.outputs}
-                fee={tx.fee}
-                hideGroups
-                linking="page"
-                inflow={inflow}
-                continuityList={false}
-                focusedCellIds={lit ? [...lit.cells] : []}
-                onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
-                continuity={continuity}
-                onClearFocus={() => select(null, null)}
-              />
-            </DetailSection>
-          )}
-        </div>
+      {/* Tier 1: what happened, to whom, for how much, and which cells changed hands. The facts
+          rail follows the hash in reading order, so a one-column page states status, time, block
+          and fee before the balances and the cells; from lg up it is the right-hand column. */}
+      <div
+        data-tier="1"
+        className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-[auto_auto_1fr] lg:gap-x-14"
+      >
+        <header className="flex min-w-0 flex-col gap-2 lg:col-start-1">
+          <span className="text-text-dim text-xs">Transaction</span>
+          <h1 className="text-text-bright break-words text-[26px] font-medium">{headline}</h1>
+          {summary}
+          <div className="flex min-w-0 items-center gap-0.5 text-xs">
+            <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
+            <CopyHash hash={tx.hash} />
+          </div>
+        </header>
         <aside
           aria-label="Transaction facts"
-          className="flex flex-[1_1_280px] flex-col gap-4 pt-6 sm:max-w-[340px]"
+          className="flex min-w-0 flex-col gap-4 sm:max-w-[340px] lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:pt-6"
         >
           <div className="flex flex-col gap-0.5">
             <span className="text-text-bright flex items-center gap-2">
@@ -1392,6 +1329,76 @@ export default function TransactionDetailPage() {
             )}
           </dl>
         </aside>
+        {activity && (
+          <div className="min-w-0 lg:col-start-1">
+            <BalanceChanges
+              activity={activity}
+              fee={tx.fee}
+              compensation={compensation ?? null}
+              genesis={genesis}
+            />
+          </div>
+        )}
+        {tiles && (
+          <div className="min-w-0 lg:col-start-1">
+            <DetailSection
+              title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
+              actions={
+                legend.length > 0 && (
+                  <span className="text-text-dim flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px]">
+                    {legend.map((l) => (
+                      <button
+                        key={l.label}
+                        type="button"
+                        onMouseEnter={() =>
+                          setHover({ t: 'cells', ids: l.links.flatMap((x) => [x.from, x.to]) })
+                        }
+                        onMouseLeave={() => setHover(null)}
+                        onFocus={() =>
+                          setHover({ t: 'cells', ids: l.links.flatMap((x) => [x.from, x.to]) })
+                        }
+                        onBlur={() => setHover(null)}
+                        className="hover:text-text flex items-center gap-1.5"
+                      >
+                        <svg aria-hidden="true" width="22" height="6" className="shrink-0">
+                          <path
+                            d="M0 3h22"
+                            stroke={continuityColor(l.links[0].kind)}
+                            strokeWidth="1.3"
+                            strokeDasharray="4 3"
+                          />
+                        </svg>
+                        {l.label}
+                      </button>
+                    ))}
+                  </span>
+                )
+              }
+            >
+              <p className="text-text-dim -mt-2 mb-4 text-xs">
+                {tx.isCellbase
+                  ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
+                  : compensation
+                    ? 'A transaction spends whole cells and creates new ones. The Nervos DAO adds the compensation; the rest of the difference is the fee.'
+                    : 'A transaction spends whole cells and creates new ones. Capacity is conserved; the difference is the fee.'}
+              </p>
+              <TxStructure
+                txHash={hash}
+                inputs={tiles.inputs}
+                outputs={tiles.outputs}
+                fee={tx.fee}
+                hideGroups
+                linking="page"
+                inflow={inflow}
+                continuityList={false}
+                focusedCellIds={lit ? [...lit.cells] : []}
+                onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
+                continuity={continuity}
+                onClearFocus={() => select(null, null)}
+              />
+            </DetailSection>
+          </div>
+        )}
       </div>
 
       {/* Tier 2, set quieter: the evidence behind tier 1, linked to it by hover. */}

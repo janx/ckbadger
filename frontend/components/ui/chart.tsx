@@ -2,7 +2,14 @@
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { niceTicks, formatTick } from '@/lib/chart-ticks';
+import {
+  AXIS_CHAR_PX,
+  niceTicks,
+  formatTick,
+  placeXTicks,
+  tickGutter,
+  type Ticks,
+} from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
 
@@ -77,6 +84,11 @@ export interface ChartProps {
   referenceLines?: readonly { value: number; label: string }[];
   /** X-axis labels at these point indexes, replacing the first / last label pair. */
   xTicks?: readonly { index: number; label: string }[];
+  /**
+   * The x axis names categories (a few labelled buckets, one slot bar each): `xTicks` names every
+   * point, and every label is drawn, on extra rows under the plot when one row cannot hold them.
+   */
+  categoricalX?: boolean;
   /** A dot at the end of each line, and at the hovered point with an in-plot reading. */
   pointDots?: boolean;
   /** Bars fill their slot (a few labelled buckets) instead of 3 px ticks. */
@@ -85,7 +97,126 @@ export interface ChartProps {
   hideMarkerLegend?: boolean;
   /** How a point label reads wherever the chart prints it (hover caption and reading). */
   formatLabel?: (label: string) => string;
+  /**
+   * Key the series under the plot — swatch · name · value at the reading, one per line, in band
+   * order — instead of reading them out as headline numbers in the caption (a chart of many
+   * bands, responsive review C#5).
+   */
+  seriesLegend?: boolean;
 }
+/** The height of each extra row of x labels a categorical axis stacks under the plot. */
+const X_LABEL_ROW = 12;
+/** The band above the plot that keys its target lines, its label baseline and swatch length. */
+const REFERENCE_KEY_BAND = 14;
+const REFERENCE_KEY_Y = 10;
+const REFERENCE_SWATCH = 14;
+
+/** Target-line keys laid right to left from the plot's right edge: dashed swatch, then label. */
+function referenceKeys(
+  lines: readonly { label: string }[],
+  right: number
+): { label: string; swatch: number; textEnd: number }[] {
+  let end = right;
+  return lines.map(({ label }) => {
+    const textEnd = end;
+    const swatch = textEnd - label.length * AXIS_CHAR_PX - 4 - REFERENCE_SWATCH;
+    end = swatch - 12;
+    return { label, swatch, textEnd };
+  });
+}
+
+/** What decides a chart's value axis: its points, how they stack, and how a tick reads. */
+export type ChartValueAxisInput = Pick<
+  ChartProps,
+  | 'title'
+  | 'data'
+  | 'series'
+  | 'unit'
+  | 'kind'
+  | 'yScale'
+  | 'yDomain'
+  | 'referenceLines'
+  | 'formatAxis'
+>;
+
+/**
+ * A chart's values as plot geometry, its round value ticks and their labels. The Chart draws from
+ * it, and charts stacked on one time axis size their shared gutter from it (`alignedPlotLeft`).
+ */
+export function chartValueAxis({
+  title,
+  data,
+  series,
+  unit,
+  kind = 'line',
+  yScale = 'linear',
+  yDomain,
+  referenceLines = [],
+  formatAxis = formatTick,
+}: ChartValueAxisInput): {
+  values: number[][];
+  plotValues: number[];
+  ticks: Ticks | null;
+  tickLabel: (value: number, step: number) => string;
+  labels: string[];
+} {
+  const values = data.map((p, i) =>
+    series.map((s) => {
+      const raw = p.values[s.key];
+      if (raw === undefined) throw new Error(`${title}: missing ${s.key} at ${p.label}`);
+      const [n, d] = exactSignedDecimalRatio(raw, `${title}: ${s.key} at ${p.label}`);
+      const value = Number(n) / Number(d);
+      if (!Number.isFinite(value))
+        throw new Error(`${title}: ${s.key} at ${i} exceeds chart geometry range`);
+      if (kind === 'stacked' && value < 0)
+        throw new Error(`${title}: stacked series ${s.key} at ${p.label} is negative`);
+      return value;
+    })
+  );
+  if (
+    yScale === 'log' &&
+    (kind !== 'line' || values.some((row) => row.some((value) => value <= 0)))
+  )
+    throw new Error(`${title}: logarithmic scale requires a positive line series`);
+  const plotValues =
+    kind === 'stacked' ? values.map((row) => row.reduce((s, v) => s + v, 0)) : values.flat();
+  // F2 charts group: reference values are plotted, so the axis must hold them (CH-12).
+  for (const line of referenceLines)
+    if (!Number.isFinite(line.value) || (yScale === 'log' && line.value <= 0))
+      throw new Error(`${title}: reference line ${line.label} has no plottable value`);
+  if (
+    yDomain &&
+    (yScale === 'log' ||
+      !Number.isFinite(yDomain[0]) ||
+      !Number.isFinite(yDomain[1]) ||
+      yDomain[0] >= yDomain[1])
+  )
+    throw new Error(`${title}: invalid fixed value domain`);
+  const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
+    (value) => (yScale === 'log' ? Math.log10(value) : value)
+  );
+  const ticks = yDomain
+    ? niceTicks(yDomain[0], yDomain[1], 4)
+    : plotValues.length
+      ? niceTicks(
+          kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
+          kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
+          4
+        )
+      : null;
+  const tickLabel = (value: number, step: number) =>
+    yScale === 'log'
+      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
+      : `${formatAxis(value, step)} ${unit}`;
+  const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
+  return { values, plotValues, ticks, tickLabel, labels };
+}
+
+/** The one `plotLeft` for charts stacked on a shared time axis: the gutter of their longest tick. */
+export function alignedPlotLeft(charts: readonly ChartValueAxisInput[]): number {
+  return Math.max(...charts.map((chart) => tickGutter(chartValueAxis(chart).labels)));
+}
+
 export function Chart({
   title,
   subtitle,
@@ -111,10 +242,12 @@ export function Chart({
   yDomain,
   referenceLines = [],
   xTicks,
+  categoricalX = false,
   pointDots = false,
   slotBars = false,
   hideMarkerLegend = false,
   formatLabel = (label: string) => label,
+  seriesLegend = false,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const [localActive, setLocalActive] = useState<number | null>(null);
@@ -160,24 +293,17 @@ export function Chart({
     throw new Error(
       `${title}: ranked composition requires one series and at most five categories plus others`
     );
-  const values = data.map((p, i) =>
-    series.map((s) => {
-      const raw = p.values[s.key];
-      if (raw === undefined) throw new Error(`${title}: missing ${s.key} at ${p.label}`);
-      const [n, d] = exactSignedDecimalRatio(raw, `${title}: ${s.key} at ${p.label}`);
-      const value = Number(n) / Number(d);
-      if (!Number.isFinite(value))
-        throw new Error(`${title}: ${s.key} at ${i} exceeds chart geometry range`);
-      if (kind === 'stacked' && value < 0)
-        throw new Error(`${title}: stacked series ${s.key} at ${p.label} is negative`);
-      return value;
-    })
-  );
-  if (
-    yScale === 'log' &&
-    (kind !== 'line' || values.some((row) => row.some((value) => value <= 0)))
-  )
-    throw new Error(`${title}: logarithmic scale requires a positive line series`);
+  const { values, ticks, tickLabel, labels } = chartValueAxis({
+    title,
+    data,
+    series,
+    unit,
+    kind,
+    yScale,
+    yDomain,
+    referenceLines,
+    formatAxis,
+  });
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
@@ -191,44 +317,29 @@ export function Chart({
       : reading !== undefined
         ? reading
         : data[data.length - 1];
-  const plotValues =
-    kind === 'stacked' ? values.map((row) => row.reduce((s, v) => s + v, 0)) : values.flat();
-  // F2 charts group: reference values are plotted, so the axis must hold them (CH-12).
-  for (const line of referenceLines)
-    if (!Number.isFinite(line.value) || (yScale === 'log' && line.value <= 0))
-      throw new Error(`${title}: reference line ${line.label} has no plottable value`);
-  if (
-    yDomain &&
-    (yScale === 'log' ||
-      !Number.isFinite(yDomain[0]) ||
-      !Number.isFinite(yDomain[1]) ||
-      yDomain[0] >= yDomain[1])
-  )
-    throw new Error(`${title}: invalid fixed value domain`);
   for (const tick of xTicks ?? [])
     if (!Number.isSafeInteger(tick.index) || tick.index < 0 || tick.index >= data.length)
       throw new Error(`${title}: x tick ${tick.label} has invalid index ${tick.index}`);
-  const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
-    (value) => (yScale === 'log' ? Math.log10(value) : value)
-  );
-  const ticks = yDomain
-    ? niceTicks(yDomain[0], yDomain[1], 4)
-    : plotValues.length
-      ? niceTicks(
-          kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
-          kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
-          4
-        )
-      : null;
-  const tickLabel = (value: number, step: number) =>
-    yScale === 'log'
-      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
-      : `${formatAxis(value, step)} ${unit}`;
-  const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
-  const left = plotLeft ?? Math.max(48, ...labels.map((s) => s.length * 6 + 8));
+  if (
+    categoricalX &&
+    (!slotBars ||
+      !xTicks ||
+      xTicks.length !== data.length ||
+      xTicks.some((tick, i) => tick.index !== i))
+  )
+    throw new Error(`${title}: a categorical axis names every slot bar, in order`);
+  const gutter = tickGutter(labels);
+  if (plotLeft !== undefined && plotLeft < gutter)
+    throw new Error(
+      `${title}: plotLeft ${plotLeft} cannot hold its longest tick: "${labels.reduce((a, b) => (b.length > a.length ? b : a), '')}" needs ${gutter}`
+    );
+  const left = plotLeft ?? gutter;
   const right = width === null ? null : width - 10,
-    top = 16,
-    bottom = height - 26;
+    // A target line is keyed in its own band above the plot, never on the plot (C#16).
+    keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
+    top = 16 + keyBand,
+    bottom = height - 26 + keyBand,
+    axisY = height + keyBand - 5;
   const lo = ticks?.values[0],
     hi = ticks?.values[ticks.values.length - 1];
   const x = (i: number) =>
@@ -255,6 +366,15 @@ export function Chart({
   }, []);
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
+  const xLabels =
+    xTicks && right !== null && right > left && data.length
+      ? placeXTicks(
+          xTicks.map((tick) => ({ ...tick, at: x(tick.index) })),
+          { left, right, width: width as number, categorical: categoricalX }
+        )
+      : null;
+  // Extra label rows go under the plot; the plot keeps its height.
+  const svgHeight = height + keyBand + ((xLabels?.rows ?? 1) - 1) * X_LABEL_ROW;
   return (
     <figure className="m-0 min-w-0">
       <figcaption
@@ -268,20 +388,22 @@ export function Chart({
             {activeIndex === null ? subtitle : selected && formatLabel(selected.label)}
           </span>
         </span>
-        <span className="text-text-bright flex flex-wrap justify-end gap-3 text-[18px] tabular-nums">
-          {selected &&
-            series.map((s, i) => (
-              <span key={s.key}>
-                {series.length > 1 && (
-                  <span className="mr-2 text-[11px]" style={{ color: color(i) }}>
-                    {s.label}
-                  </span>
-                )}
-                {formatValue(selected.values[s.key])}
-                <span className="text-text-dim text-[11px]"> {unit}</span>
-              </span>
-            ))}
-        </span>
+        {!seriesLegend && (
+          <span className="text-text-bright flex flex-wrap justify-end gap-3 text-[18px] tabular-nums">
+            {selected &&
+              series.map((s, i) => (
+                <span key={s.key}>
+                  {series.length > 1 && (
+                    <span className="mr-2 text-[11px]" style={{ color: color(i) }}>
+                      {s.label}
+                    </span>
+                  )}
+                  {formatValue(selected.values[s.key])}
+                  <span className="text-text-dim text-[11px]"> {unit}</span>
+                </span>
+              ))}
+          </span>
+        )}
       </figcaption>
       <div ref={ref} className="min-w-0" style={{ minHeight: height }}>
         {!data.length ? (
@@ -318,8 +440,8 @@ export function Chart({
               role="img"
               aria-label={`${title}, ${unit}`}
               width={width}
-              height={height}
-              viewBox={`0 0 ${width} ${height}`}
+              height={svgHeight}
+              viewBox={`0 0 ${width} ${svgHeight}`}
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -520,14 +642,26 @@ export function Chart({
                     strokeOpacity="0.6"
                     strokeDasharray="3 3"
                   />
+                </g>
+              ))}
+              {referenceKeys(referenceLines, right).map(({ label, swatch, textEnd }) => (
+                <g key={label} data-reference-key={label}>
+                  <line
+                    x1={swatch}
+                    x2={swatch + REFERENCE_SWATCH}
+                    y1={REFERENCE_KEY_Y - 3}
+                    y2={REFERENCE_KEY_Y - 3}
+                    stroke="#a0a8be"
+                    strokeDasharray="3 3"
+                  />
                   <text
-                    x={right - 4}
-                    y={y(line.value) - 4}
+                    x={textEnd}
+                    y={REFERENCE_KEY_Y}
                     textAnchor="end"
                     fill="#a0a8be"
                     fontSize="10"
                   >
-                    {line.label}
+                    {label}
                   </text>
                 </g>
               ))}
@@ -542,7 +676,7 @@ export function Chart({
                     stroke="#7c849c"
                     strokeDasharray="3 3"
                   />
-                  <text x={x(m.index)} y="10" textAnchor="middle" fill="#7c849c" fontSize="10">
+                  <text x={x(m.index)} y={top - 6} textAnchor="middle" fill="#7c849c" fontSize="10">
                     {m.plotLabel ?? m.label}
                   </text>
                 </g>
@@ -608,47 +742,24 @@ export function Chart({
                     </g>
                   );
                 })()}
-              {xTicks &&
-                // F2 charts group: a tick whose label would touch the one before it is dropped.
-                xTicks
-                  .map((tick) => {
-                    const at = x(tick.index);
-                    const anchor: 'start' | 'end' | 'middle' =
-                      at - left < 20 ? 'start' : right - at < 20 ? 'end' : 'middle';
-                    const w = tick.label.length * 6.2;
-                    const from = anchor === 'start' ? at : anchor === 'end' ? at - w : at - w / 2;
-                    return { tick, at, anchor, from, to: from + w };
-                  })
-                  .reduce<
-                    {
-                      tick: { index: number; label: string };
-                      at: number;
-                      anchor: 'start' | 'end' | 'middle';
-                      to: number;
-                      from: number;
-                    }[]
-                  >((kept, entry) => {
-                    const previous = kept[kept.length - 1];
-                    return !previous || entry.from >= previous.to + 6 ? [...kept, entry] : kept;
-                  }, [])
-                  .map(({ tick, at, anchor }) => (
-                    <text
-                      key={`${tick.index}:${tick.label}`}
-                      data-x-tick
-                      visibility={hideXAxis ? 'hidden' : undefined}
-                      x={at}
-                      y={height - 5}
-                      textAnchor={anchor}
-                      fill="#7c849c"
-                      fontSize="10"
-                    >
-                      {tick.label}
-                    </text>
-                  ))}
+              {xLabels?.ticks.map((tick) => (
+                <text
+                  key={`${tick.index}:${tick.label}`}
+                  data-x-tick
+                  visibility={hideXAxis ? 'hidden' : undefined}
+                  x={tick.x}
+                  y={axisY + tick.row * X_LABEL_ROW}
+                  textAnchor={tick.anchor}
+                  fill="#7c849c"
+                  fontSize="10"
+                >
+                  {tick.label}
+                </text>
+              ))}
               <text
                 visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                 x={left}
-                y={height - 5}
+                y={axisY}
                 fill="#7c849c"
                 fontSize="10"
               >
@@ -658,7 +769,7 @@ export function Chart({
                 <text
                   visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                   x={right}
-                  y={height - 5}
+                  y={axisY}
                   textAnchor="end"
                   fill="#7c849c"
                   fontSize="10"
@@ -670,6 +781,29 @@ export function Chart({
           )
         )}
       </div>
+      {seriesLegend && (
+        <ul aria-label={`${title} legend`} className="mt-3 flex flex-col gap-1 text-[13px]">
+          {series.map((s, i) => (
+            <li key={s.key} className="flex min-w-0 flex-wrap items-baseline justify-start gap-x-2">
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span
+                  aria-hidden="true"
+                  data-swatch
+                  className="inline-block h-2.5 w-2.5 shrink-0 self-center rounded-[2px]"
+                  style={{ backgroundColor: color(i) }}
+                />
+                <span className="text-text">{s.label}</span>
+              </span>
+              {selected && (
+                <span className="text-text-bright whitespace-nowrap tabular-nums">
+                  {formatValue(selected.values[s.key])}
+                  <span className="text-text-dim text-[11px]"> {unit}</span>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <span className="sr-only" aria-live="polite">
         {activeIndex !== null && selected
           ? `${selected.label}: ${series.map((s) => `${s.label} ${selected.values[s.key]} ${unit}`).join(', ')}`

@@ -210,7 +210,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             </blockquote>
           )}
           {/* F2 objects (OB-M6): the board's four properties; configure decoding is tier 2. */}
-          <dl aria-label="Properties" className="grid gap-x-7 sm:grid-cols-2">
+          {/* One column until md: at 640 the 2×2 grid broke "8 bytes" (responsive B#15). */}
+          <dl aria-label="Properties" className="grid gap-x-7 md:grid-cols-2">
             <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Token</dt>
               <dd className="text-text-bright text-right">
@@ -239,10 +240,15 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             </div>
             <div className="border-base-elevated flex justify-between gap-3 border-b py-2">
               <dt className="text-text-dim">Characteristic</dt>
-              <dd className="text-text-bright min-w-0 break-all text-right">
-                {characteristic.every((b) => b === '00')
-                  ? `none, all zero · ${characteristic.length} bytes`
-                  : item.characteristicHex}
+              <dd className="text-text-bright min-w-0 text-right [overflow-wrap:anywhere]">
+                {characteristic.every((b) => b === '00') ? (
+                  <>
+                    none, all zero ·{' '}
+                    <span className="whitespace-nowrap">{characteristic.length} bytes</span>
+                  </>
+                ) : (
+                  item.characteristicHex
+                )}
               </dd>
             </div>
           </dl>

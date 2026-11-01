@@ -106,6 +106,41 @@ describe('VmLaneTimeline', () => {
     expect(within(strip).getAllByRole('button')).toHaveLength(2);
   });
 
+  it('stacks an edition block that would crowd the one before it under it, name over epoch', () => {
+    // Responsive review A#13: at 390 Meepo's epoch wrapped under Mirana's and read as Mirana's.
+    stubChartWidth(358);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={unregistered}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    const node = (text: string) =>
+      [...screen.getByRole('img').querySelectorAll('text')].find((t) => t.textContent === text)!;
+    const at = (text: string) => ({
+      x: Number(node(text).getAttribute('x')),
+      y: Number(node(text).getAttribute('y')),
+      anchor: node(text).getAttribute('text-anchor'),
+    });
+    const meepo = at('Meepo');
+    const meepoEpoch = at('epoch 12,293');
+    const miranaEpoch = at('epoch 5,414');
+    // Meepo's epoch sits directly under Meepo's name, on the same edge of the same rule.
+    expect(meepoEpoch.x).toBe(meepo.x);
+    expect(meepoEpoch.anchor).toBe(meepo.anchor);
+    expect(meepoEpoch.y).toBeGreaterThan(meepo.y);
+    // A clear gap separates Mirana's block from Meepo's: name baselines 18 px below the epoch.
+    expect(meepo.y - miranaEpoch.y).toBeGreaterThanOrEqual(18);
+    // The lanes start under the last label row.
+    expect(Number(node('type · the newest VM').getAttribute('y'))).toBeGreaterThan(
+      meepoEpoch.y + 12
+    );
+  });
+
   it('puts each registered version on the lane of every hash type it uses (CH-40, R2b-b)', () => {
     stubChartWidth(1200);
     render(

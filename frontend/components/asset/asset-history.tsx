@@ -2,7 +2,7 @@
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
-import { Chart } from '@/components/ui/chart';
+import { alignedPlotLeft, Chart, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AppLink } from '@/components/ui/app-link';
@@ -122,6 +122,52 @@ export function AssetHistory({
       free: ckbDecimal((BigInt(p.capacity) - BigInt(p.occupiedCapacity)).toString()),
     },
   }));
+  // The three plots share one time axis, so one gutter: the one their longest tick needs.
+  const capacityAxis: ChartValueAxisInput = {
+    title: 'CKB held in its cells',
+    data: capacityPoints,
+    series: [
+      { key: 'occupied', label: 'Occupied', color: DATA_COLOR },
+      { key: 'free', label: 'Free', color: CLASS_COLORS.ckb },
+    ],
+    unit: 'CKB',
+    kind: 'stacked',
+  };
+  const supplyAxis: ChartValueAxisInput | null = token
+    ? {
+        title: 'Supply',
+        data: visible.map((p) => ({
+          label: p.date,
+          x: time(p.date),
+          values: { supply: formatTokenBalance(p.supply!, token.decimals).replace(/,/g, '') },
+        })),
+        series: [{ key: 'supply', label: 'Supply', assetClass: 'tokens' }],
+        unit: token.decimals === null ? 'raw' : (token.symbol ?? 'tokens'),
+      }
+    : null;
+  const weeklyAxis: ChartValueAxisInput | null =
+    weeklyUnavailable === null
+      ? {
+          title: `${weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions'} per week`,
+          data: weeks.map((w) => ({
+            label: w.weekStart,
+            x: time(w.weekStart),
+            values: { count: String(w.count) },
+          })),
+          series: [
+            {
+              key: 'count',
+              label: weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions',
+              assetClass: token ? 'tokens' : 'objects',
+            },
+          ],
+          unit: weeklyNoun,
+          kind: 'bars',
+        }
+      : null;
+  const plotLeft = alignedPlotLeft(
+    [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
+  );
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
@@ -270,18 +316,11 @@ export function AssetHistory({
             </span>
           </div>
           <Chart
-            title="CKB held in its cells"
+            {...capacityAxis}
             subtitle="Occupied and free"
-            data={capacityPoints}
-            series={[
-              { key: 'occupied', label: 'Occupied', color: DATA_COLOR },
-              { key: 'free', label: 'Free', color: CLASS_COLORS.ckb },
-            ]}
-            unit="CKB"
-            kind="stacked"
             height={token ? 150 : 200}
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
-            plotLeft={100}
+            plotLeft={plotLeft}
             xDomain={domain}
             activeIndex={active}
             onActiveIndexChange={onDaily}
@@ -289,20 +328,13 @@ export function AssetHistory({
             hideXAxis
             cursorX={selectedDate === null ? null : time(selectedDate)}
           />
-          {token && (
+          {supplyAxis && (
             <Chart
-              title="Supply"
+              {...supplyAxis}
               subtitle="Exact total supply"
-              data={visible.map((p) => ({
-                label: p.date,
-                x: time(p.date),
-                values: { supply: formatTokenBalance(p.supply!, token.decimals).replace(/,/g, '') },
-              }))}
-              series={[{ key: 'supply', label: 'Supply', assetClass: 'tokens' }]}
-              unit={token.decimals === null ? 'raw' : (token.symbol ?? 'tokens')}
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
-              plotLeft={100}
+              plotLeft={plotLeft}
               xDomain={domain}
               activeIndex={active}
               onActiveIndexChange={onDaily}
@@ -311,27 +343,13 @@ export function AssetHistory({
               cursorX={selectedDate === null ? null : time(selectedDate)}
             />
           )}
-          {weeklyUnavailable === null && (
+          {weeklyAxis && (
             <Chart
-              title={`${weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions'} per week`}
+              {...weeklyAxis}
               subtitle="Completed UTC+8 weeks"
-              data={weeks.map((w) => ({
-                label: w.weekStart,
-                x: time(w.weekStart),
-                values: { count: String(w.count) },
-              }))}
-              series={[
-                {
-                  key: 'count',
-                  label: weeklyNoun === 'transfers' ? 'Transfers' : 'Transactions',
-                  assetClass: token ? 'tokens' : 'objects',
-                },
-              ]}
-              unit={weeklyNoun}
-              kind="bars"
               formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
-              plotLeft={100}
+              plotLeft={plotLeft}
               xDomain={domain}
               activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
               onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}

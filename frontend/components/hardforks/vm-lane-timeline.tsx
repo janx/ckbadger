@@ -43,6 +43,19 @@ const VM_OPACITY = { VM0: 0.16, VM1: 0.32, VM2: 0.55 } as const;
 const UTC8_MS = 8 * 3_600_000;
 /** Average glyph width of the 10–11 px mono labels, for keeping labels apart. */
 const CHAR_PX = 6.5;
+/** Glyph width of the 12.5 px edition names. */
+const NAME_CHAR_PX = 7.5;
+/** Baselines of an edition block's name and epoch on the first row, and the clear space kept
+ * between two blocks side by side. */
+const NAME_Y = 18;
+const SUB_Y = 33;
+const BLOCK_GAP = 8;
+/**
+ * A block that would crowd the one before it drops a whole row — name over epoch, together —
+ * so its epoch never reads as the other edition's (390 px: Meepo's epoch sat under Mirana's).
+ * A row's name baseline is 34 px under the row above it: 19 px clear of that row's epoch.
+ */
+const BLOCK_ROW = 34;
 
 /** An edition's activation day as an instant on the axis: that UTC+8 day's start. */
 export function dayStartMs(day: string): number {
@@ -93,14 +106,48 @@ export function VmLaneTimeline({
   const narrow = width !== null && width < 640;
   const left = narrow ? 8 : 190;
   const right = narrow ? 8 : 150;
-  const top = narrow ? 62 : 64;
+  const w = width ?? 0;
+  const x = (t: number) => left + ((t - genesisMs) / (tipMs - genesisMs)) * (w - left - right);
+  // Edition label blocks (name over epoch): a block that would run off the right edge turns left
+  // of its rule, and a block that would touch one already placed takes the next row down.
+  const genesisDate = formatUtc8Date(genesisMs);
+  const genesisBlock = {
+    row: 0,
+    x0: left,
+    x1: left + Math.max('genesis'.length * NAME_CHAR_PX, genesisDate.length * CHAR_PX),
+  };
+  const editionLabels = editions.reduce<
+    {
+      edition: EditionMark;
+      at: number;
+      sub: string;
+      turn: boolean;
+      row: number;
+      x0: number;
+      x1: number;
+    }[]
+  >((placed, edition) => {
+    const at = x(dayStartMs(edition.activationDate));
+    const epoch = `epoch ${formatExactDecimal(String(edition.activationEpoch), 'edition epoch')}`;
+    const sub = narrow ? epoch : `${epoch} · ${edition.activationDate}`;
+    const span = Math.max(edition.shortName.length * NAME_CHAR_PX, sub.length * CHAR_PX);
+    const turn = at + 6 + span > w;
+    const x0 = turn ? at - 6 - span : at + 6;
+    const taken = [genesisBlock, ...placed];
+    let row = 0;
+    while (
+      taken.some((b) => b.row === row && x0 < b.x1 + BLOCK_GAP && b.x0 < x0 + span + BLOCK_GAP)
+    )
+      row++;
+    return [...placed, { edition, at, sub, turn, row, x0, x1: x0 + span }];
+  }, []);
+  const labelRows = 1 + Math.max(0, ...editionLabels.map((l) => l.row));
+  const top = (narrow ? 62 : 64) + (labelRows - 1) * BLOCK_ROW;
   const laneH = narrow ? 64 : 46;
   /** Where a lane's bar and its dot rows sit, from the lane's top. */
   const bar = narrow ? { y: 18, h: 14, dots: [40, 48] } : { y: 6, h: 16, dots: [30, 38] };
   const bottom = top + laneH * LANE_ORDER.length;
   const height = bottom + 44;
-  const w = width ?? 0;
-  const x = (t: number) => left + ((t - genesisMs) / (tipMs - genesisMs)) * (w - left - right);
   const firstYear = new Date(genesisMs + UTC8_MS).getUTCFullYear() + 1;
   const lastYear = new Date(tipMs + UTC8_MS).getUTCFullYear();
   const allYears = Array.from(
@@ -121,30 +168,6 @@ export function VmLaneTimeline({
     data2: [[t2, tipMs, 'VM2']],
     data: [[genesisMs, tipMs, 'VM0']],
   };
-  // Edition labels: a label that would run off the right edge turns left of its line, and a
-  // sub-label that would touch the one before it drops a row (390 px: the two epochs collided).
-  const editionLabels = editions.reduce<
-    {
-      edition: EditionMark;
-      at: number;
-      sub: string;
-      turn: boolean;
-      subY: number;
-      x0: number;
-      x1: number;
-    }[]
-  >((placed, edition) => {
-    const at = x(dayStartMs(edition.activationDate));
-    const epoch = `epoch ${formatExactDecimal(String(edition.activationEpoch), 'edition epoch')}`;
-    const sub = narrow ? epoch : `${epoch} · ${edition.activationDate}`;
-    const span = sub.length * CHAR_PX;
-    const turn = at + 6 + span > w;
-    const x0 = turn ? at - 6 - span : at + 6;
-    const before = placed[placed.length - 1];
-    const touches =
-      before !== undefined && before.subY === 33 && x0 < before.x1 + 4 && before.x0 < x0 + span + 4;
-    return [...placed, { edition, at, sub, turn, subY: touches ? 46 : 33, x0, x1: x0 + span }];
-  }, []);
   const byTime = [...deployments].sort(
     (a, b) => a.timestampMs - b.timestampMs || a.versionHash.localeCompare(b.versionHash)
   );
@@ -172,13 +195,13 @@ export function VmLaneTimeline({
               </g>
             );
           })}
-          <text x={left} y="18" fontSize="12.5" fill="#dee2ec">
+          <text x={left} y={NAME_Y} fontSize="12.5" fill="#dee2ec">
             genesis
           </text>
-          <text x={left} y="33" fontSize="10.5" fill="#7c849c">
-            {formatUtc8Date(genesisMs)}
+          <text x={left} y={SUB_Y} fontSize="10.5" fill="#7c849c">
+            {genesisDate}
           </text>
-          {editionLabels.map(({ edition, at, sub, turn, subY }) => {
+          {editionLabels.map(({ edition, at, sub, turn, row }) => {
             return (
               <g key={edition.shortName}>
                 <line
@@ -192,7 +215,7 @@ export function VmLaneTimeline({
                 />
                 <text
                   x={turn ? at - 6 : at + 6}
-                  y="18"
+                  y={NAME_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
                   fontSize="12.5"
                   fill="#dee2ec"
@@ -201,7 +224,7 @@ export function VmLaneTimeline({
                 </text>
                 <text
                   x={turn ? at - 6 : at + 6}
-                  y={subY}
+                  y={SUB_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
                   fontSize="10.5"
                   fill="#7c849c"

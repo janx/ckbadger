@@ -8,6 +8,7 @@ import type { ChartDefinition } from '@/components/charts/chart-catalogue';
 import {
   axisStyle,
   axisTicks,
+  categoricalAxis,
   chartModel,
   formatChartExact,
   formatChartReadout,
@@ -158,6 +159,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             xTicks={ticks}
             pointDots={model.kind === 'line'}
             slotBars={style === 'bucket' || style === 'month'}
+            categoricalX={categoricalAxis(definition)}
             yDomain={model.yDomain}
             referenceLines={model.referenceLines}
             formatValue={(value) => formatChartReadout(value, model.unit)}

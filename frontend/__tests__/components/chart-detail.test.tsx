@@ -11,6 +11,7 @@ vi.mock('@/lib/api', () => ({
     getNominalApcChart: vi.fn(),
     getMinerAddressDistributionChart: vi.fn(),
     getEpochTimeDistributionChart: vi.fn(),
+    getCellSizeDistributionChart: vi.fn(),
     getEpochTimeLengthChart: vi.fn(),
     getNetworkStats: vi.fn(),
     getHardforks: vi.fn(),
@@ -335,6 +336,27 @@ describe('shared chart detail', () => {
     expect(props.reading).toEqual({ label: '4.02', values: { primary: '622' } });
     expect(props.subtitle).toBe('Completed epochs by hours taken · 3 buckets');
     expect(props.slotBars).toBe(true);
+  });
+
+  it('labels every Cell size bucket on a categorical axis (responsive review C#6)', async () => {
+    const labels = [
+      '<100 CKB',
+      '100-1k CKB',
+      '1k-10k CKB',
+      '10k-100k CKB',
+      '100k-1m CKB',
+      '>=1m CKB',
+    ];
+    vi.mocked(api.getCellSizeDistributionChart).mockResolvedValue({
+      title: 'Cell Size Distribution',
+      yAxisLabel: 'Live Cells',
+      data: labels.map((date, i) => ({ date, value: String(1000 - i) })),
+    });
+    render(<ChartDetail slug="cell-size-distribution" />);
+    await screen.findByRole('heading', { name: 'Distribution' });
+    const props = lastChart('Cell size');
+    expect(props.categoricalX).toBe(true);
+    expect(props.xTicks).toEqual(labels.map((label, index) => ({ index, label })));
   });
 
   it('prints epoch numbers with thousands groups (CH-35)', async () => {

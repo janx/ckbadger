@@ -18,6 +18,7 @@ import {
 import {
   axisStyle,
   axisTicks,
+  categoricalAxis,
   chartModel,
   formatChartExact,
   formatChartHover,
@@ -410,6 +411,7 @@ function DetailBody({
               xTicks={axisTicks(points, style, 8)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
+              categoricalX={categoricalAxis(definition)}
               hideMarkerLegend
               yDomain={model.yDomain}
               referenceLines={model.referenceLines}
@@ -436,6 +438,8 @@ function DetailBody({
                 formatValue={(value) => formatChartHover(value, history.unit)}
                 xTicks={axisTicks(rangePoints(history.points, range), 'date', 8)}
                 pointDots
+                // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
+                seriesLegend
               />
             ) : (
               <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
@@ -460,6 +464,7 @@ function DetailBody({
               xTicks={axisTicks(secondaryPoints, style, 8)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
+              categoricalX={categoricalAxis(definition)}
             />
           </DetailSection>
         )}

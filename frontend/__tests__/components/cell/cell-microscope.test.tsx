@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
@@ -240,4 +241,68 @@ it('links actual same-transaction Type ID upgrades without treating unchanged by
     'href',
     `/mainnet/cell/${current}-1`
   );
+});
+
+describe('cell microscope at phone width (responsive review A#10, A#11)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const wide = {
+    ...cell,
+    data: `0x${'ab'.repeat(40)}`,
+    dataSize: 40,
+    dataAnalysis: undefined,
+    commonKnowledgeSizeBreakdown: {
+      capacityFieldBytes: 8,
+      lockScriptBytes: 0,
+      typeScriptBytes: 0,
+      dataBytes: 40,
+      totalBytes: 42,
+    },
+  } as Cell;
+
+  it('lays the hex dump out 8 bytes a row in a 358 px box, its headers wrapping as wholes', () => {
+    stubChartWidth(358);
+    render(<CellMicroscope cell={wide} />);
+    const data = screen.getByLabelText('CellData byte map');
+    const offsets = within(data)
+      .getAllByText(/^0x[0-9a-f]{4}$/)
+      .map((n) => n.textContent);
+    expect(offsets).toEqual(['0x0000', '0x0008', '0x0010', '0x0018', '0x0020']);
+    // Each header is one wrapping row of two parts, never two ragged columns.
+    for (const block of ['CellOutput byte map', 'CellData byte map'])
+      expect(screen.getByLabelText(block).firstElementChild).toHaveClass('flex-wrap');
+  });
+
+  it('lays the capacity map out so its gaps fit and a 2-byte part is a whole box', () => {
+    const small = {
+      ...cell,
+      data: '0x1000',
+      dataSize: 2,
+      dataAnalysis: undefined,
+      commonKnowledgeSizeBreakdown: {
+        capacityFieldBytes: 8,
+        lockScriptBytes: 0,
+        typeScriptBytes: 0,
+        dataBytes: 2,
+        totalBytes: 4,
+      },
+    } as Cell;
+    render(<CellMicroscope cell={small} />);
+    const map = screen.getByRole('group', { name: 'Capacity map' });
+    // A flex row of basis-0 parts: the 2 px gaps are inside the row's width.
+    expect(map).toHaveClass('flex');
+    expect(map.style.gap).toBe('2px');
+    const parts = [...map.querySelectorAll<HTMLElement>('[data-map]')];
+    expect(parts.map((p) => [p.dataset.map, p.style.flex])).toEqual([
+      ['capacity', '8 0 0px'],
+      ['data', '2 0 0px'],
+    ]);
+    // The 2-byte part keeps the width its "2" needs inside its padding.
+    const data = parts[1];
+    expect(data).toHaveTextContent(/^2$/);
+    expect(data.style.paddingInline).toBe('4px');
+    expect(Number.parseFloat(data.style.minWidth)).toBeGreaterThanOrEqual(6.3 + 8);
+  });
 });

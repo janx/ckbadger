@@ -332,6 +332,94 @@ describe('Network board (F2 charts)', () => {
     }
   });
 
+  it('labels only clusters of two or more on a phone map and lists the rest (responsive A#12)', () => {
+    // The 2026-11-01 mainnet crawl: country, verified nodes, mean GeoIP position.
+    const crawl: [string, number, number, number][] = [
+      ['AE', 2, 25.1, 55.3],
+      ['AU', 2, -35.8, 148.1],
+      ['BR', 1, -23.5, -46.6],
+      ['CA', 4, 44.1, -77.9],
+      ['CL', 1, -33.5, -70.7],
+      ['CN', 1, 34.8, 113.7],
+      ['DE', 10, 50.4, 9.2],
+      ['FR', 3, 48.9, 4.3],
+      ['GB', 1, 51.5, -0.1],
+      ['HK', 10, 22.3, 114.2],
+      ['ID', 1, -6.2, 106.8],
+      ['IN', 1, 19.1, 72.9],
+      ['JP', 1, 35.7, 139.7],
+      ['KR', 6, 37.5, 127.0],
+      ['MO', 1, 22.2, 113.6],
+      ['PL', 1, 52.2, 21.0],
+      ['SG', 8, 1.3, 103.8],
+      ['TW', 1, 25.1, 121.5],
+      ['US', 12, 38.9, -94.8],
+      ['ZA', 1, -33.9, 18.4],
+    ];
+    const points = crawl.flatMap(([country, n, lat, lon]) =>
+      Array.from({ length: n }, (_, i) => ({
+        ...point(`${country}${i}`, country, true, false),
+        lat,
+        lon,
+      }))
+    );
+    const singles = crawl.filter(([, n]) => n === 1).map(([country]) => country);
+    // 358 px: the phone column. Its map is 220 px tall.
+    const phone = layoutCountryClusters(points, 358, 220);
+    expect(phone.labels.map((l) => l.country)).toEqual(
+      crawl.filter(([, n]) => n >= 2).map(([country]) => country)
+    );
+    expect(phone.listed.map((l) => l.country)).toEqual(singles);
+    expect(phone.dots).toHaveLength(points.length);
+    const box = (l: { country: string; count: number; x: number; y: number }) => {
+      const w = `${l.country} ${l.count}`.length * 6.2;
+      return { x0: l.x - w / 2, x1: l.x + w / 2, y0: l.y - 10, y1: l.y + 2 };
+    };
+    for (let i = 0; i < phone.labels.length; i++)
+      for (let j = i + 1; j < phone.labels.length; j++) {
+        const a = box(phone.labels[i]);
+        const b = box(phone.labels[j]);
+        const overlap = a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+        expect(overlap, `${phone.labels[i].country} / ${phone.labels[j].country}`).toBe(false);
+      }
+    // A desktop map labels every cluster and lists none.
+    const desktop = layoutCountryClusters(points, 880, 430);
+    expect(desktop.labels).toHaveLength(crawl.length);
+    expect(desktop.listed).toEqual([]);
+  });
+
+  it('names every unlabelled single-node country under the phone map, as text', async () => {
+    stubChartWidth(358);
+    const solo = (peerId: string, country: string, lat: number, lon: number) => ({
+      ...point(peerId, country, true, false),
+      lat,
+      lon,
+    });
+    server.use(
+      http.get(`${API_BASE}/network/map`, () =>
+        HttpResponse.json({
+          roundId: 9,
+          verifiedRetained: 4,
+          located: 4,
+          locationUnavailable: 0,
+          points: [
+            solo('us1', 'US', 39, -95),
+            solo('us2', 'US', 39, -95),
+            solo('tw1', 'TW', 25, 121),
+            solo('mo1', 'MO', 22, 113),
+          ],
+        })
+      )
+    );
+    render(wrap(<NetworkMapView neverVerified={0} />));
+    const list = await screen.findByLabelText('Countries with one verified node');
+    expect(list).toHaveTextContent('MO 1');
+    expect(list).toHaveTextContent('TW 1');
+    expect(
+      [...document.querySelectorAll('[data-country-label]')].map((n) => n.textContent)
+    ).toEqual(['US 2']);
+  });
+
   it('lets the peer filters shrink to a phone width (visual pass: 390 overflowed to 448)', async () => {
     render(wrap(<PeersTable />));
     const select = await screen.findByLabelText('Filter by address observation');
