@@ -278,6 +278,28 @@ describe('shared Chart encodings for the charts boards', () => {
     ).toThrow(/categorical axis/);
   });
 
+  it('refuses a fixed gutter narrower than its longest tick, instead of cutting the tick', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const weeks = ['2024-01-01', '2024-01-08'].map((label, i) => ({
+      label,
+      values: { count: ['8000', '120'][i] },
+    }));
+    expect(() =>
+      render(
+        <Chart
+          title="Transactions per week"
+          subtitle="weekly"
+          data={weeks}
+          series={[{ key: 'count', label: 'Transactions', color: '#2edba3' }]}
+          unit="transactions"
+          kind="bars"
+          plotLeft={100}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow(/plotLeft 100.*"10k transactions" needs 104/);
+  });
+
   it('gives bars a hover dot and reading but no end dot (visual pass)', () => {
     const { container } = render(
       <Chart

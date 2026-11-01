@@ -9,6 +9,7 @@ import {
   niceTicks,
   placeXTicks,
   signedAxisCap,
+  tickGutter,
   stepDecimals,
   AXIS_CHAR_PX,
 } from '@/lib/chart-ticks';
@@ -259,5 +260,15 @@ describe('placeXTicks on a time axis', () => {
     const placed = placeXTicks(ticks, { left, right, width: 358, categorical: false });
     expect(placed.ticks.map((t) => t.label)).toEqual(['#0', '#4,000', '#8,000', '#12,000']);
     expect(placed.rows).toBe(1);
+  });
+});
+
+describe('tickGutter', () => {
+  it('sizes the y-axis gutter from the longest tick label, never narrower than 48 px', () => {
+    // Token page (responsive B#17): "10k transactions" needs 16 × 6 + 8 = 104 px; a 100 px gutter
+    // cut its first digit, printing ".0k transactions".
+    expect(tickGutter(['0 transactions', '5k transactions', '10k transactions'])).toBe(104);
+    expect(tickGutter(['0', '500', '1k'])).toBe(48);
+    expect(tickGutter([])).toBe(48);
   });
 });

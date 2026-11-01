@@ -2,7 +2,14 @@
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { AXIS_CHAR_PX, niceTicks, formatTick, placeXTicks } from '@/lib/chart-ticks';
+import {
+  AXIS_CHAR_PX,
+  niceTicks,
+  formatTick,
+  placeXTicks,
+  tickGutter,
+  type Ticks,
+} from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
 
@@ -112,6 +119,98 @@ function referenceKeys(
   });
 }
 
+/** What decides a chart's value axis: its points, how they stack, and how a tick reads. */
+export type ChartValueAxisInput = Pick<
+  ChartProps,
+  | 'title'
+  | 'data'
+  | 'series'
+  | 'unit'
+  | 'kind'
+  | 'yScale'
+  | 'yDomain'
+  | 'referenceLines'
+  | 'formatAxis'
+>;
+
+/**
+ * A chart's values as plot geometry, its round value ticks and their labels. The Chart draws from
+ * it, and charts stacked on one time axis size their shared gutter from it (`alignedPlotLeft`).
+ */
+export function chartValueAxis({
+  title,
+  data,
+  series,
+  unit,
+  kind = 'line',
+  yScale = 'linear',
+  yDomain,
+  referenceLines = [],
+  formatAxis = formatTick,
+}: ChartValueAxisInput): {
+  values: number[][];
+  plotValues: number[];
+  ticks: Ticks | null;
+  tickLabel: (value: number, step: number) => string;
+  labels: string[];
+} {
+  const values = data.map((p, i) =>
+    series.map((s) => {
+      const raw = p.values[s.key];
+      if (raw === undefined) throw new Error(`${title}: missing ${s.key} at ${p.label}`);
+      const [n, d] = exactSignedDecimalRatio(raw, `${title}: ${s.key} at ${p.label}`);
+      const value = Number(n) / Number(d);
+      if (!Number.isFinite(value))
+        throw new Error(`${title}: ${s.key} at ${i} exceeds chart geometry range`);
+      if (kind === 'stacked' && value < 0)
+        throw new Error(`${title}: stacked series ${s.key} at ${p.label} is negative`);
+      return value;
+    })
+  );
+  if (
+    yScale === 'log' &&
+    (kind !== 'line' || values.some((row) => row.some((value) => value <= 0)))
+  )
+    throw new Error(`${title}: logarithmic scale requires a positive line series`);
+  const plotValues =
+    kind === 'stacked' ? values.map((row) => row.reduce((s, v) => s + v, 0)) : values.flat();
+  // F2 charts group: reference values are plotted, so the axis must hold them (CH-12).
+  for (const line of referenceLines)
+    if (!Number.isFinite(line.value) || (yScale === 'log' && line.value <= 0))
+      throw new Error(`${title}: reference line ${line.label} has no plottable value`);
+  if (
+    yDomain &&
+    (yScale === 'log' ||
+      !Number.isFinite(yDomain[0]) ||
+      !Number.isFinite(yDomain[1]) ||
+      yDomain[0] >= yDomain[1])
+  )
+    throw new Error(`${title}: invalid fixed value domain`);
+  const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
+    (value) => (yScale === 'log' ? Math.log10(value) : value)
+  );
+  const ticks = yDomain
+    ? niceTicks(yDomain[0], yDomain[1], 4)
+    : plotValues.length
+      ? niceTicks(
+          kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
+          kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
+          4
+        )
+      : null;
+  const tickLabel = (value: number, step: number) =>
+    yScale === 'log'
+      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
+      : `${formatAxis(value, step)} ${unit}`;
+  const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
+  return { values, plotValues, ticks, tickLabel, labels };
+}
+
+/** The one `plotLeft` for charts stacked on a shared time axis: the gutter of their longest tick. */
+export function alignedPlotLeft(charts: readonly ChartValueAxisInput[]): number {
+  return Math.max(...charts.map((chart) => tickGutter(chartValueAxis(chart).labels)));
+}
+
 export function Chart({
   title,
   subtitle,
@@ -187,24 +286,17 @@ export function Chart({
     throw new Error(
       `${title}: ranked composition requires one series and at most five categories plus others`
     );
-  const values = data.map((p, i) =>
-    series.map((s) => {
-      const raw = p.values[s.key];
-      if (raw === undefined) throw new Error(`${title}: missing ${s.key} at ${p.label}`);
-      const [n, d] = exactSignedDecimalRatio(raw, `${title}: ${s.key} at ${p.label}`);
-      const value = Number(n) / Number(d);
-      if (!Number.isFinite(value))
-        throw new Error(`${title}: ${s.key} at ${i} exceeds chart geometry range`);
-      if (kind === 'stacked' && value < 0)
-        throw new Error(`${title}: stacked series ${s.key} at ${p.label} is negative`);
-      return value;
-    })
-  );
-  if (
-    yScale === 'log' &&
-    (kind !== 'line' || values.some((row) => row.some((value) => value <= 0)))
-  )
-    throw new Error(`${title}: logarithmic scale requires a positive line series`);
+  const { values, ticks, tickLabel, labels } = chartValueAxis({
+    title,
+    data,
+    series,
+    unit,
+    kind,
+    yScale,
+    yDomain,
+    referenceLines,
+    formatAxis,
+  });
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
@@ -218,20 +310,6 @@ export function Chart({
       : reading !== undefined
         ? reading
         : data[data.length - 1];
-  const plotValues =
-    kind === 'stacked' ? values.map((row) => row.reduce((s, v) => s + v, 0)) : values.flat();
-  // F2 charts group: reference values are plotted, so the axis must hold them (CH-12).
-  for (const line of referenceLines)
-    if (!Number.isFinite(line.value) || (yScale === 'log' && line.value <= 0))
-      throw new Error(`${title}: reference line ${line.label} has no plottable value`);
-  if (
-    yDomain &&
-    (yScale === 'log' ||
-      !Number.isFinite(yDomain[0]) ||
-      !Number.isFinite(yDomain[1]) ||
-      yDomain[0] >= yDomain[1])
-  )
-    throw new Error(`${title}: invalid fixed value domain`);
   for (const tick of xTicks ?? [])
     if (!Number.isSafeInteger(tick.index) || tick.index < 0 || tick.index >= data.length)
       throw new Error(`${title}: x tick ${tick.label} has invalid index ${tick.index}`);
@@ -243,24 +321,12 @@ export function Chart({
       xTicks.some((tick, i) => tick.index !== i))
   )
     throw new Error(`${title}: a categorical axis names every slot bar, in order`);
-  const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
-    (value) => (yScale === 'log' ? Math.log10(value) : value)
-  );
-  const ticks = yDomain
-    ? niceTicks(yDomain[0], yDomain[1], 4)
-    : plotValues.length
-      ? niceTicks(
-          kind === 'line' ? Math.min(...geometryValues) : Math.min(0, ...geometryValues),
-          kind === 'line' ? Math.max(...geometryValues) : Math.max(0, ...geometryValues),
-          4
-        )
-      : null;
-  const tickLabel = (value: number, step: number) =>
-    yScale === 'log'
-      ? `${formatAxis(10 ** value, 10 ** step)} ${unit}`
-      : `${formatAxis(value, step)} ${unit}`;
-  const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
-  const left = plotLeft ?? Math.max(48, ...labels.map((s) => s.length * 6 + 8));
+  const gutter = tickGutter(labels);
+  if (plotLeft !== undefined && plotLeft < gutter)
+    throw new Error(
+      `${title}: plotLeft ${plotLeft} cannot hold its longest tick: "${labels.reduce((a, b) => (b.length > a.length ? b : a), '')}" needs ${gutter}`
+    );
+  const left = plotLeft ?? gutter;
   const right = width === null ? null : width - 10,
     // A target line is keyed in its own band above the plot, never on the plot (C#16).
     keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,

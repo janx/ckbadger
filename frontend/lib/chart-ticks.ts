@@ -263,3 +263,16 @@ export function placeXTicks(
     rows++;
   return { ticks: centred.map((t, i) => ({ ...t, row: i % rows })), rows };
 }
+
+/** The advance of one 10 px JetBrains Mono glyph in a y-axis tick label. */
+const TICK_CHAR_PX = 6;
+/** Clear space between a y tick label's end and the plot. */
+const TICK_TO_PLOT = 8;
+
+/**
+ * The y-axis gutter that holds every tick label whole: the longest label plus the space between it
+ * and the plot, and never narrower than 48 px.
+ */
+export function tickGutter(labels: readonly string[]): number {
+  return Math.max(48, ...labels.map((label) => label.length * TICK_CHAR_PX + TICK_TO_PLOT));
+}
