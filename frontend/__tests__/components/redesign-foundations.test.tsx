@@ -71,9 +71,9 @@ describe('detail and list foundations', () => {
     expect(screen.getByRole('heading', { name: 'Blocks' })).toHaveClass('text-[22px]');
     expect(container.querySelector('[data-tier="2"]')).toBeNull();
   });
-  it('budgets fixed columns, prints the entire exact value and provides compact labelled facts', () => {
+  it('budgets fixed columns and prints the entire exact value, in the table and the phone row', () => {
     const amount = '900719925474099300.12345678';
-    render(
+    const holdings = () => (
       <ListTable
         label="Holdings"
         columns={[
@@ -88,8 +88,10 @@ describe('detail and list foundations', () => {
         ]}
         rows={[{ name: 'Token', amount }]}
         rowKey={(r) => r.name}
+        mobileRow={(r) => `${r.name} ${r.amount}`}
       />
     );
+    const { unmount } = render(holdings());
     const table = screen.getByRole('table', { name: 'Holdings' });
     expect(table).toHaveClass('table-fixed');
     expect(table).toHaveStyle({ minWidth: '420px' });
@@ -97,7 +99,14 @@ describe('detail and list foundations', () => {
       'text-right',
       'tabular-nums'
     );
+    unmount();
+    // R7: below the column minimums the designed phone row, never a generic label/value sheet.
+    stubChartWidth(358);
+    render(holdings());
     expect(screen.getByRole('list', { name: 'Holdings, compact' })).toHaveTextContent(amount);
+    expect(document.querySelector('dl')).toBeNull();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
   it('uses canonical class marks without borrowing gold for token/object/identity', () => {
     render(

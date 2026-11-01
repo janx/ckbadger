@@ -1,3 +1,5 @@
+import { onTestFinished, vi } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AddressBalance } from '@/components/address/address-holdings';
 import {
@@ -43,6 +45,31 @@ describe('Address v3 components', () => {
           (link) => link.getAttribute('href') === `/mainnet/cell/${cell.txHash}-${cell.outputIndex}`
         )
     ).toBe(true);
+  });
+  it('folds a live cell into a phone row at 358 px: outpoint and capacity · contents · occupied and created', () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    render(<AddressLiveCells rows={addressProducerCells.data} />);
+    expect(screen.queryByRole('table', { name: 'Live cells' })).toBeNull();
+    const [row] = screen.getAllByTestId('address-cell-row-mobile');
+    const lines = phoneLines(row);
+    const cell = addressProducerCells.data[0];
+    expect(lines.map((l) => [l.key, l.tone])).toEqual([
+      ['cell', 'head'],
+      ['contains', 'body'],
+      ['figures', 'quiet'],
+    ]);
+    expect(lines[0].left).toMatch(new RegExp(`:${cell.outputIndex}$`));
+    expect(lines[0].right).toBe('1,000.00000000 CKB');
+    expect(lines[2].left).toMatch(/^occupied .+ CKB · created #[\d,]+$/);
+    expect(
+      screen
+        .getByRole('list', { name: 'Live cells, compact' })
+        .querySelector('a[href*="hashType=data1&kind=type"]')
+    ).not.toBeNull();
   });
   it('retains null cycles as unavailable and never a zero measurement', () => {
     render(

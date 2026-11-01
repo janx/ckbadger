@@ -5,6 +5,7 @@ import { useState, type ReactNode } from 'react';
 import { alignedPlotLeft, Chart, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -393,6 +394,61 @@ export function AssetHistory({
             rows={supplyEvents.rows}
             rowKey={(e) => `${e.txHash}:${e.transferSequence}`}
             empty="No supply changes."
+            mobileRow={(e, wide) => {
+              const change = (
+                <span className="whitespace-nowrap">
+                  {eventColumns[1].render(e)} {eventColumns[3].render(e)}
+                </span>
+              );
+              const after = (
+                <span>
+                  supply after <AssetAmount amount={e.supplyAfter} decimals={token.decimals} />
+                </span>
+              );
+              const where = [
+                <AppLink key="b" href={`/blocks/${e.blockNumber}`}>
+                  {formatBlockNumber(e.blockNumber)}
+                </AppLink>,
+                <AppLink key="t" href={`/tx/${e.txHash}`} className="whitespace-nowrap">
+                  tx {e.txIndex} · sequence {e.transferSequence}
+                </AppLink>,
+              ];
+              const party = (
+                <span className="whitespace-nowrap">
+                  {e.kind === 'mint' ? 'to ' : 'from '}
+                  <AppLink href={`/address/${e.address ?? e.lockHash}`}>
+                    <Hash
+                      hash={e.address ?? e.lockHash}
+                      copyable={false}
+                      startChars={8}
+                      endChars={4}
+                      className="text-[11px]"
+                    />
+                  </AppLink>{' '}
+                  {e.lockKind ?? 'Lock kind unavailable'}
+                </span>
+              );
+              return (
+                <PhoneRow
+                  testId="supply-event-row-mobile"
+                  lines={[
+                    {
+                      key: 'change',
+                      tone: 'head',
+                      left: change,
+                      right: formatUtc8Date(e.timestamp),
+                    },
+                    !wide && { key: 'after', tone: 'body', left: after },
+                    {
+                      key: 'evidence',
+                      tone: 'quiet',
+                      left: <Dotted parts={wide ? [after, ...where] : where} />,
+                      right: party,
+                    },
+                  ]}
+                />
+              );
+            }}
           />
           {supplyPager}
         </details>

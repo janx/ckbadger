@@ -8,6 +8,7 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
@@ -15,6 +16,7 @@ import type { PoolStatus } from '@/lib/api';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo, cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -62,13 +64,118 @@ function PoolDot({ status }: { status: PoolStatus }) {
   );
 }
 
+/**
+ * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
+ * status and wait, then what it does and its value, then fee, rate, cells, size and cycles quiet.
+ */
+function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
+  const what = (
+    <>
+      {tx.activity ? (
+        <span className="text-text-bright">{activityHeadline(tx.activity)}</span>
+      ) : (
+        <span className="text-text-dim">Interpretation unavailable</span>
+      )}
+      <PoolInterpretationNotice
+        interpretation={tx.interpretation}
+        className="text-warning ml-2 text-[11px]"
+      />
+    </>
+  );
+  const value =
+    tx.value === null ? (
+      <span className="text-text-dim">Interpretation partial</span>
+    ) : (
+      <ExactCkb
+        shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
+        signed={false}
+        tone="plain"
+      />
+    );
+  const fee = (
+    <span className="whitespace-nowrap">
+      fee{' '}
+      <ExactCkb
+        shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
+        signed={false}
+        tone="plain"
+      />
+    </span>
+  );
+  const figures = [
+    <span key="rate" className="whitespace-nowrap">
+      {BigInt(tx.feeRate).toLocaleString('en-US')} shannon/KB
+    </span>,
+    <span key="cells" className="whitespace-nowrap">
+      {tx.activity?.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+    </span>,
+    <span key="size" className="whitespace-nowrap">
+      {tx.txSize.toLocaleString('en-US')} B
+    </span>,
+    <span key="cycles" className="whitespace-nowrap">
+      {BigInt(tx.cycles).toLocaleString('en-US')} cycles
+    </span>,
+  ];
+  return (
+    <PhoneRow
+      testId="pool-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <Link href={`/tx/${tx.hash}`} className="hover:underline">
+              <Hash
+                hash={tx.hash}
+                startChars={10}
+                endChars={6}
+                copyable={false}
+                className="text-[13px]"
+              />
+            </Link>
+          ),
+          right: (
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <PoolDot status={tx.status} />
+              <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
+                {poolStatusLabel(tx.status)}
+              </span>
+              <span className="text-text-dim">
+                · {formatTimeAgo(new Date(Number(tx.timestamp)))}
+              </span>
+            </span>
+          ),
+        },
+        wide
+          ? {
+              key: 'what',
+              tone: 'body',
+              left: <Dotted parts={[what, value, fee]} />,
+              right: (
+                <span className="text-text-dim text-[11px]">
+                  <Dotted parts={figures} />
+                </span>
+              ),
+            }
+          : { key: 'what', tone: 'body', left: what, right: value },
+        !wide && {
+          key: 'figures',
+          tone: 'quiet',
+          left: <span className="text-text">{fee}</span>,
+          right: <Dotted parts={figures} />,
+        },
+      ]}
+    />
+  );
+}
+
 export default function TransactionsPage() {
   const [kind, setKind] = useState<TransactionKind>('all');
   const activityType = kind === 'all' ? undefined : kind;
   const [tab, setTab] = useState<'committed' | 'pool'>('committed');
   const committedPage = useCursorPagination();
   const poolPage = useCursorPagination();
-  const limit = DEFAULT_PAGE_SIZE;
+  const limit = usePageSize(DEFAULT_PAGE_SIZE);
   const committed = useQuery({
     queryKey: ['transactions', committedPage.cursor, limit, activityType],
     queryFn: () =>
@@ -279,10 +386,48 @@ export default function TransactionsPage() {
                 No complete transaction count for {yesterday} (UTC+8).
               </p>
             )}
+            {/* Board L2: below sm the kind chips and the pool banner fold into one control line
+                — the kinds, each with yesterday's count, as one select, and the pool as a chip
+                that opens it — so the first transaction is on the first screen. */}
+            <div data-testid="kind-pool-line" className="flex items-center gap-2 sm:hidden">
+              <label htmlFor="transactions-kind" className="sr-only">
+                Filter by kind, with yesterday's counts
+              </label>
+              <select
+                id="transactions-kind"
+                value={kind}
+                onChange={(e) => chooseKind(e.target.value as TransactionKind)}
+                className="border-base-border bg-base-surface text-text-bright h-8 min-w-0 rounded-md border px-2 text-xs"
+              >
+                {KINDS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.value === 'all' ? 'All kinds' : option.label}
+                    {counts[option.value] !== undefined &&
+                      ` ${counts[option.value]!.toLocaleString('en-US')}`}
+                  </option>
+                ))}
+              </select>
+              {poolHead.data && (
+                <button
+                  type="button"
+                  aria-pressed={tab === 'pool'}
+                  onClick={() => setTab(tab === 'pool' ? 'committed' : 'pool')}
+                  className={cn(
+                    'flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-xs',
+                    tab === 'pool'
+                      ? 'border-base-border bg-base-surface text-text-bright'
+                      : 'border-base-border-subtle text-text'
+                  )}
+                >
+                  <span aria-hidden="true" className="bg-info h-1.5 w-1.5 rounded-full" />
+                  pool · {poolHead.data.totals.pending.toLocaleString('en-US')} pending
+                </button>
+              )}
+            </div>
             <div
               role="group"
               aria-label="Filter by kind, with yesterday's counts"
-              className="flex flex-wrap gap-2"
+              className="hidden flex-wrap gap-2 sm:flex"
             >
               {KINDS.map((option) => (
                 <button
@@ -351,7 +496,7 @@ export default function TransactionsPage() {
             ) : poolHead.data ? (
               <div
                 data-testid="pool-banner"
-                className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs"
+                className="hidden flex-wrap items-center gap-x-4 gap-y-2 text-xs sm:flex"
               >
                 <span className="text-text-dim">In the pool</span>
                 <span
@@ -399,7 +544,11 @@ export default function TransactionsPage() {
             )}
           </section>
           <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
-            <div role="group" aria-label="Transaction views" className="flex flex-wrap gap-6">
+            <div
+              role="group"
+              aria-label="Transaction views"
+              className="hidden flex-wrap gap-6 sm:flex"
+            >
               {(['committed', 'pool'] as const).map((value) => (
                 <button
                   key={value}
@@ -499,6 +648,7 @@ export default function TransactionsPage() {
                 rows={pool.data.data}
                 rowKey={(tx) => tx.hash}
                 empty="The node's pool is empty."
+                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
               />
               <p className="text-text-dim text-xs">
                 Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks

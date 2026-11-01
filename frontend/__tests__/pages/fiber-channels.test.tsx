@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
 import FiberChannelsPage from '@/app/fiber/channels/client-page';
 import { server } from '../msw/server';
@@ -131,5 +132,71 @@ describe('FiberChannelsPage', () => {
       await screen.findByRole('table', { name: 'Closed together channels' })
     ).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Lifetime' })).toBeInTheDocument();
+  });
+});
+
+// Board L8 (responsive plan, L3): three labelled lines on a phone, two at 640.
+describe('Fiber channel phone row (board L8)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const serve = () =>
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', () =>
+        HttpResponse.json(
+          page([
+            {
+              ...channel,
+              observedParties: [
+                {
+                  ...channel.observedParties[0],
+                  address: `ckb1qz${'q'.repeat(30)}pr3prn`,
+                  lockScriptName: 'Default Lock',
+                },
+                channel.observedParties[1],
+              ],
+            },
+          ])
+        )
+      )
+    );
+
+  it('labels the date and the duration and names the pair by address suffix at 358 px', async () => {
+    atContainerWidth(358);
+    serve();
+    render(<FiberChannelsPage />);
+    const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Open channels' })).toBeNull();
+    expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['channel', 'head', '0x01010101…010101', 'open'],
+      ['pair', 'body', '…pr3prn ⇄ …bbbbbb Default Lock · unnamed lock', '3,000.00000000 CKB'],
+      [
+        'time',
+        'quiet',
+        expect.stringMatching(/^opened 2023-11-15 \d\d:\d\d · open for 3 m 20 s$/),
+        null,
+      ],
+    ]);
+    expect(within(row).getByTitle(channel.channelId)).toHaveAttribute(
+      'href',
+      `/mainnet/fiber/channels/${channel.channelId}`
+    );
+  });
+
+  it('folds into two lines at 608 px: id and pair with the capacity, then time and state', async () => {
+    atContainerWidth(608);
+    serve();
+    render(<FiberChannelsPage />);
+    const [row] = await screen.findAllByTestId('fiber-channel-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      [
+        'channel',
+        '0x01010101…010101 · …pr3prn ⇄ …bbbbbb Default Lock · unnamed lock',
+        '3,000.00000000 CKB',
+      ],
+      ['time', expect.stringMatching(/^opened 2023-11-15 .+ · open for 3 m 20 s$/), 'open'],
+    ]);
   });
 });

@@ -14,6 +14,7 @@ import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { CLASS_COLORS, COMPOSITION_BADGES, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
@@ -287,26 +288,27 @@ function HoldingSection({
 export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings }) {
   const addr = holdings.lockScriptHash;
   const [active, setActive] = useState<AddressCellClass | null>(null);
+  const pageSize = usePageSize(50);
   const tokensPage = useCursorPagination(),
     daoPage = useCursorPagination(),
     objectsPage = useCursorPagination(),
     identitiesPage = useCursorPagination();
   const tokens = useQuery({
-    queryKey: ['address-tokens', addr, tokensPage.cursor],
-    queryFn: () => api.getAddressTokens(addr, { limit: 50, cursor: tokensPage.cursor }),
+    queryKey: ['address-tokens', addr, tokensPage.cursor, pageSize],
+    queryFn: () => api.getAddressTokens(addr, { limit: pageSize, cursor: tokensPage.cursor }),
     enabled: holdings.holdings.token > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
     refetchInterval: 60000,
   });
   const deposits = useQuery({
-    queryKey: ['address-holdings-cells', addr, 'dao', daoPage.cursor],
+    queryKey: ['address-holdings-cells', addr, 'dao', daoPage.cursor, pageSize],
     // R2b-a 9 (BA-34): largest deposit first, ordered and paged by the API.
     queryFn: () =>
       api.getAddressCells(addr, {
         class: 'dao',
         order: 'capacity',
-        limit: 50,
+        limit: pageSize,
         cursor: daoPage.cursor,
       }),
     enabled: holdings.holdings.dao > 0,
@@ -315,18 +317,22 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
     refetchInterval: 60000,
   });
   const objects = useQuery({
-    queryKey: ['address-holdings-cells', addr, 'object', objectsPage.cursor],
+    queryKey: ['address-holdings-cells', addr, 'object', objectsPage.cursor, pageSize],
     queryFn: () =>
-      api.getAddressCells(addr, { class: 'object', limit: 50, cursor: objectsPage.cursor }),
+      api.getAddressCells(addr, { class: 'object', limit: pageSize, cursor: objectsPage.cursor }),
     enabled: holdings.holdings.object > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,
     refetchInterval: 60000,
   });
   const identities = useQuery({
-    queryKey: ['address-holdings-cells', addr, 'identity', identitiesPage.cursor],
+    queryKey: ['address-holdings-cells', addr, 'identity', identitiesPage.cursor, pageSize],
     queryFn: () =>
-      api.getAddressCells(addr, { class: 'identity', limit: 50, cursor: identitiesPage.cursor }),
+      api.getAddressCells(addr, {
+        class: 'identity',
+        limit: pageSize,
+        cursor: identitiesPage.cursor,
+      }),
     enabled: holdings.holdings.identity > 0,
     placeholderData: keepPreviousData,
     staleTime: 60000,

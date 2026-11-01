@@ -20,6 +20,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
   getScriptRefQueryHashType,
@@ -822,7 +823,8 @@ export default function ScriptDetailPage({
   });
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
   // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
-  const cellsPageSize = isCodeHashMode ? DEFAULT_PAGE_SIZE : FAMILY_CELLS_PAGE_SIZE;
+  const listPageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
   const selectedVersionCellsQueries = useQueries({
     queries: cellReferences.map((reference) => ({
       queryKey: [
@@ -832,6 +834,7 @@ export default function ScriptDetailPage({
         reference.hashType,
         cellsKind,
         versionCellsCursorState[reference.key] ?? null,
+        cellsPageSize,
       ],
       queryFn: () =>
         api.getCellsByScriptRef({
@@ -1572,7 +1575,7 @@ export default function ScriptDetailPage({
                     <CursorPagination
                       total={selectedVersionCellsData.total}
                       totalLabel="cells"
-                      pageSize={DEFAULT_PAGE_SIZE}
+                      pageSize={cellsPageSize}
                       page={cellsPagination.page}
                       currentCount={selectedVersionCellsData.currentCount}
                       hasMore={selectedVersionCellsData.hasMore}

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { DaoSources } from '@/components/dao/dao-sources';
@@ -203,6 +204,25 @@ describe('DaoSources board columns (DAO-13, DAO-22)', () => {
     // Gold reaches the digits: nothing inside sets its own text colour (self-check: it was grey).
     expect(comp.querySelector('[class*="text-text"]')).toBeNull();
     expect(rows[1].lastElementChild).toHaveTextContent('1');
+  });
+
+  it('writes a DAO transaction as a phone row at 358 px: hash and block · one line per step · parties', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    render(<DaoSources />);
+    fireEvent.click(screen.getByRole('tab', { name: /transactions/i }));
+    const rows = await screen.findAllByTestId('dao-tx-row-mobile');
+    expect(screen.queryByRole('table', { name: 'DAO transactions' })).toBeNull();
+    const lines = phoneLines(rows[1]);
+    expect(lines[0].right).toBe('#20,874,429 · 2026-10-30 11:40');
+    expect(lines.slice(1).map((l) => l.key)).toEqual(['step-0', 'parties']);
+    expect(lines[1].left).toMatch(/7,815,830\.43832627 CKB$/);
+    expect(lines[1].right).toMatch(/^compensation 25,728\.5955841/);
+    expect(rows[1].querySelector('[data-role="compensation"]')).toHaveClass('text-gold');
+    expect(lines[2]).toMatchObject({ tone: 'quiet', left: '1 party' });
   });
 
   it('marks the tabs as tabs and lets the note wrap below them on phones', () => {

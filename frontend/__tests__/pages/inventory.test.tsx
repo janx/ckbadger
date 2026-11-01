@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
 import TokensPage from '@/app/inventory/tokens/page';
@@ -344,6 +346,44 @@ describe('Tokens Inventory Page', () => {
     window.history.replaceState(null, '', '/inventory/tokens');
   });
 
+  // L4 (responsive plan, board L3): below sm the standard chips fold into a select on the sort
+  // line, so the tabs, the filter and the sort take two lines at 390 px; a phone reads twenty.
+  it('folds the standard chips into the sort line below sm and reads twenty rows on a phone', async () => {
+    stubViewportFromMd(false);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<TokensPage />);
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ limit: 20 }))
+    );
+    expect(api.getAssets).not.toHaveBeenCalledWith(expect.objectContaining({ limit: 50 }));
+    const controls = screen.getByTestId('inventory-controls');
+    const standard = within(controls).getByLabelText('Standard filter');
+    expect(standard).toHaveClass('sm:hidden');
+    await waitFor(() =>
+      expect(
+        within(standard)
+          .getAllByRole('option')
+          .map((o) => o.textContent)
+      ).toEqual(['All 500', 'xUDT 398', 'sUDT 100', 'xUDT-compatible 2'])
+    );
+    expect(screen.getByRole('group', { name: 'Standard filters' })).toHaveClass(
+      'hidden',
+      'sm:flex'
+    );
+    // The words "sorted by" stay for the screen reader below sm and show from sm.
+    expect(within(controls).getByText('sorted by')).toHaveClass('sr-only', 'sm:not-sr-only');
+    expect(within(controls).getByLabelText('Sort inventory')).toBeInTheDocument();
+    fireEvent.change(standard, { target: { value: 'sudt' } });
+    await waitFor(() =>
+      expect(api.getAssets).toHaveBeenLastCalledWith(
+        expect.objectContaining({ standard: 'sudt', limit: 20 })
+      )
+    );
+  });
+
   it('renders header, title, and token content', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
 
@@ -604,14 +644,25 @@ describe('Objects Inventory Page', () => {
         },
       ],
     });
-    render(<ObjectsPage />);
+    const { unmount } = render(<ObjectsPage />);
     await screen.findByRole('table', { name: 'Object collections' });
-    const labels = screen.getAllByText('Decode pending').filter((el) => el.tagName === 'SPAN');
-    expect(labels).toHaveLength(2);
-    for (const label of labels) {
-      expect(label).toHaveClass('text-text-dim');
-      expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
-    }
+    const neutral = () => {
+      const labels = screen.getAllByText('Decode pending').filter((el) => el.tagName === 'SPAN');
+      expect(labels).toHaveLength(1);
+      for (const label of labels) {
+        expect(label).toHaveClass('text-text-dim');
+        expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
+      }
+    };
+    neutral();
+    unmount();
+    // The phone row (board L4) keeps the same neutral mark.
+    atContainerWidth(358);
+    render(<ObjectsPage />);
+    await screen.findByTestId('inventory-row-mobile');
+    neutral();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('maps composition tier filters to API query', async () => {

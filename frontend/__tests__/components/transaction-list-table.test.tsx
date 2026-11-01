@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import type { Transaction } from '@/lib/api';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 
 const base: Omit<Transaction, 'hash' | 'activity' | 'isCellbase'> = {
   blockNumber: 20829775,
@@ -159,5 +160,62 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     render(<TransactionListTable transactions={[scriptCall]} />);
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
     expect(row.querySelector('td:nth-child(4) [data-zero]')).toBeInTheDocument();
+  });
+});
+
+describe('TransactionListTable phone row (board L2)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three lines at 358 px: who and when, what it did in full, then value · fee and the figures', () => {
+    atContainerWidth(358);
+    render(<TransactionListTable transactions={[scriptCall, cellbase]} />);
+    expect(screen.queryByRole('table')).toBeNull();
+    const [call, base] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(call)).toEqual([
+      {
+        key: 'identity',
+        tone: 'head',
+        left: '0x00de304b...25cbbc',
+        right: expect.stringMatching(/^#20,829,775 · .+ ago$/),
+      },
+      {
+        key: 'what',
+        tone: 'body',
+        // Never truncated: both type scripts survive (A#7).
+        left: 'Script call · .bit Time Index State · .bit Time Info',
+        right: null,
+      },
+      {
+        key: 'figures',
+        tone: 'quiet',
+        left: '0.00000000 CKB · fee 0.00030000 CKB',
+        right: '3 → 3 cells · 903 B · 1,704,957 cycles',
+      },
+    ]);
+    expect(call.querySelector('[data-line="what"] .truncate')).toBeNull();
+    // A cellbase pays its reward on the what line; its fee is a quiet figure.
+    expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0xc89d2d25...9a2cd7', expect.stringMatching(/^#20,829,775 · /)],
+      ['what', 'Cellbase pays #20,829,764 · reward 559.61739927 CKB', null],
+      ['figures', '0 → 1 cells · 360 B · fee 0.00000000 CKB', '0 cycles'],
+    ]);
+    expect(base.closest('[role="listitem"]')).toHaveClass('opacity-[.55]');
+  });
+
+  it('is two lines at 608 px: value and fee join what it did, the figures take the right edge', () => {
+    atContainerWidth(608);
+    render(<TransactionListTable transactions={[scriptCall]} />);
+    const [call] = screen.getAllByTestId('transaction-row-mobile');
+    expect(phoneLines(call).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x00de304b...25cbbc', expect.stringMatching(/^#20,829,775 · /)],
+      [
+        'what',
+        'Script call · .bit Time Index State · .bit Time Info · 0.00000000 CKB · fee 0.00030000 CKB',
+        '3 → 3 cells · 903 B · 1,704,957 cycles',
+      ],
+    ]);
   });
 });

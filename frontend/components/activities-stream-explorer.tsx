@@ -14,6 +14,7 @@ import {
   type GlobalActivityFilter,
 } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { cn, formatUtc8Date } from '@/lib/utils';
 
 const PAGE_SIZE = DEFAULT_PAGE_SIZE;
@@ -307,6 +308,7 @@ export function ActivitiesStreamExplorer({
   useEffect(() => ensureKeyframes(), []);
 
   const [selectedFilter, setSelectedFilter] = useState<GlobalActivityFilter>('all');
+  const pageSize = usePageSize(PAGE_SIZE);
   const [prependedItems, setPrependedItems] = useState<GlobalActivity[]>([]);
   const [pendingNewItems, setPendingNewItems] = useState<GlobalActivity[]>([]);
   const [highlightedKeys, setHighlightedKeys] = useState<Set<string>>(new Set());
@@ -344,10 +346,10 @@ export function ActivitiesStreamExplorer({
     isFetchingNextPage,
     isFetchNextPageError,
   } = useInfiniteQuery({
-    queryKey: ['global-activities-stream', selectedFilter],
+    queryKey: ['global-activities-stream', selectedFilter, pageSize],
     queryFn: ({ pageParam }) =>
       api.getGlobalActivities({
-        limit: PAGE_SIZE,
+        limit: pageSize,
         cursor: pageParam,
         filter: selectedFilter,
       }),

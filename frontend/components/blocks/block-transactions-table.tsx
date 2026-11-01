@@ -2,6 +2,7 @@ import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { AlignedBar } from '@/components/ui/aligned-bar';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
@@ -12,6 +13,55 @@ const TRACK = 96;
 
 /** The column budget fits the block page's main column (≈ 968 px at 1440) without scrolling. */
 export const BLOCK_TXS_MIN_WIDTH = 32 + 140 + 120 + 70 + 140 + 104 + 160 + 172;
+
+/** Output capacity with its unit, for the phone row. */
+function capacity(tx: Transaction) {
+  return (
+    <span className="text-text-bright">
+      <ExactCkb
+        shannons={parseShannons(tx.outputCapacity!, `transaction ${tx.hash} output capacity`)}
+        signed={false}
+        tone="plain"
+      />
+    </span>
+  );
+}
+
+function fee(tx: Transaction) {
+  return (
+    <span className="whitespace-nowrap">
+      fee{' '}
+      <ExactCkb
+        shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
+        signed={false}
+        tone="plain"
+      />
+    </span>
+  );
+}
+
+function cells(tx: Transaction) {
+  return (
+    <span className="whitespace-nowrap">
+      {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+    </span>
+  );
+}
+
+function resources(tx: Transaction) {
+  return [
+    <span key="size" className="whitespace-nowrap">
+      {tx.txSize!.toLocaleString('en-US')} B
+    </span>,
+    <span key="cycles" className="whitespace-nowrap">
+      {tx.cycles === null
+        ? tx.cyclesStatus === 'failed'
+          ? 'replay failed'
+          : 'cycles not yet run'
+        : `${tx.cycles.toLocaleString('en-US')} cycles`}
+    </span>,
+  ];
+}
 
 /**
  * The BlockTxs board: one raw row per transaction of a block, cellbase first and set back
@@ -40,6 +90,23 @@ export function BlockTransactionsTable({
   const cycleScale = resourceScale(
     transactions.flatMap((tx) => (tx.cycles === null ? [] : [tx.cycles]))
   );
+  const proposedIn = (tx: Transaction) =>
+    blockNumber === 0 ? (
+      <span className="text-text-dim">genesis</span>
+    ) : tx.isCellbase ? (
+      <span className="text-text-dim">cellbase</span>
+    ) : (
+      <span className="whitespace-nowrap">
+        <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`}>
+          {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
+        </Link>
+        <span className="text-text-dim">
+          {' '}
+          +{tx.proposalOrigin!.distance}
+          {tx.proposalOrigin!.uncle ? ' · uncle' : ''}
+        </span>
+      </span>
+    );
   const columns: ListColumn<Transaction>[] = [
     {
       key: 'index',
@@ -61,23 +128,7 @@ export function BlockTransactionsTable({
       key: 'proposal',
       label: 'Proposed in',
       minWidth: 120,
-      render: (tx) =>
-        blockNumber === 0 ? (
-          <span className="text-text-dim">genesis</span>
-        ) : tx.isCellbase ? (
-          <span className="text-text-dim">cellbase</span>
-        ) : (
-          <span className="whitespace-nowrap">
-            <Link href={`/blocks/${tx.proposalOrigin!.blockNumber}`}>
-              {formatBlockNumber(tx.proposalOrigin!.blockNumber)}
-            </Link>
-            <span className="text-text-dim">
-              {' '}
-              +{tx.proposalOrigin!.distance}
-              {tx.proposalOrigin!.uncle ? ' · uncle' : ''}
-            </span>
-          </span>
-        ),
+      render: proposedIn,
     },
     {
       key: 'cells',
@@ -174,6 +225,48 @@ export function BlockTransactionsTable({
       rowKey={(tx) => tx.hash}
       rowClassName={(tx) => (tx.isCellbase ? 'text-text-dim' : '')}
       empty="No transactions."
+      mobileRow={(tx, wide) => (
+        <PhoneRow
+          testId="block-tx-row-mobile"
+          lines={[
+            {
+              key: 'identity',
+              tone: 'head',
+              left: (
+                <>
+                  <span className="text-text-dim mr-2">{tx.index}</span>
+                  <Link href={`/tx/${tx.hash}`} className="hover:underline">
+                    <Hash
+                      hash={tx.hash}
+                      startChars={8}
+                      endChars={6}
+                      copyable={false}
+                      className="text-[13px]"
+                    />
+                  </Link>
+                </>
+              ),
+              right: wide ? capacity(tx) : <>proposed in {proposedIn(tx)}</>,
+            },
+            !wide && {
+              key: 'amounts',
+              tone: 'body',
+              left: capacity(tx),
+              right: fee(tx),
+            },
+            {
+              key: 'figures',
+              tone: 'quiet',
+              left: wide ? (
+                <Dotted parts={[<>proposed in {proposedIn(tx)}</>, fee(tx)]} />
+              ) : (
+                cells(tx)
+              ),
+              right: <Dotted parts={[...(wide ? [cells(tx)] : []), ...resources(tx)]} />,
+            },
+          ]}
+        />
+      )}
     />
   );
 }

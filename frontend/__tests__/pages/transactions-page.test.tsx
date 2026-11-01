@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
@@ -87,7 +89,8 @@ describe('TransactionsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getAllByRole('link', { name: '#123,456' })).toHaveLength(2);
+      // One form at a time (R1): the measured table here, the phone row on a phone.
+      expect(screen.getAllByRole('link', { name: '#123,456' })).toHaveLength(1);
     });
     expect(
       screen
@@ -96,14 +99,14 @@ describe('TransactionsPage', () => {
     ).toBe(true);
 
     const hash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-    expect(screen.getAllByTitle(hash)).toHaveLength(2);
+    expect(screen.getAllByTitle(hash)).toHaveLength(1);
     for (const hashDisplay of screen.getAllByTitle(hash)) {
       expect(hashDisplay).toHaveClass('text-text', 'text-xs');
       expect(hashDisplay.children).toHaveLength(0);
       expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
     }
     expect(screen.queryByTitle(/Click to copy/)).not.toBeInTheDocument();
-    expect(screen.getAllByText('2 → 3')).toHaveLength(2);
+    expect(screen.getAllByText('2 → 3')).toHaveLength(1);
     // F2-tx (TX-25 / TX-26): the board's columns, newest first with cellbase rows set back.
     const table = screen.getByRole('table', { name: 'Committed transactions' });
     expect(table).toHaveTextContent('What it did');
@@ -226,6 +229,67 @@ describe('Transactions pool view', () => {
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);
     }
+  });
+  it('folds a pool transaction into a phone row at 358 px: hash and status · what and value · fee and figures', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      hasMore: false,
+      nextCursor: null,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      summary: {
+        size: '226',
+        cycles: '1709221',
+        minFeeRate: '54623',
+        maxFeeRate: '54623',
+        newestSeenAt: '1792886400000',
+      },
+      data: [
+        {
+          hash: `0x${'ab'.repeat(32)}`,
+          status: 'proposed',
+          value: null,
+          fee: '12345',
+          feeRate: '54623',
+          txSize: 226,
+          cycles: '1709221',
+          inputsCount: 2,
+          outputsCount: 3,
+          timestamp: '1792886400000',
+          interpretation: { status: 'partial', reasons: [{ code: 'unresolved_input' }] },
+          activity: null,
+        },
+      ],
+      total: 1,
+      limit: 50,
+      nextCursor: null,
+      totals: { pending: 0, proposed: 1, awaitingIndex: 0 },
+      truncated: false,
+      lastPolledAt: '2026-10-25T00:00:00Z',
+    });
+    render(<TransactionsPage />);
+    fireEvent.click(screen.getByRole('button', { name: /^In the pool/ }));
+    const [row] = await screen.findAllByTestId('pool-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Transactions in the pool' })).toBeNull();
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0xabababab...ababab', expect.stringMatching(/^Proposed· .+ ago$/)],
+      [
+        'what',
+        'Interpretation unavailablepartial: an input is not yet resolvable',
+        'Interpretation partial',
+      ],
+      [
+        'figures',
+        'fee 0.00012345 CKB',
+        '54,623 shannon/KB · 2 → 3 cells · 226 B · 1,709,221 cycles',
+      ],
+    ]);
   });
 });
 
@@ -352,4 +416,80 @@ it('draws awaiting-index pool squares hollow, apart from pending (cyan) and prop
   expect(awaiting).toHaveClass('border', 'border-text-dim');
   expect(awaiting).not.toHaveClass('bg-info');
   expect(screen.getByRole('button', { name: /^In the pool/ })).toHaveTextContent('In the pool2');
+});
+
+// L4 (responsive plan, board L2): below sm the chrome is one control line, and a phone reads
+// twenty transactions a page.
+describe('Transactions chrome on a phone (board L2, R2)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('folds the kind chips into one select with yesterday’s counts beside a pool chip', async () => {
+    const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+    vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+      { ...dailyActivities[0], date: yesterday, tokenCount: 11, coinbaseCount: 3 },
+    ]);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      totals: { pending: 4, proposed: 1, awaitingIndex: 0 },
+    });
+    render(<TransactionsPage />);
+    const line = await screen.findByTestId('kind-pool-line');
+    expect(line).toHaveClass('sm:hidden');
+    const select = within(line).getByLabelText("Filter by kind, with yesterday's counts");
+    await waitFor(() =>
+      expect(within(select).getByRole('option', { name: /^Tokens/ })).toHaveTextContent('Tokens 11')
+    );
+    // The same kinds as the chips, in the same order (the board's "All kinds ▾").
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.getAttribute('value'))
+    ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
+    expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^All kinds/);
+    // From sm the chips, the pool banner and the view tabs; below it the line replaces them.
+    expect(
+      screen.getByRole('group', { name: "Filter by kind, with yesterday's counts" })
+    ).toHaveClass('hidden', 'sm:flex');
+    expect(screen.getByTestId('pool-banner')).toHaveClass('hidden', 'sm:flex');
+    expect(screen.getByRole('group', { name: 'Transaction views' })).toHaveClass(
+      'hidden',
+      'sm:flex'
+    );
+    fireEvent.change(select, { target: { value: 'token' } });
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'token',
+      })
+    );
+    const pool = within(line).getByRole('button', { name: 'pool · 4 pending' });
+    expect(pool).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(pool);
+    expect(pool).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByText('not yet in a block · newest first')).toBeInTheDocument();
+  });
+
+  it('asks for twenty transactions a page below md', async () => {
+    stubViewportFromMd(false);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 20,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    });
+    render(<TransactionsPage />);
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 20 })
+    );
+    expect(api.getTransactions).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
 });

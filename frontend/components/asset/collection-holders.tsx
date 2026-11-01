@@ -5,6 +5,7 @@ import { LockKind } from '@/components/ui/lock-kind';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
@@ -12,6 +13,8 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
+import { PhoneRow } from '@/components/ui/phone-row';
 
 export interface CollectionHoldersProps {
   load: (params: {
@@ -68,9 +71,11 @@ function ScopedCollectionHolders({
 }: CollectionHoldersProps) {
   const [all, setAll] = useState(false);
   const pagination = useCursorPagination();
-  const limit = all ? 50 : 10;
+  // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
+  const allPageSize = usePageSize(50);
+  const limit = all ? allPageSize : 10;
   const holders = useQuery({
-    queryKey: ['collection-holders', queryKey, all, pagination.cursor],
+    queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
     queryFn: () => load({ limit, cursor: pagination.cursor }),
   });
   let totalHolders = BigInt(0);
@@ -95,36 +100,45 @@ function ScopedCollectionHolders({
   // lists more holders than the distribution counts, say so and show both (#6).
   const readsDiffer =
     !!distribution && !!holders.data && BigInt(holders.data.data.length) > totalHolders;
+  const rank = (holder: CollectionHolder) =>
+    (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1;
+  const party = (holder: CollectionHolder) => (
+    <DotCellParty
+      party={{
+        hashPrefix: holder.ownerHashPrefix ?? null,
+        lockHash: holder.lockScriptHash,
+        address: holder.address,
+      }}
+      truncate
+      className="max-w-full break-all [&>span]:text-xs"
+    />
+  );
   const columns: ListColumn<CollectionHolder>[] = [
     {
       key: 'rank',
       label: '#',
-      minWidth: 32,
-      render: (holder) => (pagination.page - 1) * limit + holders.data!.data.indexOf(holder) + 1,
+      minWidth: 28,
+      render: (holder) => <span className="text-text-dim">{rank(holder)}</span>,
     },
     {
       key: 'owner',
       label: 'Holder',
-      minWidth: 210,
+      minWidth: 176,
+      render: party,
+    },
+    {
+      key: 'lock',
+      label: 'Lock',
+      minWidth: 104,
+      className: 'text-[11px]',
       render: (holder) => (
-        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
-          <DotCellParty
-            party={{
-              hashPrefix: holder.ownerHashPrefix ?? null,
-              lockHash: holder.lockScriptHash,
-              address: holder.address,
-            }}
-            truncate
-            className="max-w-full break-all [&>span]:text-xs"
-          />
-          <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
-        </span>
+        <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
       ),
     },
     {
       key: 'items',
       label: 'Items',
-      minWidth: 100,
+      minWidth: 140,
       numeric: true,
       className: '!whitespace-normal break-all',
       render: (holder) =>
@@ -198,11 +212,36 @@ function ScopedCollectionHolders({
                 rows={holders.data.data}
                 rowKey={holderKey}
                 empty="No current holders."
+                mobileRow={(holder, wide) => {
+                  const max = Math.max(...holders.data!.data.map((h) => h.itemCount));
+                  return (
+                    <HolderPhoneRow
+                      rank={rank(holder)}
+                      party={party(holder)}
+                      lock={
+                        <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
+                      }
+                      amount={
+                        <span className="whitespace-nowrap">
+                          <AssetCount value={holder.itemCount} />{' '}
+                          <span className="text-text-dim text-xs">
+                            {holder.itemCount === 1 ? 'item' : 'items'}
+                          </span>
+                        </span>
+                      }
+                      // The bar is the holder's count against the largest on the page, as the
+                      // table's Items column draws it.
+                      barWidth={`${max ? (holder.itemCount / max) * 100 : 0}%`}
+                      barColor={assetClass ? CLASS_COLORS[assetClass] : undefined}
+                      wide={wide}
+                    />
+                  );
+                }}
               />
               {all && (
                 <CursorPagination
                   page={pagination.page}
-                  pageSize={50}
+                  pageSize={limit}
                   total={holders.data.total ?? undefined}
                   totalLabel="holders"
                   hasMore={holders.data.hasMore}
@@ -240,6 +279,35 @@ function ScopedCollectionHolders({
               rows={distribution}
               rowKey={(bucket) => bucket.range}
               empty="No current holders."
+              mobileRow={(bucket) => (
+                <PhoneRow
+                  testId="holder-bucket-row-mobile"
+                  lines={[
+                    {
+                      key: 'range',
+                      tone: 'body',
+                      left: (
+                        <>
+                          holds {bucket.range}
+                          <span className="text-text-dim">
+                            {' · '}
+                            <AssetCount value={bucket.items} />{' '}
+                            {bucket.items === 1 ? 'item' : 'items'}
+                          </span>
+                        </>
+                      ),
+                      right: (
+                        <span className="inline-flex items-center gap-1.5">
+                          {bucketColumns[1].render(bucket)}
+                          <span className="text-text-dim">
+                            {bucket.holders === 1 ? 'holder' : 'holders'}
+                          </span>
+                        </span>
+                      ),
+                    },
+                  ]}
+                />
+              )}
             />
           </div>
         )}

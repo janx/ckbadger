@@ -18,12 +18,14 @@ import {
   type ItemFeedSubject,
 } from '@/lib/feed-headlines';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
@@ -221,6 +223,105 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       columns={shown}
       rowKey={(r) => r.hash}
       empty="No transactions."
+      mobileRow={(r, wide) => {
+        // What the row did on this asset: the identity action, the feed's own context (an item's
+        // cell after it, a collection's headline) and the tokens moved; then the CKB it output.
+        const did = [
+          identity ? identity.action(r) : null,
+          context ? (
+            context.placement === 'after-cells' ? (
+              context.render(r)
+            ) : (
+              <span>
+                <span className="text-text-dim">{context.label}: </span>
+                {context.render(r)}
+              </span>
+            )
+          ) : null,
+          token ? (
+            <span className="whitespace-nowrap">
+              <AssetAmount amount={tokenMoved(r, token.typeHash)} decimals={token.decimals} />{' '}
+              {token.symbol ?? 'token'} moved
+            </span>
+          ) : null,
+        ];
+        const output = identity ? null : (
+          <ExactCkb shannons={BigInt(r.outputCapacity!)} signed={false} tone="plain" />
+        );
+        const figures = [
+          <span key="cells" className="whitespace-nowrap">
+            {r.inputsCount} → {r.outputsCount} cells
+          </span>,
+          <span key="fee" className="whitespace-nowrap">
+            fee <ExactCkb shannons={BigInt(r.fee)} signed={false} tone="plain" />
+          </span>,
+          <span key="size" className="whitespace-nowrap">
+            {r.txSize!.toLocaleString('en-US')} B
+          </span>,
+          // ID-C8: the identity boards carry no cycles.
+          identity ? null : (
+            <span key="cycles" className="whitespace-nowrap">
+              {r.cycles === null
+                ? r.cyclesStatus === 'failed'
+                  ? 'cycles calculation failed'
+                  : 'cycles not computed'
+                : `${r.cycles.toLocaleString('en-US')} cycles`}
+            </span>
+          ),
+          <span key="index" className="whitespace-nowrap">
+            tx {r.index} in block
+          </span>,
+        ];
+        const hasDid = did.some((part) => part !== null);
+        return (
+          <PhoneRow
+            testId="asset-tx-row-mobile"
+            lines={[
+              {
+                key: 'identity',
+                tone: 'head',
+                left: (
+                  <AppLink href={`/tx/${r.hash}`}>
+                    <Hash
+                      hash={r.hash}
+                      copyable={false}
+                      startChars={10}
+                      endChars={6}
+                      className="text-[13px]"
+                    />
+                  </AppLink>
+                ),
+                right: (
+                  <span className="whitespace-nowrap">
+                    <AppLink href={`/blocks/${r.blockNumber}`} className="text-text-bright">
+                      {formatBlockNumber(r.blockNumber)}
+                    </AppLink>
+                    <span className="text-text">
+                      {' '}
+                      · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
+                    </span>
+                  </span>
+                ),
+              },
+              wide
+                ? {
+                    key: 'what',
+                    tone: 'body',
+                    left: <Dotted parts={[...did, output]} />,
+                    right: (
+                      <span className="text-text-dim text-[11px]">
+                        <Dotted parts={figures} />
+                      </span>
+                    ),
+                  }
+                : hasDid
+                  ? { key: 'what', tone: 'body', left: <Dotted parts={did} />, right: output }
+                  : { key: 'what', tone: 'body', left: 'output', right: output },
+              !wide && { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
+            ]}
+          />
+        );
+      }}
     />
   );
 }
@@ -274,18 +375,19 @@ export function AssetFeed({
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
     txPages = useCursorPagination();
+  const pageSize = usePageSize(50);
   const activityCursor = actsPages.cursor ?? initialActivityCursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);
   }, [activityCursor, onActivityCursorChange]);
   const acts = useQuery({
-    queryKey: ['asset-feed', queryKey, 'activities', activityCursor],
-    queryFn: () => loadActivities({ limit: 50, cursor: activityCursor }),
+    queryKey: ['asset-feed', queryKey, 'activities', activityCursor, pageSize],
+    queryFn: () => loadActivities({ limit: pageSize, cursor: activityCursor }),
     enabled: tab === 'activities',
   });
   const txs = useQuery({
-    queryKey: ['asset-feed', queryKey, 'transactions', txPages.cursor],
-    queryFn: () => loadTransactions({ limit: 50, cursor: txPages.cursor }),
+    queryKey: ['asset-feed', queryKey, 'transactions', txPages.cursor, pageSize],
+    queryFn: () => loadTransactions({ limit: pageSize, cursor: txPages.cursor }),
     enabled: tab === 'transactions',
   });
   const current = tab === 'activities' ? acts : txs,
@@ -369,7 +471,7 @@ export function AssetFeed({
           <CursorPagination
             total={current.data.total}
             totalLabel="transactions"
-            pageSize={50}
+            pageSize={pageSize}
             page={pages.page}
             hasMore={current.data.hasMore}
             hasPrevious={pages.hasPrevious}

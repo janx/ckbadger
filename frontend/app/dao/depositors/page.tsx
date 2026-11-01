@@ -6,11 +6,16 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { usePageSize } from '@/hooks/usePageSize';
+import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
+import { shareBarWidthFromPercent } from '@/components/ui/share-bar';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { retryTransientOnly } from '@/lib/query-client';
 
+/** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
 
 function Ckb({ shannons }: { shannons: string }) {
@@ -79,14 +84,15 @@ const COLUMNS: ListColumn<DaoDepositorRow>[] = [
 export default function DaoDepositorsPage() {
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const cursor = cursors[cursors.length - 1];
+  const pageSize = usePageSize(PAGE);
   const query = useQuery({
-    queryKey: ['dao-depositors', cursor],
-    queryFn: () => api.getDaoDepositors({ limit: PAGE, cursor }),
+    queryKey: ['dao-depositors', cursor, pageSize],
+    queryFn: () => api.getDaoDepositors({ limit: pageSize, cursor }),
     retry: retryTransientOnly,
   });
   const page = query.data;
   const client = useQueryClient();
-  const first = client.getQueryData<RankedPage>(['dao-depositors', undefined]);
+  const first = client.getQueryData<RankedPage>(['dao-depositors', undefined, pageSize]);
   const moved =
     page && first && cursor !== undefined && first.anchor.blockNumber !== page.anchor.blockNumber
       ? { from: first.anchor.blockNumber, to: page.anchor.blockNumber }
@@ -137,24 +143,24 @@ export default function DaoDepositorsPage() {
                 columns={COLUMNS}
                 rowKey={(d) => d.lockScriptHash}
                 empty="No live deposits at this tip."
-                mobileRow={(d) => (
-                  <div className="space-y-1 text-[12px]">
-                    <div className="flex items-baseline justify-between gap-3">
-                      <span className="min-w-0">
-                        <span className="text-text-dim mr-2">{d.rank.toLocaleString('en-US')}</span>
-                        <Depositor row={d} />
+                // Board L5: the holder row — rank, depositor and CKB deposited on one line, the
+                // share as a bar (10 % = full) with its number and the deposit count on the second.
+                mobileRow={(d, wide) => (
+                  <HolderPhoneRow
+                    rank={d.rank}
+                    party={<Depositor row={d} />}
+                    amount={
+                      <span className="whitespace-nowrap">
+                        <Ckb shannons={d.capacity} /> <span className="text-text-dim">CKB</span>
                       </span>
-                      <span className="text-text-dim shrink-0">{d.sharePercent}%</span>
-                    </div>
-                    <div className="text-text-bright">
-                      <Ckb shannons={d.capacity} /> CKB
-                      <span className="text-text-dim">
-                        {' · '}
-                        {d.depositCount.toLocaleString('en-US')} deposit
-                        {d.depositCount === 1 ? '' : 's'}
-                      </span>
-                    </div>
-                  </div>
+                    }
+                    share={`${d.sharePercent}% · ${d.depositCount.toLocaleString('en-US')} deposit${
+                      d.depositCount === 1 ? '' : 's'
+                    }`}
+                    barWidth={shareBarWidthFromPercent(d.sharePercent)}
+                    barColor={CLASS_COLORS.dao}
+                    wide={wide}
+                  />
                 )}
               />
               <div className="flex justify-between gap-3 pt-4">
@@ -175,7 +181,7 @@ export default function DaoDepositorsPage() {
                     onClick={() => setCursors((c) => [...c, page.nextCursor ?? undefined])}
                     className="border-base-border text-text hover:text-text-bright h-9 rounded-md border px-4 text-xs"
                   >
-                    Next {PAGE} →
+                    Next {pageSize} →
                   </button>
                 )}
               </div>

@@ -5,7 +5,8 @@ import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { splitTokenAmount, formatTokenBalanceWithRawMarker } from '@/lib/format-asset';
-import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
   getClusterDetailHref,
   getIdentityCollectionHref,
@@ -85,6 +86,227 @@ function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
     border: '1px solid transparent',
   };
 }
+/** CKB held and occupied on a phone row: "2,885,438.81 CKB held · 2,842,315 occupied (98.5%)". */
+function HeldAndOccupied({ asset: a }: { asset: Asset }) {
+  if (a.ownedCapacity === null) return <span>CKB held unavailable</span>;
+  const held = exactUnsignedInteger(a.ownedCapacity, `${a.id} capacity`);
+  const occupied =
+    a.ownedKnowledge === null ? null : exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`);
+  if (occupied !== null && occupied > held)
+    throw new Error(`${a.id}: occupied capacity exceeds held capacity`);
+  return (
+    <Dotted
+      parts={[
+        <span key="held" className="whitespace-nowrap">
+          <ExactCkb shannons={held} signed={false} tone="plain" /> held
+        </span>,
+        occupied === null ? (
+          'occupied unavailable'
+        ) : (
+          <span key="occupied" className="whitespace-nowrap">
+            <OccupiedCkb shannons={occupied} /> occupied
+            {held > BigInt(0) && ` (${formatScaledInteger(occupied * BigInt(100), held, 1)}%)`}
+          </span>
+        ),
+      ]}
+    />
+  );
+}
+
+/** An exact count and its noun, singular for one ("1 holder", "93 objects"). */
+function Counted({
+  value,
+  noun,
+  one = noun,
+}: {
+  value: number | string | null | undefined;
+  noun: string;
+  one?: string;
+}) {
+  return (
+    <span className="whitespace-nowrap">
+      <AssetCount value={value} />{' '}
+      <span className="text-text-dim">{value === 1 || value === '1' ? one : noun}</span>
+    </span>
+  );
+}
+
+/**
+ * An inventory row on a phone (boards L3 tokens, L4 objects; identities by the same rules): name
+ * and the sort figure, then standard and activity, then supply and the CKB its cells hold. In a
+ * wide container (640) two lines: the standard joins the name and the figures share the second.
+ */
+function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) {
+  const standard = formatStandard(a.standard);
+  const href = assetHref(a);
+  if (a.assetType === 'token') {
+    const name = (
+      <AppLink href={href} className="text-text-bright">
+        <span className="font-medium">
+          {a.symbol ?? a.name ?? <Hash hash={a.id} copyable={false} className="text-xs" />}
+        </span>
+        {a.symbol && a.name && <span className="text-text"> {a.name}</span>}
+      </AppLink>
+    );
+    const activity = [
+      <Counted key="t" value={a.transfersCount} noun="transfers" one="transfer" />,
+      <Counted key="24" value={a.transfers24h} noun="in 24 h" />,
+    ];
+    const hm = a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`;
+    const supply = (
+      <span>
+        supply{' '}
+        {a.totalSupply === null ? (
+          'unavailable'
+        ) : (
+          <AssetAmount amount={a.totalSupply} decimals={a.decimals} />
+        )}{' '}
+        {a.symbol}
+      </span>
+    );
+    return (
+      <PhoneRow
+        testId="inventory-row-mobile"
+        lines={[
+          {
+            key: 'identity',
+            tone: 'head',
+            left: wide ? (
+              <>
+                {name}
+                <span className="text-text-dim text-xs"> · {standard}</span>
+              </>
+            ) : (
+              name
+            ),
+            right: <Counted value={a.holdersCount} noun="holders" one="holder" />,
+          },
+          wide
+            ? {
+                key: 'figures',
+                tone: 'quiet',
+                left: <Dotted parts={[supply, <HeldAndOccupied key="h" asset={a} />]} />,
+                right: <Dotted parts={[...activity, hm]} />,
+              }
+            : {
+                key: 'activity',
+                tone: 'body',
+                left: <Dotted parts={[standard, ...activity]} />,
+                right: hm,
+              },
+          !wide && {
+            key: 'figures',
+            tone: 'quiet',
+            left: <Dotted parts={[supply, <HeldAndOccupied key="h" asset={a} />]} />,
+          },
+        ]}
+      />
+    );
+  }
+  const title = (
+    <AppLink href={href} className="text-text-bright font-medium">
+      {a.name || <Hash hash={a.id} copyable={false} className="text-xs" />}
+    </AppLink>
+  );
+  if (a.assetType === 'object') {
+    const composition = a.compositionTier ? (
+      <CompositionBadge tier={a.compositionTier} size="sm" />
+    ) : (
+      <span className="text-text-dim">Composition unavailable</span>
+    );
+    const people = [
+      <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
+      // Round 3 (contracts L2): a count the indexer has not derived yet says nothing.
+      a.activitiesCount === null ? null : (
+        <Counted key="a" value={a.activitiesCount} noun="activities" one="activity" />
+      ),
+    ];
+    const figures = [
+      <span key="m" className="whitespace-nowrap">
+        of <AssetCount value={a.totalSupply} /> minted
+      </span>,
+      <HeldAndOccupied key="c" asset={a} />,
+      a.hMultiplier === null ? 'H-mult. unavailable' : `×${a.hMultiplier}`,
+      <Hash
+        key="id"
+        hash={a.id}
+        startChars={6}
+        endChars={4}
+        copyable={false}
+        className="text-[11px]"
+      />,
+    ];
+    return (
+      <PhoneRow
+        testId="inventory-row-mobile"
+        lines={[
+          {
+            key: 'identity',
+            tone: 'head',
+            left: wide ? (
+              <>
+                {title}
+                <span className="text-text-dim text-xs"> · {standard}</span>
+              </>
+            ) : (
+              title
+            ),
+            right: <Counted value={a.liveCount} noun="objects" one="object" />,
+          },
+          wide
+            ? {
+                key: 'figures',
+                tone: 'quiet',
+                left: <Dotted parts={[...people, ...figures]} />,
+                right: composition,
+              }
+            : {
+                key: 'activity',
+                tone: 'body',
+                left: <Dotted parts={[standard, ...people]} />,
+                right: composition,
+              },
+          !wide && { key: 'figures', tone: 'quiet', left: <Dotted parts={figures} /> },
+        ]}
+      />
+    );
+  }
+  const sub = a.name === standard ? null : standard;
+  const counts = [
+    <Counted key="e" value={a.totalSupply} noun="ever registered" />,
+    <Counted key="h" value={a.holdersCount} noun="holders" one="holder" />,
+  ];
+  return (
+    <PhoneRow
+      testId="inventory-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left:
+            wide && sub ? (
+              <>
+                {title}
+                <span className="text-text-dim text-xs"> · {sub}</span>
+              </>
+            ) : (
+              title
+            ),
+          right: <Counted value={a.liveCount} noun="live" />,
+        },
+        wide
+          ? {
+              key: 'figures',
+              tone: 'quiet',
+              left: <Dotted parts={[...counts, <HeldAndOccupied key="c" asset={a} />]} />,
+            }
+          : { key: 'activity', tone: 'body', left: <Dotted parts={[sub, ...counts]} /> },
+        !wide && { key: 'figures', tone: 'quiet', left: <HeldAndOccupied asset={a} /> },
+      ]}
+    />
+  );
+}
+
 export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
   const mark = assetType === 'token' ? 'tokens' : assetType === 'object' ? 'objects' : 'identities';
   const largestHeld = rows.reduce((max, a) => {
@@ -308,6 +530,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
       rows={rows}
       rowKey={(a) => a.id}
       empty={`No ${mark} found`}
+      mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
     />
   );
 }

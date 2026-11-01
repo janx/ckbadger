@@ -4,6 +4,7 @@
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AssetTransactions } from '@/components/asset/asset-feed';
 import type { Transaction } from '@/lib/api';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 
 const tx = (n: number, size: number, cycles: number | null): Transaction => ({
   hash: `0x${n.toString(16).padStart(2, '0').repeat(32)}`,
@@ -84,5 +85,62 @@ describe('AssetTransactions identity columns (ID-C8)', () => {
     // 1700000000000 ms = 2023-11-15 06:13:20 UTC+8
     expect(row).toHaveTextContent('#1,001 · 2023-11-15');
     expect(row).toHaveTextContent('Renewed');
+  });
+});
+
+describe('AssetTransactions phone row (board L2 rules)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('is three lines at 358 px: hash and block · what it did on the asset and the CKB out · the figures', () => {
+    atContainerWidth(358);
+    render(
+      <AssetTransactions
+        rows={[tx(1, 1930, 1_923_713)]}
+        context={{ label: 'Nervapes', placement: 'after-cells', render: () => 'Minted 3' }}
+      />
+    );
+    expect(screen.queryByRole('table')).toBeNull();
+    const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x01010101...010101', expect.stringMatching(/^#1,001 · .+ ago$/)],
+      ['what', 'Minted 3', '500.00000000 CKB'],
+      [
+        'figures',
+        '1 → 2 cells · fee 0.00001000 CKB · 1,930 B · 1,923,713 cycles · tx 1 in block',
+        null,
+      ],
+    ]);
+  });
+
+  it('keeps an item context under its label and leaves cycles off an identity row', () => {
+    atContainerWidth(358);
+    render(
+      <AssetTransactions
+        rows={[tx(1, 640, 0)]}
+        identity={{ actionLabel: '.bit action', action: () => 'Renewed' }}
+        context={{ label: 'Cell after', render: () => 'output 1' }}
+      />
+    );
+    const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    const lines = phoneLines(row);
+    expect(lines[0].right).toMatch(/^#1,001 · \d{4}-\d{2}-\d{2}$/);
+    expect(lines[1]).toMatchObject({ left: 'Renewed · Cell after: output 1', right: null });
+    expect(lines[2].left).toBe('1 → 2 cells · fee 0.00001000 CKB · 640 B · tx 1 in block');
+  });
+
+  it('folds into two lines at 608 px', () => {
+    atContainerWidth(608);
+    render(<AssetTransactions rows={[tx(1, 1930, null)]} />);
+    const [row] = screen.getAllByTestId('asset-tx-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '0x01010101...010101', expect.stringMatching(/ago$/)],
+      [
+        'what',
+        '500.00000000 CKB',
+        '1 → 2 cells · fee 0.00001000 CKB · 1,930 B · cycles not computed · tx 1 in block',
+      ],
+    ]);
   });
 });

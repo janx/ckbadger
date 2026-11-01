@@ -6,6 +6,7 @@ import { api, type Transaction } from '@/lib/api';
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { PhoneRow } from '@/components/ui/phone-row';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb, activityHeadline, protocolActionLabel } from '@/components/activity-event-row';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
@@ -127,6 +128,59 @@ function GoldCkb({ shannons }: { shannons: bigint }) {
   );
 }
 
+/**
+ * A DAO transaction on a phone (board L2's rules): the hash with its block and time, then one line
+ * per DAO step — what it did, the deposit, the compensation in gold — and how many took part.
+ */
+function DaoTransactionPhoneRow({ tx }: { tx: Transaction }) {
+  const steps = daoSteps(tx);
+  return (
+    <PhoneRow
+      testId="dao-tx-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: DAO_TX_COLUMNS[0].render(tx),
+          right: DAO_TX_COLUMNS[1].render(tx),
+        },
+        ...(steps.length === 0
+          ? [
+              {
+                key: 'step',
+                tone: 'body' as const,
+                left: <span className="text-text-dim">{activityHeadline(tx.activity!)}</span>,
+              },
+            ]
+          : steps.map((step, i) => ({
+              key: `step-${i}`,
+              tone: 'body' as const,
+              left: (
+                <>
+                  <span className="text-text-bright">{step.label}</span>{' '}
+                  <ExactCkb shannons={step.meta.capacity!} signed={false} tone="plain" />
+                </>
+              ),
+              right:
+                step.meta.compensation === null ? undefined : (
+                  <>
+                    <span className="text-text-dim">compensation </span>
+                    <GoldCkb shannons={step.meta.compensation} />
+                  </>
+                ),
+            }))),
+        {
+          key: 'parties',
+          tone: 'quiet',
+          left: `${tx.activity!.participants.length.toLocaleString('en-US')} ${
+            tx.activity!.participants.length === 1 ? 'party' : 'parties'
+          }`,
+        },
+      ]}
+    />
+  );
+}
+
 /** The DaoTxs board's table: what each DAO transaction did, its amounts and how many took part. */
 function DaoTransactionTable({ transactions }: { transactions: readonly Transaction[] }) {
   return (
@@ -136,6 +190,7 @@ function DaoTransactionTable({ transactions }: { transactions: readonly Transact
       columns={DAO_TX_COLUMNS}
       rowKey={(tx) => tx.hash}
       empty="No DAO transactions."
+      mobileRow={(tx) => <DaoTransactionPhoneRow tx={tx} />}
     />
   );
 }

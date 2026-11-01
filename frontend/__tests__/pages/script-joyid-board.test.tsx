@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
@@ -54,7 +54,8 @@ async function renderJoyid() {
 
 describe('JoyID script page against the ScriptJoyid board', () => {
   beforeEach(() => {
-    stubChartWidth(900);
+    // Charts at 900 px; the lists at the page's full content width (1248 at 1280 and up).
+    stubLayoutWidths({ chart: 900, list: 1248 });
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
@@ -223,7 +224,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
 
 describe('JoyID script page · visual pass', () => {
   beforeEach(() => {
-    stubChartWidth(900);
+    // Charts at 900 px; the lists at the page's full content width (1248 at 1280 and up).
+    stubLayoutWidths({ chart: 900, list: 1248 });
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
@@ -268,5 +270,64 @@ describe('JoyID script page · visual pass', () => {
     await renderJoyid();
     expect(api.getCellsByScriptRef).toHaveBeenCalledWith(expect.objectContaining({ limit: 12 }));
     expect(screen.getByText(/Oldest first, as the cell index keeps them/)).toBeInTheDocument();
+  });
+});
+
+// Board L7 (responsive plan, L3): the code versions on a phone and in the 640 band.
+describe('JoyID code versions at phone and 640 widths (board L7)', () => {
+  const mount = (list: number) => {
+    stubLayoutWidths({ chart: 900, list });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+    render(<ScriptDetailPage name="JoyID" />);
+  };
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('writes a version in lines at 358 px: version, date, code cell, status · the hash · its figures', async () => {
+    mount(358);
+    const rows = await screen.findAllByTestId('code-version-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Code versions' })).toBeNull();
+    expect(rows).toHaveLength(5);
+    await waitFor(() => expect(rows[0]).toHaveTextContent('96,760 B'));
+    const first = phoneLines(rows[0]);
+    expect(first.map((l) => [l.key, l.tone])).toEqual([
+      ['version', 'body'],
+      ['hash', 'quiet'],
+      ['detail', 'quiet'],
+    ]);
+    expect(first[0].left).toMatch(/^v1 2023-10-07 · 0x[0-9a-f]{8}…[0-9a-f]{6}:\d$/);
+    expect(first[0].right).toBe('consumed by v2');
+    // The version hash keeps a line of its own, whole: it is what a developer copies.
+    expect(first[1].left).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(first[2].left).toMatch(
+      /^#11,132,140 · 96,760 B · .+ CKB · first deployed into multisig 0xd1db…b95c$/
+    );
+    expect(first[2].right).toMatch(/^live cells using it: /);
+    const last = phoneLines(rows[4]);
+    expect(last[0].left).toMatch(/^v5 current /);
+    expect(last[0].right).toBe('live');
+  });
+
+  it('draws the five-column table of board L7 in the 608 px band, the hash under the code cell', async () => {
+    mount(608);
+    const table = await screen.findByRole('table', { name: 'Code versions' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toEqual(['v', 'Deployed', 'Code cell · version hash', 'Status', 'Live cells']);
+    expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(608);
+    const [first] = within(table).getAllByRole('row').slice(1);
+    const cell = first.querySelectorAll('td')[2];
+    await waitFor(() => expect(cell).toHaveTextContent('96,760 B · first deployed into multisig'));
+    expect(cell.lastElementChild!.textContent).toMatch(/^0x[0-9a-f]{64}$/);
+    expect(first.querySelectorAll('td')[3]).toHaveTextContent('consumed by v2');
   });
 });

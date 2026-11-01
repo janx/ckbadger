@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { screen, waitFor, within, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
@@ -233,5 +234,60 @@ describe('Scripts list · visual pass (R2b-b)', () => {
     await screen.findByRole('table', { name: 'Scripts' });
     expect(screen.queryByRole('heading', { name: 'Scripts', level: 2 })).toBeNull();
     expect(screen.getByText('3 scripts')).toBeInTheDocument();
+  });
+});
+
+// Board L6 (responsive plan, L3): a script family is three lines on a phone, two at 640.
+describe('Scripts list phone row (board L6)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getScripts).mockResolvedValue(response);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('is three lines at 358 px: name and CKB · role, code, counts · the description in full', async () => {
+    atContainerWidth(358);
+    render(<ScriptsPage />);
+    const rows = await screen.findAllByTestId('script-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Scripts' })).toBeNull();
+    expect(phoneLines(rows[0])).toEqual([
+      { key: 'identity', tone: 'head', left: 'JoyID', right: '456,002,179.57000000 CKB' },
+      {
+        key: 'code',
+        tone: 'body',
+        left: 'lock·Upgradable · 5 versions· by a multisig · since 2023-10-07',
+        right: '161,049 live · of 2,707,778 · 4.19% occupied',
+      },
+      {
+        key: 'description',
+        tone: 'quiet',
+        left: 'An universal Account Protocol for Web3 Mass-adoption',
+        right: null,
+      },
+    ]);
+    // Never clamped (C#12): the whole sentence, no line clamp anywhere in the row.
+    expect(rows[0].querySelector('[class*="line-clamp"]')).toBeNull();
+    expect(phoneLines(rows[1])[1].left).toMatch(/^lock·Immutable· genesis · code cell unspendable/);
+    expect(rows[2]).toHaveTextContent('Godwoken Custodian Lockdeprecated');
+  });
+
+  it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {
+    atContainerWidth(608);
+    render(<ScriptsPage />);
+    const [row] = await screen.findAllByTestId('script-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      [
+        'identity',
+        'JoyID · lock·Upgradable · 5 versions· by a multisig · since 2023-10-07',
+        '456,002,179.57000000 CKB',
+      ],
+      [
+        'description',
+        'An universal Account Protocol for Web3 Mass-adoption',
+        '161,049 live · of 2,707,778 · 4.19% occupied',
+      ],
+    ]);
   });
 });

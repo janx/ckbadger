@@ -1,6 +1,7 @@
 'use client';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -56,9 +57,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   });
   // F2 objects (IV-27): the supply events are paged at the source, 50 at a time.
   const supplyPages = useCursorPagination();
+  const supplyPageSize = usePageSize(50);
   const supplyEvents = useQuery({
-    queryKey: ['token-supply-events', typeHash, supplyPages.cursor],
-    queryFn: () => api.getTokenSupplyEvents(typeHash, { limit: 50, cursor: supplyPages.cursor }),
+    queryKey: ['token-supply-events', typeHash, supplyPages.cursor, supplyPageSize],
+    queryFn: () =>
+      api.getTokenSupplyEvents(typeHash, { limit: supplyPageSize, cursor: supplyPages.cursor }),
     // keep the open list on screen while the next page loads
     placeholderData: keepPreviousData,
   });
@@ -384,7 +387,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <CursorPagination
                     total={supplyEventsTotal(supplyEvents.data)}
                     totalLabel="supply changes"
-                    pageSize={50}
+                    pageSize={supplyPageSize}
                     page={supplyPages.page}
                     hasMore={supplyEvents.data.hasMore}
                     hasPrevious={supplyPages.hasPrevious}

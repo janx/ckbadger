@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type CollectionItem, type ItemStatusFilter } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
@@ -71,18 +72,19 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
   const [search, setSearch] = useState(''),
     [status, setStatus] = useState<ItemStatusFilter>('all');
   const pages = useCursorPagination();
+  const pageSize = usePageSize(24);
   const query = useQuery({
-    queryKey: ['collection-items', kind, id, search, status, pages.cursor],
+    queryKey: ['collection-items', kind, id, search, status, pages.cursor, pageSize],
     queryFn: () =>
       kind === 'object'
         ? api.getObjectCollectionItems(id, {
-            limit: 24,
+            limit: pageSize,
             cursor: pages.cursor,
             search: search || undefined,
             status,
           })
         : api.getIdentityCollectionItems(id, {
-            limit: 24,
+            limit: pageSize,
             cursor: pages.cursor,
             search: search || undefined,
             status,
@@ -162,7 +164,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
           <CursorPagination
             total={query.data.total}
             totalLabel="items"
-            pageSize={24}
+            pageSize={pageSize}
             page={pages.page}
             hasMore={query.data.hasMore}
             hasPrevious={pages.hasPrevious}
