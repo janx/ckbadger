@@ -12,7 +12,6 @@ import {
   ActivityReadError,
   DotJoined,
   ExactCkb,
-  ItemDeltaFact,
   activityClassMark,
   activityHeadline,
   formatStandard,
@@ -25,6 +24,7 @@ import { TxStructure, continuityColor } from '@/components/transaction/tx-struct
 import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
+import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
@@ -55,7 +55,6 @@ import { formatAgeTwoUnits } from '@/lib/format-age';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import {
-  balanceNet,
   capacityEquation,
   shortCkb,
   txLinks,
@@ -328,102 +327,6 @@ function TxSummary({
         </>
       )}
     </p>
-  );
-}
-
-const BALANCE_GRID = 'grid grid-cols-[190px_180px_100px_minmax(0,1fr)] gap-4';
-
-/** Balance changes (TX-12, TX-19): every participant, then the Net row that explains the sum. */
-function BalanceChanges({
-  activity,
-  fee,
-  compensation,
-  genesis,
-}: {
-  activity: GlobalActivity;
-  fee: string;
-  compensation: bigint | null;
-  genesis: boolean;
-}) {
-  return (
-    <DetailSection title="Balance changes">
-      <div className="overflow-x-auto">
-        <div role="table" aria-label="Balance changes by participant" className="min-w-[700px]">
-          <div
-            role="row"
-            className={cn(
-              BALANCE_GRID,
-              'border-base-border-subtle text-text-dim border-b pb-1.5 text-[11px]'
-            )}
-          >
-            <span role="columnheader">Participant</span>
-            <span role="columnheader" className="text-right">
-              CKB
-            </span>
-            <span role="columnheader" className="text-right">
-              Occupied
-            </span>
-            <span role="columnheader">Items</span>
-          </div>
-          {activity.participants.map((p, i) => (
-            <div
-              key={`${p.lockHash ?? p.lockHashPrefix ?? p.address}:${i}`}
-              role="row"
-              className={cn(BALANCE_GRID, 'border-base-elevated items-baseline border-b py-2')}
-            >
-              <span role="cell" className="min-w-0">
-                <ParticipantRefView participant={p} compact quiet />
-                {p.lockKind && <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>}
-              </span>
-              <span role="cell" className="text-right">
-                <ExactCkb shannons={BigInt(p.ckbDelta)} />
-              </span>
-              <span role="cell" className="text-right tabular-nums">
-                {formatOccupiedDelta(p.usedDelta)}
-              </span>
-              <span role="cell" className="flex min-w-0 flex-wrap gap-x-3.5 gap-y-0.5">
-                {p.itemDeltas.map((item, j) => (
-                  <ItemDeltaFact key={j} item={item} />
-                ))}
-              </span>
-            </div>
-          ))}
-          <div
-            role="row"
-            data-testid="tx-balance-net"
-            className={cn(BALANCE_GRID, 'text-text-dim items-baseline py-2')}
-          >
-            {readable(activity.txHash, () => {
-              const net = balanceNet({
-                hash: activity.txHash,
-                participants: activity.participants,
-                fee,
-                compensation,
-                genesis,
-              });
-              return (
-                <>
-                  <span role="cell">Net</span>
-                  <span role="cell" className="text-right">
-                    <ExactCkb shannons={net.ckb} tone="plain" />
-                  </span>
-                  <span role="cell" className="text-right tabular-nums">
-                    {formatOccupiedDelta(net.occupied.toString())}
-                  </span>
-                  <span role="cell">
-                    {net.note === 'fee'
-                      ? 'the fee, paid to the miner'
-                      : net.note === 'compensation'
-                        ? 'Nervos DAO compensation, less the fee'
-                        : 'issued in the genesis block'}
-                  </span>
-                </>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </DetailSection>
   );
 }
 
@@ -1336,6 +1239,10 @@ export default function TransactionDetailPage() {
               fee={tx.fee}
               compensation={compensation ?? null}
               genesis={genesis}
+              lockCodeHashes={lockCodeHashesByAddress([
+                ...(tx.inputs ?? []),
+                ...(tx.outputs ?? []),
+              ])}
             />
           </div>
         )}
