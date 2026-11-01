@@ -82,3 +82,21 @@ describe('Pagination', () => {
     });
   });
 });
+
+// Responsive fix plan 2026-11-01 (A2): Prev, up to seven page buttons and Next are ~420 px of
+// unshrinkable buttons — wider than a 358 px phone column. Below sm the page numbers take their own
+// row and Prev / Next share the row under it; from sm up it is one row as before.
+describe('Pagination across widths', () => {
+  it('gives the page numbers their own row below sm and one row from sm', () => {
+    const { container } = render(
+      <Pagination page={5000} totalPages={10419} onPageChange={vi.fn()} />
+    );
+    const root = container.firstElementChild as HTMLElement;
+    expect(root).toHaveClass('flex-wrap', 'justify-between', 'sm:flex-nowrap', 'sm:justify-center');
+    const numbers = root.querySelector('[data-role="page-numbers"]') as HTMLElement;
+    expect(numbers).toHaveClass('order-first', 'basis-full', 'sm:order-none', 'sm:basis-auto');
+    expect(numbers.textContent).toBe('1...499950005001...10419');
+    expect(screen.getByText('Prev')).toHaveClass('whitespace-nowrap');
+    expect(screen.getByText('Next')).toHaveClass('whitespace-nowrap');
+  });
+});

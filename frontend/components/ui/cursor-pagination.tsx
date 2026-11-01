@@ -21,6 +21,9 @@ interface CursorPaginationProps {
   nextLabel?: string;
 }
 
+const PAGER_BUTTON =
+  'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text shrink-0 whitespace-nowrap rounded border px-3 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:px-4';
+
 export function CursorPagination({
   total,
   totalLabel = 'items',
@@ -46,8 +49,15 @@ export function CursorPagination({
   const rangeStart = canShowRange && currentCount > 0 ? (page - 1) * pageSize + 1 : 0;
   const rangeEnd = canShowRange && currentCount > 0 ? rangeStart + currentCount - 1 : 0;
 
+  // Below sm two rows: the count sentence, then Previous · Page x of y · Next on one line (four
+  // items in one 358 px row broke "Page 1 of 10,419" over three lines). One row from sm up.
   return (
-    <div className={cn('flex w-full items-center justify-between', className)}>
+    <div
+      className={cn(
+        'flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4',
+        className
+      )}
+    >
       <span className="text-text-dim font-mono text-sm">
         {summary !== undefined ? (
           summary
@@ -66,17 +76,15 @@ export function CursorPagination({
           '\u00a0'
         )}
       </span>
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onPrevious}
-          disabled={!hasPrevious}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-        >
+      <div
+        data-role="pager-controls"
+        className="flex flex-wrap items-center justify-between gap-2 sm:justify-start sm:gap-3"
+      >
+        <button type="button" onClick={onPrevious} disabled={!hasPrevious} className={PAGER_BUTTON}>
           {previousLabel}
         </button>
         {page !== undefined && (
-          <span className="text-text-dim font-mono text-sm">
+          <span className="text-text-dim whitespace-nowrap font-mono text-sm">
             Page {page.toLocaleString('en-US')}
             {totalPages !== undefined ? ` of ${totalPages.toLocaleString('en-US')}` : ''}
           </span>
@@ -85,7 +93,7 @@ export function CursorPagination({
           type="button"
           onClick={onNext}
           disabled={!hasMore}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-4 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className={cn(PAGER_BUTTON, 'ml-auto sm:ml-0')}
         >
           {nextLabel}
         </button>
