@@ -168,15 +168,31 @@ export interface AlleleLane {
   variants: number;
   /** One variant only: every object shares it, so the lane is dimmed. */
   conserved: boolean;
-  /** Whether this lane's position came from the pattern (false: appended, order unknown). */
+  /** Whether this lane's position came from the pattern (false: no readable pattern). */
   ordered: boolean;
 }
 
 const HEX_COLOUR = /^#[0-9a-f]{6}$/i;
 
 /**
+ * Traits the decoder outputs that the readable pattern does not declare as genes — a DOB/1
+ * renderer's IMAGE, the rendered picture. Empty when no pattern step is readable (`order` null):
+ * then the page cannot tell a gene from an output, and every trait is a lane.
+ */
+export function traitsOutsidePattern(
+  genetics: CollectionInsights['genetics'],
+  order: readonly string[] | null
+): string[] {
+  if (order === null) return [];
+  return genetics.traits.map((t) => t.name).filter((name) => !order.includes(name));
+}
+
+/**
  * The allele gel's lanes (OB-4, OB-C2): one per gene in DNA order, each allele a band as thick as
- * its share, common first. Genes the pattern does not order are appended, never dropped.
+ * its share, common first. When the pattern is readable its genes are the lanes, so the gene count
+ * is the pattern's (V2: a renderer's IMAGE is an output, not a 73rd gene; `traitsOutsidePattern`
+ * names such traits for the page to mention). With no readable pattern every trait is a lane, in
+ * the API's order.
  */
 export function alleleLanes(
   genetics: CollectionInsights['genetics'],
@@ -184,9 +200,8 @@ export function alleleLanes(
   subject: string
 ): AlleleLane[] {
   const names = genetics.traits.map((t) => t.name);
-  const ordered = (order ?? []).filter((n) => names.includes(n));
-  const rest = names.filter((n) => !ordered.includes(n));
-  return [...ordered, ...rest].map((gene) => {
+  const lanes = order === null ? names : order.filter((n) => names.includes(n));
+  return lanes.map((gene) => {
     const trait = genetics.traits.find((t) => t.name === gene)!;
     let sum = 0;
     for (const v of trait.values) {
@@ -215,7 +230,7 @@ export function alleleLanes(
       bands,
       variants: bands.length,
       conserved: bands.length === 1,
-      ordered: ordered.includes(gene),
+      ordered: order !== null,
     };
   });
 }

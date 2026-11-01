@@ -17,6 +17,7 @@ import {
   sporeCellVersionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 it('reads the latest complete week by default instead of "No completed weekly total" (OB-C6)', () => {
   render(
@@ -41,7 +42,10 @@ it('writes the allele gel caption as wrapping text, not clipped SVG text', () =>
     geneOrder(nervape3xInsights.currentPattern),
     'Nervape 3x'
   );
+  stubChartWidth(900);
   render(<AlleleGel lanes={lanes} total={90} subject="Nervape 3x" />);
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   const caption = screen.getByText(/band thickness = share of all 90 objects/);
   expect(caption.closest('svg')).toBeNull();
 });

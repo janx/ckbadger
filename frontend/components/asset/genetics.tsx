@@ -7,7 +7,7 @@ import type {
   SporeDobDecoded,
 } from '@/lib/api';
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
-import { AlleleGel } from '@/components/ui/allele-gel';
+import { AlleleGel, NotGenesNote } from '@/components/ui/allele-gel';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
@@ -20,6 +20,7 @@ import {
   genotypePoints,
   sequencingGenes,
   traitDisplay,
+  traitsOutsidePattern,
 } from '@/lib/dob-genes';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
@@ -141,12 +142,18 @@ export function ObjectGeneticsView({
                     total={collection.genetics.eligibleItems}
                     subject={collectionName ?? subject}
                     ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
-                    height={300}
+                    bandHeight={170}
                     overlays={[
                       { key: 'me', label: 'this one', points: own3.points, persistent: true },
                     ]}
                     activeGene={active}
                     onGeneHover={setActive}
+                  />
+                  <NotGenesNote
+                    traits={traitsOutsidePattern(
+                      collection.genetics,
+                      geneOrder(collection.currentPattern)
+                    )}
                   />
                   {own3.absent.length > 0 && (
                     <p role="status" className="text-text-dim text-[11px]">

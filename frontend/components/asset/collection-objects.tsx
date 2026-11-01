@@ -13,7 +13,14 @@ import { MiniGel } from '@/components/ui/sequencing-gel';
 import { AppLink } from '@/components/ui/app-link';
 import { Address } from '@/components/ui/address';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { alleleLanes, geneOrder, genotypePoints, traitDisplay } from '@/lib/dob-genes';
+import {
+  alleleLanes,
+  geneOrder,
+  genotypePoints,
+  traitDisplay,
+  traitsOutsidePattern,
+} from '@/lib/dob-genes';
+import { NotGenesNote } from '@/components/ui/allele-gel';
 import { GEL_INK } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
@@ -71,6 +78,10 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
         : null,
     [genetics, insights.currentPattern, title]
   );
+  const outside = useMemo(
+    () => (lanes ? traitsOutsidePattern(genetics, geneOrder(insights.currentPattern)) : []),
+    [lanes, genetics, insights.currentPattern]
+  );
   const ink = tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other';
   const filter = (name: string, value: string | null) => {
     pages.reset();
@@ -103,18 +114,21 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
         )}
       </div>
       {lanes ? (
-        <AlleleGel
-          lanes={lanes}
-          total={genetics.eligibleItems}
-          subject={title}
-          ink={ink}
-          overlays={overlays}
-          activeOverlay={row}
-          activeGene={gene}
-          onGeneHover={setGene}
-          onBandClick={(name, value) => filter(name, value)}
-          selected={traits}
-        />
+        <>
+          <AlleleGel
+            lanes={lanes}
+            total={genetics.eligibleItems}
+            subject={title}
+            ink={ink}
+            overlays={overlays}
+            activeOverlay={row}
+            activeGene={gene}
+            onGeneHover={setGene}
+            onBandClick={(name, value) => filter(name, value)}
+            selected={traits}
+          />
+          <NotGenesNote traits={outside} />
+        </>
       ) : genetics.eligibleItems === 0 ? (
         <p className="text-text-dim text-[12px]">This collection has no DOB objects to compare.</p>
       ) : (
@@ -127,7 +141,9 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
       <div className="flex flex-wrap items-baseline justify-between gap-4 pt-2.5">
         <span className="text-text text-[13px]">Newest</span>
         <span className="text-text-dim flex flex-wrap items-baseline gap-3 text-[12px]">
-          {lanes && <span>hover a row to see its genotype · click a band to filter</span>}
+          {lanes && (
+            <span>hover a row to see its genotype · click a band or variant to filter</span>
+          )}
           {Object.entries(traits).map(([name, value]) => (
             <button
               key={name}

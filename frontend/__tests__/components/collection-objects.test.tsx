@@ -4,12 +4,21 @@ import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/te
 import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
 import { api } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   collectionGalleryFilteredProducer,
   collectionInsightsPendingProducer,
   collectionInsightsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
-beforeEach(mockItemReads);
+beforeEach(() => {
+  mockItemReads();
+  // the allele gel lays itself out for its measured box (V2); 1248 px is the 1280 column
+  stubChartWidth(1248);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 it('keeps multiple values of one trait on one row without React identity collisions', async () => {
   const log = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -110,4 +119,45 @@ it('names the owner lock kind and dates the mint in UTC+8 on each Newest row', a
   const minted = within(named).getByRole('link', { name: '2023-11-15' });
   expect(minted).toHaveAttribute('href', '/mainnet/blocks/100');
   expect(minted).toHaveAttribute('title', '#100 · 2023-11-15 06:13:20 UTC+8');
+});
+
+it('counts genes from the pattern and says a decoder output is not drawn as one (V2)', async () => {
+  const insights = {
+    ...collectionInsightsProducer,
+    currentPattern: {
+      ...collectionInsightsProducer.currentPattern,
+      steps: [
+        ...collectionInsightsProducer.currentPattern.steps,
+        {
+          ...collectionInsightsProducer.currentPattern.steps[0],
+          step: 1,
+          description: { status: 'unsupported', reason: 'byte mapping is not defined' },
+        },
+      ],
+    },
+    genetics: {
+      ...collectionInsightsProducer.genetics,
+      traits: [
+        ...collectionInsightsProducer.genetics.traits,
+        {
+          name: 'IMAGE',
+          values: Array.from({ length: 8 }, (_, i) => ({
+            value: `<svg xmlns='http://www.w3.org/2000/svg'><text>${i}</text></svg>`,
+            count: 1,
+          })),
+        },
+      ],
+    },
+  } as typeof collectionInsightsProducer;
+  const { container } = render(
+    <CollectionObjects id="collection" title="Genes" insights={insights} />
+  );
+  await screen.findByRole('table', { name: 'Newest objects' });
+  const section = screen.getByRole('region', { name: 'Objects' });
+  expect(section).toHaveTextContent('8 · 1 gene · how common each variant is');
+  expect(container.querySelectorAll('[data-lane]')).toHaveLength(1);
+  expect(container.querySelector('[data-lane="IMAGE"]')).toBeNull();
+  expect(section).toHaveTextContent(
+    'Not drawn: IMAGE, an output of the decoder that the pattern does not declare as a gene.'
+  );
 });

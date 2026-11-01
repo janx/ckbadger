@@ -6,6 +6,7 @@ import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils'
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   clusterDetailProducer,
   objectCollectionDetailProducer,
@@ -60,6 +61,8 @@ function lifeVersions(): ItemCellVersions {
 
 beforeEach(() => {
   mockItemReads();
+  // the gels lay themselves out for their measured box (V2)
+  stubChartWidth(896);
   vi.spyOn(api, 'getSporeObject').mockResolvedValue({
     ...sporeDetailProducer,
     sporeId: NERVAPE3X_ID,
@@ -112,7 +115,10 @@ beforeEach(() => {
     },
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 async function page() {
   const view = render(<SporeDetailPage sporeId={NERVAPE3X_ID} />);

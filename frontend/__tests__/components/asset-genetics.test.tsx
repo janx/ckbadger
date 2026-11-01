@@ -13,7 +13,14 @@ import {
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { ObjectGenetics, ItemProtocol } from '@/lib/api';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 describe('Independent DOB evidence', () => {
+  // the gels lay themselves out for their measured box; 896 px is the object page's DNA plate
+  beforeEach(() => stubChartWidth(896));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';
