@@ -9,6 +9,7 @@ import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 /** The board's example deposit: 10,000 CKB, in shannons. */
 const EXAMPLE_DEPOSIT = '1000000000000';
@@ -206,8 +207,8 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
       {years.length > 0 && year365 && (
         <span className="text-text-dim text-[11.5px]">
           The curve flattens as more CKB exists: the first year compensated {years[0].percent}%, the
-          last 365 days {year365.observedGrowthPercent}%. Hover a date to see the compensation owed
-          to a deposit made then.
+          last 365 days {year365.observedGrowthPercent}%. <TapOrHoverHint capital what="a date" />{' '}
+          to see the compensation owed to a deposit made then.
         </span>
       )}
     </section>

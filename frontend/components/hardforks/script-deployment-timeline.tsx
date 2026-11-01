@@ -5,6 +5,7 @@ import Link from '@/components/ui/link';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -196,7 +197,8 @@ export function DeploymentEvidence({ selected }: { selected: HardforkScriptDeplo
         </>
       ) : (
         <p className="text-text-dim">
-          Hover or focus a dot for that script version, its first code cell and its block.
+          <TapOrHoverHint capital what="a dot" />, or focus it, for that script version, its first
+          code cell and its block.
         </p>
       )}
     </aside>

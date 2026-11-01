@@ -511,7 +511,7 @@ describe('PipelinePanel static render', () => {
     const title = screen.getByText('?').getAttribute('title') ?? '';
     expect(title).toContain('proposed in one block and committed in a later block');
     expect(title).toContain('Square area = bytes; shade = cycles.');
-    expect(title).toMatch(/Hover a tx or a proposal.*click a tx to pin it/);
+    expect(title).toMatch(/Tap or hover a tx or a proposal.*a tap on a tx pins it/);
   });
 
   it('keeps only the tip in the header stats: the pool counts are on the canvas', async () => {

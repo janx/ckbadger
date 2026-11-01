@@ -9,6 +9,7 @@ import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { LANE_ORDER, VmLaneTimeline, dayStartMs } from '@/components/hardforks/vm-lane-timeline';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -222,7 +223,8 @@ export default function HardforksPage() {
                 title="Which VM runs a script, over time"
                 actions={
                   <span className="text-text-dim text-[12px]">
-                    dots: when each known script version was deployed · hover for its name
+                    dots: when each known script version was deployed ·{' '}
+                    <TapOrHoverHint what="one for its name" />
                   </span>
                 }
               >

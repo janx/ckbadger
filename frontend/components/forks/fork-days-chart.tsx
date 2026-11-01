@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface Day {
   date: string;
@@ -46,7 +47,9 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
     <div ref={box} className="min-w-0">
       <p data-testid="fork-day-reading" className="text-text mb-1 min-h-[18px] text-[12px]">
         {active === null ? (
-          <span className="text-text-dim">hover a day, or focus the chart and use ← →</span>
+          <span className="text-text-dim">
+            {tapOrHover('a day, or focus the chart and use ← →')}
+          </span>
         ) : (
           reading(days[active])
         )}

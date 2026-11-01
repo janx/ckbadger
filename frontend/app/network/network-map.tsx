@@ -6,6 +6,7 @@ import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 type Point = NetworkMap['points'][number];
 
@@ -172,7 +173,7 @@ function Legend({
   );
   return (
     <>
-      <p className="text-text-bright text-[13.5px]">Hover a node</p>
+      <p className="text-text-bright text-[13.5px]">{tapOrHover('a node', { capital: true })}</p>
       <div className="mt-2.5 flex flex-col gap-1.5">
         {row(<circle cx="7" cy="7" r={DOT_R} fill={DATA_COLOR} />, `reachable now · ${reachable}`)}
         {row(

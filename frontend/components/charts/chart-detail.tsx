@@ -30,6 +30,7 @@ import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { apiBaseFor } from '@/lib/active-network';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 export type ChartRange = '30d' | '90d' | '1y' | 'all';
 
@@ -376,8 +377,9 @@ function DetailBody({
           </div>
           {helpOpen && (
             <p className="text-text-dim mb-4 max-w-[62ch] text-xs leading-5">
-              Hover the chart for one {style === 'date' ? 'day' : 'point'}&apos;s value, or focus it
-              and use ← and → to step through; Esc returns to the latest reading.
+              <TapOrHoverHint capital what="the chart" /> for the value of one{' '}
+              {style === 'date' ? 'day' : 'point'}, or focus it and use ← and → to step through; Esc
+              returns to the latest reading.
               {hasDatedHistory && ' 30 d, 90 d and 1 y zoom to the most recent days.'}
               {supportsLog && ' Log scale spreads a series that grew by orders of magnitude.'}
             </p>

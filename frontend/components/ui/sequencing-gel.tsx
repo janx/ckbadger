@@ -15,6 +15,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedTargetProps } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { cn } from '@/lib/utils';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 /** The side-by-side map: lanes from LX, brackets at GX, the gene columns from TX. */
 const WIDE = { LX: 38, LANE: 15, TOP: 44, STEP: 3.3, LABEL_GAP: 15 } as const;
@@ -106,7 +107,7 @@ export function SequencingGel({ layout, subject, active, onActive }: SequencingG
       <ReadoutRow
         label="Gene readout"
         pinned={lit !== null && lit === readout.pinned}
-        idle="Tap or hover a gene."
+        idle={tapOrHover('a gene.', { capital: true })}
       >
         {gene
           ? `${gene.name} · ${bytesOf(gene)} · ${gene.rule} · ${shortRaw(gene.raw)} → ${valueOf(gene)}`

@@ -19,6 +19,7 @@ import {
   type FiberGraphModel,
   type FiberGraphNode,
 } from '@/lib/fiber-network-model';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface Props {
   network: FiberNetwork;
@@ -426,7 +427,7 @@ export function FiberNetworkGraph({ network }: Props) {
             <ReadoutRow
               label="Party or pair readout"
               pinned={readout.showingPin}
-              idle="Tap or hover a party or a pair."
+              idle={tapOrHover('a party or a pair.', { capital: true })}
             >
               {model && active ? readoutLine(model, active) : null}
             </ReadoutRow>
@@ -446,7 +447,9 @@ export function FiberNetworkGraph({ network }: Props) {
               />
             ) : (
               <div>
-                <div className="text-text-bright text-[13.5px]">Tap or hover a party or a pair</div>
+                <div className="text-text-bright text-[13.5px]">
+                  {tapOrHover('a party or a pair', { capital: true })}
+                </div>
                 <p className="text-text mt-1.5 leading-relaxed">
                   Each circle is a party: the address that funded or received a channel. Its size
                   follows how many channels it took part in. A green ring means it has a channel

@@ -6,6 +6,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { CHART_SECTIONS, INDEX_CHARTS, chartSectionId } from '@/components/charts/chart-catalogue';
 import { api } from '@/lib/api';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 export default function ChartsPage() {
   const network = useQuery({ queryKey: ['network-stats'], queryFn: api.getNetworkStats });
@@ -59,8 +60,8 @@ export default function ChartsPage() {
             </div>
           ))}
           <p className="text-text-dim text-[12px]">
-            Every chart stops at the last complete day. Open a chart for its full resolution, hover
-            readout and source.
+            Every chart stops at the last complete day. Open a chart for its full resolution and
+            source; there, <TapOrHoverHint what="the chart" /> to read any point.
           </p>
         </DetailLayout>
       </main>

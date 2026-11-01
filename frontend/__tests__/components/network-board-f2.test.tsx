@@ -154,7 +154,7 @@ describe('Network board (F2 charts)', () => {
     server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
     render(wrap(<NetworkMapView neverVerified={115} />));
     const panel = await screen.findByRole('complementary', { name: 'Selected peer evidence' });
-    expect(panel).toHaveTextContent('Hover a node');
+    expect(panel).toHaveTextContent('Tap or hover a node');
     expect(panel).toHaveTextContent('reachable now · 3');
     expect(panel).toHaveTextContent('verified before, not now · 1');
     expect(panel).toHaveTextContent("this node's 1 session peers");
