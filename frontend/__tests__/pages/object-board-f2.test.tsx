@@ -6,6 +6,7 @@ import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils'
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   clusterDetailProducer,
   objectCollectionDetailProducer,
@@ -60,6 +61,8 @@ function lifeVersions(): ItemCellVersions {
 
 beforeEach(() => {
   mockItemReads();
+  // the gels lay themselves out for their measured box (V2)
+  stubChartWidth(896);
   vi.spyOn(api, 'getSporeObject').mockResolvedValue({
     ...sporeDetailProducer,
     sporeId: NERVAPE3X_ID,
@@ -112,7 +115,10 @@ beforeEach(() => {
     },
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 async function page() {
   const view = render(<SporeDetailPage sporeId={NERVAPE3X_ID} />);
@@ -148,7 +154,12 @@ it('opens with the composition sentence, a summary of its life and its readable 
 it('draws the sequencing gel and the collection allele gel with "this one" (OB-4, OB-7)', async () => {
   const { container } = await page();
   const dna = screen.getByRole('region', { name: 'DNA' });
-  expect(dna).toHaveTextContent('53 bytes · 6 genes · hover a gene');
+  expect(dna).toHaveTextContent('53 bytes · 6 genes');
+  // the hint is the readout line's "tap or hover" under the map (R6), not a header suffix
+  expect(dna).not.toHaveTextContent('6 genes · hover a gene');
+  expect(within(dna).getByRole('status', { name: 'Gene readout' })).toHaveTextContent(
+    'tap or hover'
+  );
   expect(dna).toHaveTextContent(
     'Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
   );

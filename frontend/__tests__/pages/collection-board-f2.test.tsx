@@ -7,6 +7,7 @@ import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/te
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
 import {
   clusterDetailProducer,
@@ -39,6 +40,8 @@ const rows: GalleryObject[] = [
 
 beforeEach(() => {
   mockItemReads();
+  // the gels lay themselves out for their measured box (V2)
+  stubChartWidth(1248);
   vi.spyOn(api, 'getSporeCluster').mockResolvedValue({
     ...clusterDetailProducer,
     clusterId: NERVAPE3X_CLUSTER,
@@ -95,7 +98,10 @@ beforeEach(() => {
     nextCursor: 'older',
   });
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 async function page() {
   const view = render(<ClusterPage clusterId={NERVAPE3X_CLUSTER} />);
@@ -127,7 +133,9 @@ it('makes Objects one allele gel plus the 8 newest, without per-variant button l
   ).toEqual(['Object', 'Id', 'Owner', 'DNA · read →', 'Minted']);
   expect(within(table).getAllByRole('row')).toHaveLength(9);
   expect(within(table).getAllByRole('img', { name: /DNA:/ })).toHaveLength(8);
-  expect(objects).toHaveTextContent('hover a row to see its genotype · click a band to filter');
+  expect(objects).toHaveTextContent(
+    'hover a row to see its genotype · click a band or variant to filter'
+  );
 });
 
 it('shows a row’s genotype on the gel while the row is hovered (OB-C2)', async () => {

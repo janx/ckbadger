@@ -1,5 +1,6 @@
 import {
   alleleLanes,
+  traitsOutsidePattern,
   geneOrder,
   genotypePoints,
   isReadableTrait,
@@ -7,6 +8,7 @@ import {
   traitDisplay,
 } from '@/lib/dob-genes';
 import { BITCOIN_COLORS, GENE_COLORS } from '@/lib/design-tokens';
+import type { CurrentPattern } from '@/lib/api';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 
 describe('dob-genes (F2 objects, OB-4/5/7/8, OB-C2)', () => {
@@ -116,5 +118,41 @@ describe('dob-genes (F2 objects, OB-4/5/7/8, OB-C2)', () => {
     expect(() => sequencingGenes(broken, 'Nervape 3x')).toThrow(
       'Nervape 3x: gene Color bytes disagree with DNA'
     );
+  });
+
+  it('counts genes from the pattern: a decoder output the pattern does not declare is no gene (V2)', () => {
+    // The .cell deeds shape: step 0 declares the genes; step 1 is a DOB/1 renderer whose byte map
+    // is unsupported and whose output, IMAGE, is the rendered picture. The page said "73 genes"
+    // for a 72-gene pattern because IMAGE was drawn as a 73rd lane.
+    const pattern: CurrentPattern = structuredClone(nervape3xInsights.currentPattern);
+    if (pattern.status !== 'dob') throw new Error('fixture');
+    pattern.steps.push({
+      ...pattern.steps[0],
+      step: 1,
+      bytes: [],
+      description: { status: 'unsupported', reason: 'byte mapping is not defined' },
+    });
+    const genetics = {
+      ...nervape3xInsights.genetics,
+      traits: [
+        ...nervape3xInsights.genetics.traits,
+        {
+          name: 'IMAGE',
+          values: [
+            { value: "<svg xmlns='http://www.w3.org/2000/svg'><text>a</text></svg>", count: 45 },
+            { value: "<svg xmlns='http://www.w3.org/2000/svg'><text>b</text></svg>", count: 45 },
+          ],
+        },
+      ],
+    };
+    const order = geneOrder(pattern)!;
+    expect(order).toHaveLength(6);
+    const lanes = alleleLanes(genetics, order, 'Nervape 3x');
+    expect(lanes.map((l) => l.gene)).toEqual(order);
+    expect(lanes).toHaveLength(6);
+    expect(traitsOutsidePattern(genetics, order)).toEqual(['IMAGE']);
+    // With no readable pattern the page cannot tell genes apart: every trait keeps a lane.
+    expect(alleleLanes(genetics, null, 'Nervape 3x').map((l) => l.gene)).toContain('IMAGE');
+    expect(traitsOutsidePattern(genetics, null)).toEqual([]);
   });
 });

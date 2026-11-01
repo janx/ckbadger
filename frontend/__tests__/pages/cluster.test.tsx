@@ -11,6 +11,7 @@ import {
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   clusterDetailProducer,
   objectCollectionDetailProducer,
@@ -20,7 +21,15 @@ import {
 } from '@/__tests__/msw/fixtures/item-producer';
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
 const id = clusterDetailProducer.clusterId;
-beforeEach(mockItemReads);
+beforeEach(() => {
+  mockItemReads();
+  // the allele gel lays itself out for its measured box (V2); 1248 px is the 1280 column
+  stubChartWidth(1248);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 it('renders collection identity, capacity history, genes, gallery, holders and both feed layers', async () => {
   render(<ClusterPage clusterId={id} />);
   expect(await screen.findByRole('heading', { name: 'Genes' })).toHaveClass('text-[26px]');

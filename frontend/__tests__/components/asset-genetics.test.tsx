@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
 import {
   ObjectGeneticsView,
   ObjectGeneticsEvidence,
@@ -13,7 +13,15 @@ import {
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
 import type { ObjectGenetics, ItemProtocol } from '@/lib/api';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 describe('Independent DOB evidence', () => {
+  // the gels lay themselves out for their measured box; 896 px is the object page's DNA plate
+  beforeEach(() => stubChartWidth(896));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';
@@ -139,5 +147,46 @@ describe('Per-version raw protocol and item context', () => {
       />
     );
     expect(screen.getByText('No resulting item cell')).toBeInTheDocument();
+  });
+});
+
+describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('fits 358 px: both gels drawn 1:1, the allele gel in two rows of three, nothing to scroll', () => {
+    stubChartWidth(358);
+    const { container } = render(
+      <ObjectGeneticsView
+        evidence={nervape3xGenetics}
+        subject="Nervape 3x #125"
+        collection={nervape3xInsights}
+        collectionName="Nervape 3x"
+        tier="btc_ckb"
+      />
+    );
+    const section = screen.getByRole('region', { name: 'DNA' });
+    // no minimum width and no sideways scroller anywhere in the panel
+    for (const el of Array.from(section.querySelectorAll('[class]')))
+      expect(el.getAttribute('class')).not.toMatch(/\bmin-w-\[|\boverflow-x-(auto|scroll)\b/);
+    const svgs = Array.from(section.querySelectorAll('svg[role="img"]'));
+    expect(svgs).toHaveLength(2);
+    for (const svg of svgs) {
+      expect(svg).toHaveAttribute('width', '358');
+      expect(svg.getAttribute('viewBox')).toMatch(/^0 0 358 /);
+    }
+    // the sequencing gel: the map with the genes as rows under it
+    expect(within(section).getByRole('list', { name: 'Genes' })).toBeInTheDocument();
+    // the allele gel: lanes wrapped in DNA order, "this one" kept on both rows
+    const rows = Array.from(section.querySelectorAll('[data-gel-row]'));
+    expect(rows.map((row) => row.querySelectorAll('[data-lane]').length)).toEqual([3, 3]);
+    const own = section.querySelector('[data-overlay="me"]')!;
+    expect(own.querySelectorAll('[data-tick]')).toHaveLength(6);
+    expect(Array.from(own.querySelectorAll('text')).map((t) => t.textContent)).toEqual([
+      'this one',
+      'this one',
+    ]);
   });
 });
