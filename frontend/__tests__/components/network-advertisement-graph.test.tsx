@@ -83,4 +83,33 @@ describe('AdvertisementGraph', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(25);
     expect(screen.getByText('alias-24')).toBeInTheDocument();
   });
+
+  it('truncates peer ids in the middle and wraps the multiaddr instead of cutting it (T3)', async () => {
+    const advertiser = `1220094f5698529bc8f3${'a'.repeat(40)}0badc0de`;
+    const target = `122007d7be${'b'.repeat(50)}b23985be`;
+    const alias = '/ip4/54.156.243.239/tcp/8115/p2p/QmNsGNQjYA6iP472bNnNE2GR31kCYBifhY1XcaUxRjZ1py';
+    server.use(
+      http.get('/api/:network/v1/network/advertisements', () =>
+        HttpResponse.json({
+          roundId: 5,
+          finishedAt: 200,
+          coverage: 'retainedLatestObservationOnly',
+          distinctPeerPairs: 1,
+          edges: [{ advertiserPeerId: advertiser, targetPeerId: target, alias, observedAt: 200 }],
+        })
+      )
+    );
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <AdvertisementGraph roundId={5} />
+      </QueryClientProvider>
+    );
+    const head = await screen.findByTitle(advertiser);
+    expect(head).toHaveTextContent(/^1220094f56\.\.\.0badc0de$/);
+    expect(screen.getByTitle(target)).toHaveTextContent(/^122007d7be\.\.\.b23985be$/);
+    const addr = screen.getByText(alias);
+    expect(addr).toHaveClass('[overflow-wrap:anywhere]');
+    expect(addr).not.toHaveClass('truncate');
+  });
 });
