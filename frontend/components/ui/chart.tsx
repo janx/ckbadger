@@ -97,6 +97,12 @@ export interface ChartProps {
   hideMarkerLegend?: boolean;
   /** How a point label reads wherever the chart prints it (hover caption and reading). */
   formatLabel?: (label: string) => string;
+  /**
+   * Key the series under the plot — swatch · name · value at the reading, one per line, in band
+   * order — instead of reading them out as headline numbers in the caption (a chart of many
+   * bands, responsive review C#5).
+   */
+  seriesLegend?: boolean;
 }
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
 const X_LABEL_ROW = 12;
@@ -241,6 +247,7 @@ export function Chart({
   slotBars = false,
   hideMarkerLegend = false,
   formatLabel = (label: string) => label,
+  seriesLegend = false,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const [localActive, setLocalActive] = useState<number | null>(null);
@@ -381,20 +388,22 @@ export function Chart({
             {activeIndex === null ? subtitle : selected && formatLabel(selected.label)}
           </span>
         </span>
-        <span className="text-text-bright flex flex-wrap justify-end gap-3 text-[18px] tabular-nums">
-          {selected &&
-            series.map((s, i) => (
-              <span key={s.key}>
-                {series.length > 1 && (
-                  <span className="mr-2 text-[11px]" style={{ color: color(i) }}>
-                    {s.label}
-                  </span>
-                )}
-                {formatValue(selected.values[s.key])}
-                <span className="text-text-dim text-[11px]"> {unit}</span>
-              </span>
-            ))}
-        </span>
+        {!seriesLegend && (
+          <span className="text-text-bright flex flex-wrap justify-end gap-3 text-[18px] tabular-nums">
+            {selected &&
+              series.map((s, i) => (
+                <span key={s.key}>
+                  {series.length > 1 && (
+                    <span className="mr-2 text-[11px]" style={{ color: color(i) }}>
+                      {s.label}
+                    </span>
+                  )}
+                  {formatValue(selected.values[s.key])}
+                  <span className="text-text-dim text-[11px]"> {unit}</span>
+                </span>
+              ))}
+          </span>
+        )}
       </figcaption>
       <div ref={ref} className="min-w-0" style={{ minHeight: height }}>
         {!data.length ? (
@@ -772,6 +781,29 @@ export function Chart({
           )
         )}
       </div>
+      {seriesLegend && (
+        <ul aria-label={`${title} legend`} className="mt-3 flex flex-col gap-1 text-[13px]">
+          {series.map((s, i) => (
+            <li key={s.key} className="flex min-w-0 flex-wrap items-baseline justify-start gap-x-2">
+              <span className="flex min-w-0 items-baseline gap-2">
+                <span
+                  aria-hidden="true"
+                  data-swatch
+                  className="inline-block h-2.5 w-2.5 shrink-0 self-center rounded-[2px]"
+                  style={{ backgroundColor: color(i) }}
+                />
+                <span className="text-text">{s.label}</span>
+              </span>
+              {selected && (
+                <span className="text-text-bright whitespace-nowrap tabular-nums">
+                  {formatValue(selected.values[s.key])}
+                  <span className="text-text-dim text-[11px]"> {unit}</span>
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
       <span className="sr-only" aria-live="polite">
         {activeIndex !== null && selected
           ? `${selected.label}: ${series.map((s) => `${s.label} ${selected.values[s.key]} ${unit}`).join(', ')}`

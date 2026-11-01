@@ -438,6 +438,8 @@ function DetailBody({
                 formatValue={(value) => formatChartHover(value, history.unit)}
                 xTicks={axisTicks(rangePoints(history.points, range), 'date', 8)}
                 pointDots
+                // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
+                seriesLegend
               />
             ) : (
               <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>

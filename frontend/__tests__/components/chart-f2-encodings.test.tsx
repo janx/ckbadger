@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent } from '@testing-library/react';
+import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { Chart } from '@/components/ui/chart';
@@ -298,6 +298,46 @@ describe('shared Chart encodings for the charts boards', () => {
         />
       )
     ).toThrow(/plotLeft 100.*"10k transactions" needs 104/);
+  });
+
+  it('keys many bands with a compact swatch legend instead of headline numbers (C#5, C#9)', () => {
+    // Responsive review C#5: 21 script bands were read out as right-aligned 18 px numbers before
+    // the chart, ~800 px tall at 390, with no swatch tying a band to its name.
+    const names = Array.from({ length: 21 }, (_, i) => `Script ${i + 1}`);
+    const bands = names.map((label, i) => ({
+      key: `s${i}`,
+      label,
+      color: `#${(0x203040 + i * 0x050403).toString(16)}`,
+    }));
+    const rows = ['2024-01-01', '2024-01-02'].map((label, d) => ({
+      label,
+      values: Object.fromEntries(bands.map((b, i) => [b.key, String((i + 1) * (d + 1))])),
+    }));
+    const { container } = render(
+      <Chart
+        title="Occupied common knowledge"
+        subtitle="daily"
+        data={rows}
+        series={bands}
+        unit="CKB"
+        kind="stacked"
+        seriesLegend
+        formatValue={(v) => v}
+      />
+    );
+    const legend = screen.getByRole('list', { name: 'Occupied common knowledge legend' });
+    const items = within(legend).getAllByRole('listitem');
+    expect(items).toHaveLength(21);
+    items.forEach((item, i) => {
+      // Band order, each with its band's colour, its name and its latest value.
+      expect(item.querySelector('[data-swatch]')).toHaveStyle({ backgroundColor: bands[i].color });
+      expect(item).toHaveTextContent(`${names[i]}${String((i + 1) * 2)} CKB`);
+    });
+    expect(legend).toHaveClass('text-[13px]');
+    // The legend follows the plot, and the caption carries no headline numbers.
+    const plot = container.querySelector('svg[role="img"]')!;
+    expect(plot.compareDocumentPosition(legend) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(container.querySelector('figcaption .text-\\[18px\\]')).toBeNull();
   });
 
   it('gives bars a hover dot and reading but no end dot (visual pass)', () => {

@@ -48,6 +48,9 @@ describe('MostUtilizedScriptsPage', () => {
     render(<MostUtilizedScriptsPage />);
     expect(await screen.findByText('Scripts')).toBeInTheDocument();
     await waitFor(() => expect(chartMock).toHaveBeenCalledTimes(2));
+    // Responsive review C#5: each scope's bands are keyed by a swatch legend, not readouts.
+    expect(chartMock.mock.calls[0][0]).toMatchObject({ seriesLegend: true });
+    expect(chartMock.mock.calls[1][0]).toMatchObject({ seriesLegend: true });
     expect(chartMock.mock.calls[0][0]).toMatchObject({
       title: 'Occupied common knowledge',
       unit: 'CKB',
