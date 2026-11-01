@@ -8,6 +8,7 @@ import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
 import {
   clusterDetailProducer,
@@ -234,6 +235,26 @@ it('keeps decode coverage and the decoder blueprint in tier 2, as a table (OB-C1
   const relief = within(blueprint).getByRole('row', { name: /relief/ });
   expect(relief).toHaveTextContent('1 option: NERVAPE 3X');
   expect(tier2).not.toHaveTextContent('["NERVAPE 3X"]');
+});
+
+// Responsive plan 2026-11-01 (the leftover after lane V): the blueprint table had a 480 px floor
+// and scrolled sideways in a phone column. It is a ListTable now, so a column too narrow for its
+// columns gets one phone row per gene with every column on its lines (RESPONSIVE_LAYOUT rules 1, 2).
+it('lays the decoder blueprint out as phone rows in a 358 px column, nothing scrolling sideways', async () => {
+  atContainerWidth(358);
+  const { container } = await page();
+  const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+  const list = await within(tier2).findByRole('list', { name: 'DOB blueprint, compact' });
+  expect(within(tier2).queryByRole('table', { name: 'DOB blueprint' })).toBeNull();
+  const blueprint = within(tier2).getByRole('region', { name: 'Current decoder blueprint' });
+  expect(blueprint.querySelector('.overflow-x-auto, .min-w-\\[480px\\]')).toBeNull();
+  const rows = within(list).getAllByRole('listitem');
+  const prevBg = rows.find((r) => r.textContent?.includes('prev.bg')) as HTMLElement;
+  expect(prevBg).toHaveTextContent('bytes 0–31');
+  expect(prevBg).toHaveTextContent('btcfs');
+  expect(prevBg.querySelectorAll('[data-line]').length).toBeGreaterThanOrEqual(3);
+  const relief = rows.find((r) => r.textContent?.includes('relief')) as HTMLElement;
+  expect(relief).toHaveTextContent('1 option: NERVAPE 3X');
 });
 
 it('draws holder bars in the objects colour (OB-C7)', async () => {

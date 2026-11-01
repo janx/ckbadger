@@ -3,6 +3,7 @@ import { useState, type CSSProperties } from 'react';
 import type {
   CollectionInsights,
   CurrentPattern,
+  GeneDefinition,
   ObjectGenetics,
   SporeDobDecoded,
 } from '@/lib/api';
@@ -13,6 +14,8 @@ import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { PhoneRow } from '@/components/ui/phone-row';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import {
   alleleLanes,
@@ -295,6 +298,82 @@ function valueDomain(rule: string, args: unknown): string {
     return `${String(args[0])}–${String(args[1])}`;
   return `${args.length} argument${args.length === 1 ? '' : 's'}`;
 }
+type BlueprintGene = GeneDefinition;
+
+const ruleArgumentsTitle = (g: BlueprintGene) =>
+  g.ruleArguments === null ? undefined : JSON.stringify(g.ruleArguments);
+
+/** The blueprint table (OB-C12): gene, bytes, rule, values; 560 px of column minimums. */
+const BLUEPRINT_COLUMNS: readonly ListColumn<BlueprintGene>[] = [
+  {
+    key: 'gene',
+    label: 'Gene',
+    minWidth: 120,
+    render: (g) => <span className="text-text-bright">{g.name}</span>,
+  },
+  {
+    key: 'bytes',
+    label: 'Bytes',
+    minWidth: 170,
+    render: (g) => (
+      <span className="text-text-dim">
+        byte offset {g.byteOffset} · length {g.byteLength}
+        <span className="block">{byteSpan(g.byteOffset, g.byteLength)}</span>
+      </span>
+    ),
+  },
+  {
+    key: 'rule',
+    label: 'Rule',
+    minWidth: 120,
+    render: (g) => (
+      <>
+        {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
+      </>
+    ),
+  },
+  {
+    key: 'values',
+    label: 'Values',
+    minWidth: 150,
+    render: (g) => (
+      <span className="[overflow-wrap:anywhere]" title={ruleArgumentsTitle(g)}>
+        {valueDomain(g.rule, g.ruleArguments)}
+      </span>
+    ),
+  },
+];
+
+/** One gene of the blueprint in a column too narrow for the table: every column on three lines. */
+function BlueprintPhoneRow({ g }: { g: BlueprintGene }) {
+  return (
+    <PhoneRow
+      lines={[
+        { key: 'gene', tone: 'head', left: g.name, right: byteSpan(g.byteOffset, g.byteLength) },
+        {
+          key: 'rule',
+          tone: 'body',
+          left: (
+            <>
+              {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
+            </>
+          ),
+          right: `offset ${g.byteOffset} · length ${g.byteLength}`,
+        },
+        {
+          key: 'values',
+          tone: 'quiet',
+          left: (
+            <span className="[overflow-wrap:anywhere]" title={ruleArgumentsTitle(g)}>
+              {valueDomain(g.rule, g.ruleArguments)}
+            </span>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 export interface CurrentPatternEvidenceProps {
   pattern: CurrentPattern;
 }
@@ -334,43 +413,15 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
               <p className="text-text-dim text-[11px]">
                 {step.description.format} · {step.description.rangePolicy}
               </p>
-              {/* F2 objects (OB-C12): the blueprint as a table of genes and value domains. */}
-              <div className="min-w-0 overflow-x-auto">
-                <table aria-label="DOB blueprint" className="w-full min-w-[480px] text-[11px]">
-                  <thead className="text-text-dim text-left">
-                    <tr>
-                      <th className="py-1 pr-3 font-normal">Gene</th>
-                      <th className="py-1 pr-3 font-normal">Bytes</th>
-                      <th className="py-1 pr-3 font-normal">Rule</th>
-                      <th className="py-1 font-normal">Values</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {step.description.genes.map((g) => (
-                      <tr key={g.index} className="border-base-elevated border-t align-top">
-                        <th scope="row" className="text-text-bright py-1.5 pr-3 font-normal">
-                          {g.name}
-                        </th>
-                        <td className="text-text-dim py-1.5 pr-3">
-                          byte offset {g.byteOffset} · length {g.byteLength}
-                          <span className="block">{byteSpan(g.byteOffset, g.byteLength)}</span>
-                        </td>
-                        <td className="py-1.5 pr-3">
-                          {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
-                        </td>
-                        <td
-                          className="py-1.5 [overflow-wrap:anywhere]"
-                          title={
-                            g.ruleArguments === null ? undefined : JSON.stringify(g.ruleArguments)
-                          }
-                        >
-                          {valueDomain(g.rule, g.ruleArguments)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              {/* F2 objects (OB-C12): the blueprint as a table of genes and value domains; in a
+                  column too narrow for its columns, one phone row per gene (R1 / R7). */}
+              <ListTable
+                label="DOB blueprint"
+                columns={BLUEPRINT_COLUMNS}
+                rows={step.description.genes}
+                rowKey={(g) => String(g.index)}
+                mobileRow={(g) => <BlueprintPhoneRow g={g} />}
+              />
             </>
           )}
         </article>
