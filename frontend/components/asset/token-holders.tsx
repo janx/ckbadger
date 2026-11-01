@@ -200,8 +200,9 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       ? { text: '—', amount, total }
       : { text: `${formatScaledInteger(amount * BigInt(100), total, 2)}%`, amount, total };
   };
-  // Board L5: rank, address, lock, amount and the share as a bar — 584 px of minimums, so the
-  // table holds from the 640 band up and the two-line phone row takes over below it.
+  // Board L5: rank, address, lock, amount and the share as a bar — 548 px of minimums, so the
+  // table holds in the 640 band and in the token page's 554 px column at 1280; the two-line phone
+  // row takes over below it.
   const columns: ListColumn<TokenHolder>[] = [
     {
       key: 'rank',
@@ -228,14 +229,14 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     {
       key: 'lock',
       label: 'Lock',
-      minWidth: 120,
+      minWidth: 104,
       className: 'text-text-dim text-[11px]',
       render: (h) => h.lockKind ?? 'Lock kind unavailable',
     },
     {
       key: 'balance',
       label: symbol ?? 'Balance',
-      minWidth: 140,
+      minWidth: 136,
       numeric: true,
       className: '!whitespace-normal text-text-bright',
       render: (h) => <AssetAmount amount={h.balance} decimals={decimals} />,
@@ -243,13 +244,13 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     {
       key: 'share',
       label: 'Share',
-      minWidth: 120,
+      minWidth: 104,
       numeric: true,
       render: (h) => {
         const share = holderShare(h);
         return (
           <span className="inline-flex items-center justify-end gap-2">
-            <ShareBar width={shareBarWidth(share.amount, share.total)} className="w-16 flex-none" />
+            <ShareBar width={shareBarWidth(share.amount, share.total)} className="w-12 flex-none" />
             <span className="w-11 text-right">{share.text}</span>
           </span>
         );

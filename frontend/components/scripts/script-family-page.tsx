@@ -341,7 +341,7 @@ export function ScriptFamilyPage({
             tone="plain"
           />
         ) : null,
-        `signed: ${signedText(d)}`,
+        signedText(d),
       ].filter((part) => part !== null);
     const joined = (parts: ReactNode[]) =>
       parts.map((part, i) => (

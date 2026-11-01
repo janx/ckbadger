@@ -307,7 +307,7 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
     // The version hash keeps a line of its own, whole: it is what a developer copies.
     expect(first[1].left).toMatch(/^0x[0-9a-f]{64}$/);
     expect(first[2].left).toMatch(
-      /^#11,132,140 · 96,760 B · .+ CKB · signed: first deployed into multisig 0xd1db…b95c$/
+      /^#11,132,140 · 96,760 B · .+ CKB · first deployed into multisig 0xd1db…b95c$/
     );
     expect(first[2].right).toMatch(/^live cells using it: /);
     const last = phoneLines(rows[4]);

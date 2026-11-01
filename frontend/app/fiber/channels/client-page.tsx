@@ -340,6 +340,8 @@ export default function FiberChannelsPage() {
                     key: 'parties',
                     label: 'Parties',
                     minWidth: 180,
+                    // The column that takes the free width, as the grid's 1fr did.
+                    width: 'auto',
                     render: (channel) => (
                       <span className="flex min-w-0 flex-wrap gap-x-1.5">
                         {channel.observedParties.map((party, index) => (

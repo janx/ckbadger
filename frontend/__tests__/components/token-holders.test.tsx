@@ -93,8 +93,8 @@ describe('Token holders (board L5)', () => {
     render(<TokenHolders typeHash="0xabc" symbol="RGB++" decimals={8} />);
   };
 
-  it('draws the five-column table in the 608 px band: rank, address, lock, amount, share bar', async () => {
-    atContainerWidth(608);
+  it('draws the five-column table in the token page’s 554 px column at 1280 and the 608 px band', async () => {
+    atContainerWidth(554);
     mount();
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
     expect(
@@ -130,13 +130,13 @@ describe('Token holders (board L5)', () => {
   });
 });
 
-describe('Token holders between 560 and 584 px (L5)', () => {
+describe('Token holders where the table does not fit (L5)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  it('puts each holder on one line where the table does not fit: rank · address · lock · bar · amount', async () => {
-    atContainerWidth(570);
+  it('falls back to the two-line row just below the 548 px table', async () => {
+    atContainerWidth(546);
     vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
       data: [
         {
@@ -156,13 +156,10 @@ describe('Token holders between 560 and 584 px (L5)', () => {
     vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
     render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
     const [row] = await screen.findAllByTestId('holder-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
     expect(phoneLines(row)).toEqual([
-      {
-        key: 'holder',
-        tone: 'head',
-        left: '10x1111111111...111111 JoyID',
-        right: '10.00%100',
-      },
+      { key: 'holder', tone: 'head', left: '10x1111111111...111111 JoyID', right: '100' },
+      { key: 'share', tone: 'quiet', left: '', right: '10.00%' },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
   });

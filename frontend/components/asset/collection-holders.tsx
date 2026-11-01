@@ -129,7 +129,7 @@ function ScopedCollectionHolders({
     {
       key: 'lock',
       label: 'Lock',
-      minWidth: 120,
+      minWidth: 104,
       className: 'text-[11px]',
       render: (holder) => (
         <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
