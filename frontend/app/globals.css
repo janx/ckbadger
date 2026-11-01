@@ -76,6 +76,20 @@ body {
   min-height: 100vh;
 }
 
+/*
+ * Scrollbars in the page's palette (Firefox, Chromium ≥ 121; an overlay-scrollbar platform draws
+ * nothing while idle anyway). A region that scrolls inside itself — the vitals strip and the
+ * transaction pipeline below md, tables, raw data — otherwise shows the platform's light classic
+ * bar against the dark surface. The colour is inherited, so the page's own bar takes it too; only
+ * the bars inside the page are thin.
+ */
+:root {
+  scrollbar-color: #343c50 transparent; /* text.ghost thumb on a bare track */
+}
+body * {
+  scrollbar-width: thin;
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

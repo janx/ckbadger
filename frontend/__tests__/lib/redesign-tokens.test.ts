@@ -22,3 +22,10 @@ it('keeps class/copper encodings separate and bundles fonts without runtime requ
   expect(css).toContain('Noto Serif Display');
   expect(css).toContain('.crt-screen::before');
 });
+it('paints every scrollbar in the palette, thin inside the page, so a region that scrolls inside itself shows no platform-grey bar', () => {
+  // The vitals strip and the pipeline scroll inside themselves below md; with classic (non-overlay)
+  // scrollbars that bar is the platform's light one unless the page colours it.
+  const css = readFileSync(resolve('app/globals.css'), 'utf8');
+  expect(css).toMatch(/:root\s*\{[^}]*scrollbar-color:\s*#343c50 transparent;/);
+  expect(css).toMatch(/body \*\s*\{\s*scrollbar-width:\s*thin;\s*\}/);
+});

@@ -13,6 +13,10 @@ import { formatBlockNumber } from '@/lib/format-block';
  * rate and difficulty, then — on a page that holds the realtime socket — "● Live" at its right end
  * (Main.dc.html, TX-01). One row on a desktop; one row that scrolls inside itself on a phone
  * (TX-05). It replaces the homepage's old hero numbers, epoch card and floating LIVE pill.
+ *
+ * Every item is `shrink-0`: when the narrow row overflows, a shrinkable item would be squeezed to
+ * its min-content width — and the epoch, the one item with several parts, would stack them into
+ * a column while the rest stayed on the line. The row scrolls instead.
  */
 export function VitalsStrip() {
   const { data: stats, error } = useQuery({
@@ -53,7 +57,7 @@ function Vital({ label, href, children }: { label: string; href?: string; childr
       <span className={VALUE}>{children}</span>
     </>
   );
-  const cls = 'group flex items-baseline gap-1.5 md:gap-2';
+  const cls = 'group flex shrink-0 items-baseline gap-1.5 md:gap-2';
   return href ? (
     <Link href={href} className={cls}>
       {body}
@@ -74,7 +78,11 @@ function BlockTime({ value }: { value: string | null }) {
   const seconds = /^(\d+(?:\.\d+)?)s$/.exec(value);
   if (!seconds)
     return (
-      <div role="alert" data-testid="vitals-block-time-error" className="flex items-baseline gap-2">
+      <div
+        role="alert"
+        data-testid="vitals-block-time-error"
+        className="flex shrink-0 items-baseline gap-2"
+      >
         <span className={LABEL}>Block time</span>
         <span className="text-rouge text-xs">{`block time ${JSON.stringify(value)} is not <seconds>s`}</span>
       </div>
@@ -113,7 +121,11 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
   const read = readEpoch(raw);
   if ('error' in read) {
     return (
-      <div role="alert" data-testid="vitals-epoch-error" className="flex items-baseline gap-2">
+      <div
+        role="alert"
+        data-testid="vitals-epoch-error"
+        className="flex shrink-0 items-baseline gap-2"
+      >
         <span className={LABEL}>Epoch</span>
         <span className="text-rouge text-xs">{`unreadable: ${read.error}`}</span>
       </div>
@@ -128,7 +140,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
       href="/charts/epoch-time-length"
       data-testid="vitals-epoch"
       aria-label={`Epoch ${epoch.number.toLocaleString('en-US')}, block ${index} of ${length}, ${estimatedLeft === null ? 'remaining time unavailable' : `about ${estimatedLeft} left`}`}
-      className="group flex flex-wrap items-center gap-x-1.5 gap-y-1 md:gap-x-2"
+      className="group flex shrink-0 items-center gap-x-1.5 md:gap-x-2"
     >
       <span className={LABEL}>Epoch</span>
       <span className={VALUE}>{epoch.number.toLocaleString('en-US')}</span>
@@ -166,7 +178,7 @@ const LOADING_LABELS = ['Block', 'Epoch', 'Block time', 'Hash rate', 'Difficulty
 
 function LoadingVital({ label }: { label: string }) {
   return (
-    <div className="flex items-baseline gap-1.5 md:gap-2">
+    <div className="flex shrink-0 items-baseline gap-1.5 md:gap-2">
       <span className={LABEL}>{label}</span>
       <span
         aria-hidden="true"

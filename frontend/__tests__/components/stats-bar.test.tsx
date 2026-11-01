@@ -161,6 +161,24 @@ describe('VitalsStrip', () => {
     expect(strip).toHaveClass('flex-nowrap', 'overflow-x-auto', 'md:flex-wrap');
   });
 
+  it('keeps every vital whole when the row overflows: nothing shrinks, the epoch never stacks', async () => {
+    // A non-wrapping row that overflows shrinks its items to their min-content width. Text that
+    // cannot wrap has none to give, so a wrapping epoch item would take all the squeeze and stack
+    // its number, bar, index and time left into a column (seen at ~680 px). Every vital refuses to
+    // shrink and the epoch is a plain row, so the strip scrolls as designed instead.
+    useRealtimeStore.setState({ socketHeld: true });
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+    const items = Array.from(strip.children) as HTMLElement[];
+    expect(items).toHaveLength(6);
+    for (const item of items) expect(item).toHaveClass('shrink-0');
+    const epoch = screen.getByTestId('vitals-epoch');
+    expect(epoch).toHaveClass('flex');
+    expect(epoch).not.toHaveClass('flex-wrap');
+  });
+
   it('refuses a block time that is not "<seconds>s" (TX-05)', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats({ avgBlockTime: '8.43 seconds' }));
     render(<VitalsStrip />);
