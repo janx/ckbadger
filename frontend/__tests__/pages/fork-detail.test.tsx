@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ForkDetailPage from '@/app/forks/[height]/[orphan]/client-page';
@@ -8,6 +8,7 @@ import reentryFixture from '@/__tests__/fixtures/fork-api-producer/fork-reentry-
 import unincludedFixture from '@/__tests__/fixtures/fork-api-producer/fork-unincluded-detail.json';
 import multiFixture from '@/__tests__/fixtures/fork-api-producer/fork-multi-uncle-detail.json';
 import deepFixture from '@/__tests__/fixtures/fork-api-producer/fork-deep-detail.json';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 const route = { height: '10', orphan: '17404795' };
 const notFound = vi.fn();
@@ -34,6 +35,12 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     at('10', '17404795');
+    // the tree is laid out for its measured column (V4); 1248 px is the 1280 page
+    stubChartWidth(1248);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('asks the API for the fork at that height and orphan and titles it "Fork at #N" (FF-D3)', async () => {
@@ -80,7 +87,9 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(screen.getByText(/the node switches to #12/)).toBeInTheDocument();
     // the legend's times fit their column: the date is in the header (visual pass)
     expect(screen.getByText('before 06:13:20 UTC+8')).toBeInTheDocument();
-    expect(screen.getByText('scroll sideways for both branches')).toHaveClass('md:hidden');
+    // drawn to the width at every size: no sideways scroller and no "scroll sideways" caption (V4)
+    expect(screen.queryByText('scroll sideways for both branches')).toBeNull();
+    expect(tree.closest('.overflow-x-auto')).toBeNull();
   });
 
   it('lists the blocks in one table with miner, transactions and fate, and the uncle sentence (FF-D5, FF-D6)', async () => {

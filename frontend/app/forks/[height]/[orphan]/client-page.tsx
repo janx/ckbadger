@@ -473,12 +473,9 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             </span>
           }
         >
-          <div className="min-w-0 overflow-x-auto pt-6">
+          <div className="min-w-0 pt-6">
             <ForkTree model={model} />
           </div>
-          <p className="text-text-dim mt-1 text-[11px] md:hidden">
-            scroll sideways for both branches
-          </p>
           <div className="mt-2 grid grid-cols-[34px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 text-[12.5px] sm:grid-cols-[34px_190px_minmax(0,1fr)]">
             <span className="text-text-bright">{TIP_MARKS[1]}</span>
             <span className="text-text-dim">before {formatUtc8Time(event.detectedAt)}</span>
