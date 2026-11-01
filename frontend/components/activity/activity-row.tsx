@@ -267,14 +267,16 @@ function Participants({
           data-role="participant"
           className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 md:contents"
         >
-          {/* The party as one unit below md: address, roles and lock kind never break apart. */}
+          {/* The party as one unit below md: it takes the line before the amount does, and its
+              lock kind never splits; only when address, roles and lock kind cannot share one line
+              does the lock kind start the next line, whole, under the address. */}
           <div
             data-role="party-unit"
-            className="flex max-w-full items-baseline gap-x-2 md:contents"
+            className="flex max-w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 md:contents"
           >
             <div
               data-party={p.key}
-              className="flex items-baseline gap-x-2 md:col-start-1 md:block md:min-w-0 md:overflow-hidden"
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 md:col-start-1 md:block md:min-w-0 md:overflow-hidden"
             >
               <ParticipantRefView participant={p} compact quiet />
               {!lockColumn && p.lockKind && (
@@ -288,10 +290,12 @@ function Participants({
                 </span>
               )}
             </div>
+            {/* Below md the tail of the party unit (the narrow form never drops it, C#8); from md
+                its own column. */}
             {lockColumn && (
               <div
                 data-role="lock-kind"
-                className="text-text-dim hidden min-w-0 truncate whitespace-nowrap text-[11.5px] md:col-start-2 md:block"
+                className="text-text-dim shrink-0 whitespace-nowrap text-[11.5px] md:col-start-2 md:block md:min-w-0 md:truncate"
                 title={p.lockKind ?? undefined}
               >
                 {p.lockKind ?? ''}

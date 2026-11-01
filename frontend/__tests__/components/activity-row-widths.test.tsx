@@ -96,7 +96,6 @@ describe('activity participant line (A3: address and lock kind are one unit)', (
     expect(row).toHaveClass('flex', 'flex-wrap', 'md:contents');
     const unit = row.querySelector('[data-role="party-unit"]') as HTMLElement;
     expect(unit).toHaveClass('flex', 'md:contents');
-    expect(unit).not.toHaveClass('flex-wrap');
     const cell = unit.querySelector('[data-party]') as HTMLElement;
     expect(cell).toHaveTextContent('ckb1qzda...3x8k26Default Lock');
     expect(within(cell).getByText('Default Lock')).toHaveClass('shrink-0', 'whitespace-nowrap');
@@ -124,5 +123,45 @@ describe('activity participant line (A3: address and lock kind are one unit)', (
     const ref = within(cell as HTMLElement).getByText('owner_from').parentElement as HTMLElement;
     expect(ref).toHaveClass('flex-wrap');
     expect(ref).not.toHaveClass('shrink-0');
+  });
+});
+
+describe('activity lock-column line below md (A8: the narrow form keeps the lock kind)', () => {
+  // Report C#8: the Activities page dropped each participant's lock kind at 390 (its column was
+  // `hidden` below the grid breakpoint) while 640 showed it. Below md it is now the tail of the
+  // party unit, the same element that is the lock column from md up.
+  it('shows the lock kind beside the address below md and in its own column from md', () => {
+    const { container } = render(
+      <ActivityRow lockColumn activity={activity([party({ lockKind: 'JoyID' })])} />
+    );
+    const unit = container.querySelector('[data-role="party-unit"]') as HTMLElement;
+    const kinds = container.querySelectorAll('[data-role="lock-kind"]');
+    expect(kinds).toHaveLength(1);
+    const kind = kinds[0] as HTMLElement;
+    expect(kind).toHaveTextContent('JoyID');
+    expect(kind.parentElement).toBe(unit);
+    expect(kind.previousElementSibling).toHaveAttribute('data-party');
+    expect(kind).not.toHaveClass('hidden');
+    expect(kind).toHaveClass('shrink-0', 'whitespace-nowrap', 'md:col-start-2');
+    // Not repeated in the party cell.
+    expect(unit.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
+  });
+
+  it('wraps a lock kind that cannot follow the address and roles under them, whole', () => {
+    // Gate at 390 (cluster): with "owner_to, manager_to" the unit shrank, the roles wrapped inside
+    // the party cell, and the lock kind sat at the far end of the line, away from its address.
+    // The unit wraps instead: the party cell keeps its width, the lock kind starts the next line.
+    const { container } = render(
+      <ActivityRow
+        lockColumn
+        activity={activity([
+          party({ roles: ['owner_to', 'manager_to'], lockKind: 'InputTypeProxyLock' }),
+        ])}
+      />
+    );
+    const unit = container.querySelector('[data-role="party-unit"]') as HTMLElement;
+    expect(unit).toHaveClass('flex-wrap', 'max-w-full');
+    expect(unit.querySelector('[data-party]')).toHaveClass('flex-wrap');
+    expect(unit.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
   });
 });
