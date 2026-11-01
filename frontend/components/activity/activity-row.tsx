@@ -294,6 +294,155 @@ function FoldedItemDeltas({
   );
 }
 
+/** "+2 objects", "−1 object", "+1 −1 objects": a participant's object changes as one signed count. */
+export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
+  const objects = items.filter((i) => i.kind === 'object');
+  const arrived = objects.filter((o) => o.delta > 0).length;
+  const departed = objects.length - arrived;
+  const counts = [arrived > 0 && `+${arrived}`, departed > 0 && `−${departed}`].filter(Boolean);
+  return `${counts.join(' ')} object${objects.length === 1 ? '' : 's'}`;
+}
+
+/**
+ * One participant. Below md one wrapping line: the party unit, the amount at the right end (it
+ * drops under the party when the line cannot hold both), then occupied and the item changes. From
+ * md the wrappers dissolve (`md:contents`) and every cell takes its track of the shared grid.
+ *
+ * The asset boards' phone form (`foldObjects`, B#12): occupied joins the line, and the objects are
+ * one count chip ("+2 objects") beside the party that opens them in place; tokens and identities
+ * stay as facts. From md the objects fold as before ("+N more objects").
+ */
+function ParticipantLine({
+  p,
+  lockColumn,
+  foldObjects,
+  focusItemId,
+  itemTone,
+  notes,
+}: {
+  p: ActivityParticipant & { key: string };
+  lockColumn: boolean;
+  foldObjects: boolean;
+  focusItemId?: string;
+  itemTone: 'plain' | 'sign';
+  notes?: ReadonlyMap<string, string>;
+}) {
+  const [objectsOpen, setObjectsOpen] = useState(false);
+  const phoneObjects = foldObjects && p.itemDeltas.some((i) => i.kind === 'object');
+  const otherItems = p.itemDeltas.filter((i) => i.kind !== 'object');
+  return (
+    <div
+      data-role="participant"
+      className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 md:contents"
+    >
+      {/* The party as one unit below md: it takes the line before the amount does, and its
+          lock kind never splits; only when address, roles and lock kind cannot share one line
+          does the lock kind start the next line, whole, under the address. */}
+      <div
+        data-role="party-unit"
+        className="flex max-w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 md:contents"
+      >
+        <div
+          data-party={p.key}
+          className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 md:col-start-1 md:block md:min-w-0 md:overflow-hidden"
+        >
+          <ParticipantRefView participant={p} compact quiet />
+          {!lockColumn && p.lockKind && (
+            <span className="text-text-dim shrink-0 whitespace-nowrap text-[11px] md:ml-2">
+              {p.lockKind}
+            </span>
+          )}
+          {p.lockHash !== null && notes?.has(p.lockHash) && (
+            <span data-role="participant-note" className="text-text-dim text-[11px] md:ml-2">
+              {notes.get(p.lockHash)}
+            </span>
+          )}
+        </div>
+        {/* Below md the tail of the party unit (the narrow form never drops it, C#8); from md
+            its own column. */}
+        {lockColumn && (
+          <div
+            data-role="lock-kind"
+            className="text-text-dim shrink-0 whitespace-nowrap text-[11.5px] md:col-start-2 md:block md:min-w-0 md:truncate"
+            title={p.lockKind ?? undefined}
+          >
+            {p.lockKind ?? ''}
+          </div>
+        )}
+      </div>
+      {phoneObjects && (
+        <span
+          data-role="phone-items"
+          className="inline-flex flex-wrap items-baseline gap-x-2 md:hidden"
+        >
+          {otherItems.length > 0 && (
+            <DotJoined
+              parts={otherItems.map((item, i) => (
+                <ItemDeltaFact key={i} item={item} tone={itemTone} />
+              ))}
+            />
+          )}
+          <button
+            type="button"
+            data-role="object-count"
+            aria-expanded={objectsOpen}
+            onClick={() => setObjectsOpen((open) => !open)}
+            className="border-base-border text-text hover:text-text-bright h-6 whitespace-nowrap rounded-md border px-2 text-[11.5px]"
+          >
+            {objectCountLabel(p.itemDeltas)}
+          </button>
+        </span>
+      )}
+      <div className={cn('col-start-2 ml-auto text-right md:ml-0', lockColumn && 'md:col-start-3')}>
+        <ExactCkb shannons={BigInt(p.ckbDelta)} />
+      </div>
+      {p.usedDelta !== '0' && (
+        <div
+          data-role="occupied"
+          className={cn(
+            'text-text-dim col-start-2 whitespace-nowrap text-right text-[11px] md:basis-auto',
+            // The asset boards' phone form keeps occupied on the participant's line.
+            !foldObjects && 'basis-full',
+            lockColumn ? 'md:col-start-4' : 'md:col-start-3'
+          )}
+        >
+          occupied {formatOccupiedDelta(p.usedDelta)}
+        </div>
+      )}
+      {p.itemDeltas.length > 0 && (
+        <div
+          className={cn(
+            'col-span-2 col-start-1 basis-full md:col-span-1 md:basis-auto',
+            phoneObjects && 'hidden md:block',
+            lockColumn ? 'md:col-start-5' : 'md:col-start-4'
+          )}
+        >
+          {foldObjects ? (
+            <FoldedItemDeltas items={p.itemDeltas} focusItemId={focusItemId} itemTone={itemTone} />
+          ) : (
+            <DotJoined
+              parts={p.itemDeltas.map((item, i) => (
+                <ItemDeltaFact key={i} item={item} tone={itemTone} />
+              ))}
+            />
+          )}
+        </div>
+      )}
+      {phoneObjects && objectsOpen && (
+        <div data-role="phone-objects" className="basis-full pl-2 md:hidden">
+          <DotJoined
+            parts={p.itemDeltas
+              .filter((i) => i.kind === 'object')
+              .map((item, i) => (
+                <ItemDeltaFact key={i} item={item} tone={itemTone} />
+              ))}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Participants({
   participants,
   lockColumn = false,
@@ -318,88 +467,15 @@ function Participants({
   return (
     <div data-role="participants" className={lockColumn ? PARTICIPANT_GRID_LOCK : PARTICIPANT_GRID}>
       {shown.map((p) => (
-        // Below md one wrapping line: the party unit, the amount at the right end (it drops under
-        // the party when the line cannot hold both), then occupied and the item changes. From md
-        // the wrappers dissolve (`md:contents`) and every cell takes its track of the shared grid.
-        <div
+        <ParticipantLine
           key={p.key}
-          data-role="participant"
-          className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 md:contents"
-        >
-          {/* The party as one unit below md: it takes the line before the amount does, and its
-              lock kind never splits; only when address, roles and lock kind cannot share one line
-              does the lock kind start the next line, whole, under the address. */}
-          <div
-            data-role="party-unit"
-            className="flex max-w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 md:contents"
-          >
-            <div
-              data-party={p.key}
-              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 md:col-start-1 md:block md:min-w-0 md:overflow-hidden"
-            >
-              <ParticipantRefView participant={p} compact quiet />
-              {!lockColumn && p.lockKind && (
-                <span className="text-text-dim shrink-0 whitespace-nowrap text-[11px] md:ml-2">
-                  {p.lockKind}
-                </span>
-              )}
-              {p.lockHash !== null && notes?.has(p.lockHash) && (
-                <span data-role="participant-note" className="text-text-dim text-[11px] md:ml-2">
-                  {notes.get(p.lockHash)}
-                </span>
-              )}
-            </div>
-            {/* Below md the tail of the party unit (the narrow form never drops it, C#8); from md
-                its own column. */}
-            {lockColumn && (
-              <div
-                data-role="lock-kind"
-                className="text-text-dim shrink-0 whitespace-nowrap text-[11.5px] md:col-start-2 md:block md:min-w-0 md:truncate"
-                title={p.lockKind ?? undefined}
-              >
-                {p.lockKind ?? ''}
-              </div>
-            )}
-          </div>
-          <div
-            className={cn('col-start-2 ml-auto text-right md:ml-0', lockColumn && 'md:col-start-3')}
-          >
-            <ExactCkb shannons={BigInt(p.ckbDelta)} />
-          </div>
-          {p.usedDelta !== '0' && (
-            <div
-              data-role="occupied"
-              className={cn(
-                'text-text-dim col-start-2 basis-full whitespace-nowrap text-right text-[11px] md:basis-auto',
-                lockColumn ? 'md:col-start-4' : 'md:col-start-3'
-              )}
-            >
-              occupied {formatOccupiedDelta(p.usedDelta)}
-            </div>
-          )}
-          {p.itemDeltas.length > 0 && (
-            <div
-              className={cn(
-                'col-span-2 col-start-1 basis-full md:col-span-1 md:basis-auto',
-                lockColumn ? 'md:col-start-5' : 'md:col-start-4'
-              )}
-            >
-              {foldObjects ? (
-                <FoldedItemDeltas
-                  items={p.itemDeltas}
-                  focusItemId={focusItemId}
-                  itemTone={itemTone}
-                />
-              ) : (
-                <DotJoined
-                  parts={p.itemDeltas.map((item, i) => (
-                    <ItemDeltaFact key={i} item={item} tone={itemTone} />
-                  ))}
-                />
-              )}
-            </div>
-          )}
-        </div>
+          p={p}
+          lockColumn={lockColumn}
+          foldObjects={foldObjects}
+          focusItemId={focusItemId}
+          itemTone={itemTone}
+          notes={notes}
+        />
       ))}
       {foldable && (
         <button

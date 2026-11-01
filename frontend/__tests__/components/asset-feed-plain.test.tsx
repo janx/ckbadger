@@ -4,6 +4,7 @@
 // naming where the object went (OB-13).
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
 import { AssetFeed } from '@/components/asset/asset-feed';
+import { objectCountLabel } from '@/components/activity/activity-row';
 import { ItemTransactionContext } from '@/components/asset/item-evidence';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import {
@@ -101,6 +102,55 @@ it('folds a batch of objects behind "+N more objects", leading with this one (OB
   fireEvent.click(more[0]);
   expect(screen.getAllByRole('button', { name: '+2 more objects' })).toHaveLength(1);
   expect(first.querySelectorAll('a[href*="/objects/"]').length).toBe(4);
+});
+
+// L6 (responsive plan, B#12): below md a participant is one line — party, lock, a count chip for
+// its objects that opens them in place, the amount and occupied — and every participant is kept.
+describe('phone form of a collection activity entry (L6)', () => {
+  it("counts a participant's objects in one signed chip that opens them in place", async () => {
+    const { container } = feed(true);
+    const chips = await screen.findAllByRole('button', { name: /^[+−]\d+ objects?$/ });
+    expect(chips.map((c) => c.textContent)).toEqual(['−3 objects', '+3 objects']);
+    expect(chips[0].closest('[data-role="phone-items"]')).toHaveClass('md:hidden');
+    expect(chips[0]).toHaveAttribute('aria-expanded', 'false');
+    const first = container.querySelectorAll('[data-role="participant"]')[0];
+    // The objects' own lines are the md form only; the phone shows the chip.
+    const mdItems = first.querySelector('[data-role="phone-items"] ~ div:last-child')!;
+    expect(mdItems).toHaveClass('hidden', 'md:block');
+    expect(first.querySelector('[data-role="phone-objects"]')).toBeNull();
+    fireEvent.click(chips[0]);
+    expect(chips[0]).toHaveAttribute('aria-expanded', 'true');
+    const opened = first.querySelector('[data-role="phone-objects"]')!;
+    expect(opened).toHaveClass('basis-full', 'md:hidden');
+    expect(opened.querySelectorAll('a[href*="/objects/"]')).toHaveLength(3);
+    // Every participant stays (two here, both on their own line).
+    expect(container.querySelectorAll('[data-role="participant"]')).toHaveLength(2);
+  });
+
+  it("keeps occupied on the participant's line in the plain rows only", async () => {
+    const withOccupied = {
+      ...batch,
+      participants: batch.participants.map((p) => ({ ...p, usedDelta: '32400000000' })),
+    };
+    const { container } = render(
+      <AssetFeed
+        queryKey="plain-occupied"
+        scope="Its whole life"
+        plain
+        loadActivities={async () => ({ ...page, data: [withOccupied] })}
+        loadTransactions={async () => ({ ...page, data: [] })}
+      />
+    );
+    await screen.findAllByRole('button', { name: /objects?$/ });
+    const occupied = container.querySelector('[data-role="occupied"]')!;
+    expect(occupied).toHaveTextContent('occupied +324');
+    expect(occupied).not.toHaveClass('basis-full');
+  });
+
+  it('writes the chip as a signed count', () => {
+    expect(objectCountLabel([obj(1, 1)])).toBe('+1 object');
+    expect(objectCountLabel([obj(1, 1), obj(2, -1)])).toBe('+1 −1 objects');
+  });
 });
 
 it('says where the object went in the Transactions column (OB-13)', () => {
