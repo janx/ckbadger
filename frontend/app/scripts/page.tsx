@@ -136,7 +136,11 @@ function ScriptName({ script }: { script: KnownScript }) {
         {name}
       </AppLink>
       {script.deprecated && <span className="text-text-dim ml-2 text-[11px]">deprecated</span>}
-      <div className="text-text-dim mt-1 truncate text-[11px]" title={script.description ?? ref}>
+      {/* Two lines below md, so the meaning survives the clamp (C#12); one in the md table. */}
+      <div
+        className="text-text-dim mt-1 line-clamp-2 text-[11px] md:line-clamp-1"
+        title={script.description ?? ref}
+      >
         {hasName(script) ? script.description : ref}
       </div>
     </div>

@@ -112,3 +112,44 @@ describe('CursorPagination labels and grouping', () => {
     expect(screen.getByText('Page 1 of 1,055,789')).toBeInTheDocument();
   });
 });
+
+// Responsive fix plan 2026-11-01 (A2): below sm the four items no longer share one row — the count
+// sentence wrapped and "Page 1 of 10,419" broke over three lines between the buttons (report B#16,
+// A#18, C#14). Two rows below sm, one row from sm up as before.
+describe('CursorPagination across widths', () => {
+  function pager() {
+    return render(
+      <CursorPagination
+        hasMore
+        hasPrevious={false}
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+        total={250043}
+        pageSize={24}
+        page={1}
+      />
+    );
+  }
+
+  it('puts the count sentence on its own row and the controls on one row below sm', () => {
+    const { container } = pager();
+    const root = container.firstElementChild as HTMLElement;
+    expect(root).toHaveClass('flex-col', 'sm:flex-row', 'sm:items-center', 'sm:justify-between');
+    const [count, controls] = [...root.children] as HTMLElement[];
+    expect(count).toHaveTextContent('250,043 items, 24 per page');
+    expect(controls).toHaveAttribute('data-role', 'pager-controls');
+    expect([...controls.children].map((c) => c.textContent)).toEqual([
+      'Previous',
+      'Page 1 of 10,419',
+      'Next',
+    ]);
+    expect(controls).toHaveClass('flex', 'items-center', 'justify-between');
+  });
+
+  it('never breaks "Page x of y" and keeps the buttons whole', () => {
+    pager();
+    expect(screen.getByText('Page 1 of 10,419')).toHaveClass('whitespace-nowrap');
+    for (const name of ['Previous', 'Next'])
+      expect(screen.getByRole('button', { name })).toHaveClass('shrink-0', 'whitespace-nowrap');
+  });
+});

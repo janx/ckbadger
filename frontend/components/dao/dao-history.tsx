@@ -161,7 +161,9 @@ export function DaoHistory({
       </span>
       {week && (
         <span className="flex items-baseline gap-1.5">
-          <span className="text-text-dim">net change, week from {days[week.start].date}</span>
+          <span className="text-text-dim">
+            net change, week from <span className="whitespace-nowrap">{days[week.start].date}</span>
+          </span>
           <span
             className={
               week.net > BigInt(0)
@@ -171,7 +173,10 @@ export function DaoHistory({
                   : 'text-text'
             }
           >
-            <ExactCkbText shannons={week.net} signed /> CKB
+            {/* The amount and its unit are one unit: "CKB" never drops to a line of its own. */}
+            <span className="whitespace-nowrap">
+              <ExactCkbText shannons={week.net} signed /> CKB
+            </span>
           </span>
         </span>
       )}

@@ -17,6 +17,7 @@ import { formatTimeAgo, truncateHash } from '@/lib/utils';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { HMultiplierReading } from '@/components/ui/hmul-info';
 /** The supply-event route always reports its total; a page without one is a contract break. */
 function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
@@ -337,7 +338,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               <dd className="mt-1">
                 <Hash hash={t.typeArgs} truncate={false} className="break-all text-xs" />
               </dd>
-              <dd className="text-text-dim mt-1 text-[11px]">
+              <dd className="text-text-dim mt-1 text-[11px] [overflow-wrap:anywhere]">
                 {t.issuer
                   ? `the lock hash of the owner that can mint (${t.issuer.address ?? t.issuer.lockHash}), proven by the token script`
                   : NOT_ESTABLISHED_ISSUER}
@@ -401,7 +402,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   {held !== null && occupied !== null && occupied > BigInt(0) && (
                     <>
                       {' '}
-                      · H-multiplier ×{formatScaledInteger(held, occupied, 2)}: CKB held ÷ occupied
+                      · <HMultiplierReading held={held} occupied={occupied} />: CKB held ÷ occupied
                     </>
                   )}
                 </>

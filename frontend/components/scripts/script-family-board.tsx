@@ -17,6 +17,7 @@ import { formatCount } from '@/lib/format-count';
 import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -640,7 +641,8 @@ export function ScriptUseInTransaction({ family }: { family: ScriptFamilyDetail 
                       href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
                       className="text-text hover:text-jade"
                     >
-                      {deployment.codeCellTxHash}:{deployment.codeCellOutputIndex}
+                      {deployment.codeCellTxHash}
+                      <OutpointIndex index={deployment.codeCellOutputIndex} />
                     </Link>
                   </dd>
                 ))

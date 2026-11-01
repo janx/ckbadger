@@ -229,6 +229,10 @@ describe('Token board (F2 objects)', () => {
     render(<TokenDetailPage typeHash={hash} />);
     const history = await screen.findByRole('region', { name: 'History' }, { timeout: 5000 });
     expect(history).toHaveTextContent('2 mints · 1 burn · 1,000 transfers');
+    // Responsive fix plan 2026-11-01 (A3, report B#18): "H-multiplier ×N" is one unbroken unit.
+    const hmul = history.querySelector('[data-role="h-multiplier"]');
+    expect(hmul).toHaveTextContent(/^H-multiplier ×\d+\.\d{2}$/);
+    expect(hmul).toHaveClass('whitespace-nowrap');
     fireEvent.click(
       await within(history).findByText('Every change to the supply (3)', undefined, {
         timeout: 5000,
@@ -309,6 +313,22 @@ describe('Token board (F2 objects)', () => {
       'the token’s type script; its code decides what a valid transfer is'
     );
     expect(tier2).toHaveTextContent('Live cells150');
+  });
+
+  // Responsive gate (2026-11-01): the issuer's full address inside the args note had no break
+  // opportunity and pushed the page 76 px past 640 and 326 px past 390.
+  it('wraps the issuer address in the args note inside its box', async () => {
+    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' + 'x'.repeat(40);
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: { lockHash: other, address, lockKind: 'Default Lock' },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    const note = await screen.findByText(/the lock hash of the owner that can mint/, undefined, {
+      timeout: 5000,
+    });
+    expect(note).toHaveTextContent(address);
+    expect(note).toHaveClass('[overflow-wrap:anywhere]');
   });
 
   // Visual pass: the last movement reads as one plain clause.

@@ -12,44 +12,56 @@ interface PaginationProps {
 export function Pagination({ page, totalPages, onPageChange, className }: PaginationProps) {
   const pages = getPageNumbers(page, totalPages);
 
+  // Below sm, Prev + seven page buttons + Next (~420 px of unshrinkable buttons) do not fit a
+  // 358 px column: the page numbers take their own row and Prev / Next share the row under it.
   return (
-    <div className={cn('flex items-center justify-center gap-1', className)}>
+    <div
+      className={cn(
+        'flex flex-wrap items-center justify-between gap-1 sm:flex-nowrap sm:justify-center',
+        className
+      )}
+    >
       <button
         type="button"
         onClick={() => onPageChange(page - 1)}
         disabled={page <= 1}
-        className="hover:text-jade text-text-dim hover:bg-base-elevated rounded px-3 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        className="hover:text-jade text-text-dim hover:bg-base-elevated whitespace-nowrap rounded px-3 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         Prev
       </button>
 
-      {pages.map((p, i) =>
-        p === '...' ? (
-          <span key={`ellipsis-${i}`} className="text-text-dim px-2">
-            ...
-          </span>
-        ) : (
-          <button
-            type="button"
-            key={p}
-            onClick={() => onPageChange(p as number)}
-            className={cn(
-              'rounded px-3 py-2 font-mono text-sm transition-colors',
-              page === p
-                ? 'bg-emphasis text-base-bg'
-                : 'hover:text-jade text-text-dim hover:bg-base-elevated'
-            )}
-          >
-            {p}
-          </button>
-        )
-      )}
+      <div
+        data-role="page-numbers"
+        className="order-first flex basis-full flex-wrap items-center justify-center gap-1 sm:order-none sm:basis-auto"
+      >
+        {pages.map((p, i) =>
+          p === '...' ? (
+            <span key={`ellipsis-${i}`} className="text-text-dim px-2">
+              ...
+            </span>
+          ) : (
+            <button
+              type="button"
+              key={p}
+              onClick={() => onPageChange(p as number)}
+              className={cn(
+                'rounded px-3 py-2 font-mono text-sm transition-colors',
+                page === p
+                  ? 'bg-emphasis text-base-bg'
+                  : 'hover:text-jade text-text-dim hover:bg-base-elevated'
+              )}
+            >
+              {p}
+            </button>
+          )
+        )}
+      </div>
 
       <button
         type="button"
         onClick={() => onPageChange(page + 1)}
         disabled={page >= totalPages}
-        className="hover:text-jade text-text-dim hover:bg-base-elevated rounded px-3 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+        className="hover:text-jade text-text-dim hover:bg-base-elevated whitespace-nowrap rounded px-3 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50"
       >
         Next
       </button>

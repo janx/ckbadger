@@ -264,7 +264,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           />
                         </Link>
                         {a.lockScriptInfo?.name && (
-                          <span className="text-text-dim"> · {a.lockScriptInfo.name}</span>
+                          <span className="text-text-dim">
+                            {' · '}
+                            <span className="whitespace-nowrap">{a.lockScriptInfo.name}</span>
+                          </span>
                         )}
                       </dd>
                       <dt className="text-text-dim">hash type</dt>

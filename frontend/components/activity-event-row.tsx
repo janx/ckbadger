@@ -86,7 +86,7 @@ export function CkbDelta({ delta }: { delta: string }) {
   return (
     <span
       className={cn(
-        'font-mono text-xs tabular-nums',
+        'whitespace-nowrap font-mono text-xs tabular-nums',
         isPositive && 'text-positive',
         isNegative && 'text-negative',
         !isPositive && !isNegative && 'text-text-dim'

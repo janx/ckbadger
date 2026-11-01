@@ -982,6 +982,8 @@ describe('Address board · F2 blocks', () => {
     render(<AddressDetailPage />);
     const lock = await section(/^Lock script/);
     expect(lock).toHaveTextContent(/code hash0x0+64 · JoyID/);
+    // Responsive fix plan 2026-11-01 (A3): in the break-all box the lock name split "Def/ault Lock".
+    expect(within(lock).getByText('JoyID')).toHaveClass('whitespace-nowrap');
     expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(
       `/mainnet/address/${addressText}.md`
     );

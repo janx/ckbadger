@@ -182,3 +182,21 @@ describe('DaoHistory at phone width (DAO-22)', () => {
     expect(ticks).toEqual(['0', '50k', '100k', '150k']);
   });
 });
+
+// Responsive fix plan 2026-11-01 (A3, report A#14): at 390 the reading broke the week's date
+// ("2026-/10-25") and dropped "CKB" from its amount onto a line of its own.
+describe('DaoHistory reading units', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('never breaks the week date or the amount from its unit', () => {
+    stubChartWidth(358);
+    const { deposited, ratio } = series();
+    render(<DaoHistory deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByLabelText('History reading');
+    const day = within(reading).getByText(date(148));
+    expect(day).toHaveClass('whitespace-nowrap');
+    // The innermost element holding the whole "+10.00000000 CKB" is one unbreakable unit.
+    const holders = within(reading).getAllByText((_, el) => el?.textContent === '+10.00000000 CKB');
+    expect(holders[holders.length - 1]).toHaveClass('whitespace-nowrap');
+  });
+});

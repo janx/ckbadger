@@ -15,6 +15,7 @@ import { useParams } from '@/src/navigation';
 import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
 import { CELL_COLORS, DATA_COLOR, EXPIRED_COLOR } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
   const match = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/.exec(outpoint);
@@ -376,7 +377,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
                     href={`/cell/${item.txHash}-${item.outputIndex}`}
                     className="text-[#7aa7d6]"
                   >
-                    {item.txHash}:{item.outputIndex}
+                    {item.txHash}
+                    <OutpointIndex index={item.outputIndex} />
                   </Link>
                 </li>
               ))}

@@ -10,6 +10,7 @@ import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CELL_COLORS } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 function short(hash: string, head = 8, tail = 6): string {
   return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
@@ -115,7 +116,8 @@ export function TransactionEvidence({
                     <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`}>
                       {i > 0 && ', '}
                       <span className="[overflow-wrap:anywhere]">
-                        {dep.outPointTxHash}:{dep.outPointIndex}
+                        {dep.outPointTxHash}
+                        <OutpointIndex index={dep.outPointIndex} />
                       </span>{' '}
                       ({dep.depType})
                     </span>

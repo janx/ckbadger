@@ -153,6 +153,32 @@ beforeEach(() => {
   vi.mocked(api.getInventorySummary).mockResolvedValue(summary);
 });
 
+// Responsive fix plan 2026-11-01 (A12a, report B#25): at 390 the three class tabs (~414 px in one
+// line) wrapped "Identities 4" onto a line of its own. Below sm each tab puts its count under its
+// label (~330 px for the three), so they share one line at full type size; from sm one line each.
+describe('Inventory class tabs across widths', () => {
+  beforeEach(() => {
+    window.history.replaceState(null, '', '/inventory/objects');
+    vi.mocked(api.getAssets).mockResolvedValue(objects);
+  });
+  it('stacks each count under its label below sm so the three tabs share one line', async () => {
+    render(<ObjectsPage />);
+    const nav = await screen.findByRole('navigation', { name: 'Inventory classes' });
+    await waitFor(() => expect(nav).toHaveTextContent('5,653'));
+    expect(nav).toHaveClass('gap-x-5', 'sm:gap-x-6');
+    const tabs = within(nav).getAllByRole('link');
+    expect(tabs.map((t) => t.querySelector('[data-role="tab-label"]')?.textContent)).toEqual([
+      'Tokens',
+      'Objects',
+      'Identities',
+    ]);
+    for (const tab of tabs) {
+      expect(tab).toHaveClass('grid', 'grid-cols-[16px_auto]', 'sm:flex');
+      expect(tab.querySelector('[data-role="tab-count"]')).toHaveClass('col-start-2');
+    }
+  });
+});
+
 describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
   beforeEach(() => {
     window.history.replaceState(null, '', '/inventory/objects');
@@ -166,8 +192,10 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
       { timeout: 5000 }
     );
     expect(comp).toHaveTextContent(
-      '357 of 5,653 collections are fully on-chain · 26,880 live objects are'
+      '357 of 5,653 collections are fully on-chain · so are 26,880 live objects'
     );
+    // Responsive fix plan 2026-11-01 (A12b, report B#27): the sentence no longer stops at "are".
+    expect(comp).not.toHaveTextContent(/live objects are\b/);
     expect(comp).toHaveTextContent('444 Spore clusters · 5,209 m-NFT classes');
     expect(
       within(comp).getByRole('img', {

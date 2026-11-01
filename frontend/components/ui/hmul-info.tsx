@@ -14,6 +14,18 @@ interface HMulHelpPopoverProps {
 const HMUL_EXPLANATION =
   'H-multiplier = CKB held in its cells ÷ occupied. Occupied is the CKB that pays for the bytes of its cells, the state it keeps on CKB; for each of those CKB, this many are held in the same cells. Higher means more CKB parked alongside its state.';
 
+/**
+ * "H-multiplier ×1.02" as it reads in a summary line: the hyphenated term and its value are one
+ * unit that never breaks inside ("H-" / "multiplier").
+ */
+export function HMultiplierReading({ held, occupied }: { held: bigint; occupied: bigint }) {
+  return (
+    <span data-role="h-multiplier" className="whitespace-nowrap">
+      H-multiplier ×{formatScaledInteger(held, occupied, 2)}
+    </span>
+  );
+}
+
 export function formatHMulValue(value: string | null | undefined): string | null {
   return value == null ? null : `×${value}`;
 }

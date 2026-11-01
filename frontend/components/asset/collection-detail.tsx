@@ -24,7 +24,8 @@ import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { HMultiplierReading } from '@/components/ui/hmul-info';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { CompositionTier } from '@/lib/asset-utils';
@@ -351,12 +352,14 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       identity={
         kind === 'identity' ? undefined : (
           <>
-            {/* F2 objects (OB-C4): what kind of collection this is, then its id. */}
-            <span className="text-text-dim mr-2 text-[13px]">
+            {/* F2 objects (OB-C4): what kind of collection this is, then its id. The kind is one
+                unit, so its separator never dangles at a line end (B#21); the space after it is
+                where the line may break before the id. */}
+            <span className="text-text-dim whitespace-nowrap text-[13px]">
               {kind === 'spore'
                 ? `Spore cluster${insights.data?.currentPattern.status === 'dob' && insights.data.currentPattern.version !== null ? ` · DOB/${insights.data.currentPattern.version}` : ''}`
                 : 'm-NFT class'}
-            </span>
+            </span>{' '}
             <Hash hash={id} truncate={false} className="text-[11px]" />
           </>
         )
@@ -551,9 +554,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               <p className="text-text-dim text-[12px]">
                 Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
                 {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
-                {held !== null && occupied !== null && occupied > BigInt(0)
-                  ? ` · H-multiplier ×${formatScaledInteger(held, occupied, 2)}`
-                  : ''}
+                {held !== null && occupied !== null && occupied > BigInt(0) && (
+                  <>
+                    {' · '}
+                    <HMultiplierReading held={held} occupied={occupied} />
+                  </>
+                )}
               </p>
             )}
           </>

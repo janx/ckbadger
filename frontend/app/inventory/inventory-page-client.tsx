@@ -146,7 +146,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
         >
           <nav
             aria-label="Inventory classes"
-            className="border-base-border flex flex-wrap gap-6 border-b"
+            // Below sm each count sits under its label: the three tabs in one line are ~414 px,
+            // stacked ~330 px, so they share a 358 px line at full type size (B#25).
+            className="border-base-border flex flex-wrap gap-x-5 gap-y-2 border-b sm:gap-x-6"
           >
             {(['token', 'object', 'identity'] as const).map((type) => {
               const plural =
@@ -156,12 +158,12 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   key={type}
                   href={`/inventory/${plural}`}
                   aria-current={type === assetType ? 'page' : undefined}
-                  className={`flex items-center gap-2 border-b-2 pb-3 text-[15px] ${type === assetType ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+                  className={`grid grid-cols-[16px_auto] items-center gap-x-2 border-b-2 pb-3 text-[15px] sm:flex sm:items-center sm:gap-2 ${type === assetType ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                 >
                   <ClassMark kind={plural} size={16} />
-                  {plural[0].toUpperCase() + plural.slice(1)}
+                  <span data-role="tab-label">{plural[0].toUpperCase() + plural.slice(1)}</span>
                   {summary.data && (
-                    <span className="text-text-dim text-[11px]">
+                    <span data-role="tab-count" className="text-text-dim col-start-2 text-[11px]">
                       <AssetCount value={summary.data.counts[type]} />
                     </span>
                   )}

@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -19,7 +19,14 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { classifyActivity } from '@/lib/activity-classify';
 import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
-import type { GlobalActivity, ParticipantInfo, PoolStatus, PoolInterpretation } from '@/lib/api';
+import type {
+  ActivityProtocolAction,
+  GlobalActivity,
+  ParticipantInfo,
+  PoolStatus,
+  PoolInterpretation,
+} from '@/lib/api';
+import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { AssetClass } from '@/lib/design-tokens';
@@ -101,9 +108,50 @@ function DetailLine({ label, children }: { label: string; children: ReactNode })
 }
 
 /**
+ * What a protocol-action line draws, as a key: the label and every metadata field the line reads
+ * (`protocolActionNoteParts` reads `protocolActionMeta`, the protocol and the action). Two actions
+ * with one key read the same, whatever else their metadata carries.
+ */
+function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string {
+  return JSON.stringify(
+    [isPrimary, protocolActionLabel(pa), pa.protocol, pa.action, protocolActionMeta(pa)],
+    (_, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)
+  );
+}
+
+/**
+ * A run of calls, dot-joined. Over PARTICIPANT_LIMIT, the first five and an explicit
+ * "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390).
+ */
+function FoldedCalls({ parts, noun }: { parts: ReactNode[]; noun: 'types' | 'locks' }) {
+  const [open, setOpen] = useState(false);
+  const folded = !open && parts.length > PARTICIPANT_LIMIT;
+  const shown = folded ? parts.slice(0, PARTICIPANT_LIMIT - 1) : parts;
+  return (
+    <>
+      <DotJoined parts={shown} />
+      {folded && (
+        <>
+          {' '}
+          <button
+            type="button"
+            aria-expanded={false}
+            onClick={() => setOpen(true)}
+            className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
+          >
+            +{parts.length - shown.length} more {noun}
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
  * The detail lines of an activity, from the one event classification: each protocol action's
  * metadata (the headline's own action needs no name; another one leads with its label), then
- * every type call and every lock call in call syntax, args kept.
+ * every type call and every lock call in call syntax, args kept. Action lines that read the same
+ * are said once with their count ("×18"); a long call run folds behind "+N more".
  */
 function ActivityDetails({
   activity,
@@ -116,33 +164,43 @@ function ActivityDetails({
   const events = globalTxEvents(activity);
   const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
   const locks = events.flatMap((e) => (e.kind === 'lock' ? [e.call] : []));
-  const lines: ReactNode[] = [];
+  type ProtocolLine =
+    | { key: string; parts: ReactNode[]; count: number }
+    | { key: string; error: unknown };
+  const protocolLines: ProtocolLine[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
     let parts: ReactNode[];
     try {
       parts = protocolActionNoteParts(e.action);
     } catch (error) {
-      lines.push(
-        <DetailLine key={`p${i}`} label="">
-          <ActivityReadError txHash={activity.txHash} error={error} />
-        </DetailLine>
-      );
+      protocolLines.push({ key: `p${i}`, error });
       return;
     }
     const named = e.action === primary ? parts : [protocolActionLabel(e.action), ...parts];
-    if (named.length > 0) {
-      lines.push(
-        <DetailLine key={`p${i}`} label="">
-          <DotJoined parts={named} />
-        </DetailLine>
-      );
-    }
+    if (named.length === 0) return;
+    const key = protocolLineKey(e.action, e.action === primary);
+    const same = protocolLines.find((l) => l.key === key);
+    if (same && 'count' in same) same.count += 1;
+    else protocolLines.push({ key, parts: named, count: 1 });
   });
+  const lines: ReactNode[] = protocolLines.map((l) => (
+    <DetailLine key={l.key} label="">
+      {'error' in l ? (
+        <ActivityReadError txHash={activity.txHash} error={l.error} />
+      ) : (
+        <>
+          <DotJoined parts={l.parts} />
+          {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
+        </>
+      )}
+    </DetailLine>
+  ));
   if (showScriptDetails && types.length > 0) {
     lines.push(
       <DetailLine key="type" label="type">
-        <DotJoined
+        <FoldedCalls
+          noun="types"
           parts={types.map((sc, i) => (
             <span key={i} className="whitespace-nowrap">
               <TypeCallExpr sc={sc} quiet />
@@ -155,7 +213,8 @@ function ActivityDetails({
   if (showScriptDetails && locks.length > 0) {
     lines.push(
       <DetailLine key="lock" label="lock">
-        <DotJoined
+        <FoldedCalls
+          noun="locks"
           parts={locks.map((lc, i) => (
             <span key={i} className="whitespace-nowrap">
               <LockCallExpr lc={lc} quiet />
@@ -176,8 +235,11 @@ export function formatOccupiedDelta(usedDelta: string): string {
     : formatSignedCkbExact(shannons);
 }
 
+// Below md each participant is a wrapping line (see `Participants`): the 640–767 band has one 608 px
+// content width, too narrow for the 4/5-track rows (their item track started at x≈605). The tracks
+// start at md.
 const PARTICIPANT_GRID =
-  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs sm:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)]';
+  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
@@ -191,7 +253,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 // ── F2 objects (round 2): the asset boards' participant line — lock kind as its own unwrapped
 // column (IV-14, OB-12), and a batch of objects folded behind "+N more objects" (OB-M3). ──
 const PARTICIPANT_GRID_LOCK =
-  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs sm:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)]';
+  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 function FoldedItemDeltas({
   items,
   focusItemId,
@@ -256,36 +318,60 @@ function Participants({
   return (
     <div data-role="participants" className={lockColumn ? PARTICIPANT_GRID_LOCK : PARTICIPANT_GRID}>
       {shown.map((p) => (
-        <Fragment key={p.key}>
-          <div data-party={p.key} className="col-start-1 min-w-0 overflow-hidden">
-            <ParticipantRefView participant={p} compact quiet />
-            {!lockColumn && p.lockKind && (
-              <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>
-            )}
-            {p.lockHash !== null && notes?.has(p.lockHash) && (
-              <span data-role="participant-note" className="text-text-dim ml-2 text-[11px]">
-                {notes.get(p.lockHash)}
-              </span>
+        // Below md one wrapping line: the party unit, the amount at the right end (it drops under
+        // the party when the line cannot hold both), then occupied and the item changes. From md
+        // the wrappers dissolve (`md:contents`) and every cell takes its track of the shared grid.
+        <div
+          key={p.key}
+          data-role="participant"
+          className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 md:contents"
+        >
+          {/* The party as one unit below md: it takes the line before the amount does, and its
+              lock kind never splits; only when address, roles and lock kind cannot share one line
+              does the lock kind start the next line, whole, under the address. */}
+          <div
+            data-role="party-unit"
+            className="flex max-w-full flex-wrap items-baseline gap-x-2 gap-y-0.5 md:contents"
+          >
+            <div
+              data-party={p.key}
+              className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 md:col-start-1 md:block md:min-w-0 md:overflow-hidden"
+            >
+              <ParticipantRefView participant={p} compact quiet />
+              {!lockColumn && p.lockKind && (
+                <span className="text-text-dim shrink-0 whitespace-nowrap text-[11px] md:ml-2">
+                  {p.lockKind}
+                </span>
+              )}
+              {p.lockHash !== null && notes?.has(p.lockHash) && (
+                <span data-role="participant-note" className="text-text-dim text-[11px] md:ml-2">
+                  {notes.get(p.lockHash)}
+                </span>
+              )}
+            </div>
+            {/* Below md the tail of the party unit (the narrow form never drops it, C#8); from md
+                its own column. */}
+            {lockColumn && (
+              <div
+                data-role="lock-kind"
+                className="text-text-dim shrink-0 whitespace-nowrap text-[11.5px] md:col-start-2 md:block md:min-w-0 md:truncate"
+                title={p.lockKind ?? undefined}
+              >
+                {p.lockKind ?? ''}
+              </div>
             )}
           </div>
-          {lockColumn && (
-            <div
-              data-role="lock-kind"
-              className="text-text-dim hidden min-w-0 truncate whitespace-nowrap text-[11.5px] sm:col-start-2 sm:block"
-              title={p.lockKind ?? undefined}
-            >
-              {p.lockKind ?? ''}
-            </div>
-          )}
-          <div className={cn('col-start-2 text-right', lockColumn && 'sm:col-start-3')}>
+          <div
+            className={cn('col-start-2 ml-auto text-right md:ml-0', lockColumn && 'md:col-start-3')}
+          >
             <ExactCkb shannons={BigInt(p.ckbDelta)} />
           </div>
           {p.usedDelta !== '0' && (
             <div
               data-role="occupied"
               className={cn(
-                'text-text-dim col-start-2 text-right text-[11px]',
-                lockColumn ? 'whitespace-nowrap sm:col-start-4' : 'sm:col-start-3'
+                'text-text-dim col-start-2 basis-full whitespace-nowrap text-right text-[11px] md:basis-auto',
+                lockColumn ? 'md:col-start-4' : 'md:col-start-3'
               )}
             >
               occupied {formatOccupiedDelta(p.usedDelta)}
@@ -294,8 +380,8 @@ function Participants({
           {p.itemDeltas.length > 0 && (
             <div
               className={cn(
-                'col-span-2 col-start-1 sm:col-span-1',
-                lockColumn ? 'sm:col-start-5' : 'sm:col-start-4'
+                'col-span-2 col-start-1 basis-full md:col-span-1 md:basis-auto',
+                lockColumn ? 'md:col-start-5' : 'md:col-start-4'
               )}
             >
               {foldObjects ? (
@@ -313,14 +399,14 @@ function Participants({
               )}
             </div>
           )}
-        </Fragment>
+        </div>
       ))}
       {foldable && (
         <button
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade col-span-full justify-self-start bg-transparent py-1 text-xs transition-colors"
+          className="text-interactive hover:text-jade col-span-full self-start bg-transparent py-1 text-xs transition-colors md:justify-self-start"
         >
           {expanded ? 'Show fewer participants' : `+${hidden} participants`}
         </button>
