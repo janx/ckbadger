@@ -846,23 +846,13 @@ export default function TransactionDetailPage() {
       focusTestId: `tx-script-group-focus-${g.witnessIndex ?? 'none'}-${g.kind}`,
       onFocus: () => (selectedGroup === key ? select(null, null) : select(g.witnessIndex, key)),
       witness:
-        g.witnessIndex === null ? (
-          <span className="text-text-dim">—</span>
-        ) : (
-          <button
-            type="button"
-            className="hover:text-jade text-left"
-            onClick={() => select(g.witnessIndex, selectedGroup === key ? null : key)}
-          >
-            #{g.witnessIndex}
-            {w && (
-              <span className="text-text-dim">
-                {' '}
-                · {witnessKindLabel(w.kind)}, {formatCount(w.size, 'B', 'B')}
-              </span>
-            )}
-          </button>
-        ),
+        g.witnessIndex === null
+          ? null
+          : {
+              index: g.witnessIndex,
+              detail: w ? { kind: witnessKindLabel(w.kind), size: w.size } : null,
+              onSelect: () => select(g.witnessIndex, selectedGroup === key ? null : key),
+            },
       code: !g.ran ? (
         attachedDeps.length > 0 ? (
           attachedDeps.map(({ d, i }) => (
@@ -870,9 +860,7 @@ export default function TransactionDetailPage() {
               code {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex} · not run here
             </a>
           ))
-        ) : (
-          <span className="text-text-dim">—</span>
-        )
+        ) : null
       ) : isProvisional ? (
         <span className="text-text-dim">read once committed</span>
       ) : depsError ? (
