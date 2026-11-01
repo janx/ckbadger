@@ -269,6 +269,7 @@ ckbadger verify --list-checks             # List all checks
 | Bulk sync rules  | `docs/prompts/BULK_SYNC.md`           | Bulk sync logic or sync-mode boundary changes |
 | Reorg handling   | `docs/prompts/REORG_HANDLING.md`      | Reorg or fork-related changes                 |
 | Activity system  | `docs/prompts/ACTIVITY_DESIGN.md`     | Activity feed or activity CF changes          |
+| Frontend layout  | `docs/RESPONSIVE_LAYOUT.md`           | Any frontend layout or responsive change      |
 | CKB protocol     | https://github.com/nervosnetwork/rfcs | Understanding CKB internals                   |
 | Nervos docs      | https://docs.nervos.org               | User-facing explanations                      |
 | DAO, APC, Supply | `docs/DAO_CALCULATIONS.md`            | Any DAO/supply/circulation changes            |
