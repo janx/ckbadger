@@ -26,6 +26,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { LockKind } from '@/components/ui/lock-kind';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 const NEWEST = 8;
 const ROW_GRID =
@@ -142,7 +143,9 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
         <span className="text-text text-[13px]">Newest</span>
         <span className="text-text-dim flex flex-wrap items-baseline gap-3 text-[12px]">
           {lanes && (
-            <span>hover a row to see its genotype · click a band or variant to filter</span>
+            <span>
+              <TapOrHoverHint what="a row to see its genotype" /> · tap a band or variant to filter
+            </span>
           )}
           {Object.entries(traits).map(([name, value]) => (
             <button

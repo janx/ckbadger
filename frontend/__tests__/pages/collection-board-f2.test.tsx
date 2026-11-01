@@ -135,7 +135,7 @@ it('makes Objects one allele gel plus the 8 newest, without per-variant button l
   expect(within(table).getAllByRole('row')).toHaveLength(9);
   expect(within(table).getAllByRole('img', { name: /DNA:/ })).toHaveLength(8);
   expect(objects).toHaveTextContent(
-    'hover a row to see its genotype · click a band or variant to filter'
+    'tap or hover a row to see its genotype · tap a band or variant to filter'
   );
 });
 

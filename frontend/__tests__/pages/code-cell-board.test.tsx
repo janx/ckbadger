@@ -113,7 +113,7 @@ describe('code cell page against the CellCode board', () => {
         })
       ).toBeInTheDocument();
     expect(index).toHaveTextContent(
-      '+ 19 more ELF header fields and program headers: hover their bytes'
+      '+ 19 more ELF header fields and program headers: tap or hover their bytes'
     );
     const data = screen.getByLabelText('CellData byte map');
     expect(data).toHaveTextContent('⋯ 98,904 bytes [408..99,312)');

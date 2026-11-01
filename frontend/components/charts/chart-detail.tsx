@@ -30,6 +30,7 @@ import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { apiBaseFor } from '@/lib/active-network';
+import { TapOrHoverHint, tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 export type ChartRange = '30d' | '90d' | '1y' | 'all';
 
@@ -196,6 +197,13 @@ function DetailBody({
     seriesLabels: model.series.map((series) => series.label),
   });
   if (!description) throw new Error(`${definition.slug}: no calculation description`);
+  // Every chart here pins a tapped point in a readout line under it (R6).
+  const readout = (title: string) => ({
+    label: `${title} readout`,
+    idle: tapOrHover(`the chart for the value of one ${style === 'date' ? 'day' : 'point'}.`, {
+      capital: true,
+    }),
+  });
   const pointLabel = (label: string) =>
     style === 'epoch' ? `#${formatEpochLabel(label, definition.slug)}` : label;
   // Method and evidence are the quieter developer tier, after related charts (CH-20).
@@ -376,8 +384,10 @@ function DetailBody({
           </div>
           {helpOpen && (
             <p className="text-text-dim mb-4 max-w-[62ch] text-xs leading-5">
-              Hover the chart for one {style === 'date' ? 'day' : 'point'}&apos;s value, or focus it
-              and use ← and → to step through; Esc returns to the latest reading.
+              <TapOrHoverHint capital what="the chart" /> for the value of one{' '}
+              {style === 'date' ? 'day' : 'point'}: a tap pins it under the chart and a second tap
+              lets it go. Or focus the chart and use ← and → to step through; Esc returns to the
+              latest reading.
               {hasDatedHistory && ' 30 d, 90 d and 1 y zoom to the most recent days.'}
               {supportsLog && ' Log scale spreads a series that grew by orders of magnitude.'}
             </p>
@@ -416,6 +426,10 @@ function DetailBody({
               yDomain={model.yDomain}
               referenceLines={model.referenceLines}
               formatLabel={(label) => (style === 'epoch' ? `epoch ${pointLabel(label)}` : label)}
+              pinnedReadout={readout(definition.title)}
+              // The caption is hidden, so several bands (the HODL wave's eight) get a swatch key
+              // under the plot: name and value at the reading, latest by default (C#4).
+              seriesLegend={model.series.length > 1}
             />
           )}
         </DetailSection>
@@ -440,6 +454,7 @@ function DetailBody({
                 pointDots
                 // Up to 21 bands: a swatch key under the plot, not headline readouts (C#5).
                 seriesLegend
+                pinnedReadout={readout(history.title)}
               />
             ) : (
               <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
@@ -465,6 +480,7 @@ function DetailBody({
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
               categoricalX={categoricalAxis(definition)}
+              pinnedReadout={readout(model.secondary.title)}
             />
           </DetailSection>
         )}
@@ -484,6 +500,7 @@ function DetailBody({
               formatValue={(value) => formatChartHover(value, model.dailyFlow!.unit)}
               xTicks={axisTicks(rangePoints(model.dailyFlow.points, range), 'date', 8)}
               pointDots
+              pinnedReadout={readout(model.dailyFlow.title)}
             />
           </DetailSection>
         )}

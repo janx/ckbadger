@@ -3,6 +3,7 @@
 import { type MouseEvent, useMemo, useState } from 'react';
 import { getChartPaletteColor, CHART_TOOLTIP_BG } from '@/lib/chart-colors';
 import { cn } from '@/lib/utils';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface PieChartDataPoint {
   label: string;
@@ -142,7 +143,7 @@ export function PieChart({
           )}
           {activeIndex === null && (
             <text x={0} y={0.05} textAnchor="middle" className="fill-text-dim text-[0.1px]">
-              Hover for details
+              {tapOrHover('for details', { capital: true })}
             </text>
           )}
         </svg>

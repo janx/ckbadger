@@ -15,6 +15,15 @@ export interface PinnedTargetProps {
   onKeyDown: (event: KeyboardEvent) => void;
 }
 
+export interface PinnedReadoutOptions {
+  /**
+   * A hover outlasts the pointer (and focus) while nothing is pinned, until another target is
+   * hovered: for a figure whose panel holds links the pointer travels to. Once a target is pinned,
+   * leaving a hovered one shows the pin again.
+   */
+  sticky?: boolean;
+}
+
 export interface PinnedReadout<T> {
   /** What the readout shows: the hovered (or focused) target, else the pinned one. */
   active: T | null;
@@ -41,7 +50,10 @@ export interface PinnedReadout<T> {
  * or the second tap would leave the reading on screen. `keyOf` names a target, so a fresh object
  * for the same target counts as the same target.
  */
-export function usePinnedReadout<T>(keyOf: (target: T) => string = String): PinnedReadout<T> {
+export function usePinnedReadout<T>(
+  keyOf: (target: T) => string = String,
+  { sticky = false }: PinnedReadoutOptions = {}
+): PinnedReadout<T> {
   const [hovered, setHovered] = useState<T | null>(null);
   const [pinned, setPinned] = useState<T | null>(null);
   const same = (a: T | null, b: T) => a !== null && keyOf(a) === keyOf(b);
@@ -63,6 +75,9 @@ export function usePinnedReadout<T>(keyOf: (target: T) => string = String): Pinn
   }, [pinned, clear]);
   const active = hovered ?? pinned;
   const isPinned = (target: T) => same(pinned, target);
+  const leave = () => {
+    if (!sticky || pinned !== null) setHovered(null);
+  };
   return {
     active,
     pinned,
@@ -76,9 +91,9 @@ export function usePinnedReadout<T>(keyOf: (target: T) => string = String): Pinn
       role: 'button',
       'aria-pressed': isPinned(target),
       onMouseEnter: () => setHovered(target),
-      onMouseLeave: () => setHovered(null),
+      onMouseLeave: leave,
       onFocus: () => setHovered(target),
-      onBlur: () => setHovered(null),
+      onBlur: leave,
       onClick: () => toggle(target),
       onKeyDown: (event) => {
         if (event.key === 'Enter' || event.key === ' ') {

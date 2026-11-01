@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
@@ -154,7 +154,7 @@ describe('Network board (F2 charts)', () => {
     server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
     render(wrap(<NetworkMapView neverVerified={115} />));
     const panel = await screen.findByRole('complementary', { name: 'Selected peer evidence' });
-    expect(panel).toHaveTextContent('Hover a node');
+    expect(panel).toHaveTextContent('Tap or hover a node');
     expect(panel).toHaveTextContent('reachable now · 3');
     expect(panel).toHaveTextContent('verified before, not now · 1');
     expect(panel).toHaveTextContent("this node's 1 session peers");
@@ -169,6 +169,51 @@ describe('Network board (F2 charts)', () => {
       'to this nodeconnected for 1 h 2 m · ping 42 ms · this node dialled it (as of 08:00:00 UTC+8)'
     );
     expect(panel).toHaveTextContent('in address booksof 3 peers in round #97');
+  });
+
+  it('a tap pins a node’s identity in the line under the map; a second tap clears it (R6)', async () => {
+    server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
+    render(wrap(<NetworkMapView neverVerified={0} />));
+    const svg = await screen.findByRole('img', { name: /Approximate GeoIP locations/ });
+    const dot = screen.getByRole('button', { name: /^US peer 12200fce0b…/ });
+    const readout = screen.getByRole('status', { name: 'Node readout' });
+    const panel = screen.getByRole('complementary', { name: 'Selected peer evidence' });
+    // the line sits right under the map
+    expect(svg.nextElementSibling).toBe(readout);
+    expect(readout).toHaveTextContent('Tap or hover a node.');
+    // a tap: the emulated hover and focus, then the click; the pin outlasts the pointer
+    fireEvent.mouseEnter(dot);
+    fireEvent.focus(dot);
+    fireEvent.click(dot);
+    fireEvent.mouseLeave(svg);
+    expect(readout).toHaveTextContent(
+      /^tapped \/ip4\/203\.0\.113\.7\/tcp\/8115 · peer 12200fce0b…a2d1b5 · US · reachable now · ckb\/0\.204\.0/
+    );
+    expect(dot).toHaveAttribute('aria-pressed', 'true');
+    expect(panel.querySelector('p')).toHaveTextContent('/ip4/203.0.113.7/tcp/8115');
+    // a second tap on it lets go, though the emulated hover is still on it
+    fireEvent.mouseEnter(dot);
+    fireEvent.click(dot);
+    expect(readout).toHaveTextContent('Tap or hover a node.');
+    expect(panel).toHaveTextContent('Tap or hover a node');
+  });
+
+  it('lets a pin go when a refetched map no longer has its node (R6)', async () => {
+    server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <NetworkMapView neverVerified={0} />
+      </QueryClientProvider>
+    );
+    fireEvent.click(await screen.findByRole('button', { name: /^US peer 12200fce0b…/ }));
+    const readout = screen.getByRole('status', { name: 'Node readout' });
+    expect(readout).toHaveTextContent(/^tapped /);
+    const gone = { ...map, points: map.points.slice(1) };
+    act(() => {
+      client.setQueryData(['network', 'map'], gone);
+    });
+    await waitFor(() => expect(readout).toHaveTextContent('Tap or hover a node.'));
   });
 
   it('says nothing of an alias or a session the API does not give (R-13)', async () => {

@@ -69,6 +69,7 @@ import {
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/window-ruler';
 import { formatBlockNumber } from '@/lib/format-block';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 const SVG_LABEL = {
   row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase',
@@ -750,7 +751,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
 const PIPELINE_HELP = [
   'Two-step confirmation: a tx is proposed in one block and committed in a later block inside its proposal window.',
   'Square area = bytes; shade = cycles.',
-  'Hover a tx or a proposal to see how they connect; click a tx to pin it and follow it from the pool to the block that commits it.',
+  `${tapOrHover('a tx or a proposal', { capital: true })} to see how they connect; a tap on a tx pins it, so you can follow it from the pool to the block that commits it.`,
 ].join('\n');
 
 const TAG_TONE = {

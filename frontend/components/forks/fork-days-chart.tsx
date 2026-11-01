@@ -1,9 +1,11 @@
 'use client';
 
-import { useState } from 'react';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
+import { ReadoutRow } from '@/components/ui/readout-row';
 import { FORK_COLORS } from '@/lib/design-tokens';
 import { formatCount } from '@/lib/format-count';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface Day {
   date: string;
@@ -31,10 +33,15 @@ const reading = (day: Day) =>
 
 /**
  * Uncles the chain recorded each day (grey) with this node's branch switches drawn inside them in
- * jade (Forks V67, FF-L2). One reading at a time, by hover or the arrow keys.
+ * jade (Forks V67, FF-L2). One reading at a time, in the line under the chart: by hover or the
+ * arrow keys, and a tap pins a day until a second tap on it or Escape (R6).
  */
 export function ForkDaysChart({ days }: { days: readonly Day[] }) {
-  const [active, setActive] = useState<number | null>(null);
+  // Days are named by date, so a refetched window keeps the same day (or lets a gone day go).
+  const readout = usePinnedReadout<string>();
+  const found = readout.active === null ? -1 : days.findIndex((d) => d.date === readout.active);
+  if (readout.active !== null && found < 0) readout.clear();
+  const active = found < 0 ? null : found;
   // Drawn 1:1 in its box, so the 11 px axis text stays 11 px at phone width (visual pass, 390).
   const [box, measured] = useElementWidth<HTMLDivElement>();
   const W = (measured ?? DESIGN_WIDTH) - LEFT - 6;
@@ -44,13 +51,6 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
   const ticks = Array.from({ length: cap / step }, (_, i) => (i + 1) * step);
   return (
     <div ref={box} className="min-w-0">
-      <p data-testid="fork-day-reading" className="text-text mb-1 min-h-[18px] text-[12px]">
-        {active === null ? (
-          <span className="text-text-dim">hover a day, or focus the chart and use ← →</span>
-        ) : (
-          reading(days[active])
-        )}
-      </p>
       <svg
         viewBox={`-${LEFT} -10 ${W + LEFT + 6} ${H0 + 34}`}
         role="img"
@@ -61,14 +61,14 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
           event.preventDefault();
           const last = days.length - 1;
-          setActive((current) =>
-            current === null
+          const next =
+            active === null
               ? last
-              : Math.min(last, Math.max(0, current + (event.key === 'ArrowRight' ? 1 : -1)))
-          );
+              : Math.min(last, Math.max(0, active + (event.key === 'ArrowRight' ? 1 : -1)));
+          readout.hover(days[next].date);
         }}
-        onMouseLeave={() => setActive(null)}
-        onBlur={() => setActive(null)}
+        onMouseLeave={() => readout.hover(null)}
+        onBlur={() => readout.hover(null)}
       >
         {ticks.map((v) => (
           <g key={v}>
@@ -90,7 +90,9 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
             <g
               key={day.date}
               data-day={day.date}
-              onMouseEnter={() => setActive(i)}
+              onMouseEnter={() => readout.hover(day.date)}
+              onClick={() => readout.toggle(day.date)}
+              className="cursor-pointer"
               opacity={active === null || active === i ? 1 : 0.55}
             >
               <title>{reading(day)}</title>
@@ -139,6 +141,15 @@ export function ForkDaysChart({ days }: { days: readonly Day[] }) {
           );
         })}
       </svg>
+      <div data-testid="fork-day-reading" className="mt-1.5">
+        <ReadoutRow
+          label="Day readout"
+          pinned={readout.showingPin}
+          idle={tapOrHover('a day, or focus the chart and use ← →.', { capital: true })}
+        >
+          {active === null ? null : reading(days[active])}
+        </ReadoutRow>
+      </div>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 export interface ReadoutRowProps {
   /** The accessible name of the readout (it is a polite live region). */
@@ -35,7 +36,7 @@ export function ReadoutRow({ label, pinned, idle, children }: ReadoutRowProps) {
           </>
         )}
       </span>
-      <span className="text-text-dim shrink-0 whitespace-nowrap text-[11px]">tap or hover</span>
+      <TapOrHoverHint className="text-text-dim shrink-0 whitespace-nowrap text-[11px]" />
     </div>
   );
 }

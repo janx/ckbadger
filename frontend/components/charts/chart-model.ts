@@ -13,7 +13,7 @@ import {
   formatScaledInteger,
 } from '@/lib/exact-integer';
 import { niceStep } from '@/lib/chart-ticks';
-import { CLASS_COLORS, DATA_COLOR, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
+import { CLASS_COLORS, DATA_COLOR, jadeRamp, type AssetClass } from '@/lib/design-tokens';
 
 export interface RankedPreviewRow {
   /** Short display label; `title` keeps the full identity. */
@@ -475,10 +475,11 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   }));
   // Asset classes keep their colour wherever a chart splits by them, gold only for DAO; every
   // other split shares the jade ramp (CH-06, CH-14).
+  const ramp = jadeRamp(selectedSeries.length);
   const series: ChartSeries[] = selectedSeries.map((entry, index) =>
     classes
       ? { key: entry.key, label: classes[entry.key].label, color: classes[entry.key].color }
-      : { key: entry.key, label: entry.label, color: HUE_RAMP[index % HUE_RAMP.length] }
+      : { key: entry.key, label: entry.label, color: ramp[index] }
   );
   const last = points.at(-1);
   const previous = points.at(-2);
@@ -594,10 +595,11 @@ function stackedChart(definition: ChartDefinition, payload: StackedPayload): Cha
   if (!last) return model;
   const groups = CARD_GROUPS[definition.slug];
   if (groups) {
+    const cardRamp = jadeRamp(groups.length);
     const cardSeries = groups.map((group, index) => ({
       key: group.key,
       label: group.label,
-      color: HUE_RAMP[index % HUE_RAMP.length],
+      color: cardRamp[index],
     }));
     const cardPoints = points.map((point) => ({
       label: point.label,

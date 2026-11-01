@@ -8,6 +8,7 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import { isReadableTrait, traitDisplay, type DnaTrait } from '@/lib/dob-genes';
 import { GENE_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 /** One status pill for an item page: jade while live, grey once gone (OB-15). */
 export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Burned' }) {
@@ -105,7 +106,8 @@ export function ObjectTraits({
         })}
       </dl>
       <p className="text-text-dim text-[11.5px]">
-        Each trait is read from the object’s DNA, below · hover one to find its gene
+        Each trait is read from the object’s DNA, below ·{' '}
+        <TapOrHoverHint what="one to find its gene" />
       </p>
     </div>
   );

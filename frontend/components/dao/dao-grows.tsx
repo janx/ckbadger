@@ -3,12 +3,15 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Chart } from '@/components/ui/chart';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { api, type DaoArHistory, type DaoEvidence } from '@/lib/api';
 import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 /** The board's example deposit: 10,000 CKB, in shannons. */
 const EXAMPLE_DEPOSIT = '1000000000000';
@@ -49,13 +52,13 @@ function useSettled<T>(value: T, ms: number): T {
 }
 
 /**
- * The AR curve over every complete day and the one reading on it: what 10,000 CKB deposited on the
- * hovered day (at that day's closing block) is owed by the evidence tip — from the API calculator,
- * the one compensation path, never a client formula.
+ * The AR curve over every complete day and the one reading under it: what 10,000 CKB deposited on
+ * the hovered or tapped day (at that day's closing block) is owed by the evidence tip — from the
+ * API calculator, the one compensation path, never a client formula. A tap pins the day (R6).
  */
 function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
-  const [active, setActive] = useState<number | null>(null);
-  const index = active ?? 0;
+  const pin = usePinnedReadout<number>();
+  const index = pin.active ?? 0;
   const settled = useSettled(index, SETTLE_MS);
   const tip = evidence.tipBlockNumber;
   const tipAr = ar(evidence.ar.tipAr, 'DAO tip AR');
@@ -72,11 +75,21 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
     : null;
   return (
     <>
-      <div
-        aria-live="polite"
-        aria-label="Deposit reading"
-        className="border-base-border-subtle flex min-h-10 flex-wrap items-baseline gap-x-1 gap-y-1 border-b pb-2 pt-1.5 text-[12px]"
-      >
+      {days.length > 1 && (
+        <Chart
+          title="AR by date"
+          subtitle="AR at the close of every complete day since genesis"
+          data={days.map((d) => ({ label: d.date, values: { ar: d.arIndex } }))}
+          series={[{ key: 'ar', label: 'AR', assetClass: 'dao' }]}
+          unit=""
+          kind="line"
+          height={170}
+          pin={pin}
+          hideCaption
+          formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
+        />
+      )}
+      <ReadoutRow label="Deposit reading" pinned={pin.showingPin}>
         <span className="text-text-bright">10,000 CKB deposited on {day.date}</span>{' '}
         <span className="text-text-dim">is owed</span>{' '}
         {current?.isError ? (
@@ -104,22 +117,7 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
           on its {free ? `${free.integer}${free.fraction}` : '…'} free CKB, by{' '}
           {formatBlockNumber(tip)}
         </span>
-      </div>
-      {days.length > 1 && (
-        <Chart
-          title="AR by date"
-          subtitle="AR at the close of every complete day since genesis"
-          data={days.map((d) => ({ label: d.date, values: { ar: d.arIndex } }))}
-          series={[{ key: 'ar', label: 'AR', assetClass: 'dao' }]}
-          unit=""
-          kind="line"
-          height={170}
-          activeIndex={active}
-          onActiveIndexChange={setActive}
-          hideCaption
-          formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
-        />
-      )}
+      </ReadoutRow>
     </>
   );
 }
@@ -206,8 +204,8 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
       {years.length > 0 && year365 && (
         <span className="text-text-dim text-[11.5px]">
           The curve flattens as more CKB exists: the first year compensated {years[0].percent}%, the
-          last 365 days {year365.observedGrowthPercent}%. Hover a date to see the compensation owed
-          to a deposit made then.
+          last 365 days {year365.observedGrowthPercent}%. <TapOrHoverHint capital what="a date" />{' '}
+          to see the compensation owed to a deposit made then.
         </span>
       )}
     </section>

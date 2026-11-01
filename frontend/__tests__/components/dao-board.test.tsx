@@ -485,6 +485,28 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     expect(years).toHaveTextContent('1.00%from 1970-01');
   });
 
+  it('a tap on the AR chart pins that day in the reading under it; a second tap lets go (R6)', async () => {
+    stubChartWidth(600);
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
+    const reading = within(grows()).getByRole('status', { name: 'Deposit reading' });
+    // the reading is the line under the figure, with the shared hint
+    expect(chart.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(reading).toHaveTextContent('tap or hover');
+    // a touch tap on the last day (the plot ends at 590 of 600 px): the pointer leaves first
+    fireEvent.pointerLeave(chart);
+    fireEvent.click(chart, { clientX: 590 });
+    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited on 2019-11-19 is owed/);
+    await waitFor(() =>
+      expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 4, 5)
+    );
+    fireEvent.pointerLeave(chart);
+    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited on 2019-11-19/);
+    fireEvent.click(chart, { clientX: 590 });
+    expect(reading).toHaveTextContent(/^10,000 CKB deposited on 2019-11-16 is owed/);
+  });
+
   it('refuses a daily AR series with a missing day', async () => {
     stubCalculator();
     vi.mocked(api.getDaoArHistory).mockResolvedValue({

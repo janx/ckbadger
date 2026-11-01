@@ -1,10 +1,12 @@
 'use client';
 
-import { useState } from 'react';
 import Link from '@/components/ui/link';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -17,9 +19,11 @@ interface Props {
   inset?: { left: number; right: number };
   /** The label beside (or above) the strip; omitted, the strip counts its versions. */
   label?: string;
-  /** Controlled selection, shared with the lane dots; omitted, the strip keeps its own. */
-  selectedHash?: string | null;
-  onSelect?: (versionHash: string) => void;
+  /**
+   * The hover/tap state over version hashes, shared with the lane dots; omitted, the strip keeps
+   * its own (sticky, see `deploymentReadout`).
+   */
+  readout?: PinnedReadout<string>;
   /** The lane timeline draws one evidence panel for lanes and strip alike. */
   hideEvidence?: boolean;
 }
@@ -45,24 +49,29 @@ export function markName(mark: HardforkScriptDeployment): string {
 }
 
 /**
+ * The deployment dots' readout (R6): a hovered or focused dot names its version and keeps it until
+ * another is hovered, so the pointer can reach the evidence links; a tap pins it until a second
+ * tap on it or Escape.
+ */
+export function useDeploymentReadout(): PinnedReadout<string> {
+  return usePinnedReadout<string>(String, { sticky: true });
+}
+
+/**
  * Each known script version's earliest indexed code cell as a dot on the time axis (CH-40): no
- * scrolling list, every mark in place; hover or focus a dot for its evidence (CH-44).
+ * scrolling list, every mark in place; hover, tap or focus a dot for its evidence (CH-44).
  */
 export function ScriptDeploymentTimeline({
   deployments,
   domain,
   inset,
   label,
-  selectedHash: controlledHash,
-  onSelect,
+  readout: shared,
   hideEvidence = false,
 }: Props) {
-  const [localHash, setLocalHash] = useState<string | null>(null);
-  const selectedHash = controlledHash === undefined ? localHash : controlledHash;
-  const setSelectedHash = (hash: string) => {
-    setLocalHash(hash);
-    onSelect?.(hash);
-  };
+  const own = useDeploymentReadout();
+  const readout = shared ?? own;
+  const selectedHash = readout.active;
   const marks = [...deployments].sort(
     (left, right) =>
       left.blockNumber - right.blockNumber ||
@@ -137,32 +146,51 @@ export function ScriptDeploymentTimeline({
                   type="button"
                   title={`${mark.versionName} · deployed ${formatUtc8Date(mark.timestampMs)}`}
                   aria-label={`${markName(mark)}, first code cell at block ${formatBlockNumber(mark.blockNumber)}, ${formatUtc8Date(mark.timestampMs)}`}
-                  aria-pressed={active}
+                  {...readout.bind(mark.versionHash)}
                   className={`focus-visible:outline-jade block h-[7px] w-[7px] -translate-x-1/2 rounded-full border focus-visible:outline ${active ? 'bg-jade border-jade' : 'border-text-bright bg-base-bg hover:bg-jade'}`}
-                  onMouseEnter={() => setSelectedHash(mark.versionHash)}
-                  onFocus={() => setSelectedHash(mark.versionHash)}
-                  onClick={() => setSelectedHash(mark.versionHash)}
                 />
               </span>
             );
           })}
         </div>
       </div>
-      {!hideEvidence && <DeploymentEvidence selected={selected} />}
+      {!hideEvidence && (
+        <DeploymentEvidence
+          selected={selected}
+          pinned={selected !== null && readout.isPinned(selected.versionHash)}
+        />
+      )}
     </div>
   );
 }
 
-/** One deployment's evidence: name, what the mark means, header time, epoch, version, links. */
-export function DeploymentEvidence({ selected }: { selected: HardforkScriptDeployment | null }) {
+/**
+ * One deployment's evidence under the timeline: its readout line (name and day, "tapped" when
+ * pinned, R6), then what the mark means, header time, epoch, version and links.
+ */
+export function DeploymentEvidence({
+  selected,
+  pinned,
+}: {
+  selected: HardforkScriptDeployment | null;
+  pinned: boolean;
+}) {
   return (
-    <aside
-      aria-label="Selected script deployment evidence"
-      className="border-base-border-subtle mt-3 min-w-0 border-t pt-3 text-[12px]"
-    >
-      {selected ? (
+    <aside aria-label="Selected script deployment evidence" className="mt-3 min-w-0 text-[12px]">
+      <ReadoutRow
+        label="Script version readout"
+        pinned={pinned}
+        idle={tapOrHover(
+          'a dot, or focus it, for that script version, its first code cell and its block.',
+          { capital: true }
+        )}
+      >
+        {selected
+          ? `${markName(selected)} · deployed ${formatUtc8Date(selected.timestampMs)}`
+          : null}
+      </ReadoutRow>
+      {selected && (
         <>
-          <p className="text-text-bright break-words">{markName(selected)}</p>
           <p className="text-text-dim mt-2 max-w-[70ch] leading-relaxed">
             Earliest indexed code-cell creation for this named version. This is a code-cell event,
             not proof that a script instance used a particular VM or that the code remains live.
@@ -194,10 +222,6 @@ export function DeploymentEvidence({ selected }: { selected: HardforkScriptDeplo
             </dd>
           </dl>
         </>
-      ) : (
-        <p className="text-text-dim">
-          Hover or focus a dot for that script version, its first code cell and its block.
-        </p>
       )}
     </aside>
   );

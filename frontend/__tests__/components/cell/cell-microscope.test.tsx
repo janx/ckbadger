@@ -57,6 +57,36 @@ describe('cell microscope', () => {
     expect(screen.getByLabelText('CellData byte map')).toBeInTheDocument();
   });
 
+  it('a tap pins a byte, a field or a map part in the line under the bytes; a second tap clears it (R6)', () => {
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    const readout = screen.getByRole('status', { name: 'Byte readout' });
+    const detail = screen.getByRole('complementary', { name: 'Field detail' });
+    expect(box.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(readout).toHaveTextContent(/^tap or hover$/);
+    // a tap on a byte: the emulated hover, then the click; the pin outlasts the pointer
+    const byte = box.querySelector('[data-byte="data:2"]')!;
+    fireEvent.mouseOver(byte);
+    fireEvent.click(byte);
+    fireEvent.mouseLeave(box);
+    expect(readout).toHaveTextContent(/^tapped unclassified bytes · \[2\.\.4\) · 2 B/);
+    expect(detail).toHaveTextContent('unclassified bytes');
+    expect(box).toHaveAttribute('data-active', 'data:unclassified-2');
+    // a tap on a field pill or a map part moves the pin there
+    fireEvent.click(screen.getByRole('button', { name: /^length word \[0\.\.2\)/ }));
+    expect(readout).toHaveTextContent(/^tapped length word · \[0\.\.2\) · 2 B · 16/);
+    const map = screen.getByRole('group', { name: 'Capacity map' });
+    fireEvent.click(within(map).getByTitle('data · 4 bytes'));
+    fireEvent.mouseLeave(map);
+    expect(readout).toHaveTextContent(/^tapped data · 4 B occupied/);
+    expect(within(map).getByTitle('data · 4 bytes')).toHaveAttribute('aria-pressed', 'true');
+    // the second tap on it lets go, though the emulated hover is still on it
+    fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));
+    fireEvent.click(within(map).getByTitle('data · 4 bytes'));
+    expect(readout).toHaveTextContent(/^tap or hover$/);
+    expect(detail).toHaveTextContent('Tap or hover a byte, a field or the map');
+  });
+
   it('rejects an overlapping or incomplete byte map', () => {
     const broken = {
       ...cell,

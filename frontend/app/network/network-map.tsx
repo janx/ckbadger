@@ -1,11 +1,14 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
+import { ReadoutRow } from '@/components/ui/readout-row';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 type Point = NetworkMap['points'][number];
 
@@ -172,7 +175,7 @@ function Legend({
   );
   return (
     <>
-      <p className="text-text-bright text-[13.5px]">Hover a node</p>
+      <p className="text-text-bright text-[13.5px]">{tapOrHover('a node', { capital: true })}</p>
       <div className="mt-2.5 flex flex-col gap-1.5">
         {row(<circle cx="7" cy="7" r={DOT_R} fill={DATA_COLOR} />, `reachable now · ${reachable}`)}
         {row(
@@ -218,6 +221,15 @@ function sessionWords(point: Point): string {
   return `connected for ${formatDurationMs(session.connectedDurationMs)}${ping} · ${dial} (as of ${formatUtc8Time(session.observedAt * 1000)})`;
 }
 
+/** A node's identity in one line, for the readout under the map: who, where, state, client. */
+function peerLine(point: Point): string {
+  const who = point.alias
+    ? `${point.alias.address} · peer ${shortPeerId(point.peerId)}`
+    : `peer ${shortPeerId(point.peerId)}`;
+  const state = point.reachable ? 'reachable now' : 'verified before, not reachable now';
+  return `${who} · ${point.country} · ${state} · ${point.clientVersion}`;
+}
+
 function PeerReadout({ point, roundId }: { point: Point; roundId: number | null }) {
   const rows: [string, string, string?][] = [
     // With an alias the panel is titled by it, so the peer id is a row (R-13).
@@ -257,9 +269,13 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
  * Where the verified nodes are (Network board V70): every verified peer a dot at its GeoIP place,
  * reachable solid, verified-before hollow, this node's session peers ringed wherever they are; the
  * never-verified peers a strip beneath. No link is drawn and nothing is centred (user correction).
+ * A hovered or focused node is named in the line under the map and in the panel; a tap pins it
+ * there until a second tap on it or Escape (R6).
  */
 export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // A named node stays named until the pointer leaves the map (sticky), as before R6.
+  const readout = usePinnedReadout<string>(String, { sticky: true });
+  const selectedId = readout.active;
   const [ref, measured] = useElementWidth<HTMLDivElement>();
   const { data, isLoading, error } = useQuery({
     queryKey: ['network', 'map'],
@@ -275,6 +291,9 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
   const ready = !isLoading && !error && data ? data : null;
   const placed = ready ? layoutCountryClusters(ready.points, width, height) : null;
   const layout = placed?.dots ?? [];
+  // A refetched map without the pinned (or hovered) node lets it go: a reading names a drawn node.
+  if (selectedId !== null && ready && !ready.points.some((point) => point.peerId === selectedId))
+    readout.clear();
   const selected = ready?.points.find((point) => point.peerId === selectedId) ?? null;
   const countryLabels = placed?.labels ?? [];
   const listedCountries = placed?.listed ?? [];
@@ -308,7 +327,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                 role="img"
                 aria-label="Approximate GeoIP locations of retained verified CKB peers"
                 className="block"
-                onMouseLeave={() => setSelectedId(null)}
+                onMouseLeave={() => readout.hover(null)}
               >
                 {[1, 2, 3, 4, 5, 6, 7].map((k) => (
                   <line
@@ -350,13 +369,11 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                   <g
                     key={point.peerId}
                     data-peer={point.peerId}
-                    tabIndex={0}
+                    {...readout.bind(point.peerId)}
                     aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
                       point.reachable ? 'reachable now' : 'verified before, not reachable now'
                     }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
                     opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
-                    onMouseEnter={() => setSelectedId(point.peerId)}
-                    onFocus={() => setSelectedId(point.peerId)}
                     className="cursor-pointer outline-none"
                   >
                     <circle cx={x} cy={y} r="5.5" fill="transparent" />
@@ -394,6 +411,13 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                   </g>
                 ))}
               </svg>
+              <ReadoutRow
+                label="Node readout"
+                pinned={readout.showingPin}
+                idle={tapOrHover('a node.', { capital: true })}
+              >
+                {selected ? peerLine(selected) : null}
+              </ReadoutRow>
               {listedCountries.length > 0 && (
                 <p
                   aria-label="Countries with one verified node"
