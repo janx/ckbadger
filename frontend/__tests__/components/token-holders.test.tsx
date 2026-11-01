@@ -130,6 +130,44 @@ describe('Token holders (board L5)', () => {
   });
 });
 
+describe('Token holders between 560 and 584 px (L5)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('puts each holder on one line where the table does not fit: rank · address · lock · bar · amount', async () => {
+    atContainerWidth(570);
+    vi.spyOn(api, 'getTokenHolders').mockResolvedValue({
+      data: [
+        {
+          lockScriptHash: `0x${'11'.repeat(32)}`,
+          address: null,
+          balance: '100',
+          lockKind: 'JoyID',
+        },
+      ],
+      total: 1,
+      limit: 10,
+      hasMore: false,
+      nextCursor: null,
+      totalSupply: '1000',
+      anchor: null,
+    });
+    vi.spyOn(api, 'getTokenDistribution').mockRejectedValue(new Error('not needed'));
+    render(<TokenHolders typeHash="0xabc" symbol="T" decimals={0} />);
+    const [row] = await screen.findAllByTestId('holder-row-mobile');
+    expect(phoneLines(row)).toEqual([
+      {
+        key: 'holder',
+        tone: 'head',
+        left: '10x1111111111...111111 JoyID',
+        right: '10.00%100',
+      },
+    ]);
+    expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
+  });
+});
+
 describe('Holders by balance phone row', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

@@ -13,6 +13,7 @@ import { Hash } from '@/components/ui/hash';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { PhoneRow } from '@/components/ui/phone-row';
+import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { ShareBar, shareBarWidth } from '@/components/ui/share-bar';
 export interface TokenDistributionViewProps {
   distribution: TokenDistribution;
@@ -169,56 +170,6 @@ export function TokenDistributionView({
     </div>
   );
 }
-/**
- * A holder on a phone (board L5): rank, address, lock and amount on one line; the share as a bar
- * (10 % = a full bar) with its number on the second. Collection holders use the same two lines.
- */
-export function HolderPhoneRow({
-  rank,
-  party,
-  lock,
-  amount,
-  share,
-  barWidth,
-  barColor,
-}: {
-  rank: number;
-  party: ReactNode;
-  lock: ReactNode;
-  amount: ReactNode;
-  share?: ReactNode;
-  barWidth: string;
-  barColor?: string;
-}) {
-  return (
-    <PhoneRow
-      testId="holder-row-mobile"
-      lines={[
-        {
-          key: 'holder',
-          tone: 'head',
-          left: (
-            <>
-              <span data-role="rank" className="text-text-dim inline-block w-[22px]">
-                {rank.toLocaleString('en-US')}
-              </span>
-              {party} <span className="text-text-dim whitespace-nowrap text-xs">{lock}</span>
-            </>
-          ),
-          right: <span className="text-text-bright text-[13px]">{amount}</span>,
-        },
-        {
-          key: 'share',
-          tone: 'quiet',
-          left: <ShareBar width={barWidth} color={barColor} className="ml-[22px]" />,
-          right: share,
-          grow: true,
-        },
-      ]}
-    />
-  );
-}
-
 export interface TokenHoldersProps {
   typeHash: string;
   symbol: string | null;
@@ -315,7 +266,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             rows={holders.data.data}
             rowKey={(h) => h.lockScriptHash}
             empty="No holders."
-            mobileRow={(h) => {
+            mobileRow={(h, wide) => {
               const share = holderShare(h);
               return (
                 <HolderPhoneRow
@@ -335,6 +286,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                   amount={<AssetAmount amount={h.balance} decimals={decimals} />}
                   share={share.text}
                   barWidth={shareBarWidth(share.amount, share.total)}
+                  wide={wide}
                 />
               );
             }}

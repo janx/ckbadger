@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi, onTestFinished } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
-import { atContainerWidth } from '@/__tests__/utils/phone-row';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import DaoDepositorsPage from '@/app/dao/depositors/page';
 import { ApiRequestError, api } from '@/lib/api';
 
@@ -85,7 +85,7 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('folds each depositor into a two-line card on phones, not a five-fact sheet', async () => {
+  it("folds each depositor into board L5's two-line holder row on phones, not a five-fact sheet", async () => {
     atContainerWidth(358);
     onTestFinished(() => {
       vi.unstubAllGlobals();
@@ -96,7 +96,33 @@ describe('DAO depositors page (DAO-12)', () => {
     const cards = await screen.findByRole('list', { name: 'DAO depositors, compact' });
     const first = within(cards).getAllByRole('listitem')[0];
     expect(first.querySelectorAll('dt')).toHaveLength(0);
-    expect(first).toHaveTextContent('1ckb1qzda0cr0…ssd2hqn1.00%999.00000000 CKB · 1 deposit');
+    const [row] = within(first).getAllByTestId('holder-row-mobile');
+    // Rank inline, the depositor and the CKB deposited; then the share bar, its number and count.
+    expect(phoneLines(row)).toEqual([
+      { key: 'holder', tone: 'head', left: '1ckb1qzda0cr0…ssd2hqn', right: '999.00000000 CKB' },
+      { key: 'share', tone: 'quiet', left: '', right: '1.00% · 1 deposit' },
+    ]);
+    // 10 % fills the bar: 1.00 % draws a tenth of it.
+    expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '10%');
+  });
+
+  it('puts a depositor on one line in the 640 band, where the five-column table does not fit', async () => {
+    atContainerWidth(608);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
+    render(<DaoDepositorsPage />);
+    const [row] = await screen.findAllByTestId('holder-row-mobile');
+    expect(phoneLines(row)).toEqual([
+      {
+        key: 'holder',
+        tone: 'head',
+        left: '1ckb1qzda0cr0…ssd2hqn',
+        right: '1.00% · 1 deposit999.00000000 CKB',
+      },
+    ]);
   });
 
   it('says which tip each page was ranked at when the tip moved between pages (L1, J2)', async () => {

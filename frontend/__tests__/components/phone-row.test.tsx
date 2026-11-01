@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
-import { ShareBar, shareBarWidth } from '@/components/ui/share-bar';
+import { ShareBar, shareBarWidth, shareBarWidthFromPercent } from '@/components/ui/share-bar';
 import { phoneLines } from '@/__tests__/utils/phone-row';
 
 describe('PhoneRow (boards L1–L8)', () => {
@@ -51,6 +51,12 @@ describe('Share bar (board L5: 10 % = full)', () => {
     expect(shareBarWidth(BigInt(9), BigInt(10))).toBe('100%');
     expect(shareBarWidth(BigInt(0), BigInt(0))).toBe('0%');
     expect(() => shareBarWidth(BigInt(11), BigInt(10))).toThrow('is not a share');
+    // An API's exact percentage text, read as hundredths.
+    expect(shareBarWidthFromPercent('2.32')).toBe('23.2%');
+    expect(shareBarWidthFromPercent('1')).toBe('10%');
+    expect(shareBarWidthFromPercent('42.5')).toBe('100%');
+    expect(() => shareBarWidthFromPercent('1.234')).toThrow('is not a percentage');
+    expect(() => shareBarWidthFromPercent('101')).toThrow('is not a share');
     const { container } = render(<ShareBar width="23.2%" />);
     expect((container.firstElementChild!.firstElementChild as HTMLElement).style.width).toBe(
       '23.2%'

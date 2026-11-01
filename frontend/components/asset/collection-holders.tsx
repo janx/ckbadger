@@ -12,7 +12,7 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
-import { HolderPhoneRow } from '@/components/asset/token-holders';
+import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
 
 export interface CollectionHoldersProps {
@@ -209,7 +209,7 @@ function ScopedCollectionHolders({
                 rows={holders.data.data}
                 rowKey={holderKey}
                 empty="No current holders."
-                mobileRow={(holder) => {
+                mobileRow={(holder, wide) => {
                   const max = Math.max(...holders.data!.data.map((h) => h.itemCount));
                   return (
                     <HolderPhoneRow
@@ -230,6 +230,7 @@ function ScopedCollectionHolders({
                       // table's Items column draws it.
                       barWidth={`${max ? (holder.itemCount / max) * 100 : 0}%`}
                       barColor={assetClass ? CLASS_COLORS[assetClass] : undefined}
+                      wide={wide}
                     />
                   );
                 }}

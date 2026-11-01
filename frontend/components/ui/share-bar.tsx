@@ -15,6 +15,17 @@ export function shareBarWidth(amount: bigint, total: bigint): string {
   return hundredths >= BigInt(10000) ? '100%' : `${Number(hundredths) / 100}%`;
 }
 
+/**
+ * The same width from an API's exact percentage text ("1.25" = 1.25 %), read as an integer of
+ * hundredths; anything but a plain decimal with at most two places is refused.
+ */
+export function shareBarWidthFromPercent(percent: string): string {
+  const match = /^(\d+)(?:\.(\d{1,2}))?$/.exec(percent);
+  if (!match) throw new Error(`Share bar: ${JSON.stringify(percent)} is not a percentage`);
+  const hundredths = BigInt(match[1]) * BigInt(100) + BigInt((match[2] ?? '').padEnd(2, '0'));
+  return shareBarWidth(hundredths, BigInt(10000));
+}
+
 /** The thin share bar of the holder rows: a track that fills the free width. */
 export function ShareBar({
   width,
