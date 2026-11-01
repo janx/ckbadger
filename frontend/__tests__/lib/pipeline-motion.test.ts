@@ -159,6 +159,39 @@ describe('Animator under fake timers and rAF', () => {
     expect(n.v).toMatchObject({ X: 200, Y: 120 });
   });
 
+  it('lobs a commit down beside both ends in a column: straight down in height, bowed out to the right', () => {
+    const a = new Animator(browserClock, false);
+    const n = square(a, layer, 140, 20);
+    const ys: number[] = [];
+    let widest = -Infinity;
+    a.go(n, { X: 110, Y: 80 }, { dur: 720, ease: E.lob, arc: 'beside' });
+    for (let i = 0; i < 50; i++) {
+      vi.advanceTimersByTime(16);
+      ys.push(n.v.Y);
+      widest = Math.max(widest, n.v.X);
+    }
+    // The control point sits beside the wider end at mid height: the height only ever goes down.
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThanOrEqual(ys[i - 1]);
+    expect(widest).toBeGreaterThan(140 + 8);
+    expect(n.v).toMatchObject({ X: 110, Y: 80 });
+  });
+
+  it('retires a column row downwards and steps an orphan off the chain sideways', () => {
+    const a = new Animator(browserClock, false);
+    const retired = square(a, layer, 6, 290);
+    const orphan = square(a, layer, 6, 246);
+    a.exit(retired, 'retire', 0, undefined, 'column');
+    a.exit(orphan, 'orphan', 0, undefined, 'column');
+    vi.advanceTimersByTime(300);
+    expect(retired.v.X).toBe(6);
+    expect(retired.v.Y).toBeGreaterThan(290);
+    expect(orphan.v.Y).toBe(246);
+    expect(orphan.v.X).toBeGreaterThan(6);
+    vi.advanceTimersByTime(400);
+    expect(retired.el.isConnected).toBe(false);
+    expect(orphan.el.isConnected).toBe(false);
+  });
+
   it('switches the colour late for colour-late tweens', () => {
     const a = new Animator(browserClock, false);
     const n = square(a, layer);

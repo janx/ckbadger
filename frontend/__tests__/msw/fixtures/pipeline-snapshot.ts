@@ -398,3 +398,28 @@ export function mineNext(s: PipelineSnapshot, o: MineOptions): PipelineSnapshot 
     },
   };
 }
+
+/** The largest tx that still draws as a 2×2 square (`squareSide` rounds √(size / 600)). */
+const TWO_BY_TWO_MAX = 2000;
+
+/**
+ * `s` with every tx (pool, NEXT, blocks) capped at a 2×2 square, so every row of the column
+ * orientation is the base 30 px (the board, docs/superpowers/plans/2026-11-01-narrow-widths/
+ * mockup/project/Main.dc.html). Sizes only: hashes, proposals and windows are untouched.
+ */
+export function withSmallTxs(s: PipelineSnapshot): PipelineSnapshot {
+  const cap = <T extends { size: number }>(t: T): T => ({
+    ...t,
+    size: Math.min(t.size, TWO_BY_TWO_MAX),
+  });
+  return {
+    ...s,
+    blocks: s.blocks.map((b) => ({ ...b, txs: b.txs.map(cap) })),
+    pool: s.pool && {
+      ...s.pool,
+      pending: s.pool.pending.map(cap),
+      proposed: s.pool.proposed.map(cap),
+    },
+    next: s.next && { ...s.next, txs: s.next.txs.map(cap) },
+  };
+}

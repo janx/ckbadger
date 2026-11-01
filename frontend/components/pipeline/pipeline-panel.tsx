@@ -25,16 +25,13 @@ import { diffSnapshots, type Transition } from '@/lib/pipeline/transitions';
 import { STAGE_BASE, mixColor, tok } from '@/lib/pipeline/encoding';
 import {
   G,
+  axisOf,
   buildScene,
-  chainPaths,
-  chainTail,
   inWindow,
   pick,
   pickTargets,
-  rewardLink,
   rewardTarget,
   windowLabel,
-  windowRuler,
   type ChainSlotState,
   type RulerSlot,
   type Scene,
@@ -43,6 +40,12 @@ import {
 } from '@/lib/pipeline/layout';
 import { BlockCard, type DimLevel } from '@/components/pipeline/block-card';
 import { ChainLine } from '@/components/pipeline/chain-line';
+import {
+  ColumnBlock,
+  ColumnNext,
+  ColumnNextUnavailable,
+  ColumnPool,
+} from '@/components/pipeline/column-rows';
 import { MotionSvg } from '@/components/pipeline/motion-svg';
 import { NextCard, NextColumn } from '@/components/pipeline/next-card';
 import { PipelineLegend } from '@/components/pipeline/pipeline-legend';
@@ -67,13 +70,16 @@ import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/window-ruler';
 import { formatBlockNumber } from '@/lib/format-block';
 
-const SVG_LABEL =
-  'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase';
+const SVG_LABEL = {
+  row: 'One row of a transaction lifetime: the mempool and proposed pool wells, the predicted next block, and the chain of recent blocks as tiles linked to their parents through their headers, each with its proposal dots and a field of committed transactions starting with the cellbase',
+  column:
+    'A transaction lifetime read top to bottom: the mempool and proposed pool rows, the predicted next block, then the tip and three older blocks as tiles linked to their parents down one chain line, each row with its proposal dots and a line of transactions starting with the cellbase',
+} as const;
 
 /**
  * Width available to the SVG, measured before the canvas mounts (null until then), so the first
- * frame is already laid out for the real width. The SVG is drawn 1:1 and only scrolls below
- * `G.minViewW`.
+ * frame is already laid out for the real width. The SVG is drawn 1:1 at that width: a row while two
+ * whole blocks fit after NEXT, the column below that. It never scrolls and never scales.
  */
 function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null {
   const [width, setWidth] = useState<number | null>(null);
@@ -180,8 +186,7 @@ function advance(view: ViewState | null, snapshot: PipelineSnapshot, reduced: bo
 /** The pipeline canvas for one snapshot stream (exported for the motion tests). */
 export function PipelineCanvas({ snapshot }: CanvasProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const measured = useMeasuredWidth(wrapRef);
-  const viewW = measured === null ? null : Math.max(G.minViewW, measured);
+  const viewW = useMeasuredWidth(wrapRef);
   const reduced = usePrefersReducedMotion();
   const [view, setView] = useState<ViewState>(() => advance(null, snapshot, reduced));
   if (view.snapshot !== snapshot) {
@@ -218,7 +223,7 @@ export function PipelineCanvas({ snapshot }: CanvasProps) {
   );
 
   return (
-    <div ref={wrapRef} className="overflow-x-auto overscroll-x-contain">
+    <div ref={wrapRef} data-testid="pipeline-canvas">
       {built === null ? (
         <div data-testid="pipeline-measuring" style={{ height: G.H }} />
       ) : 'error' in built ? (
@@ -330,13 +335,14 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   const index = useMemo(() => txIndex(scene), [scene]);
   const targets = useMemo(() => pickTargets(scene), [scene]);
   const byNumber = useMemo(() => new Map(scene.cards.map((c) => [c.block.number, c])), [scene]);
+  const axis = useMemo(() => axisOf(scene), [scene]);
   const squares = useMemo(() => {
     const out = new Map<string, AbsSquare>();
-    const add = (q: SceneSquare, dx: number) =>
-      out.set(q.id, { X: dx + q.x, Y: q.y, s: q.s, stage: q.stage });
+    const add = (q: SceneSquare, dx: number, dy: number) =>
+      out.set(q.id, { X: dx + q.x, Y: dy + q.y, s: q.s, stage: q.stage });
     if (scene.pool)
-      for (const q of [...scene.pool.pending.squares, ...scene.pool.proposed.squares]) add(q, 0);
-    for (const c of scene.cards) for (const q of c.squares) add(q, c.x);
+      for (const q of [...scene.pool.pending.squares, ...scene.pool.proposed.squares]) add(q, 0, 0);
+    for (const c of scene.cards) for (const q of c.squares) add(q, c.x, c.y);
     return out;
   }, [scene]);
   // Predicted txs on the NEXT card, by hash, in absolute coordinates.
@@ -346,7 +352,14 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     if (!next) return out;
     const sizes = new Map(next.next.txs.map((t) => [t.hash, t.size]));
     for (const g of next.ghosts) {
-      if (g.id) out.set(g.id, { X: next.x + g.x, Y: g.y, s: g.s, size: sizes.get(g.id) as number });
+      if (g.id) {
+        out.set(g.id, {
+          X: next.x + g.x,
+          Y: next.y + g.y,
+          s: g.s,
+          size: sizes.get(g.id) as number,
+        });
+      }
     }
     return out;
   }, [scene]);
@@ -355,7 +368,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     for (const c of scene.cards) {
       for (const k of c.chips) {
         const h = k.proposal.txHash;
-        if (h && !out.has(h)) out.set(h, { X: c.x + k.x, Y: k.y });
+        if (h && !out.has(h)) out.set(h, { X: c.x + k.x, Y: c.y + k.y });
       }
     }
     return out;
@@ -367,38 +380,37 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   live.current.anchor = anchor;
   live.current.highlighted = highlighted;
 
+  // Slots along the chain's direction: x and w in a row, a row's top and height in a column.
   const chainSlots: ChainSlotState[] = scene.cards.map((c) => ({
     number: c.block.number,
-    x: c.x,
-    w: c.w,
+    ...axis.along(c),
     mined: true,
     hash: c.block.hash,
     parentHash: c.block.parentHash,
     solid: 1,
   }));
-  const rulerSlots: RulerSlot[] = scene.next
-    ? [{ number: scene.next.number, x: scene.next.x, w: scene.next.w, mined: false }, ...chainSlots]
-    : chainSlots;
+  const nextSlot = scene.next ? axis.along(scene.next) : null;
+  const rulerSlots: RulerSlot[] =
+    scene.next && nextSlot
+      ? [{ number: scene.next.number, ...nextSlot, mined: false }, ...chainSlots]
+      : chainSlots;
   const windowText = windowLabel(anchor, scene.windowTip, consensus);
-  const ruler = windowRuler(rulerSlots, anchor, consensus, scene.viewW, windowText);
+  const ruler = axis.ruler(rulerSlots, anchor, consensus, windowText);
   // The window is drawn in full only while something that has one is hovered: NEXT, a block, the
   // proposed well or the lane itself. At rest only its gold links and the marks across the chain
   // line show it.
   const showWindow = lane || windowBlock !== null;
-  const laneGeom = windowRuler(
-    rulerSlots,
-    defaultH,
-    consensus,
-    scene.viewW,
-    windowLabel(defaultH, scene.windowTip, consensus)
-  ).hit;
-  const paths = chainPaths(
-    chainSlots,
-    scene.next ? { x: scene.next.x, w: scene.next.w } : null,
-    anchor,
-    consensus,
-    scene.viewW
-  );
+  // The lane above the cards holds the window in a row; a column has no lane (the rows span it).
+  const laneGeom =
+    scene.orientation === 'row'
+      ? axis.ruler(
+          rulerSlots,
+          defaultH,
+          consensus,
+          windowLabel(defaultH, scene.windowTip, consensus)
+        ).hit
+      : null;
+  const paths = axis.chainPaths(chainSlots, nextSlot, anchor, consensus);
 
   // Pointing at a block makes it H: blocks outside its window step back (prototype paintCard).
   const dimAnchor = windowBlock ?? (lane ? anchor : null);
@@ -434,9 +446,9 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       if (!q) throw new Error(`pipeline: the cellbase of #${k.block.number} is not drawn`);
       return centreOf(q);
     };
-    const tail = chainTail(chainSlots, scene.viewW);
+    const tail = axis.tail(chainSlots);
     if (!tail) throw new Error(`pipeline: #${c.block.number} is on screen but the chain is not`);
-    return rewardLink(cellbase(c), target === 'off' ? null : cellbase(target), tail);
+    return axis.rewardLink(cellbase(c), target === 'off' ? null : cellbase(target), tail);
   })();
 
   const place = () => {
@@ -465,7 +477,7 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
     const r = (svgRef.current as SVGSVGElement).getBoundingClientRect();
     return {
       x: (e.clientX - r.left) * (scene.viewW / r.width),
-      y: (e.clientY - r.top) * (G.H / r.height),
+      y: (e.clientY - r.top) * (scene.H / r.height),
     };
   };
   const show = (content: TipContent | null) =>
@@ -580,6 +592,9 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
   };
 
   const focus = hovered !== null;
+  const column = scene.orientation === 'column';
+  const nextDim: DimLevel =
+    dimAnchor === null || (scene.next && dimAnchor === scene.next.number) ? 'false' : 'true';
   return (
     <>
       <MotionSvg
@@ -592,14 +607,12 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
           {
             'data-testid': 'pipeline-svg',
             className: `pipeline-svg block w-full select-none font-mono tabular-nums${focus ? ' is-focus' : ''}`,
-            // The canvas is drawn 1:1: its CSS height is the viewBox height, and it is never
-            // narrower than the layout's narrowest view (the panel scrolls below that).
-            style: cursor
-              ? { height: G.H, minWidth: G.minViewW, cursor }
-              : { height: G.H, minWidth: G.minViewW },
-            viewBox: `0 0 ${scene.viewW} ${G.H}`,
+            // The canvas is drawn 1:1: its CSS height is the viewBox height and its width the
+            // measured one, which picked the arrangement.
+            style: cursor ? { height: scene.H, cursor } : { height: scene.H },
+            viewBox: `0 0 ${scene.viewW} ${scene.H}`,
             role: 'img',
-            'aria-label': SVG_LABEL,
+            'aria-label': SVG_LABEL[scene.orientation],
             onPointerMove,
             onPointerLeave,
             onClick,
@@ -608,31 +621,42 @@ function SceneSvg({ scene, ctx, reduced }: SceneSvgProps) {
       >
         <g pointerEvents="none">
           <ChainLine paths={paths} tailOpen={ruler.tailOpen} windowEmphasis={lane} />
-          <WindowMarks ruler={ruler} />
-          {showWindow && <WindowTicks ruler={ruler} faded={arc !== null} />}
+          <WindowMarks d={axis.marks(ruler)} />
+          {showWindow && <WindowTicks d={axis.ticks(ruler)} faded={arc !== null} />}
         </g>
-        <PoolZone scene={scene} dimOf={poolDim} onIds={onIds} />
+        {column ? (
+          <ColumnPool scene={scene} dimOf={poolDim} onIds={onIds} />
+        ) : (
+          <PoolZone scene={scene} dimOf={poolDim} onIds={onIds} />
+        )}
         <g data-layer="cards">
-          {scene.next && (
-            <NextCard
-              next={scene.next}
-              dim={dimAnchor === null || dimAnchor === scene.next.number ? 'false' : 'true'}
-            />
-          )}
-          {scene.cards.map((c, i) => (
-            <BlockCard
-              key={c.id}
-              card={c}
-              numberInWindow={showWindow && inWindow(c.block.number, anchor, consensus)}
-              highlighted={highlighted === c.id}
-              dim={cardDim(c.block.number)}
-              onIds={onIds}
-              age={i}
-            />
-          ))}
+          {scene.next &&
+            (column ? (
+              <ColumnNext next={scene.next} dim={nextDim} />
+            ) : (
+              <NextCard next={scene.next} dim={nextDim} />
+            ))}
+          {scene.cards.map((c, i) => {
+            const Card = column ? ColumnBlock : BlockCard;
+            return (
+              <Card
+                key={c.id}
+                card={c}
+                numberInWindow={showWindow && inWindow(c.block.number, anchor, consensus)}
+                highlighted={highlighted === c.id}
+                dim={cardDim(c.block.number)}
+                onIds={onIds}
+                age={i}
+              />
+            );
+          })}
         </g>
         <g data-layer="labels" pointerEvents="none">
-          <NextColumn available={snapshot.next !== null} />
+          {scene.bands ? (
+            <ColumnNextUnavailable available={snapshot.next !== null} band={scene.bands.next} />
+          ) : (
+            <NextColumn available={snapshot.next !== null} />
+          )}
           {showWindow && (
             <WindowLabel ruler={ruler} emphasis={lane} faded={arc !== null} text={windowText} />
           )}
