@@ -277,10 +277,11 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
                   rank={rank(h)}
                   party={
                     <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
+                      {/* 10…6 lets rank, address, lock and amount share a 358 px line (L5). */}
                       <Hash
                         hash={h.address ?? h.lockScriptHash}
                         copyable={false}
-                        startChars={12}
+                        startChars={10}
                         endChars={6}
                         className="text-[13px]"
                       />

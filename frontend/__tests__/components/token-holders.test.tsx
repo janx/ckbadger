@@ -121,7 +121,7 @@ describe('Token holders (board L5)', () => {
       {
         key: 'holder',
         tone: 'head',
-        left: '1ckb1qrgqep8s...tllakf JoyID',
+        left: '1ckb1qrgqep...tllakf JoyID',
         right: '562,997.00000000',
       },
       { key: 'share', tone: 'quiet', left: '', right: '2.32%' },
@@ -158,7 +158,7 @@ describe('Token holders where the table does not fit (L5)', () => {
     const [row] = await screen.findAllByTestId('holder-row-mobile');
     expect(screen.queryByRole('table', { name: 'Top 10 holders' })).toBeNull();
     expect(phoneLines(row)).toEqual([
-      { key: 'holder', tone: 'head', left: '10x1111111111...111111 JoyID', right: '100' },
+      { key: 'holder', tone: 'head', left: '10x11111111...111111 JoyID', right: '100' },
       { key: 'share', tone: 'quiet', left: '', right: '10.00%' },
     ]);
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '100%');
