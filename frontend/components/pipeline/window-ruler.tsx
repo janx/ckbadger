@@ -1,7 +1,7 @@
 'use client';
 
 import { tok } from '@/lib/pipeline/encoding';
-import { G, rulerPath, windowMarksPath, type RulerGeom } from '@/lib/pipeline/layout';
+import { G, type RulerGeom } from '@/lib/pipeline/layout';
 import { T10C, T10G } from '@/components/pipeline/svg-text';
 
 interface WindowRulerProps {
@@ -12,12 +12,15 @@ interface WindowRulerProps {
   faded: boolean;
 }
 
-/** The window at rest: a short gold mark across the chain line at each end in view. */
-export function WindowMarks({ ruler }: { ruler: RulerGeom }) {
+/**
+ * The window at rest: a short gold mark across the chain line at each end in view (`d` from the
+ * scene's axis: `windowMarksPath` in a row, `columnWindowMarksPath` in a column).
+ */
+export function WindowMarks({ d }: { d: string }) {
   return (
     <path
       data-window-marks
-      d={windowMarksPath(ruler) || 'M0 0'}
+      d={d || 'M0 0'}
       fill="none"
       strokeWidth={1.5}
       strokeOpacity={0.9}
@@ -29,9 +32,11 @@ export function WindowMarks({ ruler }: { ruler: RulerGeom }) {
   );
 }
 
-/** The hovered window: two ticks and the dimension line between them; the rest is in the hover. */
-export function WindowTicks({ ruler, faded }: Omit<WindowRulerProps, 'emphasis'>) {
-  const d = rulerPath(ruler);
+/**
+ * The hovered window: two ticks and the dimension line between them (a row), or ticks across the
+ * gaps (a column); the rest is in the hover. `d` comes from the scene's axis.
+ */
+export function WindowTicks({ d, faded }: { d: string; faded: boolean }) {
   return (
     <path
       data-ruler-ticks

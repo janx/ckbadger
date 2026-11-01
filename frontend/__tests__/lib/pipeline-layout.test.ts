@@ -7,23 +7,40 @@ import {
   poolTxHash,
   rewardOf,
   shortIdOf,
+  withSmallTxs,
 } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import type { PipelineSnapshot, PipelineTx } from '@/lib/api';
 import {
   BLOCK_FIELD_CAPACITY,
   CARD_H,
   CHIPS_PER_ROW,
+  COL,
   G,
   POOL_PENDING_CAPACITY,
   POOL_PROPOSED_CAPACITY,
   U,
   UNC,
   UNCLE_CHIPS_PER_ROW,
+  axisOf,
   buildScene,
   chainLayout,
   chainPaths,
   chainTail,
   chipSlots,
+  columnChainPaths,
+  columnChainTail,
+  columnChipCountAt,
+  columnCountAt,
+  columnRewardLink,
+  columnRowH,
+  columnRulerPath,
+  columnUncleW,
+  columnWellCountAt,
+  columnWindowMarksPath,
+  columnWindowRuler,
+  fitLine,
+  packLine,
+  pickTargets,
   inWindow,
   pack2D,
   pick,
@@ -350,6 +367,7 @@ describe('chainLayout', () => {
   });
 
   it.each([
+    { width: 606, blocks: 2 },
     { width: 760, blocks: 3 },
     { width: 1000, blocks: 5 },
     { width: CONTAINER_VIEW_W, blocks: 8 },
@@ -366,21 +384,43 @@ describe('chainLayout', () => {
     }
   );
 
-  it('never shows fewer blocks than fit the 760 px minimum canvas: 3 by this geometry', () => {
-    expect(G.minViewW).toBe(760);
+  it('never shows fewer than two whole blocks in a row: the 589 px minimum canvas', () => {
+    // The narrowest row is the chain start, two whole cards one pitch apart, and the margin.
+    expect(G.minViewW).toBe(G.chainX0 + (CARD_W + G.gap) + CARD_W + G.marginR);
+    expect(G.minViewW).toBe(589);
     // Derived from the geometry: the cards that fit from the chain start to the margin.
     expect(G.minBlocks).toBe(
       Math.floor((G.minViewW - G.marginR - G.chainX0 + G.gap) / (CARD_W + G.gap))
     );
-    expect(G.minBlocks).toBe(3);
+    expect(G.minBlocks).toBe(2);
     expect(chainLayout(24, G.minViewW, false)).toHaveLength(G.minBlocks);
+    // One pixel less and the second card would be cut.
+    const last = chainLayout(24, G.minViewW, false)[G.minBlocks - 1];
+    expect(last.x + last.w).toBe(G.minViewW - G.marginR);
     // The landing block sits at NEXT, beside as many chain blocks as fit.
     const landing = chainLayout(24, G.minViewW, true);
-    expect(landing.map((sl) => sl.slot)).toEqual(['landing', 'chain', 'chain', 'chain']);
+    expect(landing.map((sl) => sl.slot)).toEqual(['landing', 'chain', 'chain']);
   });
 
-  it('refuses a view narrower than the minimum canvas instead of clipping its cards', () => {
-    expect(() => chainLayout(24, G.minViewW - 1, false)).toThrow(/759 px view .* 760 px/);
+  it('lays a 606 px view (the 640–767 band) out as exactly two whole chain cards, nothing cut', () => {
+    const scene = buildScene(buildPipelineSnapshot(), 606, 'settled');
+    expect(scene.cards.map((c) => c.block.number)).toEqual([T, T - 1]);
+    expect(scene.cards.map((c) => c.x)).toEqual([G.chainX0, G.chainX0 + CARD_W + G.gap]);
+    for (const c of scene.cards) {
+      expect(c.w).toBe(CARD_W);
+      expect(c.x + c.w).toBeLessThanOrEqual(606 - G.marginR);
+    }
+    // A third would be cut by the edge, so it is not drawn at all.
+    const last = scene.cards[scene.cards.length - 1];
+    expect(last.x + last.w + G.gap + CARD_W).toBeGreaterThan(606 - G.marginR);
+    // Pool wells and NEXT keep their places and widths.
+    expect(scene.next?.x).toBe(G.nextX);
+    expect(scene.next?.w).toBe(CARD_W);
+  });
+
+  it('refuses a row narrower than the minimum canvas instead of clipping its cards', () => {
+    const w = G.minViewW;
+    expect(() => chainLayout(24, w - 1, false)).toThrow(new RegExp(`${w - 1} px view .* ${w} px`));
   });
 
   it('fits all 8 chain blocks inside the 1280 px page container', () => {
@@ -585,7 +625,7 @@ describe('window label placement: inside the view, never across a tick', () => {
 });
 
 describe('a narrower view: fewer blocks, all of them whole', () => {
-  it.each([760, 1000, CONTAINER_VIEW_W])(
+  it.each([589, 606, 760, 1000, CONTAINER_VIEW_W])(
     'at %i px: no card past the edge, a forward tail, every window label in view and off its ticks',
     (W) => {
       const s = buildPipelineSnapshot();
@@ -900,5 +940,334 @@ describe('NEXT card from next.txs', () => {
         'settled'
       )
     ).toThrow(/omittedTxs/);
+  });
+});
+
+describe('the column: the pipeline stood on end below the 589 px row', () => {
+  /** The phone reference: 390 px less the 16 px gutters and the panel border. */
+  const PHONE_W = 356;
+  const quiet = withSmallTxs(buildPipelineSnapshot());
+  const scene = buildScene(quiet, PHONE_W, 'settled');
+  const bands = scene.bands as NonNullable<Scene['bands']>;
+  /** Slots along the rows: a row's top and height. */
+  const slotsOf = (sc: Scene): ChainSlotState[] =>
+    sc.cards.map((c) => ({
+      number: c.block.number,
+      x: c.y,
+      w: c.h,
+      mined: true,
+      hash: c.block.hash,
+      parentHash: c.block.parentHash,
+      solid: 1,
+    }));
+  const nextSlot = (sc: Scene): RulerSlot => {
+    const n = sc.next as NonNullable<Scene['next']>;
+    return { number: n.number, x: n.y, w: n.h, mined: false };
+  };
+
+  it('is picked by the measured width: the column below G.minViewW, the row from it', () => {
+    expect(buildScene(quiet, G.minViewW - 1, 'settled').orientation).toBe('column');
+    expect(buildScene(quiet, G.minViewW, 'settled').orientation).toBe('row');
+    expect(buildScene(quiet, G.minViewW, 'settled').H).toBe(G.H);
+    expect(buildScene(quiet, G.minViewW, 'settled').bands).toBeNull();
+  });
+
+  it('lays 356 px out as seven 30 px rows: mempool, proposed, NEXT, the tip and three older', () => {
+    expect(scene.orientation).toBe('column');
+    // Gaps: 12 between the wells, 24 on both sides of NEXT, 14 between blocks (the board).
+    expect(bands.pending).toEqual({ y: 8, h: 30 });
+    expect(bands.proposed).toEqual({ y: 50, h: 30 });
+    expect(bands.next).toEqual({ y: 104, h: 30 });
+    expect(scene.next).toMatchObject({ number: T + 1, x: 6, y: 104, w: 344, h: 30 });
+    expect(scene.cards.map((c) => c.block.number)).toEqual([T, T - 1, T - 2, T - 3]);
+    expect(scene.cards).toHaveLength(COL.blocks);
+    expect(scene.cards.map((c) => c.y)).toEqual([158, 202, 246, 290]);
+    for (const c of scene.cards) expect(c).toMatchObject({ x: 6, w: 344, h: 30, slot: 'chain' });
+    // The last row ends at 320; the 20 px below it hold the dotted tail.
+    expect(scene.H).toBe(340);
+  });
+
+  it('grows a row only for a 3×3 or 4×4 square, and the canvas with it', () => {
+    expect([1, 2, 3, 4].map(columnRowH)).toEqual([30, 30, 40, 50]);
+    // The full fixture's tip commits a 9.6 KB tx: a 4×4 square, so its row is 50 px.
+    const full = buildScene(buildPipelineSnapshot(), PHONE_W, 'settled');
+    expect(full.cards.map((c) => c.h)).toEqual([50, 30, 30, 30]);
+    expect(full.cards.map((c) => c.y)).toEqual([158, 222, 266, 310]);
+    expect(full.H).toBe(360);
+    const big = cardOf(full, T).squares.find((q) => q.s === 4 * U - 1);
+    // Centred in its row: 5 px above and below.
+    expect(big?.y).toBe(5);
+  });
+
+  it('draws the tx line from x 108: the cellbase diamond, then squares at 10 px per cell, centred', () => {
+    for (const c of scene.cards) {
+      const [cb, ...txs] = c.squares;
+      expect(cb).toMatchObject({ kind: 'cellbase', x: COL.lineX - COL.x0, y: 10, s: U - 1 });
+      expect(c.x + cb.x).toBe(108);
+      let x = COL.lineX - COL.x0 + U;
+      for (const q of txs) {
+        // Side by side, each taking its own cells, each centred on the row.
+        expect(q.x).toBe(x);
+        expect(q.y).toBe(Math.floor((c.h - q.s) / 2));
+        x += q.s + 1;
+      }
+    }
+    // The tip: three 2×2 then a 1×1, biggest first.
+    expect(cardOf(scene, T).squares.map((q) => q.s)).toEqual([9, 19, 19, 19, 9]);
+  });
+
+  it('puts the proposal dots at 60, 68, 76 … on the row centre, five a row, two rows, then +N', () => {
+    const tip = cardOf(scene, T);
+    expect(tip.chips.map((k) => tip.x + k.x + G.chip / 2)).toEqual([60, 68, 76]);
+    for (const k of tip.chips) expect(tip.y + k.y + G.chip / 2).toBe(tip.y + tip.h / 2);
+    // Many proposals: two rows of five on the 8 px pitch, centred together, and "+N" at the end of
+    // the second row giving up one slot per glyph.
+    const many = Array.from({ length: 40 }, (_, i) => ({
+      shortId: shortIdOf(committedTxHash(T - 2, 500 + i)),
+      uncleIndex: null,
+      state: 'waiting' as const,
+      txHash: null,
+      committedBlock: null,
+    }));
+    const blocks = quiet.blocks.map((b) => (b.number === T - 2 ? { ...b, proposals: many } : b));
+    const card = cardOf(buildScene({ ...quiet, blocks }, PHONE_W, 'settled'), T - 2);
+    expect(card.chips).toHaveLength(10 - 3);
+    expect(card.chipOverflow).toBe(33);
+    expect(new Set(card.chips.map((k) => k.y))).toEqual(new Set([8, 16]));
+    expect(card.chips.slice(0, 5).map((k) => card.x + k.x + G.chip / 2)).toEqual([
+      60, 68, 76, 84, 92,
+    ]);
+    const at = columnChipCountAt(card.h);
+    expect(card.x + at.x).toBe(95);
+    expect(at.y).toBe(16 + G.chip / 2 + 3.5);
+    // The label's three glyphs fit the two freed slots and the third, never over a dot.
+    const lastDot = Math.max(...card.chips.filter((k) => k.y === 16).map((k) => k.x + G.chip));
+    expect(at.x - labelWidth('+33')).toBeGreaterThanOrEqual(lastDot);
+  });
+
+  it("puts an uncle box at the end of the tx line, with its dots, out of the line's room", () => {
+    // T−1 carries the uncle T−2 and two of its proposals.
+    const host = cardOf(scene, T - 1);
+    expect(columnUncleW(2)).toBe(72);
+    expect(columnUncleW(0)).toBe(38);
+    expect(host.uncles).toEqual([
+      expect.objectContaining({ index: 0, label: 'uncle', x: 344 - 6 - 72, y: 6, w: 72, h: 18 }),
+    ]);
+    const un = host.uncles[0];
+    expect(host.x + un.x + un.w).toBe(PHONE_W - COL.x0 - COL.padR);
+    const dots = host.chips.filter((k) => k.proposal.uncleIndex === 0);
+    expect(dots.map((k) => k.x)).toEqual([un.x + 38, un.x + 46]);
+    for (const k of dots) expect(k.y + G.chip / 2).toBe(host.h / 2);
+    // Its own two proposals stay in the dot zone; no square reaches the box.
+    expect(host.chips.filter((k) => k.proposal.uncleIndex === null).map((k) => k.x)).toEqual([
+      51, 59,
+    ]);
+    for (const q of host.squares) expect(q.x + q.s).toBeLessThanOrEqual(un.x - COL.endGap);
+    expect(columnCountAt(host).x).toBe(un.x - COL.endGap);
+  });
+
+  it('counts what a block line cannot hold as +N at its end, never over a square', () => {
+    const n = T - 2;
+    const txs = smallTxs(n, 60);
+    const blocks = quiet.blocks.map((b) =>
+      b.number === n ? { ...b, txs, txCount: 1 + txs.length + 7, omittedTxs: 7 } : b
+    );
+    const card = cardOf(buildScene({ ...quiet, blocks }, PHONE_W, 'settled'), n);
+    const drawn = card.squares.length - 1;
+    expect(drawn).toBe(20);
+    // Hidden: the listed txs the line could not hold plus the ones the backend omitted.
+    expect(card.hidden).toBe(60 - drawn + 7);
+    const at = columnCountAt(card);
+    expect(at).toEqual({ x: 344 - COL.padR, y: 15 + 3.5 });
+    const end = Math.max(...card.squares.map((q) => q.x + q.s));
+    expect(end + COL.endGap).toBeLessThanOrEqual(at.x - labelWidth(`+${card.hidden}`));
+  });
+
+  it('draws the wells as rows: squares on the line from x 108 and "+N" for the rest of the pool', () => {
+    const pool = scene.pool as NonNullable<Scene['pool']>;
+    expect(pool.pending.squares.map((q) => q.x)).toEqual([108, 118, 128, 138, 148]);
+    for (const q of pool.pending.squares) expect(q.y).toBe(18);
+    expect(pool.pending).toMatchObject({ total: 5, hidden: 0 });
+    // w0 is 2×2: it takes two cells and sits 5 px below the row top.
+    const w0 = pool.proposed.squares.find((q) => q.id === poolTxHash('w0'));
+    expect(w0).toMatchObject({ s: 19, y: 50 + 5 });
+    expect(pool.proposed).toMatchObject({ total: 9, hidden: 0 });
+    // A busy pool: 56 listed, 300 in the node's pool.
+    const p0 = quiet.pool as NonNullable<PipelineSnapshot['pool']>;
+    const many = Array.from({ length: 56 }, (_, i) => ({
+      ...p0.pending[0],
+      hash: poolTxHash(`busy${i}`),
+      size: 330,
+      arrivedAt: p0.pending[0].arrivedAt + i,
+    }));
+    const busy = buildScene(
+      { ...quiet, pool: { ...p0, pending: many, pendingTotal: 300 } },
+      PHONE_W,
+      'settled'
+    );
+    const grid = (busy.pool as NonNullable<Scene['pool']>).pending;
+    expect(grid.squares.length + grid.hidden).toBe(300);
+    const at = columnWellCountAt(PHONE_W, (busy.bands as NonNullable<Scene['bands']>).pending);
+    expect(at).toEqual({ x: 344, y: 8 + 15 + 3.5 });
+    const end = Math.max(...grid.squares.map((q) => q.x + q.s));
+    expect(end + COL.endGap).toBeLessThanOrEqual(at.x - labelWidth(`+${grid.hidden}`));
+  });
+
+  it('runs the chain line at x 28 through the gaps only: dashed to the tip, solid, gold, dotted', () => {
+    const paths = columnChainPaths(slotsOf(scene), nextSlot(scene), T + 1, MAINNET, scene.H);
+    // NEXT ⇢ the tip dashed; tip → tip−1 solid (the tip is outside NEXT's window); tip−1 … tip−3
+    // gold inside it; then the dotted tail to 4 px above the edge.
+    expect(paths.pend).toBe('M28 134.0V158.0');
+    expect(paths.solid).toBe('M28 188.0V202.0');
+    expect(paths.win).toBe('M28 232.0V246.0M28 276.0V290.0');
+    expect(paths.tail).toBe('M28 320.0V336.0');
+    expect(columnChainTail(slotsOf(scene), scene.H)).toEqual({ x0: 320, x1: 336 });
+    // A row's link never runs under a row.
+    for (const d of Object.values(paths)) {
+      for (const [, a, b] of d.matchAll(/M28 ([\d.]+)V([\d.]+)/g)) {
+        for (const c of [...scene.cards, scene.next as NonNullable<Scene['next']>]) {
+          expect(Number(b) <= c.y || Number(a) >= c.y + c.h).toBe(true);
+        }
+      }
+    }
+  });
+
+  it("marks NEXT's window with a short horizontal tick across the line between tip and tip − 1", () => {
+    const ruler = columnWindowRuler([nextSlot(scene), ...slotsOf(scene)], T + 1, MAINNET, scene.H);
+    // In the middle of the gap between the tip (158 + 30) and tip − 1 (202).
+    expect(ruler.ticks).toEqual([195]);
+    expect(ruler.label).toBeNull();
+    // The far end (tip − 9) is below the last row: the window runs on in the gold tail.
+    expect(ruler.tailOpen).toBe(true);
+    expect(columnWindowMarksPath(ruler)).toBe('M22.0 195.0H34.0');
+    // Hovered, the tick runs across the whole gap.
+    expect(columnRulerPath(ruler, PHONE_W)).toBe('M6.0 195.0H350.0');
+  });
+
+  it("lands a mined block in NEXT's row, beside the four older rows, then steps them down", () => {
+    const s2 = mineNext(quiet, { commit: [poolTxHash('w0')], propose: [poolTxHash('q0')] });
+    const landing = buildScene(s2, PHONE_W, 'landing');
+    expect(landing.next).toBeNull();
+    expect(landing.cards.map((c) => [c.block.number, c.slot, c.y])).toEqual([
+      [T + 1, 'landing', 104],
+      [T, 'chain', 158],
+      [T - 1, 'chain', 202],
+      [T - 2, 'chain', 246],
+      [T - 3, 'chain', 290],
+    ]);
+    expect(landing.bands?.next).toEqual({ y: 104, h: 30 });
+    const settled = buildScene(s2, PHONE_W, 'settled');
+    expect(settled.cards.map((c) => [c.block.number, c.y])).toEqual([
+      [T + 1, 158],
+      [T, 202],
+      [T - 1, 246],
+      [T - 2, 290],
+    ]);
+  });
+
+  it("picks in absolute canvas coordinates: a row's squares and dots add its origin", () => {
+    const targets = pickTargets(scene);
+    const tip = cardOf(scene, T);
+    const q = tip.squares[2];
+    expect(pick(targets, tip.x + q.x + q.s / 2, tip.y + q.y + q.s / 2)).toEqual({
+      kind: 'tx',
+      id: q.id,
+    });
+    const k = tip.chips[0];
+    expect(pick(targets, tip.x + k.x + G.chip / 2, tip.y + k.y + G.chip / 2)).toEqual({
+      kind: 'chip',
+      card: tip.id,
+      key: k.key,
+    });
+    const next = scene.next as NonNullable<Scene['next']>;
+    const g = next.ghosts.find((x) => x.id) as NonNullable<Scene['next']>['ghosts'][number];
+    expect(pick(targets, next.x + g.x + g.s / 2, next.y + g.y + g.s / 2)).toEqual({
+      kind: 'ghost',
+      id: g.id,
+    });
+  });
+
+  it("runs a cellbase's reward link down a lane before the tx line, into the tail", () => {
+    const tip = cardOf(scene, T);
+    const cb = tip.squares[0];
+    const a = { X: tip.x + cb.x + cb.s / 2, Y: tip.y + cb.y + cb.s / 2 };
+    expect(a).toEqual({ X: 112.5, Y: 172.5 });
+    const tail = columnChainTail(slotsOf(scene), scene.H) as NonNullable<
+      ReturnType<typeof columnChainTail>
+    >;
+    expect(columnRewardLink(a, null, tail)).toEqual({
+      d: 'M112.5 172.5H107.0Q102.0 172.5 102.0 177.5V320.0',
+      tail: 'M102.0 320.0V336.0',
+    });
+    // A paid block on screen below: the link turns back into its cellbase.
+    expect(columnRewardLink(a, { X: 112.5, Y: 260.5 }, tail)).toEqual({
+      d: 'M112.5 172.5H107.0Q102.0 172.5 102.0 177.5V255.5Q102.0 260.5 107.0 260.5H112.5',
+      tail: '',
+    });
+  });
+
+  it('lays every phone width out without a cut row or a square past its row', () => {
+    for (const W of [COL.minViewW, 300, 326, PHONE_W, G.minViewW - 1]) {
+      for (const sc of [
+        buildScene(buildPipelineSnapshot(), W, 'settled'),
+        buildScene(quiet, W, 'settled'),
+      ]) {
+        expect(sc.orientation).toBe('column');
+        const rows = [...sc.cards, sc.next as NonNullable<Scene['next']>];
+        for (const c of rows) {
+          expect(c.x).toBe(COL.x0);
+          expect(c.x + c.w).toBe(W - COL.x0);
+          for (const q of 'squares' in c ? c.squares : c.ghosts) {
+            expect(q.x).toBeGreaterThanOrEqual(COL.lineX - COL.x0);
+            expect(q.x + q.s).toBeLessThanOrEqual(c.w - COL.padR);
+            expect(q.y).toBeGreaterThanOrEqual(COL.pad);
+            expect(q.y + q.s).toBeLessThanOrEqual(c.h - COL.pad);
+          }
+        }
+        const last = sc.cards[sc.cards.length - 1];
+        expect(sc.H).toBe(last.y + last.h + COL.bottom);
+      }
+    }
+  });
+
+  it('refuses a view narrower than the narrowest column instead of cutting its rows', () => {
+    expect(() => buildScene(quiet, COL.minViewW - 1, 'settled')).toThrow(
+      new RegExp(`${COL.minViewW - 1} px view .* ${COL.minViewW} px column`)
+    );
+  });
+
+  it('packs a line side by side, first fit, and gives cells back for the "+N" label', () => {
+    expect(
+      packLine(
+        [
+          { id: 'a', n: 2 },
+          { id: 'b', n: 4 },
+          { id: 'c', n: 1 },
+        ],
+        5,
+        true
+      )
+    ).toEqual({
+      pos: [
+        { id: 'a', c: 1, n: 2 },
+        { id: 'c', c: 3, n: 1 },
+      ],
+      hidden: 1,
+    });
+    // 10 cells of room; 12 txs: the label "+N" takes the last cells it needs.
+    const items = Array.from({ length: 12 }, (_, i) => ({ id: `t${i}`, n: 1 }));
+    const fit = fitLine(items, 99, false, 0, 'test line');
+    expect(fit.pos.length + fit.hidden).toBe(12);
+    expect(fit.pos.length * U - 1 + COL.endGap + labelWidth(`+${fit.hidden}`)).toBeLessThanOrEqual(
+      99
+    );
+    expect(() => fitLine(items, 4, true, 0, 'a tiny line')).toThrow(/a tiny line has no room/);
+  });
+
+  it('gives the panel and the motion layer one axis per orientation', () => {
+    const box = { x: 6, y: 158, w: 344, h: 30 };
+    expect(axisOf(scene).along(box)).toEqual({ x: 158, w: 30 });
+    const row = buildScene(quiet, 1000, 'settled');
+    expect(axisOf(row).along(box)).toEqual({ x: 6, w: 344 });
   });
 });

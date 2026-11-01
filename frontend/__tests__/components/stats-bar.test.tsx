@@ -152,20 +152,96 @@ describe('VitalsStrip', () => {
     expect(strip.firstElementChild).toBe(screen.getByRole('link', { name: /Block #20,819,143/ }));
   });
 
-  it('writes the block time with a space before its unit and keeps one row on a phone (TX-05)', async () => {
+  it('writes the block time with a space before its unit and never scrolls sideways (TX-05)', async () => {
+    useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
     const strip = await screen.findByRole('region', { name: 'Chain vitals' });
     await waitFor(() => expect(strip).toHaveTextContent('Block time8.43 s'));
-    // Below md the strip is one row that scrolls inside itself; from md up it wraps as before.
-    expect(strip).toHaveClass('flex-nowrap', 'overflow-x-auto', 'md:flex-wrap');
+    // Below md the strip is three designed lines (SPEC.md "Vitals strip below md"), not a row
+    // that pans: nothing in it scrolls sideways or refuses to wrap onto its next line.
+    const scrollClass = /^(?:[a-z]+:)?(?:overflow-x-(?:auto|scroll)|overflow-auto|flex-nowrap)$/;
+    for (const el of [strip, ...Array.from(strip.querySelectorAll('*'))]) {
+      for (const cls of Array.from(el.classList)) expect(cls).not.toMatch(scrollClass);
+    }
+    expect(strip.className).not.toMatch(/whitespace-nowrap/);
+    // From md up it is the one wrapping row it always was.
+    expect(strip).toHaveClass('md:flex', 'md:flex-wrap');
   });
 
-  it('keeps every vital whole when the row overflows: nothing shrinks, the epoch never stacks', async () => {
-    // A non-wrapping row that overflows shrinks its items to their min-content width. Text that
-    // cannot wrap has none to give, so a wrapping epoch item would take all the squeeze and stack
-    // its number, bar, index and time left into a column (seen at ~680 px). Every vital refuses to
-    // shrink and the epoch is a plain row, so the strip scrolls as designed instead.
+  it('lays the strip out below md as three lines: block and Live, the epoch, the three mining figures', async () => {
+    useRealtimeStore.setState({ socketHeld: true, isConnected: true });
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    render(<VitalsStrip />);
+    const strip = await screen.findByRole('region', { name: 'Chain vitals' });
+    await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
+    // Three equal columns below 640 (repeat(3, minmax(0, 1fr))); at 640–767 the mining figures
+    // pack to the left as inline pairs and a fourth track takes the rest.
+    expect(strip).toHaveClass('grid', 'grid-cols-3', 'gap-x-4', 'gap-y-2');
+    expect(strip).toHaveClass('sm:grid-cols-[max-content_max-content_max-content_1fr]');
+    // Line 1: the block on the left, Live at the right end of the same line.
+    const block = screen.getByRole('link', { name: /Block #20,819,143/ });
+    expect(block).toHaveClass('col-span-2', 'sm:col-span-3');
+    const live = screen.getByTestId('vitals-live');
+    expect(live).toHaveClass('row-start-1', 'col-start-3', 'sm:col-start-4', 'ml-auto');
+    // Line 2: the epoch alone across the full width, its bar taking the free width.
+    const epoch = screen.getByTestId('vitals-epoch');
+    expect(epoch).toHaveClass('col-span-3', 'sm:col-span-4');
+    const bar = screen.getByTestId('vitals-epoch-progress').parentElement as HTMLElement;
+    expect(bar).toHaveClass('flex-[1_1_48px]', 'min-w-12', 'md:w-14', 'md:flex-none');
+    // Line 3: block time, hash rate, difficulty, one track each, label over value below 640 and
+    // label beside value from 640 up.
+    const mining = [
+      screen.getByText('Block time').parentElement as HTMLElement,
+      screen.getByRole('link', { name: /Hash rate/ }),
+      screen.getByRole('link', { name: /Difficulty/ }),
+    ];
+    for (const m of mining) {
+      expect(m.className).not.toMatch(/col-span|col-start|row-start/);
+      expect(m).toHaveClass('flex-col', 'sm:flex-row', 'sm:items-baseline');
+    }
+    // Document order is the md-up reading order: Live closes the row there.
+    expect(Array.from(strip.children)).toEqual([block, epoch, ...mining, live]);
+  });
+
+  it('keeps the error rows on their own lines below md', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(
+      stats({ epoch: '100/50/1000', avgBlockTime: '8.43 seconds' })
+    );
+    render(<VitalsStrip />);
+    // The unreadable epoch keeps the epoch's full line; the bad block time keeps its mining track.
+    expect(await screen.findByTestId('vitals-epoch-error')).toHaveClass(
+      'col-span-3',
+      'sm:col-span-4'
+    );
+    const blockTime = screen.getByTestId('vitals-block-time-error');
+    expect(blockTime.className).not.toMatch(/col-span/);
+    expect(blockTime).toHaveClass('flex-col', 'sm:flex-row');
+  });
+
+  it('gives a failed fetch the whole first line', async () => {
+    vi.mocked(api.getNetworkStats).mockRejectedValue(new Error('HTTP 502'));
+    render(<VitalsStrip />);
+    expect(await screen.findByTestId('vitals-error')).toHaveClass('col-span-3', 'sm:col-span-4');
+  });
+
+  it('places the loading labels where the figures will be', () => {
+    vi.mocked(api.getNetworkStats).mockImplementation(() => new Promise(() => {}));
+    render(<VitalsStrip />);
+    const strip = screen.getByRole('region', { name: 'Chain vitals' });
+    const [block, epoch, ...mining] = Array.from(strip.children) as HTMLElement[];
+    expect(block).toHaveTextContent('Block');
+    expect(block).toHaveClass('col-span-2', 'sm:col-span-3');
+    expect(epoch).toHaveTextContent('Epoch');
+    expect(epoch).toHaveClass('col-span-3', 'sm:col-span-4');
+    expect(mining.map((m) => m.textContent)).toEqual(['Block time', 'Hash rate', 'Difficulty']);
+    for (const m of mining) expect(m).toHaveClass('flex-col', 'sm:flex-row');
+  });
+
+  it('keeps every vital whole: each is one element, and the epoch never stacks', async () => {
+    // Below md each vital owns its grid track or line, so nothing is squeezed by a neighbour. The
+    // epoch is a plain row whose text never wraps: only its bar gives up width (down to 48 px), so
+    // its number, index and time left stay on one line instead of stacking into a column.
     useRealtimeStore.setState({ socketHeld: true });
     vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
     render(<VitalsStrip />);
@@ -173,10 +249,11 @@ describe('VitalsStrip', () => {
     await waitFor(() => expect(strip).toHaveTextContent('#20,819,143'));
     const items = Array.from(strip.children) as HTMLElement[];
     expect(items).toHaveLength(6);
-    for (const item of items) expect(item).toHaveClass('shrink-0');
     const epoch = screen.getByTestId('vitals-epoch');
-    expect(epoch).toHaveClass('flex');
+    expect(epoch).toHaveClass('flex', 'whitespace-nowrap');
     expect(epoch).not.toHaveClass('flex-wrap');
+    const bar = screen.getByTestId('vitals-epoch-progress').parentElement as HTMLElement;
+    expect(bar).toHaveClass('min-w-12');
   });
 
   it('refuses a block time that is not "<seconds>s" (TX-05)', async () => {

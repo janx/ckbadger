@@ -10,12 +10,10 @@ import {
   type SquareStyle,
 } from '@/lib/pipeline/encoding';
 import {
-  chainPaths,
-  rulerPath,
+  axisOf,
   windowLabel,
-  windowMarksPath,
-  windowRuler,
   type ChainSlotState,
+  type Orientation,
   type RulerSlot,
   type Scene,
   type SceneSquare,
@@ -101,7 +99,7 @@ interface Tween {
   to: Values;
   keys: string[];
   ease: Ease;
-  arc: boolean;
+  arc: false | 'over' | 'beside';
   birth: boolean;
   colorLate: boolean;
   kind: 'seat' | 'drop';
@@ -130,8 +128,12 @@ export interface GoOptions {
   dur?: number;
   delay?: number;
   ease?: Ease;
-  /** Lob along a quadratic arc above both ends (a commit flying into its block). */
-  arc?: boolean;
+  /**
+   * Lob along a quadratic arc (a commit flying into its block): `true` rises above both ends, as a
+   * commit flies right into a row; `'beside'` bows out to the right of both ends while it goes
+   * down, as a commit falls into a column's NEXT row (its height moves straight down).
+   */
+  arc?: boolean | 'beside';
   /** Grow from nothing with an overshoot (a new cellbase). */
   birth?: boolean;
   /** Keep the old colour until the last 30 % of the move. */
@@ -274,7 +276,7 @@ export class Animator {
       to: { ...to },
       keys,
       ease: o.ease ?? E.enter,
-      arc: !!o.arc,
+      arc: o.arc === 'beside' ? 'beside' : o.arc ? 'over' : false,
       birth: !!o.birth,
       colorLate: !!o.colorLate,
       kind: 'seat',
@@ -287,8 +289,18 @@ export class Animator {
     this.kick();
   }
 
-  /** Animate a node out and remove its element; `onGone` runs once it is removed. */
-  exit(n: MotionNode, kind: ExitKind, delay = 0, onGone?: () => void): void {
+  /**
+   * Animate a node out and remove its element; `onGone` runs once it is removed. A retiring card
+   * moves on along the chain's direction (`along`): right in a row, down in a column; an orphan
+   * steps off the chain across it.
+   */
+  exit(
+    n: MotionNode,
+    kind: ExitKind,
+    delay = 0,
+    onGone?: () => void,
+    along: Orientation = 'row'
+  ): void {
     n.exiting = true;
     n.tws.clear();
     const done = () => {
@@ -301,12 +313,15 @@ export class Animator {
       done();
       return;
     }
+    const row = along === 'row';
     if (kind === 'hide') this.go(n, { op: 0 }, { dur: 200, delay, ease: E.fade, onEnd: done });
-    else if (kind === 'retire')
-      this.go(n, { X: n.v.X + 18, op: 0 }, { dur: 600, delay, ease: E.fade, onEnd: done });
-    else if (kind === 'orphan')
-      this.go(n, { Y: n.v.Y + 12, op: 0 }, { dur: 600, delay, ease: E.fade, onEnd: done });
-    else {
+    else if (kind === 'retire') {
+      const to: Values = row ? { X: n.v.X + 18, op: 0 } : { Y: n.v.Y + 18, op: 0 };
+      this.go(n, to, { dur: 600, delay, ease: E.fade, onEnd: done });
+    } else if (kind === 'orphan') {
+      const to: Values = row ? { Y: n.v.Y + 12, op: 0 } : { X: n.v.X + 12, op: 0 };
+      this.go(n, to, { dur: 600, delay, ease: E.fade, onEnd: done });
+    } else {
       n.tws.set('main', {
         t0: this.clock.now() + 60 + delay,
         dur: 900,
@@ -455,8 +470,9 @@ export class Animator {
     if (tw.birth) n.v.s = t.s * birthEase(u);
     if (tw.arc) {
       const d = Math.hypot(t.X - f.X, t.Y - f.Y);
-      const cx = (f.X + t.X) / 2;
-      const cy = Math.min(f.Y, t.Y) - 24 - 0.1 * d;
+      const over = tw.arc === 'over';
+      const cx = over ? (f.X + t.X) / 2 : Math.max(f.X, t.X) + 24 + 0.1 * d;
+      const cy = over ? Math.min(f.Y, t.Y) - 24 - 0.1 * d : (f.Y + t.Y) / 2;
       const a = (1 - e) * (1 - e);
       const b = 2 * (1 - e) * e;
       const c = e * e;
@@ -593,9 +609,22 @@ export class SceneMotion {
     this.squares.clear();
   }
 
+  /**
+   * A change of orientation redraws the canvas in place: nothing flies between a row and a column.
+   * Every record is dropped, so the next sync boots.
+   */
+  private reset(): void {
+    this.animator.finishAll();
+    for (const c of this.exitingCards) c.node.el.remove();
+    this.exitingCards.clear();
+    this.cards.clear();
+    this.squares.clear();
+  }
+
   /** Called before React commits `next`: clone what is about to disappear. */
   captureDeparting(svg: SVGSVGElement, prev: Scene, next: Scene): Departing {
     const out: Departing = { cards: new Map(), squares: new Map() };
+    if (prev.orientation !== next.orientation) return out;
     const keepCards = new Set(next.cards.map((c) => c.id));
     const cardsLayer = layer(svg, 'cards');
     const gone = new Set<string>();
@@ -639,7 +668,10 @@ export class SceneMotion {
     const fresh = ctx.seq !== this.seq;
     this.seq = ctx.seq;
     const tr = ctx.transition;
-    const boot = !prev || (fresh && tr.mode === 'boot');
+    const turned = !!prev && prev.orientation !== scene.orientation;
+    if (turned) this.reset();
+    const boot = !prev || turned || (fresh && tr.mode === 'boot');
+    const along = scene.orientation;
     const events: TransitionEvent[] = fresh ? tr.events : [];
     const phaseStep = !!prev && prev.phase !== scene.phase;
     const settle = phaseStep || (fresh && tr.mode === 'settle');
@@ -659,16 +691,23 @@ export class SceneMotion {
     const poolLayer = scene.pool ? layer(svg, 'pool') : null;
 
     // Where every card is right now, before anything is retargeted.
-    const cardX = new Map<string, number>();
-    for (const [id, r] of this.cards) cardX.set(id, r.node.v.X);
+    const cardAt = new Map<string, { X: number; Y: number }>();
+    for (const [id, r] of this.cards) cardAt.set(id, { X: r.node.v.X, Y: r.node.v.Y });
 
     // ---- Cards ----
-    const targets: { id: string; x: number; w: number; h: number; meta: Omit<CardRec, 'node'> }[] =
-      [];
+    const targets: {
+      id: string;
+      x: number;
+      y: number;
+      w: number;
+      h: number;
+      meta: Omit<CardRec, 'node'>;
+    }[] = [];
     if (scene.next) {
       targets.push({
         id: NEXT_CARD_ID,
         x: scene.next.x,
+        y: scene.next.y,
         w: scene.next.w,
         h: scene.next.h,
         meta: {
@@ -683,6 +722,7 @@ export class SceneMotion {
       targets.push({
         id: c.id,
         x: c.x,
+        y: c.y,
         w: c.w,
         h: c.h,
         meta: {
@@ -701,7 +741,7 @@ export class SceneMotion {
           : cardsLayer.querySelector(`[data-card="${t.id}"]`)
       ) as SVGGElement | null;
       if (!el) throw new Error(`motion: card ${t.id} was laid out but is not in the DOM`);
-      const v: Values = { X: t.x, Y: 0, w: t.w, h: t.h, op: 1, solid: 1, fresh: 0 };
+      const v: Values = { X: t.x, Y: t.y, w: t.w, h: t.h, op: 1, solid: 1, fresh: 0 };
       const rec = this.cards.get(t.id);
       if (!rec) {
         const created: CardRec = {
@@ -738,7 +778,8 @@ export class SceneMotion {
       }
       rec.node.el = el;
       Object.assign(rec, t.meta);
-      const to = { X: t.x, w: t.w, h: t.h };
+      // A row's cards move right, a column's rows move down: both are a move to the new origin.
+      const to = { X: t.x, Y: t.y, w: t.w, h: t.h };
       if (this.animator.differs(rec.node, to, 0.01)) {
         this.animator.go(rec.node, to, { dur: settle ? 700 : 260 });
       }
@@ -757,20 +798,21 @@ export class SceneMotion {
       this.exitingCards.add(rec);
       const kind =
         cardEvents.get(id)?.kind === 'orphan' ? 'orphan' : id === NEXT_CARD_ID ? 'hide' : 'retire';
-      this.animator.exit(rec.node, kind, 0, () => this.exitingCards.delete(rec));
+      this.animator.exit(rec.node, kind, 0, () => this.exitingCards.delete(rec), along);
     }
 
     // ---- Squares ----
-    const containerX = (container: string, at: 'now' | 'before') => {
-      if (container === 'pool') return 0;
+    const ORIGIN = { X: 0, Y: 0 };
+    const containerAt = (container: string, at: 'now' | 'before') => {
+      if (container === 'pool') return ORIGIN;
       if (at === 'before') {
-        const x = cardX.get(container);
-        if (x === undefined) throw new Error(`motion: square container ${container} has no card`);
-        return x;
+        const p = cardAt.get(container);
+        if (!p) throw new Error(`motion: square container ${container} has no card`);
+        return p;
       }
       const rec = this.cards.get(container);
       if (!rec) throw new Error(`motion: square container ${container} has no card`);
-      return rec.node.v.X;
+      return { X: rec.node.v.X, Y: rec.node.v.Y };
     };
     const els = new Map<string, SVGElement>();
     for (const root of [poolLayer, cardsLayer]) {
@@ -796,9 +838,9 @@ export class SceneMotion {
         const node = this.animator.node(q.id, el, v, look, paintSquareNode);
         this.squares.set(q.id, { node, container: q.container });
         if (boot) continue;
-        const cx = containerX(q.container, 'now');
-        const centre = { X: cx + q.x + q.s / 2, Y: q.y + q.s / 2 };
-        const newCard = q.container !== 'pool' && !cardX.has(q.container);
+        const at = containerAt(q.container, 'now');
+        const centre = { X: at.X + q.x + q.s / 2, Y: at.Y + q.y + q.s / 2 };
+        const newCard = q.container !== 'pool' && !cardAt.has(q.container);
         if (q.kind === 'cellbase' && q.container === landingId) {
           node.v.s = 0;
           node.paint(node);
@@ -826,7 +868,10 @@ export class SceneMotion {
         n.painted = '';
       }
       // Re-express the current position in the new container's coordinates.
-      n.v.X += containerX(rec.container, 'before') - containerX(q.container, 'now');
+      const was = containerAt(rec.container, 'before');
+      const now = containerAt(q.container, 'now');
+      n.v.X += was.X - now.X;
+      n.v.Y += was.Y - now.Y;
       rec.container = q.container;
       n.paint(n);
       if (e?.kind === 'commit') {
@@ -835,7 +880,8 @@ export class SceneMotion {
           delay: 40 + Math.min(e.rank * 16, 420),
           dur: 720,
           ease: E.lob,
-          arc: true,
+          // Into NEXT: over the gap to the right in a row, down from the proposed row in a column.
+          arc: along === 'row' ? true : 'beside',
           colorLate: true,
         });
       } else if (e?.kind === 'propose') {
@@ -859,7 +905,9 @@ export class SceneMotion {
       if (!clone || boot) continue;
       strip(clone);
       exitLayer.appendChild(clone);
-      rec.node.v.X += containerX(rec.container, 'before');
+      const was = containerAt(rec.container, 'before');
+      rec.node.v.X += was.X;
+      rec.node.v.Y += was.Y;
       rec.node.el = clone;
       rec.node.painted = '';
       rec.node.paint(rec.node);
@@ -880,7 +928,7 @@ export class SceneMotion {
         const rec = this.cards.get(e.block);
         if (rec) {
           const x = rec.node.v.X + Number(el.getAttribute('cx'));
-          const y = Number(el.getAttribute('cy'));
+          const y = rec.node.v.Y + Number(el.getAttribute('cy'));
           this.animator.ripple(fx, x, y, 7, tok('gold'));
         }
       });
@@ -923,33 +971,34 @@ export class SceneMotion {
     const scene = this.scene;
     if (!svg || !scene) return;
     const { consensus } = scene.snapshot;
+    const axis = axisOf(scene);
     const H = this.view.anchor();
     const slots: ChainSlotState[] = [];
     let next: { x: number; w: number } | null = null;
     let nextSlot: RulerSlot | null = null;
     for (const r of [...this.cards.values(), ...this.exitingCards]) {
       if (r.node.v.op <= 0.02) continue;
+      const { X, Y, w, h } = r.node.v;
+      const at = axis.along({ x: X, y: Y, w, h });
       if (!r.mined) {
-        next = { x: r.node.v.X, w: r.node.v.w };
-        nextSlot = { number: r.number, x: r.node.v.X, w: r.node.v.w, mined: false };
+        next = at;
+        nextSlot = { number: r.number, ...at, mined: false };
         continue;
       }
       slots.push({
         number: r.number,
-        x: r.node.v.X,
-        w: r.node.v.w,
+        ...at,
         mined: true,
         hash: r.hash,
         parentHash: r.parentHash,
         solid: r.node.v.solid,
       });
     }
-    const paths = chainPaths(slots, next, H, consensus, scene.viewW);
-    const ruler = windowRuler(
+    const paths = axis.chainPaths(slots, next, H, consensus);
+    const ruler = axis.ruler(
       nextSlot ? [nextSlot, ...slots] : slots,
       H,
       consensus,
-      scene.viewW,
       windowLabel(H, scene.windowTip, consensus)
     );
     const set = (sel: string, d: string) => svg.querySelector(sel)?.setAttribute('d', d || 'M0 0');
@@ -962,8 +1011,8 @@ export class SceneMotion {
       tail.style.setProperty('stroke', tok(ruler.tailOpen ? 'gold' : 'jade'));
       tail.setAttribute('stroke-opacity', ruler.tailOpen ? '0.7' : '0.25');
     }
-    set('[data-window-marks]', windowMarksPath(ruler));
-    set('[data-ruler-ticks]', rulerPath(ruler));
+    set('[data-window-marks]', axis.marks(ruler));
+    set('[data-ruler-ticks]', axis.ticks(ruler));
     const label = svg.querySelector('[data-window-label]');
     if (label) {
       if (ruler.label === null) label.setAttribute('visibility', 'hidden');
