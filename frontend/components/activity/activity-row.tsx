@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -176,10 +176,11 @@ export function formatOccupiedDelta(usedDelta: string): string {
     : formatSignedCkbExact(shannons);
 }
 
-// Below md the stacked two-track form (party | amount, the rest under them): the 640–767 band has
-// one 608 px content width, too narrow for the 4/5-track rows (their item track started at x≈605).
+// Below md each participant is a wrapping line (see `Participants`): the 640–767 band has one 608 px
+// content width, too narrow for the 4/5-track rows (their item track started at x≈605). The tracks
+// start at md.
 const PARTICIPANT_GRID =
-  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)]';
+  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
@@ -193,7 +194,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 // ── F2 objects (round 2): the asset boards' participant line — lock kind as its own unwrapped
 // column (IV-14, OB-12), and a batch of objects folded behind "+N more objects" (OB-M3). ──
 const PARTICIPANT_GRID_LOCK =
-  'grid grid-cols-[minmax(0,1fr)_max-content] items-baseline gap-x-3 gap-y-0.5 pl-3.5 text-xs md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)]';
+  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 function FoldedItemDeltas({
   items,
   focusItemId,
@@ -258,36 +259,56 @@ function Participants({
   return (
     <div data-role="participants" className={lockColumn ? PARTICIPANT_GRID_LOCK : PARTICIPANT_GRID}>
       {shown.map((p) => (
-        <Fragment key={p.key}>
-          <div data-party={p.key} className="col-start-1 min-w-0 overflow-hidden">
-            <ParticipantRefView participant={p} compact quiet />
-            {!lockColumn && p.lockKind && (
-              <span className="text-text-dim ml-2 text-[11px]">{p.lockKind}</span>
-            )}
-            {p.lockHash !== null && notes?.has(p.lockHash) && (
-              <span data-role="participant-note" className="text-text-dim ml-2 text-[11px]">
-                {notes.get(p.lockHash)}
-              </span>
+        // Below md one wrapping line: the party unit, the amount at the right end (it drops under
+        // the party when the line cannot hold both), then occupied and the item changes. From md
+        // the wrappers dissolve (`md:contents`) and every cell takes its track of the shared grid.
+        <div
+          key={p.key}
+          data-role="participant"
+          className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 md:contents"
+        >
+          {/* The party as one unit below md: address, roles and lock kind never break apart. */}
+          <div
+            data-role="party-unit"
+            className="flex max-w-full items-baseline gap-x-2 md:contents"
+          >
+            <div
+              data-party={p.key}
+              className="flex items-baseline gap-x-2 md:col-start-1 md:block md:min-w-0 md:overflow-hidden"
+            >
+              <ParticipantRefView participant={p} compact quiet />
+              {!lockColumn && p.lockKind && (
+                <span className="text-text-dim shrink-0 whitespace-nowrap text-[11px] md:ml-2">
+                  {p.lockKind}
+                </span>
+              )}
+              {p.lockHash !== null && notes?.has(p.lockHash) && (
+                <span data-role="participant-note" className="text-text-dim text-[11px] md:ml-2">
+                  {notes.get(p.lockHash)}
+                </span>
+              )}
+            </div>
+            {lockColumn && (
+              <div
+                data-role="lock-kind"
+                className="text-text-dim hidden min-w-0 truncate whitespace-nowrap text-[11.5px] md:col-start-2 md:block"
+                title={p.lockKind ?? undefined}
+              >
+                {p.lockKind ?? ''}
+              </div>
             )}
           </div>
-          {lockColumn && (
-            <div
-              data-role="lock-kind"
-              className="text-text-dim hidden min-w-0 truncate whitespace-nowrap text-[11.5px] md:col-start-2 md:block"
-              title={p.lockKind ?? undefined}
-            >
-              {p.lockKind ?? ''}
-            </div>
-          )}
-          <div className={cn('col-start-2 text-right', lockColumn && 'md:col-start-3')}>
+          <div
+            className={cn('col-start-2 ml-auto text-right md:ml-0', lockColumn && 'md:col-start-3')}
+          >
             <ExactCkb shannons={BigInt(p.ckbDelta)} />
           </div>
           {p.usedDelta !== '0' && (
             <div
               data-role="occupied"
               className={cn(
-                'text-text-dim col-start-2 text-right text-[11px]',
-                lockColumn ? 'whitespace-nowrap md:col-start-4' : 'md:col-start-3'
+                'text-text-dim col-start-2 basis-full whitespace-nowrap text-right text-[11px] md:basis-auto',
+                lockColumn ? 'md:col-start-4' : 'md:col-start-3'
               )}
             >
               occupied {formatOccupiedDelta(p.usedDelta)}
@@ -296,7 +317,7 @@ function Participants({
           {p.itemDeltas.length > 0 && (
             <div
               className={cn(
-                'col-span-2 col-start-1 md:col-span-1',
+                'col-span-2 col-start-1 basis-full md:col-span-1 md:basis-auto',
                 lockColumn ? 'md:col-start-5' : 'md:col-start-4'
               )}
             >
@@ -315,14 +336,14 @@ function Participants({
               )}
             </div>
           )}
-        </Fragment>
+        </div>
       ))}
       {foldable && (
         <button
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade col-span-full justify-self-start bg-transparent py-1 text-xs transition-colors"
+          className="text-interactive hover:text-jade col-span-full self-start bg-transparent py-1 text-xs transition-colors md:justify-self-start"
         >
           {expanded ? 'Show fewer participants' : `+${hidden} participants`}
         </button>

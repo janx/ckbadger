@@ -3,6 +3,7 @@ import Link from '@/components/ui/link';
 import type { Cell } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CELL_COLORS } from '@/lib/design-tokens';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 const DATA_HASH_TYPES = new Set(['data', 'data1', 'data2']);
 
@@ -140,7 +141,8 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
                   href={`/cell/${item.codeCellTxHash}-${item.codeCellOutputIndex}`}
                   className="text-[#7aa7d6]"
                 >
-                  {item.codeCellTxHash}:{item.codeCellOutputIndex}
+                  {item.codeCellTxHash}
+                  <OutpointIndex index={item.codeCellOutputIndex} />
                 </Link>{' '}
                 · observed block {formatBlockNumber(item.observedAtBlock)}
               </p>
@@ -154,7 +156,8 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
                 href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`}
                 className="text-[#7aa7d6]"
               >
-                Input {item.previousTxHash}:{item.previousOutputIndex}
+                Input {item.previousTxHash}
+                <OutpointIndex index={item.previousOutputIndex} />
               </Link>{' '}
               →{' '}
               <Link

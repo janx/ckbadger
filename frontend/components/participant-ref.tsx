@@ -27,6 +27,8 @@ function compactLabel(value: string): string {
  * `compact` is the per-participant line inside an activity row; the default is
  * the standalone form. `quiet` draws a compact address in the plain ink instead
  * of jade, for rows where colour is kept for the amounts (the homepage feed).
+ * In a column too narrow for the address and its roles, the roles wrap under the
+ * address rather than being clipped ("ow" for owner_from in a 136 px track).
  */
 export function ParticipantRefView({
   participant,
@@ -45,7 +47,7 @@ export function ParticipantRefView({
   if (address !== null) {
     const isCkbAddr = address.startsWith('ckb1') || address.startsWith('ckt1');
     return (
-      <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
+      <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
         {compact ? (
           <Link
             href={`/address/${address}`}
@@ -73,7 +75,7 @@ export function ParticipantRefView({
   const lockHash = participant.lockHash;
   if (lockHash !== null) {
     return (
-      <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
+      <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
         <Link
           href={`/address/${lockHash}`}
           className={cn(
@@ -97,7 +99,7 @@ export function ParticipantRefView({
     );
   }
   return (
-    <span className={cn('inline-flex shrink-0 items-center gap-1.5', className)}>
+    <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
       <span
         className={cn('text-text-dim font-mono', compact ? 'text-xs' : 'text-sm')}
         title={prefix}

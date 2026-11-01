@@ -169,6 +169,20 @@ describe('Mnft board (F2 objects)', () => {
     expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
   });
 
+  // Responsive fix plan 2026-11-01 (A3, report B#15): a break-all value split "8 b/ytes".
+  it('keeps the characteristic size "8 bytes" whole', async () => {
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      ...detail,
+      characteristicHex: '0x0000000000000000',
+    });
+    await page();
+    const props = within(screen.getByRole('banner')).getByLabelText('Properties');
+    expect(props).toHaveTextContent('none, all zero · 8 bytes');
+    const size = within(props).getByText('8 bytes');
+    expect(size).toHaveClass('whitespace-nowrap');
+    expect(size.closest('dd')).not.toHaveClass('break-all');
+  });
+
   it('names where its image lives instead of a bare renderer card (OB-M4)', async () => {
     await page();
     const media = screen.getByRole('figure');

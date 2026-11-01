@@ -20,6 +20,7 @@ import { epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
 import { formatCount } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 type Party = FiberChannel['observedParties'][number];
 
@@ -495,7 +496,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
                         className="min-w-0 break-all text-[#6aa9c4]"
                       >
-                        {tracked.txHash}:{tracked.outputIndex}
+                        {tracked.txHash}
+                        <OutpointIndex index={tracked.outputIndex} />
                       </Link>
                       <span className="text-text-dim">Pubkey hash · 20</span>
                       <span className="text-text-bright break-all">{tracked.pubkeyHash}</span>
@@ -584,8 +586,17 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         )}
                       </span>
                       <span className="text-text">
-                        in {ckb(flow.openingInputCapacity)} · back {ckb(flow.openingOutputCapacity)}{' '}
-                        · net {ckb(flow.observedNetInput, true)}
+                        <span data-flow="in" className="whitespace-nowrap">
+                          in {ckb(flow.openingInputCapacity)}
+                        </span>{' '}
+                        ·{' '}
+                        <span data-flow="back" className="whitespace-nowrap">
+                          back {ckb(flow.openingOutputCapacity)}
+                        </span>{' '}
+                        ·{' '}
+                        <span data-flow="net" className="whitespace-nowrap">
+                          net {ckb(flow.observedNetInput, true)}
+                        </span>
                       </span>
                     </span>
                   );

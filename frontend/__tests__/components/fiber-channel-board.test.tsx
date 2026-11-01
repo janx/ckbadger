@@ -279,6 +279,14 @@ describe('FiberChannelBoard', () => {
     );
     expect(screen.getByText(/output-only lock did not necessarily sign/)).toBeInTheDocument();
     expect(screen.getByText(/not a proven channel balance or payment/)).toBeInTheDocument();
+    // Responsive fix plan 2026-11-01 (A3, report C#20): "net" never breaks from its value.
+    const flow = screen.getByText((_, el) => el?.getAttribute('data-flow') === 'net');
+    expect(flow).toHaveTextContent(/^net \+301\.00000000 CKB$/);
+    expect(flow).toHaveClass('whitespace-nowrap');
+    for (const kind of ['in', 'back'])
+      expect(screen.getByText((_, el) => el?.getAttribute('data-flow') === kind)).toHaveClass(
+        'whitespace-nowrap'
+      );
   });
 
   it('shows a token-funded channel’s token amount beside its CKB capacity (FF-C7)', () => {

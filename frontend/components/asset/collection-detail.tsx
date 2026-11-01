@@ -24,7 +24,8 @@ import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
-import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { HMultiplierReading } from '@/components/ui/hmul-info';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { CompositionTier } from '@/lib/asset-utils';
@@ -551,9 +552,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               <p className="text-text-dim text-[12px]">
                 Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
                 {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
-                {held !== null && occupied !== null && occupied > BigInt(0)
-                  ? ` · H-multiplier ×${formatScaledInteger(held, occupied, 2)}`
-                  : ''}
+                {held !== null && occupied !== null && occupied > BigInt(0) && (
+                  <>
+                    {' · '}
+                    <HMultiplierReading held={held} occupied={occupied} />
+                  </>
+                )}
               </p>
             )}
           </>

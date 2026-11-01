@@ -29,6 +29,7 @@ import {
 import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
 import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 function CellOccupiedValue({ cell }: { cell: Cell }) {
   if (cell.cellType === 'genesis_special_burn') {
@@ -1481,7 +1482,8 @@ export default function ScriptDetailPage({
                               href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                               className="text-emphasis break-all"
                             >
-                              {cell.txHash}:{cell.outputIndex}
+                              {cell.txHash}
+                              <OutpointIndex index={cell.outputIndex} />
                             </Link>
                           ),
                         },
@@ -1541,7 +1543,8 @@ export default function ScriptDetailPage({
                             href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                             className="text-emphasis break-all"
                           >
-                            {cell.txHash}:{cell.outputIndex}
+                            {cell.txHash}
+                            <OutpointIndex index={cell.outputIndex} />
                           </Link>
                           <div>
                             Owner: <CellOwner cell={cell} />

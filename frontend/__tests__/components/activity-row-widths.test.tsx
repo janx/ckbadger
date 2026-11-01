@@ -1,6 +1,6 @@
 // Responsive fix plan 2026-11-01, lane A: the activity participant grid across widths. jsdom does
 // not lay out, so these assert the structure and the breakpoint classes that decide the layout.
-import { render } from '@/__tests__/utils/test-utils';
+import { render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
 
@@ -56,7 +56,7 @@ describe('activity participant grid (A1: the stacked form up to 767 px)', () => 
   it.each([
     ['the plain grid', false],
     ['the lock-column grid', true],
-  ])('%s keeps two tracks below md and no sm: track or column', (_name, lockColumn) => {
+  ])('%s keeps the stacked form below md and no sm: track or column', (_name, lockColumn) => {
     const { container } = render(
       <ActivityRow
         lockColumn={lockColumn}
@@ -67,7 +67,9 @@ describe('activity participant grid (A1: the stacked form up to 767 px)', () => 
       />
     );
     const grid = container.querySelector('[data-role="participants"]') as HTMLElement;
-    expect(grid).toHaveClass('grid-cols-[minmax(0,1fr)_max-content]');
+    // Below md one participant per line group (A3 made the line a wrapping row); the grid's tracks
+    // start at md.
+    expect(grid).toHaveClass('flex', 'flex-col', 'md:grid');
     expect(grid.className).toMatch(/(^|\s)md:grid-cols-\[/);
     const classes = gridClasses(container);
     expect(classes.filter((c) => c.startsWith('sm:'))).toEqual([]);
@@ -75,5 +77,52 @@ describe('activity participant grid (A1: the stacked form up to 767 px)', () => 
     const parties = [...container.querySelectorAll('[data-party]')];
     expect(parties[0]).toHaveTextContent('owner_from');
     expect(parties[1]).toHaveTextContent('owner_to, manager_to');
+  });
+});
+
+describe('activity participant line (A3: address and lock kind are one unit)', () => {
+  // Report A#15: the lock label wrapped alone or split "Default / Lock" beside a long amount. Below
+  // md the party (address, roles, lock kind) is one unit that never breaks; the amount stays at
+  // the right end of the line and drops under the party when the line cannot hold both.
+  function plainRow(p: ParticipantInfo) {
+    const { container } = render(<ActivityRow activity={activity([p])} />);
+    const row = container.querySelector('[data-role="participant"]') as HTMLElement;
+    expect(row).not.toBeNull();
+    return row;
+  }
+
+  it('keeps the address and its lock kind together and lets the amount drop', () => {
+    const row = plainRow(party({ ckbDelta: '67073483600000000' }));
+    expect(row).toHaveClass('flex', 'flex-wrap', 'md:contents');
+    const unit = row.querySelector('[data-role="party-unit"]') as HTMLElement;
+    expect(unit).toHaveClass('flex', 'md:contents');
+    expect(unit).not.toHaveClass('flex-wrap');
+    const cell = unit.querySelector('[data-party]') as HTMLElement;
+    expect(cell).toHaveTextContent('ckb1qzda...3x8k26Default Lock');
+    expect(within(cell).getByText('Default Lock')).toHaveClass('shrink-0', 'whitespace-nowrap');
+    const amount = row.querySelector('[data-ckb-amount]')!.parentElement as HTMLElement;
+    expect(amount).toHaveClass('ml-auto', 'text-right', 'md:ml-0');
+    expect(row.querySelector('[data-role="occupied"]')).toHaveClass(
+      'basis-full',
+      'whitespace-nowrap',
+      'md:basis-auto'
+    );
+  });
+
+  it('never lets the party cell shrink below its content below md', () => {
+    // An overflow-hidden flex item may shrink to nothing and clip the address; the clip is the md
+    // grid's 136 px track only.
+    const cell = plainRow(party()).querySelector('[data-party]') as HTMLElement;
+    expect(cell).not.toHaveClass('min-w-0');
+    expect(cell).not.toHaveClass('overflow-hidden');
+    expect(cell).toHaveClass('md:min-w-0', 'md:overflow-hidden');
+  });
+
+  it('lets the roles wrap under the address instead of being clipped to "ow"', () => {
+    // At md and up the party track is 136 px: "ckb1q…nunp36 owner_from" is 185 px (B#11 at 1280).
+    const cell = plainRow(party({ roles: ['owner_from'] })).querySelector('[data-party]')!;
+    const ref = within(cell as HTMLElement).getByText('owner_from').parentElement as HTMLElement;
+    expect(ref).toHaveClass('flex-wrap');
+    expect(ref).not.toHaveClass('shrink-0');
   });
 });

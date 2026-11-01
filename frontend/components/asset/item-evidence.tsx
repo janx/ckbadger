@@ -10,6 +10,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { itemFeedHeadline, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { FeedHeadlineText } from '@/components/asset/feed-headline-text';
 import { cn } from '@/lib/utils';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 export interface ItemEvidenceProps {
   protocol: ItemProtocol;
   /** F2 identities (round 2, ID-C9): the data map's title for the selected version. */
@@ -46,7 +47,8 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
       <div className="break-all text-[11px]">
         Outpoint{' '}
         <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
-          <Hash hash={cell.txHash} truncate={false} copyable={false} />:{cell.outputIndex}
+          <Hash hash={cell.txHash} truncate={false} copyable={false} />
+          <OutpointIndex index={cell.outputIndex} />
         </AppLink>
       </div>
       {[

@@ -229,6 +229,10 @@ describe('Token board (F2 objects)', () => {
     render(<TokenDetailPage typeHash={hash} />);
     const history = await screen.findByRole('region', { name: 'History' }, { timeout: 5000 });
     expect(history).toHaveTextContent('2 mints · 1 burn · 1,000 transfers');
+    // Responsive fix plan 2026-11-01 (A3, report B#18): "H-multiplier ×N" is one unbroken unit.
+    const hmul = history.querySelector('[data-role="h-multiplier"]');
+    expect(hmul).toHaveTextContent(/^H-multiplier ×\d+\.\d{2}$/);
+    expect(hmul).toHaveClass('whitespace-nowrap');
     fireEvent.click(
       await within(history).findByText('Every change to the supply (3)', undefined, {
         timeout: 5000,
