@@ -1,7 +1,10 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { ExactCkb } from '@/components/activity-event-row';
 import type { FiberNetwork, FiberParty } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -9,9 +12,11 @@ import { formatCount } from '@/lib/format-count';
 import { formatDurationMs, formatUtc8Date } from '@/lib/utils';
 import { FIBER_COLORS } from '@/lib/design-tokens';
 import {
-  fiberGraphModel,
+  fiberGraphData,
+  fiberGraphLayout,
   partyTail,
   type FiberGraphEdge,
+  type FiberGraphModel,
   type FiberGraphNode,
 } from '@/lib/fiber-network-model';
 
@@ -22,6 +27,7 @@ interface Props {
 type Active = { kind: 'node'; id: string } | { kind: 'edge'; id: string };
 
 const DIM = 0.18;
+const activeKey = (target: Active) => `${target.kind}:${target.id}`;
 
 function PartyLink({ party }: { party: FiberParty }) {
   const text = party.address
@@ -156,6 +162,30 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
   );
 }
 
+/** The one-line reading under the graph: a party with its partners, or a pair (R6). */
+function readoutLine(model: FiberGraphModel, active: Active): string {
+  const node = (id: string) => model.nodes.find((n) => n.id === id)!;
+  if (active.kind === 'node') {
+    const party = node(active.id);
+    const partners = model.edges
+      .filter((e) => e.a === party.id || e.b === party.id)
+      .map((e) => ({ label: node(e.a === party.id ? e.b : e.a).label, channels: e.pair.channels }))
+      .sort((p, q) => q.channels - p.channels || p.label.localeCompare(q.label))
+      .map((p) => `${p.label} ${p.channels.toLocaleString('en-US')}`);
+    const head = `${party.label} · ${formatCount(party.channels, 'channel')}`;
+    return partners.length ? `${head} · pairs with ${partners.join(', ')}` : head;
+  }
+  const edge = model.edges.find((e) => e.id === active.id)!;
+  const { pair } = edge;
+  const forced = pair.forceClosedSettledChannels + pair.forceClosedWaitingChannels;
+  return [
+    `…${node(edge.a).label} ↔ …${node(edge.b).label}`,
+    formatCount(pair.channels, 'channel'),
+    `${pair.openChannels.toLocaleString('en-US')} open now`,
+    ...(forced ? [`${forced.toLocaleString('en-US')} force-closed`] : []),
+  ].join(' · ');
+}
+
 function LegendLine({
   stroke,
   width,
@@ -183,18 +213,27 @@ function LegendLine({
   );
 }
 
-/** "The network, as the chain sees it" (Fiber board V65): parties as nodes, pairs as edges. */
+/**
+ * "The network, as the chain sees it" (Fiber board V65): parties as nodes, pairs as edges. The
+ * layout is computed for the measured column (R4) and drawn 1:1; a tap pins a party or a pair in
+ * the line under the graph (R6) as well as in the side panel.
+ */
 export function FiberNetworkGraph({ network }: Props) {
-  const model = useMemo(() => fiberGraphModel(network), [network]);
-  const [hover, setHover] = useState<Active | null>(null);
-  const [pinned, setPinned] = useState<Active | null>(null);
-  const active = hover ?? pinned;
-  const nodesById = useMemo(() => new Map(model.nodes.map((n) => [n.id, n])), [model]);
-  const edgesById = useMemo(() => new Map(model.edges.map((e) => [e.id, e])), [model]);
+  const data = useMemo(() => fiberGraphData(network), [network]);
+  const [box, measured] = useElementWidth<HTMLDivElement>();
+  const width = measured === null ? null : Math.floor(measured);
+  const model = useMemo(
+    () => (width === null ? null : fiberGraphLayout(data, width)),
+    [data, width]
+  );
+  const readout = usePinnedReadout<Active>(activeKey);
+  const active = readout.active;
+  const nodesById = useMemo(() => new Map((model?.nodes ?? []).map((n) => [n.id, n])), [model]);
+  const edgesById = useMemo(() => new Map((model?.edges ?? []).map((e) => [e.id, e])), [model]);
   const activeEdge = active?.kind === 'edge' ? edgesById.get(active.id) : undefined;
   const activeNode = active?.kind === 'node' ? nodesById.get(active.id) : undefined;
   const litNodes = activeNode
-    ? new Set([activeNode.id, ...model.neighbours.get(activeNode.id)!])
+    ? new Set([activeNode.id, ...data.neighbours.get(activeNode.id)!])
     : activeEdge
       ? new Set([activeEdge.a, activeEdge.b])
       : null;
@@ -205,25 +244,9 @@ export function FiberNetworkGraph({ network }: Props) {
         ? edge.id === activeEdge.id
         : true;
   const handlers = (target: Active) => ({
-    tabIndex: 0,
-    role: 'button',
+    ...readout.bind(target),
     className: 'cursor-pointer outline-none',
-    onMouseEnter: () => setHover(target),
-    onMouseLeave: () => setHover(null),
-    onFocus: () => setHover(target),
-    onBlur: () => setHover(null),
-    onClick: () =>
-      setPinned((current) =>
-        current?.kind === target.kind && current.id === target.id ? null : target
-      ),
-    onKeyDown: (event: React.KeyboardEvent) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        setPinned(target);
-      }
-    },
   });
-  const { width, height, sideX } = model;
 
   return (
     <section aria-labelledby="fiber-network-heading" className="flex min-w-0 flex-col gap-3">
@@ -259,144 +282,154 @@ export function FiberNetworkGraph({ network }: Props) {
           </span>
         </span>
       </div>
-      {model.nodes.length === 0 ? (
+      {network.parties.length === 0 ? (
         <p className="text-text-dim py-10 text-[13px]">No on-chain parties observed yet.</p>
       ) : (
         <div className="grid min-w-0 items-start gap-7 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <div className="min-w-0 overflow-x-auto">
-            <svg
-              data-fiber-graph
-              viewBox={`0 0 ${width} ${height}`}
-              role="img"
-              aria-label={`The Fiber network on chain: ${model.nodes.length} parties and the ${model.edges.length} pairs that opened channels`}
-              className="block h-auto w-full min-w-[640px] overflow-visible"
-            >
-              {sideX !== null && (
-                <text
-                  x={width - 2}
-                  y={48}
-                  textAnchor="end"
-                  fontSize="10.5"
-                  fill={FIBER_COLORS.note}
+          <div className="flex min-w-0 flex-col gap-2">
+            <div ref={box} className="min-w-0">
+              {model && (
+                <svg
+                  data-fiber-graph
+                  viewBox={`0 0 ${model.width} ${model.height}`}
+                  width={model.width}
+                  height={model.height}
+                  role="img"
+                  aria-label={`The Fiber network on chain: ${model.nodes.length} parties and the ${model.edges.length} pairs that opened channels`}
+                  className="block overflow-visible"
                 >
-                  not linked to the rest
-                </text>
-              )}
-              {model.edges.map((edge) => {
-                const lit = edgeLit(edge);
-                const [a, b] = [nodesById.get(edge.a)!.party, nodesById.get(edge.b)!.party];
-                return (
-                  <g
-                    key={edge.id}
-                    data-edge
-                    data-lit={lit}
-                    opacity={lit ? 1 : DIM}
-                    aria-label={`Pair …${partyTail(a)} and …${partyTail(b)}, ${formatCount(edge.pair.channels, 'channel')}`}
-                    {...handlers({ kind: 'edge', id: edge.id })}
-                  >
-                    <line
-                      x1={edge.x1}
-                      y1={edge.y1}
-                      x2={edge.x2}
-                      y2={edge.y2}
-                      stroke="transparent"
-                      strokeWidth="12"
-                    />
-                    <line
-                      x1={edge.x1}
-                      y1={edge.y1}
-                      x2={edge.x2}
-                      y2={edge.y2}
-                      stroke={FIBER_COLORS.history}
-                      strokeOpacity=".28"
-                      strokeWidth={edge.greyWidth.toFixed(2)}
-                    />
-                    {edge.jadeWidth !== null && (
-                      <line
-                        data-open
-                        x1={edge.x1}
-                        y1={edge.y1}
-                        x2={edge.x2}
-                        y2={edge.y2}
-                        stroke={FIBER_COLORS.open}
-                        strokeOpacity=".85"
-                        strokeWidth={edge.jadeWidth.toFixed(2)}
-                      />
-                    )}
-                    {edge.forceClosed && (
-                      <line
-                        data-forced
-                        {...edge.dash}
-                        stroke={FIBER_COLORS.forced}
-                        strokeOpacity=".7"
-                        strokeWidth="1"
-                        strokeDasharray="3 3"
-                      />
-                    )}
-                  </g>
-                );
-              })}
-              {model.nodes.map((node) => {
-                const lit = litNodes ? litNodes.has(node.id) : true;
-                return (
-                  <g
-                    key={node.id}
-                    data-node
-                    data-lit={lit}
-                    opacity={lit ? 1 : DIM}
-                    aria-label={`Party …${node.label}, ${formatCount(node.channels, 'channel')}${node.openChannels ? `, ${node.openChannels} open` : ''}`}
-                    {...handlers({ kind: 'node', id: node.id })}
-                  >
-                    <circle cx={node.x} cy={node.y} r={node.r + 8} fill="transparent" />
-                    {node.ring && (
-                      <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r={node.r + 3}
-                        fill="none"
-                        stroke={FIBER_COLORS.open}
-                        strokeWidth="1.2"
-                        strokeOpacity=".9"
-                      />
-                    )}
-                    <circle
-                      cx={node.x}
-                      cy={node.y}
-                      r={node.r}
-                      fill={FIBER_COLORS.nodeFill}
-                      stroke={FIBER_COLORS.nodeStroke}
-                      strokeWidth="1.2"
-                    />
+                  {model.islandsNote && (
                     <text
-                      x={node.x}
-                      y={node.y + node.r + 14}
-                      textAnchor="middle"
-                      fontSize="10.5"
-                      fill={FIBER_COLORS.label}
-                      stroke={FIBER_COLORS.halo}
-                      strokeWidth="3"
-                      paintOrder="stroke"
+                      x={model.islandsNote.x}
+                      y={model.islandsNote.y}
+                      textAnchor={model.islandsNote.anchor}
+                      fontSize="11"
+                      fill={FIBER_COLORS.note}
                     >
-                      {node.label}
+                      not linked to the rest
                     </text>
-                    {node.r > 14 && (
-                      <text
-                        x={node.x}
-                        y={node.y + 4}
-                        textAnchor="middle"
-                        fontSize="10.5"
-                        fill={FIBER_COLORS.count}
+                  )}
+                  {model.edges.map((edge) => {
+                    const lit = edgeLit(edge);
+                    const [a, b] = [nodesById.get(edge.a)!.party, nodesById.get(edge.b)!.party];
+                    return (
+                      <g
+                        key={edge.id}
+                        data-edge
+                        data-lit={lit}
+                        opacity={lit ? 1 : DIM}
+                        aria-label={`Pair …${partyTail(a)} and …${partyTail(b)}, ${formatCount(edge.pair.channels, 'channel')}`}
+                        {...handlers({ kind: 'edge', id: edge.id })}
                       >
-                        {node.channels}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-            <p className="text-text-dim mt-1 text-[11px] md:hidden">
-              scroll sideways for the whole network
-            </p>
+                        <line
+                          x1={edge.x1}
+                          y1={edge.y1}
+                          x2={edge.x2}
+                          y2={edge.y2}
+                          stroke="transparent"
+                          strokeWidth="12"
+                        />
+                        <line
+                          x1={edge.x1}
+                          y1={edge.y1}
+                          x2={edge.x2}
+                          y2={edge.y2}
+                          stroke={FIBER_COLORS.history}
+                          strokeOpacity=".28"
+                          strokeWidth={edge.greyWidth.toFixed(2)}
+                        />
+                        {edge.jadeWidth !== null && (
+                          <line
+                            data-open
+                            x1={edge.x1}
+                            y1={edge.y1}
+                            x2={edge.x2}
+                            y2={edge.y2}
+                            stroke={FIBER_COLORS.open}
+                            strokeOpacity=".85"
+                            strokeWidth={edge.jadeWidth.toFixed(2)}
+                          />
+                        )}
+                        {edge.forceClosed && (
+                          <line
+                            data-forced
+                            {...edge.dash}
+                            stroke={FIBER_COLORS.forced}
+                            strokeOpacity=".7"
+                            strokeWidth="1"
+                            strokeDasharray="3 3"
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
+                  {model.nodes.map((node) => {
+                    const lit = litNodes ? litNodes.has(node.id) : true;
+                    return (
+                      <g
+                        key={node.id}
+                        data-node
+                        data-lit={lit}
+                        opacity={lit ? 1 : DIM}
+                        aria-label={`Party …${node.label}, ${formatCount(node.channels, 'channel')}${node.openChannels ? `, ${node.openChannels} open` : ''}`}
+                        {...handlers({ kind: 'node', id: node.id })}
+                      >
+                        <circle cx={node.x} cy={node.y} r={node.r + 8} fill="transparent" />
+                        {node.ring && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={node.r + 3}
+                            fill="none"
+                            stroke={FIBER_COLORS.open}
+                            strokeWidth="1.2"
+                            strokeOpacity=".9"
+                          />
+                        )}
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={node.r}
+                          fill={FIBER_COLORS.nodeFill}
+                          stroke={FIBER_COLORS.nodeStroke}
+                          strokeWidth="1.2"
+                        />
+                        <text
+                          x={node.x}
+                          y={node.y + node.r + 14}
+                          textAnchor="middle"
+                          fontSize="11"
+                          fill={FIBER_COLORS.label}
+                          stroke={FIBER_COLORS.halo}
+                          strokeWidth="3"
+                          paintOrder="stroke"
+                        >
+                          {node.label}
+                        </text>
+                        {node.r > 14 && (
+                          <text
+                            x={node.x}
+                            y={node.y + 4}
+                            textAnchor="middle"
+                            fontSize="11"
+                            fill={FIBER_COLORS.count}
+                          >
+                            {node.channels}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </svg>
+              )}
+            </div>
+            <ReadoutRow
+              label="Party or pair readout"
+              pinned={readout.showingPin}
+              idle="Tap or hover a party or a pair."
+            >
+              {model && active ? readoutLine(model, active) : null}
+            </ReadoutRow>
           </div>
           <aside
             aria-label="Party or pair"
@@ -404,7 +437,7 @@ export function FiberNetworkGraph({ network }: Props) {
             className="border-base-border-subtle min-h-[220px] min-w-0 rounded-md border px-3.5 py-3 text-[12px] lg:sticky lg:top-4"
           >
             {activeNode ? (
-              <PartyPanel node={activeNode} partners={model.neighbours.get(activeNode.id)!.size} />
+              <PartyPanel node={activeNode} partners={data.neighbours.get(activeNode.id)!.size} />
             ) : activeEdge ? (
               <PairPanel
                 edge={activeEdge}
@@ -413,7 +446,7 @@ export function FiberNetworkGraph({ network }: Props) {
               />
             ) : (
               <div>
-                <div className="text-text-bright text-[13.5px]">Hover a party or a pair</div>
+                <div className="text-text-bright text-[13.5px]">Tap or hover a party or a pair</div>
                 <p className="text-text mt-1.5 leading-relaxed">
                   Each circle is a party: the address that funded or received a channel. Its size
                   follows how many channels it took part in. A green ring means it has a channel
@@ -432,8 +465,8 @@ export function FiberNetworkGraph({ network }: Props) {
       <p className="text-text-dim max-w-[900px] text-[12px]">
         Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel,
         not which node ran it.
-        {model.unpairedChannels > 0 &&
-          ` ${formatCount(model.unpairedChannels, 'channel')} with more or fewer than two parties ${model.unpairedChannels === 1 ? 'is' : 'are'} not drawn.`}
+        {data.unpairedChannels > 0 &&
+          ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${data.unpairedChannels === 1 ? 'is' : 'are'} not drawn.`}
       </p>
     </section>
   );
