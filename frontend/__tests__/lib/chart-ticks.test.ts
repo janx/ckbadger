@@ -7,8 +7,10 @@ import {
   niceCeil,
   niceStep,
   niceTicks,
+  placeXTicks,
   signedAxisCap,
   stepDecimals,
+  AXIS_CHAR_PX,
 } from '@/lib/chart-ticks';
 
 describe('niceStep', () => {
@@ -204,4 +206,40 @@ describe('formatCompactSigned', () => {
     expect(formatCompactSigned(12_500)).toBe('+12.5k');
     expect(formatCompactSigned(0)).toBe('0');
   });
+});
+
+describe('placeXTicks', () => {
+  // Responsive review C#6: the Cell size chart's six named buckets lost labels at 640 and 390.
+  const buckets = ['<100', '100-1k', '1k-10k', '10k-100k', '100k-1m', '>=1m'];
+  const span = (t: { x: number; anchor: string; label: string }) => {
+    const w = t.label.length * AXIS_CHAR_PX;
+    const from = t.anchor === 'start' ? t.x : t.anchor === 'end' ? t.x - w : t.x - w / 2;
+    return { from, to: from + w };
+  };
+
+  it.each([200, 284, 358, 608, 1200])(
+    'labels every bucket of a categorical axis at %i px, stacking rows instead of thinning',
+    (width) => {
+      const left = 56;
+      const right = width - 10;
+      const slot = (right - left) / buckets.length;
+      const placed = placeXTicks(
+        buckets.map((label, index) => ({ index, label, at: left + slot * (index + 0.5) })),
+        { left, right, width, categorical: true }
+      );
+      expect(placed.ticks.map((t) => t.label)).toEqual(buckets);
+      for (const t of placed.ticks) {
+        const { from, to } = span(t);
+        expect(from).toBeGreaterThanOrEqual(0);
+        expect(to).toBeLessThanOrEqual(width);
+      }
+      for (let row = 0; row < placed.rows; row++) {
+        const onRow = placed.ticks.filter((t) => t.row === row).map(span);
+        for (let i = 1; i < onRow.length; i++)
+          expect(onRow[i].from).toBeGreaterThanOrEqual(onRow[i - 1].to + 6);
+      }
+      if (width >= 1200) expect(placed.rows).toBe(1);
+      if (width <= 284) expect(placed.rows).toBeGreaterThan(1);
+    }
+  );
 });

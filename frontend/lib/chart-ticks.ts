@@ -186,3 +186,72 @@ export function formatCompactSigned(value: number): string {
   if (abs >= 1e3) return `${sign}${trimZeros((abs / 1e3).toFixed(1))}k`;
   return `${sign}${abs.toFixed(0)}`;
 }
+
+/** The advance of one 10 px JetBrains Mono glyph, for keeping axis labels apart. */
+export const AXIS_CHAR_PX = 6.2;
+/** The clear space kept between two x labels on one row. */
+const X_LABEL_GAP = 6;
+/** A time-axis label this close to a plot edge anchors to that edge instead of centring. */
+const X_EDGE_ANCHOR = 20;
+
+export interface XTickInput {
+  index: number;
+  label: string;
+  /** The x of the point (or slot centre) the label names. */
+  at: number;
+}
+
+export interface PlacedXTick {
+  index: number;
+  label: string;
+  x: number;
+  anchor: 'start' | 'middle' | 'end';
+  /** 0 for the first label row under the plot, 1 for the one below it, and so on. */
+  row: number;
+}
+
+const xSpan = (t: { x: number; anchor: PlacedXTick['anchor']; label: string }) => {
+  const w = t.label.length * AXIS_CHAR_PX;
+  const from = t.anchor === 'start' ? t.x : t.anchor === 'end' ? t.x - w : t.x - w / 2;
+  return { from, to: from + w };
+};
+
+/**
+ * Where the x labels go. A time axis drops a label that would touch the one before it. A
+ * categorical axis (a few named buckets, one bar each) keeps every label: centred under its bar,
+ * held inside the chart, and stacked onto as many rows as it takes for no two on a row to touch.
+ */
+export function placeXTicks(
+  ticks: readonly XTickInput[],
+  frame: { left: number; right: number; width: number; categorical: boolean }
+): { ticks: PlacedXTick[]; rows: number } {
+  const { left, right, width, categorical } = frame;
+  if (!categorical) {
+    const kept: PlacedXTick[] = [];
+    for (const tick of ticks) {
+      const anchor: PlacedXTick['anchor'] =
+        tick.at - left < X_EDGE_ANCHOR
+          ? 'start'
+          : right - tick.at < X_EDGE_ANCHOR
+            ? 'end'
+            : 'middle';
+      const placed = { index: tick.index, label: tick.label, x: tick.at, anchor, row: 0 };
+      const previous = kept[kept.length - 1];
+      if (!previous || xSpan(placed).from >= xSpan(previous).to + X_LABEL_GAP) kept.push(placed);
+    }
+    return { ticks: kept, rows: 1 };
+  }
+  const centred = ticks.map((tick) => {
+    const w = tick.label.length * AXIS_CHAR_PX;
+    if (w > width)
+      throw new Error(`categorical label "${tick.label}" is wider than its ${width} px chart`);
+    const x = Math.min(width - w / 2, Math.max(w / 2, tick.at));
+    return { index: tick.index, label: tick.label, x, anchor: 'middle' as const };
+  });
+  const spans = centred.map(xSpan);
+  // Rows of every r-th label: the first r for which no label touches the next one on its row.
+  let rows = 1;
+  while (spans.some((s, i) => i + rows < spans.length && spans[i + rows].from < s.to + X_LABEL_GAP))
+    rows++;
+  return { ticks: centred.map((t, i) => ({ ...t, row: i % rows })), rows };
+}

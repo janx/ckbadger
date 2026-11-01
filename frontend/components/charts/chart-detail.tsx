@@ -18,6 +18,7 @@ import {
 import {
   axisStyle,
   axisTicks,
+  categoricalAxis,
   chartModel,
   formatChartExact,
   formatChartHover,
@@ -410,6 +411,7 @@ function DetailBody({
               xTicks={axisTicks(points, style, 8)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
+              categoricalX={categoricalAxis(definition)}
               hideMarkerLegend
               yDomain={model.yDomain}
               referenceLines={model.referenceLines}
@@ -460,6 +462,7 @@ function DetailBody({
               xTicks={axisTicks(secondaryPoints, style, 8)}
               pointDots
               slotBars={style === 'bucket' || style === 'month'}
+              categoricalX={categoricalAxis(definition)}
             />
           </DetailSection>
         )}

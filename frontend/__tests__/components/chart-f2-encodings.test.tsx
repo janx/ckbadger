@@ -194,6 +194,59 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(ticks).toEqual(['10k-100k', '>=1m']);
   });
 
+  it('keeps every label of a categorical axis, on a second row when one cannot hold them', () => {
+    // Responsive review C#6: at 640 the Cell size card showed three of its six bucket labels.
+    stubChartWidth(284);
+    const labels = ['<100', '100-1k', '1k-10k', '10k-100k', '100k-1m', '>=1m'];
+    const buckets = labels.map((label, i) => ({ label, values: { primary: String(6 - i) } }));
+    const { container } = render(
+      <Chart
+        title="Cell size"
+        subtitle="buckets"
+        data={buckets}
+        series={series}
+        unit="cells"
+        kind="bars"
+        height={120}
+        slotBars
+        categoricalX
+        xTicks={labels.map((label, index) => ({ index, label }))}
+        formatValue={(v) => v}
+      />
+    );
+    const ticks = [...container.querySelectorAll('[data-x-tick]')];
+    expect(ticks.map((n) => n.textContent)).toEqual(labels);
+    const rows = new Set(ticks.map((n) => n.getAttribute('y')));
+    expect(rows.size).toBe(2);
+    // The second row is added below the plot, not taken from it.
+    expect(container.querySelector('svg[role="img"]')).toHaveAttribute('height', '132');
+  });
+
+  it('refuses a categorical axis that does not name every bar', () => {
+    stubChartWidth(600);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const buckets = ['a', 'b', 'c'].map((label) => ({ label, values: { primary: '1' } }));
+    expect(() =>
+      render(
+        <Chart
+          title="Cell size"
+          subtitle="buckets"
+          data={buckets}
+          series={series}
+          unit="cells"
+          kind="bars"
+          slotBars
+          categoricalX
+          xTicks={[
+            { index: 0, label: 'a' },
+            { index: 2, label: 'c' },
+          ]}
+          formatValue={(v) => v}
+        />
+      )
+    ).toThrow(/categorical axis/);
+  });
+
   it('gives bars a hover dot and reading but no end dot (visual pass)', () => {
     const { container } = render(
       <Chart

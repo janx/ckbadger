@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CHART_BY_SLUG } from '@/components/charts/chart-catalogue';
 import {
   axisTicks,
+  categoricalAxis,
   chartModel,
   formatChartReadout,
   shortBucketLabel,
@@ -365,6 +366,15 @@ describe('axis ticks (CH-24, CH-09, CH-35)', () => {
       'year 10',
       'year 20',
     ]);
+  });
+});
+
+describe('categorical axes (responsive review C#6)', () => {
+  it('names the Cell size buckets as categories, while the many-bin histograms stay numeric', () => {
+    expect(categoricalAxis(def('cell-size-distribution'))).toBe(true);
+    expect(categoricalAxis(def('block-time-distribution'))).toBe(false);
+    expect(categoricalAxis(def('epoch-time-distribution'))).toBe(false);
+    expect(categoricalAxis(def('hash-rate'))).toBe(false);
   });
 });
 

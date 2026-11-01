@@ -1226,6 +1226,17 @@ export function axisStyle(definition: ChartDefinition): AxisStyle {
   return 'date';
 }
 
+/**
+ * Bucket charts whose buckets are named ranges, one bar each: every bar keeps its label, stacked
+ * when a row cannot hold them (responsive review C#6). The second-resolution histograms have
+ * hundreds of numeric bins and keep a thinned numeric axis.
+ */
+const CATEGORY_BUCKETS: readonly string[] = ['cell-size-distribution'];
+
+export function categoricalAxis(definition: ChartDefinition): boolean {
+  return CATEGORY_BUCKETS.includes(definition.slug);
+}
+
 function thin<T>(items: readonly T[], max: number): T[] {
   if (items.length <= max) return [...items];
   if (max === 1) return [items[items.length - 1]];

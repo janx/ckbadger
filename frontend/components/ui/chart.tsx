@@ -2,7 +2,7 @@
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { niceTicks, formatTick } from '@/lib/chart-ticks';
+import { niceTicks, formatTick, placeXTicks } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
 
@@ -77,6 +77,11 @@ export interface ChartProps {
   referenceLines?: readonly { value: number; label: string }[];
   /** X-axis labels at these point indexes, replacing the first / last label pair. */
   xTicks?: readonly { index: number; label: string }[];
+  /**
+   * The x axis names categories (a few labelled buckets, one slot bar each): `xTicks` names every
+   * point, and every label is drawn, on extra rows under the plot when one row cannot hold them.
+   */
+  categoricalX?: boolean;
   /** A dot at the end of each line, and at the hovered point with an in-plot reading. */
   pointDots?: boolean;
   /** Bars fill their slot (a few labelled buckets) instead of 3 px ticks. */
@@ -86,6 +91,9 @@ export interface ChartProps {
   /** How a point label reads wherever the chart prints it (hover caption and reading). */
   formatLabel?: (label: string) => string;
 }
+/** The height of each extra row of x labels a categorical axis stacks under the plot. */
+const X_LABEL_ROW = 12;
+
 export function Chart({
   title,
   subtitle,
@@ -111,6 +119,7 @@ export function Chart({
   yDomain,
   referenceLines = [],
   xTicks,
+  categoricalX = false,
   pointDots = false,
   slotBars = false,
   hideMarkerLegend = false,
@@ -208,6 +217,14 @@ export function Chart({
   for (const tick of xTicks ?? [])
     if (!Number.isSafeInteger(tick.index) || tick.index < 0 || tick.index >= data.length)
       throw new Error(`${title}: x tick ${tick.label} has invalid index ${tick.index}`);
+  if (
+    categoricalX &&
+    (!slotBars ||
+      !xTicks ||
+      xTicks.length !== data.length ||
+      xTicks.some((tick, i) => tick.index !== i))
+  )
+    throw new Error(`${title}: a categorical axis names every slot bar, in order`);
   const geometryValues = [...plotValues, ...referenceLines.map((line) => line.value)].map(
     (value) => (yScale === 'log' ? Math.log10(value) : value)
   );
@@ -255,6 +272,15 @@ export function Chart({
   }, []);
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
+  const xLabels =
+    xTicks && right !== null && right > left && data.length
+      ? placeXTicks(
+          xTicks.map((tick) => ({ ...tick, at: x(tick.index) })),
+          { left, right, width: width as number, categorical: categoricalX }
+        )
+      : null;
+  // Extra label rows go under the plot; the plot keeps its height.
+  const svgHeight = height + ((xLabels?.rows ?? 1) - 1) * X_LABEL_ROW;
   return (
     <figure className="m-0 min-w-0">
       <figcaption
@@ -318,8 +344,8 @@ export function Chart({
               role="img"
               aria-label={`${title}, ${unit}`}
               width={width}
-              height={height}
-              viewBox={`0 0 ${width} ${height}`}
+              height={svgHeight}
+              viewBox={`0 0 ${width} ${svgHeight}`}
               tabIndex={0}
               onKeyDown={(e) => {
                 if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
@@ -608,43 +634,20 @@ export function Chart({
                     </g>
                   );
                 })()}
-              {xTicks &&
-                // F2 charts group: a tick whose label would touch the one before it is dropped.
-                xTicks
-                  .map((tick) => {
-                    const at = x(tick.index);
-                    const anchor: 'start' | 'end' | 'middle' =
-                      at - left < 20 ? 'start' : right - at < 20 ? 'end' : 'middle';
-                    const w = tick.label.length * 6.2;
-                    const from = anchor === 'start' ? at : anchor === 'end' ? at - w : at - w / 2;
-                    return { tick, at, anchor, from, to: from + w };
-                  })
-                  .reduce<
-                    {
-                      tick: { index: number; label: string };
-                      at: number;
-                      anchor: 'start' | 'end' | 'middle';
-                      to: number;
-                      from: number;
-                    }[]
-                  >((kept, entry) => {
-                    const previous = kept[kept.length - 1];
-                    return !previous || entry.from >= previous.to + 6 ? [...kept, entry] : kept;
-                  }, [])
-                  .map(({ tick, at, anchor }) => (
-                    <text
-                      key={`${tick.index}:${tick.label}`}
-                      data-x-tick
-                      visibility={hideXAxis ? 'hidden' : undefined}
-                      x={at}
-                      y={height - 5}
-                      textAnchor={anchor}
-                      fill="#7c849c"
-                      fontSize="10"
-                    >
-                      {tick.label}
-                    </text>
-                  ))}
+              {xLabels?.ticks.map((tick) => (
+                <text
+                  key={`${tick.index}:${tick.label}`}
+                  data-x-tick
+                  visibility={hideXAxis ? 'hidden' : undefined}
+                  x={tick.x}
+                  y={height - 5 + tick.row * X_LABEL_ROW}
+                  textAnchor={tick.anchor}
+                  fill="#7c849c"
+                  fontSize="10"
+                >
+                  {tick.label}
+                </text>
+              ))}
               <text
                 visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                 x={left}
