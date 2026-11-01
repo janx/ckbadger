@@ -427,6 +427,9 @@ function DetailBody({
               referenceLines={model.referenceLines}
               formatLabel={(label) => (style === 'epoch' ? `epoch ${pointLabel(label)}` : label)}
               pinnedReadout={readout(definition.title)}
+              // The caption is hidden, so several bands (the HODL wave's eight) get a swatch key
+              // under the plot: name and value at the reading, latest by default (C#4).
+              seriesLegend={model.series.length > 1}
             />
           )}
         </DetailSection>

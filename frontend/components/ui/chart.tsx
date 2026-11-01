@@ -13,7 +13,7 @@ import {
   type Ticks,
 } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
-import { CLASS_COLORS, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
+import { CLASS_COLORS, jadeRamp, type AssetClass } from '@/lib/design-tokens';
 
 export interface ChartPoint {
   label: string;
@@ -336,9 +336,9 @@ export function Chart({
   for (const marker of markers)
     if (!Number.isSafeInteger(marker.index) || marker.index < 0 || marker.index >= data.length)
       throw new Error(`${title}: hardfork ${marker.label} has invalid index ${marker.index}`);
+  const ramp = jadeRamp(series.length);
   const color = (i: number) =>
-    series[i].color ??
-    (series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : HUE_RAMP[i % HUE_RAMP.length]);
+    series[i].color ?? (series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : ramp[i]);
   const activeIndex = active !== null && active < data.length ? active : null;
   const selected =
     activeIndex !== null

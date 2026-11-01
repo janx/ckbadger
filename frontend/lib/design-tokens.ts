@@ -26,6 +26,24 @@ export const EXPIRED_COLOR = '#7c849c';
 export const HUE_RAMP = ['#2edba3', '#24b68a', '#259775', '#287b64', '#2b6054', '#344e48'] as const;
 
 /**
+ * `n` distinct shades of the jade ramp, brightest first, for `n` bands of one split: the designed
+ * stops while they last; more bands (the HODL wave's eight) take `n` stops spread evenly along the
+ * same ramp, so no two bands share a colour and the order stays bright to dark (review C#4).
+ */
+export function jadeRamp(n: number): string[] {
+  if (!Number.isSafeInteger(n) || n < 1) throw new Error(`jade ramp of ${n} shades`);
+  if (n <= HUE_RAMP.length) return HUE_RAMP.slice(0, n);
+  const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16));
+  return Array.from({ length: n }, (_, k) => {
+    const t = (k / (n - 1)) * (HUE_RAMP.length - 1);
+    const i = Math.min(Math.floor(t), HUE_RAMP.length - 2);
+    const [a, b] = [rgb(HUE_RAMP[i]), rgb(HUE_RAMP[i + 1])];
+    const mix = a.map((v, c) => Math.round(v + (b[c] - v) * (t - i)));
+    return `#${mix.map((v) => v.toString(16).padStart(2, '0')).join('')}`;
+  });
+}
+
+/**
  * Object composition (FINAL_REVIEW decision 3, AssetClasses board): Pure CKB is a crystal,
  * BTC+CKB the crystal set in Bitcoin's copper; the off-chain tiers stay plain grey outlines.
  */
