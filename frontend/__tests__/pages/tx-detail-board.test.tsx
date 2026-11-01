@@ -323,6 +323,26 @@ describe('Transaction board, tier 1', () => {
     expect(rail).toHaveTextContent('paid by ckb1qzda...cjk9lz');
   });
 
+  it('reads status, time, block and fee under the hash, before the balances and the cells', async () => {
+    // Responsive review A#17: on a phone the facts rail came after the six cell cards.
+    render(<TransactionDetailPage />);
+    const rail = await screen.findByRole('complementary', { name: 'Transaction facts' }, SLOW);
+    const table = await screen.findByRole(
+      'table',
+      { name: 'Balance changes by participant' },
+      SLOW
+    );
+    const before = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const hash = screen.getByRole('button', { name: 'Copy transaction hash' });
+    const cells = screen.getByRole('heading', { name: /consumed → .* created/ });
+    expect(before(hash, rail)).toBe(true);
+    expect(before(rail, table)).toBe(true);
+    expect(before(rail, cells)).toBe(true);
+    // From lg up the rail is still the right-hand column beside the tier-1 story.
+    expect(rail).toHaveClass('lg:col-start-2', 'lg:row-start-1');
+  });
+
   it('names the collection and composition of moved objects, occupied in whole bytes, and a Net row (TX-12, TX-19)', async () => {
     render(<TransactionDetailPage />);
     const table = await screen.findByRole(

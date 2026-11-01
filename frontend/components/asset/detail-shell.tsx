@@ -20,7 +20,8 @@ export interface AssetDetailShellProps {
   tier2?: ReactNode;
   /**
    * OB-14 (Object.dc.html): the subject's media, in a 300 px column beside the title block (under
-   * the breadcrumb); stacked above it on a phone.
+   * the breadcrumb). On a one-column page it follows the title block, so the name, status and
+   * summary are read first (responsive review B#23).
    */
   media?: ReactNode;
   /**
@@ -73,10 +74,10 @@ export function AssetDetailShell({
       </nav>
       {media ? (
         <div className="grid min-w-0 items-start gap-8 md:grid-cols-[300px_minmax(0,1fr)]">
-          <div data-hero-media className="min-w-0">
+          <div className="min-w-0 space-y-3 md:col-start-2 md:row-start-1">{titleBlock}</div>
+          <div data-hero-media className="min-w-0 md:col-start-1 md:row-start-1">
             {media}
           </div>
-          <div className="min-w-0 space-y-3">{titleBlock}</div>
         </div>
       ) : (
         titleBlock

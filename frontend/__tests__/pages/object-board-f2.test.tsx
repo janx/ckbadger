@@ -263,3 +263,22 @@ it('puts the media beside the title and lays tier 2 out in two columns (OB-14)',
   expect(columns.children[0]).toHaveTextContent('original decoder binary hash was not recorded');
   expect(columns.children[1]).toHaveTextContent(/[Cc]ell data/);
 });
+
+// Responsive review B#23: on a phone the first 500 px was the Bitcoin provenance card; the name,
+// Live badge, composition and summary sentence come first and the media after them.
+it('reads the name, status, composition and summary before the media, in DOM order', async () => {
+  const { container } = await page();
+  const before = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+  const media = container.querySelector('[data-hero-media]')!;
+  const header = screen.getByRole('banner');
+  for (const first of [
+    screen.getByRole('heading', { level: 1, name: 'Nervape 3x' }),
+    within(header).getByText('Live'),
+    within(header).getByText('BTC+CKB'),
+    within(header).getByText(/^Minted /),
+  ])
+    expect(before(first, media), first.textContent ?? '').toBe(true);
+  // From md up the media still takes the left column beside the title.
+  expect(media).toHaveClass('md:col-start-1', 'md:row-start-1');
+});
