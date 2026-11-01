@@ -217,8 +217,8 @@ const xSpan = (t: { x: number; anchor: PlacedXTick['anchor']; label: string }) =
 };
 
 /**
- * Where the x labels go. A time axis drops a label that would touch the one before it. A
- * categorical axis (a few named buckets, one bar each) keeps every label: centred under its bar,
+ * Where the x labels go. A time axis keeps every k-th label, the fewest thinnings at which no
+ * two touch, so the kept labels stay evenly spaced. A categorical axis (a few named buckets, one bar each) keeps every label: centred under its bar,
  * held inside the chart, and stacked onto as many rows as it takes for no two on a row to touch.
  */
 export function placeXTicks(
@@ -227,19 +227,27 @@ export function placeXTicks(
 ): { ticks: PlacedXTick[]; rows: number } {
   const { left, right, width, categorical } = frame;
   if (!categorical) {
-    const kept: PlacedXTick[] = [];
-    for (const tick of ticks) {
-      const anchor: PlacedXTick['anchor'] =
-        tick.at - left < X_EDGE_ANCHOR
-          ? 'start'
-          : right - tick.at < X_EDGE_ANCHOR
-            ? 'end'
-            : 'middle';
-      const placed = { index: tick.index, label: tick.label, x: tick.at, anchor, row: 0 };
-      const previous = kept[kept.length - 1];
-      if (!previous || xSpan(placed).from >= xSpan(previous).to + X_LABEL_GAP) kept.push(placed);
-    }
-    return { ticks: kept, rows: 1 };
+    const anchored = ticks.map((tick) => ({
+      index: tick.index,
+      label: tick.label,
+      x: tick.at,
+      anchor: (tick.at - left < X_EDGE_ANCHOR
+        ? 'start'
+        : right - tick.at < X_EDGE_ANCHOR
+          ? 'end'
+          : 'middle') as PlacedXTick['anchor'],
+      row: 0,
+    }));
+    // Every k-th tick from the first, for the smallest k at which no two kept labels touch: the
+    // kept ticks stay evenly spaced (C#17: dropping only the touching one printed "#0 #2,000",
+    // then jumped to "#6,000").
+    // A single kept label always fits, so the search ends by k = the tick count.
+    const everyKth = (k: number) => anchored.filter((_, i) => i % k === 0);
+    const apart = (kept: readonly PlacedXTick[]) =>
+      kept.map(xSpan).every((s, i, all) => i === 0 || s.from >= all[i - 1].to + X_LABEL_GAP);
+    let k = 1;
+    while (!apart(everyKth(k))) k++;
+    return { ticks: everyKth(k), rows: 1 };
   }
   const centred = ticks.map((tick) => {
     const w = tick.label.length * AXIS_CHAR_PX;

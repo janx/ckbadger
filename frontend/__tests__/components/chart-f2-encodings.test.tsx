@@ -60,6 +60,37 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(text(container).some((t) => t === '4 %')).toBe(true);
   });
 
+  it('keys a target line above the plot, clear of the data and the hardfork names (C#16)', () => {
+    // Responsive review C#16: "target 2.50 %" sat on the noisy data line at the right edge.
+    const { container } = render(
+      <Chart
+        title="Uncle rate"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="%"
+        referenceLines={[{ value: 2.5, label: 'target 2.50 %' }]}
+        markers={[{ index: 3, label: 'Meepo', plotLabel: 'Meepo', href: '/hardforks' }]}
+        formatValue={(v) => v}
+      />
+    );
+    const key = container.querySelector('[data-reference-key="target 2.50 %"]')!;
+    expect(key.querySelector('text')).toHaveTextContent('target 2.50 %');
+    expect(key.querySelector('line')!.getAttribute('stroke-dasharray')).toBe('3 3');
+    // The plot starts below the key: every grid line and the marker's name are under it.
+    const keyY = Number(key.querySelector('text')!.getAttribute('y'));
+    const gridYs = [...container.querySelectorAll('svg line[stroke="#1a1f30"]')].map((n) =>
+      Number(n.getAttribute('y1'))
+    );
+    expect(Math.min(...gridYs) - keyY).toBeGreaterThanOrEqual(10);
+    const marker = [...container.querySelectorAll('svg text')].find(
+      (n) => n.textContent === 'Meepo'
+    )!;
+    expect(Number(marker.getAttribute('y')) - keyY).toBeGreaterThanOrEqual(10);
+    // The line itself carries no label in the plot.
+    expect(container.querySelector('[data-reference-line="target 2.50 %"] text')).toBeNull();
+  });
+
   it('labels the x axis at the given ticks instead of only the first and last label (CH-24)', () => {
     const { container } = render(
       <Chart

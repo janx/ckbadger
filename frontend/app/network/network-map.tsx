@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -17,6 +17,12 @@ const SPACING = 9.2;
 const LAT_TOP = 72;
 const LAT_BOTTOM = -48;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
+/**
+ * Below this map width a country with a single verified node is not labelled on the map: its
+ * "XX 1" labels crowd the dense regions (390 px: CN, TW, MO, IN, HK, SG, ID ran together). Those
+ * countries are named in a line under the map instead, so every country stays readable.
+ */
+export const NARROW_MAP_WIDTH = 480;
 
 export interface CountryLabel {
   country: string;
@@ -29,13 +35,18 @@ export interface CountryLabel {
  * The Network board's layout: one cluster per country at the mean GeoIP position of its peers
  * (lat 72…−48 band), clusters pushed apart until they and their labels no longer touch and pulled
  * gently back to their place, peers on a sunflower inside — ringed first, then reachable. Visual
- * displacement only: the readout keeps the source coordinates. Deterministic.
+ * displacement only: the readout keeps the source coordinates. Deterministic. On a narrow map
+ * the single-node countries are `listed` for the line under the map instead of labelled on it.
  */
 export function layoutCountryClusters(
   points: Point[],
   width: number,
   height: number
-): { dots: Array<{ point: Point; x: number; y: number }>; labels: CountryLabel[] } {
+): {
+  dots: Array<{ point: Point; x: number; y: number }>;
+  labels: CountryLabel[];
+  listed: { country: string; count: number }[];
+} {
   if (!(width > 0 && height > 0)) throw new Error(`invalid network map size ${width}×${height}`);
   const proj = (lon: number, lat: number): [number, number] => [
     ((lon + 180) / 360) * width,
@@ -46,6 +57,8 @@ export function layoutCountryClusters(
     byCountry.set(point.country, [...(byCountry.get(point.country) ?? []), point]);
   const countries = [...byCountry.keys()].sort();
   const radius = (n: number) => SPACING * (0.6 + Math.sqrt(n) * 0.62);
+  const labelled = (country: string) =>
+    width >= NARROW_MAP_WIDTH || byCountry.get(country)!.length >= 2;
   const home = new Map(
     countries.map((country) => {
       const peers = byCountry.get(country)!;
@@ -59,9 +72,10 @@ export function layoutCountryClusters(
     })
   );
   const centre = new Map(countries.map((country) => [country, [...home.get(country)!]]));
-  /** A cluster's footprint: its dots plus the label under it. */
+  /** A cluster's footprint: its dots plus the label under it, when it has one. */
   const extent = (country: string) => {
     const r = radius(byCountry.get(country)!.length);
+    if (!labelled(country)) return { r, half: r, below: r };
     const half = Math.max(r, (`${country} ${byCountry.get(country)!.length}`.length * 6.2) / 2);
     return { r, half, below: r + 14 };
   };
@@ -98,6 +112,7 @@ export function layoutCountryClusters(
   }
   const dots: Array<{ point: Point; x: number; y: number }> = [];
   const labels: CountryLabel[] = [];
+  const listed: { country: string; count: number }[] = [];
   for (const country of countries) {
     const [cx, cy] = centre.get(country)!;
     const peers = [...byCountry.get(country)!].sort(
@@ -114,10 +129,12 @@ export function layoutCountryClusters(
         y: cy + r * Math.sin(k * GOLDEN_ANGLE),
       });
     });
-    labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + 11 });
+    if (labelled(country))
+      labels.push({ country, count: peers.length, x: cx, y: cy + radius(peers.length) + 11 });
+    else listed.push({ country, count: peers.length });
   }
   dots.sort((a, b) => a.point.peerId.localeCompare(b.point.peerId));
-  return { dots, labels };
+  return { dots, labels, listed };
 }
 
 /** The dots alone, on the default 720 × 353 map (kept for callers that place only dots). */
@@ -260,6 +277,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
   const layout = placed?.dots ?? [];
   const selected = ready?.points.find((point) => point.peerId === selectedId) ?? null;
   const countryLabels = placed?.labels ?? [];
+  const listedCountries = placed?.listed ?? [];
   const reachable = ready?.points.filter((point) => point.reachable).length ?? 0;
   const ringed = ready?.points.filter((point) => point.localSessionObserved).length ?? 0;
   const perRow = Math.max(8, Math.floor(width / 14));
@@ -267,8 +285,9 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
     <figure className="m-0 min-w-0">
       {ready && (
         <p className="text-text-dim mb-3 text-[12px]">
-          {ready.located.toLocaleString()} verified nodes in {countryLabels.length} countries ·
-          ringed: the {ringed} this node had a session with in the latest round
+          {ready.located.toLocaleString()} verified nodes in{' '}
+          {countryLabels.length + listedCountries.length} countries · ringed: the {ringed} this node
+          had a session with in the latest round
         </p>
       )}
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
@@ -375,6 +394,22 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                   </g>
                 ))}
               </svg>
+              {listedCountries.length > 0 && (
+                <p
+                  aria-label="Countries with one verified node"
+                  className="text-text-dim text-[12px] leading-relaxed"
+                >
+                  One verified node each, not labelled on the map:{' '}
+                  {listedCountries.map(({ country, count }, i) => (
+                    <Fragment key={country}>
+                      {i > 0 && ' · '}
+                      <span data-country-listed className="whitespace-nowrap">
+                        <span className="text-text">{country}</span> {count}
+                      </span>
+                    </Fragment>
+                  ))}
+                </p>
+              )}
               {neverVerified > 0 && (
                 <div className="flex flex-col gap-1.5">
                   <span className="text-text-dim text-[12px]">

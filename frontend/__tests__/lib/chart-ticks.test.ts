@@ -243,3 +243,21 @@ describe('placeXTicks', () => {
     }
   );
 });
+
+describe('placeXTicks on a time axis', () => {
+  it('thins crowded ticks to every k-th, so the kept ones stay evenly spaced (C#17)', () => {
+    // Epoch length at 390: 15,215 epochs over a 292 px plot, a tick every 2,000 epochs. Dropping
+    // only the tick that touches its neighbour printed "#0 #2,000" together, then "#6,000".
+    const left = 56;
+    const right = 348;
+    const at = (epoch: number) => left + (epoch / 15214) * (right - left);
+    const ticks = [0, 2000, 4000, 6000, 8000, 10000, 12000, 14000].map((epoch, index) => ({
+      index,
+      label: `#${epoch.toLocaleString('en-US')}`,
+      at: at(epoch),
+    }));
+    const placed = placeXTicks(ticks, { left, right, width: 358, categorical: false });
+    expect(placed.ticks.map((t) => t.label)).toEqual(['#0', '#4,000', '#8,000', '#12,000']);
+    expect(placed.rows).toBe(1);
+  });
+});

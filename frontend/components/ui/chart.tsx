@@ -2,7 +2,7 @@
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { niceTicks, formatTick, placeXTicks } from '@/lib/chart-ticks';
+import { AXIS_CHAR_PX, niceTicks, formatTick, placeXTicks } from '@/lib/chart-ticks';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { CLASS_COLORS, HUE_RAMP, type AssetClass } from '@/lib/design-tokens';
 
@@ -93,6 +93,24 @@ export interface ChartProps {
 }
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
 const X_LABEL_ROW = 12;
+/** The band above the plot that keys its target lines, its label baseline and swatch length. */
+const REFERENCE_KEY_BAND = 14;
+const REFERENCE_KEY_Y = 10;
+const REFERENCE_SWATCH = 14;
+
+/** Target-line keys laid right to left from the plot's right edge: dashed swatch, then label. */
+function referenceKeys(
+  lines: readonly { label: string }[],
+  right: number
+): { label: string; swatch: number; textEnd: number }[] {
+  let end = right;
+  return lines.map(({ label }) => {
+    const textEnd = end;
+    const swatch = textEnd - label.length * AXIS_CHAR_PX - 4 - REFERENCE_SWATCH;
+    end = swatch - 12;
+    return { label, swatch, textEnd };
+  });
+}
 
 export function Chart({
   title,
@@ -244,8 +262,11 @@ export function Chart({
   const labels = ticks?.values.map((v) => tickLabel(v, ticks.step)) ?? [];
   const left = plotLeft ?? Math.max(48, ...labels.map((s) => s.length * 6 + 8));
   const right = width === null ? null : width - 10,
-    top = 16,
-    bottom = height - 26;
+    // A target line is keyed in its own band above the plot, never on the plot (C#16).
+    keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
+    top = 16 + keyBand,
+    bottom = height - 26 + keyBand,
+    axisY = height + keyBand - 5;
   const lo = ticks?.values[0],
     hi = ticks?.values[ticks.values.length - 1];
   const x = (i: number) =>
@@ -280,7 +301,7 @@ export function Chart({
         )
       : null;
   // Extra label rows go under the plot; the plot keeps its height.
-  const svgHeight = height + ((xLabels?.rows ?? 1) - 1) * X_LABEL_ROW;
+  const svgHeight = height + keyBand + ((xLabels?.rows ?? 1) - 1) * X_LABEL_ROW;
   return (
     <figure className="m-0 min-w-0">
       <figcaption
@@ -546,14 +567,26 @@ export function Chart({
                     strokeOpacity="0.6"
                     strokeDasharray="3 3"
                   />
+                </g>
+              ))}
+              {referenceKeys(referenceLines, right).map(({ label, swatch, textEnd }) => (
+                <g key={label} data-reference-key={label}>
+                  <line
+                    x1={swatch}
+                    x2={swatch + REFERENCE_SWATCH}
+                    y1={REFERENCE_KEY_Y - 3}
+                    y2={REFERENCE_KEY_Y - 3}
+                    stroke="#a0a8be"
+                    strokeDasharray="3 3"
+                  />
                   <text
-                    x={right - 4}
-                    y={y(line.value) - 4}
+                    x={textEnd}
+                    y={REFERENCE_KEY_Y}
                     textAnchor="end"
                     fill="#a0a8be"
                     fontSize="10"
                   >
-                    {line.label}
+                    {label}
                   </text>
                 </g>
               ))}
@@ -568,7 +601,7 @@ export function Chart({
                     stroke="#7c849c"
                     strokeDasharray="3 3"
                   />
-                  <text x={x(m.index)} y="10" textAnchor="middle" fill="#7c849c" fontSize="10">
+                  <text x={x(m.index)} y={top - 6} textAnchor="middle" fill="#7c849c" fontSize="10">
                     {m.plotLabel ?? m.label}
                   </text>
                 </g>
@@ -640,7 +673,7 @@ export function Chart({
                   data-x-tick
                   visibility={hideXAxis ? 'hidden' : undefined}
                   x={tick.x}
-                  y={height - 5 + tick.row * X_LABEL_ROW}
+                  y={axisY + tick.row * X_LABEL_ROW}
                   textAnchor={tick.anchor}
                   fill="#7c849c"
                   fontSize="10"
@@ -651,7 +684,7 @@ export function Chart({
               <text
                 visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                 x={left}
-                y={height - 5}
+                y={axisY}
                 fill="#7c849c"
                 fontSize="10"
               >
@@ -661,7 +694,7 @@ export function Chart({
                 <text
                   visibility={hideXAxis || xTicks ? 'hidden' : undefined}
                   x={right}
-                  y={height - 5}
+                  y={axisY}
                   textAnchor="end"
                   fill="#7c849c"
                   fontSize="10"
