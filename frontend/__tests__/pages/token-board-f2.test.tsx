@@ -311,6 +311,22 @@ describe('Token board (F2 objects)', () => {
     expect(tier2).toHaveTextContent('Live cells150');
   });
 
+  // Responsive gate (2026-11-01): the issuer's full address inside the args note had no break
+  // opportunity and pushed the page 76 px past 640 and 326 px past 390.
+  it('wraps the issuer address in the args note inside its box', async () => {
+    const address = 'ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq' + 'x'.repeat(40);
+    vi.mocked(api.getToken).mockResolvedValue({
+      ...mockToken,
+      issuer: { lockHash: other, address, lockKind: 'Default Lock' },
+    });
+    render(<TokenDetailPage typeHash={hash} />);
+    const note = await screen.findByText(/the lock hash of the owner that can mint/, undefined, {
+      timeout: 5000,
+    });
+    expect(note).toHaveTextContent(address);
+    expect(note).toHaveClass('[overflow-wrap:anywhere]');
+  });
+
   // Visual pass: the last movement reads as one plain clause.
   it('says when it last moved and what that transaction did', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });

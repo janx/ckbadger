@@ -337,7 +337,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               <dd className="mt-1">
                 <Hash hash={t.typeArgs} truncate={false} className="break-all text-xs" />
               </dd>
-              <dd className="text-text-dim mt-1 text-[11px]">
+              <dd className="text-text-dim mt-1 text-[11px] [overflow-wrap:anywhere]">
                 {t.issuer
                   ? `the lock hash of the owner that can mint (${t.issuer.address ?? t.issuer.lockHash}), proven by the token script`
                   : NOT_ESTABLISHED_ISSUER}

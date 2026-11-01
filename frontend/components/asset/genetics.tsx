@@ -319,7 +319,9 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
             )}
           </div>
           {step.description.status === 'unsupported' ? (
-            <p role="status">Mapping unavailable: {step.description.reason}</p>
+            <p role="status" className="[overflow-wrap:anywhere]">
+              Mapping unavailable: {step.description.reason}
+            </p>
           ) : (
             <>
               <p className="text-text-dim text-[11px]">
