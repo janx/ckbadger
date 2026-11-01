@@ -350,6 +350,7 @@ describe('chainLayout', () => {
   });
 
   it.each([
+    { width: 606, blocks: 2 },
     { width: 760, blocks: 3 },
     { width: 1000, blocks: 5 },
     { width: CONTAINER_VIEW_W, blocks: 8 },
@@ -366,21 +367,43 @@ describe('chainLayout', () => {
     }
   );
 
-  it('never shows fewer blocks than fit the 760 px minimum canvas: 3 by this geometry', () => {
-    expect(G.minViewW).toBe(760);
+  it('never shows fewer than two whole blocks in a row: the 589 px minimum canvas', () => {
+    // The narrowest row is the chain start, two whole cards one pitch apart, and the margin.
+    expect(G.minViewW).toBe(G.chainX0 + (CARD_W + G.gap) + CARD_W + G.marginR);
+    expect(G.minViewW).toBe(589);
     // Derived from the geometry: the cards that fit from the chain start to the margin.
     expect(G.minBlocks).toBe(
       Math.floor((G.minViewW - G.marginR - G.chainX0 + G.gap) / (CARD_W + G.gap))
     );
-    expect(G.minBlocks).toBe(3);
+    expect(G.minBlocks).toBe(2);
     expect(chainLayout(24, G.minViewW, false)).toHaveLength(G.minBlocks);
+    // One pixel less and the second card would be cut.
+    const last = chainLayout(24, G.minViewW, false)[G.minBlocks - 1];
+    expect(last.x + last.w).toBe(G.minViewW - G.marginR);
     // The landing block sits at NEXT, beside as many chain blocks as fit.
     const landing = chainLayout(24, G.minViewW, true);
-    expect(landing.map((sl) => sl.slot)).toEqual(['landing', 'chain', 'chain', 'chain']);
+    expect(landing.map((sl) => sl.slot)).toEqual(['landing', 'chain', 'chain']);
   });
 
-  it('refuses a view narrower than the minimum canvas instead of clipping its cards', () => {
-    expect(() => chainLayout(24, G.minViewW - 1, false)).toThrow(/759 px view .* 760 px/);
+  it('lays a 606 px view (the 640–767 band) out as exactly two whole chain cards, nothing cut', () => {
+    const scene = buildScene(buildPipelineSnapshot(), 606, 'settled');
+    expect(scene.cards.map((c) => c.block.number)).toEqual([T, T - 1]);
+    expect(scene.cards.map((c) => c.x)).toEqual([G.chainX0, G.chainX0 + CARD_W + G.gap]);
+    for (const c of scene.cards) {
+      expect(c.w).toBe(CARD_W);
+      expect(c.x + c.w).toBeLessThanOrEqual(606 - G.marginR);
+    }
+    // A third would be cut by the edge, so it is not drawn at all.
+    const last = scene.cards[scene.cards.length - 1];
+    expect(last.x + last.w + G.gap + CARD_W).toBeGreaterThan(606 - G.marginR);
+    // Pool wells and NEXT keep their places and widths.
+    expect(scene.next?.x).toBe(G.nextX);
+    expect(scene.next?.w).toBe(CARD_W);
+  });
+
+  it('refuses a row narrower than the minimum canvas instead of clipping its cards', () => {
+    const w = G.minViewW;
+    expect(() => chainLayout(24, w - 1, false)).toThrow(new RegExp(`${w - 1} px view .* ${w} px`));
   });
 
   it('fits all 8 chain blocks inside the 1280 px page container', () => {
@@ -585,7 +608,7 @@ describe('window label placement: inside the view, never across a tick', () => {
 });
 
 describe('a narrower view: fewer blocks, all of them whole', () => {
-  it.each([760, 1000, CONTAINER_VIEW_W])(
+  it.each([589, 606, 760, 1000, CONTAINER_VIEW_W])(
     'at %i px: no card past the edge, a forward tail, every window label in view and off its ticks',
     (W) => {
       const s = buildPipelineSnapshot();

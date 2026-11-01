@@ -64,8 +64,6 @@ const CHAIN_BASE = {
   gap: 20,
   /** NEXT stands alone between the pool and the chain: the gaps on both of its sides are wider. */
   frontierGap: 44,
-  /** The narrowest canvas: below it the panel scrolls instead of laying out a narrower row. */
-  minViewW: 760,
   /** Kept free between the last chain card and the right edge of the view. */
   marginR: 10,
   maxBlocks: 24,
@@ -77,6 +75,12 @@ const PITCH = CARD_W + CHAIN_BASE.gap;
 
 const NEXT_X = CHAIN_BASE.x0 + PITCH + CARD_W + CHAIN_BASE.frontierGap;
 const CHAIN_X0 = NEXT_X + CARD_W + CHAIN_BASE.frontierGap;
+
+/**
+ * The narrowest one-row canvas: the chain start (381), two whole cards one pitch apart (109 + 89)
+ * and the right margin (10) = 589 px, so a row always shows the tip and the block before it.
+ */
+const MIN_VIEW_W = CHAIN_X0 + PITCH + CARD_W + CHAIN_BASE.marginR;
 
 /**
  * How many whole chain cards fit a view `viewW` px wide: card k ends at chainX0 + k·pitch + cardW,
@@ -99,8 +103,9 @@ export const G = {
   proposedX: CHAIN_BASE.x0 + PITCH,
   nextX: NEXT_X,
   chainX0: CHAIN_X0,
-  /** The fewest chain blocks ever shown: the ones that fit the narrowest canvas. */
-  minBlocks: wholeCards(CHAIN_BASE.minViewW),
+  minViewW: MIN_VIEW_W,
+  /** The fewest chain blocks ever shown in a row: the ones that fit the narrowest canvas (2). */
+  minBlocks: wholeCards(MIN_VIEW_W),
 } as const;
 
 /** An uncle travels inside the block that includes it: its header and proposals, never its txs. */
@@ -220,8 +225,8 @@ export interface ChainSlot {
 
 /**
  * x positions of `count` cards, newest first: as many whole chain cards as fit the view (never a
- * card cut by its edge), at most `maxBlocks`. The view is never narrower than `minViewW` (the panel
- * scrolls below it), so at least `minBlocks` fit. A landing block (just mined, still being
+ * card cut by its edge), at most `maxBlocks`. A row is never narrower than `minViewW`, so at least
+ * `minBlocks` fit. A landing block (just mined, still being
  * settled) sits at the NEXT position.
  */
 export function chainLayout(count: number, viewW: number, landing: boolean): ChainSlot[] {

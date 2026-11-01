@@ -1151,6 +1151,7 @@ describe('PipelinePanel interactions', () => {
   );
 
   it.each([
+    { width: 606, blocks: 2 },
     { width: 760, blocks: 3 },
     { width: 1000, blocks: 5 },
     { width: CONTAINER_VIEW_W, blocks: 8 },
@@ -1322,7 +1323,8 @@ describe('PipelinePanel interactions', () => {
   });
 
   it('ends the off-screen reward link at the chain tail of the narrowest view too', async () => {
-    // 760 px holds tip … tip − 2: the tail starts just past tip − 2 and the link stops there.
+    // The narrowest row holds the tip and the blocks after it that fit whole (G.minBlocks): the
+    // tail starts just past the last of them and the link stops there.
     viewW = G.minViewW;
     vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue({
       x: 0,
@@ -1337,8 +1339,8 @@ describe('PipelinePanel interactions', () => {
     } as DOMRect);
     const svg = await renderPanel(snapshot);
     const fit = buildScene(snapshot, G.minViewW, 'settled');
-    expect(fit.cards).toHaveLength(3);
-    const last = fit.cards[2];
+    expect(fit.cards).toHaveLength(G.minBlocks);
+    const last = fit.cards[G.minBlocks - 1];
     for (const c of fit.cards) {
       const cb = c.squares[0];
       fireEvent.pointerMove(svg, { clientX: c.x + cb.x + cb.s / 2, clientY: cb.y + cb.s / 2 });
