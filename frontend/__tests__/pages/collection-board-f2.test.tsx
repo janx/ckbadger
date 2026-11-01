@@ -185,6 +185,11 @@ it('opens with the cluster kind, its on-chain description, the composition sente
   await page();
   const header = screen.getByRole('banner');
   expect(header).toHaveTextContent('Spore cluster · DOB/0');
+  // Responsive fix plan 2026-11-01 (A12e, report B#21): the kind is one unit, so "Spore cluster ·"
+  // no longer dangles at a line end; the line may break before the id instead.
+  const kind = within(header).getByText('Spore cluster · DOB/0');
+  expect(kind).toHaveClass('whitespace-nowrap');
+  expect(kind.nextSibling?.textContent).toBe(' ');
   expect(header).toHaveTextContent('NVAP 3X · the cluster’s description, on chain');
   expect(header).toHaveTextContent(
     'All 90 objects are fully on-chain: records in CKB cells, pictures in Bitcoin inscriptions.'

@@ -352,12 +352,14 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       identity={
         kind === 'identity' ? undefined : (
           <>
-            {/* F2 objects (OB-C4): what kind of collection this is, then its id. */}
-            <span className="text-text-dim mr-2 text-[13px]">
+            {/* F2 objects (OB-C4): what kind of collection this is, then its id. The kind is one
+                unit, so its separator never dangles at a line end (B#21); the space after it is
+                where the line may break before the id. */}
+            <span className="text-text-dim whitespace-nowrap text-[13px]">
               {kind === 'spore'
                 ? `Spore cluster${insights.data?.currentPattern.status === 'dob' && insights.data.currentPattern.version !== null ? ` · DOB/${insights.data.currentPattern.version}` : ''}`
                 : 'm-NFT class'}
-            </span>
+            </span>{' '}
             <Hash hash={id} truncate={false} className="text-[11px]" />
           </>
         )

@@ -19,7 +19,14 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { classifyActivity } from '@/lib/activity-classify';
 import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
-import type { GlobalActivity, ParticipantInfo, PoolStatus, PoolInterpretation } from '@/lib/api';
+import type {
+  ActivityProtocolAction,
+  GlobalActivity,
+  ParticipantInfo,
+  PoolStatus,
+  PoolInterpretation,
+} from '@/lib/api';
+import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { AssetClass } from '@/lib/design-tokens';
@@ -101,9 +108,50 @@ function DetailLine({ label, children }: { label: string; children: ReactNode })
 }
 
 /**
+ * What a protocol-action line draws, as a key: the label and every metadata field the line reads
+ * (`protocolActionNoteParts` reads `protocolActionMeta`, the protocol and the action). Two actions
+ * with one key read the same, whatever else their metadata carries.
+ */
+function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string {
+  return JSON.stringify(
+    [isPrimary, protocolActionLabel(pa), pa.protocol, pa.action, protocolActionMeta(pa)],
+    (_, v: unknown) => (typeof v === 'bigint' ? v.toString() : v)
+  );
+}
+
+/**
+ * A run of calls, dot-joined. Over PARTICIPANT_LIMIT, the first five and an explicit
+ * "+N more locks" that opens the rest in place (B#26: 29 lock calls, one per line at 390).
+ */
+function FoldedCalls({ parts, noun }: { parts: ReactNode[]; noun: 'types' | 'locks' }) {
+  const [open, setOpen] = useState(false);
+  const folded = !open && parts.length > PARTICIPANT_LIMIT;
+  const shown = folded ? parts.slice(0, PARTICIPANT_LIMIT - 1) : parts;
+  return (
+    <>
+      <DotJoined parts={shown} />
+      {folded && (
+        <>
+          {' '}
+          <button
+            type="button"
+            aria-expanded={false}
+            onClick={() => setOpen(true)}
+            className="text-interactive hover:text-jade whitespace-nowrap bg-transparent transition-colors"
+          >
+            +{parts.length - shown.length} more {noun}
+          </button>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
  * The detail lines of an activity, from the one event classification: each protocol action's
  * metadata (the headline's own action needs no name; another one leads with its label), then
- * every type call and every lock call in call syntax, args kept.
+ * every type call and every lock call in call syntax, args kept. Action lines that read the same
+ * are said once with their count ("×18"); a long call run folds behind "+N more".
  */
 function ActivityDetails({
   activity,
@@ -116,33 +164,43 @@ function ActivityDetails({
   const events = globalTxEvents(activity);
   const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
   const locks = events.flatMap((e) => (e.kind === 'lock' ? [e.call] : []));
-  const lines: ReactNode[] = [];
+  type ProtocolLine =
+    | { key: string; parts: ReactNode[]; count: number }
+    | { key: string; error: unknown };
+  const protocolLines: ProtocolLine[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
     let parts: ReactNode[];
     try {
       parts = protocolActionNoteParts(e.action);
     } catch (error) {
-      lines.push(
-        <DetailLine key={`p${i}`} label="">
-          <ActivityReadError txHash={activity.txHash} error={error} />
-        </DetailLine>
-      );
+      protocolLines.push({ key: `p${i}`, error });
       return;
     }
     const named = e.action === primary ? parts : [protocolActionLabel(e.action), ...parts];
-    if (named.length > 0) {
-      lines.push(
-        <DetailLine key={`p${i}`} label="">
-          <DotJoined parts={named} />
-        </DetailLine>
-      );
-    }
+    if (named.length === 0) return;
+    const key = protocolLineKey(e.action, e.action === primary);
+    const same = protocolLines.find((l) => l.key === key);
+    if (same && 'count' in same) same.count += 1;
+    else protocolLines.push({ key, parts: named, count: 1 });
   });
+  const lines: ReactNode[] = protocolLines.map((l) => (
+    <DetailLine key={l.key} label="">
+      {'error' in l ? (
+        <ActivityReadError txHash={activity.txHash} error={l.error} />
+      ) : (
+        <>
+          <DotJoined parts={l.parts} />
+          {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
+        </>
+      )}
+    </DetailLine>
+  ));
   if (showScriptDetails && types.length > 0) {
     lines.push(
       <DetailLine key="type" label="type">
-        <DotJoined
+        <FoldedCalls
+          noun="types"
           parts={types.map((sc, i) => (
             <span key={i} className="whitespace-nowrap">
               <TypeCallExpr sc={sc} quiet />
@@ -155,7 +213,8 @@ function ActivityDetails({
   if (showScriptDetails && locks.length > 0) {
     lines.push(
       <DetailLine key="lock" label="lock">
-        <DotJoined
+        <FoldedCalls
+          noun="locks"
           parts={locks.map((lc, i) => (
             <span key={i} className="whitespace-nowrap">
               <LockCallExpr lc={lc} quiet />

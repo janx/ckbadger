@@ -107,6 +107,19 @@ describe('Scripts list against the Scripts board', () => {
     vi.mocked(api.getScripts).mockResolvedValue(response);
   });
 
+  // Responsive fix plan 2026-11-01 (A12d, report C#12): one clamped line cut the description
+  // mid-sentence on narrow widths; below md it may take two lines, the desktop table keeps one.
+  it('lets a description take two lines below md', async () => {
+    render(<ScriptsPage />);
+    const descriptions = await screen.findAllByText(
+      'An universal Account Protocol for Web3 Mass-adoption'
+    );
+    for (const d of descriptions) {
+      expect(d).toHaveClass('line-clamp-2', 'md:line-clamp-1');
+      expect(d).not.toHaveClass('truncate');
+    }
+  });
+
   it('opens with the board lead sentence and a name search (SC-L5)', async () => {
     render(<ScriptsPage />);
     expect(

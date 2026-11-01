@@ -1,6 +1,6 @@
 // Responsive fix plan 2026-11-01, lane A: the activity participant grid across widths. jsdom does
 // not lay out, so these assert the structure and the breakpoint classes that decide the layout.
-import { render, within } from '@/__tests__/utils/test-utils';
+import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
 
@@ -163,5 +163,57 @@ describe('activity lock-column line below md (A8: the narrow form keeps the lock
     expect(unit).toHaveClass('flex-wrap', 'max-w-full');
     expect(unit.querySelector('[data-party]')).toHaveClass('flex-wrap');
     expect(unit.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
+  });
+});
+
+describe('activity detail lines (A12c: repeats collapse, long call runs fold)', () => {
+  // Report B#26: a .bit "Registered" entry printed 18 identical ".bit · confirm proposal" lines
+  // (the actions differ only in metadata the row does not show) and 29 lock calls one per line at
+  // 390 — about 900 px for one entry.
+  function dotbitRegistration(): ActivityRowData {
+    const confirm = (i: number) => ({
+      protocol: 'dotbit',
+      protocolName: '.bit',
+      action: 'confirm_proposal',
+      metadata: { accountId: '0x' + String(i).padStart(40, '0') },
+    });
+    const lock = (i: number) => ({
+      lockCodeHash: '0x' + '93'.repeat(32),
+      lockHashType: 'type',
+      lockArgs: '0x' + String(i).padStart(4, '0') + 'ab'.repeat(20),
+      scriptHash: '0x' + String(i).padStart(64, '0'),
+      scriptName: '.bit Lock',
+      decoded: null,
+      decodeError: null,
+    });
+    return {
+      ...activity([party()]),
+      protocolActions: [
+        { protocol: 'dotbit', protocolName: '.bit', action: 'register', metadata: {} },
+        ...Array.from({ length: 18 }, (_, i) => confirm(i)),
+      ],
+      lockCalls: Array.from({ length: 29 }, (_, i) => lock(i)),
+    } as ActivityRowData;
+  }
+
+  it('says a repeated action line once with its count', () => {
+    const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
+    const lines = [...container.querySelectorAll('[data-role="detail"]')].map((l) => l.textContent);
+    expect(lines.filter((t) => t?.includes('confirm proposal'))).toEqual([
+      '.bit · confirm proposal ×18',
+    ]);
+  });
+
+  it('folds a long lock run behind "+N more locks" and opens it in place', () => {
+    const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
+    const lockLine = () =>
+      [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
+        l.textContent?.startsWith('lock')
+      ) as HTMLElement;
+    expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(5);
+    const more = within(lockLine()).getByRole('button', { name: '+24 more locks' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(more);
+    expect(lockLine().querySelectorAll('a[href*="/script"]')).toHaveLength(29);
   });
 });

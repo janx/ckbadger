@@ -31,7 +31,7 @@ describe('Inventory global summary', () => {
     );
     const comp = screen.getByRole('region', { name: 'Object composition' });
     expect(comp).toHaveTextContent(
-      '90 of 200 collections are fully on-chain · 4,200 live objects are · 17 await DOB decoding'
+      '90 of 200 collections are fully on-chain · so are 4,200 live objects · 17 await DOB decoding'
     );
     expect(screen.getByText(/Canonical asset totals/)).toHaveTextContent('#123');
   });

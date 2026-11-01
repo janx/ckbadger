@@ -90,11 +90,11 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
           <span className="text-text-bright text-[15px]">
             <AssetCount value={onchain} />
           </span>{' '}
-          of <AssetCount value={total} /> collections are fully on-chain ·{' '}
+          of <AssetCount value={total} /> collections are fully on-chain · so are{' '}
           <span className="text-text-bright">
             <AssetCount value={summary.fullyOnchainObjectsCount} />
           </span>{' '}
-          live objects are
+          live objects
           {summary.pendingItemsCount > 0 && (
             <>
               {' '}
