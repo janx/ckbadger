@@ -11,10 +11,20 @@ import {
   type CellPart,
 } from '@/lib/cell-parts';
 import { cn } from '@/lib/utils';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import {
+  hexRowBytes,
+  MAP_PAD_PX,
+  mapSegmentMinWidth,
+  type HexRowBytes,
+} from '@/lib/cell-byte-layout';
 
 export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 
+/** Excerpt ranges align to 24 bytes, which every dump row length (24, 16, 8) divides or fits. */
 const ROW = 24;
+/** The capacity map's gap between parts (`gap-[2px]`). */
+const MAP_GAP = 2;
 /** Data longer than this shows excerpts with "⋯ N bytes … show" rows instead of every byte. */
 const FULL_DATA_LIMIT = 1536;
 const SHOW_STEP = ROW * 43;
@@ -81,7 +91,7 @@ function DetailRows({ rows }: { rows: readonly [string, ReactNode, string?][] })
   );
 }
 
-/** One block's hex rows (offset · 24 bytes · ASCII). Independent of hover: highlighting is CSS. */
+/** One block's hex rows (offset · bytes · ASCII). Independent of hover: highlighting is CSS. */
 const HexRows = memo(function HexRows({
   block,
   bytes,
@@ -90,6 +100,7 @@ const HexRows = memo(function HexRows({
   from,
   to,
   digits,
+  perRow,
 }: {
   block: 'output' | 'data';
   bytes: readonly string[];
@@ -99,13 +110,15 @@ const HexRows = memo(function HexRows({
   to: number;
   /** Offset digits for the whole box, so both blocks' columns line up. */
   digits: 4 | 5;
+  /** Bytes a row: as many whole bytes as the measured box holds. */
+  perRow: HexRowBytes;
 }) {
   const rows: ReactNode[] = [];
   const width = digits;
-  for (let r = alignDown(from); r < to; r += ROW) {
+  for (let r = from - (from % perRow); r < to; r += perRow) {
     const hex: ReactNode[] = [];
     const ascii: ReactNode[] = [];
-    for (let b = r; b < r + ROW; b++) {
+    for (let b = r; b < r + perRow; b++) {
       if (b < from || b >= to || b >= bytes.length) {
         hex.push(
           <span key={b} aria-hidden="true" data-pad="" className="invisible rounded-sm px-px">
@@ -200,6 +213,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const outParts = useMemo(() => cellOutputParts(cell), [cell]);
   const dataParts = useMemo(() => cellDataParts(cell), [cell]);
   const [active, setActive] = useState<Active>(null);
+  const [bytesRef, bytesWidth] = useElementWidth<HTMLDivElement>();
   const [ranges, setRanges] = useState<[number, number][]>(() =>
     initialRanges(cell, dataParts, dataBytes.length)
   );
@@ -251,12 +265,24 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const room = (capacity - occupied) / BigInt(100000000);
   const big = breakdown.totalBytes >= 1000;
   const fmt = (n: number) => n.toLocaleString('en-US');
+  // The map's parts: every non-empty group, named in full once it is large enough to hold it.
+  const mapSegments = GROUPS.filter((g) => groupBytes[g] > 0).map((group) => ({
+    group,
+    bytes: groupBytes[group],
+    label:
+      groupBytes[group] >= (big ? 1000 : 30)
+        ? `${group} ${fmt(groupBytes[group])}`
+        : fmt(groupBytes[group]),
+  }));
+
   const onHover = (event: React.MouseEvent) => {
     const id = (event.target as HTMLElement).closest<HTMLElement>('[data-part-id]')?.dataset.partId;
     if (id) setActive({ kind: 'part', id });
   };
 
   const digits: 4 | 5 = Math.max(outBytes.length, dataBytes.length) > 0xffff ? 5 : 4;
+  // Until the box is measured (before the first paint) rows are the desktop's 24 bytes.
+  const perRow: HexRowBytes = bytesWidth === null ? 24 : hexRowBytes(bytesWidth, digits);
   const dataRows: ReactNode[] = [];
   let cursor = 0;
   ranges.forEach(([from, to], i) => {
@@ -266,6 +292,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         key={`rows:${from}`}
         block="data"
         digits={digits}
+        perRow={perRow}
         bytes={dataBytes}
         owner={dataOwner}
         parts={byId}
@@ -478,13 +505,15 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           room for {room.toLocaleString('en-US')} more
         </span>
       </div>
+      {/* A flex row: basis 0, growth by bytes, each part's minimum holds its label. */}
       <div
         role="group"
         aria-label="Capacity map"
-        className="flex h-[22px] gap-[2px]"
+        className="flex h-[22px]"
+        style={{ gap: MAP_GAP }}
         onMouseLeave={() => setActive(null)}
       >
-        {GROUPS.filter((g) => groupBytes[g] > 0).map((g) => (
+        {mapSegments.map(({ group: g, bytes, label }) => (
           <button
             type="button"
             key={g}
@@ -502,16 +531,17 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             onMouseEnter={() => setActive({ kind: 'group', group: g })}
             onFocus={() => setActive({ kind: 'group', group: g })}
             onBlur={() => setActive(null)}
-            className="flex items-center justify-center rounded-sm text-[10.5px]"
+            className="flex items-center justify-center whitespace-nowrap rounded-sm text-[10.5px]"
             style={{
-              flex: `${groupBytes[g]} 0 0`,
-              minWidth: big ? 28 : 8,
+              flex: `${bytes} 0 0`,
+              minWidth: mapSegmentMinWidth(label, big ? 28 : 8),
+              paddingInline: MAP_PAD_PX,
               backgroundColor: rgba(CELL_COLORS[g], 0.12),
               borderTop: `2px solid ${CELL_COLORS[g]}`,
               color: CELL_COLORS[g],
             }}
           >
-            {groupBytes[g] >= (big ? 1000 : 30) ? `${g} ${fmt(groupBytes[g])}` : groupBytes[g]}
+            {label}
           </button>
         ))}
       </div>
@@ -613,58 +643,61 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </div>
             )}
           </div>
-          <div
-            aria-label="Cell bytes"
-            data-cell-bytes=""
-            data-active={litIds ? litIds.join(' ') : undefined}
-            className="overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 text-xs tabular-nums"
-            onMouseOver={onHover}
-            onMouseLeave={() => setActive(null)}
-          >
-            {molecule && (
-              <div aria-label="CellOutput byte map">
-                <div className="text-text-dim flex justify-between gap-3 pb-1.5 text-[11px]">
-                  <span>outputs[{cell.outputIndex}] · CellOutput · molecule</span>
+          <div ref={bytesRef} className="min-w-0">
+            <div
+              aria-label="Cell bytes"
+              data-cell-bytes=""
+              data-active={litIds ? litIds.join(' ') : undefined}
+              className="overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 text-xs tabular-nums"
+              onMouseOver={onHover}
+              onMouseLeave={() => setActive(null)}
+            >
+              {molecule && (
+                <div aria-label="CellOutput byte map">
+                  <div className="text-text-dim flex flex-wrap justify-between gap-x-3 pb-1.5 text-[11px]">
+                    <span>outputs[{cell.outputIndex}] · CellOutput · molecule</span>
+                    <span>
+                      {fmt(outBytes.length)} B · {fmt(outOccupied)} occupied
+                    </span>
+                  </div>
+                  <HexRows
+                    block="output"
+                    digits={digits}
+                    perRow={perRow}
+                    bytes={outBytes}
+                    owner={outOwner}
+                    parts={byId}
+                    from={0}
+                    to={outBytes.length}
+                  />
+                </div>
+              )}
+              <div
+                aria-label="CellData byte map"
+                className={cn(molecule && 'mt-2.5 border-t border-dashed border-[#1a1f30] pt-3.5')}
+              >
+                <div className="text-text-dim flex flex-wrap justify-between gap-x-3 pb-1.5 text-[11px]">
                   <span>
-                    {fmt(outBytes.length)} B · {fmt(outOccupied)} occupied
+                    outputs_data[{cell.outputIndex}]
+                    {cell.elf
+                      ? ' · ELF64 RISC-V'
+                      : typeName
+                        ? ` · decoded by its type script, ${typeName}`
+                        : ''}
+                  </span>
+                  <span>
+                    {fmt(dataBytes.length)} B · all occupied
+                    {ranges.length > 1 || (ranges[0] && ranges[0][1] < dataBytes.length)
+                      ? ' · excerpts shown'
+                      : ''}
                   </span>
                 </div>
-                <HexRows
-                  block="output"
-                  digits={digits}
-                  bytes={outBytes}
-                  owner={outOwner}
-                  parts={byId}
-                  from={0}
-                  to={outBytes.length}
-                />
+                {dataBytes.length ? (
+                  dataRows
+                ) : (
+                  <p className="text-text-dim py-1">No data: the cell carries 0 bytes.</p>
+                )}
               </div>
-            )}
-            <div
-              aria-label="CellData byte map"
-              className={cn(molecule && 'mt-2.5 border-t border-dashed border-[#1a1f30] pt-3.5')}
-            >
-              <div className="text-text-dim flex justify-between gap-3 pb-1.5 text-[11px]">
-                <span>
-                  outputs_data[{cell.outputIndex}]
-                  {cell.elf
-                    ? ' · ELF64 RISC-V'
-                    : typeName
-                      ? ` · decoded by its type script, ${typeName}`
-                      : ''}
-                </span>
-                <span>
-                  {fmt(dataBytes.length)} B · all occupied
-                  {ranges.length > 1 || (ranges[0] && ranges[0][1] < dataBytes.length)
-                    ? ' · excerpts shown'
-                    : ''}
-                </span>
-              </div>
-              {dataBytes.length ? (
-                dataRows
-              ) : (
-                <p className="text-text-dim py-1">No data: the cell carries 0 bytes.</p>
-              )}
             </div>
           </div>
         </div>
