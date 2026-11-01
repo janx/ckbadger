@@ -169,6 +169,22 @@ describe('Mnft board (F2 objects)', () => {
     expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
   });
 
+  it('keeps the properties one column until md and never breaks a value inside a word', async () => {
+    // Responsive review B#15: at 640 the 2×2 grid printed "8 b / ytes" and hung "planned".
+    vi.mocked(api.getMnftItemDetail).mockResolvedValue({
+      ...detail,
+      characteristicHex: '0x0000000000000000',
+    });
+    await page();
+    const props = within(screen.getByRole('banner')).getByLabelText('Properties');
+    expect(props).toHaveClass('md:grid-cols-2');
+    expect(props).not.toHaveClass('sm:grid-cols-2');
+    const characteristic = [...props.querySelectorAll('dd')][3];
+    expect(characteristic).not.toHaveClass('break-all');
+    expect(characteristic).toHaveTextContent('none, all zero · 8 bytes');
+    expect(within(characteristic).getByText('8 bytes')).toHaveClass('whitespace-nowrap');
+  });
+
   it('names where its image lives instead of a bare renderer card (OB-M4)', async () => {
     await page();
     const media = screen.getByRole('figure');

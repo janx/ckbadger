@@ -67,6 +67,10 @@ describe('HodlWavePage', () => {
       series: response.series.map(({ key, label }) => ({ key, label })),
       data: [{ label: '2024-01-01', values: expect.objectContaining({ gt3y: '15.00' }) }],
     });
+    // Responsive review C#10: the summary pairs stay one column until md ("Largest age / band").
+    const summary = screen.getByRole('banner').querySelector('dl')!;
+    expect(summary).toHaveClass('md:grid-cols-2');
+    expect(summary).not.toHaveClass('sm:grid-cols-2');
     expect(holders).toMatchObject({
       title: 'Holder count',
       unit: 'holders',
