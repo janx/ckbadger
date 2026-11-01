@@ -468,6 +468,8 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     key: 'resources',
     label: 'Size · cycles',
     minWidth: 120,
+    // The column that takes the free width (the board's 1fr).
+    width: 'auto',
     numeric: true,
     className: '!whitespace-normal text-text-dim',
     render: (block) => (

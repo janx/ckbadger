@@ -7,6 +7,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
+import { PhoneRow } from '@/components/ui/phone-row';
 import {
   ScriptCodeClassSummary,
   isImmutableClass,
@@ -47,59 +48,150 @@ const GOVERNOR: Partial<Record<NonNullable<KnownScript['codeClasses']>[number]['
     one_key: 'one key',
   };
 
+/** The board's Code column as words: "Immutable" or "Upgradable · N versions", then by whom. */
+function scriptCodeClass(
+  script: KnownScript
+): { head: string; sub: string; replaceable: boolean } | null {
+  const classes = script.codeClasses ?? [];
+  if (!classes.length) return null;
+  const replaceable = classes.filter((row) => !isImmutableClass(row.class));
+  const immutable = classes.filter((row) => isImmutableClass(row.class));
+  if (script.firstDeployedAt === undefined)
+    throw new Error(`Script family ${script.name} row has no firstDeployedAt`);
+  const first = script.firstDeployedAt;
+  if (!replaceable.length)
+    return {
+      head: 'Immutable',
+      sub: [
+        ...(first ? [first.blockNumber === 0 ? 'genesis' : formatUtc8Date(first.timestampMs)] : []),
+        ...[...immutable]
+          .sort((a, b) => Number(b.class === 'unspendable') - Number(a.class === 'unspendable'))
+          .map((row) => (row.class === 'fixed' ? 'pinned by data hash' : 'code cell unspendable')),
+      ].join(' · '),
+      replaceable: false,
+    };
+  if (script.versionsCount === undefined)
+    throw new Error(`Script family ${script.name} has replaceable code but no versionsCount`);
+  return {
+    head: `Upgradable · ${formatCount(script.versionsCount, 'version')}`,
+    sub: [
+      `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`,
+      ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []),
+      ...(immutable.length ? ['some references pinned'] : []),
+    ].join(' · '),
+    replaceable: true,
+  };
+}
+
+/** The pip of the Code column: a hollow ring for upgradable code, a filled dot for immutable. */
+function CodeClassPip({ replaceable }: { replaceable: boolean }) {
+  return (
+    <svg width="10" height="10" aria-hidden="true" className="shrink-0">
+      <circle
+        cx="5"
+        cy="5"
+        r="3.8"
+        fill={replaceable ? '#0c0e15' : '#a0a8be'}
+        fillOpacity={replaceable ? 1 : 0.55}
+        stroke={replaceable ? '#dee2ec' : '#a0a8be'}
+      />
+    </svg>
+  );
+}
+
 /** The board's Code column: "Immutable" or "Upgradable · N versions", then by whom. */
 function ScriptCodeClass({ script }: { script: KnownScript }) {
-  const classes = script.codeClasses ?? [];
-  if (!classes.length)
+  const code = scriptCodeClass(script);
+  if (!code)
     return (
       <span data-testid="script-code-class" className="text-text-dim">
         Code evidence unavailable
       </span>
     );
-  const replaceable = classes.filter((row) => !isImmutableClass(row.class));
-  const immutable = classes.filter((row) => isImmutableClass(row.class));
-  let head: string;
-  let sub: string;
-  if (script.firstDeployedAt === undefined)
-    throw new Error(`Script family ${script.name} row has no firstDeployedAt`);
-  const first = script.firstDeployedAt;
-  if (!replaceable.length) {
-    head = 'Immutable';
-    sub = [
-      ...(first ? [first.blockNumber === 0 ? 'genesis' : formatUtc8Date(first.timestampMs)] : []),
-      ...[...immutable]
-        .sort((a, b) => Number(b.class === 'unspendable') - Number(a.class === 'unspendable'))
-        .map((row) => (row.class === 'fixed' ? 'pinned by data hash' : 'code cell unspendable')),
-    ].join(' · ');
-  } else {
-    if (script.versionsCount === undefined)
-      throw new Error(`Script family ${script.name} has replaceable code but no versionsCount`);
-    head = `Upgradable · ${formatCount(script.versionsCount, 'version')}`;
-    sub = [
-      `by ${replaceable.map((row) => GOVERNOR[row.class] ?? scriptClassLabel(row.class).toLowerCase()).join(' or ')}`,
-      ...(first ? [`since ${formatUtc8Date(first.timestampMs)}`] : []),
-      ...(immutable.length ? ['some references pinned'] : []),
-    ].join(' · ');
-  }
   return (
     <span data-testid="script-code-class" className="flex min-w-0 flex-col gap-0.5">
       <span
-        className={`inline-flex items-center gap-2 ${replaceable.length ? 'text-text-bright' : 'text-text'}`}
+        className={`inline-flex items-center gap-2 ${code.replaceable ? 'text-text-bright' : 'text-text'}`}
       >
-        <svg width="10" height="10" aria-hidden="true" className="shrink-0">
-          <circle
-            cx="5"
-            cy="5"
-            r="3.8"
-            fill={replaceable.length ? '#0c0e15' : '#a0a8be'}
-            fillOpacity={replaceable.length ? 1 : 0.55}
-            stroke={replaceable.length ? '#dee2ec' : '#a0a8be'}
-          />
-        </svg>
-        {head}
+        <CodeClassPip replaceable={code.replaceable} />
+        {code.head}
       </span>
-      <span className="text-text-dim text-[11px]">{sub}</span>
+      <span className="text-text-dim text-[11px]">{code.sub}</span>
     </span>
+  );
+}
+
+/**
+ * A script family on a phone (board L6): name and the CKB its cells hold; role, code class and
+ * cell counts with the occupied share; the description in full, never clamped. In a wide
+ * container (640) two lines: role and code join the name, the counts share the description's line.
+ */
+function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolean }) {
+  const code = scriptCodeClass(s);
+  const role = s.scriptKind ?? 'unregistered';
+  const kind = (
+    <span className="inline-flex flex-wrap items-center gap-x-1.5">
+      {role}
+      <span className="text-text-dim">·</span>
+      {code ? (
+        <>
+          <CodeClassPip replaceable={code.replaceable} />
+          <span className={code.replaceable ? 'text-text-bright' : undefined}>{code.head}</span>
+          <span className="text-text-dim">· {code.sub}</span>
+        </>
+      ) : (
+        <span className="text-text-dim">code evidence unavailable</span>
+      )}
+    </span>
+  );
+  const cells = (
+    <span className="whitespace-nowrap">
+      {countText(s.liveCellsCount)} live · of {countText(s.cellsCount)} · {occupiedShare(s).share}{' '}
+      occupied
+    </span>
+  );
+  const name = (
+    <>
+      <AppLink
+        href={scriptHref(s)}
+        title={!hasName(s) ? `${s.hashType} ref:${s.codeHash}` : undefined}
+        className="text-text-bright hover:text-emphasis font-medium hover:underline"
+      >
+        {hasName(s) ? s.name!.trim() : 'Unlabeled'}
+      </AppLink>
+      {s.deprecated && <span className="text-text-dim ml-2 text-[11px]">deprecated</span>}
+    </>
+  );
+  const description = hasName(s)
+    ? s.description
+    : `${getScriptRefBadgeLabel(s.hashType)} · ${truncateHash(s.codeHash, 10, 8)}`;
+  return (
+    <PhoneRow
+      testId="script-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: wide ? (
+            <>
+              {name}
+              <span className="text-text-dim text-xs"> · </span>
+              <span className="text-text-dim text-xs">{kind}</span>
+            </>
+          ) : (
+            name
+          ),
+          right: <span className="text-text-bright">{capacityText(s.ownedCapacitySum!)}</span>,
+        },
+        !wide && { key: 'code', tone: 'body', left: kind, right: cells },
+        {
+          key: 'description',
+          tone: 'quiet',
+          left: description,
+          right: wide ? cells : undefined,
+        },
+      ]}
+    />
   );
 }
 
@@ -376,22 +468,7 @@ export default function ScriptsPage() {
                 rows={data?.data ?? []}
                 rowKey={(s) => s.codeHash}
                 empty="No scripts found"
-                mobileRow={(s) => (
-                  <div className="min-w-0 space-y-2 text-xs">
-                    <ScriptName script={s} />
-                    <div className="text-text-dim">
-                      {s.scriptKind ? s.scriptKind.replace('+', ' + ') : 'unregistered'}
-                    </div>
-                    <ScriptCodeClass script={s} />
-                    <div className="flex flex-wrap justify-between gap-2">
-                      <span>
-                        {countText(s.liveCellsCount)} live cells · of {countText(s.cellsCount)} ever
-                      </span>
-                      <span>{capacityText(s.ownedCapacitySum!)}</span>
-                    </div>
-                    <div className="text-text-dim">Occupied {occupiedShare(s).share}</div>
-                  </div>
-                )}
+                mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
               />
             )}
             {data && data.data.length > 0 && (

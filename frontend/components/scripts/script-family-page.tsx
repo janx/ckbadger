@@ -6,7 +6,8 @@ import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
-import { ListTable } from '@/components/ui/list-table';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScriptCustodyEvidence } from '@/components/scripts/script-code-evidence';
 import {
@@ -188,6 +189,215 @@ export function ScriptFamilyPage({
     number: numbers.get(version.versionHash)!,
     current: version.deployments.some((deployment) => deployment.status === 'live'),
   }));
+  type Row = (typeof rows)[number];
+  type Deployment = Row['version']['deployments'][number];
+  const outpointKey = (d: Deployment) => `${d.codeCellTxHash}:${d.codeCellOutputIndex}`;
+  const outpointLink = (d: Deployment) => (
+    <Link
+      href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`}
+      className="text-[#6aa9c4] hover:underline"
+    >
+      {shortHex(d.codeCellTxHash, 8, 6)}:{d.codeCellOutputIndex}
+    </Link>
+  );
+  /** A code cell's fate: live, or consumed — by the version that replaced it when one did. */
+  const deploymentStatus = (d: Deployment): string => {
+    const successor = d.consumedByTx
+      ? [...deploymentOf].find(([outpoint]) => outpoint.startsWith(`${d.consumedByTx}:`))?.[1]
+      : undefined;
+    return d.status === 'live'
+      ? 'live'
+      : successor
+        ? `consumed by v${numbers.get(successor.versionHash)}`
+        : d.consumedByTx
+          ? `consumed in ${shortHex(d.consumedByTx, 8, 6)}`
+          : 'consumed';
+  };
+  const binarySize = (d: Deployment): ReactNode => {
+    const state = codeCells.get(outpointKey(d));
+    return state?.cell ? (
+      `${state.cell.dataSize.toLocaleString('en-US')} B`
+    ) : state?.error ? (
+      <span role="alert" title={state.error.message} className="text-rouge">
+        unavailable
+      </span>
+    ) : (
+      <span className="text-text-dim">…</span>
+    );
+  };
+  /** Who signed a deployment (or that it was the first), and to whom it handed the code cell. */
+  const signer = (d: Deployment): { who: string; note: string; marked: boolean } => {
+    const marker = history.find(
+      (m) =>
+        m.event === 'deployed' &&
+        m.codeCellTxHash === d.codeCellTxHash &&
+        m.codeCellOutputIndex === d.codeCellOutputIndex
+    );
+    if (!marker)
+      return {
+        who: d.custody ? `held by ${holderName(d.custody)}` : 'custody unavailable',
+        note: '',
+        marked: false,
+      };
+    const by = signerOf(marker, history);
+    return {
+      who: by ? holderName(by) : 'first deployed',
+      note: !by
+        ? `into ${holderName(marker.custody)}`
+        : holderName(by) !== holderName(marker.custody)
+          ? `hands it to ${marker.custody.lockArgs ? shortHex(marker.custody.lockArgs) : holderName(marker.custody)}`
+          : '',
+      marked: true,
+    };
+  };
+  const signedText = (d: Deployment) => {
+    const { who, note } = signer(d);
+    return note ? `${who} ${note}` : who;
+  };
+  const versionCell = (row: Row) => (
+    <span className="text-text-bright">
+      v{row.number}
+      {row.current && <span className="text-jade block text-[11px]">current</span>}
+    </span>
+  );
+  /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
+  const narrowColumns: ListColumn<Row>[] = [
+    { key: 'version', label: 'v', minWidth: 64, render: versionCell },
+    {
+      key: 'deployed',
+      label: 'Deployed',
+      minWidth: 96,
+      render: (row) =>
+        row.version.deployments.length ? (
+          row.version.deployments.map((d) => (
+            <span key={outpointKey(d)} className="block">
+              {formatUtc8Date(d.deployedAt)}
+              {d.createdAtBlock !== undefined && (
+                <span className="block text-[11px]">{blockLink(d.createdAtBlock)}</span>
+              )}
+            </span>
+          ))
+        ) : (
+          <span className="text-text-dim">No deployment observed</span>
+        ),
+    },
+    {
+      key: 'cell',
+      label: 'Code cell · version hash',
+      minWidth: 228,
+      // The column that takes the free width (the board's 1fr).
+      width: 'auto',
+      render: (row) => (
+        <>
+          {row.version.deployments.map((d) => (
+            <span key={outpointKey(d)} className="block">
+              {outpointLink(d)}
+              <span className="text-text-dim block text-[11px]">
+                {binarySize(d)} · {signedText(d)}
+              </span>
+            </span>
+          ))}
+          <span className="text-text-dim block text-[11px] [overflow-wrap:anywhere]">
+            {row.version.versionHash}
+          </span>
+        </>
+      ),
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      minWidth: 112,
+      className: 'text-text-dim',
+      render: (row) =>
+        row.version.deployments.map((d) => (
+          <span key={outpointKey(d)} className="block">
+            {deploymentStatus(d)}
+          </span>
+        )),
+    },
+    {
+      key: 'usage',
+      label: 'Live cells',
+      minWidth: 80,
+      numeric: true,
+      render: (row) => versionUsage(row.version.versionHash),
+    },
+  ];
+  /**
+   * A version on a phone (board L7): version, date, code cell and status on one line; the version
+   * hash on its own line (it is what a developer copies); each further deployment and the cells
+   * using it after.
+   */
+  const versionPhoneRow = (row: Row) => {
+    const [first, ...again] = row.version.deployments;
+    const detail = (d: Deployment) =>
+      [
+        d.createdAtBlock !== undefined ? blockLink(d.createdAtBlock) : null,
+        binarySize(d),
+        codeCells.get(outpointKey(d))?.cell ? (
+          <ExactCkb
+            shannons={BigInt(codeCells.get(outpointKey(d))!.cell!.capacity)}
+            signed={false}
+            tone="plain"
+          />
+        ) : null,
+        `signed: ${signedText(d)}`,
+      ].filter((part) => part !== null);
+    const joined = (parts: ReactNode[]) =>
+      parts.map((part, i) => (
+        <span key={i}>
+          {i > 0 && ' · '}
+          {part}
+        </span>
+      ));
+    return (
+      <PhoneRow
+        testId="code-version-row-mobile"
+        lines={[
+          {
+            key: 'version',
+            tone: 'body',
+            left: (
+              <>
+                <span className="text-text-bright font-medium">v{row.number}</span>
+                {row.current && <span className="text-jade"> current</span>}{' '}
+                {first ? (
+                  <>
+                    <span className="text-text">{formatUtc8Date(first.deployedAt)}</span> ·{' '}
+                    {outpointLink(first)}
+                  </>
+                ) : (
+                  <span className="text-text-dim">no deployment observed</span>
+                )}
+              </>
+            ),
+            right: first ? <span className="text-text-dim">{deploymentStatus(first)}</span> : null,
+          },
+          {
+            key: 'hash',
+            tone: 'quiet',
+            left: row.version.versionHash,
+          },
+          {
+            key: 'detail',
+            tone: 'quiet',
+            left: first ? joined(detail(first)) : null,
+            right: <>live cells using it: {versionUsage(row.version.versionHash)}</>,
+          },
+          ...again.map((d) => ({
+            key: `again-${outpointKey(d)}`,
+            tone: 'quiet' as const,
+            left: joined([
+              <>deployed again {formatUtc8Date(d.deployedAt)}</>,
+              outpointLink(d),
+              ...detail(d),
+            ]),
+            right: deploymentStatus(d),
+          })),
+        ]}
+      />
+    );
+  };
   const typeReference = lineage?.[0]?.referenceHash;
   const roleCrumb =
     family.scriptKind === 'lock' ? 'Locks' : family.scriptKind === 'type' ? 'Types' : null;
@@ -339,12 +549,7 @@ export function ScriptFamilyPage({
                   label: 'Version',
                   minWidth: 70,
                   width: '6%',
-                  render: (row) => (
-                    <span className="text-text-bright">
-                      v{row.number}
-                      {row.current && <span className="text-jade block text-[11px]">current</span>}
-                    </span>
-                  ),
+                  render: versionCell,
                 },
                 {
                   key: 'deployed',
@@ -354,10 +559,7 @@ export function ScriptFamilyPage({
                   render: (row) =>
                     row.version.deployments.length ? (
                       row.version.deployments.map((deployment) => (
-                        <span
-                          key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                          className="block"
-                        >
+                        <span key={outpointKey(deployment)} className="block">
                           {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
                           {deployment.createdAtBlock !== undefined && (
                             <span className="block text-[11px]">
@@ -377,23 +579,15 @@ export function ScriptFamilyPage({
                   width: '8%',
                   numeric: true,
                   render: (row) =>
-                    row.version.deployments.map((deployment) => {
-                      const key = `${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`;
-                      const state = codeCells.get(key);
-                      return (
-                        <span key={key} data-testid="code-binary-size" className="block">
-                          {state?.cell ? (
-                            `${state.cell.dataSize.toLocaleString('en-US')} B`
-                          ) : state?.error ? (
-                            <span role="alert" title={state.error.message} className="text-rouge">
-                              unavailable
-                            </span>
-                          ) : (
-                            <span className="text-text-dim">…</span>
-                          )}
-                        </span>
-                      );
-                    }),
+                    row.version.deployments.map((deployment) => (
+                      <span
+                        key={outpointKey(deployment)}
+                        data-testid="code-binary-size"
+                        className="block"
+                      >
+                        {binarySize(deployment)}
+                      </span>
+                    )),
                 },
                 {
                   key: 'hash',
@@ -413,22 +607,10 @@ export function ScriptFamilyPage({
                   width: '17%',
                   render: (row) =>
                     row.version.deployments.map((deployment) => {
-                      const key = `${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`;
-                      const state = codeCells.get(key);
-                      const successor = deployment.consumedByTx
-                        ? [...deploymentOf].find(([outpoint]) =>
-                            outpoint.startsWith(`${deployment.consumedByTx}:`)
-                          )?.[1]
-                        : undefined;
+                      const state = codeCells.get(outpointKey(deployment));
                       return (
-                        <span key={key} className="block">
-                          <Link
-                            href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                            className="text-[#6aa9c4] hover:underline"
-                          >
-                            {shortHex(deployment.codeCellTxHash, 8, 6)}:
-                            {deployment.codeCellOutputIndex}
-                          </Link>
+                        <span key={outpointKey(deployment)} className="block">
+                          {outpointLink(deployment)}
                           <span className="text-text-dim block text-[11px]">
                             {state?.cell && (
                               <>
@@ -440,13 +622,7 @@ export function ScriptFamilyPage({
                                 ·{' '}
                               </>
                             )}
-                            {deployment.status === 'live'
-                              ? 'live'
-                              : successor
-                                ? `consumed by v${numbers.get(successor.versionHash)}`
-                                : deployment.consumedByTx
-                                  ? `consumed in ${shortHex(deployment.consumedByTx, 8, 6)}`
-                                  : 'consumed'}
+                            {deploymentStatus(deployment)}
                           </span>
                         </span>
                       );
@@ -459,32 +635,15 @@ export function ScriptFamilyPage({
                   width: '18%',
                   render: (row) =>
                     row.version.deployments.map((deployment) => {
-                      const marker = history.find(
-                        (m) =>
-                          m.event === 'deployed' &&
-                          m.codeCellTxHash === deployment.codeCellTxHash &&
-                          m.codeCellOutputIndex === deployment.codeCellOutputIndex
-                      );
-                      const signer = marker ? signerOf(marker, history) : null;
-                      const key = `${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`;
-                      if (!marker)
-                        return (
-                          <span key={key} className="text-text-dim block">
-                            {deployment.custody
-                              ? `held by ${holderName(deployment.custody)}`
-                              : 'custody unavailable'}
-                          </span>
-                        );
-                      return (
-                        <span key={key} className="block text-[#a0a8be]">
-                          {signer ? holderName(signer) : 'first deployed'}
-                          <span className="text-text-dim block text-[11px]">
-                            {!signer
-                              ? `into ${holderName(marker.custody)}`
-                              : holderName(signer) !== holderName(marker.custody)
-                                ? `hands it to ${marker.custody.lockArgs ? shortHex(marker.custody.lockArgs) : holderName(marker.custody)}`
-                                : ''}
-                          </span>
+                      const { who, note, marked } = signer(deployment);
+                      return marked ? (
+                        <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
+                          {who}
+                          <span className="text-text-dim block text-[11px]">{note}</span>
+                        </span>
+                      ) : (
+                        <span key={outpointKey(deployment)} className="text-text-dim block">
+                          {who}
                         </span>
                       );
                     }),
@@ -498,33 +657,8 @@ export function ScriptFamilyPage({
                   render: (row) => versionUsage(row.version.versionHash),
                 },
               ]}
-              mobileRow={(row) => (
-                <div className="space-y-1 text-xs">
-                  <div className="text-text-bright">
-                    v{row.number}
-                    {row.current ? ' · current' : ''}
-                  </div>
-                  {row.version.deployments.map((deployment) => (
-                    <div key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}>
-                      {formatUtc8Date(deployment.deployedAt)} ·{' '}
-                      <Link
-                        href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                        className="text-[#6aa9c4]"
-                      >
-                        {shortHex(deployment.codeCellTxHash, 8, 6)}:{deployment.codeCellOutputIndex}
-                      </Link>{' '}
-                      · {deployment.status ?? 'status unavailable'}
-                    </div>
-                  ))}
-                  {!row.version.deployments.length && (
-                    <div className="text-text-dim">No deployment observed</div>
-                  )}
-                  <div className="text-text-dim break-all text-[11px]">
-                    {row.version.versionHash}
-                  </div>
-                  <div>Live cells using it: {versionUsage(row.version.versionHash)}</div>
-                </div>
-              )}
+              narrowColumns={narrowColumns}
+              mobileRow={versionPhoneRow}
             />
           </DetailSection>
           <DetailSection title="Use it in a transaction">
