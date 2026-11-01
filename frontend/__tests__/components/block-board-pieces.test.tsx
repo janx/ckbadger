@@ -1,5 +1,5 @@
 // F2 blocks: the Blocks / Block / BlockTxs board pieces, each on its own.
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { RewardBreakdown, RewardPaidBy } from '@/components/blocks/reward-breakdown';
@@ -16,6 +16,7 @@ import { ListTable } from '@/components/ui/list-table';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { scriptLabel } from '@/components/address/address-history';
 import type { Transaction } from '@/lib/api';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 
 const rewardBlock = {
   number: 20_827_932,
@@ -130,6 +131,41 @@ describe('BlockTransactionsTable', () => {
     expect(rows[1]).toHaveTextContent('#5 +2');
     expect(rows[0]).toHaveTextContent('cellbase');
   });
+  it('is a three-line phone row at 358 px: index and hash · capacity and fee · the figures', () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    wrap(
+      <BlockTransactionsTable
+        transactions={[tx(0), tx(1, { cycles: 1000, fee: '30000', inputsCount: 2 })]}
+        blockNumber={7}
+      />
+    );
+    expect(screen.queryByRole('table')).toBeNull();
+    const [base, user] = screen.getAllByTestId('block-tx-row-mobile');
+    expect(phoneLines(user).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '10x111111...111111', 'proposed in #5 +2'],
+      ['amounts', '0.00000100 CKB', 'fee 0.00030000 CKB'],
+      ['figures', '2 → 1 cells', '300 B · 1,000 cycles'],
+    ]);
+    expect(phoneLines(base)[0].right).toBe('proposed in cellbase');
+    expect(base.closest('[role="listitem"]')).toHaveClass('text-text-dim');
+  });
+  it('folds the phone row into two lines at 608 px', () => {
+    atContainerWidth(608);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    wrap(<BlockTransactionsTable transactions={[tx(1, { cycles: 1000 })]} blockNumber={7} />);
+    const [row] = screen.getAllByTestId('block-tx-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '10x111111...111111', '0.00000100 CKB'],
+      ['figures', 'proposed in #5 +2 · fee 0.00000000 CKB', '1 → 1 cells · 300 B · 1,000 cycles'],
+    ]);
+  });
 });
 
 describe('Blocks list pieces', () => {
@@ -200,6 +236,7 @@ describe('additive shared props (F2 blocks)', () => {
         rows={[1]}
         rowKey={String}
         columns={[{ key: 'a', label: 'A', header: <b>A rich</b>, minWidth: 10, render: String }]}
+        mobileRow={String}
       />
     );
     expect(screen.getByRole('columnheader')).toHaveTextContent('A rich');

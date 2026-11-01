@@ -19,6 +19,7 @@ import { NotFoundPage } from '@/components/not-found-page';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable } from '@/components/ui/list-table';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
@@ -556,6 +557,42 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               },
               { key: 'fate', label: 'Fate', minWidth: 200, render: (row) => row.fate },
             ]}
+            // No board for this list: board L1's rules — identity and time, who mined it and how
+            // many transactions, then the fate in full.
+            mobileRow={(row) => (
+              <PhoneRow
+                testId="fork-block-row-mobile"
+                lines={[
+                  {
+                    key: 'identity',
+                    tone: 'head',
+                    left: (
+                      <>
+                        <span className="font-medium">
+                          {row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number)}
+                        </span>{' '}
+                        <span className="text-[12px] text-[#6aa9c4]" title={row.hash}>
+                          {hashShort(row.hash)}
+                        </span>
+                      </>
+                    ),
+                    right: <span className="text-text-dim">{blockClock(row.timestamp)}</span>,
+                  },
+                  {
+                    key: 'miner',
+                    tone: 'body',
+                    left: (
+                      <>
+                        <span className="text-text-dim">miner </span>
+                        <Miner block={row} />
+                      </>
+                    ),
+                    right: formatCount(row.transactionsCount, 'tx'),
+                  },
+                  { key: 'fate', tone: 'quiet', left: row.fate },
+                ]}
+              />
+            )}
           />
           <p className="text-text-dim mt-2 text-[12px]">
             An uncle earns its miner nothing; it counts toward the uncle rate that sets the
@@ -618,6 +655,62 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                     ),
                 },
               ]}
+              // No board: the full hash first (it is how the transaction is found again), then
+              // where it was dropped and what became of it, then where it was committed.
+              mobileRow={(tx: OrphanedTransaction) => (
+                <PhoneRow
+                  testId="fork-tx-row-mobile"
+                  lines={[
+                    {
+                      key: 'hash',
+                      tone: 'head',
+                      left: tx.committedAt ? (
+                        <Link
+                          href={`/tx/${tx.hash}`}
+                          className="text-emphasis break-all text-[12px] hover:underline"
+                        >
+                          {tx.hash}
+                        </Link>
+                      ) : (
+                        <span className="break-all text-[12px]">{tx.hash}</span>
+                      ),
+                    },
+                    {
+                      key: 'fate',
+                      tone: 'body',
+                      left: (
+                        <Dotted
+                          parts={[
+                            `dropped in ${formatBlockNumber(tx.blockNumber)}′`,
+                            <span key="f" className="text-text-bright">
+                              {tx.fate.replaceAll('_', ' ')}
+                            </span>,
+                          ]}
+                        />
+                      ),
+                      right:
+                        tx.totalCapacity == null ? (
+                          'output capacity unavailable'
+                        ) : (
+                          <ExactCkb
+                            shannons={BigInt(tx.totalCapacity)}
+                            signed={false}
+                            tone="plain"
+                          />
+                        ),
+                    },
+                    {
+                      key: 'committed',
+                      tone: 'quiet',
+                      left: tx.committedAt ? (
+                        <>committed in {blockAt(tx.committedAt.blockNumber)}</>
+                      ) : (
+                        'not committed'
+                      ),
+                    },
+                  ]}
+                />
+              )}
             />
           </DetailSection>
         )}

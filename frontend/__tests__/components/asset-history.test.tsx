@@ -1,6 +1,7 @@
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 const daily = [
   { date: '2024-01-01', capacity: '10000000001', occupiedCapacity: '6100000000', supply: '13' },
   { date: '2024-01-08', capacity: '20000000001', occupiedCapacity: '6100000000', supply: '26' },
@@ -125,6 +126,49 @@ describe('Asset history', () => {
     fireEvent.click(screen.getByText('Every change to the supply (1)'));
     expect(screen.getByRole('table', { name: 'Mints and burns' })).toHaveTextContent('2024-01-02');
     expect(screen.getByText(/Event dates use raw block timestamps/)).toHaveTextContent('UTC+8');
+  });
+  it('writes a supply change as a phone row at 358 px: change and date · supply after · where and to whom', () => {
+    atContainerWidth(358);
+    try {
+      render(
+        <AssetHistory
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[]}
+          completeThrough="2024-01-08"
+          token={{ symbol: 'T', decimals: 8 }}
+          supplyEvents={{
+            total: 1,
+            rows: [
+              {
+                txHash: '0xaa',
+                blockNumber: 10,
+                txIndex: 0,
+                transferSequence: 2,
+                timestamp: String(Date.parse('2024-01-01T16:30:00Z')),
+                kind: 'burn',
+                amount: '100000000',
+                supplyAfter: '1200000000',
+                lockHash: `0x${'bb'.repeat(32)}`,
+                address: null,
+                lockKind: 'JoyID',
+              },
+            ],
+          }}
+        />
+      );
+      fireEvent.click(screen.getByText('Every change to the supply (1)'));
+      expect(screen.queryByRole('table', { name: 'Mints and burns' })).toBeNull();
+      const [row] = screen.getAllByTestId('supply-event-row-mobile');
+      expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+        ['change', 'Burn −1.00000000', '2024-01-02'],
+        ['after', 'supply after 12.00000000', null],
+        ['evidence', '#10 · tx 0 · sequence 2', 'from 0xbbbbbb...bbbb JoyID'],
+      ]);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
   });
   it('names what the weekly totals count and says when only the newest supply events are listed', () => {
     stubChartWidth(358);

@@ -6,6 +6,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AlignedBar } from '@/components/ui/aligned-bar';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
   DotJoined,
   ExactCkb,
@@ -84,6 +85,130 @@ function ScaleHeader({ label, scale }: { label: string; scale: number }) {
         <span>{scale.toLocaleString('en-US')}</span>
       </span>
     </>
+  );
+}
+
+/** A count of resources on the quiet line: "3 → 3 cells · 903 B · 1,744,520 cycles". */
+function quietFigures(tx: Transaction): ReactNode[] {
+  return [
+    <span key="cells" className="whitespace-nowrap">
+      {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+    </span>,
+    <span key="size" className="whitespace-nowrap">
+      {tx.txSize!.toLocaleString('en-US')} B
+    </span>,
+    <span key="cycles" className="whitespace-nowrap">
+      {tx.cycles === null
+        ? tx.cyclesStatus === 'failed'
+          ? 'replay failed'
+          : 'cycles not yet run'
+        : `${tx.cycles.toLocaleString('en-US')} cycles`}
+    </span>,
+  ];
+}
+
+/**
+ * The phone row of the Transactions board (board L2): who and when, then what it did (wrapping,
+ * never truncated), then value and fee with the developer figures quiet at the end. In a wide
+ * container (640) the value and fee join what it did and the figures take the right edge.
+ */
+function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
+  const mark = tx.activity ? activityClassMark(tx.activity) : null;
+  const note = tx.isCellbase ? null : whatNote(tx.activity!);
+  const what = tx.isCellbase ? (
+    <>
+      <span className="text-text-bright">Cellbase</span> {paysNote(tx)} · reward{' '}
+      <ExactCkb
+        shannons={parseShannons(tx.outputCapacity!, `cellbase ${tx.hash} reward`)}
+        signed={false}
+        tone="plain"
+      />
+    </>
+  ) : (
+    <>
+      {mark && <ClassMark kind={mark} size={12} className="mr-1.5 self-center" />}
+      <span className="text-text-bright">{activityHeadline(tx.activity!)}</span>
+      {note !== null && <span className="text-text-dim"> · {note}</span>}
+    </>
+  );
+  const fee = (
+    <span className="whitespace-nowrap">
+      fee{' '}
+      <Quiet when={parseShannons(tx.fee, `transaction ${tx.hash} fee`) === BigInt(0)}>
+        <ExactCkb
+          shannons={parseShannons(tx.fee, `transaction ${tx.hash} fee`)}
+          signed={false}
+          tone="plain"
+        />
+      </Quiet>
+    </span>
+  );
+  const value = tx.isCellbase ? null : (
+    <Quiet when={parseShannons(tx.value, `transaction ${tx.hash} value`) === BigInt(0)}>
+      <ExactCkb
+        shannons={parseShannons(tx.value, `transaction ${tx.hash} value`)}
+        signed={false}
+        tone="plain"
+      />
+    </Quiet>
+  );
+  // A cellbase pays its reward on the what line; its fee joins the quiet figures.
+  const quiet = tx.isCellbase
+    ? [...quietFigures(tx).slice(0, 2), fee, quietFigures(tx)[2]]
+    : quietFigures(tx);
+  return (
+    <PhoneRow
+      testId="transaction-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <Link href={`/tx/${tx.hash}`} className="hover:underline">
+              <Hash
+                hash={tx.hash}
+                startChars={10}
+                endChars={6}
+                copyable={false}
+                className="text-[13px]"
+              />
+            </Link>
+          ),
+          right: (
+            <span className="whitespace-nowrap">
+              <Link href={`/blocks/${tx.blockNumber}`} className="text-text-bright hover:text-jade">
+                {formatBlockNumber(tx.blockNumber)}
+              </Link>
+              <span className="text-text"> · {formatTimeAgo(tx.timestamp)}</span>
+            </span>
+          ),
+        },
+        wide
+          ? {
+              key: 'what',
+              tone: 'body',
+              left: <Dotted parts={tx.isCellbase ? [what] : [what, value, fee]} />,
+              right: (
+                <span className="text-text-dim text-[11px]">
+                  <Dotted parts={quiet} />
+                </span>
+              ),
+            }
+          : { key: 'what', tone: 'body', left: what },
+        !wide && {
+          key: 'figures',
+          tone: 'quiet',
+          left: tx.isCellbase ? (
+            <Dotted parts={quiet.slice(0, 3)} />
+          ) : (
+            <span className="text-text">
+              <Dotted parts={[value, fee]} />
+            </span>
+          ),
+          right: <Dotted parts={tx.isCellbase ? quiet.slice(3) : quiet} />,
+        },
+      ]}
+    />
   );
 }
 
@@ -261,6 +386,7 @@ export function TransactionListTable({
       rowKey={(tx) => tx.hash}
       rowClassName={(tx) => (tx.isCellbase ? 'opacity-[.55]' : '')}
       empty="No transactions."
+      mobileRow={(tx, wide) => <TransactionPhoneRow tx={tx} wide={wide} />}
     />
   );
 }

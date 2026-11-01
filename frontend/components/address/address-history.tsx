@@ -3,6 +3,7 @@
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
@@ -305,6 +306,25 @@ const cellColumns: ListColumn<AddressCell>[] = [
     ),
   },
 ];
+/** A live cell's quiet figures on a phone: "occupied 61 CKB · created #20,000,000". */
+function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
+  return (
+    <span className="text-text-dim text-[11px]">
+      <Dotted
+        parts={[
+          <span key="o" className="whitespace-nowrap">
+            occupied <ExactCkb shannons={BigInt(c.occupiedCapacity)} signed={false} tone="plain" />
+          </span>,
+          <span key="c" className="whitespace-nowrap">
+            created{' '}
+            <Link href={`/blocks/${c.createdAtBlock}`}>{formatBlockNumber(c.createdAtBlock)}</Link>
+          </span>,
+        ]}
+      />
+    </span>
+  );
+}
+
 export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
   return (
     <ListTable
@@ -313,6 +333,26 @@ export function AddressLiveCells({ rows }: { rows: AddressCell[] }) {
       rows={rows}
       rowKey={(c) => `${c.txHash}:${c.outputIndex}`}
       empty="No live cells match this class."
+      mobileRow={(c, wide) => (
+        <PhoneRow
+          testId="address-cell-row-mobile"
+          lines={[
+            {
+              key: 'cell',
+              tone: 'head',
+              left: cellColumns[0].render(c),
+              right: <ExactCkb shannons={BigInt(c.capacity)} signed={false} tone="plain" />,
+            },
+            {
+              key: 'contains',
+              tone: 'body',
+              left: cellColumns[1].render(c),
+              right: wide ? <OccupiedAndCreated cell={c} /> : undefined,
+            },
+            !wide && { key: 'figures', tone: 'quiet', left: <OccupiedAndCreated cell={c} /> },
+          ]}
+        />
+      )}
     />
   );
 }

@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, onTestFinished } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import DaoDepositorsPage from '@/app/dao/depositors/page';
 import { ApiRequestError, api } from '@/lib/api';
 
@@ -85,6 +86,11 @@ describe('DAO depositors page (DAO-12)', () => {
   });
 
   it('folds each depositor into a two-line card on phones, not a five-fact sheet', async () => {
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
     vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], null));
     render(<DaoDepositorsPage />);
     const cards = await screen.findByRole('list', { name: 'DAO depositors, compact' });

@@ -1,5 +1,6 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { render } from '../utils/test-utils';
@@ -258,13 +259,51 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(within(note).getByText('6,831,940')).toHaveClass('text-text-bright');
   });
 
-  it('gives each block a compact card at narrow widths: height, age, glyph, miner, reward, bars', async () => {
-    render(<BlocksPage />);
-    const cards = await screen.findAllByTestId('block-row-mobile');
-    expect(cards).toHaveLength(2);
-    expect(cards[0]).toHaveTextContent('#20,828,894');
-    expect(cards[0].querySelectorAll('[data-aligned-bar]')).toHaveLength(2);
-    expect(within(cards[0]).getByRole('img', { name: /4 proposals/ })).toBeInTheDocument();
-    expect(cards[1]).toHaveTextContent('in #20,828,904');
+  // Board L1 (2026-11-01 responsive plan): the phone row is three lines and 640 is a table.
+  describe('at phone and 640 widths (board L1)', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('gives each block three lines at 358 px: height and contents · miner and fees · the figures', async () => {
+      atContainerWidth(358);
+      render(<BlocksPage />);
+      const cards = await screen.findAllByTestId('block-row-mobile');
+      expect(cards).toHaveLength(2);
+      expect(screen.queryByRole('table')).toBeNull();
+      expect(phoneLines(cards[0]).map((l) => [l.key, l.left, l.right])).toEqual([
+        ['identity', '#20,828,894', expect.stringMatching(/^5 txs · 4 proposals · .+ ago$/)],
+        ['miner', 'miner ckb1qzda0c...93hhsj', 'fees 0.05060000 CKB'],
+        [
+          'figures',
+          // Every desktop column: hash, size with its overhead, cycles, the reward.
+          '0x0000...d2de · 3,917 B, 640 B overhead · 6,831,940 cycles · reward 684.32120795 CKB',
+          null,
+        ],
+      ]);
+      // A reward not yet paid says where it will be.
+      expect(phoneLines(cards[1])[2].left).toMatch(/· reward pays at #20,828,904$/);
+    });
+
+    it('draws the six-column table of board L1 in the 608 px band, without the reward', async () => {
+      atContainerWidth(608);
+      render(<BlocksPage />);
+      const table = await screen.findByRole('table', { name: 'Latest blocks' });
+      expect(Array.from(table.querySelectorAll('th')).map((th) => th.textContent)).toEqual([
+        'Height',
+        'Age',
+        'Txs',
+        'Miner',
+        'Fees, CKB',
+        'Size · cycles',
+      ]);
+      expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(608);
+      const [first] = Array.from(table.querySelectorAll('tbody tr'));
+      expect(first.querySelector('td')).toHaveTextContent(/^#20,828,8940x0000\.\.\.d2de$/);
+      expect(first).toHaveTextContent('0.05060000');
+      expect(first).toHaveTextContent('3,917 B6,831,940');
+      expect(screen.queryByTestId('block-row-mobile')).toBeNull();
+    });
   });
 });

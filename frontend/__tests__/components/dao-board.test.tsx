@@ -142,15 +142,20 @@ describe('DaoBoard', () => {
   });
 
   it('keeps the owner link bound to the source address', () => {
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
     const owner = evidence.concentration.owners[0];
     // The desktop row and the compact card (DAO-22) both link the same address.
-    const links = screen.getAllByRole('link', {
-      name: `${owner.address.slice(0, 12)}…${owner.address.slice(-7)}`,
-    });
-    expect(links).toHaveLength(2);
-    for (const link of links)
-      expect(link).toHaveAttribute('href', `/mainnet/address/${owner.address}`);
+    for (const width of [1248, 358]) {
+      stubChartWidth(width);
+      const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+      const links = screen.getAllByRole('link', {
+        name: `${owner.address.slice(0, 12)}…${owner.address.slice(-7)}`,
+      });
+      expect(links).toHaveLength(1);
+      expect(links[0]).toHaveAttribute('href', `/mainnet/address/${owner.address}`);
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
   });
 
   it('prints an exact seven-day net change including a one-shannon loss', () => {
@@ -200,19 +205,29 @@ describe('DaoBoard', () => {
     );
   });
 
-  it('keeps the depositor table at a scrollable width so counts and amounts never fuse (DAO-3)', () => {
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
+  it('keeps the depositor table at a width where counts and amounts never fuse (DAO-3)', () => {
+    stubChartWidth(1248);
+    const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     const table = screen.getByRole('region', { name: 'Who deposits' }).querySelector('table')!;
-    // ListTable: an explicit width budget per column, scrolled inside its own box on desktop …
+    // ListTable: an explicit width budget per column; the table is drawn only where its budget
+    // fits (R1), so it never scrolls inside a box …
     expect(parseInt(table.style.minWidth, 10)).toBeGreaterThanOrEqual(640);
-    expect(table.parentElement).toHaveClass('overflow-x-auto');
+    expect(table.parentElement).not.toHaveClass('overflow-x-auto');
     const [, , , deposits, amount] = Array.from(table.querySelectorAll('tbody tr')[0].children);
     expect(deposits).toHaveClass('whitespace-nowrap');
     expect(amount).toHaveClass('whitespace-nowrap');
-    // … and compact cards below md, so no column hides off-screen at 390 px (DAO-22).
+    unmount();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    // … and compact cards where it does not, so no column hides off-screen at 390 px (DAO-22).
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
     expect(
       screen.getByRole('list', { name: 'Largest depositors, compact' }).parentElement
     ).not.toHaveClass('overflow-x-auto');
+    expect(screen.getByRole('region', { name: 'Who deposits' }).querySelector('table')).toBeNull();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('reads the 365-day AR anchor as a rate, a UTC+8 time and a span, not raw integers (#11)', () => {
@@ -545,11 +560,17 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
 
   it('lists the largest depositors as rows on desktop and as compact cards at phone width', () => {
     stubCalculator();
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    stubChartWidth(1248);
+    const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     expect(within(who()).getByRole('table', { name: 'Largest depositors' })).toBeInTheDocument();
+    unmount();
+    vi.unstubAllGlobals();
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
     expect(
       within(who()).getByRole('list', { name: 'Largest depositors, compact' })
     ).toHaveTextContent('300.00000000');
+    vi.unstubAllGlobals();
     // R2b-a 42: every depositor, ranked, on its own page (board: "All N depositors →").
     expect(within(who()).getByRole('link', { name: 'All 2 depositors →' })).toHaveAttribute(
       'href',

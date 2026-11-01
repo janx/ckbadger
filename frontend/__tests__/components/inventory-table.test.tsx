@@ -1,3 +1,5 @@
+import { afterEach, vi } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { InventoryRows, AssetAmount } from '@/components/asset/inventory-table';
 import type { Asset } from '@/lib/api';
@@ -118,5 +120,101 @@ describe('Inventory rows', () => {
       )
     ).toThrow(`${asset.id}: occupied capacity exceeds held capacity`);
     error.mockRestore();
+  });
+});
+
+describe('Inventory phone rows (boards L3, L4)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const spore: Asset = {
+    ...asset,
+    assetType: 'object',
+    standard: 'spore',
+    name: 'Wyltek Founding Members',
+    symbol: null,
+    holdersCount: 32,
+    liveCount: 93,
+    totalSupply: '93',
+    activitiesCount: 95,
+    compositionTier: 'pure_ckb',
+  };
+
+  it('writes a token in three lines at 358 px: name and holders · standard, transfers, ×H · supply and CKB', () => {
+    atContainerWidth(358);
+    render(<InventoryRows assetType="token" rows={[asset]} />);
+    expect(screen.queryByRole('table')).toBeNull();
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['identity', 'head', 'T Token', '2 holders'],
+      ['activity', 'body', 'xUDT · 4 transfers · 0 in 24 h', '×1.6393442625'],
+      [
+        'figures',
+        'quiet',
+        // Every digit of the supply, the CKB held and occupied with its exact share.
+        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.0%)',
+        null,
+      ],
+    ]);
+    expect(row.querySelector('.truncate')).toBeNull();
+  });
+
+  it('writes a token in two lines at 608 px, the standard beside the name', () => {
+    atContainerWidth(608);
+    render(<InventoryRows assetType="token" rows={[asset]} />);
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', 'T Token · xUDT', '2 holders'],
+      [
+        'figures',
+        'supply 1.000000000000000000000001 T · 100.00000001 CKB held · 61 occupied (61.0%)',
+        '4 transfers · 0 in 24 h · ×1.6393442625',
+      ],
+    ]);
+  });
+
+  it('writes a collection in three lines with the composition mark (board L4)', () => {
+    atContainerWidth(358);
+    render(<InventoryRows assetType="object" rows={[spore]} />);
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    const lines = phoneLines(row);
+    expect(lines.map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', 'Wyltek Founding Members', '93 objects'],
+      ['activity', 'Spore · 32 holders · 95 activities', 'Pure CKB'],
+      [
+        'figures',
+        expect.stringMatching(
+          /^of 93 minted · 100\.00000001 CKB held · 61 occupied \(61\.0%\) · ×1\.6393442625 · 0xabab/
+        ),
+        null,
+      ],
+    ]);
+    expect(row.querySelector('[data-composition="pure_ckb"]')).not.toBeNull();
+  });
+
+  it('writes an identity system with its live, registered and holder counts', () => {
+    atContainerWidth(358);
+    render(
+      <InventoryRows
+        assetType="identity"
+        rows={[
+          {
+            ...asset,
+            assetType: 'identity',
+            standard: 'dotbit',
+            name: '.bit',
+            liveCount: 5,
+            totalSupply: '9',
+          },
+        ]}
+      />
+    );
+    const [row] = screen.getAllByTestId('inventory-row-mobile');
+    expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['identity', '.bit', '5 live'],
+      ['activity', '9 ever registered · 2 holders', null],
+      ['figures', '100.00000001 CKB held · 61 occupied (61.0%)', null],
+    ]);
   });
 });

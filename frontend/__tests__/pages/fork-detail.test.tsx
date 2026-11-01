@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ForkDetailPage from '@/app/forks/[height]/[orphan]/client-page';
@@ -100,6 +101,32 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       screen.getByText(/An uncle earns its miner nothing; it counts toward the uncle rate/)
     ).toBeInTheDocument();
     expect(screen.queryByText('1 blocks')).toBeNull();
+  });
+
+  it('folds the blocks and the dropped transactions into phone rows at 358 px (no board: L1 rules)', async () => {
+    at('10', '36bac5b4');
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    vi.mocked(api.getForkAt).mockResolvedValue(fixture(unincludedFixture));
+    render(<ForkDetailPage />);
+    const blocks = await screen.findAllByTestId('fork-block-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Blocks' })).toBeNull();
+    const dropped = blocks.find((row) => row.textContent!.includes('′'))!;
+    expect(phoneLines(dropped).map((l) => l.key)).toEqual(['identity', 'miner', 'fate']);
+    expect(phoneLines(dropped)[0].left).toMatch(/^#11′ 0x/);
+    expect(phoneLines(dropped)[1].left).toMatch(/^miner /);
+    expect(phoneLines(dropped)[1].right).toMatch(/^\d+ txs?$/);
+    const txs = screen.getAllByTestId('fork-tx-row-mobile');
+    const orphanHash = unincludedFixture.orphanedTransactions[1].hash;
+    const orphan = txs.find((row) => row.textContent!.includes(orphanHash))!;
+    // The full hash, unlinked while it has no canonical page.
+    expect(phoneLines(orphan)[0].left).toBe(orphanHash);
+    expect(within(orphan).queryByRole('link', { name: orphanHash })).toBeNull();
+    expect(phoneLines(orphan)[1].left).toBe('dropped in #11′ · not committed as of tip');
+    expect(phoneLines(orphan)[2]).toMatchObject({ key: 'committed', left: 'not committed' });
   });
 
   it('keeps the stored event and the uncles in tier 2 (FF-D5)', async () => {

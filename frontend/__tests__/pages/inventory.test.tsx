@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
 import TokensPage from '@/app/inventory/tokens/page';
@@ -604,14 +605,25 @@ describe('Objects Inventory Page', () => {
         },
       ],
     });
-    render(<ObjectsPage />);
+    const { unmount } = render(<ObjectsPage />);
     await screen.findByRole('table', { name: 'Object collections' });
-    const labels = screen.getAllByText('Decode pending').filter((el) => el.tagName === 'SPAN');
-    expect(labels).toHaveLength(2);
-    for (const label of labels) {
-      expect(label).toHaveClass('text-text-dim');
-      expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
-    }
+    const neutral = () => {
+      const labels = screen.getAllByText('Decode pending').filter((el) => el.tagName === 'SPAN');
+      expect(labels).toHaveLength(1);
+      for (const label of labels) {
+        expect(label).toHaveClass('text-text-dim');
+        expect(label).not.toHaveClass('text-warning', 'storage-text-gem');
+      }
+    };
+    neutral();
+    unmount();
+    // The phone row (board L4) keeps the same neutral mark.
+    atContainerWidth(358);
+    render(<ObjectsPage />);
+    await screen.findByTestId('inventory-row-mobile');
+    neutral();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('maps composition tier filters to API query', async () => {

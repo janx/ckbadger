@@ -12,6 +12,8 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
+import { PhoneRow } from '@/components/ui/phone-row';
+import { ShareBar, shareBarWidth } from '@/components/ui/share-bar';
 export interface TokenDistributionViewProps {
   distribution: TokenDistribution;
   symbol: string | null;
@@ -124,11 +126,99 @@ export function TokenDistributionView({
           rows={d.buckets}
           rowKey={(b) => b.lowerBound}
           empty="No holders."
+          mobileRow={(b) => (
+            <PhoneRow
+              testId="holder-bucket-row-mobile"
+              lines={[
+                {
+                  key: 'range',
+                  tone: 'body',
+                  left: columns[0].render(b),
+                  right: (
+                    <span className="whitespace-nowrap">
+                      <AssetCount value={b.holdersCount} />{' '}
+                      <span className="text-text-dim">
+                        {b.holdersCount === 1 ? 'holder' : 'holders'}
+                      </span>
+                    </span>
+                  ),
+                },
+                {
+                  key: 'share',
+                  tone: 'quiet',
+                  left: (
+                    <span aria-hidden="true" className="bg-base-elevated inline-block h-1.5 w-10">
+                      <span
+                        className="bg-token block h-full"
+                        style={{
+                          width:
+                            d.holdersCount === 0
+                              ? '0%'
+                              : `${(b.holdersCount / d.holdersCount) * 100}%`,
+                        }}
+                      />
+                    </span>
+                  ),
+                  right: <>{share(BigInt(b.balance))} of supply</>,
+                },
+              ]}
+            />
+          )}
         />
       </div>
     </div>
   );
 }
+/**
+ * A holder on a phone (board L5): rank, address, lock and amount on one line; the share as a bar
+ * (10 % = a full bar) with its number on the second. Collection holders use the same two lines.
+ */
+export function HolderPhoneRow({
+  rank,
+  party,
+  lock,
+  amount,
+  share,
+  barWidth,
+  barColor,
+}: {
+  rank: number;
+  party: ReactNode;
+  lock: ReactNode;
+  amount: ReactNode;
+  share?: ReactNode;
+  barWidth: string;
+  barColor?: string;
+}) {
+  return (
+    <PhoneRow
+      testId="holder-row-mobile"
+      lines={[
+        {
+          key: 'holder',
+          tone: 'head',
+          left: (
+            <>
+              <span data-role="rank" className="text-text-dim inline-block w-[22px]">
+                {rank.toLocaleString('en-US')}
+              </span>
+              {party} <span className="text-text-dim whitespace-nowrap text-xs">{lock}</span>
+            </>
+          ),
+          right: <span className="text-text-bright text-[13px]">{amount}</span>,
+        },
+        {
+          key: 'share',
+          tone: 'quiet',
+          left: <ShareBar width={barWidth} color={barColor} className="ml-[22px]" />,
+          right: share,
+          grow: true,
+        },
+      ]}
+    />
+  );
+}
+
 export interface TokenHoldersProps {
   typeHash: string;
   symbol: string | null;
@@ -147,57 +237,73 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     queryFn: () =>
       api.getTokenHolders(typeHash, { limit: all ? 50 : 10, cursor: pagination.cursor }),
   });
+  /** A holder's share of the same response's supply, exact to 0.01 %. */
+  const holderShare = (h: TokenHolder) => {
+    const total = exactUnsignedInteger(holders.data!.totalSupply, 'holder-page supply'),
+      amount = exactUnsignedInteger(h.balance, 'holder balance');
+    if (amount > total) throw new Error('Holder balance exceeds same-response supply');
+    return total === BigInt(0)
+      ? { text: '—', amount, total }
+      : { text: `${formatScaledInteger(amount * BigInt(100), total, 2)}%`, amount, total };
+  };
+  // Board L5: rank, address, lock, amount and the share as a bar — 584 px of minimums, so the
+  // table holds from the 640 band up and the two-line phone row takes over below it.
   const columns: ListColumn<TokenHolder>[] = [
     {
       key: 'rank',
       label: '#',
       minWidth: 28,
-      render: (h) => (pagination.page - 1) * (all ? 50 : 10) + holders.data!.data.indexOf(h) + 1,
+      render: (h) => <span className="text-text-dim">{rank(h)}</span>,
     },
     {
       key: 'address',
       label: 'Address',
-      minWidth: 200,
+      minWidth: 176,
       render: (h) => (
-        <>
-          <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
-            <Hash
-              hash={h.address ?? h.lockScriptHash}
-              copyable={false}
-              startChars={12}
-              endChars={6}
-              className="text-xs"
-            />
-          </AppLink>
-          <span className="text-text-dim ml-2 whitespace-nowrap text-[11px]">
-            {h.lockKind ?? 'Lock kind unavailable'}
-          </span>
-        </>
+        <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
+          <Hash
+            hash={h.address ?? h.lockScriptHash}
+            copyable={false}
+            startChars={12}
+            endChars={6}
+            className="text-xs"
+          />
+        </AppLink>
       ),
+    },
+    {
+      key: 'lock',
+      label: 'Lock',
+      minWidth: 120,
+      className: 'text-text-dim text-[11px]',
+      render: (h) => h.lockKind ?? 'Lock kind unavailable',
     },
     {
       key: 'balance',
       label: symbol ?? 'Balance',
-      minWidth: 170,
+      minWidth: 140,
       numeric: true,
-      className: '!whitespace-normal',
+      className: '!whitespace-normal text-text-bright',
       render: (h) => <AssetAmount amount={h.balance} decimals={decimals} />,
     },
     {
       key: 'share',
       label: 'Share',
-      minWidth: 90,
+      minWidth: 120,
       numeric: true,
       render: (h) => {
-        const total = exactUnsignedInteger(holders.data!.totalSupply, 'holder-page supply'),
-          amount = exactUnsignedInteger(h.balance, 'holder balance');
-        if (amount > total) throw new Error('Holder balance exceeds same-response supply');
-        return total === BigInt(0)
-          ? '—'
-          : `${formatScaledInteger(amount * BigInt(100), total, 2)}%`;
+        const share = holderShare(h);
+        return (
+          <span className="inline-flex items-center justify-end gap-2">
+            <ShareBar width={shareBarWidth(share.amount, share.total)} className="w-16 flex-none" />
+            <span className="w-11 text-right">{share.text}</span>
+          </span>
+        );
       },
     },
   ];
+  const rank = (h: TokenHolder) =>
+    (pagination.page - 1) * (all ? 50 : 10) + holders.data!.data.indexOf(h) + 1;
   const holderTable = (
     <div className="min-w-0">
       {holders.data ? (
@@ -209,6 +315,29 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             rows={holders.data.data}
             rowKey={(h) => h.lockScriptHash}
             empty="No holders."
+            mobileRow={(h) => {
+              const share = holderShare(h);
+              return (
+                <HolderPhoneRow
+                  rank={rank(h)}
+                  party={
+                    <AppLink href={`/address/${h.address ?? h.lockScriptHash}`}>
+                      <Hash
+                        hash={h.address ?? h.lockScriptHash}
+                        copyable={false}
+                        startChars={12}
+                        endChars={6}
+                        className="text-[13px]"
+                      />
+                    </AppLink>
+                  }
+                  lock={h.lockKind ?? 'Lock kind unavailable'}
+                  amount={<AssetAmount amount={h.balance} decimals={decimals} />}
+                  share={share.text}
+                  barWidth={shareBarWidth(share.amount, share.total)}
+                />
+              );
+            }}
           />
           {all && (
             <CursorPagination

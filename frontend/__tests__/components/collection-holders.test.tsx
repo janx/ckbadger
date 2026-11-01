@@ -1,3 +1,4 @@
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   act,
@@ -205,5 +206,55 @@ describe('Collection holders', () => {
     const load = vi.fn().mockResolvedValue(page([], { total: 0 }));
     render(<CollectionHolders load={load} queryKey="none" distribution={[]} />);
     expect(await screen.findByText('Full collection: 0 holders · 0 items')).toBeInTheDocument();
+  });
+});
+
+describe('Collection holders phone rows (board L5)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  it('gives each holder two lines at 358 px: rank inline, holder, lock, count · the bar', async () => {
+    atContainerWidth(358);
+    const load = vi
+      .fn()
+      .mockResolvedValue(
+        page([named, { ...resolved, lockKind: 'JoyID', lockCodeHash: `0x${'9b'.repeat(32)}` }])
+      );
+    render(
+      <CollectionHolders
+        load={load}
+        queryKey="phone"
+        distribution={distribution}
+        assetClass="objects"
+      />
+    );
+    const rows = await screen.findAllByTestId('holder-row-mobile');
+    expect(screen.queryByRole('table', { name: 'Top 10 collection holders' })).toBeNull();
+    const second = phoneLines(rows[1]);
+    expect(second.map((l) => l.key)).toEqual(['holder', 'share']);
+    // The rank is inline at the start of the first line, not a line of its own (B#19).
+    expect(rows[1].querySelector('[data-line="holder"] [data-role="rank"]')).toHaveTextContent('2');
+    expect(second[0].left).toMatch(/^2.*JoyID$/);
+    expect(second[0].right).toBe('2 items');
+    // Against the largest holder on the page (6 items), as the table's bar.
+    expect(rows[1].querySelector('[data-share-bar]')).toHaveAttribute(
+      'data-share-bar',
+      `${(2 / 6) * 100}%`
+    );
+    // The three-column distribution (265 px) still fits a phone as a table (R1) …
+    expect(
+      screen.getByRole('table', { name: 'Holders by how many items they hold' })
+    ).toBeInTheDocument();
+  });
+  it('folds the distribution into one-line rows where even it does not fit', async () => {
+    atContainerWidth(240);
+    const load = vi.fn().mockResolvedValue(page([named]));
+    render(<CollectionHolders load={load} queryKey="narrow" distribution={distribution} />);
+    const buckets = await screen.findAllByTestId('holder-bucket-row-mobile');
+    expect(buckets).toHaveLength(4);
+    expect(phoneLines(buckets[1])).toEqual([
+      { key: 'range', tone: 'body', left: 'holds 2 · 2 items', right: '1holder' },
+    ]);
   });
 });

@@ -8,6 +8,7 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { TransactionListTable } from '@/components/transaction/transaction-list-table';
 import { PoolInterpretationNotice, poolStatusLabel } from '@/components/ui/pool-status';
@@ -59,6 +60,111 @@ const POOL_SQUARE: Record<PoolStatus, string> = {
 function PoolDot({ status }: { status: PoolStatus }) {
   return (
     <span aria-hidden="true" className={cn('h-[7px] w-[7px] rounded-full', POOL_SQUARE[status])} />
+  );
+}
+
+/**
+ * A pool transaction as a phone row (no board; built from board L2's rules): the hash with its
+ * status and wait, then what it does and its value, then fee, rate, cells, size and cycles quiet.
+ */
+function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
+  const what = (
+    <>
+      {tx.activity ? (
+        <span className="text-text-bright">{activityHeadline(tx.activity)}</span>
+      ) : (
+        <span className="text-text-dim">Interpretation unavailable</span>
+      )}
+      <PoolInterpretationNotice
+        interpretation={tx.interpretation}
+        className="text-warning ml-2 text-[11px]"
+      />
+    </>
+  );
+  const value =
+    tx.value === null ? (
+      <span className="text-text-dim">Interpretation partial</span>
+    ) : (
+      <ExactCkb
+        shannons={parseShannons(tx.value, `pool transaction ${tx.hash} value`)}
+        signed={false}
+        tone="plain"
+      />
+    );
+  const fee = (
+    <span className="whitespace-nowrap">
+      fee{' '}
+      <ExactCkb
+        shannons={parseShannons(tx.fee, `pool transaction ${tx.hash} fee`)}
+        signed={false}
+        tone="plain"
+      />
+    </span>
+  );
+  const figures = [
+    <span key="rate" className="whitespace-nowrap">
+      {BigInt(tx.feeRate).toLocaleString('en-US')} shannon/KB
+    </span>,
+    <span key="cells" className="whitespace-nowrap">
+      {tx.activity?.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount} cells
+    </span>,
+    <span key="size" className="whitespace-nowrap">
+      {tx.txSize.toLocaleString('en-US')} B
+    </span>,
+    <span key="cycles" className="whitespace-nowrap">
+      {BigInt(tx.cycles).toLocaleString('en-US')} cycles
+    </span>,
+  ];
+  return (
+    <PhoneRow
+      testId="pool-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <Link href={`/tx/${tx.hash}`} className="hover:underline">
+              <Hash
+                hash={tx.hash}
+                startChars={10}
+                endChars={6}
+                copyable={false}
+                className="text-[13px]"
+              />
+            </Link>
+          ),
+          right: (
+            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+              <PoolDot status={tx.status} />
+              <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
+                {poolStatusLabel(tx.status)}
+              </span>
+              <span className="text-text-dim">
+                · {formatTimeAgo(new Date(Number(tx.timestamp)))}
+              </span>
+            </span>
+          ),
+        },
+        wide
+          ? {
+              key: 'what',
+              tone: 'body',
+              left: <Dotted parts={[what, value, fee]} />,
+              right: (
+                <span className="text-text-dim text-[11px]">
+                  <Dotted parts={figures} />
+                </span>
+              ),
+            }
+          : { key: 'what', tone: 'body', left: what, right: value },
+        !wide && {
+          key: 'figures',
+          tone: 'quiet',
+          left: <span className="text-text">{fee}</span>,
+          right: <Dotted parts={figures} />,
+        },
+      ]}
+    />
   );
 }
 
@@ -499,6 +605,7 @@ export default function TransactionsPage() {
                 rows={pool.data.data}
                 rowKey={(tx) => tx.hash}
                 empty="The node's pool is empty."
+                mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
               />
               <p className="text-text-dim text-xs">
                 Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks

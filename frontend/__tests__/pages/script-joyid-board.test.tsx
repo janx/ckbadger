@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
@@ -54,7 +54,8 @@ async function renderJoyid() {
 
 describe('JoyID script page against the ScriptJoyid board', () => {
   beforeEach(() => {
-    stubChartWidth(900);
+    // Charts at 900 px; the lists at the page's full content width (1248 at 1280 and up).
+    stubLayoutWidths({ chart: 900, list: 1248 });
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
@@ -223,7 +224,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
 
 describe('JoyID script page · visual pass', () => {
   beforeEach(() => {
-    stubChartWidth(900);
+    // Charts at 900 px; the lists at the page's full content width (1248 at 1280 and up).
+    stubLayoutWidths({ chart: 900, list: 1248 });
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);

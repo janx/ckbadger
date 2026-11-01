@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { QueryClientProvider } from '@tanstack/react-query';
 import {
   addressProducerCells,
@@ -682,6 +683,12 @@ describe('Address v3', () => {
     expect(screen.getByLabelText('Unconfirmed')).toBeInTheDocument();
   });
   it('gives compact and desktop transactions the same pool and partial evidence', async () => {
+    // The phone row: the list measures a 358 px container.
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
     vi.mocked(api.getAddressTransactions).mockResolvedValue({
       ...pageFixture([
         {

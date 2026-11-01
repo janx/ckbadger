@@ -6,6 +6,7 @@ import { api, type Block } from '@/lib/api';
 import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
@@ -24,6 +25,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
@@ -71,23 +73,7 @@ export default function BlocksPage() {
       label: 'Miner',
       minWidth: 160,
       className: 'whitespace-nowrap',
-      render: (block) =>
-        block.minerAddress ? (
-          <MinerLink
-            address={block.minerAddress}
-            pool={block.minerPool}
-            unnamed={
-              <Address
-                address={block.minerAddress}
-                startChars={10}
-                endChars={6}
-                className="text-xs"
-              />
-            }
-          />
-        ) : (
-          <span className="text-text-dim">Genesis</span>
-        ),
+      render: miner,
     },
     {
       key: 'reward',
@@ -185,7 +171,8 @@ export default function BlocksPage() {
                 rows={data.data}
                 rowKey={(block) => block.hash}
                 empty="No blocks indexed."
-                mobileRow={(block) => <BlockCard block={block} columns={columns} />}
+                narrowColumns={NARROW_COLUMNS}
+                mobileRow={(block) => <BlockPhoneRow block={block} />}
               />
               <BlocksLimitsFootnote blocks={data.data} />
               <CursorPagination
@@ -277,34 +264,223 @@ function BlockIdentity({ block }: { block: Block }) {
   );
 }
 
-/** At 390 px one compact card per block, the same cells in the board's reading order. */
-function BlockCard({ block, columns }: { block: Block; columns: ListColumn<Block>[] }) {
-  const cell = (key: string) => columns.find((c) => c.key === key)!.render(block);
-  return (
-    <div data-testid="block-row-mobile" className="space-y-2 text-xs">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-        <BlockIdentity block={block} />
-        {cell('age')}
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-        {cell('contents')}
-        {cell('miner')}
-      </div>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
-        {(
-          [
-            ['reward', 'Reward, CKB'],
-            ['fees', 'Fees, CKB'],
-            ['size', 'Size, bytes'],
-            ['cycles', 'Cycles'],
-          ] as const
-        ).map(([key, label]) => (
-          <div key={key} className="contents">
-            <dt className="text-text-dim">{label}</dt>
-            <dd className="flex justify-end">{cell(key)}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+function miner(block: Block) {
+  return block.minerAddress ? (
+    <MinerLink
+      address={block.minerAddress}
+      pool={block.minerPool}
+      unnamed={
+        <Address address={block.minerAddress} startChars={10} endChars={6} className="text-xs" />
+      }
+    />
+  ) : (
+    <span className="text-text-dim">Genesis</span>
   );
 }
+
+/** "4 txs · 3 proposals · 1 uncle": the block's contents in words (the glyph's facts). */
+function contents(block: Block): string {
+  return [
+    formatCount(block.transactionSizes.length, 'tx', 'txs'),
+    ...(block.proposalsCount > 0 ? [formatCount(block.proposalsCount, 'proposal')] : []),
+    ...(block.unclesCount > 0 ? [formatCount(block.unclesCount, 'uncle')] : []),
+  ].join(' · ');
+}
+
+function fees(block: Block, unit: boolean) {
+  return (
+    <ExactCkb
+      shannons={parseShannons(block.totalFees, `block ${block.number} fees`)}
+      signed={false}
+      tone="plain"
+      unit={unit}
+    />
+  );
+}
+
+function cyclesText(block: Block): string {
+  if (block.cycles === null)
+    return block.cyclesStatus === 'failed' ? 'cycles replay failed' : 'cycles not yet run';
+  return `${BigInt(block.cycles).toLocaleString('en-US')} cycles`;
+}
+
+/** "3,344 B, 640 B overhead": the size bar's two parts in figures. */
+function sizeText(block: Block): string {
+  return `${block.size.toLocaleString('en-US')} B, ${block.overheadSize.toLocaleString('en-US')} B overhead`;
+}
+
+function reward(block: Block) {
+  if (block.miningReward !== null)
+    return (
+      <span className="whitespace-nowrap">
+        reward{' '}
+        <ExactCkb
+          shannons={parseShannons(block.miningReward, `block ${block.number} reward`)}
+          signed={false}
+          tone="plain"
+        />
+      </span>
+    );
+  if (block.rewardFinalizesAt === null) return 'Genesis';
+  return (
+    <span className="whitespace-nowrap">
+      reward pays at{' '}
+      <Link href={`/blocks/${block.rewardFinalizesAt}`}>
+        {formatBlockNumber(block.rewardFinalizesAt)}
+      </Link>
+    </span>
+  );
+}
+
+/**
+ * A block on a phone (board L1): the height with its contents and age, who mined it and the fees,
+ * then the quiet figures — hash, size, cycles and when the reward is paid.
+ */
+function BlockPhoneRow({ block }: { block: Block }) {
+  return (
+    <PhoneRow
+      testId="block-row-mobile"
+      lines={[
+        {
+          key: 'identity',
+          tone: 'head',
+          left: (
+            <Link href={`/blocks/${block.number}`} className="text-text-bright font-medium">
+              {formatBlockNumber(block.number)}
+            </Link>
+          ),
+          right: `${contents(block)} · ${formatTimeAgo(block.timestamp)}`,
+        },
+        {
+          key: 'miner',
+          tone: 'body',
+          left: (
+            <>
+              <span className="text-text-dim">miner </span>
+              {miner(block)}
+            </>
+          ),
+          right: <span className="whitespace-nowrap">fees {fees(block, true)}</span>,
+        },
+        {
+          key: 'figures',
+          tone: 'quiet',
+          left: (
+            <Dotted
+              parts={[
+                <Hash
+                  key="h"
+                  hash={block.hash}
+                  startChars={6}
+                  endChars={4}
+                  copyable={false}
+                  className="text-[11px]"
+                />,
+                block.hardforkActivation && (
+                  <Link key="hf" href="/hardforks">
+                    HF · {block.hardforkActivation.shortName.toUpperCase()}
+                  </Link>
+                ),
+                <span key="s" className="whitespace-nowrap">
+                  {sizeText(block)}
+                </span>,
+                <span key="c" className="whitespace-nowrap">
+                  {cyclesText(block)}
+                </span>,
+                reward(block),
+              ]}
+            />
+          ),
+        },
+      ]}
+    />
+  );
+}
+
+/**
+ * Board L1's 640 table: six columns in 608 px. The reward is not a column (it is paid eleven
+ * blocks later); the hash and a hardfork activation are the height cell's second line.
+ */
+const NARROW_COLUMNS: ListColumn<Block>[] = [
+  {
+    key: 'height',
+    label: 'Height',
+    minWidth: 112,
+    render: (block) => (
+      <>
+        <Link href={`/blocks/${block.number}`} className="text-text-bright hover:text-jade">
+          {formatBlockNumber(block.number)}
+        </Link>
+        <Hash
+          hash={block.hash}
+          startChars={6}
+          endChars={4}
+          copyable={false}
+          className="text-text-dim block whitespace-nowrap text-[11px]"
+        />
+        {block.hardforkActivation && (
+          <Link href="/hardforks" className="text-text-dim block text-[11px]">
+            HF · {block.hardforkActivation.shortName.toUpperCase()}
+          </Link>
+        )}
+      </>
+    ),
+  },
+  {
+    key: 'age',
+    label: 'Age',
+    minWidth: 76,
+    className: 'whitespace-nowrap',
+    render: (block) => <span className="text-text-dim">{formatTimeAgo(block.timestamp)}</span>,
+  },
+  {
+    key: 'txs',
+    label: 'Txs',
+    minWidth: 48,
+    numeric: true,
+    render: (block) => (
+      <>
+        {block.transactionSizes.length.toLocaleString('en-US')}
+        {block.proposalsCount > 0 && (
+          <span className="text-text-dim block text-[11px]">{block.proposalsCount}p</span>
+        )}
+        {block.unclesCount > 0 && (
+          <span className="text-text-dim block text-[11px]">{block.unclesCount}u</span>
+        )}
+      </>
+    ),
+  },
+  {
+    key: 'miner',
+    label: 'Miner',
+    minWidth: 156,
+    className: 'whitespace-nowrap',
+    render: miner,
+  },
+  {
+    key: 'fees',
+    label: 'Fees, CKB',
+    minWidth: 96,
+    numeric: true,
+    render: (block) => fees(block, false),
+  },
+  {
+    key: 'resources',
+    label: 'Size · cycles',
+    minWidth: 120,
+    numeric: true,
+    className: '!whitespace-normal text-text-dim',
+    render: (block) => (
+      <>
+        <span className="block whitespace-nowrap">{block.size.toLocaleString('en-US')} B</span>
+        <span className="block whitespace-nowrap">
+          {block.cycles === null
+            ? block.cyclesStatus === 'failed'
+              ? 'replay failed'
+              : 'not yet run'
+            : BigInt(block.cycles).toLocaleString('en-US')}
+        </span>
+      </>
+    ),
+  },
+];

@@ -1,8 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api } from '@/lib/api';
+import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
 
 vi.mock('@/lib/api', () => ({
@@ -478,6 +479,12 @@ describe('ScriptDetailPage', () => {
 
   it('provides compact cell and version records at mobile widths', async () => {
     setViewportWidth(390);
+    // The lists measure their containers: 358 px inside a 390 px phone.
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('list', { name: 'Code versions, compact' })).toBeInTheDocument();
     expect(await screen.findByRole('list', { name: 'Its cells, compact' })).toBeInTheDocument();
@@ -486,6 +493,11 @@ describe('ScriptDetailPage', () => {
 
   it('wraps the complete current binary in the compact registered reference row', async () => {
     setViewportWidth(390);
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue({
       ...mockScriptFamilyDetail,
       references: [
