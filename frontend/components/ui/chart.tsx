@@ -1,7 +1,9 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { ReadoutRow } from '@/components/ui/readout-row';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import {
   AXIS_CHAR_PX,
   niceTicks,
@@ -103,6 +105,17 @@ export interface ChartProps {
    * bands, responsive review C#5).
    */
   seriesLegend?: boolean;
+  /**
+   * Tap to pin (plan R6): the readout line under the plot, by this accessible name. A tap (click)
+   * on the plot pins the nearest point's reading there; a second tap on that point, or Escape,
+   * clears it. `idle` is what the line says while nothing is hovered or pinned.
+   */
+  pinnedReadout?: { label: string; idle?: ReactNode };
+  /**
+   * The tap-to-pin state, for a caller that draws its own readout line from it (`usePinnedReadout`
+   * over point indexes): the chart hovers and pins through it and shows its `active` point.
+   */
+  pin?: PinnedReadout<number>;
 }
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
 const X_LABEL_ROW = 12;
@@ -248,12 +261,28 @@ export function Chart({
   hideMarkerLegend = false,
   formatLabel = (label: string) => label,
   seriesLegend = false,
+  pinnedReadout,
+  pin,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  const [localActive, setLocalActive] = useState<number | null>(null);
-  const active = controlledActive === undefined ? localActive : controlledActive;
+  const own = usePinnedReadout<number>();
+  if (pin && controlledActive !== undefined)
+    throw new Error(
+      `${title}: a chart takes its active point from its pin or its caller, not both`
+    );
+  // A pin names a point of these points: new ones (another range, a refetched day) let it go.
+  const points = `${data.length}|${data[0]?.label}|${data.at(-1)?.label}`;
+  const [pinnedPoints, setPinnedPoints] = useState(points);
+  if (pinnedPoints !== points) {
+    setPinnedPoints(points);
+    own.clear();
+  }
+  // Hover lives in the pin state too; only a tap-to-pin chart ever pins.
+  const tap = pin ?? own;
+  const tappable = pin !== undefined || pinnedReadout !== undefined;
+  const active = controlledActive === undefined ? tap.active : controlledActive;
   const setActive = (index: number | null) => {
-    setLocalActive(index);
+    tap.hover(index);
     onActiveIndexChange?.(index);
   };
   if (
@@ -373,6 +402,19 @@ export function Chart({
           { left, right, width: width as number, categorical: categoricalX }
         )
       : null;
+  /** The point nearest a pointer at `clientX` over the plot (`el`, the chart's svg). */
+  const pointAt = (clientX: number, el: Element): number => {
+    const px = clientX - el.getBoundingClientRect().left;
+    const index = xDomain
+      ? data.reduce(
+          (closest, _, i) => (Math.abs(x(i) - px) < Math.abs(x(closest) - px) ? i : closest),
+          0
+        )
+      : slotBars
+        ? Math.floor(((px - left) / ((right as number) - left)) * data.length)
+        : Math.round(((px - left) / ((right as number) - left)) * (data.length - 1));
+    return index < 0 ? 0 : index >= data.length ? data.length - 1 : index;
+  };
   // Extra label rows go under the plot; the plot keeps its height.
   const svgHeight = height + keyBand + ((xLabels?.rows ?? 1) - 1) * X_LABEL_ROW;
   return (
@@ -450,22 +492,16 @@ export function Chart({
                     (active === null ? data.length - 1 : active) + (e.key === 'ArrowLeft' ? -1 : 1);
                   setActive(next < 0 ? 0 : next >= data.length ? data.length - 1 : next);
                 }
-                if (e.key === 'Escape') setActive(null);
+                if (e.key === 'Escape') {
+                  tap.clear();
+                  onActiveIndexChange?.(null);
+                }
               }}
-              onPointerMove={(e) => {
-                const px = e.clientX - e.currentTarget.getBoundingClientRect().left;
-                const index = xDomain
-                  ? data.reduce(
-                      (closest, _, i) =>
-                        Math.abs(x(i) - px) < Math.abs(x(closest) - px) ? i : closest,
-                      0
-                    )
-                  : slotBars
-                    ? Math.floor(((px - left) / (right - left)) * data.length)
-                    : Math.round(((px - left) / (right - left)) * (data.length - 1));
-                setActive(index < 0 ? 0 : index >= data.length ? data.length - 1 : index);
-              }}
+              onPointerMove={(e) => setActive(pointAt(e.clientX, e.currentTarget))}
               onPointerLeave={() => setActive(null)}
+              onClick={
+                tappable ? (e) => tap.toggle(pointAt(e.clientX, e.currentTarget)) : undefined
+              }
             >
               {ticks.values.map((v) => (
                 <g key={v}>
@@ -781,6 +817,26 @@ export function Chart({
           )
         )}
       </div>
+      {pinnedReadout && (
+        <div className="mt-2">
+          <ReadoutRow label={pinnedReadout.label} pinned={tap.showingPin} idle={pinnedReadout.idle}>
+            {activeIndex !== null && selected ? (
+              <>
+                {formatLabel(selected.label)}
+                {seriesLegend
+                  ? ' · values in the key below'
+                  : series.map((s) => (
+                      <Fragment key={s.key}>
+                        {' · '}
+                        {series.length > 1 && `${s.label} `}
+                        {formatValue(selected.values[s.key])} {unit}
+                      </Fragment>
+                    ))}
+              </>
+            ) : null}
+          </ReadoutRow>
+        </div>
+      )}
       {seriesLegend && (
         <ul aria-label={`${title} legend`} className="mt-3 flex flex-col gap-1 text-[13px]">
           {series.map((s, i) => (
@@ -804,11 +860,14 @@ export function Chart({
           ))}
         </ul>
       )}
-      <span className="sr-only" aria-live="polite">
-        {activeIndex !== null && selected
-          ? `${selected.label}: ${series.map((s) => `${s.label} ${selected.values[s.key]} ${unit}`).join(', ')}`
-          : ''}
-      </span>
+      {/* A tap-to-pin chart announces through its readout line instead. */}
+      {!pinnedReadout && (
+        <span className="sr-only" aria-live="polite">
+          {activeIndex !== null && selected
+            ? `${selected.label}: ${series.map((s) => `${s.label} ${selected.values[s.key]} ${unit}`).join(', ')}`
+            : ''}
+        </span>
+      )}
       {markers.length > 0 && !hideMarkerLegend && (
         <div className="text-text-dim mt-2 flex flex-wrap gap-4 text-[11px]">
           {markers.map((m) => (

@@ -241,14 +241,40 @@ describe('mini chart hover', () => {
     expect(svg.querySelector('[data-hovered="true"]')).toBeNull();
   });
 
-  it('keeps a tapped bucket on touch until the next tap elsewhere', () => {
+  // R6 replaces "a tapped bucket stays until the next tap elsewhere": a tap pins the bucket in a
+  // readout line under the chart, and only a second tap on it (or Escape) lets it go.
+  it('a tap pins the nearest bucket in the line under the chart; a second tap or Escape clears it (R6)', () => {
     const svg = renderBars();
+    const readout = screen.getByRole('status', { name: 'Transactions readout' });
+    expect(svg.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(readout).toHaveTextContent(/^tap or hover$/);
+    // a touch tap: down, the pointer leaves on lift, the focus it causes, then the click
     fireEvent.pointerDown(svg, { clientX: 100, pointerType: 'touch' });
     fireEvent.pointerLeave(svg, { pointerType: 'touch' });
+    fireEvent.focus(svg);
+    fireEvent.click(svg, { clientX: 100 });
+    expect(readout).toHaveTextContent(/^tapped 09:00 · 610/);
     expect(headline()).toHaveTextContent('610');
+    expect(subtitle()).toHaveTextContent('09:00');
+    // a tap elsewhere on the page keeps it
     act(() => {
       fireEvent.pointerDown(document.body, { pointerType: 'touch' });
     });
+    expect(headline()).toHaveTextContent('610');
+    // the second tap on the same bucket lets go
+    fireEvent.click(svg, { clientX: 100 });
+    expect(headline()).toHaveTextContent('731');
+    expect(readout).toHaveTextContent(/^tap or hover$/);
+    // a mouse: the hover reads over the pin, leaving shows the pin again; Escape clears it
+    fireEvent.click(svg, { clientX: 120 });
+    fireEvent.pointerMove(svg, { clientX: 260 });
+    expect(readout).toHaveTextContent(/^11:00 · in progress · 326/);
+    fireEvent.pointerLeave(svg);
+    expect(readout).toHaveTextContent(/^tapped 10:00 · 731/);
+    act(() => {
+      fireEvent.keyDown(window, { key: 'Escape' });
+    });
+    expect(readout).toHaveTextContent(/^tap or hover$/);
     expect(headline()).toHaveTextContent('731');
   });
 

@@ -182,6 +182,49 @@ describe('VmLaneTimeline', () => {
     expect(Number(note.getAttribute('x')) - 70).toBeGreaterThan(Number(mirana.getAttribute('x1')));
   });
 
+  it('a tap pins a dot’s script version in the line under the timeline; a second tap clears it (R6)', () => {
+    stubChartWidth(1200);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={laned}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    const svg = screen.getByRole('img');
+    const xudt = screen.getByRole('button', { name: /^xUDT · xUDT · version 0xbbbbbbbb…, data1/ });
+    const readout = screen.getByRole('status', { name: 'Script version readout' });
+    const evidence = screen.getByRole('complementary', {
+      name: 'Selected script deployment evidence',
+    });
+    expect(svg.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(readout).toHaveTextContent(
+      'Tap or hover a dot, or focus it, for that script version, its first code cell and its block.'
+    );
+    // a hover still names the version and keeps it once the pointer moves on, as before
+    fireEvent.mouseEnter(xudt);
+    fireEvent.mouseLeave(xudt);
+    expect(readout).toHaveTextContent(/^xUDT · xUDT · version 0xbbbbbbbb… · deployed 2024-01-08/);
+    // a tap pins it; hovering another dot reads that one, leaving it shows the pin again
+    fireEvent.click(xudt);
+    expect(readout).toHaveTextContent(/^tapped xUDT · xUDT/);
+    expect(xudt).toHaveAttribute('aria-pressed', 'true');
+    const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
+    const unregistered = within(strip).getByRole('button');
+    fireEvent.mouseEnter(unregistered);
+    expect(readout).toHaveTextContent(/^Unregistered · Unregistered/);
+    fireEvent.mouseLeave(unregistered);
+    expect(readout).toHaveTextContent(/^tapped xUDT/);
+    expect(evidence).toHaveTextContent('Earliest indexed code-cell creation');
+    // the second tap on it lets go
+    fireEvent.click(xudt);
+    expect(readout).toHaveTextContent('Tap or hover a dot');
+    expect(evidence).not.toHaveTextContent('Earliest indexed code-cell creation');
+  });
+
   it('refuses lanes out of VM order and hardforks outside the chain span', () => {
     stubChartWidth(1200);
     vi.spyOn(console, 'error').mockImplementation(() => {});

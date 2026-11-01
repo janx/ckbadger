@@ -380,6 +380,33 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     expect(Number(caption.getAttribute('font-size'))).toBeGreaterThanOrEqual(10);
   });
 
+  it('a tap on a band pins its variant in the line under the gel; a second tap clears it (V2, R6)', () => {
+    stubChartWidth(358);
+    const onBand = vi.fn();
+    const { container } = render(
+      <AlleleGel lanes={lanes} total={90} subject="Nervape 3x" onBandClick={onBand} />
+    );
+    const svg = container.querySelector('svg[role="img"]')!;
+    const readout = screen.getByRole('status', { name: 'Variant readout' });
+    expect(svg.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(readout).toHaveTextContent('Tap or hover a band.');
+    const band = container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')!;
+    const calm = lanes.find((l) => l.gene === 'Color')!.bands.find((b) => b.value === 'Calm Blue')!;
+    // a hover reads the band; a tap (emulated hover, then the click) pins it past the pointer
+    fireEvent.mouseEnter(band);
+    expect(readout).toHaveTextContent(`Color · ${calm.label} · ${calm.count} of 90 objects`);
+    fireEvent.click(band);
+    fireEvent.mouseLeave(band);
+    expect(readout).toHaveTextContent(
+      new RegExp(`^tapped Color · ${calm.label} · ${calm.count} of 90 objects`)
+    );
+    // on the collection page the same tap also filters by the variant
+    expect(onBand).toHaveBeenCalledWith('Color', 'Calm Blue');
+    fireEvent.mouseEnter(band);
+    fireEvent.click(band);
+    expect(readout).toHaveTextContent('Tap or hover a band.');
+  });
+
   it('becomes a ranked gene list above 32 genes below md, and a gel from md up', () => {
     stubChartWidth(608);
     const many = twoVariantLanes(72);

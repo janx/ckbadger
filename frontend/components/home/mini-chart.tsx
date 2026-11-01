@@ -2,17 +2,17 @@
 
 import {
   createContext,
-  useCallback,
   useContext,
   useEffect,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
 import Link from '@/components/ui/link';
+import { ReadoutRow } from '@/components/ui/readout-row';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import {
   clipToCap,
   formatCompactSigned,
@@ -26,8 +26,9 @@ import { cn } from '@/lib/utils';
  * The homepage small multiples: one figure frame (caption + headline + chart) and three SVG chart
  * kinds — a line, bars from zero, and signed bars around zero. They share one geometry, one
  * colour set (one data hue), draw 1:1 so their 10 px axis text never scales, and share one hover:
- * the pointer (or a tap, or ←/→ on the focused chart) picks the nearest bucket, a thin guide marks
- * it, the other marks step back, and the caption's headline and sub-label read it out.
+ * the pointer (or ←/→ on the focused chart) picks the nearest bucket, a thin guide marks it, the
+ * other marks step back, and the caption's headline and sub-label read it out, as does the readout
+ * line under the chart. A tap pins the nearest bucket there until a second tap on it or Escape (R6).
  */
 
 export const CHART_H = 104;
@@ -66,7 +67,12 @@ interface Readout extends ReadoutValue {
   label: string;
 }
 
-const ReadoutContext = createContext<(r: Readout | null) => void>(() => {});
+/** What a chart reports to its figure: the bucket it reads, and whether a tap pinned it. */
+interface FigureReadout extends Readout {
+  pinned: boolean;
+}
+
+const ReadoutContext = createContext<(r: FigureReadout | null) => void>(() => {});
 
 // ---------------------------------------------------------------------------
 // Figure frame
@@ -102,7 +108,7 @@ export function ChartFigure({
   className,
   testId,
 }: ChartFigureProps) {
-  const [readout, setReadout] = useState<Readout | null>(null);
+  const [readout, setReadout] = useState<FigureReadout | null>(null);
   const tid = (part: string) => (testId ? `${testId}-${part}` : undefined);
   return (
     <figure data-testid={testId} className={cn('m-0 flex min-w-0 flex-col gap-1.5', className)}>
@@ -140,6 +146,11 @@ export function ChartFigure({
       <ReadoutContext.Provider value={setReadout}>
         <FigureBody body={body} />
       </ReadoutContext.Provider>
+      {body.state === 'ready' && (
+        <ReadoutRow label={`${title} readout`} pinned={readout !== null && readout.pinned}>
+          {readout ? `${readout.label} · ${readout.text}` : null}
+        </ReadoutRow>
+      )}
     </figure>
   );
 }
@@ -201,66 +212,47 @@ function ChartCanvas({ ariaLabel, xsFor, readoutOf, signature, children }: Canva
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const svgRef = useRef<SVGSVGElement>(null);
   const report = useContext(ReadoutContext);
-  const [hovered, setHovered] = useState<number | null>(null);
-  // Handlers read the latest state through refs: a pointerdown and the focus it causes arrive in
-  // one task, before a re-render.
-  const hoveredRef = useRef<number | null>(null);
-  const byTouch = useRef(false);
+  const readout = usePinnedReadout<number>();
+  // A press focuses the chart too; only a keyboard focus starts the reading at the last bucket.
+  const pressed = useRef(false);
   const xs = width === null ? [] : xsFor(width);
-  const latest = useRef({ xs, readoutOf, report });
-  latest.current = { xs, readoutOf, report };
+  const latest = useRef({ readoutOf, report });
+  latest.current = { readoutOf, report };
+  // New data without the held bucket lets it go.
+  if (readout.active !== null && readout.active >= xs.length) readout.clear();
+  const shown = readout.active !== null && readout.active < xs.length ? readout.active : null;
+  const pinned = readout.showingPin;
 
-  const select = useCallback((i: number | null) => {
-    const { xs: cur, readoutOf: read, report: send } = latest.current;
-    const next = i === null || cur.length === 0 ? null : Math.max(0, Math.min(cur.length - 1, i));
-    hoveredRef.current = next;
-    setHovered(next);
-    send(next === null ? null : read(next));
-  }, []);
-
-  // New data under a held bucket: re-read it (or let go when the bucket is gone).
+  // The caption and the readout line read the held bucket, again whenever the data changes.
   useEffect(() => {
-    const i = hoveredRef.current;
-    if (i === null) return;
-    if (i >= latest.current.xs.length) select(null);
-    else latest.current.report(latest.current.readoutOf(i));
-  }, [signature, select]);
+    const { readoutOf: read, report: send } = latest.current;
+    send(shown === null ? null : { ...read(shown), pinned });
+  }, [shown, pinned, signature]);
 
   // The caption must not keep a readout for a chart that is gone.
   useEffect(() => () => latest.current.report(null), []);
 
-  // A tapped bucket stays until the next tap outside the chart.
-  useEffect(() => {
-    if (hovered === null || !byTouch.current) return;
-    const away = (e: Event) => {
-      if (!svgRef.current?.contains(e.target as Node)) select(null);
-    };
-    document.addEventListener('pointerdown', away);
-    return () => document.removeEventListener('pointerdown', away);
-  }, [hovered, select]);
-
-  const pick = (e: ReactPointerEvent<SVGSVGElement>) => {
-    byTouch.current = e.pointerType === 'touch';
-    const left = (svgRef.current as SVGSVGElement).getBoundingClientRect().left;
-    select(nearest(latest.current.xs, e.clientX - left));
-  };
+  const bucketAt = (clientX: number) =>
+    nearest(xs, clientX - (svgRef.current as SVGSVGElement).getBoundingClientRect().left);
   const onKeyDown = (e: ReactKeyboardEvent<SVGSVGElement>) => {
-    const last = latest.current.xs.length - 1;
-    const h = hoveredRef.current;
-    const moves: Record<string, number | null> = {
+    const last = xs.length - 1;
+    const h = readout.active;
+    const moves: Record<string, number> = {
       ArrowLeft: h === null ? last : h - 1,
       ArrowRight: h === null ? last : h + 1,
       Home: 0,
       End: last,
-      Escape: null,
     };
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      readout.clear();
+      return;
+    }
     if (!(e.key in moves)) return;
     e.preventDefault();
-    byTouch.current = false;
-    select(moves[e.key]);
+    readout.hover(Math.max(0, Math.min(last, moves[e.key])));
   };
 
-  const shown = hovered !== null && hovered < xs.length ? hovered : null;
   return (
     <div ref={ref} className="w-full" style={{ height: CHART_H }}>
       {width !== null && (
@@ -273,15 +265,25 @@ function ChartCanvas({ ariaLabel, xsFor, readoutOf, signature, children }: Canva
           height={CHART_H}
           viewBox={`0 0 ${width} ${CHART_H}`}
           className="focus-visible:ring-base-border block touch-pan-y overflow-visible rounded-sm font-mono tabular-nums outline-none focus-visible:ring-1"
-          onPointerMove={pick}
-          onPointerDown={pick}
-          onPointerLeave={(e) => {
-            if (e.pointerType !== 'touch') select(null);
+          onPointerMove={(e) => readout.hover(bucketAt(e.clientX))}
+          onPointerDown={() => {
+            pressed.current = true;
+          }}
+          onPointerCancel={() => {
+            pressed.current = false;
+          }}
+          onPointerLeave={() => readout.hover(null)}
+          onClick={(e) => {
+            pressed.current = false;
+            readout.toggle(bucketAt(e.clientX));
           }}
           onFocus={() => {
-            if (hoveredRef.current === null) select(latest.current.xs.length - 1);
+            if (!pressed.current && readout.active === null) readout.hover(xs.length - 1);
           }}
-          onBlur={() => select(null)}
+          onBlur={() => {
+            pressed.current = false;
+            readout.hover(null);
+          }}
           onKeyDown={onKeyDown}
         >
           {shown !== null && (

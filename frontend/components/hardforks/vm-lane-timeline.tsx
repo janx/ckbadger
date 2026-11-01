@@ -1,11 +1,11 @@
 'use client';
 
-import { useState } from 'react';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
   DeploymentEvidence,
   ScriptDeploymentTimeline,
   markName,
+  useDeploymentReadout,
 } from '@/components/hardforks/script-deployment-timeline';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
@@ -91,7 +91,8 @@ export function VmLaneTimeline({
   tipEpoch,
 }: Props) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
-  const [selectedHash, setSelectedHash] = useState<string | null>(null);
+  // One readout for lane dots and strip dots (R6): hover names a version, a tap pins it.
+  const readout = useDeploymentReadout();
   if (!(genesisMs < tipMs)) throw new Error('VM lane timeline needs a tip after genesis');
   if (lanes.map((lane) => lane.hashType).join() !== LANE_ORDER.join())
     throw new Error(`hash-type lanes out of VM order: ${lanes.map((l) => l.hashType).join()}`);
@@ -172,7 +173,9 @@ export function VmLaneTimeline({
     (a, b) => a.timestampMs - b.timestampMs || a.versionHash.localeCompare(b.versionHash)
   );
   const unregistered = byTime.filter((deployment) => deployment.hashTypes!.length === 0);
-  const selected = deployments.find((d) => d.versionHash === selectedHash) ?? null;
+  const selected = deployments.find((d) => d.versionHash === readout.active) ?? null;
+  // A reading names a version on the timeline: one the deployments no longer hold lets go.
+  if (readout.active !== null && selected === null) readout.clear();
   return (
     <div ref={ref} className="min-w-0">
       {width !== null && width > left + right && (
@@ -350,15 +353,10 @@ export function VmLaneTimeline({
                   return (
                     <g
                       key={deployment.versionHash}
-                      role="button"
-                      tabIndex={0}
+                      {...readout.bind(deployment.versionHash)}
                       data-lane-dot={hashType}
                       aria-label={`${markName(deployment)}, ${hashType}, deployed ${formatUtc8Date(deployment.timestampMs)}`}
-                      aria-pressed={active}
                       className="cursor-pointer outline-none"
-                      onMouseEnter={() => setSelectedHash(deployment.versionHash)}
-                      onFocus={() => setSelectedHash(deployment.versionHash)}
-                      onClick={() => setSelectedHash(deployment.versionHash)}
                     >
                       <title>
                         {`${deployment.versionName} · deployed ${formatUtc8Date(deployment.timestampMs)}`}
@@ -389,13 +387,15 @@ export function VmLaneTimeline({
             domain={[genesisMs, tipMs]}
             inset={{ left, right }}
             label={`no registered reference · ${unregistered.length.toLocaleString()}`}
-            selectedHash={selectedHash}
-            onSelect={setSelectedHash}
+            readout={readout}
             hideEvidence
           />
         </div>
       )}
-      <DeploymentEvidence selected={selected} />
+      <DeploymentEvidence
+        selected={selected}
+        pinned={selected !== null && readout.isPinned(selected.versionHash)}
+      />
     </div>
   );
 }

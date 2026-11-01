@@ -7,7 +7,8 @@
 //
 // Responsive (R3, V2): the gel is laid out for its measured box and drawn 1:1. Lanes keep a 12 px
 // floor and wrap to further rows in DNA order (`lib/allele-gel-layout.ts`); more than 32 genes
-// below md become a ranked gene list that keeps every variant one tap away.
+// below md become a ranked gene list that keeps every variant one tap away. In the gel a hovered
+// band reads in the line under it, and a tap pins it until a second tap or Escape (R6, board V2).
 import { useId, useState } from 'react';
 import type { AlleleLane } from '@/lib/dob-genes';
 import { GEL_COLORS, GEL_INK } from '@/lib/design-tokens';
@@ -20,6 +21,9 @@ import {
   type AlleleGelLayout,
 } from '@/lib/allele-gel-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { cn } from '@/lib/utils';
 
 const GAP = 0.6;
@@ -59,6 +63,13 @@ interface Placed {
   y: number;
   h: number;
 }
+
+/** One band: a gene's variant. */
+interface Variant {
+  gene: string;
+  value: string;
+}
+const variantKey = (v: Variant) => `${v.gene}\u0000${v.value}`;
 
 export function AlleleGel(props: AlleleGelProps) {
   const { lanes, total, subject, overlays = [] } = props;
@@ -100,6 +111,12 @@ function Gel({
   layout,
 }: AlleleGelProps & { width: number; layout: Extract<AlleleGelLayout, { form: 'gel' }> }) {
   const inkId = `gel-ink-${useId().replace(/:/g, '')}`;
+  const readout = usePinnedReadout<Variant>(variantKey);
+  const read = readout.active;
+  const readLane = read === null ? undefined : lanes.find((l) => l.gene === read.gene);
+  const readBand = readLane?.bands.find((b) => b.value === read?.value);
+  // A reading names a band on the gel: one the lanes no longer hold lets go.
+  if (read !== null && !readBand) readout.clear();
   const { rows, laneWidth: lw, gutter: LX, head, captions } = layout;
   // Wrapped rows share the band height, down to 120 px a row (a share still reads at that height).
   const h =
@@ -224,8 +241,13 @@ function Gel({
                           fillOpacity={r(opacity)}
                           stroke={chosen ? GEL_COLORS.overlay : undefined}
                           strokeWidth={chosen ? 1 : undefined}
-                          onClick={onBandClick ? () => onBandClick(lane.gene, b.value) : undefined}
-                          className={onBandClick ? 'cursor-pointer' : undefined}
+                          onMouseEnter={() => readout.hover({ gene: lane.gene, value: b.value })}
+                          onMouseLeave={() => readout.hover(null)}
+                          onClick={() => {
+                            readout.toggle({ gene: lane.gene, value: b.value });
+                            onBandClick?.(lane.gene, b.value);
+                          }}
+                          className="cursor-pointer"
                         >
                           <title>{`${lane.gene} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${formatPercent(BigInt(b.count), BigInt(total))}%)`}</title>
                         </rect>
@@ -318,6 +340,17 @@ function Gel({
           );
         })}
       </svg>
+      <div className="mt-2">
+        <ReadoutRow
+          label="Variant readout"
+          pinned={readout.showingPin}
+          idle={tapOrHover('a band.', { capital: true })}
+        >
+          {readLane && readBand
+            ? `${readLane.gene} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects`
+            : null}
+        </ReadoutRow>
+      </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
       <p className="text-text-dim mt-1 text-[11px]">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}

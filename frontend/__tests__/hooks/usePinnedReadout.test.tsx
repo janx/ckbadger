@@ -59,6 +59,41 @@ describe('usePinnedReadout (R6: tap to pin, tap again or Escape to clear)', () =
     expect(result.current.active).toBeNull();
   });
 
+  it('keeps a sticky hover after the pointer leaves while nothing is pinned, and the pin after', () => {
+    function Probe() {
+      const readout = usePinnedReadout<string>(String, { sticky: true });
+      return (
+        <div>
+          <span {...readout.bind('a')} aria-label="target a" />
+          <span {...readout.bind('b')} aria-label="target b" />
+          <output data-testid="out">
+            {readout.active ?? 'none'}|{readout.pinned ?? 'none'}
+          </output>
+        </div>
+      );
+    }
+    render(<Probe />);
+    const a = screen.getByRole('button', { name: 'target a' });
+    const b = screen.getByRole('button', { name: 'target b' });
+    const out = screen.getByTestId('out');
+    // nothing pinned: the last hovered target stays, as a figure with links in its panel needs
+    fireEvent.mouseEnter(a);
+    fireEvent.mouseLeave(a);
+    expect(out).toHaveTextContent('a|none');
+    fireEvent.focus(b);
+    fireEvent.blur(b);
+    expect(out).toHaveTextContent('b|none');
+    // with a pin, leaving another target shows the pin again
+    fireEvent.click(a);
+    fireEvent.mouseEnter(b);
+    expect(out).toHaveTextContent('b|a');
+    fireEvent.mouseLeave(b);
+    expect(out).toHaveTextContent('a|a');
+    // the second tap on the pin clears both
+    fireEvent.click(a);
+    expect(out).toHaveTextContent('none|none');
+  });
+
   it('binds a target: hover, focus, click and Enter all drive the readout', () => {
     function Probe() {
       const readout = usePinnedReadout<string>();

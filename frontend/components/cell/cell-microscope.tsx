@@ -1,5 +1,7 @@
 'use client';
 import { memo, useMemo, useState, type ReactNode } from 'react';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
 import type { Cell } from '@/lib/api';
 import { CELL_COLORS, DATA_COLOR, ELF_REGION_COLORS } from '@/lib/design-tokens';
@@ -31,11 +33,13 @@ const FULL_DATA_LIMIT = 1536;
 const SHOW_STEP = ROW * 43;
 const GROUPS: readonly CellGroup[] = ['capacity', 'lock', 'type', 'data'];
 
-type Active =
+/** What a hover or a tap points at: one part (a byte or a pill), a map group or an ELF region. */
+type Target =
   | { kind: 'part'; id: string }
   | { kind: 'group'; group: CellGroup }
-  | { kind: 'region'; id: string }
-  | null;
+  | { kind: 'region'; id: string };
+type Active = Target | null;
+const targetKey = (t: Target) => (t.kind === 'group' ? `group:${t.group}` : `${t.kind}:${t.id}`);
 
 function rgba(hex: string, alpha: number): string {
   const h = hex.replace('#', '');
@@ -202,7 +206,8 @@ export interface CellMicroscopeProps {
 /**
  * "The cell, byte by byte" (Cell board v3): one microscope — the capacity map, a field index,
  * one hex box with the CellOutput and its data, and one detail panel that explains whatever
- * byte, field or map part is under the pointer.
+ * byte, field or map part is under the pointer. A tap pins it, with a readout line under the
+ * bytes, until a second tap on it or Escape (R6).
  */
 export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps) {
   const molecule = cell.cellOutputMolecule;
@@ -213,7 +218,17 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const dataBytes = useMemo(() => hexBytes(cell.data ?? '0x', 'CellData'), [cell.data]);
   const outParts = useMemo(() => cellOutputParts(cell), [cell]);
   const dataParts = useMemo(() => cellDataParts(cell), [cell]);
-  const [active, setActive] = useState<Active>(null);
+  const readout = usePinnedReadout<Target>(targetKey);
+  const active: Active = readout.active;
+  const setActive = readout.hover;
+  /** Hover, focus and tap wired to one button (a map part, an ELF region or a field pill). */
+  const handlers = (target: Target) => ({
+    'aria-pressed': readout.isPinned(target),
+    onMouseEnter: () => setActive(target),
+    onFocus: () => setActive(target),
+    onBlur: () => setActive(null),
+    onClick: () => readout.toggle(target),
+  });
   const [bytesRef, bytesWidth] = useElementWidth<HTMLDivElement>();
   const [ranges, setRanges] = useState<[number, number][]>(() =>
     initialRanges(cell, dataParts, dataBytes.length)
@@ -276,9 +291,17 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         : fmt(groupBytes[group]),
   }));
 
-  const onHover = (event: React.MouseEvent) => {
+  const partAt = (event: React.MouseEvent): Target | null => {
     const id = (event.target as HTMLElement).closest<HTMLElement>('[data-part-id]')?.dataset.partId;
-    if (id) setActive({ kind: 'part', id });
+    return id ? { kind: 'part', id } : null;
+  };
+  const onHover = (event: React.MouseEvent) => {
+    const part = partAt(event);
+    if (part) setActive(part);
+  };
+  const onTap = (event: React.MouseEvent) => {
+    const part = partAt(event);
+    if (part) readout.toggle(part);
   };
 
   const digits: 4 | 5 = Math.max(outBytes.length, dataBytes.length) > 0xffff ? 5 : 4;
@@ -352,6 +375,26 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const groupRange = (group: 'lock' | 'type') => {
     const own = outParts.filter((p) => p.group === group);
     return own.length ? [own[0].start, own.at(-1)!.end] : null;
+  };
+  const span = (start: number, end: number) =>
+    `[${fmt(start)}..${fmt(end)}) · ${fmt(end - start)} B`;
+  /** The readout line under the bytes: the hovered or pinned target in one line (R6). */
+  const line = (target: Target): string => {
+    if (target.kind === 'group') {
+      const g = target.group;
+      const name = g === 'lock' ? lockName : g === 'type' ? typeName : null;
+      return `${g}${name ? ` · ${name}` : ''} · ${fmt(groupBytes[g])} B occupied`;
+    }
+    if (target.kind === 'region') {
+      const region = regions.find((r) => r.id === target.id);
+      if (!region)
+        throw new Error(`Cell ${cell.txHash}:${cell.outputIndex}: no ELF region ${target.id}`);
+      return `${region.label} · ${span(region.start, region.end)}`;
+    }
+    const part = byId.get(target.id);
+    if (!part)
+      throw new Error(`Cell ${cell.txHash}:${cell.outputIndex}: no byte part ${target.id}`);
+    return `${part.label} · ${span(part.start, part.end)}${part.value !== null ? ` · ${part.value}` : ''}`;
   };
   let detail: ReactNode;
   if (active?.kind === 'part' && byId.has(active.id)) {
@@ -531,9 +574,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     : g === 'data'
             }
             title={`${g} · ${fmt(groupBytes[g])} bytes`}
-            onMouseEnter={() => setActive({ kind: 'group', group: g })}
-            onFocus={() => setActive({ kind: 'group', group: g })}
-            onBlur={() => setActive(null)}
+            {...handlers({ kind: 'group', group: g })}
             className="flex items-center justify-center whitespace-nowrap rounded-sm text-[10.5px]"
             style={{
               flex: `${bytes} 0 0`,
@@ -561,9 +602,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 key={region.id}
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
-                onMouseEnter={() => setActive({ kind: 'region', id: region.id })}
-                onFocus={() => setActive({ kind: 'region', id: region.id })}
-                onBlur={() => setActive(null)}
+                {...handlers({ kind: 'region', id: region.id })}
                 className="flex items-center justify-center overflow-hidden rounded-[1px] text-[10px] text-[#0c0e15]"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
@@ -616,9 +655,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     type="button"
                     key={part.id}
                     data-pill={part.id}
-                    onMouseEnter={() => setActive({ kind: 'part', id: part.id })}
-                    onFocus={() => setActive({ kind: 'part', id: part.id })}
-                    onBlur={() => setActive(null)}
+                    {...handlers({ kind: 'part', id: part.id })}
                     className={cn(
                       'inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[11.5px]',
                       active?.kind === 'part' && active.id === part.id
@@ -654,6 +691,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               data-active={litIds ? litIds.join(' ') : undefined}
               className="overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 text-xs tabular-nums"
               onMouseOver={onHover}
+              onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
               {molecule && (
@@ -704,6 +742,9 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </div>
             </div>
           </div>
+          <ReadoutRow label="Byte readout" pinned={readout.showingPin}>
+            {active === null ? null : line(active)}
+          </ReadoutRow>
         </div>
         <aside
           aria-label="Field detail"

@@ -400,4 +400,33 @@ describe('shared chart detail', () => {
     // The separate blocks chart says what it counts, not the hours subtitle.
     expect(lastChart('Epoch blocks').subtitle).toBe('Epoch blocks · 1,201 epochs');
   });
+
+  it('gives every chart a readout line a tap pins (R6), and says so in its help', async () => {
+    vi.mocked(api.getEpochTimeLengthChart).mockResolvedValue({
+      title: 'Epoch length',
+      yAxisLabel: 'Hours',
+      y2AxisLabel: 'Blocks',
+      data: [
+        { date: '14004', value: '4.1', value2: '1800' },
+        { date: '14005', value: '4.2', value2: '1801' },
+      ],
+      peak: { date: '14005', value: '4.2' },
+      peak2: { date: '14005', value: '1801' },
+      target: { seconds: 14400, hours: '4.00' },
+    });
+    render(<ChartDetail slug="epoch-time-length" />);
+    await screen.findByRole('group', { name: 'Epoch length readings' });
+    expect(lastChart('Epoch length').pinnedReadout).toEqual({
+      label: 'Epoch length readout',
+      idle: 'Tap or hover the chart for the value of one point.',
+    });
+    expect(lastChart('Epoch blocks').pinnedReadout).toEqual({
+      label: 'Epoch blocks readout',
+      idle: 'Tap or hover the chart for the value of one point.',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'How to read and zoom this chart' }));
+    expect(
+      screen.getByText(/a tap pins it under the chart and a second tap lets it go/)
+    ).toBeInTheDocument();
+  });
 });
