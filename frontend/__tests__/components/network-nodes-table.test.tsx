@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, within } from '../utils/test-utils';
 import { truncateHash } from '@/lib/utils';
 import { PeersTable } from '@/app/network/nodes-table';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 const REACHABLE_PEER_ID = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const UNVERIFIED_PEER_ID = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -127,5 +128,128 @@ describe('PeersTable', () => {
     ).toBeInTheDocument();
     expect(within(evidence).getByText(/not used as crawler dial aliases/)).toBeInTheDocument();
     expect(within(evidence).getByText('No completed probe observation')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Responsive plan T3 (board T3-peer-evidence.dc.html, review A#5/A#6): the evidence table needs
+ * 2,144 px, more than any page column (1,248 px at 1280). Below the measured width where every
+ * column fits a row is peer id + dial alias + dial state, and the "▸" expander holds the rest.
+ */
+describe('PeersTable form by measured width (T3)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const COLUMN_LABELS = [
+    'Peer ID',
+    'Dial alias',
+    'Participation evidence',
+    'Session initiation',
+    'Crawler dial result',
+    'Version',
+    'Country',
+    'Latest evidence',
+    'Last dial',
+    'Last verified',
+    'RTT',
+  ];
+
+  it('folds each peer to its id, dial alias and dial state where the columns do not fit', async () => {
+    stubChartWidth(1248);
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    expect(document.querySelector('.overflow-x-auto')).toBeNull();
+    // No column header row in the folded form.
+    expect(screen.queryByText('Participation evidence')).toBeNull();
+
+    const row = screen.getAllByTestId('peer-row')[0];
+    const toggle = within(row).getByRole('button', {
+      name: `Show evidence for ${REACHABLE_PEER_ID}`,
+    });
+    // The whole row is the expander, a 44 px target.
+    expect(toggle).toHaveClass('min-h-[44px]', 'w-full');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveTextContent('▸');
+    expect(toggle).toHaveTextContent(truncateHash(REACHABLE_PEER_ID));
+    expect(toggle).toHaveTextContent('/ip4/1.2.3.4/tcp/8115');
+    expect(within(toggle).getByText('Same-network Identify')).toBeInTheDocument();
+    // Every other column waits in the expander.
+    expect(row).not.toHaveTextContent('0.114.0');
+    expect(row).not.toHaveTextContent('United States');
+    expect(row).not.toHaveTextContent('42 ms');
+    expect(row).not.toHaveTextContent('Identify ·');
+  });
+
+  it('opens the expander onto every column as labelled pairs, the multiaddr wrapping', async () => {
+    stubChartWidth(358);
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const row = screen.getAllByTestId('peer-row')[0];
+    const toggle = within(row).getByRole('button', {
+      name: `Show evidence for ${REACHABLE_PEER_ID}`,
+    });
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(toggle).toHaveTextContent('▾');
+
+    const pairs = within(row).getByTestId('peer-columns');
+    const labels = [...pairs.querySelectorAll('dt')].map((dt) => dt.textContent);
+    expect(labels).toEqual(COLUMN_LABELS);
+    const value = (label: string) => {
+      const dt = [...pairs.querySelectorAll('dt')].find((d) => d.textContent === label)!;
+      return dt.nextElementSibling as HTMLElement;
+    };
+    expect(value('Peer ID')).toHaveTextContent(REACHABLE_PEER_ID);
+    expect(value('Dial alias')).toHaveTextContent('/ip4/1.2.3.4/tcp/8115');
+    expect(value('Dial alias')).toHaveClass('[overflow-wrap:anywhere]');
+    expect(value('Dial alias')).not.toHaveClass('truncate');
+    expect(value('Participation evidence')).toHaveTextContent('Identify');
+    expect(value('Session initiation')).toHaveTextContent('—');
+    expect(value('Crawler dial result')).toHaveTextContent('Same-network Identify');
+    expect(value('Version')).toHaveTextContent('0.114.0');
+    expect(value('Country')).toHaveTextContent('United States');
+    expect(value('RTT')).toHaveTextContent('42 ms');
+    // The retained evidence still loads under the pairs.
+    expect(await screen.findByText('Retained verification')).toBeInTheDocument();
+  });
+
+  it('keeps the full table where every column fits (2,144 px)', async () => {
+    stubChartWidth(2144);
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    for (const label of COLUMN_LABELS) expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getAllByTestId('peer-row')[0]).toHaveTextContent('0.114.0');
+    expect(screen.queryByTestId('peer-columns')).toBeNull();
+    expect(document.querySelector('.overflow-x-auto')).toBeNull();
+  });
+
+  it('folds the four filter controls into one "filters" button below md', async () => {
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const button = screen.getByRole('button', { name: /^filters/ });
+    expect(button).toHaveClass('md:hidden');
+    expect(button).toHaveAttribute('aria-expanded', 'false');
+    const panel = document.getElementById(button.getAttribute('aria-controls')!)!;
+    expect(panel).toHaveClass('hidden', 'md:flex');
+    for (const label of [
+      'Filter by crawler dial state',
+      'Filter by address observation',
+      'Filter by country',
+      'Filter by version',
+    ])
+      expect(within(panel).getByLabelText(label)).toBeInTheDocument();
+
+    fireEvent.click(button);
+    expect(button).toHaveAttribute('aria-expanded', 'true');
+    expect(panel).toHaveClass('flex');
+    expect(panel).not.toHaveClass('hidden');
+
+    // A filter in force is counted on the folded button.
+    fireEvent.change(within(panel).getByLabelText('Filter by country'), {
+      target: { value: 'US' },
+    });
+    expect(button).toHaveTextContent('filters · 1');
   });
 });

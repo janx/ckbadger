@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
+import { truncateHash } from '@/lib/utils';
 
 /** The arrows are Discovery address-book reports, never observed p2p connections. */
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
@@ -54,19 +55,25 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
             <div
               role="listitem"
               key={edge.advertiserPeerId + ':' + edge.targetPeerId + ':' + edge.alias}
-              className="border-base-border-subtle grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-2 border-t py-2 text-[11px]"
+              className="border-base-border-subtle grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 border-t py-2 text-[11px]"
             >
-              <span title={edge.advertiserPeerId} className="text-text-bright truncate">
-                {edge.advertiserPeerId}
+              {/* Two lines (board T3): who named whom, the ids cut in the middle so both ends
+                  stay; then the address it named, wrapping whole rather than losing its port. */}
+              <span
+                title={edge.advertiserPeerId}
+                className="text-text-bright min-w-0 [overflow-wrap:anywhere]"
+              >
+                {truncateHash(edge.advertiserPeerId)}
               </span>
               <span className="text-text-dim">named</span>
-              <span className="min-w-0">
-                <span title={edge.targetPeerId} className="text-text-bright block truncate">
-                  {edge.targetPeerId}
-                </span>
-                <span title={edge.alias} className="text-text-dim block truncate">
-                  {edge.alias}
-                </span>
+              <span
+                title={edge.targetPeerId}
+                className="text-text-bright min-w-0 [overflow-wrap:anywhere]"
+              >
+                {truncateHash(edge.targetPeerId)}
+              </span>
+              <span className="text-text-dim col-span-3 min-w-0 [overflow-wrap:anywhere]">
+                {edge.alias}
               </span>
             </div>
           ))}

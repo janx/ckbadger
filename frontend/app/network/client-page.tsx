@@ -252,9 +252,7 @@ function PeersDashboard({
         <DetailSection title="Who named whom">
           <AdvertisementGraph roundId={lastRound.roundId} />
         </DetailSection>
-        <DetailSection title="Peer evidence">
-          <PeersTable />
-        </DetailSection>
+        <PeersTable />
       </DetailTier2>
     </DetailLayout>
   );
