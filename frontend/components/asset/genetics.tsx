@@ -89,7 +89,7 @@ export function ObjectGeneticsView({
         </h2>
         <span className="text-text-dim text-[12px]">
           {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
-          {evidence.number !== null ? ` · number ${evidence.number}` : ''} · hover a gene
+          {evidence.number !== null ? ` · number ${evidence.number}` : ''}
         </span>
       </div>
       <p className="text-[13px] leading-relaxed">

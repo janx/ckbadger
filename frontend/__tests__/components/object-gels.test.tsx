@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { AlleleGel } from '@/components/ui/allele-gel';
@@ -15,15 +16,23 @@ const lanes = alleleLanes(
 );
 
 describe('SequencingGel (Object board, OB-7)', () => {
+  // drawn 1:1 for its measured box; 896 px is the DNA plate at 1280, where the gene columns fit
+  beforeEach(() => stubChartWidth(896));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it('draws every hex digit in its own lane, top to bottom, with a byte ruler', () => {
     const { container } = render(
       <SequencingGel layout={layout} subject="Nervape 3x" active={null} onActive={() => {}} />
     );
     const bands = container.querySelectorAll('[data-nibble]');
     expect(bands).toHaveLength(106);
-    // a9 → nibble 0 in lane a, nibble 1 in lane 9; lanes are 15 units wide from x = 64.
-    expect(Number(bands[0].getAttribute('x'))).toBeCloseTo(64 + 10 * 15 + 2.5, 5);
-    expect(Number(bands[1].getAttribute('x'))).toBeCloseTo(64 + 9 * 15 + 2.5, 5);
+    // a9 → nibble 0 in lane a, nibble 1 in lane 9; lanes are 15 px wide from x = 38 (V3: the
+    // ruler gutter gave 26 px to the gene columns so they fit the 896 px plate 1:1).
+    expect(Number(bands[0].getAttribute('x'))).toBeCloseTo(38 + 10 * 15 + 2.5, 5);
+    expect(Number(bands[1].getAttribute('x'))).toBeCloseTo(38 + 9 * 15 + 2.5, 5);
     expect(screen.getByText('byte')).toBeInTheDocument();
     expect(container.querySelectorAll('[data-ruler]').length).toBeGreaterThanOrEqual(7);
     expect(
@@ -173,6 +182,136 @@ describe('AlleleGel (Collection board, OB-4 / OB-C2)', () => {
     expect(
       container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')
     ).toHaveAttribute('stroke', '#ffffff');
+  });
+});
+
+/** The object page's DNA panel state: the gene lit across the trait list and both gels. */
+function ControlledGel() {
+  const [active, setActive] = useState<string | null>(null);
+  return (
+    <SequencingGel layout={layout} subject="Nervape 3x" active={active} onActive={setActive} />
+  );
+}
+
+describe('SequencingGel at the measured width (V3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('draws lanes and gene columns side by side, 1:1, where the columns fit', () => {
+    stubChartWidth(896);
+    const { container } = render(<ControlledGel />);
+    const svg = container.querySelector('svg[role="img"]')!;
+    expect(svg).toHaveAttribute('width', '896');
+    expect(svg.getAttribute('viewBox')).toMatch(/^0 0 896 /);
+    expect(svg.getAttribute('class')).not.toMatch(/min-w-/);
+    expect(container.querySelector('.overflow-x-auto')).toBeNull();
+    // the gene readings are SVG columns beside the bands, the value not cut
+    expect(container.querySelector('[data-gene="prev.bg"]')!.textContent).toContain(
+      'Bitcoin inscription …79e0i0'
+    );
+    // each column starts after the longest text of the one before: "bytes 51–52 · nervapeNote"
+    // (25 characters of 11.5 px) ends before the raw column, which no longer collides with it
+    const texts = Array.from(container.querySelectorAll('[data-gene="Note"] text'));
+    const [bytesX, rawX] = [Number(texts[1].getAttribute('x')), Number(texts[2].getAttribute('x'))];
+    expect(texts[1].textContent).toBe('bytes 51–52 · nervapeNote');
+    expect(rawX - bytesX).toBeGreaterThanOrEqual(25 * 7.32);
+    expect(container.querySelector('[data-gene-row]')).toBeNull();
+    // the caption is HTML text under the SVG, 11 px
+    const caption = screen.getByText(/^read top to bottom: each band is one hex digit/);
+    expect(caption.closest('svg')).toBeNull();
+    expect(caption).toHaveClass('text-[11px]');
+  });
+
+  it('keeps the lanes at 20 px and turns the gene columns into rows under the map at 358 px', () => {
+    stubChartWidth(358);
+    const { container } = render(<ControlledGel />);
+    const svg = container.querySelector('svg[role="img"]')!;
+    expect(svg).toHaveAttribute('width', '358');
+    const x = (pos: number) =>
+      Number(container.querySelector(`[data-nibble="${pos}"]`)!.getAttribute('x'));
+    // a9: nibble 0 in lane a, nibble 1 in lane 9, one 20 px lane apart
+    expect(x(0) - x(1)).toBe(20);
+    for (const band of Array.from(svg.querySelectorAll('[data-nibble]')))
+      expect(
+        Number(band.getAttribute('x')) + Number(band.getAttribute('width'))
+      ).toBeLessThanOrEqual(358);
+    // no gene text inside the map; the dashed rules mark where Color, Serial and Note begin
+    expect(svg.querySelector('[data-gene]')).toBeNull();
+    expect(
+      Array.from(svg.querySelectorAll('[data-boundary]')).map((b) =>
+        b.getAttribute('data-boundary')
+      )
+    ).toEqual(['Color', 'Serial', 'Note']);
+    const genes = screen.getByRole('list', { name: 'Genes' });
+    // the longest reading (a9461795…e0 → Bitcoin inscription …79e0i0) does not fit a third
+    // column at 358 px: each reading takes its own line under the name and bytes
+    expect(genes).toHaveAttribute('data-rows', 'two-line');
+    const rows = within(genes).getAllByRole('listitem');
+    expect(rows.map((r) => r.getAttribute('data-gene-row'))).toEqual([
+      'prev.type',
+      'relief',
+      'prev.bg',
+      'Color',
+      'Serial',
+      'Note',
+    ]);
+    // name · bytes (and rule) · raw → value, the value never cut
+    const bg = rows[2];
+    for (const part of [
+      'prev.bg',
+      'bytes 0–31',
+      'btcfs',
+      'a9461795…e0',
+      '→',
+      'Bitcoin inscription …79e0i0',
+    ])
+      expect(bg).toHaveTextContent(part);
+    expect(within(bg).getByText('Bitcoin inscription …79e0i0')).toHaveClass(
+      '[overflow-wrap:anywhere]'
+    );
+    expect(rows[3]).toHaveTextContent('Color');
+    expect(rows[3]).toHaveTextContent('byte 32');
+    expect(rows[3]).toHaveTextContent('03');
+    expect(rows[3]).toHaveTextContent('Nature Green');
+    const caption = screen.getByText(/dashed rules mark the gene boundaries/);
+    expect(caption.closest('svg')).toBeNull();
+    expect(caption).toHaveClass('text-[11px]');
+  });
+
+  it('a tap on a gene row highlights its byte span and pins its reading; a second tap clears it', () => {
+    stubChartWidth(358);
+    const { container } = render(<ControlledGel />);
+    const color = screen.getByRole('button', { name: /^Color, byte 32/ });
+    fireEvent.click(color);
+    const span = container.querySelector('[data-span="Color"]')!;
+    expect(span).not.toBeNull();
+    // byte 32 is nibbles 64 and 65: lit; byte 0 is dimmed
+    expect(container.querySelector('[data-nibble="64"]')).toHaveAttribute('opacity', '1');
+    expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '0.15');
+    expect(color).toHaveAttribute('data-active', 'true');
+    expect(color).toHaveAttribute('aria-pressed', 'true');
+    const readout = screen.getByRole('status', { name: 'Gene readout' });
+    expect(readout).toHaveTextContent(/^tapped Color · byte 32 · nervapeColor · 03 → Nature Green/);
+    fireEvent.click(color);
+    expect(container.querySelector('[data-span]')).toBeNull();
+    expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
+    expect(readout).toHaveTextContent('Tap or hover a gene.');
+  });
+
+  it('keeps each gene on one line where its reading fits the third column (the 640 plate)', () => {
+    stubChartWidth(556);
+    render(<ControlledGel />);
+    expect(screen.getByRole('list', { name: 'Genes' })).toHaveAttribute('data-rows', 'one-line');
+  });
+
+  it('refuses a box too narrow for 16 lanes of 14 px', () => {
+    stubChartWidth(200);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => render(<ControlledGel />)).toThrow(
+      /Nervape 3x: a 200 px DNA map cannot hold 16 lanes/
+    );
   });
 });
 
