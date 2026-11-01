@@ -1,6 +1,7 @@
-import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
@@ -415,4 +416,80 @@ it('draws awaiting-index pool squares hollow, apart from pending (cyan) and prop
   expect(awaiting).toHaveClass('border', 'border-text-dim');
   expect(awaiting).not.toHaveClass('bg-info');
   expect(screen.getByRole('button', { name: /^In the pool/ })).toHaveTextContent('In the pool2');
+});
+
+// L4 (responsive plan, board L2): below sm the chrome is one control line, and a phone reads
+// twenty transactions a page.
+describe('Transactions chrome on a phone (board L2, R2)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('folds the kind chips into one select with yesterday’s counts beside a pool chip', async () => {
+    const yesterday = new Date(Date.now() + 8 * 3600000 - 86400000).toISOString().slice(0, 10);
+    vi.mocked(api.getDailyActivityStats).mockResolvedValue([
+      { ...dailyActivities[0], date: yesterday, tokenCount: 11, coinbaseCount: 3 },
+    ]);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    });
+    vi.mocked(api.getPoolTransactions).mockResolvedValue({
+      ...emptyPool,
+      totals: { pending: 4, proposed: 1, awaitingIndex: 0 },
+    });
+    render(<TransactionsPage />);
+    const line = await screen.findByTestId('kind-pool-line');
+    expect(line).toHaveClass('sm:hidden');
+    const select = within(line).getByLabelText("Filter by kind, with yesterday's counts");
+    await waitFor(() =>
+      expect(within(select).getByRole('option', { name: /^Tokens/ })).toHaveTextContent('Tokens 11')
+    );
+    // The same kinds as the chips, in the same order (the board's "All kinds ▾").
+    expect(
+      within(select)
+        .getAllByRole('option')
+        .map((o) => o.getAttribute('value'))
+    ).toEqual(['all', 'ckb', 'script', 'cellbase', 'dao', 'token', 'object', 'identity']);
+    expect(within(select).getAllByRole('option')[0].textContent).toMatch(/^All kinds/);
+    // From sm the chips, the pool banner and the view tabs; below it the line replaces them.
+    expect(
+      screen.getByRole('group', { name: "Filter by kind, with yesterday's counts" })
+    ).toHaveClass('hidden', 'sm:flex');
+    expect(screen.getByTestId('pool-banner')).toHaveClass('hidden', 'sm:flex');
+    expect(screen.getByRole('group', { name: 'Transaction views' })).toHaveClass(
+      'hidden',
+      'sm:flex'
+    );
+    fireEvent.change(select, { target: { value: 'token' } });
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'token',
+      })
+    );
+    const pool = within(line).getByRole('button', { name: 'pool · 4 pending' });
+    expect(pool).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(pool);
+    expect(pool).toHaveAttribute('aria-pressed', 'true');
+    expect(await screen.findByText('not yet in a block · newest first')).toBeInTheDocument();
+  });
+
+  it('asks for twenty transactions a page below md', async () => {
+    stubViewportFromMd(false);
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 20,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    });
+    render(<TransactionsPage />);
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 20 })
+    );
+    expect(api.getTransactions).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
 });

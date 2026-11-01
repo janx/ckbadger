@@ -36,6 +36,33 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   } as unknown as typeof globalThis.ResizeObserver;
 }
 
+// jsdom has no matchMedia. Answer width queries from window.innerWidth (jsdom: 1024, a desktop,
+// so lists keep their own page size) and reduced motion as not asked for; any other query is a
+// test that must bring its own stub. Tests that need another answer stub their own.
+if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
+  window.matchMedia = ((query: string) => {
+    const width = /^\((min|max)-width:\s*(\d+)px\)$/.exec(query);
+    let matches: boolean;
+    if (width)
+      matches =
+        width[1] === 'min'
+          ? window.innerWidth >= Number(width[2])
+          : window.innerWidth <= Number(width[2]);
+    else if (query === '(prefers-reduced-motion: reduce)') matches = false;
+    else throw new Error(`setup.ts matchMedia: unsupported query ${query}`);
+    return {
+      matches,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as MediaQueryList;
+  }) as typeof window.matchMedia;
+}
+
 beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());

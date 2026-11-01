@@ -31,6 +31,7 @@ import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-rou
 import { cn, formatUtc8Date } from '@/lib/utils';
 import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { usePageSize } from '@/hooks/usePageSize';
 
 const activityFilters = [
   ['all', 'All'],
@@ -48,10 +49,11 @@ type ActivityFilter = (typeof activityFilters)[number][0];
 const activityPageQuery = (
   lockHash: string | undefined,
   cursor: string | undefined,
-  filter: ActivityFilter
+  filter: ActivityFilter,
+  limit: number
 ) => ({
-  queryKey: ['address-activities', lockHash, cursor, filter] as const,
-  queryFn: () => api.getAddressActivities(lockHash!, { limit: 50, cursor, filter }),
+  queryKey: ['address-activities', lockHash, cursor, filter, limit] as const,
+  queryFn: () => api.getAddressActivities(lockHash!, { limit, cursor, filter }),
 });
 export default function AddressDetailPage() {
   const params = useParams();
@@ -105,6 +107,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [tab, setTab] = useState<'activities' | 'transactions' | 'cells'>('activities');
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
+  const pageSize = usePageSize(50);
   const activityPage = useCursorPagination(),
     txPage = useCursorPagination(),
     cellPage = useCursorPagination(),
@@ -123,7 +126,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     refetchInterval: 60000,
   });
   const activities = useQuery({
-    ...activityPageQuery(lockHash, activityPage.cursor, filter),
+    ...activityPageQuery(lockHash, activityPage.cursor, filter, pageSize),
     enabled: !!lockHash && tab === 'activities',
     placeholderData: keepPreviousData,
     refetchInterval: poolRefetchInterval({
@@ -134,13 +137,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   // contracts W5-1 (BA-35): the Activities tab counts the address's activities — the `total` of
   // the unfiltered first page (its transactions minus its cellbases), whatever filter is on.
   const activitiesCount = useQuery({
-    ...activityPageQuery(lockHash, undefined, 'all'),
+    ...activityPageQuery(lockHash, undefined, 'all', pageSize),
     enabled: !!lockHash,
     select: (page) => page.total,
   });
   const transactions = useQuery({
-    queryKey: ['address-transactions', lockHash, txPage.cursor],
-    queryFn: () => api.getAddressTransactions(lockHash!, { limit: 50, cursor: txPage.cursor }),
+    queryKey: ['address-transactions', lockHash, txPage.cursor, pageSize],
+    queryFn: () =>
+      api.getAddressTransactions(lockHash!, { limit: pageSize, cursor: txPage.cursor }),
     enabled: !!lockHash && tab === 'transactions',
     placeholderData: keepPreviousData,
     refetchInterval: poolRefetchInterval({
@@ -149,15 +153,20 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     }),
   });
   const cells = useQuery({
-    queryKey: ['address-cells', lockHash, cellPage.cursor, cellClass],
+    queryKey: ['address-cells', lockHash, cellPage.cursor, cellClass, pageSize],
     queryFn: () =>
-      api.getAddressCells(lockHash!, { limit: 50, cursor: cellPage.cursor, class: cellClass }),
+      api.getAddressCells(lockHash!, {
+        limit: pageSize,
+        cursor: cellPage.cursor,
+        class: cellClass,
+      }),
     enabled: !!lockHash && tab === 'cells',
     placeholderData: keepPreviousData,
   });
   const names = useQuery({
-    queryKey: ['address-dotcell-names', lockHash, namesPage.cursor],
-    queryFn: () => api.getAddressDotCellNames(lockHash!, { limit: 50, cursor: namesPage.cursor }),
+    queryKey: ['address-dotcell-names', lockHash, namesPage.cursor, pageSize],
+    queryFn: () =>
+      api.getAddressDotCellNames(lockHash!, { limit: pageSize, cursor: namesPage.cursor }),
     enabled: !!lockHash,
     placeholderData: keepPreviousData,
   });

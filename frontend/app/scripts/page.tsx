@@ -19,6 +19,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type KnownScript } from '@/lib/api';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
 import { formatUtc8Date, truncateHash } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
@@ -246,11 +247,12 @@ export default function ScriptsPage() {
   const [role, setRole] = useState<'lock' | 'type' | undefined>();
   const [sortKey, setSortKey] = useState<SortKey>('capacity');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['scripts', pagination.cursor, search, role, sortKey, sortDirection],
+    queryKey: ['scripts', pagination.cursor, pageSize, search, role, sortKey, sortDirection],
     queryFn: () =>
       api.getScripts({
-        limit: DEFAULT_PAGE_SIZE,
+        limit: pageSize,
         cursor: pagination.cursor,
         decoderType: undefined,
         search,
@@ -476,7 +478,7 @@ export default function ScriptsPage() {
                 <CursorPagination
                   total={data.total ?? undefined}
                   totalLabel="scripts"
-                  pageSize={DEFAULT_PAGE_SIZE}
+                  pageSize={pageSize}
                   page={pagination.page}
                   hasMore={data.hasMore}
                   hasPrevious={pagination.hasPrevious}

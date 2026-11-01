@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -183,10 +184,12 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     queryKey: ['token-distribution', typeHash],
     queryFn: () => api.getTokenDistribution(typeHash),
   });
+  // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
+  const allPageSize = usePageSize(50);
+  const limit = all ? allPageSize : 10;
   const holders = useQuery({
-    queryKey: ['token-holders', typeHash, all, pagination.cursor],
-    queryFn: () =>
-      api.getTokenHolders(typeHash, { limit: all ? 50 : 10, cursor: pagination.cursor }),
+    queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],
+    queryFn: () => api.getTokenHolders(typeHash, { limit, cursor: pagination.cursor }),
   });
   /** A holder's share of the same response's supply, exact to 0.01 %. */
   const holderShare = (h: TokenHolder) => {
@@ -254,7 +257,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     },
   ];
   const rank = (h: TokenHolder) =>
-    (pagination.page - 1) * (all ? 50 : 10) + holders.data!.data.indexOf(h) + 1;
+    (pagination.page - 1) * limit + holders.data!.data.indexOf(h) + 1;
   const holderTable = (
     <div className="min-w-0">
       {holders.data ? (
@@ -294,7 +297,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           {all && (
             <CursorPagination
               page={pagination.page}
-              pageSize={50}
+              pageSize={limit}
               total={holders.data.total ?? undefined}
               totalLabel="holders"
               hasMore={holders.data.hasMore}

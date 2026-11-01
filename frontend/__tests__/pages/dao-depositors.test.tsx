@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi, onTestFinished } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import DaoDepositorsPage from '@/app/dao/depositors/page';
 import { ApiRequestError, api } from '@/lib/api';
 
@@ -123,6 +124,17 @@ describe('DAO depositors page (DAO-12)', () => {
         right: '1.00% · 1 deposit999.00000000 CKB',
       },
     ]);
+  });
+
+  it('ranks twenty depositors a page below md and says so on the button (R2)', async () => {
+    stubViewportFromMd(false);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1, 2], '2'));
+    render(<DaoDepositorsPage />);
+    expect(await screen.findByRole('button', { name: 'Next 20 →' })).toBeInTheDocument();
+    expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 20, cursor: undefined });
   });
 
   it('says which tip each page was ranked at when the tip moved between pages (L1, J2)', async () => {

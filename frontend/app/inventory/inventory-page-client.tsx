@@ -16,6 +16,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type Asset, type InventorySummary } from '@/lib/api';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 
 export type AssetType = Asset['assetType'];
 type AssetSortKey = NonNullable<Parameters<typeof api.getAssets>[0]>['sortKey'];
@@ -76,11 +77,13 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     staleTime: 60_000,
     refetchInterval: 60_000,
   });
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const assets = useQuery({
     queryKey: [
       'assets',
       assetType,
       pagination.cursor,
+      pageSize,
       search,
       standard,
       compositionTier,
@@ -90,7 +93,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     queryFn: () =>
       api.getAssets({
         type: assetType,
-        limit: DEFAULT_PAGE_SIZE,
+        limit: pageSize,
         cursor: pagination.cursor,
         search,
         standard,
@@ -180,7 +183,11 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
             />
           )}
           {assetType === 'token' && (
-            <div className="flex flex-wrap gap-2" role="group" aria-label="Standard filters">
+            <div
+              className="hidden flex-wrap gap-2 sm:flex"
+              role="group"
+              aria-label="Standard filters"
+            >
               {[
                 { standard: '', count: null as number | null },
                 ...(summary.data ? tokenStandardChips(summary.data) : []),
@@ -211,9 +218,40 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               ))}
             </div>
           )}
-          {/* F2 objects (IV-07): the board's quiet "sorted by" line carries the sort controls. */}
-          <div className="text-text-dim flex flex-wrap items-center gap-2 text-[12px]">
-            <span>sorted by</span>
+          {/* F2 objects (IV-07): the board's quiet "sorted by" line carries the sort controls.
+              Board L3: below sm it also carries the standard filter as one select, so the tabs,
+              the filter and the sort take two lines at 390 px. */}
+          <div
+            data-testid="inventory-controls"
+            className="text-text-dim flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] sm:gap-x-2 sm:text-[12px]"
+          >
+            {assetType === 'token' && (
+              <>
+                <label htmlFor="inventory-standard" className="sr-only">
+                  Standard filter
+                </label>
+                <select
+                  id="inventory-standard"
+                  value={standard ?? ''}
+                  onChange={(e) => filter('standard', e.target.value)}
+                  // Sized to the chosen standard, not the longest one (Chromium).
+                  className="border-base-border bg-base-surface text-text h-7 min-w-0 rounded border px-1.5 [field-sizing:content] sm:hidden"
+                >
+                  {[
+                    { standard: '', count: summary.data?.counts[assetType] ?? null },
+                    ...(summary.data ? tokenStandardChips(summary.data) : []),
+                  ].map(({ standard: s, count }) => (
+                    <option key={s} value={s}>
+                      {s ? formatStandard(s) : 'All'}
+                      {count !== null && ` ${count.toLocaleString('en-US')}`}
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+            {/* Below sm the words go to the screen reader so the filter, the sort and its
+                direction share one line; the select names itself. */}
+            <span className="sr-only sm:not-sr-only">sorted by</span>
             <select
               aria-label="Sort inventory"
               value={sortKey}
@@ -221,7 +259,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                 setSortKey(e.target.value as AssetSortKey);
                 pagination.reset();
               }}
-              className="text-text bg-transparent py-1"
+              className="text-text min-w-0 bg-transparent py-1"
             >
               {sortOptions.map(([key, label]) => (
                 <option key={key} value={key}>
@@ -232,13 +270,16 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
             <button
               type="button"
               aria-label="Reverse sort direction"
-              className="text-text hover:text-text-bright"
+              className="text-text hover:text-text-bright whitespace-nowrap"
               onClick={() => {
                 setSortDirection(sortDirection === 'desc' ? 'asc' : 'desc');
                 pagination.reset();
               }}
             >
-              {sortDirection === 'desc' ? '↓ largest first' : '↑ smallest first'}
+              {sortDirection === 'desc' ? '↓' : '↑'}
+              <span className="hidden sm:inline">
+                {sortDirection === 'desc' ? ' largest first' : ' smallest first'}
+              </span>
             </button>
             {assetType !== 'identity' && <HMulHelpPopover />}
           </div>
@@ -258,7 +299,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               <CursorPagination
                 total={assets.data.total ?? undefined}
                 totalLabel="items"
-                pageSize={DEFAULT_PAGE_SIZE}
+                pageSize={pageSize}
                 page={pagination.page}
                 hasMore={assets.data.hasMore}
                 hasPrevious={pagination.hasPrevious}

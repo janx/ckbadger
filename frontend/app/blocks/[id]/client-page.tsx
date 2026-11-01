@@ -21,6 +21,7 @@ import { DaoHeaderFields } from '@/components/blocks/dao-header-fields';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { api, isNotFoundApiError, type Block, type BlockUncle, type Transaction } from '@/lib/api';
 import { isEditableElement } from '@/lib/search-focus';
 import { parseShannons, formatPercent } from '@/lib/ckb-decimal';
@@ -49,6 +50,7 @@ export default function BlockDetailPage() {
   const [view, setView] = useState<'activities' | 'transactions'>('activities');
   const pagination = useCursorPagination();
   const activityPagination = useCursorPagination();
+  const pageSize = usePageSize(100);
   const {
     data: block,
     isLoading,
@@ -59,21 +61,21 @@ export default function BlockDetailPage() {
     refetchInterval: (query) => (query.state.data?.cyclesStatus === 'pending' ? 3000 : false),
   });
   const transactions = useQuery({
-    queryKey: ['block-transactions', id, block?.number, pagination.cursor],
+    queryKey: ['block-transactions', id, block?.number, pagination.cursor, pageSize],
     queryFn: () =>
       api.getTransactions({
         blockNumber: block!.number,
-        limit: 100,
+        limit: pageSize,
         ...(pagination.cursor ? { cursor: pagination.cursor } : {}),
       }),
     enabled: !!block,
   });
   const activities = useQuery({
-    queryKey: ['block-activities', block?.number, activityPagination.cursor],
+    queryKey: ['block-activities', block?.number, activityPagination.cursor, pageSize],
     queryFn: () =>
       api.getGlobalActivities({
         blockNumber: block!.number,
-        limit: 100,
+        limit: pageSize,
         cursor: activityPagination.cursor,
         // R2b-a 3 (BA-14): the block in tx order, cellbase first, paged forward by the API.
         order: 'asc',
@@ -634,7 +636,7 @@ export default function BlockDetailPage() {
                       )}
                       {(activities.data.hasMore || activityPagination.hasPrevious) && (
                         <CursorPagination
-                          pageSize={100}
+                          pageSize={pageSize}
                           page={activityPagination.page}
                           hasMore={activities.data.hasMore}
                           hasPrevious={activityPagination.hasPrevious}
@@ -660,7 +662,7 @@ export default function BlockDetailPage() {
                       {(transactions.data.hasMore || pagination.hasPrevious) && (
                         <CursorPagination
                           total={block.transactionsCount}
-                          pageSize={100}
+                          pageSize={pageSize}
                           page={pagination.page}
                           hasMore={transactions.data.hasMore}
                           hasPrevious={pagination.hasPrevious}

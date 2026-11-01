@@ -10,6 +10,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type FiberChannel, type FiberChannelState, type FiberNetwork } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { formatCount } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
@@ -228,12 +229,13 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
 export default function FiberChannelsPage() {
   const [stateFilter, setStateFilter] = useState<StateFilter>('open');
   const pagination = useCursorPagination();
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const network = useQuery({ queryKey: ['fiber-network'], queryFn: api.getFiberNetwork });
   const channels = useQuery({
-    queryKey: ['fiber-channels', stateFilter, pagination.cursor],
+    queryKey: ['fiber-channels', stateFilter, pagination.cursor, pageSize],
     queryFn: () =>
       api.getFiberChannels({
-        limit: DEFAULT_PAGE_SIZE,
+        limit: pageSize,
         cursor: pagination.cursor,
         state: stateFilter === 'all' ? undefined : stateFilter,
         sort: 'capacity',
@@ -380,7 +382,7 @@ export default function FiberChannelsPage() {
                   className="pt-1"
                   total={channels.data.total}
                   totalLabel="channels"
-                  pageSize={DEFAULT_PAGE_SIZE}
+                  pageSize={pageSize}
                   page={pagination.page}
                   currentCount={channels.data.data.length}
                   hasMore={channels.data.hasMore}

@@ -25,6 +25,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
@@ -374,18 +375,19 @@ export function AssetFeed({
   const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
   const actsPages = useCursorPagination(),
     txPages = useCursorPagination();
+  const pageSize = usePageSize(50);
   const activityCursor = actsPages.cursor ?? initialActivityCursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);
   }, [activityCursor, onActivityCursorChange]);
   const acts = useQuery({
-    queryKey: ['asset-feed', queryKey, 'activities', activityCursor],
-    queryFn: () => loadActivities({ limit: 50, cursor: activityCursor }),
+    queryKey: ['asset-feed', queryKey, 'activities', activityCursor, pageSize],
+    queryFn: () => loadActivities({ limit: pageSize, cursor: activityCursor }),
     enabled: tab === 'activities',
   });
   const txs = useQuery({
-    queryKey: ['asset-feed', queryKey, 'transactions', txPages.cursor],
-    queryFn: () => loadTransactions({ limit: 50, cursor: txPages.cursor }),
+    queryKey: ['asset-feed', queryKey, 'transactions', txPages.cursor, pageSize],
+    queryFn: () => loadTransactions({ limit: pageSize, cursor: txPages.cursor }),
     enabled: tab === 'transactions',
   });
   const current = tab === 'activities' ? acts : txs,
@@ -469,7 +471,7 @@ export function AssetFeed({
           <CursorPagination
             total={current.data.total}
             totalLabel="transactions"
-            pageSize={50}
+            pageSize={pageSize}
             page={pages.page}
             hasMore={current.data.hasMore}
             hasPrevious={pages.hasPrevious}

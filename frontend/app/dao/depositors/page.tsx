@@ -6,6 +6,7 @@ import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { usePageSize } from '@/hooks/usePageSize';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { shareBarWidthFromPercent } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
@@ -14,6 +15,7 @@ import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { retryTransientOnly } from '@/lib/query-client';
 
+/** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
 
 function Ckb({ shannons }: { shannons: string }) {
@@ -82,14 +84,15 @@ const COLUMNS: ListColumn<DaoDepositorRow>[] = [
 export default function DaoDepositorsPage() {
   const [cursors, setCursors] = useState<(string | undefined)[]>([undefined]);
   const cursor = cursors[cursors.length - 1];
+  const pageSize = usePageSize(PAGE);
   const query = useQuery({
-    queryKey: ['dao-depositors', cursor],
-    queryFn: () => api.getDaoDepositors({ limit: PAGE, cursor }),
+    queryKey: ['dao-depositors', cursor, pageSize],
+    queryFn: () => api.getDaoDepositors({ limit: pageSize, cursor }),
     retry: retryTransientOnly,
   });
   const page = query.data;
   const client = useQueryClient();
-  const first = client.getQueryData<RankedPage>(['dao-depositors', undefined]);
+  const first = client.getQueryData<RankedPage>(['dao-depositors', undefined, pageSize]);
   const moved =
     page && first && cursor !== undefined && first.anchor.blockNumber !== page.anchor.blockNumber
       ? { from: first.anchor.blockNumber, to: page.anchor.blockNumber }
@@ -178,7 +181,7 @@ export default function DaoDepositorsPage() {
                     onClick={() => setCursors((c) => [...c, page.nextCursor ?? undefined])}
                     className="border-base-border text-text hover:text-text-bright h-9 rounded-md border px-4 text-xs"
                   >
-                    Next {PAGE} →
+                    Next {pageSize} →
                   </button>
                 )}
               </div>

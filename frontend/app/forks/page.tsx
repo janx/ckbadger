@@ -14,6 +14,7 @@ import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, type ForkNodeRecord, type ReorgEvent } from '@/lib/api';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { FORK_COLORS } from '@/lib/design-tokens';
@@ -249,7 +250,7 @@ function Fate({ event }: { event: ReorgEvent }) {
 
 export default function ForksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
-  const limit = DEFAULT_PAGE_SIZE;
+  const limit = usePageSize(DEFAULT_PAGE_SIZE);
   const overview = useQuery({
     queryKey: ['forks-overview', 30],
     queryFn: () => api.getForkOverview(30),

@@ -5,6 +5,7 @@
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { objectCountLabel } from '@/components/activity/activity-row';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { ItemTransactionContext } from '@/components/asset/item-evidence';
 import type { GlobalActivity, Transaction } from '@/lib/api';
 import {
@@ -224,4 +225,21 @@ describe('m-NFT mint row class cell (R-4)', () => {
       `the class cell's lock 0x${'09'.repeat(32)} is no participant`
     );
   });
+});
+
+it('reads twenty activities a page below md (R2)', async () => {
+  stubViewportFromMd(false);
+  const load = vi.fn(async () => page);
+  render(
+    <AssetFeed
+      queryKey="phone-page"
+      scope="Its whole life"
+      plain
+      loadActivities={load}
+      loadTransactions={async () => ({ ...page, data: [] })}
+    />
+  );
+  await screen.findAllByRole('button', { name: /objects?$/ });
+  expect(load).toHaveBeenCalledWith({ limit: 20, cursor: undefined });
+  vi.unstubAllGlobals();
 });

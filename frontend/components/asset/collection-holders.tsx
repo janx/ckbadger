@@ -5,6 +5,7 @@ import { LockKind } from '@/components/ui/lock-kind';
 import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
@@ -70,9 +71,11 @@ function ScopedCollectionHolders({
 }: CollectionHoldersProps) {
   const [all, setAll] = useState(false);
   const pagination = useCursorPagination();
-  const limit = all ? 50 : 10;
+  // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
+  const allPageSize = usePageSize(50);
+  const limit = all ? allPageSize : 10;
   const holders = useQuery({
-    queryKey: ['collection-holders', queryKey, all, pagination.cursor],
+    queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
     queryFn: () => load({ limit, cursor: pagination.cursor }),
   });
   let totalHolders = BigInt(0);
@@ -238,7 +241,7 @@ function ScopedCollectionHolders({
               {all && (
                 <CursorPagination
                   page={pagination.page}
-                  pageSize={50}
+                  pageSize={limit}
                   total={holders.data.total ?? undefined}
                   totalLabel="holders"
                   hasMore={holders.data.hasMore}

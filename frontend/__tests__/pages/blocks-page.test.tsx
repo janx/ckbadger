@@ -1,5 +1,6 @@
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { screen, waitFor, within } from '@testing-library/react';
 import { resourceScale } from '@/components/blocks/block-visual';
@@ -88,6 +89,18 @@ describe('BlocksPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getBlocks).mockResolvedValue(mockBlocksResponse);
+  });
+
+  it('asks for twenty blocks a page below md (R2)', async () => {
+    stubViewportFromMd(false);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    render(<BlocksPage />);
+    await waitFor(() =>
+      expect(api.getBlocks).toHaveBeenCalledWith({ cursor: undefined, limit: 20 })
+    );
+    expect(api.getBlocks).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
   });
 
   it('renders hardfork badge for activation block in block list', async () => {

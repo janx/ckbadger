@@ -10,6 +10,7 @@ import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
 import { NamedParty } from '@/components/asset/identity-document';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { retryTransientOnly } from '@/lib/query-client';
 function nameHref(id: string) {
   return `/identities/dotcell/${encodeURIComponent(id)}`;
@@ -21,14 +22,15 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
     );
   }
   const [wantsMore, setWantsMore] = useState(false);
+  const pageSize = usePageSize(DEFAULT_PAGE_SIZE);
   const more = useInfiniteQuery({
-    queryKey: ['dotcell-item-children', item.identityId, item.childrenNextCursor],
+    queryKey: ['dotcell-item-children', item.identityId, item.childrenNextCursor, pageSize],
     queryFn: ({ pageParam }) => {
       if (pageParam === null) {
         throw new Error(`.cell name ${item.identityId}: no sub-name cursor to page from`);
       }
       return api.getDotCellItemChildren(item.identityId, {
-        limit: DEFAULT_PAGE_SIZE,
+        limit: pageSize,
         cursor: pageParam,
       });
     },

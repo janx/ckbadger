@@ -22,6 +22,7 @@ import { CLASS_COLORS, DATA_COLOR } from '@/lib/design-tokens';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatTimeAgo } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -29,7 +30,7 @@ import { formatCount } from '@/lib/format-count';
 
 export default function BlocksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
-  const limit = DEFAULT_PAGE_SIZE;
+  const limit = usePageSize(DEFAULT_PAGE_SIZE);
   const { data, isLoading, error } = useQuery({
     queryKey: ['blocks', cursor, limit],
     queryFn: () => api.getBlocks({ cursor, limit }),
