@@ -85,7 +85,9 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
   const points = model?.card?.points ?? model?.points ?? [];
   return (
     <article className="min-w-0" aria-label={`${definition.title} chart preview`}>
-      <div className="mb-2 flex min-w-0 items-end justify-between gap-3">
+      {/* The readout keeps the right edge; in a card too narrow for title and readout side by
+          side it drops under the title whole instead of being cut (responsive review 2026-11-01). */}
+      <div className="mb-2 flex min-w-0 flex-wrap items-end justify-between gap-x-3 gap-y-1">
         <div className="min-w-0">
           <Link
             href={`/charts/${definition.slug}`}
@@ -97,10 +99,10 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         </div>
         {model?.latest && headline && (
           <div
-            className="min-w-0 shrink-0 text-right"
+            className="ml-auto min-w-0 text-right"
             title={`${model.latest.label}: ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`}
           >
-            <div className="text-text-dim text-[11px]">{headline.pre}</div>
+            <div className="text-text-dim whitespace-nowrap text-[11px]">{headline.pre}</div>
             <div
               role="group"
               aria-label={`${definition.title} current readout`}

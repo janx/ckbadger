@@ -45,6 +45,23 @@ describe('ChartSmallMultiple', () => {
     expect(screen.getByText('daily, PH/s')).toBeInTheDocument();
   });
 
+  // Responsive review 2026-11-01: in a four-column "Related charts" grid at 1280 (and two columns
+  // at 640) the readout block could not shrink and its date was cut at the card's edge. The header
+  // wraps instead: the readout keeps the right edge and drops under the title when both do not fit.
+  it('lets the readout drop under the title in a narrow card instead of being cut', async () => {
+    render(
+      <ChartSmallMultiple definition={{ ...base, fetch: vi.fn().mockResolvedValue(result) }} />
+    );
+    const readoutBlock = (await screen.findByTitle(
+      '2024-01-01: 900.7199254740993 PH/s'
+    )) as HTMLElement;
+    const header = readoutBlock.parentElement as HTMLElement;
+    expect(header).toHaveClass('flex-wrap');
+    expect(readoutBlock).toHaveClass('ml-auto');
+    expect(readoutBlock).not.toHaveClass('shrink-0');
+    expect(screen.getByText('2024-01-01')).toHaveClass('whitespace-nowrap');
+  });
+
   it('distinguishes an empty response from an error and permits retry', async () => {
     const fetch = vi
       .fn()
