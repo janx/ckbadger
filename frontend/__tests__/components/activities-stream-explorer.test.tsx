@@ -334,8 +334,13 @@ describe('ActivitiesStreamExplorer', () => {
     const row = await screen.findByRole('article');
 
     expect(screen.getByText('Today')).toBeInTheDocument();
-    // TX hash shown prominently
-    expect(within(row).getByText(/0xscriptca/)).toBeInTheDocument();
+    // T7 (option A): the tx hash is the row's hover; the headline is the link to the tx.
+    expect(row).toHaveAttribute('title', expect.stringMatching(/^0xscriptca/));
+    expect(row).not.toHaveTextContent(/0xscriptca/);
+    expect(within(row).getByRole('link', { name: 'Script call' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(/^\/mainnet\/tx\/0xscriptca/)
+    );
     // Block number shown
     expect(within(row).getByText('#123,456')).toBeInTheDocument();
     // Time shown

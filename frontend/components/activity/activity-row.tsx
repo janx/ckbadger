@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -7,9 +7,8 @@ import {
   DotJoined,
   ExactCkb,
   ItemDeltaFact,
-  LockCallExpr,
-  TypeCallExpr,
   activityClassMark,
+  formatScriptRef,
   activityHeadline,
   globalTxEvents,
   protocolActionLabel,
@@ -19,8 +18,12 @@ import { ParticipantRefView } from '@/components/participant-ref';
 import { classifyActivity } from '@/lib/activity-classify';
 import { formatSignedCkbExact, formatSignedCkbInteger, SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import { PARTICIPANT_LIMIT, participantsToShow } from '@/lib/participant-order';
+import { getScriptDetailHref } from '@/lib/detail-routes';
+import { lockArgsLine } from '@/lib/lock-args';
 import type {
+  ActivityLockCall,
   ActivityProtocolAction,
+  ActivityTypeCall,
   GlobalActivity,
   ParticipantInfo,
   PoolStatus,
@@ -37,6 +40,11 @@ const ROW_CLASS = 'flex flex-col gap-[3px] border-b border-base-elevated py-3 tr
 /**
  * Line 1 of a row: the primary fact on the left (the Layer-3 narrative for an activity), the raw
  * evidence quiet on the right — block, tx hash, age — always there to verify it against.
+ *
+ * `layout="line"` (tables round 2026-11-02, T7 · option A) is the activity row's one 18 px line:
+ * the title, then `details` inline (the tx-level facts, dim), the evidence on the right. With
+ * `href` the title is the link to the transaction and the default evidence is block · age — the
+ * hash is the row's hover (`title`), not text. The default `layout="wrap"` is unchanged (TxRow).
  */
 export function ActivityRowHead({
   title,
@@ -47,6 +55,9 @@ export function ActivityRowHead({
   poolStatus,
   timeAddedToPool,
   evidence,
+  layout = 'wrap',
+  href,
+  details,
 }: {
   /** F2 blocks: replaces the default "#block · hash · age" (a block page names the tx index). */
   evidence?: ReactNode;
@@ -57,19 +68,62 @@ export function ActivityRowHead({
   poolStatus?: PoolStatus;
   timeAddedToPool?: string;
   showEvidence?: boolean;
+  /** T7: `line` is the activity row's one 18 px headline line; `wrap` (default) is unchanged. */
+  layout?: 'wrap' | 'line';
+  /** T7 (line layout): the title links here and the default evidence leaves the hash out. */
+  href?: string;
+  /** T7 (line layout): the tx-level facts drawn inline after the title. */
+  details?: ReactNode;
 }) {
+  const line = layout === 'line';
+  const linked = line && href !== undefined;
+  const titleClass = cn('text-text-bright text-body font-medium', line && 'leading-[18px]');
   return (
-    <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-      <span data-role="headline" className="text-text-bright text-body font-medium">
-        {title}
-      </span>
+    <div
+      data-role="row-head"
+      className={cn(
+        'flex flex-wrap items-baseline justify-between gap-x-4',
+        line ? 'gap-y-0 leading-[18px]' : 'gap-y-0.5'
+      )}
+    >
+      {line ? (
+        <span className="min-w-0">
+          {linked ? (
+            <Link
+              data-role="headline"
+              href={href}
+              className={cn(titleClass, 'hover:text-jade transition-colors')}
+            >
+              {title}
+            </Link>
+          ) : (
+            <span data-role="headline" className={titleClass}>
+              {title}
+            </span>
+          )}
+          {details}
+        </span>
+      ) : (
+        <span data-role="headline" className={titleClass}>
+          {title}
+        </span>
+      )}
       {showEvidence && evidence !== undefined && (
-        <span data-role="evidence" className="text-text-dim text-meta shrink-0">
+        <span
+          data-role="evidence"
+          className={cn('text-text-dim text-meta shrink-0', line && 'ml-auto leading-[18px]')}
+        >
           {evidence}
         </span>
       )}
       {showEvidence && evidence === undefined && (
-        <span data-role="evidence" className="text-text-dim text-meta shrink-0">
+        <span
+          data-role="evidence"
+          className={cn(
+            'text-text-dim text-meta shrink-0',
+            line && 'ml-auto whitespace-nowrap leading-[18px]'
+          )}
+        >
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
               {formatBlockNumber(blockNumber)}
@@ -80,10 +134,17 @@ export function ActivityRowHead({
             <span>Unconfirmed</span>
           )}
           {' · '}
-          <Link href={`/tx/${hash}`} className="hover:text-jade text-text-dim transition-colors">
-            {truncateHash(hash, 10, 6)}
-          </Link>
-          {' · '}
+          {!linked && (
+            <>
+              <Link
+                href={`/tx/${hash}`}
+                className="hover:text-jade text-text-dim transition-colors"
+              >
+                {truncateHash(hash, 10, 6)}
+              </Link>
+              {' · '}
+            </>
+          )}
           {timestamp !== null ? (
             formatTimeAgo(timestamp)
           ) : timeAddedToPool ? (
@@ -93,16 +154,6 @@ export function ActivityRowHead({
           )}
         </span>
       )}
-    </div>
-  );
-}
-
-/** A detail line under the headline, indented: a short dim label column, then the text. */
-function DetailLine({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div data-role="detail" className="text-text text-small flex items-baseline gap-2 pl-3.5">
-      <span className="text-text-dim text-meta w-[30px] shrink-0">{label}</span>
-      <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
     </div>
   );
 }
@@ -148,18 +199,81 @@ function FoldedCalls({ parts, noun }: { parts: ReactNode[]; noun: 'types' | 'loc
 }
 
 /**
- * The detail lines of an activity, from the one event classification: each protocol action's
- * metadata (the headline's own action needs no name; another one leads with its label), then
- * every type call and every lock call in call syntax, args kept. Action lines that read the same
- * are said once with their count ("×18"); a long call run folds behind "+N more".
+ * A called script by name only (T7): the registry name, else its code hash; the call with its
+ * full args — and a lock's "args not decoded" reason — is the name's hover, never dropped.
  */
-function ActivityDetails({
-  activity,
-  showScriptDetails = true,
-}: {
-  activity: ActivityBody & { txHash: string };
-  showScriptDetails?: boolean;
-}) {
+function CallName({ name, href, call }: { name: string; href: string; call: string }) {
+  return (
+    <Link
+      href={href}
+      title={call}
+      className="text-text-dim hover:text-jade whitespace-nowrap transition-colors"
+      onClick={(e) => e.stopPropagation()}
+    >
+      {name}
+    </Link>
+  );
+}
+
+function typeCallName(sc: ActivityTypeCall): ReactNode {
+  const name = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName });
+  return (
+    <CallName
+      name={name}
+      call={sc.typeArgs === '0x' ? name : `${name}(${sc.typeArgs})`}
+      href={getScriptDetailHref({
+        name: sc.scriptName,
+        codeHash: sc.typeCodeHash,
+        hashType: sc.typeHashType,
+        scriptKind: 'type',
+      })}
+    />
+  );
+}
+
+function lockCallName(lc: ActivityLockCall): ReactNode {
+  const name = formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName });
+  const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
+  // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
+  const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError) : null;
+  return (
+    <CallName
+      name={name}
+      call={notDecoded ? `${call} ${notDecoded}` : call}
+      href={getScriptDetailHref({
+        name: lc.scriptName,
+        codeHash: lc.lockCodeHash,
+        hashType: lc.lockHashType,
+        scriptKind: 'lock',
+      })}
+    />
+  );
+}
+
+/** One inline group of tx-level facts after the headline, led by a dim middle dot. */
+function DetailRun({ children }: { children: ReactNode }) {
+  return (
+    <>
+      <span className="text-text-dim text-small">{' \u00B7 '}</span>
+      <span data-role="detail" className="text-text-dim text-small font-normal">
+        {children}
+      </span>
+    </>
+  );
+}
+
+/**
+ * The tx-level facts of an activity, from the one event classification, as inline runs after the
+ * headline (T7): each protocol action's metadata (the headline's own action needs no name; another
+ * one leads with its label), then the type calls and the lock calls by name ("lock …"), their args
+ * in each name's hover. Action runs that read the same are said once with their count ("×18"); a
+ * long call run folds behind "+N more". A protocol action that cannot be read is an error line
+ * under the headline (`errors`).
+ */
+function activityDetails(
+  activity: ActivityBody & { txHash: string },
+  showScriptDetails: boolean
+): { runs: ReactNode; errors: ReactNode } {
   const primary = classifyActivity(activity).primaryProtocolAction;
   const events = globalTxEvents(activity);
   const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
@@ -184,47 +298,48 @@ function ActivityDetails({
     if (same && 'count' in same) same.count += 1;
     else protocolLines.push({ key, parts: named, count: 1 });
   });
-  const lines: ReactNode[] = protocolLines.map((l) => (
-    <DetailLine key={l.key} label="">
-      {'error' in l ? (
-        <ActivityReadError txHash={activity.txHash} error={l.error} />
-      ) : (
-        <>
-          <DotJoined parts={l.parts} />
-          {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
-        </>
-      )}
-    </DetailLine>
-  ));
-  if (showScriptDetails && types.length > 0) {
-    lines.push(
-      <DetailLine key="type" label="type">
+  const runs: ReactNode[] = [];
+  const errors: ReactNode[] = [];
+  for (const l of protocolLines) {
+    if ('error' in l) {
+      errors.push(
+        <div key={l.key} data-role="detail-error" className="text-small pl-[18px]">
+          <ActivityReadError txHash={activity.txHash} error={l.error} />
+        </div>
+      );
+      continue;
+    }
+    runs.push(
+      <DetailRun key={l.key}>
+        <DotJoined parts={l.parts} />
+        {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
+      </DetailRun>
+    );
+  }
+  if (showScriptDetails && types.length > 0)
+    runs.push(
+      <DetailRun key="type">
         <FoldedCalls
           noun="types"
           parts={types.map((sc, i) => (
-            <span key={i} className="whitespace-nowrap">
-              <TypeCallExpr sc={sc} quiet />
-            </span>
+            <Fragment key={i}>{typeCallName(sc)}</Fragment>
           ))}
         />
-      </DetailLine>
+      </DetailRun>
     );
-  }
-  if (showScriptDetails && locks.length > 0) {
-    lines.push(
-      <DetailLine key="lock" label="lock">
+  if (showScriptDetails && locks.length > 0)
+    runs.push(
+      <DetailRun key="lock">
+        {'lock '}
         <FoldedCalls
           noun="locks"
           parts={locks.map((lc, i) => (
-            <span key={i} className="whitespace-nowrap">
-              <LockCallExpr lc={lc} quiet />
-            </span>
+            <Fragment key={i}>{lockCallName(lc)}</Fragment>
           ))}
         />
-      </DetailLine>
+      </DetailRun>
     );
-  }
-  return <>{lines}</>;
+  return { runs: <>{runs}</>, errors: <>{errors}</> };
 }
 
 /** The change in occupied capacity, whole CKB (it is bytes), exact otherwise. */
@@ -546,18 +661,26 @@ export function ActivityRow({
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
   const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
+  const { runs, errors } = activityDetails(activity, showScriptDetails);
   return (
     <article
       data-feed-row={activity.txHash}
+      // T7: the hash leaves the visible row; it is the row's hover (and the headline's link).
+      title={activity.txHash}
       className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
     >
       <ActivityRowHead
+        layout="line"
         title={
           <>
             {mark && <ClassMark kind={mark} className="mr-2" />}
             {headline ?? activityHeadline(activity)}
           </>
         }
+        // A caller's own evidence (block, address pages) carries its own tx link; then the
+        // headline stays text, which also keeps a headline with links of its own unnested.
+        href={evidence === undefined ? `/tx/${activity.txHash}` : undefined}
+        details={runs}
         hash={activity.txHash}
         blockNumber={activity.blockNumber}
         timestamp={activity.timestamp}
@@ -566,8 +689,8 @@ export function ActivityRow({
         poolStatus={activity.poolStatus}
         timeAddedToPool={activity.timeAddedToPool}
       />
+      {errors}
       <PoolInterpretationNotice interpretation={activity.interpretation} />
-      <ActivityDetails activity={activity} showScriptDetails={showScriptDetails} />
       {showParticipants && (
         <Participants
           participants={shown.participants}

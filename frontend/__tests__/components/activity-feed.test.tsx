@@ -84,28 +84,33 @@ describe('ActivityFeed', () => {
       'href',
       '/mainnet/blocks/20819142'
     );
-    expect(within(evidence).getByRole('link', { name: '0x01ababab...abab00' })).toHaveAttribute(
+    // T7 (option A): block · age on the right; the headline links to the tx, the hash is the
+    // row's hover.
+    expect(within(first).getByRole('link', { name: 'Script call' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
     );
-    expect(evidence).toHaveTextContent(/\ds ago$/);
+    expect(first).toHaveAttribute('title', a.txHash);
+    expect(evidence).not.toHaveTextContent('0x01ababab');
+    expect(evidence).toHaveTextContent(/^#20,819,142 · \ds ago$/);
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
 
-  it('writes calls in call syntax with their args, no count prefix, no gold', async () => {
+  it('names the calls inline after the headline, args in the hover, no count prefix, no gold', async () => {
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(8));
     const first = rows()[0] as HTMLElement;
-    const type = first.querySelector('[data-role="detail"]') as HTMLElement;
-    expect(type).toHaveTextContent('type.bit Time Index State(0x00) · .bit Time Info(0x00)');
+    // T7 (option A): the type names follow the headline on its line; each call with its args
+    // is the name's hover.
+    const type = first.querySelector('[data-role="row-head"] [data-role="detail"]') as HTMLElement;
+    expect(type).toHaveTextContent(/^\.bit Time Index State · \.bit Time Info$/);
     expect(first).not.toHaveTextContent(/type calls/);
     // A line breaks between calls, never inside one.
-    const call = within(type).getByRole('link', { name: '.bit Time Info' })
-      .parentElement as HTMLElement;
+    const call = within(type).getByRole('link', { name: '.bit Time Info' });
     expect(call).toHaveClass('whitespace-nowrap');
-    expect(call).toHaveTextContent(/^\.bit Time Info\(0x00\)$/);
-    expect(within(type).getByRole('link', { name: '.bit Time Info' })).toHaveClass('text-text');
+    expect(call).toHaveAttribute('title', '.bit Time Info(0x00)');
+    expect(call).toHaveClass('text-text-dim');
     expect(first.querySelector('[class*="gold"]')).toBeNull();
   });
 
@@ -121,8 +126,9 @@ describe('ActivityFeed', () => {
     expect(within(row).getByText('DAO Withdraw Request')).toBeInTheDocument();
     const note = row.querySelector('[data-role="detail"]') as HTMLElement;
     expect(note).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
-    // Detail lines are plain ink, quieter than the headline.
-    expect(note).toHaveClass('text-text');
+    // T7: the action's facts follow the headline inline, dim, quieter than the headline.
+    expect(note.closest('[data-role="row-head"]')).not.toBeNull();
+    expect(note).toHaveClass('text-text-dim', 'text-small');
     // Paid first, received next, the zero last.
     const parties = [...row.querySelectorAll('[data-party]')].map((e) => e.textContent);
     expect(parties).toEqual([
@@ -216,7 +222,12 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Object transfer')).toBeInTheDocument();
     const details = [...row.querySelectorAll('[data-role="detail"]')].map((e) => e.textContent);
-    expect(details).toEqual(['typeCKBFS(0xcd6e...2500)', 'lockNervape Shadow Lock(0x0131...5d74)']);
+    // T7: the calls by name, inline after the headline; the args are each name's hover.
+    expect(details).toEqual(['CKBFS', 'lock Nervape Shadow Lock']);
+    expect(within(row).getByRole('link', { name: 'CKBFS' })).toHaveAttribute(
+      'title',
+      `CKBFS(0xcd6ecb${'00'.repeat(14)}2500)`
+    );
     expect(row).toHaveTextContent('object 0x51c75a...96f2 departed');
     expect(row).toHaveTextContent('object 0x51c75a...96f2 arrived');
     // A party with no item change is still listed.
@@ -232,8 +243,10 @@ describe('ActivityFeed', () => {
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText('Token transfer')).toBeInTheDocument();
     // TX-31: an unnamed lock is named by its code hash (what kind of lock), not its script hash.
-    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent(
-      'lock0xab0ede...e09f(0x4b00...838e)'
+    expect(row.querySelector('[data-role="detail"]')).toHaveTextContent('lock 0xab0ede...e09f');
+    expect(within(row).getByRole('link', { name: '0xab0ede...e09f' })).toHaveAttribute(
+      'title',
+      `0xab0ede...e09f(0x4b0000${'00'.repeat(14)}838e)`
     );
     expect(
       within(row).getByRole('link', { name: `${MINUS}36,583.46853885 Seal` })
