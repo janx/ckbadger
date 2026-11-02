@@ -213,6 +213,28 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   ];
   const coll = collection.data;
   const onchain = coll?.composition?.onchainCount;
+  // Hierarchy v3 (F4): every sentence that left tier 1, in full; it heads the DNA column.
+  const words = (history || coll || genetics.data) && (
+    <DetailSection title="This object, in words">
+      <div className="flex flex-col gap-3">
+        {(history || coll) && (
+          <p className="text-text-dim text-body">
+            {history && history.length > 0 && <span>{itemLifeSentence(history, now)}</span>}
+            {coll && collectionName && (
+              <span>
+                {' '}
+                {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${coll.holdersCount.toLocaleString('en-US')} addresses`}.`}
+              </span>
+            )}
+          </p>
+        )}
+        {genetics.data && <DnaParagraph evidence={genetics.data} subject={title} tier={tier} />}
+        {history && lockFootnote(history, 'object') && (
+          <p className="text-text-dim text-body">{lockFootnote(history, 'object')}</p>
+        )}
+      </div>
+    </DetailSection>
+  );
   return (
     <AssetDetailShell
       title={title}
@@ -275,70 +297,46 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
         />
       }
       tier2={
-        <>
-          {/* Hierarchy v3 (F4): every sentence that left tier 1, in full. */}
-          {(history || coll || genetics.data) && (
-            <DetailSection title="This object, in words">
-              <div className="flex flex-col gap-3">
-                {(history || coll) && (
-                  <p className="text-text-dim text-body">
-                    {history && history.length > 0 && <span>{itemLifeSentence(history, now)}</span>}
-                    {coll && collectionName && (
-                      <span>
-                        {' '}
-                        {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${coll.holdersCount.toLocaleString('en-US')} addresses`}.`}
-                      </span>
-                    )}
-                  </p>
-                )}
-                {genetics.data && (
-                  <DnaParagraph evidence={genetics.data} subject={title} tier={tier} />
-                )}
-                {history && lockFootnote(history, 'object') && (
-                  <p className="text-text-dim text-body">{lockFootnote(history, 'object')}</p>
-                )}
-              </div>
-            </DetailSection>
-          )}
-          {/* OB-14 (Object.dc.html tier 2): the DNA evidence and the cell's raw record side by side. */}
-          <div
-            data-tier2-columns
-            className="grid min-w-0 items-start gap-x-14 gap-y-10 md:grid-cols-2"
-          >
-            {/* Only a DOB object has DNA evidence; otherwise the raw record spans both columns. */}
-            {isDob && (
-              <div className="min-w-0 space-y-10">
-                {genetics.data ? (
-                  <ObjectGeneticsEvidence
-                    evidence={genetics.data}
-                    subject={title}
-                    decoded={decoded.data}
-                  />
-                ) : (
-                  <AssetReadState
-                    label="DNA evidence"
-                    error={genetics.error}
-                    loading={genetics.isLoading}
-                  />
-                )}
-              </div>
-            )}
-            <div className={isDob ? 'min-w-0 space-y-10' : 'min-w-0 space-y-10 md:col-span-2'}>
-              {data ? (
-                <>
-                  <AssetReadState label="raw object data" error={protocol.error} retained />
-                  <ItemEvidence protocol={data} />
-                </>
+        // OB-14 (Object.dc.html tier 2): the DNA evidence and the cell's raw record side by side.
+        <div
+          data-tier2-columns
+          className="grid min-w-0 items-start gap-x-14 gap-y-10 md:grid-cols-2"
+        >
+          {/* Only a DOB object has DNA evidence; otherwise the raw record spans both columns. */}
+          {isDob && (
+            <div className="min-w-0 space-y-10">
+              {words}
+              {genetics.data ? (
+                <ObjectGeneticsEvidence
+                  evidence={genetics.data}
+                  subject={title}
+                  decoded={decoded.data}
+                />
               ) : (
                 <AssetReadState
-                  label="raw object data"
-                  error={protocol.error}
-                  loading={protocol.isLoading}
+                  label="DNA evidence"
+                  error={genetics.error}
+                  loading={genetics.isLoading}
                 />
               )}
             </div>
+          )}
+          <div className={isDob ? 'min-w-0 space-y-10' : 'min-w-0 space-y-10 md:col-span-2'}>
+            {!isDob && words}
+            {data ? (
+              <>
+                <AssetReadState label="raw object data" error={protocol.error} retained />
+                <ItemEvidence protocol={data} />
+              </>
+            ) : (
+              <AssetReadState
+                label="raw object data"
+                error={protocol.error}
+                loading={protocol.isLoading}
+              />
+            )}
           </div>
-        </>
+        </div>
       }
     >
       <AssetReadState label="object" error={error} retained />

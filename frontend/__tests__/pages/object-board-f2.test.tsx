@@ -315,6 +315,12 @@ it('puts the media beside the title and lays tier 2 out in two columns (OB-14)',
   expect(columns).toHaveClass('md:grid-cols-2');
   expect(columns.children).toHaveLength(2);
   expect(columns.children[0]).toHaveTextContent('original decoder binary hash was not recorded');
+  // the sentences that left tier 1 head the shorter, DNA column (page height)
+  expect(
+    within(columns.children[0] as HTMLElement).getByRole('heading', {
+      name: 'This object, in words',
+    })
+  ).toBeInTheDocument();
   expect(columns.children[1]).toHaveTextContent(/[Cc]ell data/);
 });
 
