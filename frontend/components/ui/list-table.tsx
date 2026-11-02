@@ -41,7 +41,25 @@ export interface ListTableProps<T> {
   rowClassName?: (row: T) => string;
   onRowHover?: (row: T | null) => void;
   className?: string;
+  /**
+   * Cell padding (table-rows plan T2). `default`: `py-3 align-top`, rows grow with their tallest
+   * cell. `row`: `py-[11px] align-middle`, so one 18 px line makes a 40 px row; heads unchanged.
+   */
+  density?: ListTableDensity;
+  /**
+   * The row's hover text, written to the `<tr>` and to the phone `listitem` as `title`: where the
+   * fields that left a one-line row are kept (with the detail page). Never empty.
+   */
+  rowTitle?: (row: T) => string;
 }
+
+export type ListTableDensity = 'default' | 'row';
+
+/** `td` classes per density; `th` is the same in both. */
+const CELL_CLASS: Record<ListTableDensity, string> = {
+  default: 'min-w-0 py-3 pr-4 align-top last:pr-0',
+  row: 'min-w-0 py-[11px] pr-4 align-middle last:pr-0',
+};
 
 export type ListTableForm = 'table' | 'narrow-table' | 'rows';
 
@@ -118,8 +136,16 @@ export function ListTable<T>({
   rowClassName,
   onRowHover,
   className,
+  density = 'default',
+  rowTitle,
 }: ListTableProps<T>) {
   const [minimum, narrowMinimum] = minimumWidths(label, columns, narrowColumns);
+  const titleOf = (row: T): string | undefined => {
+    if (!rowTitle) return undefined;
+    const title = rowTitle(row);
+    if (!title.trim()) throw new Error(`${label}: row ${rowKey(row)} has an empty title`);
+    return title;
+  };
   const [ref, width] = useContainerWidth();
   // Until the container has a width the table is drawn: in a browser the layout effect measures
   // the container and replaces it before the first paint; a hidden container (a closed details)
@@ -142,6 +168,7 @@ export function ListTable<T>({
             <div
               role="listitem"
               key={rowKey(row)}
+              title={titleOf(row)}
               className={cn('border-base-elevated border-b py-2.5', rowClassName?.(row))}
             >
               {mobileRow(row, width! >= WIDE_ROW_MIN_WIDTH)}
@@ -182,6 +209,7 @@ export function ListTable<T>({
             {rows.map((row) => (
               <tr
                 key={rowKey(row)}
+                title={titleOf(row)}
                 onMouseEnter={() => onRowHover?.(row)}
                 onMouseLeave={() => onRowHover?.(null)}
                 className={cn('border-base-elevated border-b', rowClassName?.(row))}
@@ -190,7 +218,7 @@ export function ListTable<T>({
                   <td
                     key={c.key}
                     className={cn(
-                      'min-w-0 py-3 pr-4 align-top last:pr-0',
+                      CELL_CLASS[density],
                       c.numeric ? 'whitespace-nowrap text-right tabular-nums' : 'break-words',
                       c.className
                     )}

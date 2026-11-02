@@ -5,7 +5,7 @@ import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Hash } from '@/components/ui/hash';
 import { ClassMark } from '@/components/ui/class-mark';
-import { AlignedBar } from '@/components/ui/aligned-bar';
+import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import {
   DotJoined,
@@ -69,23 +69,6 @@ function whatNote(activity: GlobalActivity): ReactNode {
   ];
   if (names.length > 0) return names.join(' · ');
   return formatCount(activity.participants.length, 'participant');
-}
-
-/** A bar column's header: its name, then the 0 … scale ends of the shared track. */
-function ScaleHeader({ label, scale }: { label: string; scale: number }) {
-  return (
-    <>
-      {label}
-      <span
-        aria-hidden="true"
-        className="text-meta mt-0.5 flex justify-between"
-        style={{ width: TRACK }}
-      >
-        <span>0</span>
-        <span>{scale.toLocaleString('en-US')}</span>
-      </span>
-    </>
-  );
 }
 
 /** A count of resources on the quiet line: "3 → 3 cells · 903 B · 1,744,520 cycles". */
@@ -347,7 +330,8 @@ export function TransactionListTable({
       key: 'size',
       label: 'Size, bytes',
       minWidth: 145,
-      header: <ScaleHeader label="Size, bytes" scale={sizeScale} />,
+      // The shared head at this table's own geometry: an 80 px tick row 2 px under the name.
+      header: <ScaleHeader label="Size, bytes" scale={sizeScale} trackWidth={TRACK} tickGap={2} />,
       render: (tx) => (
         <AlignedBar
           label="Size, bytes"
@@ -368,7 +352,7 @@ export function TransactionListTable({
       key: 'cycles',
       label: 'Cycles',
       minWidth: 180,
-      header: <ScaleHeader label="Cycles" scale={cycleScale} />,
+      header: <ScaleHeader label="Cycles" scale={cycleScale} trackWidth={TRACK} tickGap={2} />,
       render: (tx) =>
         tx.cycles === null ? (
           <span className="text-text-dim text-small">

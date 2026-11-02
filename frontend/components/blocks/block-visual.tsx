@@ -184,33 +184,11 @@ export function resourceScale(values: readonly number[]): number {
 
 // ---- F2 blocks (BA-02, BA-04): the column scale and the consensus-limit footnote ----
 
-/** "Size, bytes" over "0 … 4,000": the column's shared scale, as wide as its bar track. */
-export function ScaleHeader({
-  label,
-  scale,
-  trackWidth = 120,
-}: {
-  label: string;
-  scale: number;
-  trackWidth?: number;
-}) {
-  if (!Number.isSafeInteger(scale) || scale <= 0)
-    throw new Error(`${label}: invalid column scale ${scale}`);
-  return (
-    <span className="flex flex-col gap-[3px]">
-      <span>{label}</span>
-      <span
-        data-scale-ticks
-        aria-hidden="true"
-        className="text-meta flex justify-between"
-        style={{ width: `${trackWidth}px` }}
-      >
-        <span>0</span>
-        <span>{scale.toLocaleString('en-US')}</span>
-      </span>
-    </span>
-  );
-}
+/**
+ * "Size, bytes" over "0 … 4,000": the column's shared scale, as wide as its bar track. Lifted into
+ * `aligned-bar.tsx` beside the bar it heads (table-rows R2); re-exported for its callers here.
+ */
+export { ScaleHeader } from '@/components/ui/aligned-bar';
 
 interface LimitRow {
   number: number;

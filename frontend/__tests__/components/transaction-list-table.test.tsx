@@ -94,6 +94,33 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
     ]);
   });
 
+  // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
+  // drawn (an 80 px tick row 2 px under the name), so the lift changes no pixel.
+  it('heads its bars with the shared ScaleHeader: 80 px ticks, 2 px under the name', () => {
+    render(<TransactionListTable transactions={[scriptCall, transfer, cellbase]} />);
+    const heads = within(screen.getByRole('table')).getAllByRole('columnheader');
+    for (const [i, end] of [
+      [6, '1,000'],
+      [7, '2,000,000'],
+    ] as const) {
+      const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
+      expect(ticks).toHaveAttribute('aria-hidden', 'true');
+      expect(ticks).toHaveClass('text-meta', 'flex', 'justify-between');
+      expect(ticks.style.width).toBe('80px');
+      expect((ticks.parentElement as HTMLElement).style.gap).toBe('2px');
+      expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', end]);
+    }
+  });
+
+  it('draws its row bars 8 px tall at their exact width, never widened to a minimum', () => {
+    render(<TransactionListTable transactions={[{ ...transfer, cycles: 1000 }, scriptCall]} />);
+    const row = within(screen.getByRole('table')).getAllByRole('row')[1];
+    // 1,000 of a 2,000,000-cycle scale on an 80 px track: 0.04 px.
+    const fill = row.querySelector('td:nth-child(8) [data-segment="value"]') as HTMLElement;
+    expect(fill.style.width).toBe('0.04px');
+    expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
+  });
+
   it('says what each transaction did: kind, mark and a quiet note', () => {
     render(<TransactionListTable transactions={[scriptCall, transfer]} />);
     const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);

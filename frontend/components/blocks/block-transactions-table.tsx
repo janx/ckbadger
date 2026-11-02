@@ -1,10 +1,10 @@
 import Link from '@/components/ui/link';
 import { Hash } from '@/components/ui/hash';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { AlignedBar } from '@/components/ui/aligned-bar';
+import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
+import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { Transaction } from '@/lib/api';
