@@ -203,7 +203,7 @@ describe('VmLaneTimeline', () => {
     expect(svg.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     // R14: the row's own "tap or hover" is the hint; the idle line does not repeat it.
     expect(readout).toHaveTextContent(
-      /^a dot reads its script version, its first code cell and its blocktap or hover$/
+      /^a dot reads its script version, its first code cell and its block \(keyboard: focus it\)tap or hover$/
     );
     // a hover still names the version and keeps it once the pointer moves on, as before
     fireEvent.mouseEnter(xudt);

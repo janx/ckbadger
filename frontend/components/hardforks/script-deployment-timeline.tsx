@@ -181,7 +181,7 @@ export function DeploymentEvidence({
       <ReadoutRow
         label="Script version readout"
         pinned={pinned}
-        idle="a dot reads its script version, its first code cell and its block"
+        idle="a dot reads its script version, its first code cell and its block (keyboard: focus it)"
       >
         {selected
           ? `${markName(selected)} · deployed ${formatUtc8Date(selected.timestampMs)}`
