@@ -2,7 +2,7 @@
 // The two tests of the retired 24-card gallery are kept here against the new list.
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
-import { api } from '@/lib/api';
+import { api, type CollectionInsights } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
@@ -195,4 +195,36 @@ it('writes each Newest row on one line with the name bright and the rest in its 
     `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
   );
   expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
+});
+
+// Consistency round (Main.dc.html) + RESPONSIVE_LAYOUT rule 4: the gel sits beside the table only
+// when it can be drawn as a gel in 440 px; a collection with more lanes than a 440 px gel holds
+// (above 32, which needs 736 px) puts the gel above the table at full width instead of turning it
+// into the ranked text list.
+it('puts a many-gene gel above the table at full width, a few-gene gel beside it', async () => {
+  const traits = Array.from({ length: 33 }, (_, i) => ({
+    name: `g${i}`,
+    values: [
+      { value: 'a', count: 4 },
+      { value: 'b', count: 4 },
+    ],
+  }));
+  const many = {
+    ...collectionInsightsProducer,
+    currentPattern: { status: 'notDob', steps: [] },
+    genetics: { ...collectionInsightsProducer.genetics, traits },
+  } as CollectionInsights;
+  const { unmount } = render(<CollectionObjects id="collection" title="Genes" insights={many} />);
+  await screen.findByRole('table', { name: 'Newest objects' });
+  const columns = (section: HTMLElement) => section.querySelector('[data-role="objects-columns"]')!;
+  expect(columns(screen.getByRole('region', { name: 'Objects' })).className).not.toMatch(
+    /xl:grid-cols-\[440px/
+  );
+  expect(screen.getByRole('img', { name: /allele gel of 8 objects/ })).toBeInTheDocument();
+  unmount();
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  await screen.findByRole('table', { name: 'Newest objects' });
+  expect(columns(screen.getByRole('region', { name: 'Objects' }))).toHaveClass(
+    'xl:grid-cols-[440px_minmax(0,1fr)]'
+  );
 });

@@ -33,6 +33,7 @@ import {
   type AlleleLane,
 } from '@/lib/dob-genes';
 import { GEL_INK } from '@/lib/design-tokens';
+import { ALLELE_GEL } from '@/lib/allele-gel-layout';
 import { formatBlockNumber } from '@/lib/format-block';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
@@ -180,7 +181,14 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
           {ruled && ` · ${genesVary(ruled.lanes.length)}`}
         </span>
       </h2>
-      <div className="grid min-w-0 items-start gap-x-12 gap-y-8 xl:grid-cols-[440px_minmax(0,1fr)]">
+      <div
+        data-role="objects-columns"
+        className={cn(
+          'grid min-w-0 items-start gap-x-12 gap-y-8',
+          // RESPONSIVE_LAYOUT rule 4: beside the table only when 440 px still draws it as a gel.
+          (!lanes || lanes.length <= ALLELE_GEL.listAbove) && 'xl:grid-cols-[440px_minmax(0,1fr)]'
+        )}
+      >
         <div className="min-w-0 space-y-3">
           {lanes ? (
             <>
