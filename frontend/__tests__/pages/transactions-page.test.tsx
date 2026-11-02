@@ -1,12 +1,16 @@
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { render } from '@/__tests__/utils/test-utils';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
 
+// D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
+// the page; outside a router it reads window.location, as the stub's empty URL did.
+vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', async () => ({
   ...(await vi.importActual('@/lib/api')),
   api: {
@@ -491,5 +495,93 @@ describe('Transactions chrome on a phone (board L2, R2)', () => {
       expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 20 })
     );
     expect(api.getTransactions).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
+});
+
+// Hierarchy D11 (ruling R7): "DAO transactions →" on /dao links /transactions?kind=dao, so the
+// page starts on the kind its URL names and writes a chosen kind back (replace, not push).
+describe('Transactions kind in the URL (D11)', () => {
+  beforeEach(() => {
+    vi.mocked(api.getTransactions).mockResolvedValue({
+      data: [],
+      limit: 50,
+      nextCursor: null,
+      hasMore: false,
+      total: 0,
+    });
+  });
+
+  function renderAt(url: string) {
+    const router = createMemoryRouter([{ path: '*', element: <TransactionsPage /> }], {
+      initialEntries: [url],
+    });
+    render(<RouterProvider router={router} />);
+    return router;
+  }
+  const chip = (name: string) =>
+    within(
+      screen.getByRole('group', { name: "Filter by kind, with yesterday's counts" })
+    ).getByRole('button', { name });
+
+  it('starts on the kind its URL names and asks for it (?kind=dao)', async () => {
+    renderAt('/mainnet/transactions?kind=dao');
+    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('All')).toHaveAttribute('aria-pressed', 'false');
+    expect(
+      screen.getByLabelText("Filter by kind, with yesterday's counts", { selector: 'select' })
+    ).toHaveValue('dao');
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'dao',
+      })
+    );
+    expect(api.getTransactions).not.toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
+
+  it.each(['?kind=interest', ''])(
+    'starts on All when the URL names an unknown kind or none (%s)',
+    async (search) => {
+      renderAt(`/mainnet/transactions${search}`);
+      expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+      await waitFor(() =>
+        expect(api.getTransactions).toHaveBeenCalledWith({ cursor: undefined, limit: 50 })
+      );
+    }
+  );
+
+  it('writes a chosen kind back to the URL by replace, and All drops it', async () => {
+    const router = renderAt('/mainnet/transactions?kind=dao');
+    fireEvent.click(chip('Tokens'));
+    await waitFor(() => expect(router.state.location.search).toBe('?kind=token'));
+    expect(router.state.location.pathname).toBe('/mainnet/transactions');
+    expect(router.state.historyAction).toBe('REPLACE');
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'token',
+      })
+    );
+    fireEvent.click(chip('All'));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('follows the URL when it changes under the mounted page', async () => {
+    const router = renderAt('/mainnet/transactions?kind=dao');
+    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => {
+      await router.navigate('/mainnet/transactions?kind=object');
+    });
+    expect(chip('Objects')).toHaveAttribute('aria-pressed', 'true');
+    await waitFor(() =>
+      expect(api.getTransactions).toHaveBeenLastCalledWith({
+        cursor: undefined,
+        limit: 50,
+        activityType: 'object',
+      })
+    );
   });
 });
