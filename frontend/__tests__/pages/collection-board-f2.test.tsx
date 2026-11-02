@@ -214,6 +214,10 @@ it('orders sections as the board: History in the hero, Objects, Who holds it bes
   expect(holders.parentElement).toContainElement(
     screen.getByRole('region', { name: 'Recent activity' })
   );
+  // Screen 3 is the shell's feed slot: lists of rows follow the tier-1 body, before tier 2.
+  const tier1 = document.querySelector('[data-tier="1"]')!;
+  expect(tier1.contains(holders)).toBe(false);
+  expect(tier1.compareDocumentPosition(holders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
 it('opens Recent activity with five rows and two links that open the full feed in place', async () => {

@@ -40,7 +40,6 @@ import {
 } from '@/components/ui/composition-set';
 import { RowTag } from '@/components/ui/row-tag';
 import { formatCount } from '@/lib/format-count';
-import { cn } from '@/lib/utils';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { collectionFeedHeadline } from '@/lib/feed-headlines';
 import { readErrorText } from '@/lib/read-error';
@@ -397,6 +396,22 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     </div>
   );
   const objectsKind = kind !== 'identity';
+  const holdersRegion = (
+    <div role="region" aria-label="Who holds it" className="min-w-0">
+      <CollectionHolders
+        queryKey={`${kind}:${id}`}
+        distribution={insights.data?.holderDistribution}
+        assetClass={kind === 'identity' ? undefined : ('objects' as const)}
+        load={(p) =>
+          kind === 'spore'
+            ? api.getSporeClusterHolders(id, p)
+            : kind === 'object'
+              ? api.getObjectCollectionHolders(id, p)
+              : api.getIdentityCollectionHolders(id, p)
+        }
+      />
+    </div>
+  );
   return (
     <AssetDetailShell
       title={title}
@@ -469,8 +484,38 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
         ) : undefined
       }
+      // Main.dc.html screen 3: who holds it beside the recent activity — the shell's feed slot,
+      // after the tier-1 body (lists of rows follow the domain, as on every asset page).
       feed={
-        objectsKind ? undefined : (
+        objectsKind ? (
+          <div className="grid min-w-0 items-start gap-x-16 gap-y-12 lg:grid-cols-2">
+            {holdersRegion}
+            <AssetFeed
+              queryKey={`${kind}:${id}`}
+              scope="This collection"
+              collection
+              plain
+              // visual pass: every row of a Spore cluster / m-NFT class feed is about objects
+              mark="objects"
+              recent={{ rows: 5, transactions: data.activitiesCount }}
+              loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
+              loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
+              // OB-C9 (CollectionTxs board): the collection's own column, named by it, after Cells.
+              context={{
+                label: title,
+                placement: 'after-cells',
+                render: (tx) => (
+                  <span className="text-text-bright">
+                    {collectionFeedHeadline(
+                      (tx as CollectionFeedTransaction).collectionContext,
+                      tx.hash
+                    )}
+                  </span>
+                ),
+              }}
+            />
+          </div>
+        ) : (
           <AssetFeed
             queryKey={`${kind}:${id}`}
             scope="This collection"
@@ -649,53 +694,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           )}
         </section>
       )}
-      <div
-        className={cn(
-          'grid min-w-0 items-start gap-x-16 gap-y-12',
-          objectsKind && 'lg:grid-cols-2'
-        )}
-      >
-        <div role="region" aria-label="Who holds it" className="min-w-0">
-          <CollectionHolders
-            queryKey={`${kind}:${id}`}
-            distribution={insights.data?.holderDistribution}
-            assetClass={kind === 'identity' ? undefined : ('objects' as const)}
-            load={(p) =>
-              kind === 'spore'
-                ? api.getSporeClusterHolders(id, p)
-                : kind === 'object'
-                  ? api.getObjectCollectionHolders(id, p)
-                  : api.getIdentityCollectionHolders(id, p)
-            }
-          />
-        </div>
-        {objectsKind && (
-          <AssetFeed
-            queryKey={`${kind}:${id}`}
-            scope="This collection"
-            collection
-            plain
-            // visual pass: every row of a Spore cluster / m-NFT class feed is about objects
-            mark="objects"
-            recent={{ rows: 5, transactions: data.activitiesCount }}
-            loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
-            loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
-            // OB-C9 (CollectionTxs board): the collection's own column, named by it, after Cells.
-            context={{
-              label: title,
-              placement: 'after-cells',
-              render: (tx) => (
-                <span className="text-text-bright">
-                  {collectionFeedHeadline(
-                    (tx as CollectionFeedTransaction).collectionContext,
-                    tx.hash
-                  )}
-                </span>
-              ),
-            }}
-          />
-        )}
-      </div>
+      {!objectsKind && holdersRegion}
     </AssetDetailShell>
   );
 }
