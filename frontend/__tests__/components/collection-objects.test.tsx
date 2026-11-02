@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/te
 import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
 import { api, type CollectionInsights } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { nervape3xInsights, nervape3xOtherTraits } from '@/__tests__/fixtures/objects/nervape3x';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   collectionGalleryFilteredProducer,
@@ -250,4 +251,98 @@ it('pages the objects with the shared pager wording (C11)', async () => {
   expect(screen.getByText('Showing 1–20 of 1,298 objects · 20 per page')).toBeInTheDocument();
   expect(screen.getByText('Page 1 of 65')).toBeInTheDocument();
   expect(screen.queryByText(/objects, 20 per page/)).toBeNull();
+});
+
+// Lane A follow-up 1: the gene columns clipped "…bee9i0 · 3 of 1,298" to "…bee9i0 · 3 o…" and
+// "0 · 1,139" to "0 · 1,13…". A gene cell never cuts its share or a number: the share does not
+// shrink, the value is cut only when it is words, and each gene column is at least as wide (in ch,
+// the font is monospaced) as the swatch, a value's shown part and the widest share of its lane.
+describe('gene cells keep their share whole (lane A follow-up)', () => {
+  const columnMinimums = (table: HTMLElement) =>
+    [...table.style.getPropertyValue('--object-cols').matchAll(/minmax\((\d+)ch/g)].map((m) =>
+      Number(m[1])
+    );
+  const checkCells = (table: HTMLElement) => {
+    const mins = columnMinimums(table);
+    const genes = within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+      .filter((t) => !['Object', 'Made of', 'Owner', 'Minted'].includes(t ?? ''));
+    expect(genes.length).toBeGreaterThan(0);
+    expect(mins).toHaveLength(genes.length);
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      const cells = [...row.querySelectorAll<HTMLElement>('[data-gene-cell]')];
+      expect(cells).toHaveLength(mins.length);
+      cells.forEach((cell, i) => {
+        expect(cell).not.toHaveClass('truncate');
+        const share = cell.querySelector('[data-role="gene-share"]')!;
+        expect(share).toHaveClass('shrink-0', 'whitespace-nowrap');
+        expect(share.closest('.truncate')).toBeNull();
+        const value = cell.querySelector('[data-role="gene-value"]')!;
+        const text = value.textContent!;
+        const numeric = /^[\d,.]+$/.test(text);
+        if (numeric) expect(value).not.toHaveClass('truncate');
+        const need =
+          3 + (numeric ? text.length : Math.min(text.length, 8)) + share.textContent!.length;
+        expect(need).toBeLessThanOrEqual(mins[i]);
+      });
+    }
+  };
+  it('on a cluster with a Bitcoin pointer and a colour gene', async () => {
+    const base = collectionGalleryFilteredProducer.data[0];
+    vi.mocked(api.getCollectionGallery).mockResolvedValue(
+      emptyPage(
+        Object.entries(nervape3xOtherTraits)
+          .slice(0, 6)
+          .map(([sporeId, traits]) => ({ ...base, sporeId, traits: [...traits] }))
+      )
+    );
+    render(<CollectionObjects id="collection" title="Nervape 3x" insights={nervape3xInsights} />);
+    checkCells((await screen.findByRole('table', { name: 'Newest objects' })) as HTMLElement);
+  });
+  it('on a numeric gene whose variant is carried by four-digit counts', async () => {
+    const values = [
+      { value: '0', count: 1139 },
+      { value: '1', count: 159 },
+    ];
+    const insights = {
+      ...collectionInsightsProducer,
+      currentPattern: { status: 'notDob', steps: [] },
+      genetics: {
+        ...collectionInsightsProducer.genetics,
+        liveItems: 1298,
+        eligibleItems: 1298,
+        decodedItems: 1298,
+        traits: [
+          { name: 'prev.view', values },
+          {
+            name: 'prev.bg',
+            values: Array.from({ length: 52 }, (_, i) => ({
+              value: `btcfs://${'b4'.repeat(32)}i${i}`,
+              count: i === 0 ? 1247 : 1,
+            })),
+          },
+        ],
+      },
+    } as CollectionInsights;
+    const base = collectionGalleryFilteredProducer.data[0];
+    vi.mocked(api.getCollectionGallery).mockResolvedValue(
+      emptyPage([
+        {
+          ...base,
+          traits: [
+            { name: 'prev.view', value: '0' },
+            { name: 'prev.bg', value: `btcfs://${'b4'.repeat(32)}i0` },
+          ],
+        },
+      ])
+    );
+    render(<CollectionObjects id="collection" title="Nervape Headwear" insights={insights} />);
+    const table = (await screen.findByRole('table', { name: 'Newest objects' })) as HTMLElement;
+    checkCells(table);
+    const view = table.querySelectorAll('[data-gene-cell]')[0];
+    expect(view).toHaveTextContent('0 · 1,139 of 1,298');
+  });
 });

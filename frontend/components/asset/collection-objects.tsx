@@ -6,7 +6,7 @@
 // that vary get lanes (C9), the gel and the object table sit side by side, the table names the
 // varying genes as columns with each object's composition, twenty a page (C11), and the filter is
 // in the URL (C15).
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useInRouterContext } from 'react-router-dom';
 import { api, type CollectionInsights } from '@/lib/api';
@@ -65,6 +65,28 @@ function objectName(number: string | null, sporeId: string): string {
 function geneCellText(value: string): string {
   if (/^btcfs:\/\//i.test(value.trim())) return `…${value.trim().slice(-6)}`;
   return traitDisplay(value);
+}
+
+/** A gene value that is a number: it is never cut (no ellipsis inside a number). */
+const NUMERIC = /^[\d,.]+$/;
+/** Characters of a word value a gene cell keeps when its column is narrow (the rest "…"). */
+const WORD_VALUE_CH = 8;
+/** The swatch and its gap, in ch of the 12 px monospaced row text. */
+const SWATCH_CH = 3;
+/** A gene cell's share of the objects: " · 3 of 1,298". */
+const geneShare = (count: number, total: number) =>
+  ` · ${count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
+/**
+ * Lane A follow-up: a gene column's minimum width in ch — the swatch, the shown part of the widest
+ * value (a number whole, words up to 8 characters) and the widest share of its lane, so no cell
+ * ever cuts its share or a number. The rows are monospaced, so characters measure the width.
+ */
+function geneColumnCh(lane: AlleleLane, total: number): number {
+  return lane.bands.reduce((max, b) => {
+    const text = geneCellText(b.value);
+    const shown = NUMERIC.test(text) ? text.length : Math.min(text.length, WORD_VALUE_CH);
+    return Math.max(max, SWATCH_CH + shown + geneShare(b.count, total).length);
+  }, 0);
 }
 
 /** The gel's filters from the URL (C15): `?background=…&view=…`, as the D11 `?filter=`. */
@@ -162,15 +184,17 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
     : [];
   // The board's table names the genes that vary as its columns (two at most; the rest in titles).
   const columns = (lanes ?? []).slice(0, 2);
-  const grid = cn(
-    ROW_GRID,
-    columns.length === 2
-      ? 'sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1.1fr)_minmax(0,0.8fr)_88px_minmax(0,1.6fr)_88px]'
-      : columns.length === 1
-        ? 'sm:grid-cols-[minmax(0,1.3fr)_minmax(0,1.1fr)_88px_minmax(0,1.6fr)_88px]'
-        : 'sm:grid-cols-[minmax(0,1.3fr)_88px_minmax(0,1.6fr)_88px]'
-  );
   const total = genetics.eligibleItems;
+  // Each gene column is at least as wide as its widest cell (lane A follow-up); the object and
+  // owner columns share the rest.
+  const objectCols = [
+    'minmax(0,1.3fr)',
+    ...columns.map((lane, i) => `minmax(${geneColumnCh(lane, total)}ch,${i === 0 ? 1.1 : 0.8}fr)`),
+    '88px',
+    'minmax(0,1.6fr)',
+    '88px',
+  ].join(' ');
+  const grid = cn(ROW_GRID, 'sm:grid-cols-[var(--object-cols)]');
   const filtered = Object.keys(traits).length > 0;
   return (
     <section aria-label="Objects" className="min-w-0 space-y-[18px]">
@@ -255,7 +279,12 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
           {gallery.data ? (
             <>
               <AssetReadState label="newest objects" error={gallery.error} retained />
-              <div role="table" aria-label="Newest objects" className="text-small min-w-0">
+              <div
+                role="table"
+                aria-label="Newest objects"
+                className="text-small min-w-0"
+                style={{ '--object-cols': objectCols } as CSSProperties}
+              >
                 <div role="row" className={cn(grid, 'text-text-dim text-meta hidden h-7 sm:grid')}>
                   <span role="columnheader">Object</span>
                   {columns.map((lane) => (
@@ -321,25 +350,38 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           <span
                             key={lane.gene}
                             role="cell"
-                            className="min-w-0 truncate"
+                            data-gene-cell
+                            className="flex min-w-0 items-center whitespace-nowrap"
                             title={own ? `${geneLabel(lane.gene)} = ${own.value}` : undefined}
                           >
                             {own ? (
                               <>
                                 <i
                                   aria-hidden="true"
-                                  className="mr-1.5 inline-block h-2.5 w-2.5 rounded-sm align-[-1px]"
+                                  className="mr-1.5 inline-block h-2.5 w-2.5 shrink-0 rounded-sm"
                                   style={{
                                     background: band?.colour ?? GEL_INK[ink][1],
                                     opacity: band?.colour ? 1 : 0.8,
                                   }}
                                 />
-                                <span className="text-text">{geneCellText(own.value)}</span>
+                                {/* Words may be cut; a number and the share never are. */}
+                                <span
+                                  data-role="gene-value"
+                                  className={cn(
+                                    'text-text',
+                                    NUMERIC.test(geneCellText(own.value))
+                                      ? 'shrink-0'
+                                      : 'min-w-0 truncate'
+                                  )}
+                                >
+                                  {geneCellText(own.value)}
+                                </span>
                                 {band && (
-                                  <span className="text-text-ghost">
-                                    {' '}
-                                    · {band.count.toLocaleString('en-US')} of{' '}
-                                    {total.toLocaleString('en-US')}
+                                  <span
+                                    data-role="gene-share"
+                                    className="text-text-ghost shrink-0 whitespace-nowrap"
+                                  >
+                                    {geneShare(band.count, total)}
                                   </span>
                                 )}
                               </>
