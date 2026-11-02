@@ -228,9 +228,14 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
     expect(table.querySelector('[data-thumb-frame="btc_ckb"]')).not.toBeNull();
     expect(table.querySelector('[data-thumb-frame="centralized_mixture"]')).toBeNull();
     expect(within(table).getByText(/^m-NFT/)).toBeInTheDocument();
-    const bars = table.querySelectorAll('[data-held-bar]');
+    // Table-rows L2-2: an 8 px AlignedBar per row on the page's round scale.
+    const scale = resourceScale([983730, 322852]);
+    const bars = table.querySelectorAll('[data-segment]');
     expect(bars).toHaveLength(2);
-    expect(bars[0]).toHaveStyle({ width: '100%', backgroundColor: CLASS_COLORS.objects });
+    expect(bars[0]).toHaveStyle({
+      width: `${Math.round((983730 / scale) * 120 * 100) / 100}px`,
+      backgroundColor: CLASS_COLORS.objects,
+    });
   });
 });
 

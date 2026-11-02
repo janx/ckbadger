@@ -105,7 +105,12 @@ describe('Inventory rows', () => {
       />
     );
     const table = screen.getByRole('table', { name: 'Object collections' });
-    expect(table).toHaveTextContent('of 7 minted');
+    // Table-rows L2-2: minted ≠ live shows as a ghost "/ 7" beside the live count; the words
+    // are the row's title.
+    expect(within(table).getByText('/ 7', { exact: false })).toHaveClass('text-text-ghost');
+    expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
+      '3 live of 7 minted'
+    );
     expect(within(table).getByText('3')).toBeInTheDocument();
     expect(within(table).getByText('19')).toBeInTheDocument();
     expect(within(table).getByText('Decode pending')).toHaveClass('text-text-dim');
@@ -234,6 +239,104 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
       'title',
       'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.8%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
+    );
+  });
+});
+
+// Table-rows round, lane L2-2 (board Lists.dc.html · objects): 24 px framed mark + bright name +
+// the standard and the composition as tags · Live items (a ghost "/ N" only when minted differs) ·
+// Holders · Activity · CKB held as a violet 8 px bar · H-mult. Occupied and the collection id go to
+// the row's title (and the collection page).
+describe('Objects table on the row rules (table-rows L2-2)', () => {
+  const spore: Asset = {
+    ...asset,
+    id: '0x' + '5a'.repeat(32),
+    assetType: 'object',
+    standard: 'spore',
+    name: 'Wyltek Founding Members',
+    symbol: null,
+    holdersCount: 32,
+    liveCount: 93,
+    totalSupply: '93',
+    activitiesCount: 95,
+    compositionTier: 'pure_ckb',
+  };
+  const mnft: Asset = {
+    ...spore,
+    id: '0x' + '6b'.repeat(32),
+    standard: 'm-nft',
+    name: 'Santa',
+    liveCount: 2712,
+    totalSupply: '2811',
+    activitiesCount: 3014,
+    compositionTier: 'centralized_mixture',
+    ownedCapacity: '40000000000',
+    ownedKnowledge: '40000000000',
+    hMultiplier: '1.00',
+  };
+  const mount = () => {
+    render(<InventoryRows assetType="object" rows={[spore, mnft]} />);
+    return screen.getByRole('table', { name: 'Object collections' });
+  };
+
+  it('draws one-line rows at the row density with the board’s six columns', () => {
+    const table = mount();
+    expect(within(table).getAllByRole('columnheader').map(headText)).toEqual([
+      'Collection',
+      'Live items',
+      'Holders',
+      'Activity',
+      'CKB held in its cells',
+      'H-mult.',
+    ]);
+    for (const td of table.querySelectorAll('tbody td'))
+      expect(td).toHaveClass('py-[11px]', 'align-middle');
+    expect(table).not.toHaveTextContent(/minted|Spore ·|occupied/);
+  });
+
+  it('marks each collection with a 24 px framed thumb, its bright name and two tags', () => {
+    const table = mount();
+    const [, pure, central] = within(table).getAllByRole('row');
+    const thumb = pure.querySelector('[data-thumb-frame="pure_ckb"]')!;
+    expect(thumb).toHaveClass('h-6', 'w-6', '-my-[3px]');
+    expect(thumb.querySelector('svg[data-class="objects"]')).not.toBeNull();
+    expect(central.querySelector('[data-thumb-frame]')).toBeNull();
+    const name = within(pure).getByRole('link', { name: 'Wyltek Founding Members' });
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+    const tags = (row: HTMLElement) =>
+      Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => [
+        t.textContent,
+        t.getAttribute('data-row-tag'),
+      ]);
+    // Fully on-chain tiers are the accent tag; a centralized mix is a plain one.
+    expect(tags(pure)).toEqual([
+      ['Spore', 'default'],
+      ['Pure CKB', 'accent'],
+    ]);
+    expect(tags(central)).toEqual([
+      ['m-NFT', 'default'],
+      ['Centralized mix', 'default'],
+    ]);
+  });
+
+  it('shows "/ minted" only when it differs from live, and draws CKB held in violet', () => {
+    const table = mount();
+    expect(cellUnder(table, 1, 'Live items')).toHaveTextContent(/^93$/);
+    expect(cellUnder(table, 2, 'Live items')).toHaveTextContent('2,712 / 2,811');
+    const scale = resourceScale([100, 400]);
+    expect(
+      cellUnder(table, 1, 'CKB held in its cells').querySelector('[data-segment]')
+    ).toHaveStyle({ width: barWidth(100, scale), backgroundColor: CLASS_COLORS.objects });
+    expect(cellUnder(table, 2, 'CKB held in its cells')).toHaveTextContent('400.00');
+    expect(cellUnder(table, 2, 'Activity')).toHaveTextContent('3,014');
+    expect(cellUnder(table, 1, 'H-mult.')).toHaveTextContent('×1.64');
+  });
+
+  it('moves the id, live of minted, occupied and the exact digits into the row title', () => {
+    const table = mount();
+    expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
+      'title',
+      `Santa · m-NFT · ${mnft.id} · 2,712 live of 2,811 minted · 400 CKB held · 400 CKB occupied (100.0%) · H-mult. ×1.00`
     );
   });
 });

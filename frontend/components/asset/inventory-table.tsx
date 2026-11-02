@@ -20,6 +20,7 @@ import {
   getTokenDetailHref,
 } from '@/lib/detail-routes';
 import { CompositionBadge } from '@/components/ui/composition-mark';
+import { formatCompositionTier } from '@/lib/asset-utils';
 import type { CSSProperties } from 'react';
 import { CLASS_COLORS, COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
@@ -545,6 +546,136 @@ function tokenColumns(rows: readonly Asset[]): ListColumn<Asset>[] {
   ];
 }
 
+/** A count column of one inventory table: exact, right-aligned, in its own inline box. */
+function countColumn(
+  key: string,
+  label: string,
+  minWidth: number,
+  value: (a: Asset) => number | string | null | undefined
+): ListColumn<Asset> {
+  return {
+    key,
+    label,
+    minWidth,
+    numeric: true,
+    render: (a) => (
+      <span>
+        <AssetCount value={value(a)} />
+      </span>
+    ),
+  };
+}
+
+const ON_CHAIN_TIERS = new Set<Asset['compositionTier']>(['pure_ckb', 'btc_ckb']);
+
+/**
+ * Board objects row: a 24 px mark in the collection's frame (crystal / copper for the fully
+ * on-chain tiers, IV-10), the name bright, then the standard and the composition as tags. The
+ * mark overhangs the 18 px line by 3 px each way, so the row stays 41 px.
+ */
+function CollectionName({ asset: a }: { asset: Asset }) {
+  const frame = thumbFrame(a.compositionTier);
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <span
+        data-thumb-frame={frame ? (a.compositionTier ?? undefined) : undefined}
+        className={cn(
+          '-my-[3px] flex h-6 w-6 shrink-0 items-center justify-center rounded-[3px]',
+          !frame && 'border-base-border border'
+        )}
+        style={frame}
+      >
+        <ClassMark kind="objects" size={12} />
+      </span>
+      <AppLink
+        href={assetHref(a)}
+        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+      >
+        {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+      </AppLink>
+      <RowTag>{formatStandard(a.standard)}</RowTag>
+      {a.compositionTier ? (
+        <RowTag variant={ON_CHAIN_TIERS.has(a.compositionTier) ? 'accent' : 'default'}>
+          {formatCompositionTier(a.compositionTier)}
+        </RowTag>
+      ) : (
+        <RowTag>Composition unavailable</RowTag>
+      )}
+    </span>
+  );
+}
+
+/** Live items, and a ghost "/ N" only when minted differs from live (board objects). */
+function LiveOfMinted({ asset: a }: { asset: Asset }) {
+  const differs =
+    a.liveCount !== null && a.totalSupply !== null && String(a.liveCount) !== a.totalSupply;
+  return (
+    <span>
+      <AssetCount value={a.liveCount} />
+      {differs && (
+        <span className="text-text-ghost text-meta">
+          {' / '}
+          <AssetCount value={a.totalSupply} />
+        </span>
+      )}
+    </span>
+  );
+}
+
+function objectTitle(a: Asset): string {
+  return [
+    a.name || a.id,
+    formatStandard(a.standard),
+    a.id,
+    `${countText(a.liveCount, 'live', 'live')} of ${countText(a.totalSupply, 'minted', 'minted')}`,
+    heldTitle(a),
+    a.hMultiplier === null ? 'H-mult. unavailable' : `H-mult. ×${a.hMultiplier}`,
+  ].join(' · ');
+}
+
+function objectColumns(rows: readonly Asset[]): ListColumn<Asset>[] {
+  return [
+    {
+      key: 'identity',
+      label: 'Collection',
+      minWidth: 300,
+      width: 'auto',
+      render: (a) => <CollectionName asset={a} />,
+    },
+    {
+      key: 'live',
+      label: 'Live items',
+      minWidth: 120,
+      numeric: true,
+      render: (a) => <LiveOfMinted asset={a} />,
+    },
+    countColumn('holders', 'Holders', 90, (a) => a.holdersCount),
+    {
+      key: 'activity',
+      label: 'Activity',
+      minWidth: 100,
+      numeric: true,
+      // Round 3 (contracts L2): a collection's count is null (unknown) on the cached list until
+      // the indexer has derived it — say nothing rather than a stand-in.
+      render: (a) =>
+        a.activitiesCount === null ? null : (
+          <span>
+            <AssetCount value={a.activitiesCount} />
+          </span>
+        ),
+    },
+    heldColumn(rows, 'objects'),
+    {
+      key: 'hm',
+      label: 'H-mult.',
+      minWidth: 90,
+      numeric: true,
+      className: 'text-text-dim',
+      render: (a) => <HMultiplier value={a.hMultiplier} />,
+    },
+  ];
+}
+
 export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
   if (assetType === 'token')
     return (
@@ -556,6 +687,19 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         empty="No tokens found"
         density="row"
         rowTitle={tokenTitle}
+        mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
+      />
+    );
+  if (assetType === 'object')
+    return (
+      <ListTable
+        label="Object collections"
+        columns={objectColumns(rows)}
+        rows={rows}
+        rowKey={(a) => a.id}
+        empty="No objects found"
+        density="row"
+        rowTitle={objectTitle}
         mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
       />
     );
