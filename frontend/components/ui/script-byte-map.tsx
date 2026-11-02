@@ -33,7 +33,8 @@ const HASH_TYPES: Record<string, { byte: string; words: string }> = {
 };
 
 export interface ScriptByteMapProps {
-  kind: 'lock' | 'type';
+  /** Which role the script plays; a family whose role is unknown may omit it. */
+  kind?: 'lock' | 'type';
   /** The script's three parts; null draws a script family's shape (each cell sets its args). */
   script: { codeHash: string; hashType: string; args: string } | null;
   /** Registry name of the code. */
@@ -60,7 +61,8 @@ export function ScriptByteMap({
   codeNote,
   argsNote,
 }: ScriptByteMapProps) {
-  const subject = `${kind} script`;
+  const subject = kind ? `${kind} script` : 'script';
+  if (script && !kind) throw new Error('script byte map: a script needs its role (lock or type)');
   const hashType = script ? HASH_TYPES[script.hashType] : null;
   if (script && !hashType) throw new Error(`${subject}: unknown hash_type ${script.hashType}`);
   if (script && hexBytes(script.codeHash, `${subject} code_hash`).length !== 32)

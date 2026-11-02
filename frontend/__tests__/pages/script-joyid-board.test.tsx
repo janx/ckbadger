@@ -235,7 +235,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
     expect(within(tier1).queryByRole('heading', { name: 'The script' })).toBeNull();
     const facts = within(tier2).getByRole('heading', { name: 'The script' }).closest('section')!;
-    expect(facts.querySelectorAll('dl')).toHaveLength(fixture.family.references.length);
+    // Lane E (C6): one row per reference (was one definition list each), the lists folded.
+    expect(
+      within(within(facts).getByRole('table', { name: 'Registered references' })).getAllByRole(
+        'row'
+      )
+    ).toHaveLength(fixture.family.references.length + 1);
+    expect(
+      within(facts).getByText('Each reference in full').closest('details')!.querySelectorAll('dl')
+    ).toHaveLength(fixture.family.references.length);
     expect(facts).toHaveTextContent('Lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696');
   });
 });
