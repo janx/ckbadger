@@ -2,7 +2,8 @@
 // tier 2 draws it — the DNA ruler (one part per gene that owns bytes), the gene table (numbered
 // one-byte runs folded into one row) and what the decoded objects show for each gene. Every value
 // comes from the API's pattern and trait counts; a range that cannot be drawn exactly throws.
-import type { CollectionInsights, GeneDefinition } from '@/lib/api';
+import type { CollectionInsights, CurrentPattern, GeneDefinition } from '@/lib/api';
+import { stepGenes, type GeneSource } from '@/lib/dob-declared';
 import { traitDisplay } from '@/lib/dob-genes';
 
 const fmt = (n: number) => n.toLocaleString('en-US');
@@ -11,6 +12,24 @@ const fmt = (n: number) => n.toLocaleString('en-US');
 export interface PatternGene {
   key: string;
   gene: GeneDefinition;
+  /** Lane E follow-up: the API's reviewed byte map, or the cluster description's declaration. */
+  source?: GeneSource;
+}
+
+/**
+ * Every gene of a DOB pattern, step by step (`<step>:<gene index>`): a mapped step's genes from the
+ * API, an unmapped step's from the pattern its cluster's description declares (`stepGenes`).
+ */
+export function patternGenes(
+  pattern: CurrentPattern,
+  description: string | null | undefined,
+  context: string
+): PatternGene[] {
+  if (pattern.status !== 'dob') return [];
+  return pattern.steps.flatMap((step) => {
+    const { source, genes } = stepGenes(step, description, context);
+    return genes.map((gene) => ({ key: `${step.step}:${gene.index}`, gene, source }));
+  });
 }
 
 /** A gene's declared range as exact integers (decimal strings in the API). */

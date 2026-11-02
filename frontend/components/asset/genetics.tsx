@@ -37,6 +37,7 @@ import {
   geneRows,
   geneSpan,
   patternExtent,
+  patternGenes,
   ruleWords,
   type GeneRow,
   type PatternGene,
@@ -56,6 +57,8 @@ export interface ObjectGeneticsViewProps {
   /** The gene lit across trait list, sequencing gel and allele gel (three-way hover). */
   active?: string | null;
   onActive?: (gene: string | null) => void;
+  /** Lane E follow-up: the cluster's description, for a pattern it declares (`sequencingGenes`). */
+  description?: string | null;
 }
 function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefined {
   if (tier !== 'btc_ckb' && tier !== 'pure_ckb') return undefined;
@@ -73,9 +76,10 @@ function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefine
 function dnaWords(
   evidence: ObjectGenetics,
   subject: string,
-  tier: CompositionTier | undefined
+  tier: CompositionTier | undefined,
+  description: string | null | undefined
 ): { bytes: number; pointer: string | null } {
-  const layout = sequencingGenes(evidence, subject);
+  const layout = sequencingGenes(evidence, subject, description);
   const pointer = layout.genes.find((g) => g.owns && /^btcfs/i.test(g.ruleName));
   return {
     bytes: layout.bytes.length,
@@ -88,13 +92,16 @@ export function DnaParagraph({
   evidence,
   subject,
   tier,
+  description,
 }: {
   evidence: ObjectGenetics;
   subject: string;
   tier?: CompositionTier;
+  /** Lane E follow-up: the cluster's description, for a pattern it declares (`sequencingGenes`). */
+  description?: string | null;
 }) {
   if (evidence.dnaHex === null) return null;
-  const { bytes, pointer } = dnaWords(evidence, subject, tier);
+  const { bytes, pointer } = dnaWords(evidence, subject, tier, description);
   return (
     <p className="text-text-dim text-body">
       The object’s traits are not stored as text. It carries {bytes} bytes of DNA, and the
@@ -119,6 +126,7 @@ export function ObjectGeneticsView({
   tier,
   active: controlled,
   onActive,
+  description,
 }: ObjectGeneticsViewProps) {
   const [own, setOwn] = useState<string | null>(null);
   const active = controlled === undefined ? own : controlled;
@@ -129,9 +137,9 @@ export function ObjectGeneticsView({
   const { dnaHex, cachedVmTraits: cached } = evidence;
   if (dnaHex === null)
     return <p className="text-text-dim text-meta">This object has no DOB DNA.</p>;
-  const layout = sequencingGenes(evidence, subject);
+  const layout = sequencingGenes(evidence, subject, description);
   const geneNames = [...new Set(layout.genes.map((g) => g.name))];
-  const words = dnaWords(evidence, subject, tier);
+  const words = dnaWords(evidence, subject, tier, description);
   // C9: on the object page too, only the genes that vary among the collection get a lane.
   const ruled =
     collection?.genetics.complete && collection.genetics.traits.length
@@ -278,14 +286,17 @@ export function ObjectGeneticsEvidence({
   evidence,
   subject,
   decoded,
+  description,
 }: {
   evidence: ObjectGenetics;
   subject: string;
   /** F2 objects (OB-14): the decoder's own output files, from `/spore/objects/{id}/decode`. */
   decoded?: SporeDobDecoded;
+  /** Lane E follow-up: the cluster's description, for a pattern it declares (`sequencingGenes`). */
+  description?: string | null;
 }) {
   const { dnaHex, cachedVmTraits: cached } = evidence;
-  const layout = dnaHex === null ? null : sequencingGenes(evidence, subject);
+  const layout = dnaHex === null ? null : sequencingGenes(evidence, subject, description);
   const tier = useDetailTier();
   return (
     <section aria-label="DNA evidence" className="min-w-0 space-y-3">
@@ -372,6 +383,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
   const inside = layout.genes
     .filter((g) => !g.owns)
     .map((g) => ({ name: g.name, start: g.offset, end: g.offset + g.length }));
+  const declaredOnly = layout.genes.some((g) => g.source === 'description');
   const clipped = layout.genes.filter((g) => g.truncated);
   const title = (g: (typeof layout.genes)[number]) =>
     `${g.name} · ${span(g.offset, g.length)} · Declared bytes ${g.declared.offset} + ${g.declared.length}.${g.truncated ? ' Clipped to the actual DNA shown.' : ''} ${g.ruleName}${g.ruleArguments !== null && g.ruleArguments !== undefined ? ` ${JSON.stringify(g.ruleArguments)}` : ''}; raw 0x${g.raw}.`;
@@ -401,6 +413,8 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               start: part.start,
               end: part.end,
               label: `${g.name} ${count(n)}`,
+              // too narrow for its name, a part keeps its byte count (Main board: "Entity 8", "1")
+              short: count(n),
               color: g.color,
               title: `${g.name} · ${span(part.start, n)}`,
             };
@@ -487,6 +501,12 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
           )}
         />
       )}
+      {declaredOnly && (
+        <p className="text-text-dim text-meta">
+          These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
+          binary names no byte mapping to check them against.
+        </p>
+      )}
       {clipped.length > 0 && (
         <p className="text-text-dim text-meta">
           Clipped to the actual DNA shown: {clipped.map((g) => g.name).join(', ')} declare
@@ -523,6 +543,11 @@ export interface CurrentPatternEvidenceProps {
   sample?: PatternSample | null;
   /** Lane E (C5), additive: the status line under the reading (decode coverage). */
   status?: ReactNode;
+  /**
+   * Lane E follow-up, additive: the cluster's stored description, whose declared pattern a step
+   * the API cannot map is read from; `undefined` while it loads, `null` when there is none.
+   */
+  description?: string | null;
 }
 
 const RULED_UNMAPPED = 'The decoder binary describes no byte mapping; the pattern alone is used.';
@@ -549,23 +574,25 @@ export function CurrentPatternEvidence(props: CurrentPatternEvidenceProps) {
               ? `${step.step}:${step.description.genes.map((g) => g.index).join(',')}`
               : `${step.step}:-`
           )
-          .join('|') + `#${props.sample?.dnaHex ?? ''}`
+          .join('|') +
+        `#${props.sample?.dnaHex ?? ''}#${props.description === undefined ? 'unread' : 'read'}`
       : 'notDob';
   return <PatternReading key={key} {...props} />;
 }
 
-function PatternReading({ pattern, genetics, sample, status }: CurrentPatternEvidenceProps) {
+function PatternReading({
+  pattern,
+  genetics,
+  sample,
+  status,
+  description,
+}: CurrentPatternEvidenceProps) {
   const tier = useDetailTier();
   const readout = usePinnedReadout<string>();
   if (pattern.status === 'notDob')
     return <p className="text-text-dim text-meta">No DOB blueprint in this collection.</p>;
-  const genes: PatternGene[] = pattern.steps.flatMap((step) =>
-    step.description.status === 'supported'
-      ? [...step.description.genes]
-          .sort((a, b) => a.index - b.index)
-          .map((gene) => ({ key: `${step.step}:${gene.index}`, gene }))
-      : []
-  );
+  const genes: PatternGene[] = patternGenes(pattern, description, 'How an object is read');
+  const declared = genes.some((g) => g.source === 'description');
   const dna = sample?.dnaHex ? hexBytes(sample.dnaHex, `${sample.id} DNA`) : null;
   const extent = dna ? dna.length : patternExtent(genes);
   const ruler = genes.length && extent ? dnaRulerParts(genes, extent) : null;
@@ -804,6 +831,8 @@ function PatternReading({ pattern, genetics, sample, status }: CurrentPatternEvi
                 start: part.start,
                 end: part.end,
                 label: `${gene.name} ${count(n)}`,
+                // too narrow for its name, a part keeps its byte count (Main board: "Entity 8", "1")
+                short: count(n),
                 color: inkOf(part.key),
                 title: `${gene.name} · ${span}`,
               };
@@ -844,6 +873,12 @@ function PatternReading({ pattern, genetics, sample, status }: CurrentPatternEvi
         )
       )}
       {genes.length > 0 && geneTable(rows, 'DOB blueprint')}
+      {declared && (
+        <p className="text-text-dim text-meta">
+          These ranges are the pattern’s own declaration, in the cluster’s description; the decoder
+          binary names no byte mapping to check them against.
+        </p>
+      )}
       {folded && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">

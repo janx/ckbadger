@@ -118,10 +118,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   const geneColors = useMemo(() => {
     const colors = new Map<string, string>();
     if (genetics.data?.dnaHex)
-      for (const g of sequencingGenes(genetics.data, title).genes)
+      for (const g of sequencingGenes(genetics.data, title, cluster.data?.description).genes)
         if (!colors.has(g.name)) colors.set(g.name, g.color);
     return colors;
-  }, [genetics.data, title]);
+  }, [genetics.data, title, cluster.data?.description]);
   const moves = history ? history.length - 1 : null;
   // Consistency round C7: the rail's facts as the metrics row under the hero (R13 — a value and
   // its inline note; a time of day and the minter's full address stay in the item's title).
@@ -238,7 +238,14 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             )}
           </p>
         )}
-        {genetics.data && <DnaParagraph evidence={genetics.data} subject={title} tier={tier} />}
+        {genetics.data && (
+          <DnaParagraph
+            evidence={genetics.data}
+            subject={title}
+            tier={tier}
+            description={cluster.data?.description}
+          />
+        )}
         {history && lockFootnote(history, 'object') && (
           <p className="text-text-dim text-body">{lockFootnote(history, 'object')}</p>
         )}
@@ -322,6 +329,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   evidence={genetics.data}
                   subject={title}
                   decoded={decoded.data}
+                  description={cluster.data?.description}
                 />
               ) : (
                 <AssetReadState
@@ -365,6 +373,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               <ObjectGeneticsView
                 evidence={genetics.data}
                 subject={title}
+                description={cluster.data?.description}
                 collection={collectionGenes.data}
                 collectionName={collectionName}
                 collectionHref={collectionHref}

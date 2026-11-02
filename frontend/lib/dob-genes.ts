@@ -4,6 +4,7 @@
 import type { CollectionInsights, CurrentPattern, GeneDefinition, ObjectGenetics } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
 import { GENE_COLORS } from '@/lib/design-tokens';
+import { stepGenes } from '@/lib/dob-declared';
 
 export interface DnaTrait {
   name: string;
@@ -75,6 +76,8 @@ export interface SequencingGene {
   truncated: boolean;
   ruleName: string;
   ruleArguments: unknown;
+  /** Lane E follow-up: read from the description's declared pattern (the API mapped no bytes). */
+  source?: 'description';
 }
 export interface SequencingLayout {
   bytes: string[];
@@ -86,7 +89,16 @@ export interface SequencingLayout {
 }
 
 /** One object's DNA mapped gene by gene, coloured for the sequencing gel (OB-7). */
-export function sequencingGenes(evidence: ObjectGenetics, subject: string): SequencingLayout {
+export function sequencingGenes(
+  evidence: ObjectGenetics,
+  subject: string,
+  /**
+   * Lane E follow-up, additive: the cluster's stored description; a step the API cannot map reads
+   * the pattern it declares (`stepGenes`). `undefined` (the default, or while it loads): such a
+   * step reads nothing; `null`: the cluster has no description, which an unmapped step cannot be.
+   */
+  description?: string | null
+): SequencingLayout {
   if (evidence.dnaHex === null) throw new Error(`${subject}: no DNA to sequence`);
   const bytes = hexBytes(evidence.dnaHex, subject);
   const pattern = evidence.currentPattern;
@@ -97,6 +109,38 @@ export function sequencingGenes(evidence: ObjectGenetics, subject: string): Sequ
     for (const step of pattern.steps) {
       if (step.description.status !== 'supported') {
         unsupported.push({ step: step.step, reason: step.description.reason });
+        // The declared rows are JSON DOB/0's [name, type, offset, length, rule, args]; a JSON
+        // DOB/0 decoder reads each range clipped to the DNA (crates/dob-decoder fixtures README),
+        // so the bytes shown are the declared range within this DNA, the clip flagged.
+        for (const definition of stepGenes(step, description, subject).genes) {
+          const offset = Number(definition.byteOffset);
+          const end = Math.min(offset + Number(definition.byteLength), bytes.length);
+          const start = Math.min(offset, bytes.length);
+          const declared = { offset: definition.byteOffset, length: definition.byteLength };
+          if (end === start) {
+            unmapped.push({ name: definition.name, declared });
+            continue;
+          }
+          const values = evidence.cachedVmTraits.traits
+            .filter((t) => t.name === definition.name)
+            .map((t) => traitDisplay(t.value));
+          genes.push({
+            key: `${step.step}:${definition.index}`,
+            name: definition.name,
+            offset: start,
+            length: end - start,
+            rule: ruleText(definition.rule, definition.ruleArguments),
+            raw: bytes.slice(start, end).join(''),
+            owns: false,
+            color: GENE_COLORS.shared,
+            value: values.length ? values.join(' · ') : null,
+            declared,
+            truncated: offset + Number(definition.byteLength) > bytes.length,
+            ruleName: definition.rule,
+            ruleArguments: definition.ruleArguments,
+            source: 'description',
+          });
+        }
         continue;
       }
       const definitions = step.description.genes;

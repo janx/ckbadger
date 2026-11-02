@@ -122,9 +122,12 @@ export function StoredDescription({ description }: { description: string | null 
 export function ClusterPatternReading({
   clusterId,
   insights,
+  description,
 }: {
   clusterId: string;
   insights: CollectionInsights;
+  /** The cluster's stored description (`undefined` while it loads), for a declared pattern. */
+  description: string | null | undefined;
 }) {
   const dob = insights.currentPattern.status === 'dob';
   const sample = useQuery({
@@ -146,6 +149,7 @@ export function ClusterPatternReading({
       <CurrentPatternEvidence
         pattern={insights.currentPattern}
         genetics={insights.genetics}
+        description={description}
         sample={
           first
             ? {
