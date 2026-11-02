@@ -720,6 +720,9 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
 
 type Owner = DaoEvidence['concentration']['owners'][number];
 
+/** Hierarchy R8: rows of a list on a topic page; the list page behind its link has them all. */
+const TOPIC_ROWS = 5;
+
 /**
  * The ranked groups of the concentration bar from the evidence's exact top-1 / 10 / 100 sums:
  * largest · next 9 · next 90 · the rest, naming only groups that have members.
@@ -833,9 +836,10 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
           />
         </div>
       )}
+      {/* R8: a topic page lists five rows; "All N depositors →" ranks every one. */}
       <ListTable
         label="Largest depositors"
-        rows={evidence.concentration.owners}
+        rows={evidence.concentration.owners.slice(0, TOPIC_ROWS)}
         columns={OWNER_COLUMNS}
         rowKey={(o) => o.lockScriptHash}
         empty="No live deposits at this indexed tip."

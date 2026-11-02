@@ -772,6 +772,37 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
       '/mainnet/dao/depositors'
     );
   });
+
+  it('shows the five largest depositors on the topic page and links the rest (D6, R8)', () => {
+    stubCalculator();
+    // Seven owners in the evidence; the board lists five, the link goes to all of them.
+    const [first] = evidence.concentration.owners;
+    const owners = Array.from({ length: 7 }, (_, i) => ({
+      ...first,
+      rank: i + 1,
+      address: `${first.address.slice(0, -7)}owner0${i + 1}`,
+      lockScriptHash: '0x' + String(i + 1).repeat(64),
+    }));
+    const seven = { ...evidence, concentration: { ...evidence.concentration, owners } };
+    for (const width of [1248, 358]) {
+      stubChartWidth(width);
+      const { unmount } = render(<DaoBoard statistics={stats} evidence={seven} />);
+      const rows =
+        width === 1248
+          ? within(who())
+              .getByRole('table', { name: 'Largest depositors' })
+              .querySelectorAll('tbody tr')
+          : within(
+              within(who()).getByRole('list', { name: 'Largest depositors, compact' })
+            ).getAllByRole('listitem');
+      expect(rows).toHaveLength(5);
+      expect(within(who()).queryByText(/owner06$/)).toBeNull();
+      expect(within(who()).getByRole('link', { name: 'All 2 depositors →' })).toBeInTheDocument();
+      unmount();
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    }
+  });
 });
 
 describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
