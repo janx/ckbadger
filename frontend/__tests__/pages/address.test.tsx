@@ -347,10 +347,11 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByRole('link', { name: 'JoyID' })).toHaveAttribute(
-      'href',
-      expect.stringContaining('/scripts/JoyID')
-    );
+    // Lane P: the name heads the page's status line and the Lock metric, both to the script.
+    const links = screen.getAllByRole('link', { name: 'JoyID' });
+    expect(links).toHaveLength(2);
+    for (const link of links)
+      expect(link).toHaveAttribute('href', expect.stringContaining('/scripts/JoyID'));
     expect(screen.getByText('Deprecated')).toBeInTheDocument();
   });
   it('shows raw script identity when no registered name is present', async () => {
@@ -947,13 +948,14 @@ describe('Address board · F2 blocks', () => {
   const section = async (name: RegExp) =>
     (await screen.findByRole('heading', { name })).closest('section') as HTMLElement;
 
-  it('keeps every non-zero balance part visible: 3 px minimum, 2 px gaps, 10 px bar (BA-31)', async () => {
+  // Lane P (Address.dc.html): the bar is the board's 18 px partition with the shares inside.
+  it('keeps every non-zero balance part visible: 3 px minimum, 2 px gaps, 18 px bar (BA-31)', async () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
     expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'free', 'DAO free']);
-    for (const part of parts) expect(part.style.minWidth).toBe('3px');
-    expect(parts[0].parentElement).toHaveClass('h-2.5', 'gap-0.5', 'rounded-[5px]');
+    for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
+    expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
     expect(balance).toHaveTextContent('free part of 5 deposits');
   });
 
@@ -1311,6 +1313,31 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(screen.queryByRole('table', { name: '拯救民主 objects held here' })).toBeNull();
   });
 
+  // Lane P (Address.dc.html): the balance hero, then the four metrics, then Holdings.
+  it('leads with the balance figure and its partition, then the four metrics, then Holdings', async () => {
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    const tier1 = container.querySelector('[data-tier="1"]')!;
+    expect(tier1.querySelector('section')).toHaveAttribute('aria-label', 'Balance');
+    const balance = screen.getByRole('region', { name: 'Balance' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    const holdings = screen.getByRole('heading', { name: 'Holdings' });
+    expect(
+      balance.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      metrics.compareDocumentPosition(holdings) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(balance.querySelector('[data-role="balance-figure"]')).toHaveTextContent(
+      /^9,651,178\.35338057 CKB$/
+    );
+    expect([...metrics.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
+      'Holdings',
+      'Live cells',
+      'Transactions',
+      'Lock',
+    ]);
+  });
   // Lane P (exact or none): a filter chip shows a count only when its one-row page proves it — 0
   // or 1 — and no number otherwise; "All" keeps the address's total; an empty filter is dimmed.
   it('counts a filter chip from its one-row page only when the count is exact; an empty filter is dimmed 0', async () => {

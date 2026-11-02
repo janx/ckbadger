@@ -2,24 +2,26 @@
 
 import { useState, type ReactNode } from 'react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
-import { api, type AddressHoldings, type AddressCellClass } from '@/lib/api';
+import { api, type Address, type AddressHoldings, type AddressCellClass } from '@/lib/api';
 import { ClassMark } from '@/components/ui/class-mark';
-import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
-import { getIdentityItemDetailHref } from '@/lib/detail-routes';
+import { getIdentityItemDetailHref, getScriptDetailHref } from '@/lib/detail-routes';
 import { cn, formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { CompositionSet, compositionCountsFromAddress } from '@/components/ui/composition-set';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
+import { AssetMetrics, type AssetMetric } from '@/components/asset/detail-shell';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { META_CHAR_PX } from '@/lib/byte-map';
 
 export const ADDRESS_CLASSES: { key: AddressCellClass; label: string; mark: AssetClass }[] = [
   { key: 'dao', label: 'Nervos DAO', mark: 'dao' },
@@ -162,24 +164,231 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
   );
 }
 
-export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
+/** An exact CKB amount in running text: the whole part, then the fraction dim (Address board). */
+function ExactParts({ shannons }: { shannons: bigint }) {
+  const { integer, decimal } = formatCkbAmount(shannons);
   return (
-    <section aria-label="Balance" className="space-y-4">
-      <div className="text-text-bright text-hero font-medium">
-        <ExactCkb shannons={BigInt(holdings.balance)} signed={false} tone="plain" wrap />
+    <span className="text-text tabular-nums">
+      {integer}
+      <span className="text-text-dim">.{decimal}</span>
+    </span>
+  );
+}
+
+/**
+ * The balance hero (lane P, Address.dc.html): the balance as the page's display figure — 40 px, its
+ * fraction 22 px dim — with its live cells at the right; the 18 px partition with each share
+ * inside its part (a share its part cannot hold is in the part's title, never cut); and one quiet
+ * line of the exact parts. A DAO part is drawn only when the address has CKB in the Nervos DAO.
+ */
+export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
+  const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
+  const sum = exactUnsignedInteger(holdings.balance, 'Address balance');
+  const occupied = exactUnsignedInteger(holdings.occupiedCapacity, 'Address occupied');
+  const free = exactUnsignedInteger(holdings.freeCapacity, 'Address free');
+  const daoFree = exactUnsignedInteger(holdings.daoFreeCapacity, 'Address DAO free');
+  if (occupied + free + daoFree !== sum)
+    throw new Error(
+      `Address ${holdings.lockScriptHash}: occupied ${occupied} + free ${free} + DAO free ${daoFree} ≠ balance ${sum} shannons`
+    );
+  const parts = (
+    [
+      { key: 'occupied', value: occupied, color: DATA_COLOR, ink: 'text-base-bg' },
+      { key: 'free', value: free, color: CLASS_COLORS.ckb, ink: 'text-text-bright' },
+      { key: 'DAO free', value: daoFree, color: CLASS_COLORS.dao, ink: 'text-base-bg' },
+    ] as const
+  ).filter((p) => p.value > BigInt(0));
+  const share = (v: bigint) => `${formatScaledInteger(v * BigInt(100), sum, 2)} %`;
+  const exact = (v: bigint) => `${formatCkbAmount(v).full} CKB`;
+  const { integer, decimal } = formatCkbAmount(sum);
+  const zero = sum === BigInt(0);
+  // The bar's width less its 2 px gaps, shared out as the parts' flex-grow does.
+  const room = barWidth === null ? null : barWidth - 2 * (parts.length - 1);
+  return (
+    <section aria-label="Balance" className="min-w-0">
+      <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
+        <div className="min-w-0">
+          <span className="text-text-dim text-meta block uppercase tracking-[0.08em]">balance</span>
+          <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
+            {zero ? (
+              <span data-ghost className="text-text-ghost text-entity sm:text-display font-medium">
+                0
+              </span>
+            ) : (
+              // One step smaller below sm (RESPONSIVE_LAYOUT 5), and the fraction may take the
+              // next line on a phone rather than push the page wide.
+              <>
+                <span className="text-text-bright text-entity sm:text-display font-medium">
+                  {integer}
+                </span>
+                <wbr />
+                <span className="text-text-dim text-section sm:text-hero">.{decimal}</span>
+              </>
+            )}
+            <span className="text-text-dim text-body"> CKB</span>
+          </div>
+        </div>
+        <span className="text-text-dim text-body tabular-nums">
+          in <span className="text-text">{holdings.liveCellsCount.toLocaleString('en-US')}</span>{' '}
+          live {holdings.liveCellsCount === 1 ? 'cell' : 'cells'}
+        </span>
       </div>
-      <CapacityPartition
-        subject="Address"
-        showTotal={false}
-        total={holdings.balance}
-        occupied={holdings.occupiedCapacity}
-        free={holdings.freeCapacity}
-        daoFree={holdings.daoFreeCapacity}
-        minSegmentWidth={3}
-        daoFreeNote={daoFreeNote(holdings)}
-      />
+      {!zero && (
+        <div aria-label="Address capacity partition" className="mt-3.5">
+          <div
+            ref={barRef}
+            role="img"
+            aria-label={`Balance partition: ${parts.map((p) => `${p.key} ${exact(p.value)} (${share(p.value)})`).join(', ')}${daoFree === BigInt(0) ? ', nothing in the Nervos DAO' : ''}`}
+            className="text-meta flex h-[18px] gap-0.5"
+          >
+            {parts.map((p) => {
+              const label = `${p.key} ${share(p.value)}`;
+              const width = room === null ? 0 : (room * Number(p.value)) / Number(sum);
+              const fits = width >= label.length * META_CHAR_PX + 16;
+              return (
+                <div
+                  key={p.key}
+                  data-part={p.key}
+                  title={`${label} · ${exact(p.value)}`}
+                  className={cn(
+                    'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-sm tabular-nums',
+                    fits && 'px-2',
+                    p.ink
+                  )}
+                  style={{
+                    flexGrow: Number(p.value) / Number(sum),
+                    flexBasis: 0,
+                    backgroundColor: p.color,
+                  }}
+                >
+                  {fits && (
+                    <>
+                      {p.key} <span className="ml-2 font-medium">{share(p.value)}</span>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <p data-testid="balance-parts" className="text-text-dim text-small mt-2 tabular-nums">
+            occupied <ExactParts shannons={occupied} /> pays for the bytes its cells keep · free{' '}
+            <ExactParts shannons={free} /> ·{' '}
+            {daoFree === BigInt(0) ? (
+              'no CKB in the Nervos DAO'
+            ) : (
+              <>
+                DAO free <ExactParts shannons={daoFree} />
+                {daoFreeNote(holdings) ? `, ${daoFreeNote(holdings)}` : ''}
+              </>
+            )}
+          </p>
+        </div>
+      )}
     </section>
   );
+}
+
+/** A live cell count by class, for the Live cells metric ("827 objects + 1 plain CKB"). */
+const CELL_NOUN: Record<AddressCellClass, [string, string]> = {
+  dao: ['DAO cell', 'DAO cells'],
+  token: ['token cell', 'token cells'],
+  object: ['object', 'objects'],
+  identity: ['identity', 'identities'],
+  script: ['other-script cell', 'other-script cells'],
+  plain: ['plain CKB', 'plain CKB'],
+};
+
+/**
+ * The metrics row under the balance (lane P, Address.dc.html): Holdings · Live cells ·
+ * Transactions · Lock, as the asset pages' `AssetMetrics` (meta label, 17 px value, dim note).
+ */
+export function AddressMetrics({
+  holdings,
+  address,
+}: {
+  holdings: AddressHoldings;
+  address: Address;
+}) {
+  const held = HOLDING_LINE.map((c) => ({ ...c, count: holdings.holdings[c.key] })).filter(
+    (c) => c.count > 0
+  );
+  const holdingsMetric: AssetMetric =
+    held.length === 0
+      ? { label: 'Holdings', value: 'none' }
+      : held.length === 1
+        ? {
+            label: 'Holdings',
+            value: formatCount(held[0].count, held[0].one, held[0].many),
+            note:
+              held[0].key === 'object'
+                ? `in ${formatCount(holdings.objectCollections.length, 'collection')}`
+                : held[0].key === 'token'
+                  ? `in ${formatCount(holdings.classes.token.cellCount, 'cell')}`
+                  : undefined,
+          }
+        : {
+            label: 'Holdings',
+            value: formatCount(
+              held.reduce((n, c) => n + c.count, 0),
+              'holding'
+            ),
+            note: held.map((c) => formatCount(c.count, c.one, c.many)).join(' · '),
+          };
+  const byClass = ADDRESS_CLASSES.map((c) => ({
+    key: c.key,
+    count: holdings.classes[c.key].cellCount,
+  }));
+  const cells = byClass.reduce((n, c) => n + c.count, 0);
+  if (cells !== holdings.liveCellsCount)
+    throw new Error(
+      `Address ${holdings.lockScriptHash}: class cell counts add up to ${cells}, not its ${holdings.liveCellsCount} live cells`
+    );
+  const lock = address.lockScript;
+  const lockName = address.lockScriptInfo?.name;
+  const items: AssetMetric[] = [
+    holdingsMetric,
+    {
+      label: 'Live cells',
+      value: holdings.liveCellsCount.toLocaleString('en-US'),
+      note:
+        byClass
+          .filter((c) => c.count > 0)
+          .map(
+            (c) => `${c.count.toLocaleString('en-US')} ${CELL_NOUN[c.key][c.count === 1 ? 0 : 1]}`
+          )
+          .join(' + ') || undefined,
+    },
+    { label: 'Transactions', value: address.transactionsCount.toLocaleString('en-US') },
+    lock
+      ? {
+          label: 'Lock',
+          size: 'body',
+          value: (
+            <Link
+              href={getScriptDetailHref({
+                name: lockName,
+                codeHash: lock.codeHash,
+                hashType: lock.hashType,
+                scriptKind: 'lock',
+              })}
+              className="text-text-bright"
+            >
+              {lockName ?? `${lock.codeHash.slice(0, 10)}…${lock.codeHash.slice(-4)}`}
+            </Link>
+          ),
+          note: `${lock.hashType} · ${argsNote(lock.args)}`,
+          title: lockName ? undefined : lock.codeHash,
+        }
+      : { label: 'Lock', size: 'body', value: 'unavailable' },
+  ];
+  return <AssetMetrics items={items} />;
+}
+
+/** A lock's args by their length: "20-byte args", or "no args". */
+function argsNote(args: string): string {
+  if (!/^0x([0-9a-f]{2})*$/i.test(args)) throw new Error(`invalid script args ${args}`);
+  const bytes = (args.length - 2) / 2;
+  return bytes === 0 ? 'no args' : `${bytes.toLocaleString('en-US')}-byte args`;
 }
 function HoldingSection({
   kind,

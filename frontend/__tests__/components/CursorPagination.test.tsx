@@ -147,6 +147,9 @@ describe('CursorPagination across widths', () => {
       'Next',
     ]);
     expect(controls).toHaveClass('flex', 'items-center', 'justify-between');
+    // Lane P: in a column narrower than both, the controls drop under the sentence as one unit.
+    expect(root).toHaveClass('sm:flex-wrap');
+    expect(controls).not.toHaveClass('flex-wrap');
   });
 
   it('never breaks "Page x of y" and keeps the buttons whole', () => {

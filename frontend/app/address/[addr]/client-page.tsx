@@ -10,6 +10,7 @@ import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
   AddressBalance,
+  AddressMetrics,
   AddressHoldingsSection,
   AddressLoadState,
   AddressStaleNotice,
@@ -320,7 +321,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {a && <AddressStaleNotice error={address.error} label="address metadata" />}
             {holdings.data && <AddressStaleNotice error={holdings.error} label="holdings" />}
             {holdings.data ? (
-              <AddressBalance holdings={holdings.data} />
+              <>
+                {/* Lane P (Address.dc.html): the balance hero, then the four metrics. */}
+                <AddressBalance holdings={holdings.data} />
+                <AddressMetrics holdings={holdings.data} address={a} />
+              </>
             ) : (
               <AddressLoadState
                 label="holdings and balance partition"

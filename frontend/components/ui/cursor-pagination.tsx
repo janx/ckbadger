@@ -63,11 +63,13 @@ export function CursorPagination({
       : null;
 
   // Below sm two rows: the count sentence, then Previous · Page x of y · Next on one line (four
-  // items in one 358 px row broke "Page 1 of 10,419" over three lines). One row from sm up.
+  // items in one 358 px row broke "Page 1 of 10,419" over three lines). One row from sm up; in a
+  // column too narrow for both (the address page's half-width lists) the controls drop under the
+  // sentence as one unit — they never wrap among themselves.
   return (
     <div
       className={cn(
-        'flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4',
+        'flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between sm:gap-x-4',
         className
       )}
     >
@@ -76,7 +78,7 @@ export function CursorPagination({
       </span>
       <div
         data-role="pager-controls"
-        className="flex flex-wrap items-center justify-between gap-2 sm:justify-start sm:gap-3"
+        className="flex items-center justify-between gap-2 sm:justify-start sm:gap-3"
       >
         <button type="button" onClick={onPrevious} disabled={!hasPrevious} className={PAGER_BUTTON}>
           {previousLabel}
