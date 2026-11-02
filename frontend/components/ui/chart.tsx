@@ -116,7 +116,16 @@ export interface ChartProps {
    * over point indexes): the chart hovers and pins through it and shows its `active` point.
    */
   pin?: PinnedReadout<number>;
+  // --- hierarchy v3 (DAO page, R13): every one opt-in ---
+  /** The chart's name written inside the plot, top left (meta, dim); no caption is drawn then. */
+  plotName?: string;
+  /** Round values written inside the plot from its left edge (ghost ink), with no axis gutter. */
+  insideYTicks?: boolean;
+  /** The first series' latest value written at the line's end, from its exact decimal. */
+  endLabel?: (value: string) => string;
 }
+/** hierarchy v3: the band above the data that holds an in-plot name. */
+const PLOT_NAME_BAND = 28;
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
 const X_LABEL_ROW = 12;
 /** The band above the plot that keys its target lines, its label baseline and swatch length. */
@@ -263,6 +272,9 @@ export function Chart({
   seriesLegend = false,
   pinnedReadout,
   pin,
+  plotName,
+  insideYTicks = false,
+  endLabel,
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const own = usePinnedReadout<number>();
@@ -357,7 +369,7 @@ export function Chart({
       xTicks.some((tick, i) => tick.index !== i))
   )
     throw new Error(`${title}: a categorical axis names every slot bar, in order`);
-  const gutter = tickGutter(labels);
+  const gutter = insideYTicks ? 0 : tickGutter(labels);
   if (plotLeft !== undefined && plotLeft < gutter)
     throw new Error(
       `${title}: plotLeft ${plotLeft} cannot hold its longest tick: "${labels.reduce((a, b) => (b.length > a.length ? b : a), '')}" needs ${gutter}`
@@ -366,7 +378,8 @@ export function Chart({
   const right = width === null ? null : width - 10,
     // A target line is keyed in its own band above the plot, never on the plot (C#16).
     keyBand = referenceLines.length ? REFERENCE_KEY_BAND : 0,
-    top = 16 + keyBand,
+    // hierarchy v3: an in-plot name keeps its own band above the data.
+    top = (plotName === undefined ? 16 : PLOT_NAME_BAND) + keyBand,
     bottom = height - 26 + keyBand,
     axisY = height + keyBand - 5;
   const lo = ticks?.values[0],
@@ -419,34 +432,36 @@ export function Chart({
   const svgHeight = height + keyBand + ((xLabels?.rows ?? 1) - 1) * X_LABEL_ROW;
   return (
     <figure className="m-0 min-w-0">
-      <figcaption
-        className={
-          hideCaption ? 'sr-only' : 'mb-3 flex flex-wrap items-baseline justify-between gap-3'
-        }
-      >
-        <span>
-          <span className="text-text-bright text-body block font-medium">{title}</span>
-          <span className="text-text-dim text-meta">
-            {activeIndex === null ? subtitle : selected && formatLabel(selected.label)}
+      {plotName === undefined && (
+        <figcaption
+          className={
+            hideCaption ? 'sr-only' : 'mb-3 flex flex-wrap items-baseline justify-between gap-3'
+          }
+        >
+          <span>
+            <span className="text-text-bright text-body block font-medium">{title}</span>
+            <span className="text-text-dim text-meta">
+              {activeIndex === null ? subtitle : selected && formatLabel(selected.label)}
+            </span>
           </span>
-        </span>
-        {!seriesLegend && (
-          <span className="text-text-bright text-hero flex flex-wrap justify-end gap-3 tabular-nums">
-            {selected &&
-              series.map((s, i) => (
-                <span key={s.key}>
-                  {series.length > 1 && (
-                    <span className="text-meta mr-2" style={{ color: color(i) }}>
-                      {s.label}
-                    </span>
-                  )}
-                  {formatValue(selected.values[s.key])}
-                  <span className="text-text-dim text-meta"> {unit}</span>
-                </span>
-              ))}
-          </span>
-        )}
-      </figcaption>
+          {!seriesLegend && (
+            <span className="text-text-bright text-hero flex flex-wrap justify-end gap-3 tabular-nums">
+              {selected &&
+                series.map((s, i) => (
+                  <span key={s.key}>
+                    {series.length > 1 && (
+                      <span className="text-meta mr-2" style={{ color: color(i) }}>
+                        {s.label}
+                      </span>
+                    )}
+                    {formatValue(selected.values[s.key])}
+                    <span className="text-text-dim text-meta"> {unit}</span>
+                  </span>
+                ))}
+            </span>
+          )}
+        </figcaption>
+      )}
       <div ref={ref} className="min-w-0" style={{ minHeight: height }}>
         {!data.length ? (
           <p className="text-text-dim text-small py-8">No data in this range.</p>
@@ -503,14 +518,57 @@ export function Chart({
                 tappable ? (e) => tap.toggle(pointAt(e.clientX, e.currentTarget)) : undefined
               }
             >
-              {ticks.values.map((v) => (
-                <g key={v}>
-                  <line x1={left} x2={right} y1={yTick(v)} y2={yTick(v)} stroke="#1a1f30" />
-                  <text x={left - 8} y={yTick(v) + 3} textAnchor="end" fill="#7c849c" fontSize="10">
-                    {tickLabel(v, ticks.step)}
-                  </text>
-                </g>
-              ))}
+              {ticks.values.map((v, i) =>
+                insideYTicks ? (
+                  // hierarchy v3: the baseline and a value in the name's band are not written.
+                  i > 0 &&
+                  yTick(v) >= top + 12 && (
+                    <g key={v}>
+                      <line
+                        x1={left}
+                        x2={right}
+                        y1={yTick(v)}
+                        y2={yTick(v)}
+                        stroke="#1a1f30"
+                        strokeDasharray="3 5"
+                      />
+                      <text
+                        data-role="y-tick"
+                        x={left + 8}
+                        y={yTick(v) - 5}
+                        fill="#343c50"
+                        fontSize="11"
+                      >
+                        {tickLabel(v, ticks.step)}
+                      </text>
+                    </g>
+                  )
+                ) : (
+                  <g key={v}>
+                    <line x1={left} x2={right} y1={yTick(v)} y2={yTick(v)} stroke="#1a1f30" />
+                    <text
+                      x={left - 8}
+                      y={yTick(v) + 3}
+                      textAnchor="end"
+                      fill="#7c849c"
+                      fontSize="10"
+                    >
+                      {tickLabel(v, ticks.step)}
+                    </text>
+                  </g>
+                )
+              )}
+              {plotName !== undefined && (
+                <text
+                  data-role="chart-name"
+                  x={left + 8}
+                  y={14 + keyBand}
+                  fill="#7c849c"
+                  fontSize="11"
+                >
+                  {plotName}
+                </text>
+              )}
               {gaps.map((gap) => {
                 const toX = (t: number) =>
                   left + ((t - xDomain![0]) / (xDomain![1] - xDomain![0])) * (right - left);
@@ -667,6 +725,21 @@ export function Chart({
                   </g>
                 );
               })}
+              {endLabel && (
+                <text
+                  data-role="end-label"
+                  x={right}
+                  y={Math.max(13, y(values[data.length - 1][0]) - 8)}
+                  textAnchor="end"
+                  fill="#dee2ec"
+                  fontSize="13"
+                  stroke="#0c0e15"
+                  strokeWidth="4"
+                  paintOrder="stroke"
+                >
+                  {endLabel(data[data.length - 1].values[series[0].key])}
+                </text>
+              )}
               {referenceLines.map((line) => (
                 <g key={line.label} data-reference-line={line.label}>
                   <line

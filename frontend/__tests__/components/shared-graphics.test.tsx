@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AlignedBar, AlignedBarFootnote } from '@/components/ui/aligned-bar';
 import { IciclePartition } from '@/components/ui/icicle-partition';
@@ -202,6 +203,118 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
   });
 });
 
+// ---- hierarchy v3 (DAO page, R12): additive IciclePartition options ----
+describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12)', () => {
+  const tree = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    color: '#4b5266',
+    ink: 'bright' as const,
+    boxLabel: { name: 'secondary issuance since genesis', share: '100', unit: 'CKB' },
+    children: [
+      {
+        key: 'm',
+        label: 'to miners',
+        value: BigInt(10),
+        tone: 'ckb' as const,
+        color: '#a0a8be',
+        ink: 'dark' as const,
+        boxLabel: { name: 'miners', share: '10.00%' },
+      },
+      {
+        key: 'c',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        ink: 'dark' as const,
+        boxLabel: { name: 'depositors', share: '20.00%' },
+        children: [
+          {
+            key: 'p',
+            label: 'paid out',
+            value: BigInt(10),
+            tone: 'dao' as const,
+            ink: 'dark' as const,
+            boxLabel: { name: 'paid out', share: '50.0%' },
+          },
+          {
+            key: 'o',
+            label: 'still owed',
+            value: BigInt(10),
+            tone: 'dao' as const,
+            ink: 'bright' as const,
+            boxLabel: { name: 'still owed', share: '50.0%' },
+          },
+        ],
+      },
+      {
+        key: 'b',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        ink: 'bright' as const,
+        boxLabel: { name: 'burnt', share: '70.00%', note: 'no cell can ever claim it' },
+      },
+    ],
+  };
+  const rows = { heights: [48, 48, 32], gap: 3 };
+
+  it('stacks rows of the given heights a gap apart and sets sibling boxes a gap apart', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
+    );
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 1200 134');
+    const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
+    expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('y'))).toEqual(['0', '51', '102']);
+    expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('height'))).toEqual([
+      '48',
+      '48',
+      '32',
+    ]);
+    // Siblings share the row less the gaps: (1200 − 2 × 3) split 10 : 20 : 70.
+    expect(box('m').getAttribute('x')).toBe('0');
+    expect(box('m').getAttribute('width')).toBe('119.4');
+    expect(box('c').getAttribute('x')).toBe('122.4');
+    expect(box('b').getAttribute('x')).toBe('364.2');
+    // compensation's two parts sit exactly under it, a gap apart
+    expect(box('p').getAttribute('x')).toBe('122.4');
+    expect(box('o').getAttribute('x')).toBe('243.3');
+  });
+
+  it('writes the name and share inside each box, falling back to the share alone where the words do not fit', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
+    );
+    const label = (key: string) => container.querySelector(`[data-label="${key}"]`);
+    expect(label('total')).toHaveTextContent('secondary issuance since genesis 100 CKB');
+    expect(label('total')!.getAttribute('y')).toBe('29');
+    // 119 px holds "10.00%" but not "miners 10.00%" at 13 px
+    expect(label('m')!.textContent).toBe('10.00%');
+    expect(label('c')!.textContent).toBe('depositors 20.00%');
+    expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
+    expect(label('b')!.querySelector('[data-part="note"]')).toHaveClass('fill-text-dim');
+    // the 32 px row reads at 11 px: "paid out 50.0%" fits 118 px, "still owed 50.0%" does not
+    expect(label('p')!.textContent).toBe('paid out 50.0%');
+    expect(label('p')).toHaveAttribute('font-size', '11');
+    expect(label('o')!.textContent).toBe('50.0%');
+    // ink: the page colour on light boxes, the bright ink on dark ones
+    expect(label('m')).toHaveClass('fill-base-bg');
+    expect(label('b')).toHaveClass('fill-text-bright');
+    // no words under the boxes (R12)
+    expect(container.querySelectorAll('[data-note]')).toHaveLength(0);
+  });
+
+  it('writes nothing in a box too narrow for its share', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={358} rows={rows} />
+    );
+    expect(container.querySelector('[data-label="m"]')).toBeNull();
+    expect(container.querySelector('[data-label="b"]')!.textContent).toBe('burnt 70.00%');
+  });
+});
+
 describe('ConcentrationBar (DAO-12)', () => {
   it('splits a total into ranked groups of one class colour with exact shares', () => {
     const { container } = render(
@@ -234,6 +347,70 @@ describe('ConcentrationBar (DAO-12)', () => {
         />
       )
     ).toThrow('x: parts sum to 9, not the total 10');
+  });
+});
+
+// ---- hierarchy v3 (DAO page, R15): additive ConcentrationBar option ----
+describe('ConcentrationBar with the group names inside its segments (hierarchy v3, R15)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const groups = [
+    { label: 'largest', value: BigInt(83) },
+    { label: 'next 9', value: BigInt(179) },
+    { label: 'next 90', value: BigInt(311) },
+    { label: 'the other 16,541', value: BigInt(427) },
+  ];
+  const bar = (width: number) => {
+    stubChartWidth(width);
+    return render(
+      <ConcentrationBar
+        label="Share of deposits"
+        assetClass="dao"
+        total={BigInt(1000)}
+        groups={groups}
+        labelsInside
+      />
+    );
+  };
+
+  it('draws a 28 px bar with each name and share inside its segment, and no legend row', () => {
+    const { container } = bar(1408);
+    const img = screen.getByRole('img', { name: /^Share of deposits/ });
+    expect(img).toHaveClass('h-[28px]');
+    const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
+    expect(segments.map((s) => s.textContent)).toEqual([
+      'largest 8.30%',
+      'next 9 · 17.90%',
+      'next 90 · 31.10%',
+      'the other 16,541 · 42.70%',
+    ]);
+    // The fade is the background's, so the words keep full ink: dark on the strong segments.
+    expect(segments.map((s) => s.style.opacity)).toEqual(['', '', '', '']);
+    expect(segments[0]).toHaveClass('text-base-bg');
+    expect(segments[3]).toHaveClass('text-text-bright');
+    expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
+  });
+
+  it('keeps the legend row when a segment is too narrow for its words', () => {
+    const { container } = bar(358);
+    const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
+    // 8.3 % of 358 px holds neither "largest 8.30%" nor "8.30%"
+    expect(segments[0].textContent).toBe('');
+    expect(container.querySelector('[data-role="concentration-legend"]')).toHaveTextContent(
+      'largest 8.30%'
+    );
+  });
+
+  it('is the original thin bar with a legend row when not asked', () => {
+    stubChartWidth(1408);
+    const { container } = render(
+      <ConcentrationBar label="x" assetClass="dao" total={BigInt(1000)} groups={groups} />
+    );
+    expect(screen.getByRole('img', { name: /^x/ })).toHaveClass('h-3');
+    expect(container.querySelector('[data-segment="largest"]')!.textContent).toBe('');
+    expect(screen.getByText('next 9').parentElement).toHaveTextContent('next 9 17.90%');
   });
 });
 

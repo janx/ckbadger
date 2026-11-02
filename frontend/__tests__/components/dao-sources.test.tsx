@@ -46,28 +46,28 @@ const activity = {
     },
   ],
 };
-const five = Array.from({ length: 5 }, (_, i) => ({
+const three = Array.from({ length: 3 }, (_, i) => ({
   ...activity,
   txHash: '0x' + String(i + 1).repeat(64),
   blockNumber: 123 - i,
 }));
 
-describe('DaoSources: Recent DAO activity (hierarchy D7, R7)', () => {
+describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
-      data: five,
-      limit: 5,
+      data: three,
+      limit: 3,
       total: null,
       hasMore: true,
       nextCursor: 'next',
     } as any);
   });
 
-  it('loads the five newest DAO activities under one heading, with no tabs and no pager', async () => {
+  it('loads the three newest DAO activities under one heading, with no tabs, no pager and no note (R15)', async () => {
     render(<DaoSources />);
     await waitFor(() =>
-      expect(api.getGlobalActivities).toHaveBeenCalledWith({ filter: 'dao', limit: 5 })
+      expect(api.getGlobalActivities).toHaveBeenCalledWith({ filter: 'dao', limit: 3 })
     );
     const section = screen.getByRole('region', { name: 'Recent DAO activity' });
     expect(within(section).getByRole('heading', { level: 2 })).toHaveTextContent(
@@ -77,10 +77,17 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7)', () => {
       'text-section',
       'font-medium'
     );
-    expect(section).toHaveTextContent(
-      'deposits, withdrawal requests and withdrawals · newest first'
-    );
-    await waitFor(() => expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(5));
+    // The note under the heading moved to tier 2 (dao-board); only the two links stay beside it.
+    expect(section).not.toHaveTextContent(/newest first/);
+    const links = within(section).getByRole('heading', { level: 2 }).nextElementSibling!;
+    expect(Array.from(links.children).map((c) => c.textContent)).toEqual([
+      'All DAO activity →',
+      'DAO transactions →',
+    ]);
+    await waitFor(() => expect(section.querySelectorAll('article[data-feed-row]')).toHaveLength(3));
+    // Tight rows: 10 px above and below each (the shared row keeps its 2 px between party lines).
+    for (const row of Array.from(section.querySelectorAll('article[data-feed-row]')))
+      expect(row).toHaveClass('py-2.5');
     // R7: no Activities / Transactions tabs and no "Older …" pager; the list pages page instead.
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.queryByRole('tab')).toBeNull();
@@ -105,7 +112,7 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7)', () => {
   it('draws each row with the shared activity row, every participant shown (DAO-13)', async () => {
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [activity],
-      limit: 5,
+      limit: 3,
       total: null,
       hasMore: false,
       nextCursor: null,
@@ -122,6 +129,11 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7)', () => {
     for (const n of [1, 2, 3]) expect(article).toHaveTextContent(`party${n}`);
     // The lock kind sits in its own column (one line per party), as on the activities page.
     expect(article.querySelectorAll('[data-role="lock-kind"]')).toHaveLength(3);
+    // R11: no gold text in a DAO row; the vault ring is the graphic that carries the colour.
+    const gold = Array.from(article.querySelectorAll('[class]')).filter((el) =>
+      /(^|\s)text-gold/.test(el.getAttribute('class')!)
+    );
+    expect(gold).toHaveLength(0);
     // Raw milliseconds never reach the page (DAO-1).
     expect(screen.queryByText(/1793268770452/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '#123' })).toHaveAttribute(

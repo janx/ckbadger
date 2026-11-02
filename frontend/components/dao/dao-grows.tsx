@@ -7,7 +7,6 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { api, type DaoArHistory, type DaoEvidence } from '@/lib/api';
 import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
@@ -51,27 +50,23 @@ function useSettled<T>(value: T, ms: number): T {
 }
 
 /**
- * The AR curve over every complete day and the one reading under it: what 10,000 CKB deposited on
- * the hovered or tapped day (at that day's closing block) is owed by the evidence tip — from the
- * API calculator, the one compensation path, never a client formula. A tap pins the day (R6).
+ * The AR curve over every complete day, named inside its 200 px plot with the latest AR at its end
+ * (hierarchy v3), and the one reading under it: what 10,000 CKB deposited on the hovered or tapped
+ * day (at that day's closing block) is owed by the evidence tip — from the API calculator, the one
+ * compensation path, never a client formula. A tap pins the day (R6).
  */
 function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
   const pin = usePinnedReadout<number>();
   const index = pin.active ?? 0;
   const settled = useSettled(index, SETTLE_MS);
   const tip = evidence.tipBlockNumber;
-  const tipAr = ar(evidence.ar.tipAr, 'DAO tip AR');
   const day = days[index];
-  const dayAr = ar(day.ar, `DAO AR on ${day.date}`);
   const owed = useQuery({
     queryKey: ['dao-calculator', EXAMPLE_DEPOSIT, days[settled].blockNumber, tip],
     queryFn: () => api.calculateDaoCompensation(EXAMPLE_DEPOSIT, days[settled].blockNumber, tip),
     staleTime: Infinity,
   });
   const current = settled === index ? owed : null;
-  const free = current?.data
-    ? splitCkbAmount(parseShannons(current.data.freeCapacity, 'DAO calculator freeCapacity'))
-    : null;
   return (
     <>
       {days.length > 1 && (
@@ -82,41 +77,39 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
           series={[{ key: 'ar', label: 'AR', assetClass: 'dao' }]}
           unit=""
           kind="line"
-          height={170}
+          height={200}
           pin={pin}
-          hideCaption
+          plotName="AR, the accumulated rate · 1.0 at genesis"
+          insideYTicks
+          endLabel={(value) => arAtFourPlaces(formatExactDecimal(value, 'DAO accumulated rate'))}
           formatValue={(value) => formatExactDecimal(value, 'DAO accumulated rate')}
         />
       )}
-      <ReadoutRow label="Deposit reading" pinned={pin.showingPin}>
-        <span className="text-text-bright">10,000 CKB deposited on {day.date}</span>{' '}
-        <span className="text-text-dim">is owed</span>{' '}
-        {current?.isError ? (
-          <span role="alert" className="text-negative">
-            (the calculator failed: {String(current.error)})
+      <div className="mt-2.5">
+        <ReadoutRow label="Deposit reading" pinned={pin.showingPin}>
+          <span className="text-text-dim">
+            10,000 CKB deposited {day.date} →{' '}
+            {current?.isError ? (
+              <span role="alert" className="text-negative">
+                (the calculator failed: {String(current.error)})
+              </span>
+            ) : current?.data ? (
+              <span data-role="owed" className="text-text-bright">
+                <OwedAmount
+                  shannons={parseShannons(
+                    current.data.estimatedCompensation,
+                    `DAO calculator compensation for ${formatBlockNumber(day.blockNumber)}`
+                  )}
+                />{' '}
+                CKB
+              </span>
+            ) : (
+              <span>…</span>
+            )}{' '}
+            compensation by {formatBlockNumber(tip)}
           </span>
-        ) : current?.data ? (
-          <span data-role="owed" className="text-gold">
-            <OwedAmount
-              shannons={parseShannons(
-                current.data.estimatedCompensation,
-                `DAO calculator compensation for ${formatBlockNumber(day.blockNumber)}`
-              )}
-            />{' '}
-            CKB compensation
-          </span>
-        ) : (
-          <span className="text-text-dim">…</span>
-        )}
-        {' · '}
-        <span className="text-text-dim">
-          {dayAr > tipAr
-            ? `AR on ${day.date} is above the tip's`
-            : `${formatPercent(tipAr - dayAr, dayAr, 4)}%`}{' '}
-          on its {free ? `${free.integer}${free.fraction}` : '…'} free CKB, by{' '}
-          {formatBlockNumber(tip)}
-        </span>
-      </ReadoutRow>
+        </ReadoutRow>
+      </div>
     </>
   );
 }
@@ -129,7 +122,6 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
 export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
   const milestones = evidence.ar.milestones;
   if (milestones.length === 0) throw new Error('DAO evidence has no AR milestones');
-  const tipAr = ar(evidence.ar.tipAr, 'DAO tip AR');
   const history = useQuery({
     queryKey: ['dao-ar-history'],
     queryFn: api.getDaoArHistory,
@@ -148,16 +140,11 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
   });
   const yearMax = Math.max(...years.map((y) => Number(y.percent)), 0);
 
-  // Hierarchy D4: the figure first, one caption at the bottom; what AR is reads in tier 2.
+  // Hierarchy v3: the figure first — the AR plot named inside, its reading, 72 px year bars with one
+  // axis line — then one caption on one line; what AR is, and why the curve flattens, read in tier 2.
   return (
-    <section aria-label="How a deposit grows" className="flex min-w-0 flex-col gap-3">
-      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">How a deposit grows</h2>
-        <span className="text-text-dim text-meta">
-          AR {arAtFourPlaces(tipAr)} at the tip · +{evidence.ar.sinceGenesisGrowthPercent}% since
-          genesis
-        </span>
-      </div>
+    <section aria-label="How a deposit grows" className="flex min-w-0 flex-col">
+      <h2 className="text-text-bright text-section mb-[18px] font-medium">How a deposit grows</h2>
       {history.isError ? (
         <div role="alert" className="text-rouge text-small">
           AR history could not be read: {String(history.error)}
@@ -170,12 +157,11 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
         <ArByDay days={history.data} evidence={evidence} />
       )}
       {years.length > 0 && (
-        <div className="mt-1.5 flex flex-col gap-1">
-          <span className="text-text-dim text-small">compensation in each year since launch</span>
+        <div className="mt-5 flex flex-col">
           <div
             role="img"
             aria-label="Compensation on free capacity in each year since launch"
-            className="flex items-end gap-1.5 pt-1.5"
+            className="flex h-[72px] items-end gap-2"
           >
             {years.map((y) => {
               const share = yearMax === 0 ? 0 : Number(y.percent) / yearMax;
@@ -183,34 +169,39 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
                 <div
                   key={y.from.blockNumber}
                   data-year={y.from.blockNumber}
-                  className="flex min-w-0 flex-1 flex-col items-center gap-1"
+                  title={`from ${formatUtc8Date(y.from.chainTimeMs)}: ${y.percent}%`}
+                  className="flex min-w-0 flex-1 flex-col items-center gap-[3px]"
                 >
-                  <span className="text-text-bright text-meta">{y.percent}%</span>
+                  <span className="text-text-bright text-small tabular-nums">{y.percent}%</span>
                   <span
                     aria-hidden="true"
-                    className="bg-gold w-[70%] rounded-t-sm"
-                    style={{ height: `${Math.round(54 * share)}px`, opacity: 0.35 + 0.65 * share }}
+                    className="bg-gold w-full rounded-sm"
+                    style={{ height: `${Math.round(48 * share)}px`, opacity: 0.35 + 0.45 * share }}
                   />
-                  <span className="text-text-dim text-meta">
-                    from {formatUtc8Date(y.from.chainTimeMs).slice(0, 7)}
-                  </span>
                 </div>
               );
             })}
           </div>
+          <div className="text-text-dim text-meta mt-1 flex justify-between gap-4">
+            <span>
+              compensation in each year since launch ·{' '}
+              {formatUtc8Date(years[0].from.chainTimeMs).slice(0, 7)} →
+            </span>
+            <span className="whitespace-nowrap">
+              → {formatUtc8Date(years[years.length - 1].from.chainTimeMs).slice(0, 7)}
+            </span>
+          </div>
         </div>
       )}
-      <p className="text-text text-body mt-1">
-        A deposit grows by AR at its withdrawal request ÷ AR at its deposit, on the capacity it does
-        not occupy. The curve flattens as more CKB exists.
+      <p className="text-text text-body mt-3.5 max-w-[640px]">
+        A deposit grows by AR at its withdrawal request ÷ AR at its deposit.
       </p>
     </section>
   );
 }
 
-/** AR cut to four decimal places for the heading note (the exact rate is in tier 2). */
-function arAtFourPlaces(value: bigint): string {
-  const exact = formatAccumulatedRate(value);
+/** AR cut (not rounded) to four decimal places for the line's end (the exact rate is in tier 2). */
+function arAtFourPlaces(exact: string): string {
   const m = /^(\d+\.\d{4})\d*$/.exec(exact);
   if (!m) throw new Error(`DAO AR ${exact} is not a decimal rate`);
   return m[1];

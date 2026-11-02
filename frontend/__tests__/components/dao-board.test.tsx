@@ -118,9 +118,9 @@ describe('DaoBoard', () => {
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
     );
-    // Board wording (DAO-14) for the same readiness partition.
+    // Board wording (DAO-14; hierarchy v3) for the same readiness partition.
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      '500.00000000 CKB in 1 cell waits for its window'
+      'waiting for its window 500.00000000 CKB · 1 cell'
     );
     // Hierarchy D5: the epoch-lock caveat is developer evidence (tier 2), not under the bars.
     expect(
@@ -143,9 +143,9 @@ describe('DaoBoard', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '1M' }));
     // One History reading (DAO-11) carries the exact amounts of the last complete day.
-    const reading = screen.getByLabelText('History reading');
-    expect(reading).toHaveTextContent('deposited500.00000000');
-    expect(reading).toHaveTextContent('share1.25%');
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(reading).toHaveTextContent('deposited 500.00000000');
+    expect(reading).toHaveTextContent('share 1.25%');
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -188,9 +188,10 @@ describe('DaoBoard', () => {
   });
 
   it("draws the depositors' share from their allocation weight, not DAO free capacity (DAO-2)", () => {
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
-    // The board legend (hierarchy D3 wording): the weight's 4.50%, not DAO free capacity's 4.00%.
-    expect(screen.getByRole('region', { name: 'Where secondary issuance goes' })).toHaveTextContent(
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    // The board legend (hierarchy D3 wording, tier 2 since v3): the weight's 4.50%, not DAO free
+    // capacity's 4.00%.
+    expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
     expect(screen.getByTitle('DAO depositors: 450.00000000 CKB')).toBeInTheDocument();
@@ -323,12 +324,12 @@ describe('DaoBoard', () => {
       'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
     );
     expect(works).not.toHaveTextContent(/interest|earned/i);
-    // R1 roles: the explanation is prose (body 13 px); the protocol notes read as small.
+    // R1 roles: the explanation and the protocol notes are prose (body 13 px, as the v3 board).
     const [concept, notes] = Array.from(works.querySelectorAll('p'));
     expect(concept).toHaveTextContent(/^CKB locked in the Nervos DAO/);
     expect(concept).toHaveClass('text-body', 'text-text-dim');
     expect(notes).toHaveTextContent(/Epoch-lock readiness/);
-    expect(notes).toHaveClass('text-small');
+    expect(notes).toHaveClass('text-body');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {
@@ -364,8 +365,19 @@ const peakHistory = {
   peak2: { date: '2024-01-14', value: '2' },
 };
 
-describe('DaoBoard hero (DAO-9, DAO-10)', () => {
-  it('leads with deposited, its share and peak, the 24 h change, and four metrics (D1)', () => {
+describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const hero = () => screen.getByRole('region', { name: 'Nervos DAO' });
+  /** The hero block's metric row: the terms after the hero section (tier 2 has its own list). */
+  const terms = () => within(hero().parentElement!).getAllByRole('term');
+  /** The metric row's value for a label (dt → its dd). */
+  const metric = (label: string) =>
+    terms().find((t) => t.textContent === label)!.nextElementSibling!;
+
+  it('leads with deposited as the one gold figure and its 24 h change on the same row (R11, R13)', () => {
     render(
       <DaoBoard
         statistics={stats}
@@ -374,53 +386,98 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
         circulationHistory={ratio}
       />
     );
-    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
-    expect(hero).toHaveTextContent('deposited500.00000000 CKB');
-    expect(hero).toHaveTextContent(
-      '1.25% of circulating CKB on 2024-01-15 · peak 600.50000000 CKB on 2024-01-14'
+    const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
+    expect(figure).toHaveTextContent('deposited500.00000000 CKB');
+    const amount = within(figure).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'deposited'
     );
-    // The 24 h change is the figure's second line now, signed and coloured by its sign; the
-    // window's own counts follow it (R2b-a 41, board v2).
-    const change = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'change24h');
+    expect(amount).toHaveClass('text-gold');
+    // The 24 h change sits right of the figure on its baseline row, signed and coloured by sign;
+    // the window's own counts follow it (R2b-a 41).
+    const change = within(hero()).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'change24h'
+    );
     expect(change).toHaveTextContent('−2,578,825.48689593 CKB');
     expect(change).toHaveClass('text-negative');
-    const figure = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
-    expect(figure).toContainElement(change);
-    expect(figure).toHaveTextContent(
+    const row = amount.parentElement!;
+    expect(row).toContainElement(change);
+    expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
+    expect(change.parentElement).toHaveTextContent(
       '−2,578,825.48689593 CKB in 24 h · 12 deposits in, 9 withdrawal requests out'
     );
-    // Four metrics; "Change in 24 h" is no longer one of them.
-    const terms = within(hero).getAllByRole('term');
-    expect(terms.map((t) => t.textContent)).toEqual([
+    expect(change.parentElement).toHaveClass('text-body');
+    // The share and the peak moved into the picture's reading row (board v3).
+    expect(hero()).not.toHaveTextContent(/of circulating CKB on/);
+    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
+      'share 1.25% · depositors 2 · peak 600.50000000 on 2024-01-14'
+    );
+    // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
+    expect(hero()).not.toHaveTextContent(/anchor/i);
+    expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
+  });
+
+  it('collapses the metrics into one row: a label, a section-size value and an inline note, no sub-lines (R13)', () => {
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    expect(terms().map((t) => t.textContent)).toEqual([
       'Estimated APC',
       'Compensation, last 365 days',
       'Depositors',
       'Deposits',
     ]);
-    for (const t of terms) expect(t).toHaveClass('text-meta', 'text-text-dim');
-    expect(hero).toHaveTextContent("Estimated APC1.99%at today's issuance and deposits");
-    expect(hero).toHaveTextContent(
-      "Compensation, last 365 days2.0000%on free capacity, from the header's AR"
-    );
-    // depositorsChange24h, signed (−3 in the fixture).
-    expect(hero).toHaveTextContent('Depositors2−3 in 24 h');
-    expect(hero).toHaveTextContent('Deposits2+ 2 withdrawals requested');
-    // Each term's value: hero (22 px), bright.
-    for (const t of terms)
-      expect(t.nextElementSibling).toHaveClass('text-hero', 'text-text-bright');
-    // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
-    expect(hero).not.toHaveTextContent(/anchor/i);
-    expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
+    const dl = terms()[0].closest('dl')!;
+    expect(dl).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
+    for (const t of terms()) {
+      expect(t).toHaveClass('text-meta', 'text-text-dim');
+      // One value per metric, no sub-line under it.
+      expect(t.parentElement!.children).toHaveLength(2);
+      expect(t.nextElementSibling!.tagName).toBe('DD');
+      expect(t.nextElementSibling).toHaveClass('text-section', 'text-text-bright');
+    }
+    expect(metric('Estimated APC')).toHaveTextContent(/^1\.99%$/);
+    expect(metric('Compensation, last 365 days')).toHaveTextContent(/^2\.0000%$/);
+    // depositorsChange24h, signed (−3 in the fixture), inline and quiet.
+    expect(metric('Depositors')).toHaveTextContent(/^2 · −3 in 24 h$/);
+    expect(metric('Deposits')).toHaveTextContent(/^2 · 2 withdrawals requested$/);
+    for (const label of ['Depositors', 'Deposits'])
+      expect(metric(label).querySelector('span')).toHaveClass('text-small', 'text-text-dim');
+    // The former sub-lines are explanation: they moved to tier 2.
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    for (const moved of [
+      /at today's issuance and deposits/,
+      /on free capacity, from the header's AR/,
+    ]) {
+      expect(tier1).not.toHaveTextContent(moved);
+      expect(tier2).toHaveTextContent(moved);
+    }
   });
 
   it('signs the depositor change and omits it without a 24 h window', () => {
     const { rerender } = render(
       <DaoBoard statistics={{ ...stats, depositorsChange24h: 9 }} evidence={evidence} />
     );
-    const hero = () => screen.getByRole('region', { name: 'Nervos DAO summary' });
-    expect(hero()).toHaveTextContent('Depositors2+9 in 24 h');
+    expect(metric('Depositors')).toHaveTextContent(/^2 · \+9 in 24 h$/);
     rerender(<DaoBoard statistics={{ ...stats, depositorsChange24h: null }} evidence={evidence} />);
-    expect(hero()).toHaveTextContent('Depositors2Deposits');
+    expect(metric('Depositors')).toHaveTextContent(/^2$/);
+  });
+
+  it('says the chain is younger than 365 days inline when there is no 365-day window', () => {
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={{ ...evidence, ar: { ...evidence.ar, year365: null } }}
+      />
+    );
+    expect(metric('Compensation, last 365 days')).toHaveTextContent(
+      /^— · the chain is younger than 365 days$/
+    );
   });
 
   it('fails when the deposit history arrives without its R8 peak', () => {
@@ -436,11 +493,44 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
       )
     ).toThrow('/dao/charts/total-deposit has no peak');
   });
-});
 
-describe('DaoBoard History (DAO-11)', () => {
-  afterEach(() => vi.restoreAllMocks());
-  it('draws History as one figure with one reading under it, not three charts (D2)', () => {
+  it('opens with the title row — h1, the charts link and the range buttons — and a short lede (R13)', () => {
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const title = within(hero()).getByRole('heading', { level: 1, name: 'Nervos DAO' });
+    expect(title).toHaveClass('text-index');
+    const row = title.parentElement!;
+    expect(row).toContainElement(within(hero()).getByRole('group', { name: 'History range' }));
+    expect(row).toContainElement(
+      within(hero()).getByRole('link', { name: 'Explore DAO charts →' })
+    );
+    expect(within(hero()).getByRole('link', { name: 'Explore DAO charts →' })).toHaveAttribute(
+      'href',
+      '/mainnet/charts/total-deposit'
+    );
+    // No "History" section or heading: the hero is the history.
+    expect(screen.queryByRole('heading', { name: 'History' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'History' })).toBeNull();
+    const lede = within(hero()).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
+    expect(lede.textContent!.length).toBeLessThanOrEqual(90);
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+      'href',
+      '#evidence'
+    );
+    // Title row, lede, figure: in that order.
+    const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
+    expect(title.compareDocumentPosition(lede) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(lede.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('draws the picture right under the figure, then its reading and the metric row (R13)', () => {
     stubChartWidth(1200);
     render(
       <DaoBoard
@@ -450,26 +540,43 @@ describe('DaoBoard History (DAO-11)', () => {
         circulationHistory={ratio}
       />
     );
-    const region = screen.getByRole('region', { name: 'History' });
-    expect(within(region).getByRole('heading', { level: 2 })).toHaveClass('text-section');
-    const svgs = region.querySelectorAll('svg');
-    expect(svgs).toHaveLength(1);
-    const readings = within(region).getAllByLabelText('History reading');
-    expect(readings).toHaveLength(1);
-    // Evidence first: the reading is the line under the charts, a hairline above it.
+    const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
+    const main = hero().querySelector('svg[data-panel="deposited"]')!;
+    expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    expect(figure.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(hero().querySelectorAll('svg[data-panel]')).toHaveLength(3);
+    expect(hero().querySelector('figcaption')).toBeNull();
+    // The hero section is the figure and its picture; the reading and the metrics follow it.
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    const metrics = terms()[0].closest('dl')!;
+    expect(hero()).not.toContainElement(reading);
+    expect(hero().compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
-      svgs[0].compareDocumentPosition(readings[0]) & Node.DOCUMENT_POSITION_FOLLOWING
+      reading.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    expect(readings[0]).toHaveClass('border-t', 'text-small');
-    expect(readings[0]).not.toHaveClass('border-b');
+    expect(hero().parentElement).toBe(metrics.parentElement);
+  });
+
+  it('keeps the title row and says so when the daily history cannot be read', () => {
+    render(<DaoBoard statistics={stats} evidence={evidence} historyError />);
+    expect(within(hero()).getByRole('alert')).toHaveTextContent(
+      'DAO daily history could not be loaded from indexed snapshots.'
+    );
+    expect(within(hero()).getByRole('link', { name: 'Explore DAO charts →' })).toBeInTheDocument();
+    expect(within(hero()).queryByRole('group', { name: 'History range' })).toBeNull();
   });
 });
 
-describe('DaoBoard secondary issuance (DAO-7)', () => {
-  afterEach(() => vi.restoreAllMocks());
+describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   const issuance = () => screen.getByRole('region', { name: 'Where secondary issuance goes' });
+  const tier2 = (container: HTMLElement) =>
+    container.querySelector('[data-tier="2"]') as HTMLElement;
 
-  it('splits issuance three ways and only compensation two ways, as an aligned icicle', () => {
+  it('splits issuance three ways and only compensation two ways, as an aligned 48 / 48 / 32 px icicle naming each part and its share', () => {
     stubChartWidth(1400);
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const svg = within(issuance()).getByRole('img', {
@@ -478,55 +585,98 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     const box = (key: string) => svg.querySelector(`[data-node="${key}"]`)!;
     for (const key of ['total', 'miners', 'compensation', 'burnt', 'paid', 'owed'])
       expect(box(key)).not.toBeNull();
+    expect(['total', 'miners', 'paid'].map((k) => box(k).getAttribute('height'))).toEqual([
+      '48',
+      '48',
+      '32',
+    ]);
     // compensation's two parts sit exactly under it
     expect(box('paid').getAttribute('x')).toBe(box('compensation').getAttribute('x'));
-    expect(svg.querySelector('[data-label="compensation"]')).toHaveTextContent(
-      'compensation for depositors'
-    );
-    // Hierarchy D3: the burnt-for-good caveat is tier-2 evidence, not a box under the icicle.
-    expect(svg.querySelector('[data-placeholder="burnt"]')).toBeNull();
-    expect(svg.querySelector('[data-placeholder="miners"]')).toHaveTextContent('paid in cellbases');
-    expect(issuance()).toHaveTextContent('still owed');
+    // R12: inside each box only the name and the share (1 + 3 + 3 CKB; 1 of 3 paid out).
+    const label = (key: string) => svg.querySelector(`[data-label="${key}"]`)!.textContent;
+    expect(label('total')).toBe('secondary issuance since genesis 7 CKB');
+    expect(label('miners')).toBe('miners 14.29%');
+    expect(label('compensation')).toBe('depositors 42.86%');
+    expect(label('burnt')).toBe('burnt 42.86% · no cell can ever claim it');
+    expect(label('paid')).toBe('paid out 33.3%');
+    expect(label('owed')).toBe('still owed 66.7%');
+    // No exact amount and no word under the boxes.
+    expect(svg.textContent).not.toMatch(/\.\d{8}/);
+    expect(svg.querySelector('[data-placeholder]')).toBeNull();
+    expect(svg.querySelector('[data-note]')).toBeNull();
     expect(issuance()).not.toHaveTextContent(/interest|earned/i);
   });
 
-  it('says where each share of capacity use goes, and why a deposit keeps its share, in one caption', () => {
+  it('gathers every exact amount in one quiet line under the icicle, then one caption', () => {
+    stubChartWidth(1400);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const line = within(issuance()).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'exact-amounts'
+    );
+    expect(line).toHaveTextContent(
+      'to miners 1.00000000 · for depositors 3.00000000 (paid out 1.00000000 · still owed 2.00000000 to 22,379 live cells) · burnt 3.00000000 CKB'
+    );
+    expect(line).toHaveClass('text-small', 'text-text-dim');
+    const svg = within(issuance()).getByRole('img', { name: /split three ways/ });
+    expect(svg.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const caption = within(issuance()).getByText(
+      '1.344 billion CKB a year, split in every block by how CKB is used: a deposit keeps its share, free CKB outside the DAO has its share burnt.'
+    );
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(line.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(issuance().lastElementChild).toBe(caption);
+  });
+
+  it('moves capacity use, its legend and its line, and the section note to tier 2 (V7)', () => {
     const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-    expect(issuance()).toHaveTextContent(
+    expect(within(issuance()).queryByLabelText('Current capacity use partition')).toBeNull();
+    expect(issuance()).not.toHaveTextContent(
+      /is used at block|occupied by cells|exact to the shannon/
+    );
+    // No note beside the heading.
+    expect(
+      within(issuance()).getByRole('heading', { level: 2 }).parentElement!.children
+    ).toHaveLength(1);
+    const works = within(tier2(container))
+      .getByRole('heading', { name: 'How the Nervos DAO works' })
+      .closest('section')!;
+    expect(within(works).getByLabelText('Current capacity use partition')).toBeInTheDocument();
+    expect(works).toHaveTextContent(
       'How all 10,000.00000000 CKB issued so far is used at block #5 · every block splits its issuance in these proportions'
     );
-    expect(issuance()).toHaveTextContent('occupied by cells 0.01% → miners');
-    expect(issuance()).toHaveTextContent(
+    expect(works).toHaveTextContent('occupied by cells 0.01% → miners');
+    expect(works).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
-    expect(issuance()).toHaveTextContent('everything else 95.49% → burnt');
-    // One caption under the bar (D3), after the bar and its legend in reading order.
-    const caption = within(issuance()).getByText(
-      "A deposit keeps its share of all CKB. Free CKB outside the DAO receives nothing: its share of every block's issuance is burnt."
+    expect(works).toHaveTextContent('everything else 95.49% → burnt');
+    expect(works).toHaveTextContent('Statistics are exact to the shannon at block #5');
+    // The icicle's former notes, in words.
+    expect(works).toHaveTextContent(
+      "The miners' share is s × U ÷ C of each block's secondary issuance s, paid in cellbases; the depositors' share accrues via AR and is paid out at withdrawals."
     );
-    const bar = within(issuance()).getByLabelText('Current capacity use partition');
-    expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The protocol caveats and the anchor link left tier 1 for the evidence (D3, D8).
-    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-    const caveats = [
+    // The former caption's long form stays in the explanation.
+    expect(works).toHaveTextContent(
+      'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
+    );
+    // The protocol caveats and the anchor link stay in tier 2 (D3, D8).
+    for (const caveat of [
       /Protocol occupied \(U\) includes the genesis virtual occupied baseline; it is not the real occupied size of live cells\./,
       /No cell can ever claim the burnt share\. A hardfork could only put future secondary issuance to use; what is burnt stays burnt\./,
       /withdrawal requests take no share/,
-    ];
-    for (const caveat of caveats) {
+    ]) {
       expect(issuance()).not.toHaveTextContent(caveat);
-      expect(tier2).toHaveTextContent(caveat);
+      expect(tier2(container)).toHaveTextContent(caveat);
     }
     expect(
       within(issuance()).queryByRole('link', { name: /Verify statistics anchor block/ })
     ).toBeNull();
   });
 
-  it('draws capacity use as a 22 px bar with each share written inside the segments that fit (R9)', () => {
+  it('draws capacity use as an 18 px bar with each share written inside the segments that fit (R9)', () => {
     stubChartWidth(1400);
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const bar = within(issuance()).getByLabelText('Current capacity use partition');
-    expect(bar).toHaveClass('h-[22px]');
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(tier2(container)).getByLabelText('Current capacity use partition');
+    expect(bar).toHaveClass('h-[18px]');
     const segments = Array.from(bar.children) as HTMLElement[];
     expect(segments.map((s) => s.title)).toEqual([
       'Occupied: 1.00000000 CKB',
@@ -541,22 +691,22 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     ]);
   });
 
-  it('writes no share inside the bar before its width is known or where a segment is too narrow', () => {
+  it('writes no share inside the capacity bar before its width is known or where a segment is too narrow', () => {
     stubChartWidth(358);
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const bar = within(issuance()).getByLabelText('Current capacity use partition');
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(tier2(container)).getByLabelText('Current capacity use partition');
     // 4.50 % of 358 px is 16 px, too narrow for "4.50%"; the legend still states every share.
     expect(Array.from(bar.children).map((s) => s.textContent)).toEqual([
       '',
       '',
       'everything else 95.49% → burnt',
     ]);
-    expect(issuance()).toHaveTextContent(
+    expect(tier2(container)).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50%'
     );
   });
 
-  it('states every part in words at phone width instead of shrinking the drawing', () => {
+  it('states every part with its share and exact amount at phone width instead of shrinking the drawing', () => {
     stubChartWidth(358);
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const svg = within(issuance()).getByRole('img', {
@@ -564,12 +714,16 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     });
     expect(svg.querySelectorAll('text')).toHaveLength(0);
     const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
-    expect(legend).toHaveTextContent('to miners');
-    expect(legend).toHaveTextContent('paid out');
-    expect(legend).toHaveTextContent('burnt');
-    // Hierarchy D3: "gone for good" stays; the caveat behind it is tier-2 evidence.
-    expect(legend).toHaveTextContent('gone for good');
-    expect(legend).not.toHaveTextContent(/No cell can ever claim/);
+    expect(legend).toHaveTextContent('secondary issuance since genesis 7.00000000 CKB');
+    expect(legend).toHaveTextContent('miners 14.29% · 1.00000000');
+    expect(legend).toHaveTextContent('depositors 42.86% · 3.00000000');
+    expect(legend).toHaveTextContent('paid out 33.3% · 1.00000000');
+    expect(legend).toHaveTextContent('still owed 66.7% · 2.00000000 to 22,379 live cells');
+    expect(legend).toHaveTextContent('burnt 42.86% · 3.00000000 · no cell can ever claim it');
+    // The one line is the desktop form; the list replaces it.
+    expect(
+      within(issuance()).queryByText((_, el) => el?.getAttribute('data-role') === 'exact-amounts')
+    ).toBeNull();
   });
 });
 
@@ -584,12 +738,15 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
-      ).toHaveTextContent('+200.00000000 CKB compensation')
+      ).toHaveTextContent(/^\+200\.00000000 CKB$/)
     );
-    // R2b-a 43: the calculator says which free capacity it assumed (board: "its 9,898 free CKB").
+    // Board v3: one line, the owed amount white (R11: the figure is the page's one gold text).
     expect(reading).toHaveTextContent(
-      '10,000 CKB deposited on 2019-11-16 is owed +200.00000000 CKB compensation · 2.0000% on its 9,898 free CKB, by #5'
+      '10,000 CKB deposited 2019-11-16 → +200.00000000 CKB compensation by #5tap or hover'
     );
+    expect(
+      within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
+    ).toHaveClass('text-text-bright');
     // One compensation path: the API's calculator, the day's closing block → the evidence tip.
     expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 1, 5);
     expect(grows()).not.toHaveTextContent(/interest|earned/i);
@@ -605,42 +762,65 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     expect(chart).toHaveTextContent('2019-11-19');
     fireEvent.keyDown(chart, { key: 'ArrowLeft' });
     const reading = within(grows()).getByLabelText('Deposit reading');
-    expect(reading).toHaveTextContent('10,000 CKB deposited on 2019-11-18');
-    expect(reading).toHaveTextContent('0.9901% on its');
+    expect(reading).toHaveTextContent('10,000 CKB deposited 2019-11-18 →');
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
-      ).toHaveTextContent('+98.01980198 CKB compensation')
+      ).toHaveTextContent(/^\+98\.01980198 CKB$/)
     );
     expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 3, 5);
     const years = within(grows()).getByRole('img', {
       name: 'Compensation on free capacity in each year since launch',
     });
     // Anniversary to anniversary only: the year in progress (to the tip) is not a bar.
-    expect(years.querySelectorAll('[data-year]')).toHaveLength(1);
-    expect(years).toHaveTextContent('1.00%from 1970-01');
-    // Evidence first (D4): the chart, its reading and the year bars, then ONE caption at the bottom.
+    const bars = years.querySelectorAll('[data-year]');
+    expect(bars).toHaveLength(1);
+    // Each bar carries its share above it (small) in 72 px; one axis line names the years under it.
+    expect(years).toHaveClass('h-[72px]');
+    expect(bars[0]).toHaveTextContent(/^1\.00%$/);
+    expect(bars[0].querySelector('span')).toHaveClass('text-small');
+    expect(bars[0]).toHaveAttribute('title', 'from 1970-01-01: 1.00%');
+    const axis = years.nextElementSibling!;
+    expect(axis).toHaveTextContent('compensation in each year since launch · 1970-01 →→ 1970-01');
+    expect(axis).toHaveClass('text-meta');
+    // Evidence first (D4): the chart, its reading and the year bars, then ONE caption at the bottom,
+    // one line inside 640 px.
     const caption = within(grows()).getByText(
-      'A deposit grows by AR at its withdrawal request ÷ AR at its deposit, on the capacity it does not occupy. The curve flattens as more CKB exists.'
+      'A deposit grows by AR at its withdrawal request ÷ AR at its deposit.'
     );
     expect(chart.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(years.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(caption).toHaveClass('text-body');
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(grows().lastElementChild).toBe(caption);
   });
 
-  it('notes AR at the tip and its growth since genesis beside the heading (D4)', () => {
+  it("names AR inside its 200 px plot and writes the tip AR at the line's end, no note beside the heading (V3)", async () => {
+    stubChartWidth(600);
     stubCalculator();
     const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
+    expect(chart).toHaveAttribute('height', '200');
+    expect(chart.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      'AR, the accumulated rate · 1.0 at genesis'
+    );
+    // the tip AR cut (not rounded) to four places
+    expect(chart.querySelector('[data-role="end-label"]')).toHaveTextContent(/^1\.0150$/);
+    expect(grows().querySelector('figcaption')).toBeNull();
     const heading = within(grows()).getByRole('heading', { level: 2 });
     expect(heading).toHaveTextContent('How a deposit grows');
-    expect(heading.parentElement).toHaveTextContent(
-      'How a deposit growsAR 1.0200 at the tip · +2.0000% since genesis'
+    // The heading stands alone: no note beside it.
+    expect(heading.parentElement).toBe(grows());
+    expect(grows()).not.toHaveTextContent(/at the tip/);
+    // The opening paragraph and the rest of the caption read in the evidence.
+    expect(grows()).not.toHaveTextContent(/growth index|since genesis/);
+    const tier2 = container.querySelector('[data-tier="2"]');
+    expect(tier2).toHaveTextContent("AR, in every block header, is the DAO's growth index.");
+    expect(tier2).toHaveTextContent(
+      'A deposit grows on the capacity it does not occupy; the curve flattens as more CKB exists.'
     );
-    // The opening paragraph left tier 1: what AR is now reads in the evidence.
-    expect(grows()).not.toHaveTextContent(/growth index/);
-    expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
-      "AR, in every block header, is the DAO's growth index."
+    expect(tier2).toHaveTextContent(
+      "The deposit reading under “How a deposit grows” is the API calculator's for 10,000 CKB in a standard deposit cell: compensation accrues on its free capacity, the CKB the cell does not occupy."
     );
   });
 
@@ -656,14 +836,14 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // a touch tap on the last day (the plot ends at 590 of 600 px): the pointer leaves first
     fireEvent.pointerLeave(chart);
     fireEvent.click(chart, { clientX: 590 });
-    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited on 2019-11-19 is owed/);
+    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited 2019-11-19 →/);
     await waitFor(() =>
       expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 4, 5)
     );
     fireEvent.pointerLeave(chart);
-    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited on 2019-11-19/);
+    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited 2019-11-19/);
     fireEvent.click(chart, { clientX: 590 });
-    expect(reading).toHaveTextContent(/^10,000 CKB deposited on 2019-11-16 is owed/);
+    expect(reading).toHaveTextContent(/^10,000 CKB deposited 2019-11-16 →/);
   });
 
   it('refuses a daily AR series with a missing day', async () => {
@@ -686,50 +866,111 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
   });
 });
 
-describe('DaoBoard when deposits can leave (DAO-14)', () => {
-  it('says what ends its cycle within a day and what is already requested, chart first (D5)', () => {
+describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const windows = () => screen.getByRole('region', { name: 'When deposits can leave' });
+
+  it('draws 200 px bars named inside the plot, one axis line and one reading row (V4)', () => {
     stubCalculator();
-    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const windows = screen.getByRole('region', { name: 'When deposits can leave' });
-    expect(windows).toHaveTextContent('days from now · 6 epochs a day2 deposits');
-    // The readout row under the bars (hairline, tap or hover) opens on the next day's cycle end.
-    const reading = within(windows).getByRole('status', { name: 'Cycle reading' });
-    expect(reading).toHaveClass('border-t', 'text-small');
-    expect(reading).toHaveTextContent(
-      '300.00000000 CKB in 1 deposit ends its cycle within a day · epochs +0 to +6tap or hover'
-    );
-    expect(windows).toHaveTextContent('withdrawals already requested · 2 cells · 900.00000000 CKB');
-    expect(windows).toHaveTextContent(
-      '400.00000000 CKB in 1 cell is past its window and can be claimed now · 500.00000000 CKB in 1 cell waits for its window'
-    );
-    const ready = within(windows).getByRole('img', { name: /^Withdrawal requests/ });
-    expect(ready).toHaveAccessibleName(
-      'Withdrawal requests: past the window 400.00000000 CKB, waiting 500.00000000 CKB'
-    );
-    expect(ready).toHaveClass('h-[18px]');
-    // The next day's bar leads; the rest are quieter (board). Bars are 180 px tall (R9).
-    const cycles = within(windows).getByRole('list', { name: 'Phase-0 cycle boundaries' });
-    for (const item of within(cycles).getAllByRole('listitem'))
-      expect(item).toHaveClass('h-[180px]');
-    const bars = windows.querySelectorAll('[data-window-bar]');
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const cycles = within(windows()).getByRole('list', { name: 'Phase-0 cycle boundaries' });
+    const items = within(cycles).getAllByRole('listitem');
+    for (const item of items) {
+      expect(item).toHaveClass('h-[200px]');
+      // no day number under each bar any more: the axis line names the days
+      expect(item.textContent).toBe('');
+    }
+    const name = within(windows()).getByText('CKB whose 180-epoch cycle ends in the next 30 days');
+    expect(name).toHaveClass('text-meta', 'text-text-dim', 'absolute');
+    expect(name.parentElement).toContainElement(cycles);
+    const axis = cycles.parentElement!.nextElementSibling!;
+    expect(Array.from(axis.children).map((c) => c.textContent)).toEqual([
+      'in a day',
+      'day 10',
+      'day 20',
+      'day 30',
+    ]);
+    expect(axis).toHaveClass('text-meta');
+    // The next day's bar leads; the rest are quieter (board).
+    const bars = windows().querySelectorAll('[data-window-bar]');
     expect(bars).toHaveLength(30);
     expect(bars[0]).toHaveClass('opacity-90');
     expect(bars[1]).toHaveClass('opacity-50');
-    // ONE caption, at the bottom, after the evidence.
-    const caption = within(windows).getByText(
-      'A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A withdrawal completes only when a cycle ends.'
+    // The readout row under the bars (hairline, tap or hover): the next day's cycle end, one line.
+    const reading = within(windows()).getByRole('status', { name: 'Cycle reading' });
+    expect(reading).toHaveClass('border-t', 'text-small');
+    expect(reading).toHaveTextContent(
+      /^300\.00000000 CKB in 1 deposit ends its cycle within a daytap or hover$/
     );
-    expect(cycles.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(ready.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(caption).toHaveClass('text-body');
-    // How to read the bars, and what a request's compensation does, moved to tier 2.
+    // No note beside the heading, no "days from now" line.
+    const heading = within(windows()).getByRole('heading', { level: 2 });
+    expect(heading.parentElement!.children).toHaveLength(1);
+    expect(windows()).not.toHaveTextContent(/indexed epoch|days from now|6 epochs a day/);
+  });
+
+  it('reads any day of the bars on focus or hover, exactly', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    fireEvent.focus(
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1 deposits, 30000000000 shannons/)
+    );
+    expect(within(windows()).getByRole('status', { name: 'Cycle reading' })).toHaveTextContent(
+      'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
+    );
+  });
+
+  it('draws the requested withdrawals as a 28 px bar with the claimable amount inside it and the waiting one under it', () => {
+    stubCalculator();
+    stubChartWidth(800);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(windows()).toHaveTextContent('withdrawals already requested · 2 cells');
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar).toHaveAccessibleName(
+      'Withdrawal requests: past the window 400.00000000 CKB, waiting 500.00000000 CKB'
+    );
+    expect(bar).toHaveClass('h-[28px]');
+    // 400 of 900 is 44 % of 800 px: room for the claimable words inside its segment.
+    expect(bar.firstElementChild).toHaveTextContent('claimable now 400.00000000 CKB · 1 cell');
+    const waiting = bar.nextElementSibling!;
+    expect(waiting).toHaveTextContent(/^waiting for its window 500\.00000000 CKB · 1 cell$/);
+    expect(waiting).toHaveClass('text-meta', 'text-right');
+  });
+
+  it('writes the claimable amount under the bar where its segment is too narrow for it', () => {
+    stubCalculator();
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar.firstElementChild!.textContent).toBe('');
+    const under = bar.nextElementSibling!;
+    expect(under).toHaveTextContent(
+      'claimable now 400.00000000 CKB · 1 cellwaiting for its window 500.00000000 CKB · 1 cell'
+    );
+  });
+
+  it('ends with one one-line caption and keeps the cycle notes, the epoch and the caveats in tier 2', () => {
+    stubCalculator();
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const caption = within(windows()).getByText(
+      'A withdrawal completes only at the end of a 180-epoch cycle, about 30 days.'
+    );
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    expect(windows().lastElementChild).toBe(caption);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     for (const moved of [
+      /A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made\./,
       /each bar is the CKB whose current cycle ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted calendar dates\./,
       /compensation stopped growing at the request/,
       /Epoch-lock readiness alone does not prove a complete withdraw transaction; the required input, headers, witnesses and script execution still apply\./,
+      /the indexed epoch is 185\+2\/4/,
     ]) {
-      expect(windows).not.toHaveTextContent(moved);
+      expect(windows()).not.toHaveTextContent(moved);
       expect(tier2).toHaveTextContent(moved);
     }
   });
@@ -757,6 +998,36 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     );
   });
 
+  it('writes the group names and shares inside a 28 px concentration bar, with no legend row (R15)', () => {
+    stubCalculator();
+    stubChartWidth(1408);
+    const many = {
+      ...evidence,
+      phase0: { capacity: '10000', count: 20000 },
+      concentration: {
+        ...evidence.concentration,
+        currentDepositors: 16641,
+        top1Capacity: '827',
+        top10Capacity: '2620',
+        top100Capacity: '5727',
+      },
+    };
+    const { container } = render(
+      <DaoBoard statistics={{ ...stats, totalDeposited: '10000' }} evidence={many} />
+    );
+    const bar = within(who()).getByRole('img', { name: /^Share of deposits/ });
+    expect(bar).toHaveClass('h-[28px]');
+    expect(Array.from(bar.children).map((s) => s.textContent)).toEqual([
+      'largest 8.27%',
+      'next 9 · 17.93%',
+      'next 90 · 31.07%',
+      'the other 16,541 · 42.73%',
+    ]);
+    expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it('names only the groups that exist when there are few depositors', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
@@ -770,9 +1041,17 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     stubChartWidth(1248);
     const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     const table = within(who()).getByRole('table', { name: 'Largest depositors' });
-    // Board v2: depositor rows read at body (13 px) under quieter column heads.
+    // Board v2: depositor rows read at body (13 px) under quieter column heads; v3 (R15): rows of
+    // 32–34 px (6 px above and below a 20.8 px line).
     for (const cell of Array.from(table.querySelectorAll('tbody td')))
-      expect(cell).toHaveClass('text-body');
+      expect(cell).toHaveClass('text-body', 'py-1.5');
+    // The Lock column names the lock; its code hash and hash type are the link's title.
+    const lock = within(table).getAllByRole('link', { name: /^0x9bd7e06f/ })[0];
+    expect(lock.textContent).toBe('0x9bd7e06f…');
+    expect(lock).toHaveAttribute(
+      'title',
+      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8 (type)'
+    );
     unmount();
     vi.unstubAllGlobals();
     stubChartWidth(358);
@@ -854,6 +1133,10 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
       'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
     );
     expect(t2).toHaveTextContent('102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8');
+    // The feed's former note (hierarchy v3, V6).
+    expect(t2).toHaveTextContent(
+      '“Recent DAO activity” lists deposits, withdrawal requests and withdrawals, newest first.'
+    );
   });
 
   it('fails when the statistics row S is not still owed + burnt', () => {
@@ -905,39 +1188,18 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
 describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('opens the hero with the page intro above the figure and the metrics (board v2)', () => {
-    stubCalculator();
-    render(
-      <DaoBoard
-        statistics={stats}
-        evidence={evidence}
-        intro={<h1>Nervos DAO</h1>}
-        depositedHistory={history}
-        circulationHistory={ratio}
-      />
-    );
-    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
-    const title = within(hero).getByRole('heading', { name: 'Nervos DAO' });
-    const figure = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
-    const metrics = within(hero).getAllByRole('term')[0];
-    expect(title.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(title.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The figure and the metrics share the row under the intro, not the intro's column.
-    expect(figure.parentElement).toBe(metrics.closest('dl')!.parentElement);
-    expect(title.parentElement).not.toBe(figure.parentElement);
-  });
-
   it('sizes the deposited amount so 22 digits fit a 358 px column (390 px overflow)', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const amount = screen.getByText((_, el) => el?.getAttribute('data-role') === 'deposited');
     // R4: the display step from 640 up, index (26 px) below it: 13 + 9 characters at 26 / 22 px
-    // are 322 px, and the unit's space is set at body, so " CKB" ends at 353 px.
-    expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
-    // The fraction (its trailing zeros quieter still) is one hero-sized, dim run.
+    // are 322 px, and the unit's space is set at body, so " CKB" ends at 353 px. R11: the page's
+    // one gold text, its fraction the dim gold.
+    expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-gold');
+    // The fraction (its trailing zeros quieter still) is one hero-sized, dim-gold run.
     const fraction = amount.querySelector('.text-hero')!;
     expect(fraction).toHaveTextContent(/^\.00000000$/);
-    expect(fraction).toHaveClass('text-text-dim');
+    expect(fraction).toHaveClass('text-gold-dim');
     expect(within(amount).getByText(/CKB$/)).toHaveClass('text-body', 'text-text-dim');
   });
 
@@ -948,7 +1210,8 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     const chart = await within(
       screen.getByRole('region', { name: 'How a deposit grows' })
     ).findByRole('img', { name: /^AR by date/ });
-    const ticks = Array.from(chart.querySelectorAll('text[text-anchor="end"]')).map((t) =>
+    // Round values inside the plot (hierarchy v3), not in a gutter.
+    const ticks = Array.from(chart.querySelectorAll('[data-role="y-tick"]')).map((t) =>
       t.textContent!.trim()
     );
     expect(ticks[0]).not.toBe('0');
@@ -958,28 +1221,25 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
 });
 
 describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
-  it('spaces sections 72 px apart, History 64 px under the hero, the two columns 56 px apart', () => {
+  it('spaces the first section 64 px under the hero, the rest 72 px apart, the two columns 56 px apart', () => {
     stubCalculator();
     const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     // Explicit gaps, no space-y-* (its sibling selector would decide the margins instead).
     expect(tier1.className).not.toMatch(/space-y-/);
     const block = (name: string) => screen.getByRole('region', { name }).parentElement!;
-    expect(screen.getByRole('region', { name: 'Nervos DAO summary' }).parentElement).toBe(tier1);
-    expect(block('History')).toHaveClass('mt-16');
-    expect(block('Where secondary issuance goes')).toHaveClass('mt-[72px]');
+    // The hero block (the hero section, its reading and the metric row) opens tier 1.
+    expect(block('Nervos DAO').parentElement).toBe(tier1);
+    expect(tier1.firstElementChild).toBe(block('Nervos DAO'));
+    expect(block('Where secondary issuance goes')).toHaveClass('mt-16');
     const columns = block('How a deposit grows');
     expect(columns).toBe(block('When deposits can leave'));
     expect(columns).toHaveClass('mt-[72px]', 'lg:grid-cols-2', 'lg:gap-x-14', 'gap-y-[72px]');
     expect(block('Who deposits')).toHaveClass('mt-[72px]');
     expect(screen.getByTestId('sources').parentElement).toHaveClass('mt-[72px]');
     for (const child of Array.from(tier1.children)) expect(child.parentElement).toBe(tier1);
-    // No rule between tier-1 sections; their headings are the section step, notes meta (board).
+    // No rule between tier-1 sections; their headings are the section step (board).
     const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
-    expect(within(issuance).getByText(/^since genesis · exact to the shannon/)).toHaveClass(
-      'text-meta',
-      'text-text-dim'
-    );
     expect(
       within(screen.getByRole('region', { name: 'Who deposits' })).getByRole('link', {
         name: /depositors →$/,
@@ -992,6 +1252,67 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     );
   });
 
+  it('keeps one gold text in tier 1: the deposited figure (R11, V8)', async () => {
+    stubChartWidth(1400);
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const grows = screen.getByRole('region', { name: 'How a deposit grows' });
+    await within(grows).findByRole('img', { name: /^AR by date/ });
+    await waitFor(() =>
+      expect(within(grows).getByText((_, el) => el?.getAttribute('data-role') === 'owed'))
+    );
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const deposited = tier1.querySelector('[data-role="deposited"]')!;
+    // HTML text: every gold ink class sits on the figure (its fraction is the dim gold).
+    const goldInk = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => /^text-(gold|warning)(-dim|-bright)?(\/\d+)?$/.test(c))
+    );
+    expect(goldInk.length).toBeGreaterThan(0);
+    for (const el of goldInk) expect(deposited.contains(el)).toBe(true);
+    // SVG text: none drawn in gold (the plots' fills, strokes and bars may be gold).
+    for (const t of Array.from(tier1.querySelectorAll('svg text, svg tspan'))) {
+      expect(t.getAttribute('class') ?? '').not.toMatch(/fill-gold/);
+      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(/#f2c55c|#d0a840/);
+    }
+  });
+
+  it('names every tier-1 chart inside its plot and keeps captions and the lede within 640 px (R13, R14)', async () => {
+    stubChartWidth(1400);
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    await within(screen.getByRole('region', { name: 'How a deposit grows' })).findByRole('img', {
+      name: /^AR by date/,
+    });
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1.querySelector('figcaption')).toBeNull();
+    // Captions and the lede (the exact-amounts line is data, one line across the column).
+    const prose = Array.from(
+      tier1.querySelectorAll('section > p:not([data-role="exact-amounts"])')
+    );
+    expect(prose.length).toBeGreaterThanOrEqual(4);
+    for (const p of prose) expect(p.className).toMatch(/(^|\s)max-w-\[(640|560)px\](\s|$)/);
+    // "tap or hover" at most once per section (R14).
+    for (const section of Array.from(tier1.querySelectorAll('section')))
+      expect(section.querySelectorAll('[data-hint="tap-or-hover"]').length).toBeLessThanOrEqual(1);
+  });
+
   it('keeps tier 1 within the prose budget: at most three caption-length blocks (§0, §4)', async () => {
     stubChartWidth(1400);
     stubCalculator();
@@ -1001,18 +1322,12 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
         evidence={evidence}
         depositedHistory={history}
         circulationHistory={ratio}
-        intro={
-          <p>
-            CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance
-            dilutes everything else. <a href="#evidence">How it works ↓</a>
-          </p>
-        }
       />
     );
     await within(screen.getByRole('region', { name: 'How a deposit grows' })).findByRole('img', {
       name: /^AR by date/,
     });
-    expectTier1Budget(container);
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 });
 
@@ -1025,7 +1340,7 @@ describe('DaoBoard 24 h counts (DAO-10, R2b-a 41)', () => {
         evidence={evidence}
       />
     );
-    const hero = () => screen.getByRole('region', { name: 'Nervos DAO summary' });
+    const hero = () => screen.getByRole('region', { name: 'Nervos DAO' });
     expect(hero()).toHaveTextContent('1 deposit in, 1 withdrawal request out');
     rerender(
       <DaoBoard
