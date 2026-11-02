@@ -54,11 +54,13 @@ describe('DaoHistory (DAO-11, DAO-18)', () => {
     expect(container.querySelectorAll('[data-panel]')).toHaveLength(3);
     expect(screen.getByRole('heading', { name: 'History' })).toBeInTheDocument();
     const reading = screen.getByLabelText('History reading');
-    expect(reading).toHaveTextContent(`${date(154)} · last full day`);
-    expect(reading).toHaveTextContent('deposited101,190.00000000');
-    expect(reading).toHaveTextContent('share of circulation11.5400%');
+    // Board v2 (D2): one line under the figure — the day, deposited, share, depositors, the week.
+    expect(reading).toHaveTextContent(
+      `${date(154)} · last full daydeposited101,190.00000000share11.5400%depositors254week from ${date(148)}+10.00000000 CKB`
+    );
     // Weeks are named by the day they start (board: "week from"), the last one ends today.
-    expect(reading).toHaveTextContent(`net change, week from ${date(148)}+10.00000000 CKB`);
+    const svg = container.querySelector('svg')!;
+    expect(svg.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('moves the one reading with the pointer across all panels', () => {
@@ -74,7 +76,7 @@ describe('DaoHistory (DAO-11, DAO-18)', () => {
     expect(reading).toHaveTextContent(`${date(0)}deposited100,000.00000000`);
     expect(reading).not.toHaveTextContent('last full day');
     // Before the first whole week there is no weekly figure to read.
-    expect(reading).not.toHaveTextContent('net change');
+    expect(reading).not.toHaveTextContent('week from');
     expect(container.querySelectorAll('[data-cursor]')).toHaveLength(1);
     fireEvent.pointerLeave(overlay);
     expect(reading).toHaveTextContent('last full day');

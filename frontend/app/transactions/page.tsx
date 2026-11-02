@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useInRouterContext } from 'react-router-dom';
+import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
@@ -48,6 +50,14 @@ const KINDS: { value: TransactionKind; label: string; mark?: AssetClass; color: 
   { value: 'object', label: 'Objects', mark: 'objects', color: CLASS_COLORS.objects },
   { value: 'identity', label: 'Identities', mark: 'identities', color: CLASS_COLORS.identities },
 ];
+/**
+ * The kind a URL names (`/transactions?kind=dao`, the DAO page's "DAO transactions →"): a known
+ * kind, else All (hierarchy D11).
+ */
+function kindFromUrl(raw: string | null): TransactionKind {
+  const known = KINDS.find((option) => option.value === raw);
+  return known ? known.value : 'all';
+}
 type PoolRow = Awaited<ReturnType<typeof api.getPoolTransactions>>['data'][number];
 /**
  * Pool squares (TX-38): pending cyan, proposed gold (gold's "proposed" meaning), and a committed
@@ -170,11 +180,24 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
 }
 
 export default function TransactionsPage() {
-  const [kind, setKind] = useState<TransactionKind>('all');
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const inRouter = useInRouterContext();
+  const urlKind = kindFromUrl(searchParams.get('kind'));
+  const [kind, setKind] = useState<TransactionKind>(urlKind);
   const activityType = kind === 'all' ? undefined : kind;
   const [tab, setTab] = useState<'committed' | 'pool'>('committed');
   const committedPage = useCursorPagination();
   const poolPage = useCursorPagination();
+  const { reset: resetCommitted } = committedPage;
+  const { reset: resetPool } = poolPage;
+  // D11: the page follows its URL, also when a link or history entry changes it under this page.
+  useEffect(() => {
+    setKind(urlKind);
+    resetCommitted();
+    resetPool();
+  }, [urlKind, resetCommitted, resetPool]);
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
   const committed = useQuery({
     queryKey: ['transactions', committedPage.cursor, limit, activityType],
@@ -228,6 +251,14 @@ export default function TransactionsPage() {
     setKind(value);
     committedPage.reset();
     poolPage.reset();
+    // D11: the URL names the chosen kind (replace: a filter is not a step of history). Outside a
+    // router there is no address to keep in step, and leaving the page would reload it.
+    if (inRouter) {
+      const query = new URLSearchParams(searchParams);
+      if (value === 'all') query.delete('kind');
+      else query.set('kind', value);
+      router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
+    }
   };
   const poolColumns: ListColumn<PoolRow>[] = [
     {

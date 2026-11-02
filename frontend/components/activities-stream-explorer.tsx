@@ -7,6 +7,8 @@ import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
+import { useInRouterContext } from 'react-router-dom';
+import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import {
   api,
   type DailyActivityStats,
@@ -38,6 +40,15 @@ const FILTER_OPTIONS: Array<{
   { label: 'Identities', value: 'identity', mark: 'identities' },
   { label: 'Protocols', value: 'protocol' },
 ];
+
+/**
+ * The filter a URL names (`/activities?filter=dao`, the DAO page's "All DAO activity →"): a known
+ * chip value, else All (hierarchy D11).
+ */
+function filterFromUrl(raw: string | null): GlobalActivityFilter {
+  const known = FILTER_OPTIONS.find((option) => option.value === raw);
+  return known ? known.value : 'all';
+}
 
 const STREAM_KEYFRAMES = `
 @keyframes activity-stream-row-enter {
@@ -307,7 +318,14 @@ export function ActivitiesStreamExplorer({
 }) {
   useEffect(() => ensureKeyframes(), []);
 
-  const [selectedFilter, setSelectedFilter] = useState<GlobalActivityFilter>('all');
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const inRouter = useInRouterContext();
+  const urlFilter = filterFromUrl(searchParams.get('filter'));
+  const [selectedFilter, setSelectedFilter] = useState<GlobalActivityFilter>(urlFilter);
+  // D11: the stream follows its URL, also when a link or history entry changes it under this page.
+  useEffect(() => setSelectedFilter(urlFilter), [urlFilter]);
   const pageSize = usePageSize(PAGE_SIZE);
   const [prependedItems, setPrependedItems] = useState<GlobalActivity[]>([]);
   const [pendingNewItems, setPendingNewItems] = useState<GlobalActivity[]>([]);
@@ -444,6 +462,14 @@ export function ActivitiesStreamExplorer({
     startTransition(() => {
       setSelectedFilter(nextFilter);
     });
+    // D11: the URL names the chosen filter (replace: a filter is not a step of history). Outside a
+    // router there is no address to keep in step, and leaving the page would reload it.
+    if (inRouter) {
+      const query = new URLSearchParams(searchParams);
+      if (nextFilter === 'all') query.delete('filter');
+      else query.set('filter', nextFilter);
+      router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
+    }
   };
 
   const handleMergePending = () => {

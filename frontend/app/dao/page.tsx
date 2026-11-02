@@ -1,7 +1,6 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { DaoBoard } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
@@ -18,20 +17,21 @@ export default function DaoPage() {
     queryFn: api.getDaoCirculationRatioChart,
   });
 
+  // Hierarchy D1: one sentence and a pointer to the evidence; the concept itself is tier 2
+  // ("How the Nervos DAO works"), and "Explore DAO charts →" sits beside History.
   const intro = (
-    <div className="flex min-w-0 flex-col gap-2.5">
+    <div className="flex min-w-0 flex-col gap-2">
       <h1 className="text-text-bright text-index font-medium">Nervos DAO</h1>
-      <p className="text-text text-body max-w-[700px] leading-relaxed">
-        CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
-        billion CKB a year, is split by how CKB is used: depositors are compensated with the share
-        their deposits make up, miners get the share that is occupied, and the rest is burnt.
+      <p className="text-text text-body max-w-[1040px]">
+        CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance dilutes
+        everything else.{' '}
+        <a
+          href="#evidence"
+          className="text-text-dim hover:text-text-bright whitespace-nowrap hover:underline"
+        >
+          How it works ↓
+        </a>
       </p>
-      <Link
-        href="/charts/total-deposit"
-        className="text-text hover:text-text-bright text-small w-fit font-mono hover:underline"
-      >
-        Explore DAO charts →
-      </Link>
     </div>
   );
 

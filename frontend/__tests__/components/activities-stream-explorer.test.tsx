@@ -6,7 +6,11 @@ import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
+import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
+// D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
+// the page; outside a router it reads window.location, as the stub's empty URL did.
+vi.mock('@/src/navigation', async (importOriginal) => await importOriginal());
 vi.mock('@/lib/api', () => ({
   api: {
     getGlobalActivities: vi.fn(),
@@ -734,5 +738,77 @@ describe('ActivitiesStreamExplorer', () => {
 
     expect(await screen.findByText(exactAmount('+1.00000000 CKB'))).toBeInTheDocument();
     expect(await screen.findByText('Could not refresh: refresh failed')).toBeInTheDocument();
+  });
+});
+
+// Hierarchy D11 (ruling R7): "All DAO activity →" on /dao links /activities?filter=dao, so the
+// stream starts on the filter its URL names and writes a chosen filter back (replace, not push).
+describe('ActivitiesStreamExplorer filter in the URL (D11)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getGlobalActivities).mockResolvedValue({
+      data: [],
+      limit: DEFAULT_PAGE_SIZE,
+      hasMore: false,
+      nextCursor: null,
+    });
+  });
+
+  function renderAt(url: string) {
+    const router = createMemoryRouter([{ path: '*', element: <ActivitiesStreamExplorer /> }], {
+      initialEntries: [url],
+    });
+    render(<RouterProvider router={router} />);
+    return router;
+  }
+  const chip = (name: string) =>
+    within(screen.getByRole('group', { name: 'Filter by kind' })).getByRole('button', { name });
+
+  it('starts on the filter its URL names and asks the API for it (?filter=dao)', async () => {
+    renderAt('/mainnet/activities?filter=dao');
+    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
+    expect(chip('All')).toHaveAttribute('aria-pressed', 'false');
+    await waitFor(() =>
+      expect(api.getGlobalActivities).toHaveBeenCalledWith(
+        expect.objectContaining({ filter: 'dao', limit: DEFAULT_PAGE_SIZE })
+      )
+    );
+    expect(api.getGlobalActivities).not.toHaveBeenCalledWith(
+      expect.objectContaining({ filter: 'all' })
+    );
+  });
+
+  it.each(['?filter=interest', ''])(
+    'starts on All when the URL names an unknown filter or none (%s)',
+    async (search) => {
+      renderAt(`/mainnet/activities${search}`);
+      expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+      await waitFor(() =>
+        expect(api.getGlobalActivities).toHaveBeenCalledWith(
+          expect.objectContaining({ filter: 'all' })
+        )
+      );
+    }
+  );
+
+  it('writes a chosen filter back to the URL by replace, and All drops it', async () => {
+    const router = renderAt('/mainnet/activities?filter=dao');
+    fireEvent.click(chip('Tokens'));
+    await waitFor(() => expect(router.state.location.search).toBe('?filter=token'));
+    expect(router.state.location.pathname).toBe('/mainnet/activities');
+    expect(router.state.historyAction).toBe('REPLACE');
+    expect(chip('Tokens')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(chip('All'));
+    await waitFor(() => expect(router.state.location.search).toBe(''));
+    expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('follows the URL when it changes under the mounted stream', async () => {
+    const router = renderAt('/mainnet/activities?filter=dao');
+    expect(chip('Nervos DAO')).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => {
+      await router.navigate('/mainnet/activities');
+    });
+    expect(chip('All')).toHaveAttribute('aria-pressed', 'true');
   });
 });
