@@ -233,13 +233,16 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(joy.querySelector('[data-role="party"]')).toHaveAttribute('data-party');
     expect(within(joy).getByText('JoyID')).toHaveAttribute('data-role', 'lock-kind');
     expect(joy.querySelector('[data-ckb-amount]')).toHaveTextContent('+3,052.11026713 CKB');
-    expect(within(joy).getByRole('link', { name: '+13,000.19363874 RGB++' })).toBeInTheDocument();
+    // An asset delta is a signed delta: jade / rouge by sign like the CKB, its symbol dim.
+    const rgbpp = within(joy).getByRole('link', { name: '+13,000.19363874 RGB++' });
+    expect(rgbpp).toHaveClass('text-positive');
+    expect(within(rgbpp).getByText('RGB++')).toHaveClass('text-text-dim');
     expect(joy.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +207');
     // No second line per asset: the intent lock's LP delta is on its own participant line.
     const intent = lines(container).find((l) => l.textContent?.includes('s7p9j4')) as HTMLElement;
-    expect(
-      within(intent).getByRole('link', { name: `${MINUS}5,913.45087427 LP-UTXOSwap V1` })
-    ).toBeInTheDocument();
+    const lp = within(intent).getByRole('link', { name: `${MINUS}5,913.45087427 LP-UTXOSwap V1` });
+    expect(lp).toHaveClass('text-negative');
+    expect(within(lp).getByText('LP-UTXOSwap V1')).toHaveClass('text-text-dim');
     expect(intent.querySelector('[data-role="occupied"]')).toHaveTextContent(
       `occupied ${MINUS}231`
     );
@@ -270,12 +273,10 @@ describe('option A: every participant, one line each (D1)', () => {
         'whitespace-nowrap'
       );
     }
-    // Occupied last, in 11 px ghost ink.
-    expect(container.querySelector('[data-role="occupied"]')).toHaveClass(
-      'text-meta',
-      'text-text-ghost',
-      'whitespace-nowrap'
-    );
+    // Occupied last, 11 px, in the board's ghost tone (≈ #4a5268), readable — not the 1.7:1 token.
+    const occupied = container.querySelector('[data-role="occupied"]');
+    expect(occupied).toHaveClass('text-meta', 'text-text-dim/60', 'whitespace-nowrap');
+    expect(occupied).not.toHaveClass('text-text-ghost');
     // The three/four/five-track participant grid is gone.
     const box = container.querySelector('[data-role="participants"]') as HTMLElement;
     expect(box.className).not.toMatch(/grid/);

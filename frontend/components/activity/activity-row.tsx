@@ -381,7 +381,7 @@ function ItemOnLine({
 }) {
   return (
     <span data-role="item" className={cn('min-w-0 max-w-full', className)}>
-      <ItemDeltaFact item={item} tone={tone} />
+      <ItemDeltaFact item={item} tone={tone} symbol="dim" />
     </span>
   );
 }
@@ -444,8 +444,9 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 /**
  * One participant, one 18 px line (T7 · option A, Feed.dc.html column A): the address (and any
  * roles), the lock kind as a tag, a note the API attaches, the signed exact CKB, each item change
- * with its mark, and the occupied change last in 11 px ghost ink. The line wraps between those
- * items, in that order, when it cannot hold them — never inside one.
+ * with its mark (signed, by sign; symbol dim), and the occupied change last in the board's 11 px
+ * ghost tone (≈ #4a5268). The line wraps between those items, in that order, when it cannot hold
+ * them — never inside one.
  *
  * The asset boards' phone form (`foldObjects`, B#12) stays: below md the objects are one count
  * chip ("+2 objects") that opens them in place; tokens and identities stay as facts.
@@ -518,7 +519,7 @@ function ParticipantLine({
       {p.usedDelta !== '0' && (
         <span
           data-role="occupied"
-          className="text-meta text-text-ghost whitespace-nowrap tabular-nums"
+          className="text-meta text-text-dim/60 whitespace-nowrap tabular-nums"
         >
           occupied {formatOccupiedDelta(p.usedDelta)}
         </span>
@@ -618,7 +619,11 @@ export type ActivityRowProps = {
   /** F2 objects: fold a batch of objects behind "+N more objects", leading with `focusItemId` (OB-M3). */
   foldObjects?: boolean;
   focusItemId?: string;
-  /** Token amounts by sign (jade +, rouge −): only the Address board draws them so (BA-35). */
+  /**
+   * Token amounts: by sign (jade +, rouge −) by default — an asset delta is a signed delta, like
+   * the CKB beside it (T7 ruling, 2026-11-02; was the Address board only, BA-35). `plain` draws
+   * them bright.
+   */
   itemTone?: 'plain' | 'sign';
   /** Round 3 (R-4): a note the API attaches to one participant, keyed by its lock hash. */
   participantNotes?: ReadonlyMap<string, string>;
@@ -641,7 +646,7 @@ export function ActivityRow({
   evidence,
   foldObjects = false,
   focusItemId,
-  itemTone = 'plain',
+  itemTone = 'sign',
   participantNotes,
 }: ActivityRowProps) {
   const shown =
