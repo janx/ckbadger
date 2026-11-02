@@ -245,6 +245,8 @@ export function ByteScaleMap({
   if (cursor !== total)
     throw new Error(`${label}: byte map parts end at ${cursor}, not ${total} bytes`);
   const [ref, width] = useElementWidth<HTMLDivElement>();
+  // Many parts (a 72-gene DNA ruler) share 1 px gaps, so the gaps do not eat a phone column.
+  const options = { ...SCALE_DEFAULTS, gap: segments.length > 24 ? 1 : SCALE_DEFAULTS.gap };
   const room = (text: string) => text.length * META_CHAR_PX + 8;
   const fits = (text: string, w: number) => room(text) <= w;
   // Each part keeps room for its byte count (its short label), as the cell page's map does.
@@ -258,7 +260,7 @@ export function ByteScaleMap({
             end: s.end,
             min: s.minWidth ?? (s.short ? room(s.short) : undefined),
           })),
-          SCALE_DEFAULTS
+          options
         );
   const ticks =
     layout && width !== null
@@ -270,7 +272,7 @@ export function ByteScaleMap({
         role="group"
         aria-label={`${label} byte map`}
         className="flex h-[22px] min-w-0"
-        style={{ gap: SCALE_DEFAULTS.gap }}
+        style={{ gap: options.gap }}
         onMouseLeave={onHover ? () => onHover(null) : undefined}
       >
         {segments.map((s, i) => {

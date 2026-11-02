@@ -130,3 +130,28 @@ describe('ByteScaleMap (lane E, C5 / C6)', () => {
     expect(container.querySelector('[data-segment]')).toBeNull();
   });
 });
+
+describe('ByteScaleMap with many parts', () => {
+  it('narrows the gaps to 1 px so a 72-gene ruler stays to scale in a 358 px phone column', () => {
+    stubChartWidth(358);
+    const many: ScaleSegment[] = [
+      { key: 'name', start: 0, end: 40, label: 'name 40', color: '#68ccf0', title: 'name' },
+      ...Array.from({ length: 71 }, (_, i) => ({
+        key: `g${i}`,
+        start: 40 + i,
+        end: 41 + i,
+        label: '',
+        color: '#a98cf5',
+        title: `g${i}`,
+      })),
+    ];
+    const { container } = render(<ByteScaleMap label="DNA" total={111} segments={many} />);
+    expect(screen.getByRole('group', { name: 'DNA byte map' })).toHaveStyle({ gap: '1px' });
+    const widths = [...container.querySelectorAll<HTMLElement>('[data-segment]')].map((p) =>
+      Number.parseFloat(p.style.width)
+    );
+    // 71 one-byte genes at the 3 px floor, the 40-byte gene with the rest — wider than 60 px
+    expect(widths.slice(1).every((w) => w === 3)).toBe(true);
+    expect(widths[0]).toBeGreaterThan(60);
+  });
+});
