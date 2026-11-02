@@ -6,6 +6,7 @@ import { tokenProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import TokenDetailPage from '@/app/tokens/[typeHash]/client-page';
 import {
   api,
@@ -282,15 +283,47 @@ describe('Token board (F2 objects)', () => {
     vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, transfers24h: 0 });
     render(<TokenDetailPage typeHash={hash} />);
     await screen.findByRole('heading', { name: 'TEST' }, { timeout: 5000 });
-    const facts = screen.getByLabelText('Facts');
-    expect(facts).toHaveTextContent(
-      'Maximum supply: Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
+    // C7: the rail is the metrics row; each "not established" keeps its sentence in a title.
+    const facts = screen.getByRole('region', { name: 'Metrics' });
+    expect(within(facts).getByText('maximum supply not established')).toHaveAttribute(
+      'title',
+      'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
     );
-    expect(facts).toHaveTextContent(
+    expect(within(facts).getByText('Not established')).toHaveAttribute(
+      'title',
       'Not established. This token’s type script does not name an owner lock CKBadger can prove mints it.'
     );
     expect(facts).toHaveTextContent('· none in 24 h');
     expect(facts).not.toHaveTextContent('Live cells');
+  });
+
+  // Consistency round C7: the metrics row replaces the rail (one column), and the lede no longer
+  // restates it ("… exist, held by … Its cells hold …" was the rail twice).
+  it('opens with one metrics row and a lede that restates none of it (C7)', async () => {
+    vi.mocked(api.getTokenDistribution).mockResolvedValue({
+      holdersCount: 720,
+      totalSupply: '10000',
+      largestHolderBalance: '9449',
+      nextNineBalance: '381',
+      remainingBalance: '170',
+      unit: 'token',
+      decimals: 0,
+      buckets: [{ lowerBound: '0', upperBound: null, holdersCount: 720, balance: '10000' }],
+    });
+    const { container } = render(<TokenDetailPage typeHash={hash} />);
+    await screen.findByRole('heading', { name: 'TEST' }, { timeout: 5000 });
+    expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(
+      within(metrics)
+        .getAllByRole('term')
+        .map((t) => t.textContent)
+    ).toEqual(['Supply', 'Holders', 'Transfers', 'Issuer', 'CKB held in its cells']);
+    await waitFor(() => expect(metrics).toHaveTextContent('largest holds 94.49%'));
+    expect(screen.getByRole('banner')).not.toHaveTextContent(/exist, held by|Its cells hold/);
+    expect(ledeRestatements(container)).toEqual([]);
+    // The type hash, which the rail listed, names the token under its title.
+    expect(screen.getByRole('banner')).toHaveTextContent(hash);
   });
 
   it('opens with a 13 px identity line and tells the same-symbol tokens apart (IV-16)', async () => {

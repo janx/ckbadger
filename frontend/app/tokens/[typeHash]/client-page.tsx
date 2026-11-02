@@ -5,16 +5,15 @@ import { usePageSize } from '@/hooks/usePageSize';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
 import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
-import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
-import { formatTimeAgo, truncateHash } from '@/lib/utils';
+import { formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -104,18 +103,29 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   if (held !== null && occupied !== null && occupied > held)
     throw new Error(`${typeHash}: token occupied capacity exceeds held capacity`);
   const tokenLabel = t.symbol ?? t.name ?? 'Token';
+  // C7: the metrics row's note; a cap the type script does not fix keeps its reason in a title.
   const maximum =
     t.maximumSupplyStatus === 'limited' ? (
       t.maximumSupply === null ? (
-        <span>Unavailable</span>
+        <span>maximum supply unavailable</span>
       ) : (
-        <AssetAmount amount={t.maximumSupply} decimals={t.decimals} />
+        <span>
+          maximum <AssetAmount amount={t.maximumSupply} decimals={t.decimals} />
+        </span>
       )
     ) : t.maximumSupplyStatus === 'unlimited' ? (
-      'Unlimited'
+      <span>maximum supply unlimited</span>
     ) : (
-      NOT_ESTABLISHED_CAP
+      <span title={NOT_ESTABLISHED_CAP}>maximum supply not established</span>
     );
+  const largestShare =
+    concentration.data && BigInt(concentration.data.totalSupply) > BigInt(0)
+      ? formatScaledInteger(
+          BigInt(concentration.data.largestHolderBalance) * BigInt(100),
+          BigInt(concentration.data.totalSupply),
+          2
+        )
+      : null;
   return (
     <AssetDetailShell
       kind="tokens"
@@ -126,11 +136,15 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         { label: 'Tokens', href: '/inventory/tokens' },
       ]}
       identity={
-        <span className="text-body">
-          {formatStandard(t.standard)} ·{' '}
-          {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
-          {t.name && t.name !== t.symbol && <> · {t.name}</>}
-        </span>
+        <>
+          <span className="text-body">
+            {formatStandard(t.standard)} ·{' '}
+            {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
+            {t.name && t.name !== t.symbol && <> · {t.name}</>}
+          </span>{' '}
+          {/* C7: the type hash the rail listed names the token under its title, as an id does. */}
+          <Hash hash={t.typeScriptHash} truncate={false} className="text-meta" />
+        </>
       }
       intro={
         <div className="text-small space-y-3">
@@ -154,30 +168,8 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               )}
             </p>
           )}
-          <p>
-            <AssetAmount amount={t.totalSupply} decimals={t.decimals} /> {t.symbol} exist, held by{' '}
-            <AssetCount value={t.holdersCount} /> addresses.{' '}
-            {concentration.data && BigInt(concentration.data.totalSupply) > BigInt(0) && (
-              <>
-                The largest holder owns{' '}
-                {formatScaledInteger(
-                  BigInt(concentration.data.largestHolderBalance) * BigInt(100),
-                  BigInt(concentration.data.totalSupply),
-                  2
-                )}
-                % of the supply.{' '}
-              </>
-            )}
-            {held !== null && (
-              <>
-                Its cells hold <ExactCkb shannons={held} tone="plain" signed={false} wrap />
-                {occupied !== null && held > BigInt(0) && (
-                  <>, {formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied</>
-                )}
-                .
-              </>
-            )}
-          </p>
+          {/* C7: supply, holders, the largest holder's share and the CKB its cells hold are the
+              metrics row; the lede no longer says them twice. */}
           {latest.data ? (
             <>
               <AssetReadState error={latest.error} label="last token movement" retained />
@@ -233,79 +225,76 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           )}
         </div>
       }
-      facts={[
-        {
-          label: 'Supply',
-          value: (
-            <>
-              <span className="text-body">
-                <AssetAmount amount={t.totalSupply} decimals={t.decimals} />
-              </span>{' '}
-              <span className="text-text-dim text-small">{t.symbol}</span>
-              <div className="text-text-dim text-small mt-1">Maximum supply: {maximum}</div>
-            </>
-          ),
-        },
-        { label: 'Holders', value: <AssetCount value={t.holdersCount} /> },
-        {
-          label: 'Transfers',
-          value: (
-            <>
-              <AssetCount value={t.transfersCount} />
-              <span className="text-text-dim text-meta">
-                {' '}
-                ·{' '}
-                {t.transfers24h === 0 ? (
+      metrics={
+        <AssetMetrics
+          items={[
+            {
+              label: 'Supply',
+              value: <AssetAmount amount={t.totalSupply} decimals={t.decimals} />,
+              note: (
+                <>
+                  {t.symbol && <>{t.symbol} · </>}
+                  {maximum}
+                </>
+              ),
+            },
+            {
+              label: 'Holders',
+              value: <AssetCount value={t.holdersCount} />,
+              note: largestShare === null ? undefined : `largest holds ${largestShare}%`,
+            },
+            {
+              label: 'Transfers',
+              value: <AssetCount value={t.transfersCount} />,
+              note:
+                t.transfers24h === 0 ? (
                   'none in 24 h'
                 ) : (
                   <>
                     <AssetCount value={t.transfers24h} /> in 24 h
                   </>
-                )}
-              </span>
-            </>
-          ),
-        },
-        {
-          label: 'Issuer',
-          value: t.issuer ? (
-            <>
-              <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
-                <Hash
-                  hash={t.issuer.address ?? t.issuer.lockHash}
-                  startChars={12}
-                  endChars={6}
-                  copyable={false}
-                  className="text-small"
-                />
-              </AppLink>
-              <p className="text-text-dim text-meta mt-1">
-                {t.issuer.lockKind ?? 'Lock kind unavailable'} · owner lock proven by token script
-              </p>
-            </>
-          ) : (
-            <span className="text-text-dim text-small">{NOT_ESTABLISHED_ISSUER}</span>
-          ),
-        },
-        {
-          label: 'CKB held in its cells',
-          value:
-            held !== null && occupied !== null ? (
-              <CapacityPartition
-                subject="Token cells"
-                total={held.toString()}
-                occupied={occupied.toString()}
-                free={(held - occupied).toString()}
-              />
-            ) : (
-              <span className="text-text-dim">Capacity unavailable</span>
-            ),
-        },
-        {
-          label: 'Type hash',
-          value: <Hash hash={t.typeScriptHash} truncate={false} className="text-small break-all" />,
-        },
-      ]}
+                ),
+            },
+            {
+              label: 'Issuer',
+              size: 'body',
+              value: t.issuer ? (
+                <AppLink href={`/address/${t.issuer.address ?? t.issuer.lockHash}`}>
+                  <Hash
+                    hash={t.issuer.address ?? t.issuer.lockHash}
+                    startChars={12}
+                    endChars={6}
+                    copyable={false}
+                    className="text-body"
+                  />
+                </AppLink>
+              ) : (
+                <span title={NOT_ESTABLISHED_ISSUER}>Not established</span>
+              ),
+              note: t.issuer
+                ? `${t.issuer.lockKind ?? 'Lock kind unavailable'} · owner lock proven by token script`
+                : undefined,
+            },
+            {
+              label: 'CKB held in its cells',
+              value:
+                held !== null ? (
+                  <ExactCkb shannons={held} signed={false} tone="plain" wrap />
+                ) : (
+                  <span className="text-text-dim">Capacity unavailable</span>
+                ),
+              note:
+                held !== null && occupied !== null && held > BigInt(0) ? (
+                  <span
+                    title={`occupied ${formatCkbAmount(occupied).full} CKB · free ${formatCkbAmount(held - occupied).full} CKB`}
+                  >
+                    {formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied
+                  </span>
+                ) : undefined,
+            },
+          ]}
+        />
+      }
       feed={
         <AssetFeed
           queryKey={`token:${typeHash}`}
