@@ -123,6 +123,21 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     ).toBe(JSON.stringify(tagged, null, 2));
   });
 
+  // C16: a version with no records is one line — its name and "none" — not a heading over a
+  // "No records" paragraph (the survey's empty section).
+  it('states an empty .cell record list in one line', () => {
+    const p = structuredClone(dotcellProtocolProducer) as Extract<
+      ItemProtocol,
+      { kind: 'dotcell' }
+    >;
+    p.versions[0].decoded.records = [];
+    render(<DotcellStored protocol={p} item={dotcellItem()} />);
+    const records = screen.getByRole('region', { name: 'Records as stored · witness' });
+    expect(records).toHaveTextContent(/^Records as stored · witness · none in this version$/);
+    expect(records.children).toHaveLength(1);
+    expect(within(records).queryByText(/^No records/)).toBeNull();
+  });
+
   it('shows .cell records as stored, the shared lock and the ring successor by name', async () => {
     const p = structuredClone(dotcellProtocolProducer) as Extract<
       ItemProtocol,

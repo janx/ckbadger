@@ -34,8 +34,19 @@ export function identityDataTitle(standard: IdentityStandard) {
   };
 }
 
-/** A tier-2 section: its heading quiet inside tier 2 (FINAL_REVIEW, ID-C12), named for the outline. */
-function Tier2Section({ title, children }: { title: string; children: ReactNode }) {
+/**
+ * A tier-2 section: its heading quiet inside tier 2 (FINAL_REVIEW, ID-C12), named for the outline.
+ * `empty` (consistency C16): the section has nothing to show, said in the heading's own line
+ * ("Records as stored · witness · none in this version") instead of a heading over a "No …" line.
+ */
+function Tier2Section({
+  title,
+  empty,
+  children,
+}: { title: string } & (
+  | { empty: string; children?: never }
+  | { empty?: never; children: ReactNode }
+)) {
   const tier = useDetailTier();
   return (
     <section aria-label={title} className="min-w-0 space-y-3">
@@ -46,6 +57,9 @@ function Tier2Section({ title, children }: { title: string; children: ReactNode 
         )}
       >
         {title}
+        {empty !== undefined && (
+          <span className="text-text-dim text-small font-normal"> · {empty}</span>
+        )}
       </h2>
       {children}
     </section>
@@ -254,8 +268,10 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
   });
   return (
     <>
-      <Tier2Section title="Records as stored · witness">
-        {d.records.length ? (
+      {d.records.length === 0 ? (
+        <Tier2Section title="Records as stored · witness" empty="none in this version" />
+      ) : (
+        <Tier2Section title="Records as stored · witness">
           <div className="text-small">
             {d.records.map((r, i) => (
               <div
@@ -270,10 +286,8 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               </div>
             ))}
           </div>
-        ) : (
-          <p className="text-text-dim text-small">No records in this version.</p>
-        )}
-      </Tier2Section>
+        </Tier2Section>
+      )}
       <Tier2Section title="Name cell">
         <Rows
           rows={[
