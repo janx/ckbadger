@@ -280,6 +280,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     mints !== undefined && transfers !== undefined && burns !== undefined
       ? `${formatCount(mints, 'mint')} · ${formatCount(transfers, 'transfer')} · ${formatCount(burns, 'burn')}`
       : undefined;
+  // Lane A follow-up: the API's rule (CollectionActivityDailyCounts): a transaction adds one to each
+  // of mint, transfer and burn it carries and nothing for an update, renewal or recycle, over
+  // complete weeks — so the three overlap and are not a partition of the transactions.
+  const weeklyRule = insights.data?.completeThrough
+    ? `Mints, transfers and burns are counted by complete week through ${insights.data.completeThrough}. A transaction counts once in each of them it carries, and one that only updates, renews or recycles counts in none, so they need not add up to the transactions.`
+    : undefined;
   const objectMetrics: AssetMetric[] = [
     {
       label: 'Holders',
@@ -290,15 +296,23 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     ...(data.activitiesCount === null
       ? weeklyNote === undefined
         ? []
-        : [{ label: 'Mints · transfers · burns', value: weeklyNote, size: 'body' as const }]
+        : [
+            {
+              label: 'Mints · transfers · burns',
+              value: weeklyNote,
+              size: 'body' as const,
+              title: weeklyRule,
+            },
+          ]
       : [
           {
             label: 'Transactions',
             value: data.activitiesCount.toLocaleString('en-US'),
-            note: weeklyNote,
-            title: insights.data?.completeThrough
-              ? `mints, transfers and burns counted by complete week through ${insights.data.completeThrough}`
-              : undefined,
+            note:
+              weeklyNote === undefined
+                ? undefined
+                : `${weeklyNote}; a transaction may count in more than one`,
+            title: weeklyRule,
           },
         ]),
     ...(cluster.data

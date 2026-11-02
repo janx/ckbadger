@@ -286,10 +286,15 @@ it('gives the metrics row the board facts (OB-C8, C7) and the history its mintin
       .getAllByRole('term')
       .map((t) => t.textContent)
   ).toEqual(['Holders', 'Transactions', 'Created', 'Cluster cell held by']);
-  expect(rail).toHaveTextContent('184 · 90 mints · 94 transfers · 0 burns');
+  // Lane A follow-up 3: a transaction carrying a mint and a transfer counts in both (the API's
+  // CollectionActivityDailyCounts rule), so the parts are not a partition of the total — the note
+  // says so, and the title gives the whole rule.
+  expect(rail).toHaveTextContent(
+    '184 · 90 mints · 94 transfers · 0 burns; a transaction may count in more than one'
+  );
   expect(within(rail).getByText('Transactions').parentElement).toHaveAttribute(
     'title',
-    'mints, transfers and burns counted by complete week through 2026-10-24'
+    'Mints, transfers and burns are counted by complete week through 2026-10-24. A transaction counts once in each of them it carries, and one that only updates, renews or recycles counts in none, so they need not add up to the transactions.'
   );
   const history = screen.getByRole('region', { name: 'History' });
   expect(history).toHaveTextContent('Minted in 90 transactions · 94 transfers since');
