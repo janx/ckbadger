@@ -273,9 +273,11 @@ describe('JoyID script page · visual pass', () => {
     );
   });
 
-  it('pages its cells 12 at a time, oldest first, as the board does', async () => {
+  // Hierarchy plan rule (topic-page lists 5 rows; was the board's 12): the pagination under the
+  // table stays the way to every cell, as no page lists a script's cells on its own.
+  it('pages its cells 5 at a time, oldest first', async () => {
     await renderJoyid();
-    expect(api.getCellsByScriptRef).toHaveBeenCalledWith(expect.objectContaining({ limit: 12 }));
+    expect(api.getCellsByScriptRef).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 }));
     expect(screen.getByText(/Oldest first, as the cell index keeps them/)).toBeInTheDocument();
   });
 });
@@ -474,10 +476,12 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     for (const name of ['Code versions', 'Its cells']) {
       const h2 = within(tier1()).getByRole('heading', { name, level: 2 });
       expect(h2.closest('section')).toHaveClass('mt-[72px]');
-      expect(h2.parentElement).toHaveClass('mb-[18px]');
+      // The heading row is a flex row, as the DAO page's: the h2 is as wide as its words.
+      expect(h2.parentElement).toHaveClass('mb-[18px]', 'flex', 'items-baseline');
     }
     expect(within(custody).getByRole('heading', { level: 2 }).parentElement).toHaveClass(
-      'mb-[18px]'
+      'mb-[18px]',
+      'flex'
     );
   });
 

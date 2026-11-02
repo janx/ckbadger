@@ -330,7 +330,7 @@ export function ScriptCodeTrack({
   return (
     <div aria-label="Code track" className="text-meta relative mt-1 min-w-0">
       <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-tick" />
-      <div className="text-text-dim">code · who held the code cell</div>
+      <div className="text-text-dim pt-1.5">code · who held the code cell</div>
       <div className="relative h-8 pr-[10px]">
         <div className="relative h-full">
           {upgradeList.map(([day, versions], i) => {

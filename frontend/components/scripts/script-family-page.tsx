@@ -215,7 +215,7 @@ function Section({
 }) {
   return (
     <section aria-label={title} className={`min-w-0 ${className}`}>
-      <div className="mb-[18px]">
+      <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-text-bright text-section font-medium">{title}</h2>
       </div>
       {children}
@@ -695,7 +695,7 @@ export function ScriptFamilyPage({
               aria-label="Its cells"
               className="mt-[72px] min-w-0 scroll-mt-4"
             >
-              <div className="mb-[18px]">
+              <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
                 <h2 className="text-text-bright text-section font-medium">Its cells</h2>
               </div>
               <div className="text-text-dim text-meta mb-3 flex flex-wrap gap-x-4 gap-y-1">
