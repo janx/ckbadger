@@ -110,6 +110,9 @@ it('draws an identity collection its weekly transfers from the insights it is se
   ).toBeInTheDocument();
   expect(api.getCollectionInsights).toHaveBeenCalledWith('dotbit', 'identity');
   expect(screen.queryByText(/not indexed for identity collections/)).not.toBeInTheDocument();
+  // Lane E: an identity collection has no developer evidence; no empty tier 2 (was an eyebrow and
+  // an empty "Collection metadata" heading).
+  expect(document.querySelector('[data-tier="2"]')).toBeNull();
 });
 it('separates physical cell ownership from protocol-named .cell parties', async () => {
   const p = dotcellProtocolProducer;

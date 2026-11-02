@@ -426,45 +426,48 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         />
       }
       tier2={
-        <>
-          {kind === 'spore' && (
-            // Lane E (C5, Main board): the cluster cell byte by byte beside how an object is read.
-            <div className="grid min-w-0 items-start gap-x-16 gap-y-10 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
-              <section aria-label="Cluster cell evidence" className="min-w-0 space-y-4">
-                <AssetReadState
-                  label="cluster cell"
-                  error={protocol.error}
-                  retained={!!protocol.data}
-                  loading={protocol.isLoading}
-                />
-                {protocol.data?.current ? (
-                  <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
-                ) : (
-                  protocol.data && (
-                    <p className="text-text-dim text-meta">
-                      No current cell carries this cluster type.
-                    </p>
-                  )
-                )}
-                {cluster.data && <StoredDescription description={cluster.data.description} />}
-              </section>
-              {insights.data && <ClusterPatternReading clusterId={id} insights={insights.data} />}
-            </div>
-          )}
-          {/* F2 objects (OB-K5): the configure decoding is developer evidence (Mnft board tier 2). */}
-          {object?.classDetail && (
-            <MnftPermissions
-              permissions={object.classDetail.permissions}
-              configure={object.classDetail.configure}
-            />
-          )}
-          {object?.classDetail && (
-            <MnftClassEvidence
-              classDetail={object.classDetail}
-              issuerDetail={object.issuerDetail}
-            />
-          )}
-        </>
+        // Lane E: tier 2 only where there is evidence (a Spore cluster, an m-NFT class).
+        (kind === 'spore' || object?.classDetail) && (
+          <>
+            {kind === 'spore' && (
+              // Lane E (C5, Main board): the cluster cell byte by byte beside how an object is read.
+              <div className="grid min-w-0 items-start gap-x-16 gap-y-10 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+                <section aria-label="Cluster cell evidence" className="min-w-0 space-y-4">
+                  <AssetReadState
+                    label="cluster cell"
+                    error={protocol.error}
+                    retained={!!protocol.data}
+                    loading={protocol.isLoading}
+                  />
+                  {protocol.data?.current ? (
+                    <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
+                  ) : (
+                    protocol.data && (
+                      <p className="text-text-dim text-meta">
+                        No current cell carries this cluster type.
+                      </p>
+                    )
+                  )}
+                  {cluster.data && <StoredDescription description={cluster.data.description} />}
+                </section>
+                {insights.data && <ClusterPatternReading clusterId={id} insights={insights.data} />}
+              </div>
+            )}
+            {/* F2 objects (OB-K5): the configure decoding is developer evidence (Mnft board tier 2). */}
+            {object?.classDetail && (
+              <MnftPermissions
+                permissions={object.classDetail.permissions}
+                configure={object.classDetail.configure}
+              />
+            )}
+            {object?.classDetail && (
+              <MnftClassEvidence
+                classDetail={object.classDetail}
+                issuerDetail={object.issuerDetail}
+              />
+            )}
+          </>
+        )
       }
     >
       <AssetReadState label="collection" error={detail.error} retained />
