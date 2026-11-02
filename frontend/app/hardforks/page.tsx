@@ -2,14 +2,16 @@
 
 import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
+import type { ReactNode } from 'react';
 import { Header } from '@/components/layout/header';
-import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { LANE_ORDER, VmLaneTimeline, dayStartMs } from '@/components/hardforks/vm-lane-timeline';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatExactDecimal } from '@/lib/exact-integer';
-import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
+import { cn } from '@/lib/utils';
+import type { HardforkHashTypeLaneF2 } from '@/lib/api';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -34,6 +36,8 @@ const DAY_MS = 86_400_000;
 /**
  * What each edition changed for scripts, in plain words (CH-42), with the registry's facts: the
  * first script registered under data1 and how long data2 has waited (R2b-b `hashTypes`, R11).
+ * Hierarchy v3 (H3): at most two sentences; that type-hash scripts moved to the new VM, and what
+ * the Spawn syscalls do, are tier 2's (`HowHashTypePicksAVm`).
  */
 function editionStory(event: Edition, timeline: Timeline, tipMs: number | null): string {
   const data2 = timeline.hashTypeLanes!.find((lane) => lane.hashType === 'data2');
@@ -43,14 +47,14 @@ function editionStory(event: Edition, timeline: Timeline, tipMs: number | null):
     const first = timeline.scriptDeployments
       .filter((deployment) => deployment.hashTypes!.includes('data1'))
       .sort((a, b) => a.timestampMs - b.timestampMs)[0];
-    return `Added CKB-VM version 1 and the hash type data1 to pin it. Scripts named by type hash moved to VM1 at this epoch.${
+    return `Added CKB-VM version 1 and the hash type data1 to pin it.${
       first
         ? ` The first known script pinned with data1 came ${Math.floor((first.timestampMs - since) / DAY_MS).toLocaleString()} days later: ${first.versionName}.`
         : ''
     }`;
   }
   if (event.id === 'meepo-2024')
-    return `Added CKB-VM version 2, with the Spawn syscalls (scripts can start and talk to other scripts), and the hash type data2. Scripts named by type hash moved to VM2. ${
+    return `Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2. ${
       data2.knownVersions === 0
         ? `No script CKBadger knows uses data2 yet${tipMs === null ? '' : `, ${Math.floor((tipMs - since) / DAY_MS).toLocaleString()} days on`}.`
         : `${data2.knownVersions.toLocaleString()} known script version${data2.knownVersions === 1 ? '' : 's'} use data2.`
@@ -84,9 +88,10 @@ function EditionCard({
         <h3 id={headingId} className="text-text-bright text-section font-medium">
           {event.name}
         </h3>
-        <span className="text-jade text-small">{event.status}</span>
+        {/* R11: no coloured words in tier 1 on a page without a figure. */}
+        <span className="text-text-dim text-small">{event.status}</span>
       </div>
-      <p className="text-text-dim text-small">
+      <p className="text-text-dim text-meta self-start">
         epoch {event.activationEpoch.toLocaleString()} ·{' '}
         {event.activationBlock !== null && (
           <>
@@ -98,7 +103,9 @@ function EditionCard({
         )}
         {event.activationDate}
       </p>
-      <p className="text-text text-body leading-relaxed">{editionStory(event, timeline, tipMs)}</p>
+      <p className="text-text text-body max-w-[640px] leading-relaxed">
+        {editionStory(event, timeline, tipMs)}
+      </p>
       {rfcs.length > 0 && (
         <div className="text-small">
           {rfcs.map((feature) => (
@@ -118,7 +125,7 @@ function EditionCard({
             href={overview.url}
             target="_blank"
             rel="noreferrer"
-            className="text-emphasis hover:underline"
+            className="text-text hover:text-text-bright hover:underline"
           >
             {overview.label} overview ↗
           </a>
@@ -129,13 +136,106 @@ function EditionCard({
             href={resource.url}
             target="_blank"
             rel="noreferrer"
-            className="text-emphasis hover:underline"
+            className="text-text hover:text-text-bright hover:underline"
           >
             {resource.label}
           </a>
         ))}
       </div>
     </article>
+  );
+}
+
+/**
+ * A tier-1 section (R6), as the DAO page heads its sections: the h2 at section size in its own row,
+ * 18 px above the evidence.
+ */
+function Section({
+  title,
+  className,
+  children,
+}: {
+  title: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-label={title} className={cn('min-w-0', className)}>
+      <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** The page title (index step) and, once the timeline is loaded, its network and tip epoch. */
+function TitleRow({ status }: { status?: ReactNode }) {
+  return (
+    <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+      <h1 className="text-text-bright text-index break-words font-medium">Hardforks</h1>
+      {status}
+    </div>
+  );
+}
+
+/**
+ * Hierarchy v3 (R13): one short sentence (≤ 90 characters) under the title; the whole opening
+ * paragraph is tier 2's "How hash_type picks a VM".
+ */
+function Lede() {
+  return (
+    <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
+      Editions change CKB&apos;s rules; a script&apos;s hash type picks its VM.
+    </p>
+  );
+}
+
+/** The caption's link down to the explanation (and the tier-2 anchor it lands on). */
+const HOW_ID = 'how-hash-type-picks-a-vm';
+
+/**
+ * Tier 2 (hierarchy v3): the explanation tier 1 states as a timeline and one caption — the opening
+ * paragraph the page used to lead with (CH-43) and the paragraph that stood under the timeline,
+ * with every lane's live references (CH-41). Two columns from lg, prose at most 640 px wide.
+ */
+function HowHashTypePicksAVm({
+  lanes,
+  editions: [vm1, vm2],
+}: {
+  lanes: readonly HardforkHashTypeLaneF2[];
+  /** The edition that added VM1, then the one that added VM2. */
+  editions: readonly [Edition, Edition];
+}) {
+  return (
+    <DetailSection title="How hash_type picks a VM">
+      <div className="grid items-start gap-x-14 gap-y-3.5 lg:grid-cols-2">
+        <div className="flex min-w-0 max-w-[640px] flex-col gap-3.5">
+          <p className="text-text-dim text-body">
+            CKB changes its rules in editions. Each one switches on at an agreed epoch, and every
+            node must run it from there on. Both so far brought a new version of CKB-VM, the machine
+            that runs scripts, and a cell&apos;s scripts choose which one runs them through their
+            hash type.
+          </p>
+          {/* Moved from the edition cards (H3): what each edition did to type-hash scripts. */}
+          <p className="text-text-dim text-body">
+            Scripts named by type hash moved to VM1 at {vm1.shortName}&apos;s epoch,{' '}
+            {vm1.activationEpoch.toLocaleString()}, and to VM2 at {vm2.shortName}&apos;s,{' '}
+            {vm2.activationEpoch.toLocaleString()}. {vm2.shortName}&apos;s Spawn syscalls let
+            scripts start and talk to other scripts.
+          </p>
+        </div>
+        <p className="text-text-dim text-body max-w-[640px]">
+          A script named by its type hash follows every upgrade: the same code runs on VM0, then
+          VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a
+          hardfork never changes how an existing data-pinned script runs. Live cells reference
+          registered scripts {formatExactDecimal(lanes[0].liveReferences, 'type live references')}{' '}
+          times by type hash, {formatExactDecimal(lanes[1].liveReferences, 'data1 live references')}{' '}
+          by data1, {formatExactDecimal(lanes[2].liveReferences, 'data2 live references')} by data2
+          and {formatExactDecimal(lanes[3].liveReferences, 'data live references')} by data.
+        </p>
+      </div>
+    </DetailSection>
   );
 }
 
@@ -168,106 +268,110 @@ export default function HardforksPage() {
   const unlaned = data?.scriptDeployments.find((deployment) => !deployment.hashTypes);
   const genesisFeatures =
     data?.consensusFeatures.filter((feature) => feature.activationEpoch === 0) ?? [];
+  // Everything the timeline, the cards and tier 2 read, once the response is whole.
+  const ready =
+    data && span && mirana && meepo && lanesValid && !unlaned
+      ? { data, span, mirana, meepo, lanes: lanes! }
+      : null;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto max-w-[1440px] px-4 pb-16 pt-6">
-        <DetailLayout
-          title="Hardforks"
-          kind="topic"
-          // The board's lead, in plain words (CH-43).
-          identity={
-            <p className="text-text text-body max-w-[820px] leading-relaxed">
-              CKB changes its rules in editions. Each one switches on at an agreed epoch, and every
-              node must run it from there on. Both so far brought a new version of CKB-VM, the
-              machine that runs scripts, and a cell&apos;s scripts choose which one runs them
-              through their hash type.
-            </p>
-          }
-          status={
-            data && (
-              <span className="text-text-dim text-small">
-                {data.network} · tip epoch {data.tipEpoch.toLocaleString()}
-              </span>
-            )
-          }
-        >
-          {isLoading && <p className="text-text-dim">Loading hardfork timeline…</p>}
-          {error && (
-            <p role="alert" className="text-negative">
-              Failed to load hardfork timeline: {String(error)}
-            </p>
-          )}
-          {data && (!mirana || !meepo) && (
-            <p role="alert" className="text-negative">
-              Consensus edition timeline is incomplete.
-            </p>
-          )}
-          {data && !lanesValid && (
-            <p role="alert" className="text-negative">
-              The hardfork timeline has no hash-type lanes in VM order (type, data1, data2, data);
-              the live references per hash type cannot be shown.
-            </p>
-          )}
-          {data && unlaned && (
-            <p role="alert" className="text-negative">
-              Script deployment {unlaned.versionHash} has no registered hash types; the versions
-              cannot be placed on their lanes.
-            </p>
-          )}
-          {data && mirana && meepo && lanesValid && !unlaned && (
-            <>
-              <DetailSection
-                title="Which VM runs a script, over time"
-                actions={
-                  <span className="text-text-dim text-small">
-                    dots: when each known script version was deployed ·{' '}
-                    <TapOrHoverHint what="one for its name" />
-                  </span>
+        <div className="text-body min-w-0 font-mono">
+          {/* Hierarchy v3 (R13): the hero is tier 1's first section — the title row, one sentence,
+              then the VM timeline as the page's display element (it has no defining number). */}
+          <div data-tier="1" className="min-w-0">
+            <section aria-label="Hardforks" className="min-w-0">
+              <TitleRow
+                status={
+                  data && (
+                    <span className="text-text-dim text-small">
+                      {data.network} · tip epoch {data.tipEpoch.toLocaleString()}
+                    </span>
+                  )
                 }
-              >
-                {span === null || span.genesisMs === null || span.tipMs === null ? (
-                  <p className="text-text-dim text-small">
-                    The index holds no block header yet; the timeline draws once it does.
-                  </p>
-                ) : span.tipMs <= dayStartMs(meepo.activationDate) ? (
-                  <p className="text-text-dim text-small">
-                    The index has not reached the latest edition yet; the timeline draws once it
-                    has.
-                  </p>
-                ) : (
-                  <VmLaneTimeline
-                    editions={[mirana, meepo]}
-                    lanes={lanes!}
-                    deployments={data.scriptDeployments}
-                    genesisMs={span.genesisMs}
-                    tipMs={span.tipMs}
-                    tipEpoch={data.tipEpoch}
-                  />
-                )}
-                <p className="text-text text-body mt-4 max-w-[940px] leading-relaxed">
-                  A script named by its type hash follows every upgrade: the same code runs on VM0,
-                  then VM1, then VM2. A script named by its data hash stays on the VM its hash type
-                  pins, so a hardfork never changes how an existing data-pinned script runs. Live
-                  cells reference registered scripts{' '}
-                  {formatExactDecimal(lanes![0].liveReferences, 'type live references')} times by
-                  type hash, {formatExactDecimal(lanes![1].liveReferences, 'data1 live references')}{' '}
-                  by data1, {formatExactDecimal(lanes![2].liveReferences, 'data2 live references')}{' '}
-                  by data2 and{' '}
-                  {formatExactDecimal(lanes![3].liveReferences, 'data live references')} by data.
+              />
+              <Lede />
+              {isLoading && <p className="text-text-dim mt-8">Loading hardfork timeline…</p>}
+              {error && (
+                <p role="alert" className="text-negative mt-8">
+                  Failed to load hardfork timeline: {String(error)}
                 </p>
-              </DetailSection>
-              <div className="grid min-w-0 items-start gap-12 md:grid-cols-2">
+              )}
+              {data && (!mirana || !meepo) && (
+                <p role="alert" className="text-negative mt-8">
+                  Consensus edition timeline is incomplete.
+                </p>
+              )}
+              {data && !lanesValid && (
+                <p role="alert" className="text-negative mt-8">
+                  The hardfork timeline has no hash-type lanes in VM order (type, data1, data2,
+                  data); the live references per hash type cannot be shown.
+                </p>
+              )}
+              {data && unlaned && (
+                <p role="alert" className="text-negative mt-8">
+                  Script deployment {unlaned.versionHash} has no registered hash types; the versions
+                  cannot be placed on their lanes.
+                </p>
+              )}
+              {ready && (
+                <div className="mt-8 min-w-0">
+                  {ready.span.genesisMs === null || ready.span.tipMs === null ? (
+                    <p className="text-text-dim text-small">
+                      The index holds no block header yet; the timeline draws once it does.
+                    </p>
+                  ) : ready.span.tipMs <= dayStartMs(ready.meepo.activationDate) ? (
+                    <p className="text-text-dim text-small">
+                      The index has not reached the latest edition yet; the timeline draws once it
+                      has.
+                    </p>
+                  ) : (
+                    <VmLaneTimeline
+                      editions={[ready.mirana, ready.meepo]}
+                      lanes={ready.lanes}
+                      deployments={ready.data.scriptDeployments}
+                      genesisMs={ready.span.genesisMs}
+                      tipMs={ready.span.tipMs}
+                      tipEpoch={ready.data.tipEpoch}
+                    />
+                  )}
+                </div>
+              )}
+            </section>
+            {ready && (
+              // Footnote budget under the timeline: its readout row and this one caption (R4, R14).
+              <p className="text-text text-body mt-3.5 max-w-[640px]">
+                A script named by its type hash follows every upgrade; one named by its data hash
+                stays on the VM its hash type pins.{' '}
+                <a
+                  href={`#${HOW_ID}`}
+                  className="text-text-dim hover:text-text-bright whitespace-nowrap hover:underline"
+                >
+                  How it works ↓
+                </a>
+              </p>
+            )}
+            {/* Rhythm (R6): the hero's caption, the editions 64 px under it, the consensus 72. */}
+            {ready && (
+              <div className="mt-16 grid min-w-0 items-start gap-12 md:grid-cols-2">
                 {events.map((event) => (
-                  <EditionCard key={event.id} event={event} timeline={data} tipMs={span!.tipMs} />
+                  <EditionCard
+                    key={event.id}
+                    event={event}
+                    timeline={ready.data}
+                    tipMs={ready.span.tipMs}
+                  />
                 ))}
               </div>
-              <DetailSection title="As this node's consensus states it">
-                <p className="text-text-dim text-small mb-3">
-                  get_consensus · hardfork_features · {data.network}
+            )}
+            {ready && (
+              <Section title="As this node's consensus states it" className="mt-[72px]">
+                <p className="text-text-dim text-small mb-3 w-fit">
+                  get_consensus · hardfork_features · {ready.data.network}
                 </p>
                 <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
-                  {data.consensusFeatures.map((feature) => (
+                  {ready.data.consensusFeatures.map((feature) => (
                     <div
                       key={feature.rfc}
                       className="border-base-border-subtle text-small border-t py-2"
@@ -282,16 +386,24 @@ export default function HardforksPage() {
                   ))}
                 </dl>
                 {genesisFeatures.length > 0 && (
-                  <p className="text-text-dim text-small mt-3">
+                  <p className="text-text-dim text-meta mt-3 max-w-[640px]">
                     Today&apos;s node applies RFC{' '}
                     {joinWords(genesisFeatures.map((feature) => feature.rfc))} from epoch 0, so they
                     do not show as switching on with an edition.
                   </p>
                 )}
-              </DetailSection>
-            </>
+              </Section>
+            )}
+          </div>
+          {ready && (
+            // "How it works ↓" under the timeline lands on the evidence boundary.
+            <div id={HOW_ID} className="scroll-mt-4">
+              <DetailTier2>
+                <HowHashTypePicksAVm lanes={ready.lanes} editions={[ready.mirana, ready.meepo]} />
+              </DetailTier2>
+            </div>
           )}
-        </DetailLayout>
+        </div>
       </main>
     </div>
   );

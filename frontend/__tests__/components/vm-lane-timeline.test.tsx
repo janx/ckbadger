@@ -201,8 +201,9 @@ describe('VmLaneTimeline', () => {
       name: 'Selected script deployment evidence',
     });
     expect(svg.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // R14: the row's own "tap or hover" is the hint; the idle line does not repeat it.
     expect(readout).toHaveTextContent(
-      'Tap or hover a dot, or focus it, for that script version, its first code cell and its block.'
+      /^a dot reads its script version, its first code cell and its block \(keyboard: focus it\)tap or hover$/
     );
     // a hover still names the version and keeps it once the pointer moves on, as before
     fireEvent.mouseEnter(xudt);
@@ -221,8 +222,70 @@ describe('VmLaneTimeline', () => {
     expect(evidence).toHaveTextContent('Earliest indexed code-cell creation');
     // the second tap on it lets go
     fireEvent.click(xudt);
-    expect(readout).toHaveTextContent('Tap or hover a dot');
+    expect(readout).toHaveTextContent(/^a dot reads its script version/);
     expect(evidence).not.toHaveTextContent('Earliest indexed code-cell creation');
+  });
+
+  it('names itself inside the plot, top-left, above every edition label (R13)', () => {
+    stubChartWidth(1200);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={laned}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    const svg = screen.getByRole('img');
+    // The page's display element (no defining number): at least 280 px tall.
+    expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    const name = svg.querySelector('[data-role="chart-name"]')!;
+    expect(name).toHaveTextContent(
+      /^which VM runs a script, over time · dots: when each known script version was deployed$/
+    );
+    expect(name.querySelectorAll('tspan')).toHaveLength(0);
+    expect(name.getAttribute('x')).toBe('0');
+    expect(name.getAttribute('font-size')).toBe('11');
+    expect(name.getAttribute('fill')).toBe('#7c849c');
+    const nameY = Number(name.getAttribute('y'));
+    // Edition names (12.5 px) and the edition rules start under the name band.
+    const y = (text: string) =>
+      Number(
+        [...svg.querySelectorAll('text')].find((t) => t.textContent === text)!.getAttribute('y')
+      );
+    for (const label of ['genesis', 'Mirana', 'Meepo'])
+      expect(y(label) - 12.5).toBeGreaterThanOrEqual(nameY + 8);
+    for (const rule of Array.from(svg.querySelectorAll('line[data-edition]')))
+      expect(Number(rule.getAttribute('y1'))).toBeGreaterThanOrEqual(nameY + 8);
+  });
+
+  it('wraps the in-plot name into two lines at phone width, both inside the plot', () => {
+    stubChartWidth(358);
+    render(
+      <VmLaneTimeline
+        editions={editions}
+        lanes={lanes}
+        deployments={unregistered}
+        genesisMs={genesisMs}
+        tipMs={tipMs}
+        tipEpoch={15203}
+      />
+    );
+    const svg = screen.getByRole('img');
+    expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    const name = svg.querySelector('[data-role="chart-name"]')!;
+    const lines = [...name.querySelectorAll('tspan')];
+    expect(lines.map((t) => t.textContent)).toEqual([
+      'which VM runs a script, over time',
+      'dots: when each known script version was deployed',
+    ]);
+    // 11 px mono advances ~0.64 em: each line fits the 358 px plot.
+    for (const line of lines) expect(line.textContent!.length * 11 * 0.64).toBeLessThanOrEqual(358);
+    const lastY = Number(name.getAttribute('y')) + Number(lines[1].getAttribute('dy'));
+    const genesis = [...svg.querySelectorAll('text')].find((t) => t.textContent === 'genesis')!;
+    expect(Number(genesis.getAttribute('y')) - 12.5).toBeGreaterThanOrEqual(lastY + 8);
   });
 
   it('refuses lanes out of VM order and hardforks outside the chain span', () => {

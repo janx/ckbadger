@@ -43,8 +43,21 @@ const VM_OPACITY = { VM0: 0.16, VM1: 0.32, VM2: 0.55 } as const;
 const UTC8_MS = 8 * 3_600_000;
 /** Average glyph width of the 10–11 px mono labels, for keeping labels apart. */
 const CHAR_PX = 6.5;
+/**
+ * The plot's name, inside it at the top-left (hierarchy v3, R13): the page's former section title
+ * and its hint line. It wraps after the title where one line does not fit (a phone).
+ */
+const PLOT_TITLE = 'which VM runs a script, over time';
+const PLOT_HINT = 'dots: when each known script version was deployed';
+/** 11 px mono advances ~0.64 em in Chromium (lane D, observed). */
+const NAME_PX = 11;
+const NAME_CHAR_PX = NAME_PX * 0.64;
+const PLOT_NAME_Y = 13;
+const PLOT_NAME_LINE = 14;
+/** Clear space between the name band and the edition labels under it. */
+const PLOT_NAME_GAP = 9;
 /** Glyph width of the 12.5 px edition names. */
-const NAME_CHAR_PX = 7.5;
+const EDITION_CHAR_PX = 7.5;
 /** Baselines of an edition block's name and epoch on the first row, and the clear space kept
  * between two blocks side by side. */
 const NAME_Y = 18;
@@ -115,7 +128,7 @@ export function VmLaneTimeline({
   const genesisBlock = {
     row: 0,
     x0: left,
-    x1: left + Math.max('genesis'.length * NAME_CHAR_PX, genesisDate.length * CHAR_PX),
+    x1: left + Math.max('genesis'.length * EDITION_CHAR_PX, genesisDate.length * CHAR_PX),
   };
   const editionLabels = editions.reduce<
     {
@@ -131,7 +144,7 @@ export function VmLaneTimeline({
     const at = x(dayStartMs(edition.activationDate));
     const epoch = `epoch ${formatExactDecimal(String(edition.activationEpoch), 'edition epoch')}`;
     const sub = narrow ? epoch : `${epoch} · ${edition.activationDate}`;
-    const span = Math.max(edition.shortName.length * NAME_CHAR_PX, sub.length * CHAR_PX);
+    const span = Math.max(edition.shortName.length * EDITION_CHAR_PX, sub.length * CHAR_PX);
     const turn = at + 6 + span > w;
     const x0 = turn ? at - 6 - span : at + 6;
     const taken = [genesisBlock, ...placed];
@@ -143,7 +156,10 @@ export function VmLaneTimeline({
     return [...placed, { edition, at, sub, turn, row, x0, x1: x0 + span }];
   }, []);
   const labelRows = 1 + Math.max(0, ...editionLabels.map((l) => l.row));
-  const top = (narrow ? 62 : 64) + (labelRows - 1) * BLOCK_ROW;
+  // The name takes one line where it fits, else the title over the hint; the labels start under it.
+  const nameOneLine = `${PLOT_TITLE} · ${PLOT_HINT}`.length * NAME_CHAR_PX <= w;
+  const band = PLOT_NAME_Y + (nameOneLine ? 0 : PLOT_NAME_LINE) + PLOT_NAME_GAP;
+  const top = band + (narrow ? 62 : 64) + (labelRows - 1) * BLOCK_ROW;
   const laneH = narrow ? 64 : 46;
   /** Where a lane's bar and its dot rows sit, from the lane's top. */
   const bar = narrow ? { y: 18, h: 14, dots: [40, 48] } : { y: 6, h: 16, dots: [30, 38] };
@@ -198,10 +214,22 @@ export function VmLaneTimeline({
               </g>
             );
           })}
-          <text x={left} y={NAME_Y} fontSize="12.5" fill="#dee2ec">
+          <text data-role="chart-name" x="0" y={PLOT_NAME_Y} fontSize={NAME_PX} fill="#7c849c">
+            {nameOneLine ? (
+              `${PLOT_TITLE} · ${PLOT_HINT}`
+            ) : (
+              <>
+                <tspan>{PLOT_TITLE}</tspan>
+                <tspan x="0" dy={PLOT_NAME_LINE}>
+                  {PLOT_HINT}
+                </tspan>
+              </>
+            )}
+          </text>
+          <text x={left} y={band + NAME_Y} fontSize="12.5" fill="#dee2ec">
             genesis
           </text>
-          <text x={left} y={SUB_Y} fontSize="10.5" fill="#7c849c">
+          <text x={left} y={band + SUB_Y} fontSize="10.5" fill="#7c849c">
             {genesisDate}
           </text>
           {editionLabels.map(({ edition, at, sub, turn, row }) => {
@@ -211,14 +239,14 @@ export function VmLaneTimeline({
                   data-edition={edition.shortName}
                   x1={at}
                   x2={at}
-                  y1="10"
+                  y1={band + 10}
                   y2={bottom}
                   stroke="#dee2ec"
                   strokeWidth="1.2"
                 />
                 <text
                   x={turn ? at - 6 : at + 6}
-                  y={NAME_Y + row * BLOCK_ROW}
+                  y={band + NAME_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
                   fontSize="12.5"
                   fill="#dee2ec"
@@ -227,7 +255,7 @@ export function VmLaneTimeline({
                 </text>
                 <text
                   x={turn ? at - 6 : at + 6}
-                  y={SUB_Y + row * BLOCK_ROW}
+                  y={band + SUB_Y + row * BLOCK_ROW}
                   textAnchor={turn ? 'end' : 'start'}
                   fontSize="10.5"
                   fill="#7c849c"

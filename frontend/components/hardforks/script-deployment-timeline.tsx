@@ -6,7 +6,6 @@ import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
-import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -177,13 +176,12 @@ export function DeploymentEvidence({
 }) {
   return (
     <aside aria-label="Selected script deployment evidence" className="text-small mt-3 min-w-0">
+      {/* The row's own "tap or hover" is the section's one hint (R14); the idle line says what a
+          dot reads. */}
       <ReadoutRow
         label="Script version readout"
         pinned={pinned}
-        idle={tapOrHover(
-          'a dot, or focus it, for that script version, its first code cell and its block.',
-          { capital: true }
-        )}
+        idle="a dot reads its script version, its first code cell and its block (keyboard: focus it)"
       >
         {selected
           ? `${markName(selected)} · deployed ${formatUtc8Date(selected.timestampMs)}`
@@ -203,20 +201,24 @@ export function DeploymentEvidence({
             <dt className="text-text-dim">Version</dt>
             <dd className="break-all font-mono">{selected.versionHash}</dd>
             <dt className="text-text-dim">Evidence</dt>
+            {/* Plain ink: no coloured words in the hardforks page's tier 1 (R11). */}
             <dd className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
               <Link
                 href={`/scripts/${encodeURIComponent(selected.familyName)}`}
-                className="text-jade hover:underline"
+                className="text-text hover:text-text-bright hover:underline"
               >
                 {selected.familyName} family
               </Link>
               <Link
                 href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
-                className="text-jade hover:underline"
+                className="text-text hover:text-text-bright hover:underline"
               >
                 Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
               </Link>
-              <Link href={`/blocks/${selected.blockNumber}`} className="text-jade hover:underline">
+              <Link
+                href={`/blocks/${selected.blockNumber}`}
+                className="text-text hover:text-text-bright hover:underline"
+              >
                 Block {formatBlockNumber(selected.blockNumber)}
               </Link>
             </dd>
