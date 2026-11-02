@@ -1,6 +1,5 @@
 'use client';
 
-import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, LabelCount } from '@/lib/api';
 import { DATA_COLOR } from '@/lib/design-tokens';
@@ -8,6 +7,7 @@ import { formatPercent } from '@/lib/ckb-decimal';
 import { partitionSpans } from '@/lib/partition-geometry';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { cn } from '@/lib/utils';
+import { TopicSection } from '@/app/network/topic-section';
 
 const TOP_N = 8;
 /** The hosting bar's segments: one hue, the largest strongest (Network board). */
@@ -15,18 +15,6 @@ const PROVIDER_OPACITY = [0.9, 0.6, 0.5, 0.42, 0.34, 0.2] as const;
 /** The in-segment words (hierarchy v3 R15): 12 px monospace, 10 px padding each side. */
 const LABEL_ADVANCE = 7.2;
 const LABEL_PAD = 10;
-
-/** A tier-1 section of this page (R6): h2 at section size, 18 px to its evidence. */
-export function NetworkSection({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section aria-label={title} className="min-w-0">
-      <div className="mb-[18px]">
-        <h2 className="text-text-bright text-section font-medium">{title}</h2>
-      </div>
-      {children}
-    </section>
-  );
-}
 
 /** The data hue at `alpha`, as a background, so a segment's words keep their full ink. */
 function dataHue(alpha: number): string {
@@ -94,9 +82,9 @@ export function NetworkDistributions() {
     );
   // Its scope ("reachable now or verified before") is said in tier 2 (R14: no note beside the h2).
   return (
-    <NetworkSection title="Which software they run">
+    <TopicSection title="Which software they run">
       <Bars items={data.versions} attr="data-version-bar" />
-    </NetworkSection>
+    </TopicSection>
   );
 }
 
@@ -193,7 +181,7 @@ function HostingSection({
     return fits(full) ? full : fits(share(count)) ? share(count) : '';
   };
   return (
-    <NetworkSection title="Where they run">
+    <TopicSection title="Where they run">
       <div
         ref={ref}
         role="img"
@@ -232,6 +220,6 @@ function HostingSection({
           {caption}
         </p>
       )}
-    </NetworkSection>
+    </TopicSection>
   );
 }

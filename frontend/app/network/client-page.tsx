@@ -7,7 +7,7 @@ import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
-import { NetworkShareHistory, NetworkTrends } from '@/app/network/trends';
+import { NetworkShareHistory, NetworkTrendNotes, NetworkTrends } from '@/app/network/trends';
 import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
 import {
@@ -133,7 +133,7 @@ function MaxMindAttribution() {
   if (!data || !hasGeoData(data.countries)) return null;
 
   return (
-    <p className="text-text-dim border-base-border/60 text-small mt-2 border-t pt-3 font-mono">
+    <p className="text-text-dim border-base-border/60 text-meta mt-8 border-t pt-3 font-mono">
       Geo/ASN data © MaxMind (GeoLite2)
     </p>
   );
@@ -280,6 +280,9 @@ function HowTheCrawlerSees() {
       <p className="text-text-dim text-body mt-3.5">
         “Which software they run” counts every verified node, reachable now or verified before.
       </p>
+      <div className="mt-3.5">
+        <NetworkTrendNotes />
+      </div>
     </DetailSection>
   );
 }
@@ -295,37 +298,52 @@ function PeersDashboard({
 }) {
   return (
     <div className="text-body min-w-0 font-mono">
-      <div data-tier="1" className="min-w-0 space-y-8">
+      {/* Hierarchy R6: hero → first section 64 px, sections 72 px apart, h2 → evidence 18. */}
+      <div data-tier="1" className="min-w-0">
         <Hero lastRound={lastRound} activeRound={activeRound} enabled={enabled} />
-        <HostingBar />
-        <NetworkDistributions />
-        <NetworkTrends />
+        <div className="mt-16 min-w-0">
+          <HostingBar />
+        </div>
+        <div className="mt-[72px] min-w-0">
+          <NetworkDistributions />
+        </div>
+        <div className="mt-[72px] min-w-0">
+          <NetworkTrends />
+        </div>
         <MaxMindAttribution />
       </div>
       {/* "How it works ↓" in the hero lands on the evidence boundary. */}
       <div id="evidence" className="scroll-mt-4">
-        <DetailTier2>
-          <HowTheCrawlerSees />
-          <DetailSection title="Crawler round evidence">
-            <p className="text-text-dim text-small leading-relaxed">
-              Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
-              attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
-              observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates ·{' '}
-              {lastRound.foreignPeers.toLocaleString()} foreign peers ·{' '}
-              {lastRound.newVerifiedPeers.toLocaleString()} newly verified
-            </p>
-            <ReachabilityCaveat className="mt-3" />
-          </DetailSection>
-          <DetailSection title="Protocols they speak">
-            <NetworkProtocols />
-          </DetailSection>
+        {/* Two columns from lg: the explanation and the round beside the daily counts; the two
+            long lists (who named whom, the peers) run the full width under them. */}
+        <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-8">
+            <HowTheCrawlerSees />
+            <DetailSection title="Crawler round evidence">
+              <p className="text-text-dim text-small leading-relaxed">
+                Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
+                attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
+                observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates
+                · {lastRound.foreignPeers.toLocaleString()} foreign peers ·{' '}
+                {lastRound.newVerifiedPeers.toLocaleString()} newly verified
+              </p>
+              <ReachabilityCaveat className="mt-3" />
+            </DetailSection>
+            <DetailSection title="Protocols they speak">
+              <NetworkProtocols />
+            </DetailSection>
+          </div>
           <DetailSection title="Daily version and country counts">
             <NetworkShareHistory />
           </DetailSection>
-          <DetailSection title="Who named whom">
-            <AdvertisementGraph roundId={lastRound.roundId} />
-          </DetailSection>
-          <PeersTable />
+          <div className="min-w-0 lg:col-span-2">
+            <DetailSection title="Who named whom">
+              <AdvertisementGraph roundId={lastRound.roundId} />
+            </DetailSection>
+          </div>
+          <div className="min-w-0 lg:col-span-2">
+            <PeersTable />
+          </div>
         </DetailTier2>
       </div>
     </div>

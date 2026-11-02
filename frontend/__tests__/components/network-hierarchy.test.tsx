@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
@@ -7,6 +7,10 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { NetworkClientPage } from '@/app/network/client-page';
 import { NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
 import { HostingBar } from '@/app/network/distributions';
+import { NetworkTrends } from '@/app/network/trends';
+import { PeersTable } from '@/app/network/nodes-table';
+import { AdvertisementGraph } from '@/app/network/advertisement-graph';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import type { NetworkMap } from '@/lib/api';
 
 // Hierarchy v3 on /network (plan 2026-11-02 lane N, rulings R11–R16): the DAO page's anatomy —
@@ -428,5 +432,181 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     );
     // The list itself is unchanged: one row per version, its count beside it.
     expect(tier1.querySelectorAll('[data-version-bar]')).toHaveLength(2);
+  });
+});
+
+describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, R16; lane N, N4)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('spaces the sections as the v3 rhythm: 64 px after the hero, 72 px apart, h2 → evidence 18', async () => {
+    stubChartWidth(1248);
+    const { tier1 } = await renderPage();
+    await within(tier1).findByRole('region', { name: 'Where they run' });
+    await within(tier1).findByRole('region', { name: 'Which software they run' });
+    const blocks = Array.from(tier1.children) as HTMLElement[];
+    expect(blocks[0]).toContainElement(screen.getByRole('region', { name: 'Where the nodes are' }));
+    const holder = (name: string) =>
+      blocks.find((b) => b.contains(screen.getByRole('region', { name })))!;
+    expect(holder('Where they run')).toHaveClass('mt-16');
+    expect(holder('Which software they run')).toHaveClass('mt-[72px]');
+    expect(holder('Over time')).toHaveClass('mt-[72px]');
+    expect(tier1).not.toHaveClass('space-y-8');
+    for (const h2 of Array.from(tier1.querySelectorAll('h2'))) {
+      expect(h2).toHaveClass('text-section', 'text-text-bright');
+      expect(h2.parentElement).toHaveClass('mb-[18px]');
+    }
+  });
+
+  it('draws Over time with its name and values inside the plot, one reading row and one caption', async () => {
+    stubChartWidth(900);
+    render(wrap(<NetworkTrends />));
+    const section = await screen.findByRole('region', { name: 'Over time' });
+    const svg = await within(section).findByRole('img', {
+      name: 'Verified and reachable peers, peers',
+    });
+    expect(section.querySelector('figcaption')).toBeNull();
+    expect(svg.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      'verified and reachable peers per completed UTC+8 day'
+    );
+    expect(svg.querySelectorAll('[data-role="y-tick"]').length).toBeGreaterThan(0);
+    // R14: the first and the last day on the axis.
+    expect([...svg.querySelectorAll('[data-x-tick]')].map((n) => n.textContent)).toEqual([
+      '07-01',
+      '07-03',
+    ]);
+    const reading = within(section).getByRole('status', { name: 'Peer reading' });
+    expect(reading).toHaveTextContent(
+      /^2025-07-03 · Same-network reachable 80 peers · Verified \(retained\) 120 peerstap or hover$/
+    );
+    const caption = section.lastElementChild as HTMLElement;
+    expect(caption).toHaveAttribute('data-role', 'caption');
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    expect(caption.textContent!.length).toBeLessThanOrEqual(160);
+    // The paragraph and the panel heading leave tier 1.
+    expect(section).not.toHaveTextContent(/Daily history of retained verified peers/);
+    expect(section).not.toHaveTextContent(/Retained verification state/);
+    expect(section).not.toHaveTextContent(/Rounds per day are unavailable/);
+  });
+
+  it('keeps the Over time notes in tier 2, word for word', async () => {
+    stubChartWidth(1248);
+    const { tier2 } = await renderPage();
+    await waitFor(() =>
+      expect(tier2).toHaveTextContent(/Coverage: 2025-07-01 through 2025-07-03\./)
+    );
+    expect(tier2).toHaveTextContent(
+      "“Over time” draws the retained verification state (daily): verified and reachable peers per completed UTC+8 day. Daily history of retained verified peers, by UTC+8 day. The current (incomplete) day is excluded. Round counts were not recorded. Days older than the crawler's hourly retention show as gaps, never zero."
+    );
+    expect(tier2).toHaveTextContent(
+      'Shaded days have no retained round observation. Rounds per day are unavailable because the crawler did not record counts.'
+    );
+  });
+
+  it('keeps tier 1 to one coloured text, one hint per section and short prose (R11, R14, §4)', async () => {
+    stubChartWidth(1248);
+    const { container, tier1, hero } = await renderPage();
+    await within(tier1).findByRole('img', { name: 'Verified and reachable peers, peers' });
+    await within(tier1).findByRole('region', { name: 'Where they run' });
+    const figure = hero.querySelector('[data-role="reachable"]')!;
+    expect(tier1.querySelector('figcaption')).toBeNull();
+    // No inline ink outside the graphics either (a chart key's coloured series names).
+    for (const el of Array.from(tier1.querySelectorAll('[style*="color"]')))
+      if (!el.closest('svg') && !(el as HTMLElement).style.backgroundColor)
+        expect(figure.contains(el)).toBe(true);
+    for (const section of Array.from(tier1.querySelectorAll('section')))
+      expect(section.querySelectorAll('[data-hint="tap-or-hover"]').length).toBeLessThanOrEqual(1);
+    const prose = Array.from(tier1.querySelectorAll('[data-role="caption"], [data-role="lede"]'));
+    expect(prose).toHaveLength(4);
+    for (const p of prose) {
+      expect(p.className).toMatch(/(^|\s)max-w-\[(640|560)px\](\s|$)/);
+      expect(p.textContent!.length).toBeLessThanOrEqual(160);
+    }
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
+  });
+
+  it('orders tier 2: how the crawler sees it, the round, protocols, daily counts, who named whom, peers', async () => {
+    stubChartWidth(1248);
+    const { tier2 } = await renderPage();
+    await within(tier2).findByRole('heading', { name: 'Peer evidence' });
+    expect(
+      within(tier2)
+        .getAllByRole('heading', { level: 2 })
+        .map((h) => h.textContent)
+    ).toEqual([
+      'How the crawler sees the network',
+      'Crawler round evidence',
+      'Protocols they speak',
+      'Daily version and country counts',
+      'Who named whom',
+      'Peer evidence',
+    ]);
+  });
+});
+
+describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('lists the first five peers and loads fifty more at a time', async () => {
+    const limits: (string | null)[] = [];
+    const peer = (i: number) => ({
+      peerId: `1220${String(i).padStart(60, '0')}`,
+      crawlerDialState: 'reachable',
+      participation: {
+        discoveryAdvertised: false,
+        directSessionObserved: false,
+        crawlerIdentified: true,
+      },
+      sessionInitiators: [],
+      primaryAddr: `/ip4/10.0.0.${i}/tcp/8115`,
+      version: '0.204.0',
+      country: 'US',
+      asn: 'AS1 Example',
+      lastAdvertisedAt: null,
+      lastDialObservedAt: 1751500800,
+      latestPositiveObservedAt: 1751500800,
+      lastReachableAt: 1751500800,
+      rttMs: 10,
+    });
+    server.use(
+      http.get(`${API_BASE}/network/peers`, ({ request }) => {
+        const url = new URL(request.url);
+        limits.push(url.searchParams.get('limit'));
+        const from = url.searchParams.get('cursor') ? 5 : 0;
+        const n = Number(url.searchParams.get('limit'));
+        const items = Array.from({ length: Math.min(n, 7 - from) }, (_, k) => peer(from + k));
+        return HttpResponse.json({ items, nextCursor: from + n < 7 ? items.at(-1)!.peerId : null });
+      })
+    );
+    render(wrap(<PeersTable />));
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(5));
+    expect(limits).toEqual(['5']);
+    fireEvent.click(screen.getByRole('button', { name: 'Load more' }));
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(7));
+    expect(limits).toEqual(['5', '50']);
+  });
+
+  it('shows who named whom in five rows of two, then every observation on demand', async () => {
+    stubChartWidth(1248);
+    server.use(
+      http.get(`${API_BASE}/network/advertisements`, () =>
+        HttpResponse.json({
+          roundId: 5,
+          finishedAt: 1751500800,
+          coverage: 'retainedLatestObservationOnly',
+          distinctPeerPairs: 12,
+          edges: Array.from({ length: 12 }, (_, i) => ({
+            advertiserPeerId: 'aaaaaaaa'.repeat(8),
+            targetPeerId: `${i}`.padStart(64, 'b'),
+            alias: `alias-${i}`,
+            observedAt: 1751500800,
+          })),
+        })
+      )
+    );
+    render(wrap(<AdvertisementGraph roundId={5} />));
+    await waitFor(() => expect(screen.getAllByRole('listitem')).toHaveLength(10));
+    fireEvent.click(screen.getByRole('button', { name: 'Show all 12 observations' }));
+    expect(screen.getAllByRole('listitem')).toHaveLength(12);
+    expect(screen.getByRole('button', { name: 'Show first 10 observations' })).toBeInTheDocument();
   });
 });

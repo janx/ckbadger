@@ -315,13 +315,13 @@ describe('Network board (F2 charts)', () => {
     expect(fills[0]).toHaveStyle({ backgroundColor: '#2edba3' });
   });
 
-  it('draws verified as a line over the reachable area, with dated x labels (CH-58)', async () => {
+  it('draws verified as a line over the reachable area, with its first and last day on the axis (CH-58, R14)', async () => {
     render(wrap(<NetworkTrends />));
     const svg = await screen.findByRole('img', { name: 'Verified and reachable peers, peers' });
     expect(svg.querySelectorAll('path[fill="#dee2ec"]')).toHaveLength(0);
     expect(svg.querySelector('path[fill="#2edba3"]')).not.toBeNull();
     const ticks = [...svg.querySelectorAll('[data-x-tick]')].map((n) => n.textContent);
-    expect(ticks).toEqual(['07-01', '07-02', '07-03']);
+    expect(ticks).toEqual(['07-01', '07-03']);
     // The daily share tables are developer evidence, not part of "Over time".
     expect(screen.queryByText('Client Version Share')).toBeNull();
   });

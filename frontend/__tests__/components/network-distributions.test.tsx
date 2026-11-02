@@ -4,7 +4,12 @@ import { render, screen, waitFor } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
-import { mergePeerCounts, NetworkShareHistory, NetworkTrends } from '@/app/network/trends';
+import {
+  mergePeerCounts,
+  NetworkShareHistory,
+  NetworkTrendNotes,
+  NetworkTrends,
+} from '@/app/network/trends';
 import producerGaps from '@/__tests__/fixtures/network-api-producer/network-history-gaps.json';
 
 const API_BASE = '/api/:network/v1';
@@ -91,15 +96,22 @@ describe('NetworkTrends', () => {
       })
     );
     stubChartWidth(900);
-    const { container } = render(<NetworkTrends />);
-    // CH-50: the shared chart, a shaded gap the series never bridge, and the gap note only
-    // because a gap exists.
+    // Hierarchy v3 (N4): how to read the chart and its coverage are tier 2's notes.
+    const { container } = render(
+      <>
+        <NetworkTrends />
+        <NetworkTrendNotes />
+      </>
+    );
+    // CH-50: the shared chart, a shaded gap the series never bridge, and the gap note.
     expect(
       await screen.findByRole('img', { name: 'Verified and reachable peers, peers' })
     ).toBeInTheDocument();
     expect(container.querySelector('[data-chart-gap="no rounds 01-12"]')).not.toBeNull();
     // D2: the API's days are UTC+8 calendar days, and the page says so.
-    expect(screen.getByText('Retained peers per completed UTC+8 day')).toBeInTheDocument();
+    expect(
+      screen.getByText('verified and reachable peers per completed UTC+8 day')
+    ).toBeInTheDocument();
     expect(screen.queryByText(/UTC day/)).toBeNull();
     expect(screen.getByText(/Coverage: 1970-01-11 through 1970-01-13\./)).toBeInTheDocument();
     expect(
@@ -185,7 +197,7 @@ describe('NetworkTrends', () => {
       })
     );
     render(<NetworkTrends />);
-    expect(await screen.findByText('Retained verification state (daily)')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Over time' })).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByText('Loading verified peer history…')).toBeInTheDocument()
     );
@@ -305,9 +317,11 @@ describe('NetworkTrends', () => {
       </>
     );
 
-    expect(await screen.findByText('Retained verification state (daily)')).toBeInTheDocument();
-    expect((await screen.findAllByText('Same-network reachable')).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('Verified (retained)').length).toBeGreaterThan(0);
+    expect(await screen.findByRole('heading', { name: 'Over time' })).toBeInTheDocument();
+    // The series are named in the reading row (no coloured key above the plot, hierarchy v3).
+    expect(await screen.findByRole('status', { name: 'Peer reading' })).toHaveTextContent(
+      'Same-network reachable 70 peers · Verified (retained) 120 peers'
+    );
     // Historical totals were not persisted, so these are exact retained counts rather than shares.
     expect(screen.getAllByText(/0.114.0 4 · 0.113.0 2/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/United States 3 · Germany 2/).length).toBeGreaterThan(0);

@@ -5,6 +5,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { truncateHash } from '@/lib/utils';
 
+/** Five rows of two first (hierarchy R5): every observation stays one tap away. */
+const FIRST_OBSERVATIONS = 10;
+
 /** The arrows are Discovery address-book reports, never observed p2p connections. */
 export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const [showAll, setShowAll] = useState(false);
@@ -32,7 +35,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
         Crawler round changed; refreshing advertisement evidence…
       </p>
     );
-  const visible = showAll ? data.edges : data.edges.slice(0, 24);
+  const visible = showAll ? data.edges : data.edges.slice(0, FIRST_OBSERVATIONS);
   return (
     <div className="min-w-0">
       <p className="text-text-dim text-small mb-4 max-w-4xl leading-relaxed">
@@ -78,14 +81,14 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
           ))}
         </div>
       )}
-      {data.edges.length > 24 && (
+      {data.edges.length > FIRST_OBSERVATIONS && (
         <button
           type="button"
           onClick={() => setShowAll((value) => !value)}
           className="text-jade text-meta mt-3 underline underline-offset-2"
         >
           {showAll
-            ? 'Show first 24 observations'
+            ? `Show first ${FIRST_OBSERVATIONS} observations`
             : `Show all ${data.edges.length.toLocaleString()} observations`}
         </button>
       )}
