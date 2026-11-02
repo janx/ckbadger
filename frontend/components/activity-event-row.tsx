@@ -328,7 +328,7 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
               +{formatCkbAmount(capacity as bigint).full} CKB
             </span>
             {compensation !== null && (
-              <span className="text-positive font-mono text-[10px] tabular-nums">
+              <span className="text-positive text-meta font-mono tabular-nums">
                 +{formatCkbAmount(compensation).full} CKB compensation
               </span>
             )}
@@ -571,9 +571,9 @@ export function ActivityEventGroup({
 
   const when =
     isInPool && activity.timeAddedToPool ? (
-      <TimeInPool since={activity.timeAddedToPool} className="text-warning font-mono text-[10px]" />
+      <TimeInPool since={activity.timeAddedToPool} className="text-warning text-meta font-mono" />
     ) : (
-      <span className="text-text-dim font-mono text-[10px]">{time}</span>
+      <span className="text-text-dim text-meta font-mono">{time}</span>
     );
 
   // Vertical padding helper — first/last rows of a group get more padding
@@ -602,7 +602,7 @@ export function ActivityEventGroup({
         </div>
         <PoolInterpretationNotice
           interpretation={activity.interpretation}
-          className="text-warning mt-1 block font-mono text-[10px]"
+          className="text-warning text-meta mt-1 block font-mono"
         />
         <div className="mt-1 space-y-0.5 pl-2">
           {events.map((event, i) => (
@@ -893,7 +893,7 @@ export function ExactCkb({
           {parts.ghost}
         </span>
       </span>
-      {unit && <span className="text-text-dim whitespace-pre text-[11px]"> CKB</span>}
+      {unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>}
     </span>
   );
 }

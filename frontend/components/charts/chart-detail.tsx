@@ -136,14 +136,14 @@ function Reading({
 }) {
   return (
     <div className="flex flex-col items-end" title={`${formatChartExact(raw, unit)} ${unit}`}>
-      <span className="text-text-dim text-[11px]">{label}</span>
+      <span className="text-text-dim text-meta">{label}</span>
       <span className="flex items-baseline gap-1">
         <span
-          className={`text-[22px] font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
+          className={`text-hero font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
         >
           {formatChartHover(raw, unit)}
         </span>
-        <span className="text-text-dim text-[11px]">{unit}</span>
+        <span className="text-text-dim text-meta">{unit}</span>
       </span>
     </div>
   );
@@ -311,7 +311,7 @@ function DetailBody({
   ];
   return (
     <>
-      <nav aria-label="Breadcrumb" className="mb-3 text-[12px]">
+      <nav aria-label="Breadcrumb" className="text-small mb-3">
         <Link
           href={`/charts#${chartSectionId(definition.section)}`}
           className="text-text-dim hover:text-jade"
@@ -330,7 +330,7 @@ function DetailBody({
           title={distribution ? 'Distribution' : 'Full history'}
           actions={
             model.kind !== 'ranked' && (
-              <span className="text-text-dim text-[12px]">
+              <span className="text-text-dim text-small">
                 {points.length.toLocaleString()} {POINT_NOUN[style]}
               </span>
             )

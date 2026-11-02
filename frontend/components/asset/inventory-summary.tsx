@@ -25,7 +25,7 @@ export function InventorySummaryNotice({ summary, assetType }: InventorySummaryN
           lives in its cell on CKB
         </p>
       )}
-      <p className="text-[11px]">
+      <p className="text-meta">
         Canonical asset totals
         {summary.anchor
           ? ` at block ${formatBlockNumber(summary.anchor.blockNumber)}`
@@ -86,8 +86,8 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
   return (
     <section aria-label="Object composition" className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <span className="text-text text-[13px]">
-          <span className="text-text-bright text-[15px]">
+        <span className="text-text text-body">
+          <span className="text-text-bright text-body">
             <AssetCount value={onchain} />
           </span>{' '}
           of <AssetCount value={total} /> collections are fully on-chain · so are{' '}
@@ -103,7 +103,7 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
           )}
         </span>
         {spore && mnft && (
-          <span className="text-text-dim text-[12px]">
+          <span className="text-text-dim text-small">
             <AssetCount value={spore.collectionsCount} /> Spore clusters ·{' '}
             <AssetCount value={mnft.collectionsCount} /> m-NFT classes
           </span>

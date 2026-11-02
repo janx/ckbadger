@@ -76,16 +76,16 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
     <figure className="border-base-border min-w-0 space-y-3 rounded-md border p-5 text-center">
       {renderer ? (
         <>
-          <div className="text-text-bright text-[13px]">
+          <div className="text-text-bright text-body">
             {where ? `Its image is ${where}` : 'Its class names a renderer'}
           </div>
-          <p className="text-text-dim break-all text-[12px]">{renderer}</p>
+          <p className="text-text-dim text-small break-all">{renderer}</p>
           {where && (
-            <a href={renderer} rel="noreferrer" target="_blank" className="text-aqua text-[12px]">
+            <a href={renderer} rel="noreferrer" target="_blank" className="text-aqua text-small">
               Open the file ↗
             </a>
           )}
-          <figcaption className="text-text-dim text-[11.5px]">
+          <figcaption className="text-text-dim text-meta">
             One file for the whole class.
             {scheme === 'http' || scheme === 'https'
               ? ' If that server goes away, the picture goes with it; the token itself stays on CKB.'
@@ -93,7 +93,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           </figcaption>
         </>
       ) : (
-        <figcaption className="text-text-dim text-[11px]">No class renderer recorded.</figcaption>
+        <figcaption className="text-text-dim text-meta">No class renderer recorded.</figcaption>
       )}
     </figure>
   );
@@ -135,7 +135,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto min-w-0 px-4 py-8">
-          <h1 className="text-text-bright text-[26px]">m-NFT</h1>
+          <h1 className="text-text-bright text-entity">m-NFT</h1>
           <AssetReadState label="m-NFT" error={detail.error} loading={detail.isLoading} />
         </main>
       </div>
@@ -177,23 +177,23 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
         { label: className, href: classHref },
       ]}
       status={<LiveBadge live={item.isLive} gone="Burned" />}
-      identity={<Hash hash={item.nftId} truncate={false} className="break-all text-[11px]" />}
+      identity={<Hash hash={item.nftId} truncate={false} className="text-meta break-all" />}
       intro={
         <div className="space-y-4 pt-1">
           <AssetReadState error={detail.error} label="m-NFT" retained />
           {item.composition ? (
             <CompositionLine tier={item.composition.tier} />
           ) : (
-            <p className="text-text-dim text-[11px]">Composition unavailable.</p>
+            <p className="text-text-dim text-meta">Composition unavailable.</p>
           )}
           {history && history.data.length > 0 ? (
-            <p className="text-text text-[15px] leading-relaxed">
+            <p className="text-text text-body leading-relaxed">
               <span>
                 {itemLifeSentence(history.data, now, 'Issued', item.issuer.name ?? 'its issuer')}
               </span>
             </p>
           ) : (
-            <p className="text-text text-[15px]">
+            <p className="text-text text-body">
               Issued in <AppLink href={classHref}>{className}</AppLink> at{' '}
               <AppLink href={`/blocks/${item.createdAtBlock}`}>
                 block <AssetCount value={item.createdAtBlock} />
@@ -204,7 +204,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {item.class.description && (
             <blockquote className="border-base-border border-l pl-4">
               <p className="break-words">{item.class.description}</p>
-              <footer className="text-text-dim mt-2 text-[11px]">
+              <footer className="text-text-dim text-meta mt-2">
                 the class’s description, on chain
               </footer>
             </blockquote>
@@ -263,7 +263,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 <AppLink href={`/address/${current.ownerAddress}`}>
                   <Hash hash={current.ownerAddress} className="text-xs" copyable={false} />
                 </AppLink>
-                <span className="text-text-dim mt-1 block text-[12px]">
+                <span className="text-text-dim text-small mt-1 block">
                   {current.lockName ?? 'Unregistered lock'} · since{' '}
                   {formatUtc8Date(current.timestamp)}
                 </span>
@@ -280,7 +280,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           value: (
             <>
               <AppLink href={classHref}>{className}</AppLink>
-              <span className="text-text-dim mt-1 block text-[12px]">
+              <span className="text-text-dim text-small mt-1 block">
                 by {item.issuer.name ?? 'an unnamed issuer'}
               </span>
             </>
@@ -291,7 +291,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           value: first ? (
             <>
               <span className="block">{formatUtc8DateTime(first.timestamp)}</span>
-              <span className="text-text-dim mt-1 block text-[12px]">
+              <span className="text-text-dim text-small mt-1 block">
                 <AppLink href={`/blocks/${first.blockNumber}`}>
                   {formatBlockNumber(first.blockNumber)}
                 </AppLink>{' '}
@@ -313,7 +313,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                   <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
                     {formatUtc8DateTime(last.timestamp)}
                   </AppLink>
-                  <span className="text-text-dim mt-1 block text-[12px]">
+                  <span className="text-text-dim text-small mt-1 block">
                     <AppLink href={`/blocks/${last.blockNumber}`}>
                       {formatBlockNumber(last.blockNumber)}
                     </AppLink>{' '}
@@ -331,7 +331,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             current ? (
               <>
                 <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" wrap />
-                <div className="text-text-dim mt-1 text-[12px]">
+                <div className="text-text-dim text-small mt-1">
                   <span className="text-jade">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
                   occupied · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))}{' '}
                   free
@@ -374,21 +374,17 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             state={{ claimed: item.claimed, locked: item.locked, value: item.state }}
           />
           <DetailSection title="Issuer record">
-            <p className="text-[11px]">Name · {item.issuer.name ?? 'not recorded'}</p>
-            <p className="text-[11px]">
+            <p className="text-meta">Name · {item.issuer.name ?? 'not recorded'}</p>
+            <p className="text-meta">
               Issuer ID ·{' '}
-              <Hash
-                hash={item.issuer.issuerId}
-                truncate={false}
-                className="break-all text-[11px]"
-              />
+              <Hash hash={item.issuer.issuerId} truncate={false} className="text-meta break-all" />
             </p>
-            <p className="text-text-dim mt-2 text-[11px]">
+            <p className="text-text-dim text-meta mt-2">
               <AssetCount value={item.issuer.classCount} /> classes ·{' '}
               <AssetCount value={item.issuer.setCount} /> sets
             </p>
             {item.issuer.infoHex !== null && (
-              <details className="mt-3 text-[11px]">
+              <details className="text-meta mt-3">
                 <summary className="cursor-pointer">Raw issuer metadata</summary>
                 <pre className="mt-3 whitespace-pre-wrap break-all">{item.issuer.infoHex}</pre>
               </details>
@@ -421,7 +417,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             title="CKB held in its cell"
             actions={
               current && (
-                <span className="text-text-dim text-[12px]">
+                <span className="text-text-dim text-small">
                   1 CKB per byte ·{' '}
                   <span className="text-jade">
                     {ckbText(BigInt(current.occupiedCapacity))} occupied
@@ -432,21 +428,21 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             }
             intro={
               history.data.length > 0 && (
-                <p className="mb-4 text-[13px] leading-relaxed">
+                <p className="text-body mb-4 leading-relaxed">
                   {cellLifeSentence(history.data, 'token')}
                 </p>
               )
             }
           />
           {lockFootnote(history.data, 'token') && (
-            <p className="text-text-dim text-[12px]">{lockFootnote(history.data, 'token')}</p>
+            <p className="text-text-dim text-small">{lockFootnote(history.data, 'token')}</p>
           )}
         </div>
       )}
       <section aria-label={`In ${className}`} className="space-y-3">
         <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 className="text-text-bright text-[15px]">In {className}</h2>
-          <AppLink className="text-[12px]" href={classHref}>
+          <h2 className="text-text-bright text-section">In {className}</h2>
+          <AppLink className="text-small" href={classHref}>
             Open the class →
           </AppLink>
         </div>
@@ -455,7 +451,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             <AssetReadState error={collection.error} label="class totals" retained />
             <div className="flex flex-wrap items-baseline gap-x-10 gap-y-2">
               <span>
-                <span className="text-text-bright text-[15px]">
+                <span className="text-text-bright text-body">
                   <AssetCount value={collection.data.totalCount} />
                 </span>{' '}
                 <span className="text-text-dim">
@@ -464,14 +460,14 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               </span>
               <span>
-                <span className="text-text-bright text-[15px]">
+                <span className="text-text-bright text-body">
                   <AssetCount value={collection.data.holdersCount} />
                 </span>{' '}
                 <span className="text-text-dim">holders</span>
               </span>
               {collection.data.composition && (
                 <span>
-                  <span className="text-text-bright text-[15px]">
+                  <span className="text-text-bright text-body">
                     <AssetCount value={collection.data.composition.onchainCount} /> of{' '}
                     <AssetCount value={collection.data.liveCount} />
                   </span>{' '}
@@ -480,7 +476,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
               )}
               {collection.data.ownedCapacity !== null && (
                 <span>
-                  <span className="text-text-bright text-[15px]">
+                  <span className="text-text-bright text-body">
                     <ExactCkb
                       shannons={BigInt(collection.data.ownedCapacity)}
                       signed={false}
@@ -492,7 +488,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
                 </span>
               )}
             </div>
-            <div className="text-text-dim flex flex-wrap items-center gap-4 text-[12px]">
+            <div className="text-text-dim text-small flex flex-wrap items-center gap-4">
               {collection.data.composition && (
                 <CompositionBadge tier={collection.data.composition.tier} size="sm" />
               )}

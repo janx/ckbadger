@@ -78,13 +78,13 @@ export function BlockContents({
           ))}
         </svg>
         {showCount && (
-          <span className="text-text-dim text-[11px]">
+          <span className="text-text-dim text-meta">
             {transactionSizes.length.toLocaleString('en-US')} tx
           </span>
         )}
       </span>
       {showCount && (userSizes.length > shown.length || proposalsCount > dots) && (
-        <span className="text-text-dim text-[11px]">
+        <span className="text-text-dim text-meta">
           {[
             ...(userSizes.length > shown.length
               ? [`+${userSizes.length - shown.length} tiles`]
@@ -202,7 +202,7 @@ export function ScaleHeader({
       <span
         data-scale-ticks
         aria-hidden="true"
-        className="flex justify-between text-[9.5px]"
+        className="text-meta flex justify-between"
         style={{ width: `${trackWidth}px` }}
       >
         <span>0</span>

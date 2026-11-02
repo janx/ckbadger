@@ -56,7 +56,7 @@ export function PageHeader({
               <h1
                 className={cn(
                   'text-text-bright break-words font-mono font-medium',
-                  kind === 'index' ? 'text-[22px]' : 'text-[26px]'
+                  kind === 'entity' ? 'text-entity' : 'text-index'
                 )}
               >
                 {title}

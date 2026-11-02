@@ -352,7 +352,7 @@ function Gel({
         </ReadoutRow>
       </div>
       {/* Visual pass: as SVG text this line was clipped once a gel had 16 lanes; it wraps here. */}
-      <p className="text-text-dim mt-1 text-[11px]">
+      <p className="text-text-dim text-meta mt-1">
         variants per gene ↑ · one lane per gene, in DNA order · band thickness = share of all{' '}
         {total.toLocaleString('en-US')} objects, common at the top, rare below
       </p>
@@ -403,11 +403,11 @@ function GeneList({
       <div
         role="table"
         aria-label="Genes ranked by how many variants they have"
-        className="min-w-0 text-[12px]"
+        className="text-small min-w-0"
       >
         <div
           role="row"
-          className={cn(LIST_GRID, 'border-base-border text-text-dim border-b pb-1.5 text-[11px]')}
+          className={cn(LIST_GRID, 'border-base-border text-text-dim text-meta border-b pb-1.5')}
         >
           <span role="columnheader">gene</span>
           <span role="columnheader" className="text-right">
@@ -449,12 +449,12 @@ function GeneList({
                   {lane.gene}
                 </button>
                 {marks.map((m) => (
-                  <span key={m.key} className="text-text-dim block text-[11px]">
+                  <span key={m.key} className="text-text-dim text-meta block">
                     ▸ {m.label}: {m.band.label} · {of(m.band.count)}
                   </span>
                 ))}
                 {expanded && (
-                  <ul aria-label={`${lane.gene} variants`} className="mt-1 space-y-0.5 text-[11px]">
+                  <ul aria-label={`${lane.gene} variants`} className="text-meta mt-1 space-y-0.5">
                     {lane.bands.map((b) => (
                       <li key={b.value} className="[overflow-wrap:anywhere]">
                         {onBandClick ? (
@@ -497,12 +497,12 @@ function GeneList({
         <button
           type="button"
           onClick={() => setAll(true)}
-          className="text-aqua min-h-11 text-left text-[12px]"
+          className="text-aqua text-small min-h-11 text-left"
         >
           {moreGenes(rest)} ▾
         </button>
       )}
-      <p className="text-text-dim mt-1 text-[11px]">
+      <p className="text-text-dim text-meta mt-1">
         genes ranked by how many variants they have · most common = how many of all{' '}
         {total.toLocaleString('en-US')} objects carry the commonest variant · open a gene for every
         variant
@@ -520,7 +520,7 @@ export function NotGenesNote({ traits }: { traits: readonly string[] }) {
   const names =
     traits.length > 1 ? `${traits.slice(0, -1).join(', ')} and ${traits.at(-1)}` : traits[0];
   return (
-    <p className="text-text-dim text-[11px] [overflow-wrap:anywhere]">
+    <p className="text-text-dim text-meta [overflow-wrap:anywhere]">
       Not drawn: {names}, {traits.length > 1 ? 'outputs' : 'an output'} of the decoder that the
       pattern does not declare as {traits.length > 1 ? 'genes' : 'a gene'}.
     </p>

@@ -83,7 +83,7 @@ export default function BlocksPage() {
       numeric: true,
       render: (block) =>
         block.miningReward === null ? (
-          <span className="text-text-dim text-[11px]">
+          <span className="text-text-dim text-meta">
             {block.rewardFinalizesAt === null ? (
               'Genesis'
             ) : (
@@ -253,11 +253,11 @@ function BlockIdentity({ block }: { block: Block }) {
           startChars={6}
           endChars={4}
           copyable={false}
-          className="text-text-dim text-[11.5px]"
+          className="text-text-dim text-meta"
         />
       </div>
       {block.hardforkActivation && (
-        <Link href="/hardforks" className="text-text-dim block text-[11px]">
+        <Link href="/hardforks" className="text-text-dim text-meta block">
           HF · {block.hardforkActivation.shortName.toUpperCase()}
         </Link>
       )}
@@ -375,7 +375,7 @@ function BlockPhoneRow({ block }: { block: Block }) {
                   startChars={6}
                   endChars={4}
                   copyable={false}
-                  className="text-[11px]"
+                  className="text-meta"
                 />,
                 block.hardforkActivation && (
                   <Link key="hf" href="/hardforks">
@@ -417,10 +417,10 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
           startChars={6}
           endChars={4}
           copyable={false}
-          className="text-text-dim block whitespace-nowrap text-[11px]"
+          className="text-text-dim text-meta block whitespace-nowrap"
         />
         {block.hardforkActivation && (
-          <Link href="/hardforks" className="text-text-dim block text-[11px]">
+          <Link href="/hardforks" className="text-text-dim text-meta block">
             HF · {block.hardforkActivation.shortName.toUpperCase()}
           </Link>
         )}
@@ -443,10 +443,10 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
       <>
         {block.transactionSizes.length.toLocaleString('en-US')}
         {block.proposalsCount > 0 && (
-          <span className="text-text-dim block text-[11px]">{block.proposalsCount}p</span>
+          <span className="text-text-dim text-meta block">{block.proposalsCount}p</span>
         )}
         {block.unclesCount > 0 && (
-          <span className="text-text-dim block text-[11px]">{block.unclesCount}u</span>
+          <span className="text-text-dim text-meta block">{block.unclesCount}u</span>
         )}
       </>
     ),

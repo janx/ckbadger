@@ -136,7 +136,7 @@ function ChannelState({ state }: { state: FiberChannelState }) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1.5 whitespace-nowrap text-[11px]',
+        'text-meta inline-flex items-center gap-1.5 whitespace-nowrap',
         state === 'open' ? 'text-jade' : 'text-text-dim'
       )}
     >
@@ -254,20 +254,20 @@ export default function FiberChannelsPage() {
           figures={summary ? heroFigures(summary) : undefined}
         />
         {network.isError && (
-          <p role="alert" className="text-rouge text-[13px]">
+          <p role="alert" className="text-rouge text-body">
             Fiber network evidence could not be loaded: {String(network.error)}
           </p>
         )}
         {network.isLoading && (
-          <p className="text-text-dim text-[13px]">Loading indexed Fiber network…</p>
+          <p className="text-text-dim text-body">Loading indexed Fiber network…</p>
         )}
         {network.data && <FiberNetworkGraph network={network.data} />}
         <section aria-labelledby="fiber-channels-heading" className="flex min-w-0 flex-col gap-2.5">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 id="fiber-channels-heading" className="text-text-bright text-[15px] font-medium">
+            <h2 id="fiber-channels-heading" className="text-text-bright text-section font-medium">
               Channels
             </h2>
-            <span className="text-text-dim text-[12px]">sorted by capacity</span>
+            <span className="text-text-dim text-small">sorted by capacity</span>
           </div>
           <div className="flex flex-wrap gap-1.5" role="group" aria-label="State">
             {filters.map((filter) => {
@@ -282,7 +282,7 @@ export default function FiberChannelsPage() {
                     pagination.reset();
                   }}
                   className={cn(
-                    'h-[30px] rounded-md border px-[11px] text-[12px]',
+                    'text-small h-[30px] rounded-md border px-[11px]',
                     on
                       ? 'bg-base-elevated text-text-bright border-[#2c3348]'
                       : 'border-base-border-subtle text-text hover:text-text-bright'
@@ -300,13 +300,11 @@ export default function FiberChannelsPage() {
             })}
           </div>
           {channels.isError && (
-            <p role="alert" className="text-rouge py-7 text-[13px]">
+            <p role="alert" className="text-rouge text-body py-7">
               Channel list could not be loaded: {String(channels.error)}
             </p>
           )}
-          {channels.isLoading && (
-            <p className="text-text-dim py-7 text-[13px]">Loading channels…</p>
-          )}
+          {channels.isLoading && <p className="text-text-dim text-body py-7">Loading channels…</p>}
           {channels.data && (
             <>
               <ListTable
@@ -329,7 +327,7 @@ export default function FiberChannelsPage() {
                           {shortId(channel.channelId)}
                         </Link>
                         {stateFilter === 'all' && (
-                          <span className="text-text-dim block text-[11px]">
+                          <span className="text-text-dim text-meta block">
                             {FIBER_STATE_WORDS[channel.state]}
                           </span>
                         )}

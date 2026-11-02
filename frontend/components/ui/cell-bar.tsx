@@ -47,7 +47,7 @@ export function CellBar({ subject, anatomy, className, capacity, hideLegend }: C
         ))}
       </div>
       {!hideLegend && (
-        <div className="text-text-dim mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+        <div className="text-text-dim text-meta mt-2 flex flex-wrap gap-x-4 gap-y-1">
           {parts.map((p) => (
             <span key={p.key} title={`${p.key}: ${p.value} bytes`}>
               <span style={{ color: CELL_COLORS[p.key] }}>{p.key}</span> {p.value.toString()} B

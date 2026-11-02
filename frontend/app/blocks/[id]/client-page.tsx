@@ -534,7 +534,7 @@ export default function BlockDetailPage() {
         >
           {activation && resources && (
             <section aria-label="Hardfork resources">
-              <h2 className="text-text-dim mb-3 text-[15px]">
+              <h2 className="text-text-dim text-section mb-3">
                 HARDFORK RESOURCES · {activation.shortName.toUpperCase()}
               </h2>
               <div className="flex flex-wrap gap-4">
@@ -557,7 +557,7 @@ export default function BlockDetailPage() {
             <div className="min-w-0">
               <p
                 data-testid="block-summary"
-                className="mb-8 max-w-[80ch] text-[15px] leading-relaxed"
+                className="text-body mb-8 max-w-[80ch] leading-relaxed"
               >
                 {formatCount(block.transactionsCount, 'transaction')}
                 {block.minerAddress && (
@@ -589,11 +589,11 @@ export default function BlockDetailPage() {
                       key={tab}
                       aria-pressed={view === tab}
                       onClick={() => setView(tab)}
-                      className={`-mb-px flex min-h-11 items-center gap-2 border-b-2 text-[15px] font-medium ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+                      className={`text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium ${tab === view ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                     >
                       <span>{tab === 'activities' ? 'Activities' : 'Transactions'}</span>
                       {/* One activity row per transaction of the block (the block feed's contract). */}
-                      <span className="text-text-dim text-[12px] font-normal">
+                      <span className="text-text-dim text-small font-normal">
                         {block.transactionsCount.toLocaleString('en-US')}
                       </span>
                     </button>
@@ -788,7 +788,7 @@ function ScalePending({ error, value }: { error: Error | null; value: number }) 
   return (
     <span className="text-text-bright">
       {value.toLocaleString('en-US')}
-      <span className="text-text-dim ml-2 text-[11px]">
+      <span className="text-text-dim text-meta ml-2">
         {error ? `bar scale unavailable: ${error.message}` : 'reading the list scale…'}
       </span>
     </span>

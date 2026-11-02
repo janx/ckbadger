@@ -43,7 +43,7 @@ export function HolderPhoneRow({
       )}
     </>
   );
-  const figure = <span className="text-text-bright text-[13px]">{amount}</span>;
+  const figure = <span className="text-text-bright text-body">{amount}</span>;
   if (wide)
     return (
       <PhoneRow
@@ -57,7 +57,7 @@ export function HolderPhoneRow({
               <span className="inline-flex items-center gap-3">
                 <ShareBar width={barWidth} color={barColor} className="w-16 flex-none" />
                 {share !== undefined && share !== null && (
-                  <span className="text-text-dim text-[11px]">{share}</span>
+                  <span className="text-text-dim text-meta">{share}</span>
                 )}
                 {figure}
               </span>

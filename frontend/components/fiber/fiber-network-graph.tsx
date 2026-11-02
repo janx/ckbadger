@@ -73,10 +73,10 @@ function PartyPanel({ node, partners }: { node: FiberGraphNode; partners: number
   const { party } = node;
   return (
     <div>
-      <div className="text-text-bright text-[13.5px]">
+      <div className="text-text-bright text-body">
         <PartyLink party={party} />
       </div>
-      <div className="text-text-dim mb-2 mt-0.5 text-[11.5px]" style={{ overflowWrap: 'anywhere' }}>
+      <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
         {party.lockScriptName ? `${party.lockScriptName} · ` : ''}lock hash{' '}
         {party.lockScriptHash.slice(0, 10)}…{party.lockScriptHash.slice(-6)}
       </div>
@@ -116,10 +116,10 @@ function PairPanel({ edge, a, b }: { edge: FiberGraphEdge; a: FiberParty; b: Fib
   const { pair } = edge;
   return (
     <div>
-      <div className="text-text-bright text-[13.5px]">
+      <div className="text-text-bright text-body">
         …{partyTail(a)} ↔ …{partyTail(b)}
       </div>
-      <div className="text-text-dim mb-2 mt-0.5 text-[11.5px]" style={{ overflowWrap: 'anywhere' }}>
+      <div className="text-text-dim text-meta mb-2 mt-0.5" style={{ overflowWrap: 'anywhere' }}>
         {formatCount(pair.channels, 'channel')} between <PartyLink party={a} /> and{' '}
         <PartyLink party={b} />
       </div>
@@ -252,10 +252,10 @@ export function FiberNetworkGraph({ network }: Props) {
   return (
     <section aria-labelledby="fiber-network-heading" className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 id="fiber-network-heading" className="text-text-bright text-[15px] font-medium">
+        <h2 id="fiber-network-heading" className="text-text-bright text-section font-medium">
           The network, as the chain sees it
         </h2>
-        <span className="text-text-dim flex flex-wrap gap-x-[18px] gap-y-1 text-[11.5px]">
+        <span className="text-text-dim text-meta flex flex-wrap gap-x-[18px] gap-y-1">
           <span className="inline-flex items-center gap-1.5">
             <LegendLine stroke={FIBER_COLORS.open} width={3} />
             CKB locked now
@@ -284,7 +284,7 @@ export function FiberNetworkGraph({ network }: Props) {
         </span>
       </div>
       {network.parties.length === 0 ? (
-        <p className="text-text-dim py-10 text-[13px]">No on-chain parties observed yet.</p>
+        <p className="text-text-dim text-body py-10">No on-chain parties observed yet.</p>
       ) : (
         <div className="grid min-w-0 items-start gap-7 lg:grid-cols-[minmax(0,1fr)_340px]">
           <div className="flex min-w-0 flex-col gap-2">
@@ -435,7 +435,7 @@ export function FiberNetworkGraph({ network }: Props) {
           <aside
             aria-label="Party or pair"
             aria-live="polite"
-            className="border-base-border-subtle min-h-[220px] min-w-0 rounded-md border px-3.5 py-3 text-[12px] lg:sticky lg:top-4"
+            className="border-base-border-subtle text-small min-h-[220px] min-w-0 rounded-md border px-3.5 py-3 lg:sticky lg:top-4"
           >
             {activeNode ? (
               <PartyPanel node={activeNode} partners={data.neighbours.get(activeNode.id)!.size} />
@@ -447,7 +447,7 @@ export function FiberNetworkGraph({ network }: Props) {
               />
             ) : (
               <div>
-                <div className="text-text-bright text-[13.5px]">
+                <div className="text-text-bright text-body">
                   {tapOrHover('a party or a pair', { capital: true })}
                 </div>
                 <p className="text-text mt-1.5 leading-relaxed">
@@ -465,7 +465,7 @@ export function FiberNetworkGraph({ network }: Props) {
           </aside>
         </div>
       )}
-      <p className="text-text-dim max-w-[900px] text-[12px]">
+      <p className="text-text-dim text-small max-w-[900px]">
         Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel,
         not which node ran it.
         {data.unpairedChannels > 0 &&

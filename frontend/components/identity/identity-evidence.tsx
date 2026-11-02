@@ -42,7 +42,7 @@ function Tier2Section({ title, children }: { title: string; children: ReactNode 
       <h2
         className={cn(
           'font-medium',
-          tier === 2 ? 'text-text text-[13px]' : 'text-text-bright text-[15px]'
+          tier === 2 ? 'text-text text-body' : 'text-text-bright text-section'
         )}
       >
         {title}
@@ -54,7 +54,7 @@ function Tier2Section({ title, children }: { title: string; children: ReactNode 
 
 function Rows({ rows }: { rows: [string, ReactNode][] }) {
   return (
-    <dl className="grid min-w-0 grid-cols-1 gap-x-3.5 gap-y-2 text-[12px] sm:grid-cols-[200px_minmax(0,1fr)]">
+    <dl className="text-small grid min-w-0 grid-cols-1 gap-x-3.5 gap-y-2 sm:grid-cols-[200px_minmax(0,1fr)]">
       {rows.map(([term, value]) => (
         <div key={term} className="contents">
           <dt className="text-text-dim">{term}</dt>
@@ -123,10 +123,10 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
           ],
         ]}
       />
-      <p className="text-text-ghost text-[11.5px]">
+      <p className="text-text-ghost text-meta">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
-          <Hash hash={v.cell.txHash} copyable={false} className="text-[11.5px]" />
+          <Hash hash={v.cell.txHash} copyable={false} className="text-meta" />
         </AppLink>
       </p>
     </Tier2Section>
@@ -229,7 +229,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
           ['data layout', `V${d.documentVersion} (union variant 0)`],
         ]}
       />
-      <pre className="bg-base-elevated text-text whitespace-pre-wrap rounded-md px-3.5 py-3 text-[11.5px] [overflow-wrap:anywhere]">
+      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap rounded-md px-3.5 py-3 [overflow-wrap:anywhere]">
         {JSON.stringify(d.document, null, 2)}
       </pre>
     </Tier2Section>
@@ -256,7 +256,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
     <>
       <Tier2Section title="Records as stored · witness">
         {d.records.length ? (
-          <div className="text-[12px]">
+          <div className="text-small">
             {d.records.map((r, i) => (
               <div
                 key={`${r.key}:${i}`}
@@ -271,7 +271,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
             ))}
           </div>
         ) : (
-          <p className="text-text-dim text-[12px]">No records in this version.</p>
+          <p className="text-text-dim text-small">No records in this version.</p>
         )}
       </Tier2Section>
       <Tier2Section title="Name cell">
@@ -287,7 +287,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               `Lock · ${v.cell.lockName ?? 'not named'}`,
               <>
                 <AppLink href={`/address/${v.cell.ownerAddress}`}>
-                  <Hash hash={v.cell.ownerAddress} copyable={false} className="text-[12px]" />
+                  <Hash hash={v.cell.ownerAddress} copyable={false} className="text-small" />
                 </AppLink>{' '}
                 <Dim>
                   · names are held under this lock; ownership is the owner field in the data
@@ -307,7 +307,7 @@ export function DotcellStored({ protocol, item }: { protocol: Of<'dotcell'>; ite
               ) : (
                 <>
                   <AppLink href={`/identities/dotcell/${d.nextId}`}>
-                    <Hash hash={d.nextId} copyable={false} className="text-[12px]" />
+                    <Hash hash={d.nextId} copyable={false} className="text-small" />
                   </AppLink>
                   <AssetReadState label="its name" error={next.error} loading={next.isLoading} />
                 </>

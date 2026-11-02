@@ -99,7 +99,7 @@ export function SequencingGel({ layout, subject, active, onActive }: SequencingG
       {width !== null && form === 'narrow' && (
         <NarrowGel layout={layout} subject={subject} width={width} lit={lit} bind={readout.bind} />
       )}
-      <p className="text-text-dim text-[11px]">
+      <p className="text-text-dim text-meta">
         read top to bottom: each band is one hex digit in the lane of its value · {n} digits ={' '}
         {bytes.length} bytes
         {form === 'narrow' ? ' · dashed rules mark the gene boundaries' : ''}
@@ -488,7 +488,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
       <ul
         aria-label="Genes"
         data-rows={oneLine ? 'one-line' : 'two-line'}
-        className="border-base-border-subtle border-t text-[12px]"
+        className="border-base-border-subtle text-small border-t"
       >
         {genes.map((g) => {
           const on = g.name === lit;
@@ -527,12 +527,12 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
                   {g.name}
                 </span>
                 {oneLine ? (
-                  <span className="text-text-dim text-[11px]">
+                  <span className="text-text-dim text-meta">
                     {bytesOf(g)}
                     <span className="block">{g.rule}</span>
                   </span>
                 ) : (
-                  <span className="text-text-dim text-right text-[11px]">
+                  <span className="text-text-dim text-meta text-right">
                     {bytesOf(g)} · {g.rule}
                   </span>
                 )}

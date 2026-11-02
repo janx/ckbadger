@@ -146,7 +146,7 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     });
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2).toContainElement(heading);
-    expect(heading).toHaveClass('text-[13px]');
+    expect(heading).toHaveClass('text-body');
     expect(within(tier2).getByRole('heading', { name: 'Uncles in #12' })).toBeInTheDocument();
     expect(
       within(tier2).getByText(`${uncleFixture.orphanedBlocks[0].hash} · #11`)

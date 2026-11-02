@@ -63,9 +63,9 @@ const PLACE = {
 const STACKED = 'flex flex-col gap-px sm:flex-row sm:items-baseline sm:gap-1.5 md:gap-2';
 const INLINE = 'flex items-baseline gap-1.5 md:gap-2';
 
-const LABEL = 'text-text-dim text-[11px] md:text-xs';
+const LABEL = 'text-text-dim text-meta md:text-xs';
 const VALUE =
-  'text-text-bright group-hover:text-jade text-[13px] font-medium tabular-nums transition-colors md:text-[15px]';
+  'text-text-bright group-hover:text-jade text-body font-medium tabular-nums transition-colors';
 
 function Vital({
   label,
@@ -191,7 +191,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
           style={{ width: `${pct}%` }}
         />
       </span>
-      <span className="text-text text-[11px] tabular-nums md:text-xs">
+      <span className="text-text text-meta tabular-nums md:text-xs">
         {index} / {length}
       </span>
       <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
@@ -256,7 +256,7 @@ function LiveMark({ connected }: { connected: boolean }) {
       title={
         connected ? 'Live: realtime updates connected' : 'Not live: realtime updates not connected'
       }
-      className={`ml-auto flex items-center gap-2 text-[12px] ${PLACE.live} ${connected ? 'text-jade' : 'text-text-dim'}`}
+      className={`text-small ml-auto flex items-center gap-2 ${PLACE.live} ${connected ? 'text-jade' : 'text-text-dim'}`}
     >
       <span
         aria-hidden="true"

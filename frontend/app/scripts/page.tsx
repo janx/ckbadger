@@ -117,7 +117,7 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
         <CodeClassPip replaceable={code.replaceable} />
         {code.head}
       </span>
-      <span className="text-text-dim text-[11px]">{code.sub}</span>
+      <span className="text-text-dim text-meta">{code.sub}</span>
     </span>
   );
 }
@@ -160,7 +160,7 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
       >
         {hasName(s) ? s.name!.trim() : 'Unlabeled'}
       </AppLink>
-      {s.deprecated && <span className="text-text-dim ml-2 text-[11px]">deprecated</span>}
+      {s.deprecated && <span className="text-text-dim text-meta ml-2">deprecated</span>}
     </>
   );
   const description = hasName(s)
@@ -228,10 +228,10 @@ function ScriptName({ script }: { script: KnownScript }) {
       >
         {name}
       </AppLink>
-      {script.deprecated && <span className="text-text-dim ml-2 text-[11px]">deprecated</span>}
+      {script.deprecated && <span className="text-text-dim text-meta ml-2">deprecated</span>}
       {/* Two lines below md, so the meaning survives the clamp (C#12); one in the md table. */}
       <div
-        className="text-text-dim mt-1 line-clamp-2 text-[11px] md:line-clamp-1"
+        className="text-text-dim text-meta mt-1 line-clamp-2 md:line-clamp-1"
         title={script.description ?? ref}
       >
         {hasName(script) ? script.description : ref}
@@ -304,9 +304,7 @@ export default function ScriptsPage() {
       render: (s: KnownScript) => (
         <span className="tabular-nums">
           {countText(s.liveCellsCount)}
-          <span className="text-text-ghost block text-[11px]">
-            of {countText(s.cellsCount)} ever
-          </span>
+          <span className="text-text-ghost text-meta block">of {countText(s.cellsCount)} ever</span>
         </span>
       ),
     },
@@ -408,7 +406,7 @@ export default function ScriptsPage() {
                   setRole(value);
                   pagination.reset();
                 }}
-                className={`-mb-px flex h-11 items-center gap-2 border-b-2 text-[15px] font-medium ${role === value ? 'text-text-bright border-[#2edba3]' : 'text-text-dim border-transparent'}`}
+                className={`text-section -mb-px flex h-11 items-center gap-2 border-b-2 font-medium ${role === value ? 'text-text-bright border-[#2edba3]' : 'text-text-dim border-transparent'}`}
               >
                 {label}{' '}
                 {count !== undefined && (

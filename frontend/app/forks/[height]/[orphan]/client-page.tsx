@@ -93,12 +93,12 @@ export default function ForkDetailPage() {
       <main className="container mx-auto min-w-0 max-w-[1280px] px-4 pb-[72px] pt-7">
         {query.isLoading && <p role="status">Loading fork evidence…</p>}
         {query.error && (
-          <p role="alert" className="text-rouge text-[13px]">
+          <p role="alert" className="text-rouge text-body">
             Fork evidence unavailable: {(query.error as Error).message}
           </p>
         )}
         {mismatch && (
-          <p role="alert" className="text-rouge break-all text-[13px]">
+          <p role="alert" className="text-rouge text-body break-all">
             {mismatch}
           </p>
         )}
@@ -162,16 +162,16 @@ function firstOrphanOf(event: ReorgEvent): string {
 function ForkHeading({ event }: { event: ReorgEvent }) {
   return (
     <>
-      <nav aria-label="Breadcrumb" className="text-text-dim text-[12px]">
+      <nav aria-label="Breadcrumb" className="text-text-dim text-small">
         <Link href="/forks" className="hover:text-text">
           Forks
         </Link>
       </nav>
       <div className="mt-2.5 flex flex-wrap items-baseline gap-3">
-        <h1 className="text-text-bright text-[26px] font-medium">
+        <h1 className="text-text-bright text-entity font-medium">
           Fork at {formatBlockNumber(event.forkPointNumber)}
         </h1>
-        <span className="text-text-dim text-[13px]">
+        <span className="text-text-dim text-body">
           {formatCount(event.depth, 'block')} deep · detected {formatUtc8DateTime(event.detectedAt)}{' '}
           · this node switched once
         </span>
@@ -194,11 +194,11 @@ function StoredFork({ event }: { event: ReorgEvent }) {
       <ForkHeading event={event} />
       <p
         data-testid="fork-narrative"
-        className="text-text mt-3 max-w-[900px] text-[15px] leading-relaxed"
+        className="text-text text-body mt-3 max-w-[900px] leading-relaxed"
       >
         {story}
       </p>
-      <p role="status" className="text-text-dim mt-3 max-w-[900px] text-[13px] leading-relaxed">
+      <p role="status" className="text-text-dim text-body mt-3 max-w-[900px] leading-relaxed">
         Branch evidence needs the node store: this API runs without the node reader, so the blocks
         of both branches, their miners and what became of them are not shown. Below is what this
         node recorded when it switched.
@@ -377,7 +377,7 @@ function EventRef({ target, text }: { target: ForkEventRef; text: string }) {
 function StoredEvent({ event }: { event: ReorgEvent }) {
   return (
     <DetailSection title="This node’s fork event, as stored">
-      <div className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12px] sm:grid-cols-[110px_minmax(0,1fr)]">
+      <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
         <span className="text-text-dim">fork point</span>
         <span className="break-all">
           {blockAt(event.forkPointNumber)} {event.forkPointHash}
@@ -455,7 +455,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
       <ForkHeading event={event} />
       <p
         data-testid="fork-narrative"
-        className="text-text mt-3 max-w-[900px] text-[15px] leading-relaxed"
+        className="text-text text-body mt-3 max-w-[900px] leading-relaxed"
       >
         {narrative(data).join(' ')}
       </p>
@@ -464,7 +464,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
         <DetailSection
           title="The two branches"
           actions={
-            <span className="text-text-dim flex flex-wrap gap-x-4 gap-y-1 text-[11.5px]">
+            <span className="text-text-dim text-meta flex flex-wrap gap-x-4 gap-y-1">
               <span>dashed: blocks that lost</span>
               <span className="text-jade">→ included as an uncle</span>
               <span className="text-text-bright">
@@ -477,7 +477,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
           <div className="min-w-0 pt-6">
             <ForkTree model={model} />
           </div>
-          <div className="mt-2 grid grid-cols-[34px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 text-[12.5px] sm:grid-cols-[34px_190px_minmax(0,1fr)]">
+          <div className="text-body mt-2 grid grid-cols-[34px_minmax(0,1fr)] gap-x-2.5 gap-y-1.5 sm:grid-cols-[34px_190px_minmax(0,1fr)]">
             <span className="text-text-bright">{TIP_MARKS[1]}</span>
             <span className="text-text-dim">before {formatUtc8Time(event.detectedAt)}</span>
             <span className="text-text col-span-2 sm:col-span-1">
@@ -568,7 +568,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                         <span className="font-medium">
                           {row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number)}
                         </span>{' '}
-                        <span className="text-[12px] text-[#6aa9c4]" title={row.hash}>
+                        <span className="text-small text-[#6aa9c4]" title={row.hash}>
                           {hashShort(row.hash)}
                         </span>
                       </>
@@ -591,7 +591,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
               />
             )}
           />
-          <p className="text-text-dim mt-2 text-[12px]">
+          <p className="text-text-dim text-small mt-2">
             An uncle earns its miner nothing; it counts toward the uncle rate that sets the
             difficulty.
           </p>
@@ -664,12 +664,12 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                       left: tx.committedAt ? (
                         <Link
                           href={`/tx/${tx.hash}`}
-                          className="text-emphasis break-all text-[12px] hover:underline"
+                          className="text-emphasis text-small break-all hover:underline"
                         >
                           {tx.hash}
                         </Link>
                       ) : (
-                        <span className="break-all text-[12px]">{tx.hash}</span>
+                        <span className="text-small break-all">{tx.hash}</span>
                       ),
                     },
                     {
@@ -721,7 +721,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             const includer = data.canonicalBranch.find((block) => block.number === number);
             return (
               <DetailSection key={number} title={`Uncles in ${formatBlockNumber(number)}`}>
-                <div className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12px] sm:grid-cols-[110px_minmax(0,1fr)]">
+                <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
                   {uncles.map((block, i) => (
                     <span key={block.hash} className="contents">
                       <span className="text-text-dim">uncle {i}</span>

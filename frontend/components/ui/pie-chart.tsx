@@ -125,7 +125,8 @@ export function PieChart({
                 x={0}
                 y={-0.1}
                 textAnchor="middle"
-                className="fill-text-bright text-[0.12px] font-medium"
+                fontSize={0.12}
+                className="fill-text-bright font-medium"
               >
                 {slices[activeIndex].label.length > 12
                   ? slices[activeIndex].label.slice(0, 12) + '...'
@@ -135,14 +136,15 @@ export function PieChart({
                 x={0}
                 y={0.15}
                 textAnchor="middle"
-                className="fill-text font-mono text-[0.14px] tabular-nums"
+                fontSize={0.14}
+                className="fill-text font-mono tabular-nums"
               >
                 {formatValue(slices[activeIndex].percentage)}
               </text>
             </>
           )}
           {activeIndex === null && (
-            <text x={0} y={0.05} textAnchor="middle" className="fill-text-dim text-[0.1px]">
+            <text x={0} y={0.05} textAnchor="middle" fontSize={0.1} className="fill-text-dim">
               {tapOrHover('for details', { capital: true })}
             </text>
           )}

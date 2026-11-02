@@ -67,7 +67,7 @@ export function ParticipantRefView({
         ) : (
           <Address address={address} />
         )}
-        {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+        {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
     );
   }
@@ -87,7 +87,7 @@ export function ParticipantRefView({
         >
           {compact ? compactLabel(lockHash) : truncateHash(lockHash, 10, 6)}
         </Link>
-        {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+        {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
     );
   }
@@ -108,13 +108,13 @@ export function ParticipantRefView({
       </span>
       <span
         className={cn(
-          'text-text-dim/70 font-mono text-[10px] uppercase',
+          'text-text-dim/70 text-meta font-mono uppercase',
           !compact && 'border-border rounded border px-1'
         )}
       >
         unresolved
       </span>
-      {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+      {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
     </span>
   );
 }

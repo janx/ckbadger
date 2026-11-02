@@ -81,12 +81,12 @@ function EditionCard({
   return (
     <article aria-labelledby={headingId} className="flex min-w-0 flex-col gap-2">
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1">
-        <h3 id={headingId} className="text-text-bright text-[15px] font-medium">
+        <h3 id={headingId} className="text-text-bright text-section font-medium">
           {event.name}
         </h3>
-        <span className="text-jade text-[12px]">{event.status}</span>
+        <span className="text-jade text-small">{event.status}</span>
       </div>
-      <p className="text-text-dim text-[12px]">
+      <p className="text-text-dim text-small">
         epoch {event.activationEpoch.toLocaleString()} ·{' '}
         {event.activationBlock !== null && (
           <>
@@ -98,11 +98,9 @@ function EditionCard({
         )}
         {event.activationDate}
       </p>
-      <p className="text-text text-[13px] leading-relaxed">
-        {editionStory(event, timeline, tipMs)}
-      </p>
+      <p className="text-text text-body leading-relaxed">{editionStory(event, timeline, tipMs)}</p>
       {rfcs.length > 0 && (
-        <div className="text-[12px]">
+        <div className="text-small">
           {rfcs.map((feature) => (
             <div
               key={feature.rfc}
@@ -114,7 +112,7 @@ function EditionCard({
           ))}
         </div>
       )}
-      <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12px]">
+      <div className="text-small flex flex-wrap gap-x-5 gap-y-1">
         {overview && (
           <a
             href={overview.url}
@@ -179,7 +177,7 @@ export default function HardforksPage() {
           kind="topic"
           // The board's lead, in plain words (CH-43).
           identity={
-            <p className="text-text max-w-[820px] text-[15px] leading-relaxed">
+            <p className="text-text text-body max-w-[820px] leading-relaxed">
               CKB changes its rules in editions. Each one switches on at an agreed epoch, and every
               node must run it from there on. Both so far brought a new version of CKB-VM, the
               machine that runs scripts, and a cell&apos;s scripts choose which one runs them
@@ -222,18 +220,18 @@ export default function HardforksPage() {
               <DetailSection
                 title="Which VM runs a script, over time"
                 actions={
-                  <span className="text-text-dim text-[12px]">
+                  <span className="text-text-dim text-small">
                     dots: when each known script version was deployed ·{' '}
                     <TapOrHoverHint what="one for its name" />
                   </span>
                 }
               >
                 {span === null || span.genesisMs === null || span.tipMs === null ? (
-                  <p className="text-text-dim text-[12px]">
+                  <p className="text-text-dim text-small">
                     The index holds no block header yet; the timeline draws once it does.
                   </p>
                 ) : span.tipMs <= dayStartMs(meepo.activationDate) ? (
-                  <p className="text-text-dim text-[12px]">
+                  <p className="text-text-dim text-small">
                     The index has not reached the latest edition yet; the timeline draws once it
                     has.
                   </p>
@@ -247,7 +245,7 @@ export default function HardforksPage() {
                     tipEpoch={data.tipEpoch}
                   />
                 )}
-                <p className="text-text mt-4 max-w-[940px] text-[12.5px] leading-relaxed">
+                <p className="text-text text-body mt-4 max-w-[940px] leading-relaxed">
                   A script named by its type hash follows every upgrade: the same code runs on VM0,
                   then VM1, then VM2. A script named by its data hash stays on the VM its hash type
                   pins, so a hardfork never changes how an existing data-pinned script runs. Live
@@ -265,14 +263,14 @@ export default function HardforksPage() {
                 ))}
               </div>
               <DetailSection title="As this node's consensus states it">
-                <p className="text-text-dim mb-3 text-[12px]">
+                <p className="text-text-dim text-small mb-3">
                   get_consensus · hardfork_features · {data.network}
                 </p>
                 <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
                   {data.consensusFeatures.map((feature) => (
                     <div
                       key={feature.rfc}
-                      className="border-base-border-subtle border-t py-2 text-[12px]"
+                      className="border-base-border-subtle text-small border-t py-2"
                     >
                       <dt className="text-text-bright">RFC {feature.rfc}</dt>
                       <dd className="text-text-dim">
@@ -284,7 +282,7 @@ export default function HardforksPage() {
                   ))}
                 </dl>
                 {genesisFeatures.length > 0 && (
-                  <p className="text-text-dim mt-3 text-[12px]">
+                  <p className="text-text-dim text-small mt-3">
                     Today&apos;s node applies RFC{' '}
                     {joinWords(genesisFeatures.map((feature) => feature.rfc))} from epoch 0, so they
                     do not show as switching on with an edition.

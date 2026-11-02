@@ -26,7 +26,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
   const { cell } = version;
   return (
     <section aria-label="Raw item evidence" className="min-w-0 space-y-5">
-      <label className="flex flex-wrap items-center gap-3 text-[11px]">
+      <label className="text-meta flex flex-wrap items-center gap-3">
         Cell version{' '}
         <select
           className="bg-base-bg border-base-border max-w-full border p-2"
@@ -44,7 +44,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
           ))}
         </select>
       </label>
-      <div className="break-all text-[11px]">
+      <div className="text-meta break-all">
         Outpoint{' '}
         <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
           <Hash hash={cell.txHash} truncate={false} copyable={false} />
@@ -57,7 +57,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
       ].map(
         ({ kind, script, name }) =>
           script && (
-            <details key={kind} className="min-w-0 text-[11px]">
+            <details key={kind} className="text-meta min-w-0">
               <summary className="cursor-pointer">
                 {kind} script · {name ?? 'Unregistered'}
               </summary>
@@ -126,7 +126,7 @@ export function ItemTransactionContext({
     <div
       data-acted-on={context.actedOn}
       className={cn(
-        'space-y-1 whitespace-normal text-[11px]',
+        'text-meta space-y-1 whitespace-normal',
         headline.neighbour && 'opacity-[0.45]'
       )}
     >

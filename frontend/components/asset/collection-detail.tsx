@@ -76,19 +76,19 @@ function CollectionIntro({
 }) {
   return (
     <div className="space-y-3 pt-1">
-      <p className="text-text text-[13px]">
+      <p className="text-text text-body">
         {description ?? 'No collection description recorded.'}
         {description && <span className="text-text-dim"> · {source}</span>}
       </p>
       {composition && (
         <div className="flex flex-wrap items-center gap-3">
           <CompositionBadge tier={composition.tier} />
-          <span className="text-text text-[12.5px]">
+          <span className="text-text text-body">
             {collectionCompositionSentence(composition.tier, composition.onchainCount, live)}
           </span>
         </div>
       )}
-      <p className="text-text text-[15px] leading-relaxed">
+      <p className="text-text text-body leading-relaxed">
         {`${live.toLocaleString('en-US')} objects.`}
         {exactlyOne !== undefined &&
           ` ${exactlyOne.toLocaleString('en-US')} of their ${holders.toLocaleString('en-US')} holders own exactly one.`}
@@ -205,7 +205,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       value: (
         <>
           {data.liveCount.toLocaleString('en-US')}
-          <span className="text-text-dim mt-1 block text-[12px]">
+          <span className="text-text-dim text-small mt-1 block">
             {melted === 0
               ? 'all live · none melted'
               : `live · ${melted.toLocaleString('en-US')} of ${data.totalCount.toLocaleString('en-US')} ${kind === 'spore' ? 'melted' : 'burned'}`}
@@ -238,7 +238,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               <>
                 {data.activitiesCount !== null && data.activitiesCount.toLocaleString('en-US')}
                 {mints !== undefined && transfers !== undefined && (
-                  <span className="text-text-dim text-[12px]">
+                  <span className="text-text-dim text-small">
                     {data.activitiesCount !== null && ' · '}
                     {mints.toLocaleString('en-US')} mint{mints === 1 ? '' : 's'},{' '}
                     {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'}
@@ -270,7 +270,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               protocol.data.current ? (
                 <>
                   <Address address={protocol.data.current.cell.ownerAddress} />
-                  <span className="text-text-dim mt-1 block text-[12px]">
+                  <span className="text-text-dim text-small mt-1 block">
                     {protocol.data.current.cell.lockName ?? 'Unregistered lock'}
                   </span>
                 </>
@@ -355,12 +355,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             {/* F2 objects (OB-C4): what kind of collection this is, then its id. The kind is one
                 unit, so its separator never dangles at a line end (B#21); the space after it is
                 where the line may break before the id. */}
-            <span className="text-text-dim whitespace-nowrap text-[13px]">
+            <span className="text-text-dim text-body whitespace-nowrap">
               {kind === 'spore'
                 ? `Spore cluster${insights.data?.currentPattern.status === 'dob' && insights.data.currentPattern.version !== null ? ` · DOB/${insights.data.currentPattern.version}` : ''}`
                 : 'm-NFT class'}
             </span>{' '}
-            <Hash hash={id} truncate={false} className="text-[11px]" />
+            <Hash hash={id} truncate={false} className="text-meta" />
           </>
         )
       }
@@ -435,7 +435,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                 </>
               ) : (
                 protocol.data && (
-                  <p className="text-text-dim text-[11px]">
+                  <p className="text-text-dim text-meta">
                     No current cell carries this cluster type.
                   </p>
                 )
@@ -456,28 +456,28 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             />
           )}
           <section className="space-y-4">
-            <h2 className="text-text-bright text-[15px]">Collection metadata</h2>
+            <h2 className="text-text-bright text-section">Collection metadata</h2>
             {cluster.data && (
-              <pre className="whitespace-pre-wrap break-all text-[11px]">
+              <pre className="text-meta whitespace-pre-wrap break-all">
                 {cluster.data.description ?? 'No description bytes recorded.'}
               </pre>
             )}
             {object?.classDetail && (
               <>
-                <div className="break-all text-[11px]">
+                <div className="text-meta break-all">
                   Class ID <Hash hash={object.classDetail.classId} truncate={false} />
                 </div>
-                <div className="break-all text-[11px]">
+                <div className="text-meta break-all">
                   Issuer ID <Hash hash={object.classDetail.issuerId} truncate={false} />
                 </div>
-                <p className="text-[11px]">
+                <p className="text-meta">
                   Issued {object.classDetail.issued} / planned {object.classDetail.total}
                 </p>
-                <p className="break-all text-[11px]">
+                <p className="text-meta break-all">
                   Renderer {object.classDetail.renderer ?? 'not recorded'}
                 </p>
                 {object.issuerDetail && (
-                  <pre className="whitespace-pre-wrap break-all text-[11px]">
+                  <pre className="text-meta whitespace-pre-wrap break-all">
                     {JSON.stringify(object.issuerDetail, null, 2)}
                   </pre>
                 )}
@@ -505,7 +505,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
             free={(held - occupied).toString()}
           />
         ) : (
-          <p className="text-text-dim text-[11px]">Collection capacity is not recorded.</p>
+          <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
         ))}
       {/* F2 objects (OB-C5): Objects first, then History, then Who holds it (Collection board). */}
       {kind === 'spore' &&
@@ -551,7 +551,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         {kind !== 'identity' && (
           <>
             {mints !== undefined && transfers !== undefined && (
-              <p className="text-text-dim text-[12px]">
+              <p className="text-text-dim text-small">
                 Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
                 {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
                 {held !== null && occupied !== null && occupied > BigInt(0) && (
@@ -576,11 +576,11 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       {kind === 'identity' && <CollectionItems id={id} kind={kind} />}
       {kind === 'identity' && isDidCkbCollectionAlias(id) && (
         <section aria-label="PDS distribution" className="space-y-4">
-          <h2 className="text-text-bright text-[15px]">Personal data servers</h2>
+          <h2 className="text-text-bright text-section">Personal data servers</h2>
           {pds.data ? (
             <>
               <AssetReadState label="PDS distribution" error={pds.error} retained />
-              <p className="text-text-dim text-[11px]">
+              <p className="text-text-dim text-meta">
                 {pds.data.totalLiveIdentities} live identities · {pds.data.withoutPds} without a
                 PDS. An identity can name more than one endpoint.
               </p>

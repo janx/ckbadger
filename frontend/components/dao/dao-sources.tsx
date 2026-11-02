@@ -123,7 +123,7 @@ function GoldCkb({ shannons }: { shannons: bigint }) {
       {parts.integer}
       <span className="opacity-75">{parts.fraction}</span>
       <span className="opacity-40">{parts.ghost}</span>
-      <span className="text-[11px] opacity-70"> CKB</span>
+      <span className="text-meta opacity-70"> CKB</span>
     </span>
   );
 }
@@ -224,13 +224,13 @@ export function DaoSources() {
                 setTab(choice);
                 setCursor(undefined);
               }}
-              className={`-mb-px h-11 border-b-2 text-[15px] font-medium capitalize ${tab === choice ? 'border-jade text-text-bright' : 'text-text-dim hover:text-text border-transparent'}`}
+              className={`text-section -mb-px h-11 border-b-2 font-medium capitalize ${tab === choice ? 'border-jade text-text-bright' : 'text-text-dim hover:text-text border-transparent'}`}
             >
               {choice}
             </button>
           ))}
         </div>
-        <span className="text-text-dim basis-full pb-2 text-[12px] sm:ml-auto sm:basis-auto sm:pb-0">
+        <span className="text-text-dim text-small basis-full pb-2 sm:ml-auto sm:basis-auto sm:pb-0">
           deposits, withdrawal requests and withdrawals · newest first
         </span>
       </div>

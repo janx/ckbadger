@@ -104,11 +104,11 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   return (
     <section aria-labelledby="h-objects" className="min-w-0 space-y-3.5">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 id="h-objects" className="text-text-bright text-[15px]">
+        <h2 id="h-objects" className="text-text-bright text-section">
           Objects
         </h2>
         {lanes && (
-          <span className="text-text-dim text-[12px]">
+          <span className="text-text-dim text-small">
             {genetics.eligibleItems.toLocaleString('en-US')} · {lanes.length} gene
             {lanes.length === 1 ? '' : 's'} · how common each variant is
           </span>
@@ -131,17 +131,17 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
           <NotGenesNote traits={outside} />
         </>
       ) : genetics.eligibleItems === 0 ? (
-        <p className="text-text-dim text-[12px]">This collection has no DOB objects to compare.</p>
+        <p className="text-text-dim text-small">This collection has no DOB objects to compare.</p>
       ) : (
-        <p role="status" className="text-text-dim text-[12px]">
+        <p role="status" className="text-text-dim text-small">
           Allele frequencies and filtering await complete decoding:{' '}
           {genetics.decodedItems.toLocaleString('en-US')} of{' '}
           {genetics.eligibleItems.toLocaleString('en-US')} decoded.
         </p>
       )}
       <div className="flex flex-wrap items-baseline justify-between gap-4 pt-2.5">
-        <span className="text-text text-[13px]">Newest</span>
-        <span className="text-text-dim flex flex-wrap items-baseline gap-3 text-[12px]">
+        <span className="text-text text-body">Newest</span>
+        <span className="text-text-dim text-small flex flex-wrap items-baseline gap-3">
           {lanes && (
             <span>
               <TapOrHoverHint what="a row to see its genotype" /> · tap a band or variant to filter
@@ -163,12 +163,12 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
       {gallery.data ? (
         <>
           <AssetReadState label="newest objects" error={gallery.error} retained />
-          <div role="table" aria-label="Newest objects" className="min-w-0 text-[12px]">
+          <div role="table" aria-label="Newest objects" className="text-small min-w-0">
             <div
               role="row"
               className={cn(
                 ROW_GRID,
-                'text-text-dim border-base-border hidden border-b pb-1.5 text-[11px] sm:grid'
+                'text-text-dim border-base-border text-meta hidden border-b pb-1.5 sm:grid'
               )}
             >
               <span role="columnheader">Object</span>
@@ -212,7 +212,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           address={item.ownerAddress ?? item.ownerLockHash}
                           startChars={12}
                           endChars={6}
-                          className="text-[12px]"
+                          className="text-small"
                         />{' '}
                         <LockKind lockKind={item.lockKind} lockCodeHash={item.lockCodeHash} />
                       </>
@@ -267,7 +267,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
 export function DecodeCoverage({ genetics }: { genetics: CollectionInsights['genetics'] }) {
   const n = (v: number) => v.toLocaleString('en-US');
   return (
-    <p className="text-text-dim text-[11px]">
+    <p className="text-text-dim text-meta">
       {n(genetics.decodedItems)} of {n(genetics.eligibleItems)} DOB objects decoded ·{' '}
       {n(genetics.pendingItems)} pending · {n(genetics.failedItems)} failed ·{' '}
       {n(genetics.nonDobItems)} non-DOB objects · {n(genetics.liveItems)} live

@@ -431,18 +431,18 @@ function PeerRow({ peer, folded }: { peer: NetworkPeerSummary; folded: boolean }
                 left of the line and wraps inside its badge only when it must. */}
             <span className="text-aqua whitespace-nowrap text-xs">{truncateHash(peer.peerId)}</span>
             <span className="min-w-0 justify-self-end">
-              <Badge variant={state.variant} className="text-[11px] leading-snug">
+              <Badge variant={state.variant} className="text-meta leading-snug">
                 {state.label}
               </Badge>
             </span>
-            <span className="text-text col-span-2 col-start-2 min-w-0 truncate text-[11px]">
+            <span className="text-text text-meta col-span-2 col-start-2 min-w-0 truncate">
               {orDash(peer.primaryAddr)}
             </span>
           </button>
           {expanded && (
             <dl
               data-testid="peer-columns"
-              className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono text-[11.5px] sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
+              className="text-meta grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
             >
               {columns.map((c) => (
                 <Fragment key={c.label}>

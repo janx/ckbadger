@@ -69,7 +69,7 @@ export function HexMap({
             onFocus={() => select(f.id)}
             onBlur={() => select(null)}
             className={cn(
-              'text-left text-[11px]',
+              'text-meta text-left',
               active === f.id ? 'text-text-bright' : 'text-text-dim'
             )}
           >

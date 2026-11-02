@@ -51,7 +51,7 @@ export function ActivityFeed() {
               aria-pressed={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                '-mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 text-sm transition-colors sm:text-[15px]',
+                'sm:text-section -mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 text-sm transition-colors',
                 tab === t.id
                   ? 'border-jade text-text-bright font-medium'
                   : 'text-text-dim hover:text-text border-transparent'

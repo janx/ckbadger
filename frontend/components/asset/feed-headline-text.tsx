@@ -8,7 +8,7 @@ export function FeedHeadlineText({ headline }: { headline: ItemFeedHeadline }) {
       {headline.raw?.map((raw, i) => (
         <span key={raw}>
           {headline.text || i > 0 ? ' · ' : ''}
-          <code data-raw-action className="font-mono text-[12px] font-normal">
+          <code data-raw-action className="text-small font-mono font-normal">
             {raw}
           </code>
         </span>

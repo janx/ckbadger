@@ -233,7 +233,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
         startChars={6}
         endChars={4}
         copyable={false}
-        className="text-[11px]"
+        className="text-meta"
       />,
     ];
     return (
@@ -358,21 +358,21 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
                 href={assetHref(a)}
                 className={cn(
                   'text-text-bright block break-words',
-                  assetType === 'identity' && 'text-[15px]'
+                  assetType === 'identity' && 'text-body'
                 )}
               >
                 {title || <Hash hash={a.id} copyable={false} className="text-xs" />}
               </AppLink>
-              {sub && <span className="text-text-dim text-[11px]">{sub}</span>}
+              {sub && <span className="text-text-dim text-meta">{sub}</span>}
               {a.assetType === 'object' && (
-                <span className="text-text-dim text-[11px]">
+                <span className="text-text-dim text-meta">
                   {standard} ·{' '}
                   <Hash
                     hash={a.id}
                     startChars={6}
                     endChars={4}
                     copyable={false}
-                    className="text-[11px]"
+                    className="text-meta"
                   />
                 </span>
               )}
@@ -391,7 +391,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         a.compositionTier ? (
           <CompositionBadge tier={a.compositionTier} />
         ) : (
-          <span className="text-text-dim text-[11px]">Composition unavailable</span>
+          <span className="text-text-dim text-meta">Composition unavailable</span>
         ),
     });
   if (assetType !== 'token')
@@ -404,7 +404,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         <>
           <AssetCount value={a.liveCount} />
           {assetType === 'object' && (
-            <span className="text-text-dim block text-[11px]">
+            <span className="text-text-dim text-meta block">
               of <AssetCount value={a.totalSupply} /> minted
             </span>
           )}
@@ -439,7 +439,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
           <>
             <AssetCount value={assetType === 'token' ? a.transfersCount : a.activitiesCount} />
             {assetType === 'token' && (
-              <span className="text-text-dim block text-[11px]">
+              <span className="text-text-dim text-meta block">
                 <AssetCount value={a.transfers24h} /> in 24 h
               </span>
             )}

@@ -32,7 +32,7 @@ export function Tooltip({
         type="button"
         className={
           buttonClassName ||
-          'text-text-dim hover:text-text border-base-border hover:border-text-dim ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-[9px] leading-none transition-colors'
+          'text-text-dim hover:text-text border-base-border hover:border-text-dim text-meta ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono leading-none transition-colors'
         }
         onMouseEnter={show}
         onMouseLeave={hide}
@@ -44,7 +44,7 @@ export function Tooltip({
       </button>
       {visible && (
         <span
-          className="bg-base-elevated border-base-border text-text pointer-events-none fixed z-[9999] w-56 -translate-x-1/2 -translate-y-full rounded border px-3 py-2 font-mono text-[11px] leading-relaxed shadow-lg"
+          className="bg-base-elevated border-base-border text-text text-meta pointer-events-none fixed z-[9999] w-56 -translate-x-1/2 -translate-y-full rounded border px-3 py-2 font-mono leading-relaxed shadow-lg"
           style={{ top: pos.top, left: pos.left }}
         >
           {text}

@@ -117,10 +117,10 @@ const columns: ListColumn<AddressTransaction>[] = [
         </Link>
         <PoolInterpretationNotice
           interpretation={tx.interpretation}
-          className="text-warning block text-[11px]"
+          className="text-warning text-meta block"
         />
         {tx.txType === 'named' && (
-          <span className="text-text-dim block text-[11px]">Named participant</span>
+          <span className="text-text-dim text-meta block">Named participant</span>
         )}
       </span>
     ),
@@ -309,7 +309,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
 /** A live cell's quiet figures on a phone: "occupied 61 CKB · created #20,000,000". */
 function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
   return (
-    <span className="text-text-dim text-[11px]">
+    <span className="text-text-dim text-meta">
       <Dotted
         parts={[
           <span key="o" className="whitespace-nowrap">

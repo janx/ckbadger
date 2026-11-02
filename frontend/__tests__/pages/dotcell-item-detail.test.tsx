@@ -24,7 +24,7 @@ it('shows current name state, exact protocol, physical cell history and both fee
   await waitFor(() =>
     expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.cell')
   );
-  expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
+  expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-entity');
   expect(api.getDotCellItemDetail).toHaveBeenCalledWith('alice.cell');
   expect(await screen.findByRole('region', { name: 'Owner and manager' })).toBeInTheDocument();
   expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(

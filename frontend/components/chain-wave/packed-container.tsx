@@ -217,7 +217,7 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
               top: tooltipPos.y - 8,
             }}
           >
-            <div className="text-text-dim mb-1 text-[10px]">{CATEGORY_LABELS[item.category]}</div>
+            <div className="text-text-dim text-meta mb-1">{CATEGORY_LABELS[item.category]}</div>
             <div className="text-text-dim space-y-0.5">
               <div>
                 TX: <span className="text-text-bright font-mono">{truncateHash(item.id)}</span>
@@ -294,7 +294,7 @@ export function PackedContainer({
       <div className="mb-2 flex items-center justify-between sm:mb-3">
         <div>
           <h3 className={cn('text-sm font-bold sm:text-base', config.titleColor)}>{title}</h3>
-          {subtitle && <div className="text-text-dim text-[10px] sm:text-xs">{subtitle}</div>}
+          {subtitle && <div className="text-text-dim text-meta sm:text-xs">{subtitle}</div>}
         </div>
         <div className={cn('text-right text-xs sm:text-sm', config.countColor)}>
           <span className="text-text-bright font-bold">{totalCount.toLocaleString()}</span>

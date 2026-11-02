@@ -86,7 +86,7 @@ function Fact({ label, children, sub }: { label: string; children: ReactNode; su
   return (
     <div className="min-w-0">
       <div className="text-text-dim">{label}</div>
-      <div className="mt-0.5 text-[15px]">{children}</div>
+      <div className="text-body mt-0.5">{children}</div>
       {sub && <div className="text-text-dim mt-0.5">{sub}</div>}
     </div>
   );
@@ -254,7 +254,7 @@ function CopyOutpoint({ value }: { value: string }) {
         await navigator.clipboard.writeText(value);
         setCopied(true);
       }}
-      className="text-text-dim hover:text-text-bright h-[26px] rounded border border-[#222840] px-2 text-[11px]"
+      className="text-text-dim hover:text-text-bright text-meta h-[26px] rounded border border-[#222840] px-2"
     >
       {copied ? 'copied' : 'copy'}
     </button>
@@ -318,7 +318,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         identity={
           <div className="space-y-1.5">
             <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-text-bright text-[15px] [overflow-wrap:anywhere]">
+              <span className="text-text-bright text-body [overflow-wrap:anywhere]">
                 {cell.txHash}
                 <span className="text-text-dim">:</span>
                 {cell.outputIndex}

@@ -44,7 +44,7 @@ export default function ActivitiesPage() {
           }
         >
           {summary && count !== undefined ? (
-            <p className="text-text text-[15px]">
+            <p className="text-text text-body">
               <span className="text-text-bright">{count.toLocaleString('en-US')}</span> yesterday
               (UTC+8) ·{' '}
               <span className="text-text-bright">

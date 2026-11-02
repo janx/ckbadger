@@ -75,7 +75,7 @@ function LockLabel({
     <span
       data-role="lock"
       title={codeHash}
-      className={cn('text-text-dim whitespace-nowrap text-[11px]', className)}
+      className={cn('text-text-dim text-meta whitespace-nowrap', className)}
     >
       {name}
     </span>
@@ -145,7 +145,7 @@ export function BalanceChanges({
               role="row"
               className={cn(
                 BALANCE_GRID,
-                'border-base-border-subtle text-text-dim border-b pb-1.5 text-[11px]'
+                'border-base-border-subtle text-text-dim text-meta border-b pb-1.5'
               )}
             >
               <span role="columnheader">Participant</span>
@@ -229,7 +229,7 @@ export function BalanceChanges({
                     data-line="amounts"
                     className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                   >
-                    <span className="text-[14px]">{ckb}</span>
+                    <span className="text-body">{ckb}</span>
                     <span className="text-text whitespace-nowrap text-xs">{occupied}</span>
                   </div>
                   {p.itemDeltas.length > 0 && (
@@ -259,7 +259,7 @@ export function BalanceChanges({
                     {party}
                     <LockLabel participant={p} lockCodeHashes={lockCodeHashes} />
                   </div>
-                  <div data-role="ckb" className="text-right text-[14px]">
+                  <div data-role="ckb" className="text-body text-right">
                     {ckb}
                   </div>
                   <div

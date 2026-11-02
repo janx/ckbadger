@@ -48,27 +48,27 @@ describe('detail and list foundations', () => {
         <DetailSection title="Activity">A transfer</DetailSection>
       </DetailLayout>
     );
-    // Tier-2 headings are the quieter 13 px #a0a8be; tier 1 keeps 15 px (TX-16, FINAL_REVIEW).
+    // Tier-2 headings are the quieter body 13 px #a0a8be; tier 1 takes section 17 px (TX-16, R1).
     expect(screen.getByRole('heading', { name: 'Script groups' })).toHaveClass(
-      'text-[13px]',
+      'text-body',
       'text-[#a0a8be]'
     );
-    expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('text-[15px]');
-    expect(screen.getByRole('heading', { name: 'Activity' })).not.toHaveClass('text-[13px]');
-    expect(screen.getByRole('heading', { name: 'Transaction' })).toHaveClass('text-[26px]');
+    expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('text-section');
+    expect(screen.getByRole('heading', { name: 'Activity' })).not.toHaveClass('text-body');
+    expect(screen.getByRole('heading', { name: 'Transaction' })).toHaveClass('text-entity');
     expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
     expect(container.querySelector('details')).not.toHaveAttribute('open');
     expect(container.querySelector('dt')).toHaveTextContent('Block');
     expect(container.querySelector('dd')).toHaveTextContent('12');
-    expect(screen.getByRole('heading', { name: 'Activity' })).toHaveClass('text-[15px]');
+    expect(screen.getByRole('heading', { name: 'Activity' })).toHaveClass('text-section');
   });
-  it('sets index titles to 22 px and omits tier two on developer-only pages', () => {
+  it('sets index titles to 26 px and omits tier two on developer-only pages', () => {
     const { container } = render(
       <DetailLayout title="Blocks" kind="index">
         rows
       </DetailLayout>
     );
-    expect(screen.getByRole('heading', { name: 'Blocks' })).toHaveClass('text-[22px]');
+    expect(screen.getByRole('heading', { name: 'Blocks' })).toHaveClass('text-index');
     expect(container.querySelector('[data-tier="2"]')).toBeNull();
   });
   it('budgets fixed columns and prints the entire exact value, in the table and the phone row', () => {

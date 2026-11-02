@@ -25,11 +25,11 @@ describe('PhoneRow (boards L1–L8)', () => {
       { key: 'figures', tone: 'quiet', left: '3,344 B · 0 cycles', right: null },
     ]);
     const [head, body, quiet] = Array.from(row.children);
-    expect(head).toHaveClass('text-[13px]', 'text-text-bright');
+    expect(head).toHaveClass('text-body', 'text-text-bright');
     expect(body).toHaveClass('text-xs', 'text-text');
     // Quiet figures: 11 px dim, and an exact amount takes the line's ink.
     expect(quiet).toHaveClass(
-      'text-[11px]',
+      'text-meta',
       'text-text-dim',
       '[&_[data-ckb-amount]]:[color:inherit]'
     );

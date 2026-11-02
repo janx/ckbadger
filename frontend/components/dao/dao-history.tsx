@@ -142,16 +142,16 @@ export function DaoHistory({
     <div
       aria-live="polite"
       aria-label="History reading"
-      className="border-base-border-subtle flex min-h-10 flex-wrap items-baseline gap-x-[26px] gap-y-1.5 border-b pb-2.5 pt-2 text-[12px]"
+      className="border-base-border-subtle text-small flex min-h-10 flex-wrap items-baseline gap-x-[26px] gap-y-1.5 border-b pb-2.5 pt-2"
     >
-      <span className="text-text-bright text-[13px]">
+      <span className="text-text-bright text-body">
         {day.date}
-        {index === last && <span className="text-text-dim text-[12px]"> · last full day</span>}
+        {index === last && <span className="text-text-dim text-small"> · last full day</span>}
       </span>
       <span className="flex items-baseline gap-1.5">
         <span aria-hidden="true" className="bg-gold inline-block h-2 w-2 rounded-sm" />
         <span className="text-text-dim">deposited</span>
-        <span className="text-text-bright text-[13px]">
+        <span className="text-text-bright text-body">
           <ExactCkbText shannons={day.shannons} />
         </span>
       </span>
@@ -426,7 +426,7 @@ export function DaoHistory({
   return (
     <div>
       <div className="mb-1 flex flex-wrap items-center justify-between gap-4">
-        <h2 className="text-text-bright text-[15px] font-medium">History</h2>
+        <h2 className="text-text-bright text-section font-medium">History</h2>
         <div role="group" aria-label="History range" className="flex gap-1">
           {(['1M', '1Y', 'All'] as const).map((choice) => (
             <button
@@ -437,7 +437,7 @@ export function DaoHistory({
                 setRange(choice);
                 setHover(null);
               }}
-              className={`h-7 rounded-md border px-2.5 font-mono text-[12px] ${range === choice ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+              className={`text-small h-7 rounded-md border px-2.5 font-mono ${range === choice ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
             >
               {choice}
             </button>

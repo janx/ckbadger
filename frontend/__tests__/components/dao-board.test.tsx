@@ -284,7 +284,7 @@ describe('DaoBoard', () => {
       'The DAO field in every block header · #5',
       'The DAO script',
     ]);
-    for (const h of headings) expect(h).toHaveClass('text-[13px]', 'text-[#a0a8be]');
+    for (const h of headings) expect(h).toHaveClass('text-body', 'text-[#a0a8be]');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {
@@ -705,7 +705,8 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const amount = screen.getByText((_, el) => el?.getAttribute('data-role') === 'deposited');
-    expect(amount).toHaveClass('text-[24px]', 'sm:text-[30px]');
+    // R4: the display step from 640 up, index (26 px) below it: 22 digits at 26 px are 343 px.
+    expect(amount).toHaveClass('text-index', 'sm:text-display');
   });
 
   it('draws AR around its own range, not from zero', async () => {
@@ -732,7 +733,7 @@ describe('DaoBoard tier-1 rhythm (board V63)', () => {
     expect(issuance).not.toHaveClass('border-t');
     expect(issuance.parentElement).toHaveClass('space-y-12');
     expect(within(issuance).getByRole('heading', { level: 2 })).toHaveClass(
-      'text-[15px]',
+      'text-section',
       'font-medium'
     );
   });

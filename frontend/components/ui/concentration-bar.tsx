@@ -46,7 +46,7 @@ export function ConcentrationBar({ label, assetClass, total, groups }: Concentra
           />
         ))}
       </div>
-      <div className="text-text-dim flex flex-wrap gap-x-6 gap-y-1 text-[12px]">
+      <div className="text-text-dim text-small flex flex-wrap gap-x-6 gap-y-1">
         {groups.map((g) => (
           <span key={g.label}>
             <span>{g.label}</span>{' '}

@@ -161,12 +161,12 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   key={type}
                   href={`/inventory/${plural}`}
                   aria-current={type === assetType ? 'page' : undefined}
-                  className={`grid grid-cols-[16px_auto] items-center gap-x-2 border-b-2 pb-3 text-[15px] sm:flex sm:items-center sm:gap-2 ${type === assetType ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+                  className={`text-body grid grid-cols-[16px_auto] items-center gap-x-2 border-b-2 pb-3 sm:flex sm:items-center sm:gap-2 ${type === assetType ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
                 >
                   <ClassMark kind={plural} size={16} />
                   <span data-role="tab-label">{plural[0].toUpperCase() + plural.slice(1)}</span>
                   {summary.data && (
-                    <span data-role="tab-count" className="text-text-dim col-start-2 text-[11px]">
+                    <span data-role="tab-count" className="text-text-dim text-meta col-start-2">
                       <AssetCount value={summary.data.counts[type]} />
                     </span>
                   )}
@@ -223,7 +223,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               the filter and the sort take two lines at 390 px. */}
           <div
             data-testid="inventory-controls"
-            className="text-text-dim flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] sm:gap-x-2 sm:text-[12px]"
+            className="text-text-dim text-meta sm:text-small flex flex-wrap items-center gap-x-1.5 gap-y-1 sm:gap-x-2"
           >
             {assetType === 'token' && (
               <>

@@ -74,7 +74,7 @@ export function PoolInterpretationNotice({
   if (reasons.length === 0) return null;
 
   return (
-    <span className={className ?? 'text-warning font-mono text-[10px]'}>
+    <span className={className ?? 'text-warning text-meta font-mono'}>
       partial: {reasons.map(reasonText).join('; ')}
     </span>
   );

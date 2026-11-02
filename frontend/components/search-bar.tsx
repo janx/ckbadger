@@ -170,7 +170,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                 ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade h-10 rounded-xl border pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
-                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/60 h-9 rounded-md border pl-3 pr-9 text-[13px]'
+                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/60 text-body h-9 rounded-md border pl-3 pr-9'
                   : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade focus:ring-jade rounded-lg border px-3 py-2.5 pr-3 text-sm focus:ring-1 sm:px-4 sm:py-3 sm:text-base'
             )}
           />
@@ -264,9 +264,9 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       <span
         data-testid="search-shortcut-key-slash"
         className={cn(
-          'rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
+          'text-meta rounded border px-1.5 py-0.5 font-mono leading-none',
           isCompact
-            ? 'border-base-border text-text-dim rounded px-1.5 text-[11px]'
+            ? 'border-base-border text-text-dim text-meta rounded px-1.5'
             : 'border-base-border/80 bg-base-surface/80 text-text-dim'
         )}
       >
@@ -275,7 +275,7 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       {!isCompact && (
         <span
           data-testid="search-shortcut-key-question"
-          className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none"
+          className="border-base-border/80 bg-base-surface/80 text-text-dim text-meta rounded border px-1.5 py-0.5 font-mono leading-none"
         >
           ?
         </span>

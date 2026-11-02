@@ -102,7 +102,7 @@ function Kpi({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
       <dt className="text-text-dim text-xs">{label}</dt>
-      <dd className="text-text-bright m-0 text-[22px] font-medium tabular-nums">{children}</dd>
+      <dd className="text-text-bright text-hero m-0 font-medium tabular-nums">{children}</dd>
     </div>
   );
 }

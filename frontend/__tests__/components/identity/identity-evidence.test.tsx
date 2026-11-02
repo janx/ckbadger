@@ -30,7 +30,7 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
       </DetailTier2>
     );
     const heading = screen.getByRole('heading', { name: 'Account cell data · 80 bytes' });
-    expect(heading).toHaveClass('text-[13px]');
+    expect(heading).toHaveClass('text-body');
     expect(screen.queryByText(/dotbit cell data/)).not.toBeInTheDocument();
     expect(identityDataTitle('dotcell')(dotcellProtocolProducer.versions[0] as never)).toBe(
       'Name cell data · layout v3 · 103 bytes'
@@ -45,7 +45,7 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     );
     const section = screen.getByRole('region', { name: 'Account data, from the witness' });
     expect(screen.getByRole('heading', { name: 'Account data, from the witness' })).toHaveClass(
-      'text-[13px]'
+      'text-body'
     );
     expect(section).toHaveTextContent('status0x00 · raw byte, as stored');
     expect(section).toHaveTextContent('witness version4');

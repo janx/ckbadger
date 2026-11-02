@@ -21,7 +21,7 @@ export default function ChartsPage() {
           actions={
             <nav
               aria-label="Chart sections"
-              className="flex flex-wrap gap-x-[18px] gap-y-1 text-[12px]"
+              className="text-small flex flex-wrap gap-x-[18px] gap-y-1"
             >
               {CHART_SECTIONS.map((section) => (
                 <a
@@ -59,7 +59,7 @@ export default function ChartsPage() {
               </DetailSection>
             </div>
           ))}
-          <p className="text-text-dim text-[12px]">
+          <p className="text-text-dim text-small">
             Every chart stops at the last complete day. Open a chart for its full resolution and
             source; there, <TapOrHoverHint what="the chart" /> to read any point.
           </p>

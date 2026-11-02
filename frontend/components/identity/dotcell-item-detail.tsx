@@ -47,14 +47,14 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
   return (
     <div className="min-w-0 space-y-2">
       {/* The endpoint declares no total, so a count is shown only once the whole list is here. */}
-      <h3 className="text-text-dim text-[12px] font-normal">
+      <h3 className="text-text-dim text-small font-normal">
         {hasMore
           ? 'Sub-names'
           : children.length
             ? `Sub-names · ${children.length.toLocaleString('en-US')}`
             : 'Sub-names · none'}
       </h3>
-      <ul className="space-y-1 text-[12px]">
+      <ul className="text-small space-y-1">
         {children.map((child) => (
           <li key={child.identityId}>
             <Link href={nameHref(child.identityId)} className="text-emphasis hover:underline">
@@ -128,8 +128,8 @@ function ScopedName({ itemRef }: { itemRef: string }) {
       error={detail.error}
       dotcell={item}
       tier2Extra={
-        <section aria-label="Name relationships" className="min-w-0 space-y-3 text-[12px]">
-          <h2 className="text-text text-[13px] font-medium">Name relationships</h2>
+        <section aria-label="Name relationships" className="text-small min-w-0 space-y-3">
+          <h2 className="text-text text-body font-medium">Name relationships</h2>
           {item.parent ? (
             <p>
               Parent <AppLink href={nameHref(item.parent.identityId)}>{item.parent.name}</AppLink>
@@ -155,7 +155,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
     >
       {item.sale && (
         <section aria-label="For sale" className="space-y-3">
-          <h2 className="text-text-bright text-[15px] font-medium">For sale</h2>
+          <h2 className="text-text-bright text-section font-medium">For sale</h2>
           <ExactCkb shannons={BigInt(item.sale.priceShannons)} signed={false} tone="plain" wrap />
           <dl>
             <NamedParty party={item.sale.seller} label="Seller" />

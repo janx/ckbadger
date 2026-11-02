@@ -221,7 +221,7 @@ function ActivityStreamToolbar({
             )}
             {option.label}
             {counts && counts[option.value] !== undefined && (
-              <span className="text-text-dim text-[11px] tabular-nums">
+              <span className="text-text-dim text-meta tabular-nums">
                 {counts[option.value]!.toLocaleString('en-US')}
               </span>
             )}
@@ -229,7 +229,7 @@ function ActivityStreamToolbar({
         ))}
       </div>
       {summary && (
-        <p className="text-text-dim mt-2 text-[11px]">
+        <p className="text-text-dim text-meta mt-2">
           Yesterday, UTC+8 · kind occurrences may overlap; DAO counts actions.
         </p>
       )}
@@ -260,7 +260,7 @@ function ActivityStreamToolbar({
 function ActivityDayDivider({ label }: { label: string }) {
   return (
     <div
-      className="text-text-dim border-base-border-subtle mt-5 border-b py-2 text-[11px]"
+      className="text-text-dim border-base-border-subtle text-meta mt-5 border-b py-2"
       data-testid={getDayDividerTestId(label)}
     >
       {label}

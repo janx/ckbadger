@@ -89,7 +89,7 @@ export function CellVersions({
       title={title}
       actions={
         actions ?? (
-          <span className="text-text-dim text-[11px]">
+          <span className="text-text-dim text-meta">
             Every canonical cell version · oldest first
           </span>
         )
@@ -133,7 +133,7 @@ export function CellVersions({
                         data: String(v.anatomy.dataBytes),
                       }}
                     />
-                    <div className="text-text-dim mt-1.5 flex flex-wrap gap-x-4 text-[11px]">
+                    <div className="text-text-dim text-meta mt-1.5 flex flex-wrap gap-x-4">
                       <span>capacity 8</span>
                       <span>lock {v.anatomy.lockBytes}</span>
                       <span>type {v.anatomy.typeBytes}</span>
@@ -159,7 +159,7 @@ export function CellVersions({
                         copyable={false}
                         startChars={10}
                         endChars={6}
-                        className="text-[11px]"
+                        className="text-meta"
                       />
                     </AppLink>
                   </span>
@@ -169,7 +169,7 @@ export function CellVersions({
                       hash={v.lock.codeHash}
                       startChars={6}
                       endChars={4}
-                      className="text-[11px]"
+                      className="text-meta"
                       copyable={false}
                     />
                   </AppLink>
@@ -177,13 +177,13 @@ export function CellVersions({
               </div>
               <div className="text-text-bright min-w-0 sm:text-right">
                 <ExactCkb shannons={BigInt(v.capacity)} signed={false} tone="plain" wrap />
-                <div className="text-text-dim mt-1 text-[11px]">
+                <div className="text-text-dim text-meta mt-1">
                   <ExactCkb shannons={free} signed={false} tone="plain" wrap /> free
                 </div>
                 {v.consumedByTx && (
                   <AppLink
                     href={`/tx/${v.consumedByTx}`}
-                    className="text-text-dim mt-1 block text-[11px]"
+                    className="text-text-dim text-meta mt-1 block"
                   >
                     Consumed in transaction →
                   </AppLink>

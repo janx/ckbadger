@@ -32,7 +32,7 @@ afterEach(() => {
 });
 it('renders collection identity, capacity history, genes, gallery, holders and both feed layers', async () => {
   render(<ClusterPage clusterId={id} />);
-  expect(await screen.findByRole('heading', { name: 'Genes' })).toHaveClass('text-[26px]');
+  expect(await screen.findByRole('heading', { name: 'Genes' })).toHaveClass('text-entity');
   expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
     'Inventory/Objects'
   );

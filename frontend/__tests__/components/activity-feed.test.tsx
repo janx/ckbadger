@@ -59,7 +59,7 @@ describe('ActivityFeed', () => {
     expect(activity).toHaveAttribute('aria-pressed', 'true');
     expect(activity).toHaveClass('border-jade', 'border-b-2', 'h-11', 'whitespace-nowrap');
     // 14 px tabs on a phone so both tabs and View all fit one line.
-    expect(activity).toHaveClass('text-sm', 'sm:text-[15px]');
+    expect(activity).toHaveClass('text-sm', 'sm:text-section');
     expect(transactions).toHaveClass('whitespace-nowrap');
     expect(screen.getByRole('link', { name: 'View all →' })).toHaveClass('whitespace-nowrap');
     expect(transactions).toHaveAttribute('aria-pressed', 'false');

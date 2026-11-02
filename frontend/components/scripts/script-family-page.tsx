@@ -257,7 +257,7 @@ export function ScriptFamilyPage({
   const versionCell = (row: Row) => (
     <span className="text-text-bright">
       v{row.number}
-      {row.current && <span className="text-jade block text-[11px]">current</span>}
+      {row.current && <span className="text-jade text-meta block">current</span>}
     </span>
   );
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
@@ -273,7 +273,7 @@ export function ScriptFamilyPage({
             <span key={outpointKey(d)} className="block">
               {formatUtc8Date(d.deployedAt)}
               {d.createdAtBlock !== undefined && (
-                <span className="block text-[11px]">{blockLink(d.createdAtBlock)}</span>
+                <span className="text-meta block">{blockLink(d.createdAtBlock)}</span>
               )}
             </span>
           ))
@@ -292,12 +292,12 @@ export function ScriptFamilyPage({
           {row.version.deployments.map((d) => (
             <span key={outpointKey(d)} className="block">
               {outpointLink(d)}
-              <span className="text-text-dim block text-[11px]">
+              <span className="text-text-dim text-meta block">
                 {binarySize(d)} · {signedText(d)}
               </span>
             </span>
           ))}
-          <span className="text-text-dim block text-[11px] [overflow-wrap:anywhere]">
+          <span className="text-text-dim text-meta block [overflow-wrap:anywhere]">
             {row.version.versionHash}
           </span>
         </>
@@ -425,7 +425,7 @@ export function ScriptFamilyPage({
             </>
           }
           identity={
-            <span className="text-text text-[13px]">
+            <span className="text-text text-body">
               {family.description}
               {family.website && (
                 <>
@@ -562,7 +562,7 @@ export function ScriptFamilyPage({
                         <span key={outpointKey(deployment)} className="block">
                           {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
                           {deployment.createdAtBlock !== undefined && (
-                            <span className="block text-[11px]">
+                            <span className="text-meta block">
                               {blockLink(deployment.createdAtBlock)}
                             </span>
                           )}
@@ -595,7 +595,7 @@ export function ScriptFamilyPage({
                   minWidth: 220,
                   width: '24%',
                   render: (row) => (
-                    <span className="text-text-dim text-[11px] [overflow-wrap:anywhere]">
+                    <span className="text-text-dim text-meta [overflow-wrap:anywhere]">
                       {row.version.versionHash}
                     </span>
                   ),
@@ -611,7 +611,7 @@ export function ScriptFamilyPage({
                       return (
                         <span key={outpointKey(deployment)} className="block">
                           {outpointLink(deployment)}
-                          <span className="text-text-dim block text-[11px]">
+                          <span className="text-text-dim text-meta block">
                             {state?.cell && (
                               <>
                                 <ExactCkb
@@ -639,7 +639,7 @@ export function ScriptFamilyPage({
                       return marked ? (
                         <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
                           {who}
-                          <span className="text-text-dim block text-[11px]">{note}</span>
+                          <span className="text-text-dim text-meta block">{note}</span>
                         </span>
                       ) : (
                         <span key={outpointKey(deployment)} className="text-text-dim block">
@@ -666,10 +666,10 @@ export function ScriptFamilyPage({
           </DetailSection>
           <section id="its-cells" className="min-w-0">
             <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <h2 className="text-text-bright text-[15px] font-medium">Its cells</h2>
+              <h2 className="text-text-bright text-section font-medium">Its cells</h2>
               <ScriptCellsSummary family={family} />
             </div>
-            <div className="text-text-dim mb-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            <div className="text-text-dim text-meta mb-3 flex flex-wrap gap-x-4 gap-y-1">
               {ANATOMY_LEGEND.map(([name, color]) => (
                 <span key={name} className="inline-flex items-center gap-1.5">
                   <span

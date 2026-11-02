@@ -33,6 +33,7 @@ interface CellLifePlaceholderProps {
 export function CellLifePlaceholder({ size = 56 }: CellLifePlaceholderProps) {
   return (
     <div
+      className="text-body"
       style={{
         width: `${size}px`,
         height: `${size}px`,
@@ -44,7 +45,6 @@ export function CellLifePlaceholder({ size = 56 }: CellLifePlaceholderProps) {
         justifyContent: 'center',
         color: '#343c50',
         fontFamily: 'monospace',
-        fontSize: `${size * 0.4}px`,
         lineHeight: 1,
         flexShrink: 0,
       }}

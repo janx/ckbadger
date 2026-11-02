@@ -73,10 +73,10 @@ export function FiberChannelStep({
   });
   const header = (
     <h3 className="flex flex-wrap items-baseline gap-x-3.5 gap-y-1 font-normal">
-      <span className="text-text-bright text-[13.5px]">
+      <span className="text-text-bright text-body">
         {n} · {title}
       </span>
-      <span className="text-text-dim text-[12px]">
+      <span className="text-text-dim text-small">
         <Link href={`/tx/${txHash}`} className="text-[#6aa9c4] hover:underline" title={txHash}>
           {short(txHash)}
         </Link>
@@ -92,11 +92,11 @@ export function FiberChannelStep({
   let body: ReactNode;
   if (transaction.isPending || (codeHashes.length > 0 && lookup.isPending)) {
     body = (
-      <p className="text-text-dim text-[12px]">Loading the {title.toLowerCase()} transaction…</p>
+      <p className="text-text-dim text-small">Loading the {title.toLowerCase()} transaction…</p>
     );
   } else if (transaction.error || lookup.error) {
     body = (
-      <p role="alert" className="text-rouge break-all text-[12px]">
+      <p role="alert" className="text-rouge text-small break-all">
         {title} transaction unavailable: {String(transaction.error ?? lookup.error)}
       </p>
     );
@@ -114,14 +114,14 @@ export function FiberChannelStep({
       : -1;
     if (consumes && spentIndex < 0) {
       body = (
-        <p role="alert" className="text-rouge break-all text-[12px]">
+        <p role="alert" className="text-rouge text-small break-all">
           {title} transaction {txHash} does not spend the {consumes.role} cell {consumes.txHash}:
           {consumes.index}
         </p>
       );
     } else if (carries && carries.index >= tiles.outputs.length) {
       body = (
-        <p role="alert" className="text-rouge break-all text-[12px]">
+        <p role="alert" className="text-rouge text-small break-all">
           {title} transaction {txHash} has no output {carries.index} to carry the channel
         </p>
       );
@@ -156,7 +156,7 @@ export function FiberChannelStep({
             onward="the channel, onward"
             hideGroups
           />
-          <div className="flex flex-col gap-1 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5 text-[12px]">
+          <div className="text-small flex flex-col gap-1 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5">
             <span className="text-text-bright">{box.head}</span>
             {box.lines.map((line, index) => (
               <span key={index} className="text-text-dim">
@@ -171,7 +171,7 @@ export function FiberChannelStep({
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
       {header}
-      {description && <p className="text-text text-[12.5px]">{description}</p>}
+      {description && <p className="text-text text-body">{description}</p>}
       {body}
     </div>
   );

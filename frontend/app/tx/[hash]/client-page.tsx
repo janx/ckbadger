@@ -279,7 +279,7 @@ function TxSummary({
       : [];
   const sender = moves.length > 0 && moves[0].from.length === 1 ? moves[0].from[0] : null;
   return (
-    <p data-testid="tx-summary" className="text-text max-w-[80ch] text-[15px]">
+    <p data-testid="tx-summary" className="text-text text-body max-w-[80ch]">
       {moves.length === 0 && mark && <ClassMark kind={mark} size={12} className="mr-1.5" />}
       {ran.length > 0 && `It ran ${listWords(ran)}. `}
       {moves.map((m, i) => (
@@ -584,7 +584,7 @@ function DepRow({
 function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
     <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
-      <h2 className="text-[13px] font-medium text-[#a0a8be]">{title}</h2>
+      <h2 className="text-body font-medium text-[#a0a8be]">{title}</h2>
       <span className="text-text-dim text-xs">{note}</span>
     </div>
   );
@@ -898,7 +898,7 @@ export default function TransactionDetailPage() {
       indexed.
     </p>
   ) : tx.isCellbase ? (
-    <p data-testid="tx-summary" className="text-text max-w-[80ch] text-[15px]">
+    <p data-testid="tx-summary" className="text-text text-body max-w-[80ch]">
       The first transaction of block{' '}
       {formatBlockNumber(required(tx.blockNumber, hash, 'blockNumber'))}. It consumes no cell and{' '}
       {tx.pays === undefined ? (
@@ -1107,7 +1107,7 @@ export default function TransactionDetailPage() {
   );
 
   return shell(
-    <div className="min-w-0 font-mono text-[13px]">
+    <div className="text-body min-w-0 font-mono">
       {error && (
         <p role="alert" className="mb-4 text-xs">
           Unable to refresh transaction: {error.message}. Showing previously loaded data.
@@ -1122,7 +1122,7 @@ export default function TransactionDetailPage() {
       >
         <header className="flex min-w-0 flex-col gap-2 lg:col-start-1">
           <span className="text-text-dim text-xs">Transaction</span>
-          <h1 className="text-text-bright break-words text-[26px] font-medium">{headline}</h1>
+          <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
           {summary}
           <div className="flex min-w-0 items-center gap-0.5 text-xs">
             <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
@@ -1182,7 +1182,7 @@ export default function TransactionDetailPage() {
             </div>
             <div className="flex flex-col gap-0.5">
               <dt className="text-text-dim text-xs">Fee</dt>
-              <dd className="text-[15px]">
+              <dd className="text-body">
                 <ExactCkb
                   shannons={exactUnsignedInteger(tx.fee, `${hash}: fee`)}
                   signed={false}
@@ -1240,7 +1240,7 @@ export default function TransactionDetailPage() {
               title={`${formatCount(tiles.inputs.length, 'cell')} consumed → ${formatCount(tiles.outputs.length, 'cell')} created`}
               actions={
                 legend.length > 0 && (
-                  <span className="text-text-dim flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[11.5px]">
+                  <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-3.5 gap-y-1">
                     {legend.map((l) => (
                       <button
                         key={l.label}
@@ -1301,7 +1301,7 @@ export default function TransactionDetailPage() {
         <DetailSection
           title="Script groups"
           actions={
-            <span className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px]">
+            <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
               <span data-testid="tx-groups-ran">
                 {isProvisional
                   ? 'will run when committed'

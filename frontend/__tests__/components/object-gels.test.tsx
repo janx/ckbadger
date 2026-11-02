@@ -221,7 +221,7 @@ describe('SequencingGel at the measured width (V3)', () => {
     // the caption is HTML text under the SVG, 11 px
     const caption = screen.getByText(/^read top to bottom: each band is one hex digit/);
     expect(caption.closest('svg')).toBeNull();
-    expect(caption).toHaveClass('text-[11px]');
+    expect(caption).toHaveClass('text-meta');
   });
 
   it('keeps the lanes at 20 px and turns the gene columns into rows under the map at 358 px', () => {
@@ -277,7 +277,7 @@ describe('SequencingGel at the measured width (V3)', () => {
     expect(rows[3]).toHaveTextContent('Nature Green');
     const caption = screen.getByText(/dashed rules mark the gene boundaries/);
     expect(caption.closest('svg')).toBeNull();
-    expect(caption).toHaveClass('text-[11px]');
+    expect(caption).toHaveClass('text-meta');
   });
 
   it('a tap on a gene row highlights its byte span and pins its reading; a second tap clears it', () => {

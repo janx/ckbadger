@@ -230,7 +230,7 @@ function collectionOrder(groups: AddressHoldings['objectCollections']) {
 export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
   return (
     <section aria-label="Balance" className="space-y-4">
-      <div className="text-text-bright text-[18px] font-medium">
+      <div className="text-text-bright text-hero font-medium">
         <ExactCkb shannons={BigInt(holdings.balance)} signed={false} tone="plain" wrap />
       </div>
       <CapacityPartition
@@ -274,7 +274,7 @@ function HoldingSection({
       }}
     >
       <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-2">
-        <h3 className="text-text-bright flex items-center gap-2 text-[15px] font-medium">
+        <h3 className="text-text-bright text-body flex items-center gap-2 font-medium">
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
         </h3>
@@ -375,7 +375,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
   return (
     <section aria-labelledby="holdings-heading" className="space-y-6">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 id="holdings-heading" className="text-text-bright text-[15px] font-medium">
+        <h2 id="holdings-heading" className="text-text-bright text-section font-medium">
           Holdings
         </h2>
         <nav aria-label="Holdings" className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
@@ -634,13 +634,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     </Link>{' '}
                     <span className="text-text-dim">{formatStandard(t.standard)}</span>
                     {sharedNames(tokens.data.data).has(tokenName(t) ?? '') && (
-                      <span data-type-hash className="ml-2 text-[11px]">
+                      <span data-type-hash className="text-meta ml-2">
                         <Hash
                           hash={t.typeScriptHash}
                           startChars={4}
                           endChars={2}
                           copyable={false}
-                          className="text-[11px]"
+                          className="text-meta"
                         />
                       </span>
                     )}
@@ -729,7 +729,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                             title={`${d.name ?? d.id} · ${d.compositionTier === null ? 'Composition unavailable' : formatCompositionTier(d.compositionTier)}`}
                             aria-label={d.name ?? `Object ${d.id}`}
                             className={cn(
-                              'bg-base-surface flex h-[72px] w-[72px] flex-col items-center justify-between rounded border p-1.5 text-[11px]',
+                              'bg-base-surface text-meta flex h-[72px] w-[72px] flex-col items-center justify-between rounded border p-1.5',
                               d.compositionTier === 'btc_ckb' || d.compositionTier === 'pure_ckb'
                                 ? 'border-transparent'
                                 : 'border-base-border'
@@ -750,14 +750,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                               startChars={4}
                               endChars={2}
                               copyable={false}
-                              className="text-[11px]"
+                              className="text-meta"
                             />
                           </Link>
                         );
                       })}
                     </div>
                     {!items.length && (
-                      <p className="text-text-dim text-[11px]">Items are on another page.</p>
+                      <p className="text-text-dim text-meta">Items are on another page.</p>
                     )}
                   </div>
                 );
@@ -800,7 +800,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     <div className="flex flex-wrap justify-between gap-2">
                       <Link
                         href={getIdentityItemDetailHref(d.standard, d.id)}
-                        className="text-text-bright text-[15px]"
+                        className="text-text-bright text-body"
                       >
                         {d.name ?? <Hash hash={d.id} copyable={false} />}
                       </Link>

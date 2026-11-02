@@ -238,7 +238,7 @@ function NotSpentYet({
           </div>
         ))}
       </div>
-      <p className="text-text-dim text-[11px]">
+      <p className="text-text-dim text-meta">
         Current code cells at the indexed tip; the spender picks its own cell deps.
       </p>
     </div>

@@ -32,7 +32,7 @@ function RankedPreview({ model }: { model: ChartModel }) {
   return (
     <ol className="space-y-2" aria-label={`${model.title} ranked preview`}>
       {model.rankedPreview.rows.map((row) => (
-        <li key={row.title} className="min-w-0 text-[11px]">
+        <li key={row.title} className="text-meta min-w-0">
           <div className="flex justify-between gap-2">
             <span className="flex min-w-0 items-center gap-1.5" title={row.title}>
               {/* The Assets ranking shows each entry's class by its mark (CH-06). */}
@@ -91,30 +91,30 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         <div className="min-w-0">
           <Link
             href={`/charts/${definition.slug}`}
-            className="text-text-bright hover:text-jade text-[13px]"
+            className="text-text-bright hover:text-jade text-body"
           >
             {definition.title}
           </Link>
-          <div className="text-text-dim text-[11px]">{definition.cardSubtitle}</div>
+          <div className="text-text-dim text-meta">{definition.cardSubtitle}</div>
         </div>
         {model?.latest && headline && (
           <div
             className="ml-auto min-w-0 text-right"
             title={`${model.latest.label}: ${formatChartExact(model.latest.raw, model.unit)} ${model.unit}`}
           >
-            <div className="text-text-dim whitespace-nowrap text-[11px]">{headline.pre}</div>
+            <div className="text-text-dim text-meta whitespace-nowrap">{headline.pre}</div>
             <div
               role="group"
               aria-label={`${definition.title} current readout`}
               className="min-w-0 overflow-x-auto"
             >
               <div className="flex w-max min-w-full items-baseline justify-end gap-1">
-                <span className="text-text-bright whitespace-nowrap text-[18px] font-medium tabular-nums">
+                <span className="text-text-bright text-hero whitespace-nowrap font-medium tabular-nums">
                   {headline.display}
                 </span>
                 {/* The unit is in the subtitle, as on the board; only a percentage keeps its sign. */}
                 {headline.unit === '%' && (
-                  <span className="text-text-dim whitespace-nowrap text-[11px]">%</span>
+                  <span className="text-text-dim text-meta whitespace-nowrap">%</span>
                 )}
               </div>
             </div>
@@ -170,7 +170,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
       {model?.card && model.card.legend.length > 0 && (
         <ul
           aria-label={`${definition.title} legend`}
-          className="text-text-dim mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]"
+          className="text-text-dim text-meta mt-1 flex flex-wrap gap-x-3 gap-y-0.5"
         >
           {model.card.legend.map((entry) => (
             <li key={entry.key} className="flex items-center gap-1.5">

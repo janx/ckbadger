@@ -204,7 +204,7 @@ export function TxStructure({
         )}
       >
         {column(inputs, 'consumed')}
-        <div className="text-text-dim relative flex flex-wrap items-center justify-center gap-2 py-3 text-center text-[11px] lg:block lg:min-h-[180px] lg:p-0">
+        <div className="text-text-dim text-meta relative flex flex-wrap items-center justify-center gap-2 py-3 text-center lg:block lg:min-h-[180px] lg:p-0">
           <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
           <span aria-hidden="true" className="lg:hidden">
             ↓
@@ -295,7 +295,7 @@ export function TxStructure({
         )}
       </div>
       {meOut !== undefined && (
-        <p className="text-text-dim flex items-center gap-1.5 text-[11px]">
+        <p className="text-text-dim text-meta flex items-center gap-1.5">
           <svg aria-hidden="true" width="22" height="6">
             <path
               d="M0 3h22"
@@ -309,7 +309,7 @@ export function TxStructure({
       )}
       {meOut !== undefined && afterOnward}
       {poolCapacity !== undefined && (
-        <p className="text-text-dim text-[11px]">
+        <p className="text-text-dim text-meta">
           Capacity entering the pool{' '}
           <ExactCkb
             shannons={exactUnsignedInteger(poolCapacity, `${txHash}: pool capacity`)}
@@ -321,7 +321,7 @@ export function TxStructure({
       {continuityList && continuity.length > 0 && (
         <ul
           aria-label="Cell continuity"
-          className="text-text-dim flex flex-wrap gap-x-6 gap-y-2 text-[11px]"
+          className="text-text-dim text-meta flex flex-wrap gap-x-6 gap-y-2"
         >
           {continuity.map((l) => (
             <li key={`${l.from}:${l.to}`}>
@@ -361,7 +361,7 @@ export function TxStructure({
       )}
       {!hideGroups && groups.length > 0 && (
         <section>
-          <h3 className="text-text-bright mb-3 text-[15px] font-medium">Script groups</h3>
+          <h3 className="text-text-bright text-body mb-3 font-medium">Script groups</h3>
           <div className="divide-base-elevated divide-y">
             {groups.map((g) => (
               <div
@@ -410,13 +410,13 @@ export function TxStructure({
       )}
       {witnesses && (
         <section>
-          <h3 className="text-text-bright mb-3 text-[15px] font-medium">Witnesses</h3>
+          <h3 className="text-text-bright text-body mb-3 font-medium">Witnesses</h3>
           {witnesses}
         </section>
       )}
       {dependencies && (
         <section>
-          <h3 className="text-text-bright mb-3 text-[15px] font-medium">Dependencies</h3>
+          <h3 className="text-text-bright text-body mb-3 font-medium">Dependencies</h3>
           {dependencies}
         </section>
       )}

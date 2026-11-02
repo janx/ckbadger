@@ -107,7 +107,7 @@ export default function DaoDepositorsPage() {
           actions={
             <Link
               href="/dao"
-              className="text-text hover:text-text-bright font-mono text-[12px] hover:underline"
+              className="text-text hover:text-text-bright text-small font-mono hover:underline"
             >
               ← Nervos DAO
             </Link>

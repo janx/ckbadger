@@ -12,22 +12,22 @@ export function truncateRecordHex(hex: string, head = 18, tail = 8): string {
 export function NamedParty({ party, label }: { party: DotCellPartyRef; label: string }) {
   return (
     <div className="min-w-0">
-      <dt className="text-text-dim text-[11px]">{label}</dt>
+      <dt className="text-text-dim text-meta">{label}</dt>
       <dd className="mt-1 break-all">
         {party.lockHash ? (
           <AppLink href={`/address/${party.address ?? party.lockHash}`}>
-            <Hash hash={party.address ?? party.lockHash} className="text-[11px]" copyable={false} />
+            <Hash hash={party.address ?? party.lockHash} className="text-meta" copyable={false} />
           </AppLink>
         ) : (
           <>
-            <Hash hash={party.hashPrefix} truncate={false} className="text-[11px]" />
-            <span className="text-text-dim mt-1 block text-[11px]">
+            <Hash hash={party.hashPrefix} truncate={false} className="text-meta" />
+            <span className="text-text-dim text-meta mt-1 block">
               Named lock-hash prefix · no uniquely resolved address
             </span>
           </>
         )}
         {party.scriptName && (
-          <span className="text-text-dim block text-[11px]">{party.scriptName}</span>
+          <span className="text-text-dim text-meta block">{party.scriptName}</span>
         )}
       </dd>
     </div>
@@ -55,19 +55,19 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
     <section aria-label="mNFT permissions" className="space-y-4">
       <h2
         className={
-          tier === 2 ? 'text-[13px] font-medium text-[#a0a8be]' : 'text-text-bright text-[15px]'
+          tier === 2 ? 'text-body font-medium text-[#a0a8be]' : 'text-text-bright text-section'
         }
       >
         What its configuration permits
       </h2>
-      <p className="text-text-dim text-[11px]">
+      <p className="text-text-dim text-meta">
         Configure 0x{configure.toString(16).padStart(2, '0')} · zero permission bits allow the
         operation.
       </p>
       <dl className="grid gap-3 sm:grid-cols-2">
         {Object.entries(labels).map(([key, label]) => (
           <div key={key} className="border-base-border flex justify-between gap-3 border-b py-2">
-            <dt className="text-[11px]">{label}</dt>
+            <dt className="text-meta">{label}</dt>
             <dd
               className={
                 permissions[key as keyof typeof permissions] ? 'text-jade' : 'text-text-dim'
@@ -79,7 +79,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
         ))}
       </dl>
       {state && (
-        <p className="text-[11px]">
+        <p className="text-meta">
           State 0x{state.value.toString(16).padStart(2, '0')} ·{' '}
           {state.claimed ? 'claimed' : 'unclaimed'} · {state.locked ? 'locked' : 'unlocked'}.{' '}
           {state.locked

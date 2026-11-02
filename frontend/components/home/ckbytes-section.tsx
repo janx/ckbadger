@@ -208,7 +208,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
     <div className="flex flex-col gap-3.5">
       <div
         data-testid="ckbytes-circulating"
-        className="text-text-bright text-[clamp(22px,3.2vw,34px)] font-medium tabular-nums tracking-[-0.01em] [overflow-wrap:anywhere]"
+        className="text-text-bright text-index sm:text-display font-medium tabular-nums tracking-[-0.01em] [overflow-wrap:anywhere]"
       >
         {total.integer}
         <span className="text-text-dim">.{total.decimal}</span>
@@ -332,7 +332,7 @@ function exactSignedReadout(delta: bigint): ReadoutValue {
     value: (
       <>
         {text.slice(0, dot)}
-        <span className="text-text-dim text-[10px]">{text.slice(dot)}</span>
+        <span className="text-text-dim text-meta">{text.slice(dot)}</span>
       </>
     ),
     text: `${text} CKB`,
@@ -431,7 +431,7 @@ function DaoStat({ term, children }: { term: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
       <dt className="text-text-dim text-xs">{term}</dt>
-      <dd className="text-text-bright m-0 text-[15px] tabular-nums">{children}</dd>
+      <dd className="text-text-bright text-body m-0 tabular-nums">{children}</dd>
     </div>
   );
 }
@@ -447,7 +447,7 @@ function DaoBlock() {
   return (
     <div data-testid="home-dao" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-col gap-0.5">
-        <span className="text-text-bright text-[13px]">Nervos DAO</span>
+        <span className="text-text-bright text-body">Nervos DAO</span>
         <span className="text-text-dim text-xs">deposited</span>
       </div>
       {d.state === 'loading' && (
@@ -483,7 +483,7 @@ function DaoFigures({ view }: { view: DaoView }) {
     <>
       <div
         data-testid="home-dao-deposited"
-        className="text-text-bright text-[22px] font-medium tabular-nums [overflow-wrap:anywhere]"
+        className="text-text-bright text-hero font-medium tabular-nums [overflow-wrap:anywhere]"
       >
         {deposited.integer}
         <span className="text-text-dim">.{deposited.decimal}</span>

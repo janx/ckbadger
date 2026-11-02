@@ -152,8 +152,8 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
 
   return (
     <section aria-label="How a deposit grows" className="flex min-w-0 flex-col gap-3">
-      <h2 className="text-text-bright text-[15px] font-medium">How a deposit grows</h2>
-      <p className="text-text text-[13px] leading-relaxed">
+      <h2 className="text-text-bright text-section font-medium">How a deposit grows</h2>
+      <p className="text-text text-body leading-relaxed">
         AR, in every block header, is the DAO&apos;s growth index:{' '}
         {formatAccumulatedRate(ar(evidence.ar.genesisAr, 'DAO genesis AR'))} at genesis,{' '}
         {formatAccumulatedRate(tipAr)} now. A deposit grows by AR at its withdrawal request ÷ AR at
@@ -172,7 +172,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
       )}
       {years.length > 0 && (
         <div className="mt-1.5 flex flex-col gap-1">
-          <span className="text-text-dim text-[12px]">compensation in each year since launch</span>
+          <span className="text-text-dim text-small">compensation in each year since launch</span>
           <div
             role="img"
             aria-label="Compensation on free capacity in each year since launch"
@@ -186,13 +186,13 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
                   data-year={y.from.blockNumber}
                   className="flex min-w-0 flex-1 flex-col items-center gap-1"
                 >
-                  <span className="text-text-bright text-[11px]">{y.percent}%</span>
+                  <span className="text-text-bright text-meta">{y.percent}%</span>
                   <span
                     aria-hidden="true"
                     className="bg-gold w-[70%] rounded-t-sm"
                     style={{ height: `${Math.round(54 * share)}px`, opacity: 0.35 + 0.65 * share }}
                   />
-                  <span className="text-text-dim text-[10.5px]">
+                  <span className="text-text-dim text-meta">
                     from {formatUtc8Date(y.from.chainTimeMs).slice(0, 7)}
                   </span>
                 </div>
@@ -202,7 +202,7 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
         </div>
       )}
       {years.length > 0 && year365 && (
-        <span className="text-text-dim text-[11.5px]">
+        <span className="text-text-dim text-meta">
           The curve flattens as more CKB exists: the first year compensated {years[0].percent}%, the
           last 365 days {year365.observedGrowthPercent}%. <TapOrHoverHint capital what="a date" />{' '}
           to see the compensation owed to a deposit made then.

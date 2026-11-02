@@ -139,9 +139,9 @@ function ObjectCard({
 
           {/* Secondary: show name when token number is primary, or hash when name is primary */}
           {tokenIndex !== null && hasName ? (
-            <div className="text-text truncate font-mono text-[11px]">{item.name}</div>
+            <div className="text-text text-meta truncate font-mono">{item.name}</div>
           ) : hasName ? (
-            <div className="text-text-dim font-mono text-[10px]">
+            <div className="text-text-dim text-meta font-mono">
               <HexDisplay value={item.nftId} size="sm" startChars={8} endChars={6} />
             </div>
           ) : null}
@@ -151,7 +151,7 @@ function ObjectCard({
             {ownerAddress ? (
               <Link
                 href={`/address/${ownerAddress}`}
-                className="text-text-dim hover:text-text min-w-0 truncate font-mono text-[10px] hover:underline"
+                className="text-text-dim hover:text-text text-meta min-w-0 truncate font-mono hover:underline"
                 title={ownerAddress}
               >
                 {ownerAddress.length > 20
@@ -161,16 +161,16 @@ function ObjectCard({
             ) : item.ownerLockHash ? (
               <Link
                 href={`/address/${item.ownerLockHash}`}
-                className="text-text-dim hover:text-text font-mono text-[10px] hover:underline"
+                className="text-text-dim hover:text-text text-meta font-mono hover:underline"
               >
                 <HexDisplay value={item.ownerLockHash} size="sm" startChars={6} endChars={4} />
               </Link>
             ) : (
-              <span className="text-text-dim font-mono text-[10px]">{'\u2014'}</span>
+              <span className="text-text-dim text-meta font-mono">{'\u2014'}</span>
             )}
             <Link
               href={`/blocks/${item.createdAtBlock}`}
-              className="text-text-dim hover:text-emphasis shrink-0 font-mono text-[10px] hover:underline"
+              className="text-text-dim hover:text-emphasis text-meta shrink-0 font-mono hover:underline"
             >
               {formatBlockNumber(item.createdAtBlock)}
             </Link>
@@ -228,7 +228,7 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
           </div>
 
           {/* Secondary: content type + size */}
-          <div className="text-text-dim flex items-center gap-1.5 font-mono text-[10px]">
+          <div className="text-text-dim text-meta flex items-center gap-1.5 font-mono">
             <span>{icon}</span>
             <span className="truncate" title={spore.contentType}>
               {spore.contentType || 'unknown'}
@@ -244,7 +244,7 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
             {ownerDisplay ? (
               <Link
                 href={`/address/${ownerDisplay}`}
-                className="text-text-dim hover:text-text min-w-0 truncate font-mono text-[10px] hover:underline"
+                className="text-text-dim hover:text-text text-meta min-w-0 truncate font-mono hover:underline"
                 title={ownerDisplay}
               >
                 {ownerDisplay.length > 24
@@ -254,19 +254,19 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
             ) : spore.ownerLockHash ? (
               <Link
                 href={`/address/${spore.ownerLockHash}`}
-                className="text-text-dim hover:text-text font-mono text-[10px] hover:underline"
+                className="text-text-dim hover:text-text text-meta font-mono hover:underline"
               >
                 <HexDisplay value={spore.ownerLockHash} size="sm" startChars={6} endChars={4} />
               </Link>
             ) : (
-              <span className="text-text-dim font-mono text-[10px]">{'\u2014'}</span>
+              <span className="text-text-dim text-meta font-mono">{'\u2014'}</span>
             )}
             {spore.createdAtBlock == null ? (
-              <span className="text-text-dim font-mono text-[10px]">—</span>
+              <span className="text-text-dim text-meta font-mono">—</span>
             ) : (
               <Link
                 href={`/blocks/${spore.createdAtBlock}`}
-                className="text-text-dim hover:text-emphasis shrink-0 font-mono text-[10px] hover:underline"
+                className="text-text-dim hover:text-emphasis text-meta shrink-0 font-mono hover:underline"
               >
                 {formatBlockNumber(spore.createdAtBlock)}
               </Link>

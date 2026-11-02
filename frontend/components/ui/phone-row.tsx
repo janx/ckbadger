@@ -19,11 +19,11 @@ export interface PhoneLine {
 }
 
 const TONE: Record<PhoneLineTone, string> = {
-  head: 'text-[13px] text-text-bright',
+  head: 'text-body text-text-bright',
   body: 'text-xs text-text',
   // An exact amount takes the ink of its line here (ExactCkb sets its own), so the developer
   // figures stay quiet; a part that wraps itself in brighter ink keeps it.
-  quiet: 'text-[11px] text-text-dim [&_[data-ckb-amount]]:[color:inherit]',
+  quiet: 'text-meta text-text-dim [&_[data-ckb-amount]]:[color:inherit]',
 };
 
 /**

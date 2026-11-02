@@ -54,14 +54,14 @@ export function DetailLayout({
   className,
 }: DetailLayoutProps) {
   return (
-    <div className={cn('min-w-0 font-mono text-[13px]', className)}>
+    <div className={cn('text-body min-w-0 font-mono', className)}>
       <header className="mb-8">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <h1
               className={cn(
                 'text-text-bright break-words font-medium',
-                kind === 'index' ? 'text-[22px]' : 'text-[26px]'
+                kind === 'entity' ? 'text-entity' : 'text-index'
               )}
             >
               {title}
@@ -128,7 +128,7 @@ export function DetailSection({
         <h2
           className={cn(
             'font-medium',
-            tier === 2 ? 'text-[13px] text-[#a0a8be]' : 'text-text-bright text-[15px]'
+            tier === 2 ? 'text-body text-[#a0a8be]' : 'text-text-bright text-section'
           )}
         >
           {title}

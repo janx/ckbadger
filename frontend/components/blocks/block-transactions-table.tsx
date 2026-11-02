@@ -241,7 +241,7 @@ export function BlockTransactionsTable({
                       startChars={8}
                       endChars={6}
                       copyable={false}
-                      className="text-[13px]"
+                      className="text-body"
                     />
                   </Link>
                 </>

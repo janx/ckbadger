@@ -20,7 +20,7 @@ describe('FiberNetworkGraph', () => {
   it('draws the network as a graph with the board’s legend and node labels (FF-F1)', () => {
     const { container } = render(<FiberNetworkGraph network={mainnet as FiberNetwork} />);
     const heading = screen.getByRole('heading', { name: 'The network, as the chain sees it' });
-    expect(heading).toHaveClass('text-[15px]');
+    expect(heading).toHaveClass('text-section');
     for (const legend of [
       'CKB locked now',
       'channels over time',

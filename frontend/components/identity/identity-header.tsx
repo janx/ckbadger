@@ -51,7 +51,7 @@ export function IdentityPositioning({
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier="pure_ckb" />
-      <span className="text-text text-[12.5px]">{text}</span>
+      <span className="text-text text-body">{text}</span>
     </div>
   );
 }
@@ -82,7 +82,7 @@ export function IdentityStatusBadge({ state }: { state: IdentityState }) {
   return (
     <span
       data-identity-state={state}
-      className={cn('rounded border px-1.5 py-px text-[11px]', s.className)}
+      className={cn('text-meta rounded border px-1.5 py-px', s.className)}
     >
       {s.label}
     </span>

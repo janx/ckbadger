@@ -132,12 +132,10 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
           value: (
             <>
               {formatUtc8DateTime(uncle.timestamp)}
-              <span className="text-text-dim block text-[11px]">
+              <span className="text-text-dim text-meta block">
                 {formatTimeAgo(uncle.timestamp)}
               </span>
-              {delay && (
-                <span className="text-text-dim block text-[11px]">{delay} its sibling</span>
-              )}
+              {delay && <span className="text-text-dim text-meta block">{delay} its sibling</span>}
             </>
           ),
         },
@@ -197,7 +195,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         </>
       }
     >
-      <p className="text-[13px] leading-relaxed">
+      <p className="text-body leading-relaxed">
         Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
         {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
         chain is{' '}

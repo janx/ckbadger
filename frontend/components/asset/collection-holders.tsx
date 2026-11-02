@@ -130,7 +130,7 @@ function ScopedCollectionHolders({
       key: 'lock',
       label: 'Lock',
       minWidth: 104,
-      className: 'text-[11px]',
+      className: 'text-meta',
       render: (holder) => (
         <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
       ),
@@ -187,7 +187,7 @@ function ScopedCollectionHolders({
       actions={
         <button
           type="button"
-          className="text-jade text-[11px]"
+          className="text-jade text-meta"
           onClick={() => {
             setAll(!all);
             pagination.reset();
@@ -248,7 +248,7 @@ function ScopedCollectionHolders({
                   hasPrevious={pagination.hasPrevious}
                   onNext={() => pagination.goToNext(holders.data.nextCursor)}
                   onPrevious={pagination.goToPrevious}
-                  className="flex-wrap gap-3 [&>div>span]:text-[11px] [&>div]:flex-wrap [&>div]:gap-2 [&>span]:text-[11px] [&_button]:px-3 [&_button]:text-[11px]"
+                  className="[&>div>span]:text-meta [&>span]:text-meta [&_button]:text-meta flex-wrap gap-3 [&>div]:flex-wrap [&>div]:gap-2 [&_button]:px-3"
                 />
               )}
             </>
@@ -262,12 +262,12 @@ function ScopedCollectionHolders({
         </div>
         {distribution && (
           <div className="min-w-0">
-            <p className="text-text-dim mb-2 break-words text-[11px]">
+            <p className="text-text-dim text-meta mb-2 break-words">
               Full collection: <AssetCount value={totalHolders.toString()} /> holders ·{' '}
               <AssetCount value={totalItems.toString()} /> items
             </p>
             {readsDiffer && (
-              <p role="note" className="text-text-dim mb-2 text-[11px]">
+              <p role="note" className="text-text-dim text-meta mb-2">
                 The holder list ({holders.data!.data.length.toLocaleString('en-US')} shown) and the
                 distribution ({totalHolders.toLocaleString('en-US')} holder
                 {totalHolders === BigInt(1) ? '' : 's'}) were read at different moments.

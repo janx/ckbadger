@@ -63,12 +63,12 @@ export default function AddressDetailPage() {
 function AddressIdentity({ value }: { value: string }) {
   const [copyState, setCopyState] = useState('Copy address');
   return (
-    <span className="flex min-w-0 items-start gap-2 text-[13px]">
+    <span className="text-body flex min-w-0 items-start gap-2">
       <Hash
         hash={value}
         truncate={false}
         copyable={false}
-        className="min-w-0 text-[13px] [overflow-wrap:anywhere]"
+        className="text-body min-w-0 [overflow-wrap:anywhere]"
       />
       <button
         aria-label={copyState}
@@ -428,7 +428,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       aria-pressed={tab === id}
                       onClick={() => setTab(id)}
                       className={cn(
-                        'flex h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
+                        'text-section flex h-11 items-center gap-2 border-b-2 font-medium',
                         tab === id
                           ? 'border-jade text-text-bright'
                           : 'text-text-dim border-transparent'

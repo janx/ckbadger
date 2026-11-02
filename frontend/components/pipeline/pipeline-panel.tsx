@@ -101,7 +101,7 @@ function Stat({ label, value, tone }: { label: string; value: string; tone: stri
   return (
     <span className="flex items-baseline gap-1.5 font-mono">
       <span className="text-text-dim text-xs uppercase tracking-wider">{label}</span>
-      <span className={`text-[13px] font-semibold tabular-nums ${tone}`}>{value}</span>
+      <span className={`text-body font-semibold tabular-nums ${tone}`}>{value}</span>
     </span>
   );
 }
@@ -810,14 +810,14 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
     <div
       data-testid="pipeline-selection"
       aria-live="polite"
-      className={`${FOOTER_ROW} text-text gap-x-3 text-[11px]`}
+      className={`${FOOTER_ROW} text-text text-meta gap-x-3`}
     >
-      <span className="text-text-dim text-[10px] uppercase tracking-wider">Selected</span>
+      <span className="text-text-dim text-meta uppercase tracking-wider">Selected</span>
       <span className="text-text-bright">{shortHash(pinned)}</span>
       {sel ? (
         <>
           <span
-            className={`rounded border px-1.5 py-[3px] text-[10px] leading-none ${TAG_TONE[sel.tag]}`}
+            className={`text-meta rounded border px-1.5 py-[3px] leading-none ${TAG_TONE[sel.tag]}`}
           >
             {sel.tag}
           </span>
@@ -833,7 +833,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
         type="button"
         aria-label="Clear selection"
         onClick={clearPin}
-        className="border-base-border text-text hover:text-text-bright rounded border px-[7px] py-[3px] text-[11px]"
+        className="border-base-border text-text hover:text-text-bright text-meta rounded border px-[7px] py-[3px]"
       >
         ×
       </button>
@@ -851,7 +851,7 @@ export function PipelinePanel() {
           Transaction Pipeline
           <span
             title={PIPELINE_HELP}
-            className="border-text-dim/70 text-text-dim inline-block h-3.5 w-3.5 rounded-full border text-center font-mono text-[9px] normal-case leading-3 tracking-normal"
+            className="border-text-dim/70 text-text-dim text-meta inline-block h-3.5 w-3.5 rounded-full border text-center font-mono normal-case leading-3 tracking-normal"
           >
             ?
           </span>

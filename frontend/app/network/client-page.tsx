@@ -141,11 +141,11 @@ function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
   if (!(minutes >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
   const figure = (label: string, value: string, note?: string, jade = false) => (
     <div key={label}>
-      <dt className="text-text-dim text-[12px]">{label}</dt>
-      <dd className={`mt-0.5 text-[18px] tabular-nums ${jade ? 'text-jade' : 'text-text-bright'}`}>
+      <dt className="text-text-dim text-small">{label}</dt>
+      <dd className={`text-hero mt-0.5 tabular-nums ${jade ? 'text-jade' : 'text-text-bright'}`}>
         {value}
       </dd>
-      {note && <dd className="text-text-dim mt-0.5 text-[11.5px]">{note}</dd>}
+      {note && <dd className="text-text-dim text-meta mt-0.5">{note}</dd>}
     </div>
   );
   return (
@@ -188,7 +188,7 @@ function PeersDashboard({
       kind="topic"
       identity={
         <div className="grid min-w-0 items-end gap-x-12 gap-y-6 lg:grid-cols-[minmax(0,1fr)_460px]">
-          <p className="text-text max-w-[720px] text-[15px] leading-relaxed">
+          <p className="text-text text-body max-w-[720px] leading-relaxed">
             CKB nodes find each other by word of mouth: each node tells its peers about other nodes
             it knows. This crawler asks every node it can reach, then tries to connect to each one
             it hears about. A node it cannot reach may still be running, behind NAT or a firewall.
@@ -198,7 +198,7 @@ function PeersDashboard({
       }
     >
       {!enabled && (
-        <p role="status" className="text-info text-[12px]">
+        <p role="status" className="text-info text-small">
           Crawler disabled. This retained evidence is not live.
         </p>
       )}

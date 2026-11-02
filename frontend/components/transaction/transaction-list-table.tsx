@@ -78,7 +78,7 @@ function ScaleHeader({ label, scale }: { label: string; scale: number }) {
       {label}
       <span
         aria-hidden="true"
-        className="mt-0.5 flex justify-between text-[9.5px]"
+        className="text-meta mt-0.5 flex justify-between"
         style={{ width: TRACK }}
       >
         <span>0</span>
@@ -170,7 +170,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
                 startChars={10}
                 endChars={6}
                 copyable={false}
-                className="text-[13px]"
+                className="text-body"
               />
             </Link>
           ),
@@ -189,7 +189,7 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
               tone: 'body',
               left: <Dotted parts={tx.isCellbase ? [what] : [what, value, fee]} />,
               right: (
-                <span className="text-text-dim text-[11px]">
+                <span className="text-text-dim text-meta">
                   <Dotted parts={quiet} />
                 </span>
               ),

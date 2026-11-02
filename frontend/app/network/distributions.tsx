@@ -30,7 +30,7 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
       {top.map((it, i) => (
         <div
           key={it.label}
-          className="grid grid-cols-[minmax(0,1fr)_90px_36px] items-center gap-2.5 py-0.5 text-[12px]"
+          className="text-small grid grid-cols-[minmax(0,1fr)_90px_36px] items-center gap-2.5 py-0.5"
         >
           <span
             className={`truncate ${i === 0 ? 'text-text-bright' : 'text-text'}`}
@@ -62,15 +62,15 @@ export function NetworkDistributions() {
   if (isLoading) return <div className="bg-base-elevated h-40 w-full animate-pulse rounded" />;
   if (error || !data)
     return (
-      <p role="alert" className="text-negative text-[12px]">
+      <p role="alert" className="text-negative text-small">
         Failed to load distributions.
       </p>
     );
   return (
     <section className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-[15px] font-medium">Which software they run</h2>
-        <span className="text-text-dim text-[12px]">reachable now or verified before</span>
+        <h2 className="text-text-bright text-section font-medium">Which software they run</h2>
+        <span className="text-text-dim text-small">reachable now or verified before</span>
       </div>
       <Bars items={data.versions} attr="data-version-bar" />
     </section>
@@ -83,7 +83,7 @@ export function NetworkProtocols() {
   if (isLoading) return null;
   if (error || !data)
     return (
-      <p role="alert" className="text-negative text-[12px]">
+      <p role="alert" className="text-negative text-small">
         Failed to load protocol counts.
       </p>
     );
@@ -107,7 +107,7 @@ export function HostingBar() {
   if (isLoading) return null;
   if (error || !data)
     return (
-      <p role="alert" className="text-negative text-[12px]">
+      <p role="alert" className="text-negative text-small">
         Failed to load hosting networks.
       </p>
     );
@@ -118,7 +118,7 @@ export function HostingBar() {
   const total = [...byOrg.values()].reduce((sum, count) => sum + count, 0);
   if (total !== data.verifiedRetained)
     return (
-      <p role="alert" className="text-negative text-[12px]">
+      <p role="alert" className="text-negative text-small">
         Hosting networks cover {total} peers, not the {data.verifiedRetained} verified.
       </p>
     );
@@ -130,7 +130,7 @@ export function HostingBar() {
   const countries = data.countries.filter((country) => country.label !== 'Unknown').length;
   return (
     <div className="flex flex-col gap-2">
-      <span className="text-text-bright text-[12.5px]">Where they run</span>
+      <span className="text-text-bright text-body">Where they run</span>
       <div
         role="img"
         aria-label="Verified nodes by hosting network"
@@ -148,7 +148,7 @@ export function HostingBar() {
           />
         ))}
       </div>
-      <div className="text-text-dim flex flex-wrap gap-x-5 gap-y-1 text-[12px]">
+      <div className="text-text-dim text-small flex flex-wrap gap-x-5 gap-y-1">
         {segments.map(([org, count]) => (
           <span key={org}>
             {org} <span className="text-text-bright">{count.toLocaleString()}</span>
@@ -156,7 +156,7 @@ export function HostingBar() {
         ))}
       </div>
       {leader && (
-        <span className="text-text-dim text-[12px]">
+        <span className="text-text-dim text-small">
           {leader[1].toLocaleString()} of the {total.toLocaleString()} verified nodes run on{' '}
           {leader[0]}, across {countries} countries.
         </span>

@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import type { ChartBody } from '@/components/home/mini-chart';
 
 /** A homepage section heading: unframed, 15 px / 500, sentence case. */
-export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-[15px] font-medium';
+export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-section font-medium';
 
 /** The small-multiples grid: same-size charts, as many per row as fit at 220 px. */
 export const SMALL_MULTIPLES_CLASS =

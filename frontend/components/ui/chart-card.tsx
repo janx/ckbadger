@@ -125,7 +125,7 @@ export function StatCard({
 
   return (
     <div className={cn('min-w-0 text-center', className)}>
-      <div className="text-text-dim font-mono text-[11px] uppercase tracking-wider">{label}</div>
+      <div className="text-text-dim text-meta font-mono uppercase tracking-wider">{label}</div>
       <div
         className={cn(
           'text-text-bright mt-1 break-words font-mono text-xl font-bold tabular-nums leading-tight',

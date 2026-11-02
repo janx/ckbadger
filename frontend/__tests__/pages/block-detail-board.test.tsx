@@ -225,7 +225,7 @@ describe('Block board · first tier', () => {
     expect(screen.getByRole('link', { name: 'Previous block, 20,827,931' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Next block, 20,827,933' })).toBeInTheDocument();
     const summary = screen.getByTestId('block-summary');
-    expect(summary).toHaveClass('text-[15px]');
+    expect(summary).toHaveClass('text-body');
     expect(summary).toHaveTextContent(
       /^4 transactions, mined by .+ on 2026-10-25 at 08:55:37 UTC\+8\. The miner earns 684\.32120795 CKB for this block, paid 11 blocks later\.$/
     );
@@ -242,7 +242,7 @@ describe('Block board · first tier', () => {
     );
   });
 
-  it('counts both views in quiet 12 px beside 15 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
+  it('counts both views in quiet 12 px beside 17 px tab names, and says where the txs came from (BA-40, BA-16)', async () => {
     render(<BlockDetailPage />);
     const views = await screen.findByRole('group', { name: 'Block contents' });
     const [activities, transactions] = within(views).getAllByRole('button');
@@ -250,9 +250,9 @@ describe('Block board · first tier', () => {
       [activities, 'Activities'],
       [transactions, 'Transactions'],
     ] as const) {
-      expect(tab).toHaveClass('text-[15px]');
+      expect(tab).toHaveClass('text-section');
       expect(tab.firstChild).toHaveTextContent(name);
-      expect(within(tab).getByText('4')).toHaveClass('text-[12px]');
+      expect(within(tab).getByText('4')).toHaveClass('text-small');
     }
     expect(
       await screen.findByText("3 committed from #20,827,930's proposals, 2 blocks later")

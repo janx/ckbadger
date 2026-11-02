@@ -13,7 +13,7 @@ import { formatUtc8Date, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind: 'm-nft' }>;
 
 function Sub({ children }: { children: ReactNode }) {
-  return <span className="text-text-dim mt-0.5 block text-[12px] font-normal">{children}</span>;
+  return <span className="text-text-dim text-small mt-0.5 block font-normal">{children}</span>;
 }
 function B({ children }: { children: ReactNode }) {
   return <span className="text-text-bright">{children}</span>;
@@ -109,7 +109,7 @@ function ownerFact(protocol: IdentityProtocol, note: string) {
     label: 'Owner',
     value: (
       <>
-        <Address address={cell.ownerAddress} className="text-[13px]" />
+        <Address address={cell.ownerAddress} className="text-body" />
         <Sub>
           {cell.lockName ?? 'lock not named'}
           {note}
@@ -160,7 +160,7 @@ function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>
  * exactly one lock, else the prefix itself — never an address it does not have.
  */
 export function PartyLine({ party, size = 13 }: { party: DotCellPartyRef; size?: 13 | 14 }) {
-  const text = size === 14 ? 'text-[14px]' : 'text-[13px]';
+  const text = size === 14 ? 'text-body' : 'text-body';
   return party.lockHash ? (
     <>
       <AppLink href={`/address/${party.address ?? party.lockHash}`}>
@@ -170,7 +170,7 @@ export function PartyLine({ party, size = 13 }: { party: DotCellPartyRef; size?:
     </>
   ) : (
     <>
-      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-[12px]" />
+      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
       <Sub>prefix · no uniquely resolved lock</Sub>
     </>
   );
@@ -519,7 +519,7 @@ export function IdentitySummary({
     <p
       data-testid="identity-summary"
       aria-label={`${subject} in brief`}
-      className="text-text mt-1.5 max-w-[820px] text-[15px] leading-relaxed"
+      className="text-text text-body mt-1.5 max-w-[820px] leading-relaxed"
     >
       {body}
     </p>

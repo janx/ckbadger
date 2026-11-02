@@ -81,8 +81,8 @@ export function IdentityRecords({
   return (
     <section aria-label={title} className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-[15px] font-medium">{title}</h2>
-        <span className="text-text-dim text-[12px]">its records</span>
+        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+        <span className="text-text-dim text-small">its records</span>
       </div>
       {records.length === 0 ? (
         <p className="text-text">No records are set.</p>
@@ -97,7 +97,7 @@ export function IdentityRecords({
                 >
                   <dt className="text-text-dim">
                     <span>{a.coin}</span>
-                    <span className="text-text-ghost block text-[11px]">
+                    <span className="text-text-ghost text-meta block">
                       {a.key} · coin type {a.coinType}
                     </span>
                   </dt>
@@ -113,7 +113,7 @@ export function IdentityRecords({
                       <RecordValue value={a.value} />
                     )}
                     {whose(a.ckbLockHash, parties) && (
-                      <span className="text-text-dim block text-[12px]">
+                      <span className="text-text-dim text-small block">
                         {whose(a.ckbLockHash, parties)}
                       </span>
                     )}
@@ -126,7 +126,7 @@ export function IdentityRecords({
             <dl className="border-base-border-subtle grid min-w-0 grid-cols-1 gap-x-6 gap-y-3.5 border-t pt-3.5 sm:grid-cols-3">
               {view.profile.map((p) => (
                 <div key={p.key} className="min-w-0">
-                  <dt className="text-text-dim text-[11.5px]">{p.label}</dt>
+                  <dt className="text-text-dim text-meta">{p.label}</dt>
                   <dd className="mt-0.5 min-w-0">
                     <RecordValue value={p.value} label={p.label} />
                   </dd>
@@ -151,7 +151,7 @@ export function IdentityRecords({
               ))}
             </dl>
           )}
-          <p className="text-text-dim text-[12px]">
+          <p className="text-text-dim text-small">
             {records.length.toLocaleString('en-US')} record{records.length === 1 ? '' : 's'} · each
             cached for {view.ttls.map((t) => `${t.toLocaleString('en-US')} s`).join(' or ')}
           </p>

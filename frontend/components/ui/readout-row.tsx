@@ -24,7 +24,7 @@ export function ReadoutRow({ label, pinned, idle, children }: ReadoutRowProps) {
       role="status"
       aria-live="polite"
       aria-label={label}
-      className="border-base-border-subtle flex items-baseline justify-between gap-3 border-t pt-2 text-[12px]"
+      className="border-base-border-subtle text-small flex items-baseline justify-between gap-3 border-t pt-2"
     >
       <span className="text-text min-w-0" style={{ overflowWrap: 'anywhere' }}>
         {empty ? (
@@ -36,7 +36,7 @@ export function ReadoutRow({ label, pinned, idle, children }: ReadoutRowProps) {
           </>
         )}
       </span>
-      <TapOrHoverHint className="text-text-dim shrink-0 whitespace-nowrap text-[11px]" />
+      <TapOrHoverHint className="text-text-dim text-meta shrink-0 whitespace-nowrap" />
     </div>
   );
 }

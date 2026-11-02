@@ -37,7 +37,7 @@ describe('Asset domain layout', () => {
         <p>Capacity history</p>
       </AssetDetailShell>
     );
-    expect(screen.getByRole('heading', { level: 1, name: 'Object' })).toHaveClass('text-[26px]');
+    expect(screen.getByRole('heading', { level: 1, name: 'Object' })).toHaveClass('text-entity');
     expect(container.querySelector('[data-tier="1"]')).toHaveTextContent('Capacity history');
     expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Inventory');

@@ -265,11 +265,11 @@ describe('PipelinePanel static render', () => {
 
   it('writes the block and NEXT numbers in the card headers at 11 px', async () => {
     const svg = await renderPanel();
-    expect(card(svg, T).querySelector('[data-block-number]')).toHaveClass('text-[11px]');
+    expect(card(svg, T).querySelector('[data-block-number]')).toHaveClass('text-meta');
     const nextNumber = within(svg.querySelector('[data-next]') as unknown as HTMLElement).getByText(
       `…${String(T + 1).slice(-4)}`
     );
-    expect(nextNumber).toHaveClass('text-[11px]');
+    expect(nextNumber).toHaveClass('text-meta');
   });
 
   it('draws a tx whose cycles are still pending as a dashed square', async () => {

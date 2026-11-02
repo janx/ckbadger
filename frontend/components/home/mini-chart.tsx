@@ -117,12 +117,12 @@ export function ChartFigure({
           {href ? (
             <Link
               href={href}
-              className="text-text-bright hover:text-jade block w-fit max-w-full truncate text-[13px] transition-colors"
+              className="text-text-bright hover:text-jade text-body block w-fit max-w-full truncate transition-colors"
             >
               {title}
             </Link>
           ) : (
-            <span className="text-text-bright block max-w-full truncate text-[13px]">{title}</span>
+            <span className="text-text-bright text-body block max-w-full truncate">{title}</span>
           )}
           <span data-testid={tid('subtitle')} className="text-text-dim text-xs">
             {readout ? readout.label : subtitle}

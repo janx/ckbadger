@@ -35,6 +35,6 @@ describe('the tap-or-hover hint (R6: one wording for every hover target)', () =>
     );
     const hint = screen.getByText('tap or hover');
     expect(hint).toHaveAttribute('data-hint', 'tap-or-hover');
-    expect(hint).toHaveClass('whitespace-nowrap', 'text-[11px]');
+    expect(hint).toHaveClass('whitespace-nowrap', 'text-meta');
   });
 });

@@ -97,7 +97,7 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
             </div>
             {scriptChartData.length > 0 && (
               <>
-                <div className="text-text-dim mt-2 font-mono text-[10px] uppercase tracking-wider">
+                <div className="text-text-dim text-meta mt-2 font-mono uppercase tracking-wider">
                   Script Usage
                 </div>
                 <PieChart
@@ -117,7 +117,7 @@ export function ActivityBreakdown({ isRealtime = false }: ActivityBreakdownProps
 function StatItem({ label, value }: { label: string; value: string }) {
   return (
     <div className="text-center">
-      <div className="text-text-dim font-mono text-[10px] uppercase tracking-wider">{label}</div>
+      <div className="text-text-dim text-meta font-mono uppercase tracking-wider">{label}</div>
       <div className="text-emphasis font-mono text-sm">{value}</div>
     </div>
   );

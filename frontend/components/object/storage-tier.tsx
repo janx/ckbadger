@@ -10,12 +10,11 @@ const COMPOSITION_TIER_DESCRIPTIONS: Record<string, string> = {
     'Some content references external decentralized storage (e.g. IPFS, Arweave). Data persists as long as the external network hosts it.',
   centralized_mixture:
     'Some content depends on centralized servers (http/https). Data availability relies on the server operator.',
-  unknown:
-    'Composition could not be determined. The content storage method is unverified.',
+  unknown: 'Composition could not be determined. The content storage method is unverified.',
 };
 
 const TOOLTIP_BTN_BASE =
-  'ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-[9px] leading-none transition-colors';
+  'ml-1 inline-flex h-3.5 w-3.5 items-center justify-center rounded-full border font-mono text-meta leading-none transition-colors';
 
 export function compositionTierCardStyle(tier: string): {
   card: string;

@@ -15,15 +15,15 @@ describe('TopicHero (Fiber / Forks board hero)', () => {
       />
     );
     const title = screen.getByRole('heading', { level: 1, name: 'Forks' });
-    expect(title).toHaveClass('text-[26px]');
+    expect(title).toHaveClass('text-index');
     expect(screen.getByText('Two miners sometimes find a block at the same height.')).toHaveClass(
-      'text-[15px]'
+      'text-body'
     );
     const terms = screen.getAllByRole('term').map((t) => t.textContent);
     expect(terms).toEqual(['Uncle rate · 30 days', 'This node switched branch']);
-    expect(screen.getByText('2.57%')).toHaveClass('text-[18px]', 'text-text-bright');
+    expect(screen.getByText('2.57%')).toHaveClass('text-hero', 'text-text-bright');
     expect(screen.getByText('0 times')).toHaveClass('text-jade');
-    expect(screen.getByText('7,178 uncles in 279,561 blocks')).toHaveClass('text-[11.5px]');
+    expect(screen.getByText('7,178 uncles in 279,561 blocks')).toHaveClass('text-meta');
   });
 
   it('renders no figure grid while the figures are still loading', () => {

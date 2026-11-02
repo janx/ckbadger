@@ -1,5 +1,5 @@
 /** A header nav link or dropdown trigger: sentence case, normal tracking, a tall hit area. */
-export const NAVBAR_LINK_CLASS = 'py-3 font-mono text-[13px] transition-colors';
+export const NAVBAR_LINK_CLASS = 'py-3 font-mono text-body transition-colors';
 
 export const NAVBAR_LINK_DEFAULT_CLASS = 'text-text hover:text-jade';
 

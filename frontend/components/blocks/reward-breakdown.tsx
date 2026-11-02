@@ -124,12 +124,12 @@ export function RewardBreakdown({
     total === BigInt(0) ? '0.00' : formatScaledInteger(value * BigInt(100), total, 2);
   return (
     <div className="space-y-3 text-xs">
-      <div data-testid="reward-total" className="text-text-bright text-[15px] font-medium">
+      <div data-testid="reward-total" className="text-text-bright text-body font-medium">
         <ExactCkb shannons={total} signed={false} tone="plain" />
         {block.minerAddress && (
           <>
             <span className="text-text-dim text-xs font-normal"> to </span>
-            <Address address={block.minerAddress} className="text-[13px] font-normal" />
+            <Address address={block.minerAddress} className="text-body font-normal" />
           </>
         )}
       </div>

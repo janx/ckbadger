@@ -25,33 +25,28 @@ export interface CollectionItemsProps {
  * never passed off as an address, and a named owner is never reported as "No live owner".
  */
 function ItemOwner({ item }: { item: CollectionItem }) {
-  if (item.ownerAddress) return <Address address={item.ownerAddress} className="text-[11px]" />;
+  if (item.ownerAddress) return <Address address={item.ownerAddress} className="text-meta" />;
   if (item.ownerLockHash)
     return (
-      <span className="text-[11px]">
-        <Hash hash={item.ownerLockHash} copyable={false} className="text-[11px]" />
+      <span className="text-meta">
+        <Hash hash={item.ownerLockHash} copyable={false} className="text-meta" />
         <span className="text-text-dim block">address not indexed</span>
       </span>
     );
   if (item.ownerHashPrefix)
     return (
-      <span className="text-[11px] [overflow-wrap:anywhere]">
-        <Hash
-          hash={item.ownerHashPrefix}
-          truncate={false}
-          copyable={false}
-          className="text-[11px]"
-        />
+      <span className="text-meta [overflow-wrap:anywhere]">
+        <Hash hash={item.ownerHashPrefix} truncate={false} copyable={false} className="text-meta" />
         <span className="text-text-dim block">named owner prefix · no indexed lock</span>
       </span>
     );
   if (item.isLive)
     return (
-      <span role="alert" className="text-text-dim text-[11px]">
+      <span role="alert" className="text-text-dim text-meta">
         {item.nftId}: a live item with no owner in the API response
       </span>
     );
-  return <span className="text-text-dim text-[11px]">No live owner</span>;
+  return <span className="text-text-dim text-meta">No live owner</span>;
 }
 
 /**
@@ -99,7 +94,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
   return (
     <section aria-label="Collection items" className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-text-bright text-[15px]">
+        <h2 className="text-text-bright text-section">
           {kind === 'identity' ? 'Identities' : 'Objects'}
         </h2>
         <div className="flex max-w-full flex-wrap gap-3">
@@ -144,17 +139,17 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
                       ? mnftRowTitle(item)
                       : (item.name ??
                         item.did ?? (
-                          <Hash hash={item.nftId} copyable={false} className="text-[11px]" />
+                          <Hash hash={item.nftId} copyable={false} className="text-meta" />
                         ))}
                   </AppLink>
-                  <span className="text-text-dim mt-1 block text-[11px]">
+                  <span className="text-text-dim text-meta mt-1 block">
                     {formatStandard(item.standard)} · {item.isLive ? 'Live' : 'Inactive'}
                   </span>
                 </div>
                 <div className="min-w-0">
                   <ItemOwner item={item} />
                 </div>
-                <AppLink href={`/blocks/${item.createdAtBlock}`} className="text-[11px]">
+                <AppLink href={`/blocks/${item.createdAtBlock}`} className="text-meta">
                   {formatBlockNumber(item.createdAtBlock)}
                 </AppLink>
               </article>

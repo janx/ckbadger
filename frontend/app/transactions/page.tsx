@@ -78,7 +78,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       )}
       <PoolInterpretationNotice
         interpretation={tx.interpretation}
-        className="text-warning ml-2 text-[11px]"
+        className="text-warning text-meta ml-2"
       />
     </>
   );
@@ -130,7 +130,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
                 startChars={10}
                 endChars={6}
                 copyable={false}
-                className="text-[13px]"
+                className="text-body"
               />
             </Link>
           ),
@@ -152,7 +152,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
               tone: 'body',
               left: <Dotted parts={[what, value, fee]} />,
               right: (
-                <span className="text-text-dim text-[11px]">
+                <span className="text-text-dim text-meta">
                   <Dotted parts={figures} />
                 </span>
               ),
@@ -349,7 +349,7 @@ export default function TransactionsPage() {
           }
         >
           <section className="space-y-4" aria-label="Yesterday and the pool">
-            <p className="text-text text-[15px]">
+            <p className="text-text text-body">
               {total === undefined ? (
                 <span className="text-text-dim">Yesterday’s total unavailable</span>
               ) : (
@@ -454,7 +454,7 @@ export default function TransactionsPage() {
                   ) : null}
                   {option.label}
                   {counts[option.value] !== undefined && (
-                    <span className="text-text-dim text-[11px]">
+                    <span className="text-text-dim text-meta">
                       {counts[option.value]!.toLocaleString('en-US')}
                     </span>
                   )}
@@ -462,7 +462,7 @@ export default function TransactionsPage() {
               ))}
             </div>
             {day && (
-              <p className="text-text-dim text-[11px]">
+              <p className="text-text-dim text-meta">
                 Kind occurrences may overlap; DAO counts actions. “All” counts unique transactions.
               </p>
             )}
@@ -556,7 +556,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === value}
                   onClick={() => setTab(value)}
                   className={cn(
-                    '-mb-px flex min-h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
+                    'text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium',
                     tab === value
                       ? 'border-jade text-text-bright'
                       : 'text-text-dim border-transparent'
@@ -616,26 +616,26 @@ export default function TransactionsPage() {
               <dl className="flex flex-wrap gap-x-9 gap-y-2.5 text-xs" aria-label="Pool summary">
                 <div>
                   <dt className="text-text-dim">Pending · proposed</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {pool.data.totals.pending.toLocaleString('en-US')} ·{' '}
                     {pool.data.totals.proposed.toLocaleString('en-US')}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-text-dim">Total size</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {BigInt(pool.data.summary.size).toLocaleString('en-US')} B
                   </dd>
                 </div>
                 <div>
                   <dt className="text-text-dim">Total cycles</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {BigInt(pool.data.summary.cycles).toLocaleString('en-US')}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-text-dim">Fee rate, shannon/KB</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {pool.data.summary.minFeeRate === null || pool.data.summary.maxFeeRate === null
                       ? 'No fee rates'
                       : `${BigInt(pool.data.summary.minFeeRate).toLocaleString('en-US')} – ${BigInt(pool.data.summary.maxFeeRate).toLocaleString('en-US')}`}

@@ -55,7 +55,7 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
           : 'This route does not lead to a page.'}
       </p>
       {entity && (
-        <dl className="border-base-border-subtle mt-8 min-w-0 border-t font-mono text-[12px]">
+        <dl className="border-base-border-subtle text-small mt-8 min-w-0 border-t font-mono">
           <div className="border-base-border-subtle grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
             <dt className="text-text-dim">requested</dt>
             <dd className="text-text min-w-0 break-all">{entity.identifier}</dd>
@@ -67,12 +67,12 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
         </dl>
       )}
       {lookup.status === 'loading' && (
-        <p role="status" className="text-text-dim mt-4 max-w-xl text-[12px]">
+        <p role="status" className="text-text-dim text-small mt-4 max-w-xl">
           Checking the local /search index for an exact alternative…
         </p>
       )}
       {lookup.status === 'checked' && lookup.evidence && (
-        <div className="text-text-dim mt-4 min-w-0 max-w-xl text-[13px] leading-relaxed">
+        <div className="text-text-dim text-body mt-4 min-w-0 max-w-xl leading-relaxed">
           <p className="break-all">{lookup.evidence.finding}</p>
           {lookup.evidence.alternative && (
             <Link
@@ -85,16 +85,16 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
         </div>
       )}
       {lookup.status === 'error' && lookup.error && (
-        <p role="status" className="text-text-dim mt-4 min-w-0 max-w-xl break-all text-[12px]">
+        <p role="status" className="text-text-dim text-small mt-4 min-w-0 max-w-xl break-all">
           The separate /search check could not complete: {lookup.error}
         </p>
       )}
       {errMessage && (
-        <p className="text-text-dim mt-4 max-w-xl break-all font-mono text-[12px]">{errMessage}</p>
+        <p className="text-text-dim text-small mt-4 max-w-xl break-all font-mono">{errMessage}</p>
       )}
       <nav
         aria-label="Find another route"
-        className="mt-8 flex flex-wrap gap-3 font-mono text-[12px]"
+        className="text-small mt-8 flex flex-wrap gap-3 font-mono"
       >
         <Link
           href="/"

@@ -19,24 +19,23 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
       void queryClient.invalidateQueries({ queryKey: ['network', 'summary'] });
     }
   }, [data, roundId, queryClient]);
-  if (isLoading)
-    return <p className="text-text-dim text-[12px]">Loading advertisement evidence…</p>;
+  if (isLoading) return <p className="text-text-dim text-small">Loading advertisement evidence…</p>;
   if (error)
     return (
-      <p role="alert" className="text-negative text-[12px]">
+      <p role="alert" className="text-negative text-small">
         Advertisement evidence unavailable: {String(error)}
       </p>
     );
   if (!data || data.roundId !== roundId)
     return (
-      <p role="status" className="text-text-dim text-[12px]">
+      <p role="status" className="text-text-dim text-small">
         Crawler round changed; refreshing advertisement evidence…
       </p>
     );
   const visible = showAll ? data.edges : data.edges.slice(0, 24);
   return (
     <div className="min-w-0">
-      <p className="text-text-dim mb-4 max-w-4xl text-[12px] leading-relaxed">
+      <p className="text-text-dim text-small mb-4 max-w-4xl leading-relaxed">
         {data.distinctPeerPairs.toLocaleString()} unique advertiser → target peer pairs across{' '}
         {data.edges.length.toLocaleString()} retained endpoint alias observations in completed round
         #{roundId}. Each row is one address-book report — who named whom — never a connection, so
@@ -44,7 +43,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
         is a subset of what the crawler heard in that round.
       </p>
       {visible.length === 0 ? (
-        <p className="text-text-dim text-[12px]">No retained advertisement edges for this round.</p>
+        <p className="text-text-dim text-small">No retained advertisement edges for this round.</p>
       ) : (
         <div
           role="list"
@@ -55,7 +54,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
             <div
               role="listitem"
               key={edge.advertiserPeerId + ':' + edge.targetPeerId + ':' + edge.alias}
-              className="border-base-border-subtle grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 border-t py-2 text-[11px]"
+              className="border-base-border-subtle text-meta grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 border-t py-2"
             >
               {/* Two lines (board T3): who named whom, the ids cut in the middle so both ends
                   stay; then the address it named, wrapping whole rather than losing its port. */}
@@ -83,7 +82,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
         <button
           type="button"
           onClick={() => setShowAll((value) => !value)}
-          className="text-jade mt-3 text-[11px] underline underline-offset-2"
+          className="text-jade text-meta mt-3 underline underline-offset-2"
         >
           {showAll
             ? 'Show first 24 observations'

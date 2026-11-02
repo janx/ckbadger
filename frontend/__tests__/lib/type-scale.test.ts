@@ -64,7 +64,8 @@ function arbitrarySizeClasses(code: string): Offence[] {
  * Every font size set from script on an HTML element: a `fontSize` key in an object literal (a
  * `style={{…}}` or a hoisted style object), an `el.style.fontSize =` assignment, or CSS text with
  * `font-size:`. A `style` on an SVG text element is exempt (R3); so are JSX `fontSize=` attributes
- * and canvas `ctx.font`, which are not object keys.
+ * and canvas `ctx.font`, which are not object keys, and a `font-size` key whose value is an array or
+ * object (a class-group table such as tailwind-merge's), which no CSS size can be.
  */
 function inlineFontSizes(file: string, code: string): Offence[] {
   const source = ts.createSourceFile(
@@ -92,10 +93,15 @@ function inlineFontSizes(file: string, code: string): Offence[] {
     }
     return false;
   };
+  const isTable = (node: ts.Node) =>
+    ts.isPropertyAssignment(node) &&
+    (ts.isArrayLiteralExpression(node.initializer) ||
+      ts.isObjectLiteralExpression(node.initializer));
   const visit = (node: ts.Node) => {
     if (
       (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
       ['fontSize', 'font-size'].includes(keyName(node.name)) &&
+      !isTable(node) &&
       !onSvgText(node)
     )
       out.push({ line: at(node), what: node.getText(source).replace(/\s+/g, ' ').slice(0, 60) });
@@ -177,8 +183,10 @@ describe('the scale gate finds what it must, and only that', () => {
       "  el.style.fontSize = '14px';",
       "  el.style.cssText = 'font-size: 15px';",
       '}',
+      "const merge = { classGroups: { 'font-size': [{ text: ['meta'] }] } };",
+      'const css = { fontSize };',
     ].join('\n');
-    expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 3, 9, 10]);
+    expect(inlineFontSizes('a.tsx', code).map((o) => o.line)).toEqual([2, 3, 9, 10, 13]);
   });
 });
 

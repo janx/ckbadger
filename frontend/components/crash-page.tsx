@@ -74,10 +74,10 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
       >
         We could not complete this page.
       </p>
-      <p className="text-text-dim mt-3 max-w-xl text-[13px] leading-relaxed">
+      <p className="text-text-dim text-body mt-3 max-w-xl leading-relaxed">
         This error does not establish whether the requested entity or chain data is available.
       </p>
-      <dl className="border-base-border-subtle mt-8 min-w-0 border-t font-mono text-[12px]">
+      <dl className="border-base-border-subtle text-small mt-8 min-w-0 border-t font-mono">
         <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
           <dt className="text-text-dim">error</dt>
           <dd role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">
@@ -101,7 +101,7 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
           <dd className="text-text min-w-0 break-words">Not checked in this error view</dd>
         </div>
       </dl>
-      <div className="mt-8 flex flex-wrap gap-3 font-mono text-[12px]">
+      <div className="text-small mt-8 flex flex-wrap gap-3 font-mono">
         <button
           type="button"
           className="border-jade text-jade hover:bg-jade/10 focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
@@ -124,7 +124,7 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
         </Link>
       </div>
       {copyState !== 'idle' && (
-        <p role="status" className="text-text-dim mt-3 text-[12px]">
+        <p role="status" className="text-text-dim text-small mt-3">
           {copyState === 'copied' ? 'Error details copied.' : 'Could not copy details.'}
         </p>
       )}

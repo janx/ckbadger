@@ -167,10 +167,10 @@ function StageFlowPill({
 }) {
   return (
     <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
-      <div className="text-text/70 text-[11px] uppercase tracking-widest">{title}</div>
+      <div className="text-text/70 text-meta uppercase tracking-widest">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
         <div className="text-text-bright text-lg font-semibold">{value.toLocaleString()}</div>
-        <div className="text-text/70 text-[11px]">{subtitle}</div>
+        <div className="text-text/70 text-meta">{subtitle}</div>
       </div>
     </div>
   );
@@ -184,7 +184,7 @@ function StageConnector({ label }: { label: string }) {
         <div className="bg-gold/80 h-2 w-2 rounded-full" />
         <div className="bg-gold/35 absolute inset-0 animate-ping rounded-full" />
       </div>
-      <div className="text-text-dim text-[10px] uppercase tracking-widest">{label}</div>
+      <div className="text-text-dim text-meta uppercase tracking-widest">{label}</div>
       <div className="bg-base-border h-px w-6" />
     </div>
   );
@@ -262,16 +262,16 @@ function TxMetricScatter({
 
       {!compact && (
         <>
-          <div className="text-text-dim absolute bottom-1 left-2 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute bottom-1 left-2 uppercase tracking-widest">
             Low fee rate
           </div>
-          <div className="text-text-dim absolute bottom-1 right-2 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute bottom-1 right-2 uppercase tracking-widest">
             High fee rate
           </div>
-          <div className="text-text-dim absolute left-1 top-2 -rotate-90 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute left-1 top-2 -rotate-90 uppercase tracking-widest">
             High cycles
           </div>
-          <div className="text-text-dim absolute bottom-2 left-1 -rotate-90 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute bottom-2 left-1 -rotate-90 uppercase tracking-widest">
             Low cycles
           </div>
         </>
@@ -310,7 +310,7 @@ function StageScatterCard({
         </div>
         <div className="text-right">
           <div className="text-text-bright text-lg font-bold">{totalCount.toLocaleString()}</div>
-          <div className="text-text-dim text-[11px] uppercase tracking-widest">txns</div>
+          <div className="text-text-dim text-meta uppercase tracking-widest">txns</div>
         </div>
       </div>
 
@@ -365,7 +365,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
                 {formatBlockNumber(entry.block.number)}
               </div>
               {index === 0 ? (
-                <span className="border-gold/40 bg-gold/20 text-gold rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
+                <span className="border-gold/40 bg-gold/20 text-gold text-meta rounded-md border px-1.5 py-0.5 uppercase tracking-widest">
                   New
                 </span>
               ) : (
@@ -400,7 +400,7 @@ function TriMetricLegend() {
           Y-axis = cycles (higher at top)
         </div>
       </div>
-      <div className="text-text-dim mt-2 text-[11px]">
+      <div className="text-text-dim text-meta mt-2">
         Dashed bubble means cycles data is not available yet; green ring marks cellbase.
       </div>
     </div>

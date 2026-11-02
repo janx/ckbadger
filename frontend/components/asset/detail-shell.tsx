@@ -50,10 +50,10 @@ export function AssetDetailShell({
     <>
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <ClassMark kind={kind} size={24} />
-        <h1 className="text-text-bright min-w-0 break-words text-[26px] font-medium">{title}</h1>
+        <h1 className="text-text-bright text-entity min-w-0 break-words font-medium">{title}</h1>
         {status}
       </div>
-      {identity && <div className="text-text-dim min-w-0 break-words text-[11px]">{identity}</div>}
+      {identity && <div className="text-text-dim text-meta min-w-0 break-words">{identity}</div>}
       {intro}
     </>
   );
@@ -95,7 +95,7 @@ export function AssetDetailShell({
       <dl className="space-y-5">
         {facts.map((f) => (
           <div key={f.label}>
-            <dt className="text-text-dim text-[11px]">{f.label}</dt>
+            <dt className="text-text-dim text-meta">{f.label}</dt>
             <dd className="text-text-bright mt-1 min-w-0 break-words tabular-nums">{f.value}</dd>
           </div>
         ))}
@@ -105,7 +105,7 @@ export function AssetDetailShell({
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto min-w-0 px-4 py-8 font-mono text-[13px]">
+      <main className="text-body container mx-auto min-w-0 px-4 py-8 font-mono">
         <div
           data-tier="1"
           className="grid min-w-0 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_260px]"

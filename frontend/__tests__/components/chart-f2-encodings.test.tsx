@@ -333,7 +333,7 @@ describe('shared Chart encodings for the charts boards', () => {
       expect(item.querySelector('[data-swatch]')).toHaveStyle({ backgroundColor: bands[i].color });
       expect(item).toHaveTextContent(`${names[i]}${String((i + 1) * 2)} CKB`);
     });
-    expect(legend).toHaveClass('text-[13px]');
+    expect(legend).toHaveClass('text-body');
     // The legend follows the plot, and the caption carries no headline numbers.
     const plot = container.querySelector('svg[role="img"]')!;
     expect(plot.compareDocumentPosition(legend) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
