@@ -75,6 +75,35 @@ describe('ParticipantRefView', () => {
     ).toThrow(/no address, lock hash or lock-hash prefix/);
   });
 
+  // Consistency C3: the party a page is about (the address page's own line) is text, not a link
+  // to the page it is on; the whole address or lock hash stays in its hover, the roles beside it.
+  it('writes the compact party as text with the full value in its hover when not linked', () => {
+    const { unmount } = render(
+      <ParticipantRefView
+        participant={makeRef({ address, lockHash: LOCK_HASH, roles: ['owner'] })}
+        compact
+        linked={false}
+      />
+    );
+    expect(screen.queryByRole('link')).toBeNull();
+    const text = screen.getByTitle(address);
+    expect(text).toHaveTextContent(`${address.slice(0, 8)}...${address.slice(-6)}`);
+    expect(text).toHaveClass('text-text-dim', 'font-mono');
+    expect(screen.getByText('owner')).toBeInTheDocument();
+    unmount();
+    render(
+      <ParticipantRefView participant={makeRef({ lockHash: LOCK_HASH })} compact linked={false} />
+    );
+    expect(screen.queryByRole('link')).toBeNull();
+    expect(screen.getByTitle(LOCK_HASH)).toHaveTextContent(truncateHash(LOCK_HASH, 8, 6));
+  });
+
+  it('refuses the unlinked form outside the compact activity-row line', () => {
+    expect(() =>
+      render(<ParticipantRefView participant={makeRef({ address })} linked={false} />)
+    ).toThrow(/compact/);
+  });
+
   it('shows the protocol roles it was given', () => {
     render(
       <ParticipantRefView
