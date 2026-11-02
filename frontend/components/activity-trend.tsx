@@ -76,7 +76,7 @@ export function ActivityTrend() {
   const headerActions = (
     <Link
       href="/charts"
-      className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
+      className="text-text-dim hover:text-jade text-small font-mono transition-colors"
     >
       VIEW ALL &rarr;
     </Link>
@@ -117,7 +117,7 @@ export function ActivityTrend() {
           {isLoading ? (
             <div className="bg-base-elevated h-4 w-48 animate-pulse rounded" />
           ) : (
-            <div className="text-text-dim flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[10px]">
+            <div className="text-text-dim text-meta flex flex-wrap gap-x-3 gap-y-0.5 font-mono">
               {breakdownItems.map((item) => (
                 <span key={item.label}>
                   {item.label}: <span className="text-text-bright">{item.value}</span>
@@ -130,25 +130,23 @@ export function ActivityTrend() {
         {/* 24h stats */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <div className="text-text-dim text-[10px] uppercase tracking-wider">
+            <div className="text-text-dim text-meta uppercase tracking-wider">
               Unique Addr (24h)
             </div>
             {isLoading ? (
               <div className="bg-base-elevated mt-1 inline-block h-5 w-16 animate-pulse rounded" />
             ) : (
-              <div className="text-text-bright mt-1 font-mono text-sm font-bold tabular-nums">
+              <div className="text-text-bright text-body mt-1 font-mono font-bold tabular-nums">
                 {summary ? summary.uniqueAddressCount.toLocaleString() : '\u2014'}
               </div>
             )}
           </div>
           <div>
-            <div className="text-text-dim text-[10px] uppercase tracking-wider">
-              CKB Moved (24h)
-            </div>
+            <div className="text-text-dim text-meta uppercase tracking-wider">CKB Moved (24h)</div>
             {isLoading ? (
               <div className="bg-base-elevated mt-1 inline-block h-5 w-16 animate-pulse rounded" />
             ) : (
-              <div className="text-text-bright mt-1 font-mono text-sm font-bold tabular-nums">
+              <div className="text-text-bright text-body mt-1 font-mono font-bold tabular-nums">
                 {summary ? formatCkbCompact(summary.totalCkbMoved) : '\u2014'}
               </div>
             )}

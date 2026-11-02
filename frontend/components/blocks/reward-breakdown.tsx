@@ -68,7 +68,7 @@ export function RewardBreakdown({
   const context = `Block ${block.number} reward`;
   if (!block.rewardBreakdown || block.miningReward === null) {
     return (
-      <p className="text-text-dim text-xs">
+      <p className="text-text-dim text-small">
         {block.number === 0 ? (
           'Genesis has no mining reward.'
         ) : (
@@ -123,13 +123,13 @@ export function RewardBreakdown({
   const share = (value: bigint) =>
     total === BigInt(0) ? '0.00' : formatScaledInteger(value * BigInt(100), total, 2);
   return (
-    <div className="space-y-3 text-xs">
-      <div data-testid="reward-total" className="text-text-bright text-[15px] font-medium">
+    <div className="text-small space-y-3">
+      <div data-testid="reward-total" className="text-text-bright text-body font-medium">
         <ExactCkb shannons={total} signed={false} tone="plain" />
         {block.minerAddress && (
           <>
-            <span className="text-text-dim text-xs font-normal"> to </span>
-            <Address address={block.minerAddress} className="text-[13px] font-normal" />
+            <span className="text-text-dim text-small font-normal"> to </span>
+            <Address address={block.minerAddress} className="text-body font-normal" />
           </>
         )}
       </div>
@@ -181,7 +181,7 @@ export function RewardBreakdown({
 export function RewardPaidBy({ block }: { block: RewardBlock }) {
   if (block.rewardPaidAtBlock === null) return null;
   return (
-    <span className="text-text-dim text-xs">
+    <span className="text-text-dim text-small">
       paid by the cellbase of{' '}
       <Link href={`/blocks/${block.rewardPaidAtBlock}`}>
         {formatBlockNumber(block.rewardPaidAtBlock)}
@@ -190,7 +190,7 @@ export function RewardPaidBy({ block }: { block: RewardBlock }) {
         <>
           {' · '}
           <Link href={`/tx/${block.miningRewardTxHash}`}>
-            <Hash hash={block.miningRewardTxHash} copyable={false} className="text-xs" />
+            <Hash hash={block.miningRewardTxHash} copyable={false} className="text-small" />
           </Link>
         </>
       )}

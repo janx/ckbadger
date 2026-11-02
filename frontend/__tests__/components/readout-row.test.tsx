@@ -13,8 +13,8 @@ describe('ReadoutRow (the line under a figure that a tap pins, R6)', () => {
     expect(row).toHaveTextContent(/^tapped kdeakp · 165 channels/);
     const hint = screen.getByText('tap or hover');
     expect(hint).toHaveClass('whitespace-nowrap');
-    expect(hint).toHaveClass('text-[11px]');
-    expect(row).toHaveClass('text-[12px]');
+    expect(hint).toHaveClass('text-meta');
+    expect(row).toHaveClass('text-small');
     expect(row).toHaveClass('border-t');
   });
 

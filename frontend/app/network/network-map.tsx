@@ -175,7 +175,7 @@ function Legend({
   );
   return (
     <>
-      <p className="text-text-bright text-[13.5px]">{tapOrHover('a node', { capital: true })}</p>
+      <p className="text-text-bright text-body">{tapOrHover('a node', { capital: true })}</p>
       <div className="mt-2.5 flex flex-col gap-1.5">
         {row(<circle cx="7" cy="7" r={DOT_R} fill={DATA_COLOR} />, `reachable now · ${reachable}`)}
         {row(
@@ -250,7 +250,7 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
   ];
   return (
     <>
-      <p className="text-text-bright text-[13.5px] [overflow-wrap:anywhere]">
+      <p className="text-text-bright text-body [overflow-wrap:anywhere]">
         {point.alias ? point.alias.address : `peer ${shortPeerId(point.peerId)}`}
       </p>
       <dl className="mt-2 grid grid-cols-[7rem_minmax(0,1fr)] gap-x-2 gap-y-1">
@@ -303,7 +303,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
   return (
     <figure className="m-0 min-w-0">
       {ready && (
-        <p className="text-text-dim mb-3 text-[12px]">
+        <p className="text-text-dim text-small mb-3">
           {ready.located.toLocaleString()} verified nodes in{' '}
           {countryLabels.length + listedCountries.length} countries · ringed: the {ringed} this node
           had a session with in the latest round
@@ -313,9 +313,9 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
         {/* Measured from mount, so the map is drawn 1:1 in its own column at every width. */}
         <div ref={ref} className="flex min-w-0 flex-col gap-3">
           {isLoading ? (
-            <p className="text-text-dim text-[12px]">Loading crawler locations…</p>
+            <p className="text-text-dim text-small">Loading crawler locations…</p>
           ) : !ready ? (
-            <p role="alert" className="text-negative text-[12px]">
+            <p role="alert" className="text-negative text-small">
               Crawler locations unavailable: {String(error)}
             </p>
           ) : (
@@ -421,7 +421,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
               {listedCountries.length > 0 && (
                 <p
                   aria-label="Countries with one verified node"
-                  className="text-text-dim text-[12px] leading-relaxed"
+                  className="text-text-dim text-small leading-relaxed"
                 >
                   One verified node each, not labelled on the map:{' '}
                   {listedCountries.map(({ country, count }, i) => (
@@ -436,7 +436,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
               )}
               {neverVerified > 0 && (
                 <div className="flex flex-col gap-1.5">
-                  <span className="text-text-dim text-[12px]">
+                  <span className="text-text-dim text-small">
                     {neverVerified.toLocaleString()} more peers were only heard of: never verified,
                     so their place is unknown
                   </span>
@@ -467,7 +467,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
           <aside
             aria-label="Selected peer evidence"
             aria-live="polite"
-            className="border-base-border-subtle min-w-0 self-start rounded border px-3.5 py-3 text-[12px] lg:sticky lg:top-4"
+            className="border-base-border-subtle text-small min-w-0 self-start rounded border px-3.5 py-3 lg:sticky lg:top-4"
           >
             {selected ? (
               <PeerReadout point={selected} roundId={ready.roundId} />
@@ -483,7 +483,7 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
         )}
       </div>
       {ready && (
-        <figcaption className="text-text-dim mt-3 text-[12px] leading-relaxed">
+        <figcaption className="text-text-dim text-small mt-3 leading-relaxed">
           {ready.located.toLocaleString()} of {ready.verifiedRetained.toLocaleString()} retained
           verified peers have approximate GeoIP coordinates;{' '}
           {ready.locationUnavailable.toLocaleString()} locations are unavailable. Dots with close

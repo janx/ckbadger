@@ -24,7 +24,7 @@ export function SiteFooter() {
 
   return (
     <footer className="border-base-border bg-base-void/95 border-t">
-      <div className="container mx-auto flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-[18px] font-mono text-[12px] leading-relaxed">
+      <div className="text-small container mx-auto flex flex-wrap items-center justify-between gap-x-6 gap-y-2 px-4 py-[18px] font-mono leading-relaxed">
         <span className="text-text-dim" title={`CKBadger ${buildVersion}`}>
           CKBadger {releaseOf(buildVersion)}
         </span>

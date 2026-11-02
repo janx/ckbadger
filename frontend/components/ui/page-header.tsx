@@ -56,14 +56,14 @@ export function PageHeader({
               <h1
                 className={cn(
                   'text-text-bright break-words font-mono font-medium',
-                  kind === 'index' ? 'text-[22px]' : 'text-[26px]'
+                  kind === 'entity' ? 'text-entity' : 'text-index'
                 )}
               >
                 {title}
               </h1>
               {badge}
             </div>
-            {subtitle && <div className="text-text-dim mt-1 break-words text-sm">{subtitle}</div>}
+            {subtitle && <div className="text-text-dim text-body mt-1 break-words">{subtitle}</div>}
           </div>
 
           {navigation?.next && (
@@ -88,7 +88,7 @@ export function PageHeader({
           onClick={handleCopy}
           title="Click to copy"
         >
-          <span className="text-text group-hover:text-text break-all font-mono text-sm">
+          <span className="text-text group-hover:text-text text-body break-all font-mono">
             {hash}
           </span>
           {copied ? (
@@ -122,7 +122,7 @@ export function Badge({ children, variant = 'gray', className }: BadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded border px-2 py-0.5 font-mono text-xs',
+        'text-small inline-flex items-center rounded border px-2 py-0.5 font-mono',
         variantClasses[variant],
         className
       )}

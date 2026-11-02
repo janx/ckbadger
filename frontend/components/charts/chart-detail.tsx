@@ -86,7 +86,7 @@ function RankedDetail({ model, definition }: { model: ChartModel; definition: Ch
           throw new Error(`${definition.slug}: invalid share ${row.share}`);
         return (
           <li key={`${row.label}:${index}`} className="min-w-0">
-            <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 text-xs">
+            <div className="text-small flex min-w-0 flex-wrap items-baseline justify-between gap-x-4">
               <span className="text-text-bright min-w-0 break-all">
                 {index + 1}.{' '}
                 {row.assetClass && <ClassMark kind={row.assetClass} size={12} className="mr-1" />}
@@ -136,14 +136,14 @@ function Reading({
 }) {
   return (
     <div className="flex flex-col items-end" title={`${formatChartExact(raw, unit)} ${unit}`}>
-      <span className="text-text-dim text-[11px]">{label}</span>
+      <span className="text-text-dim text-meta">{label}</span>
       <span className="flex items-baseline gap-1">
         <span
-          className={`text-[22px] font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
+          className={`text-hero font-medium tabular-nums ${quiet ? 'text-text' : 'text-text-bright'}`}
         >
           {formatChartHover(raw, unit)}
         </span>
-        <span className="text-text-dim text-[11px]">{unit}</span>
+        <span className="text-text-dim text-meta">{unit}</span>
       </span>
     </div>
   );
@@ -209,7 +209,7 @@ function DetailBody({
   // Method and evidence are the quieter developer tier, after related charts (CH-20).
   const method = (
     <DetailSection title="How it is computed / Evidence">
-      <div className="grid min-w-0 gap-4 text-xs md:grid-cols-2">
+      <div className="text-small grid min-w-0 gap-4 md:grid-cols-2">
         <div className="border-base-border min-w-0 border-t pt-3">
           <div className="text-text-dim mb-2">Calculation scope</div>
           <p className="text-text-bright max-w-[62ch] leading-6">{description.overview}</p>
@@ -311,7 +311,7 @@ function DetailBody({
   ];
   return (
     <>
-      <nav aria-label="Breadcrumb" className="mb-3 text-[12px]">
+      <nav aria-label="Breadcrumb" className="text-small mb-3">
         <Link
           href={`/charts#${chartSectionId(definition.section)}`}
           className="text-text-dim hover:text-jade"
@@ -330,7 +330,7 @@ function DetailBody({
           title={distribution ? 'Distribution' : 'Full history'}
           actions={
             model.kind !== 'ranked' && (
-              <span className="text-text-dim text-[12px]">
+              <span className="text-text-dim text-small">
                 {points.length.toLocaleString()} {POINT_NOUN[style]}
               </span>
             )
@@ -352,7 +352,7 @@ function DetailBody({
                     type="button"
                     aria-pressed={range === option}
                     onClick={() => setRange(option)}
-                    className={`rounded border px-3 py-1 text-xs ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
+                    className={`text-small rounded border px-3 py-1 ${range === option ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
                   >
                     {label}
                   </button>
@@ -364,7 +364,7 @@ function DetailBody({
                   type="button"
                   aria-pressed={logScale}
                   onClick={() => setLogScale((current) => !current)}
-                  className={`rounded border px-3 py-1 text-xs ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
+                  className={`text-small rounded border px-3 py-1 ${logScale ? 'border-jade text-text-bright bg-jade/10' : 'border-base-border text-text-dim hover:text-text-bright'}`}
                 >
                   Log scale
                 </button>
@@ -375,7 +375,7 @@ function DetailBody({
                   aria-label="How to read and zoom this chart"
                   aria-expanded={helpOpen}
                   onClick={() => setHelpOpen((open) => !open)}
-                  className="border-base-border text-text-dim hover:text-text-bright rounded border px-2 py-1 text-xs"
+                  className="border-base-border text-text-dim hover:text-text-bright text-small rounded border px-2 py-1"
                 >
                   ?
                 </button>
@@ -383,7 +383,7 @@ function DetailBody({
             </div>
           </div>
           {helpOpen && (
-            <p className="text-text-dim mb-4 max-w-[62ch] text-xs leading-5">
+            <p className="text-text-dim text-small mb-4 max-w-[62ch] leading-5">
               <TapOrHoverHint capital what="the chart" /> for the value of one{' '}
               {style === 'date' ? 'day' : 'point'}: a tap pins it under the chart and a second tap
               lets it go. Or focus the chart and use ← and → to step through; Esc returns to the
@@ -393,7 +393,7 @@ function DetailBody({
             </p>
           )}
           {model.latest === null ? (
-            <p className="text-text-dim py-8 text-xs">No indexed observations for this chart.</p>
+            <p className="text-text-dim text-small py-8">No indexed observations for this chart.</p>
           ) : model.kind === 'ranked' ? (
             <RankedDetail model={model} definition={definition} />
           ) : (
@@ -435,7 +435,7 @@ function DetailBody({
         </DetailSection>
         {model.historicalShares?.map((history) => (
           <DetailSection key={history.title} title={history.title}>
-            <p className="text-text-dim mb-3 text-xs">
+            <p className="text-text-dim text-small mb-3">
               {history.title === 'Occupied common knowledge'
                 ? 'Exact occupied CKB in live cells attributed to each script or asset.'
                 : 'Full live cell capacity attributed to each script or asset. This is a different scope from occupied common knowledge.'}
@@ -457,13 +457,15 @@ function DetailBody({
                 pinnedReadout={readout(history.title)}
               />
             ) : (
-              <p className="text-text-dim py-8 text-xs">No indexed observations for this scope.</p>
+              <p className="text-text-dim text-small py-8">
+                No indexed observations for this scope.
+              </p>
             )}
           </DetailSection>
         ))}
         {model.secondary && model.secondary.points.length > 0 && (
           <DetailSection title={model.secondary.title}>
-            <p className="text-text-dim mb-3 text-xs">
+            <p className="text-text-dim text-small mb-3">
               Separate scale: {model.secondary.unit}. These values are never combined with{' '}
               {model.unit}.
             </p>
@@ -486,7 +488,7 @@ function DetailBody({
         )}
         {model.dailyFlow && model.dailyFlow.points.length > 0 && (
           <DetailSection title={model.dailyFlow.title}>
-            <p className="text-text-dim mb-3 text-xs">
+            <p className="text-text-dim text-small mb-3">
               Exact signed change in occupied CKB from the preceding returned day.
             </p>
             <Chart
@@ -545,7 +547,7 @@ export function ChartDetail({ slug }: { slug: string }) {
         {sync.data?.syncStatus?.chartDataMayBeIncomplete && (
           <p
             role="status"
-            className="text-warning border-warning/30 bg-warning/10 mb-5 rounded border px-3 py-2 text-xs"
+            className="text-warning border-warning/30 bg-warning/10 text-small mb-5 rounded border px-3 py-2"
           >
             Chart data may be incomplete while the indexer synchronizes history.
           </p>
@@ -578,7 +580,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           </DetailLayout>
         )}
         {data.error && model && (
-          <p role="alert" className="text-negative mb-5 break-words text-xs">
+          <p role="alert" className="text-negative text-small mb-5 break-words">
             Could not refresh {definition.title}: {data.error.message}. Showing previously loaded
             data.
             <button
@@ -594,7 +596,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           <DetailBody definition={definition} model={model} events={hardforks.data?.events ?? []} />
         )}
         {hardforks.error && (
-          <p role="alert" className="text-negative mt-4 text-xs">
+          <p role="alert" className="text-negative text-small mt-4">
             Hardfork markers unavailable: {hardforks.error.message}
           </p>
         )}

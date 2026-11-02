@@ -167,11 +167,11 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             className={cn(
               'text-text-bright w-full font-mono transition-colors focus:outline-none',
               isHome
-                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade h-10 rounded-xl border pl-4 pr-20 text-sm shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-xl border pl-4 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
-                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/60 h-9 rounded-md border pl-3 pr-9 text-[13px]'
-                  : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade focus:ring-jade rounded-lg border px-3 py-2.5 pr-3 text-sm focus:ring-1 sm:px-4 sm:py-3 sm:text-base'
+                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/60 text-body h-9 rounded-md border pl-3 pr-9'
+                  : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade focus:ring-jade text-body rounded-lg border px-3 py-2.5 pr-3 focus:ring-1 sm:px-4 sm:py-3'
             )}
           />
           {showShortcutHints && <SearchShortcutHints variant={isCompact ? 'compact' : 'home'} />}
@@ -193,7 +193,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
       </form>
 
       {submitFeedback && (
-        <div className="text-text-dim mt-1 px-1 text-xs" role="status" aria-live="polite">
+        <div className="text-text-dim text-small mt-1 px-1" role="status" aria-live="polite">
           {submitFeedback}
         </div>
       )}
@@ -232,9 +232,9 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                     <SearchResultIcon type={result.resultType} />
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">{result.label}</div>
-                      <div className="text-text-dim truncate font-mono text-xs">{result.id}</div>
+                      <div className="text-text-dim text-small truncate font-mono">{result.id}</div>
                     </div>
-                    <span className="bg-base-elevated text-text-dim shrink-0 rounded px-2 py-0.5 font-mono text-xs">
+                    <span className="bg-base-elevated text-text-dim text-small shrink-0 rounded px-2 py-0.5 font-mono">
                       {result.resultType}
                     </span>
                   </button>
@@ -264,9 +264,9 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       <span
         data-testid="search-shortcut-key-slash"
         className={cn(
-          'rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none',
+          'text-meta rounded border px-1.5 py-0.5 font-mono leading-none',
           isCompact
-            ? 'border-base-border text-text-dim rounded px-1.5 text-[11px]'
+            ? 'border-base-border text-text-dim text-meta rounded px-1.5'
             : 'border-base-border/80 bg-base-surface/80 text-text-dim'
         )}
       >
@@ -275,7 +275,7 @@ function SearchShortcutHints({ variant }: { variant: 'compact' | 'home' }) {
       {!isCompact && (
         <span
           data-testid="search-shortcut-key-question"
-          className="border-base-border/80 bg-base-surface/80 text-text-dim rounded border px-1.5 py-0.5 font-mono text-[10px] leading-none"
+          className="border-base-border/80 bg-base-surface/80 text-text-dim text-meta rounded border px-1.5 py-0.5 font-mono leading-none"
         >
           ?
         </span>

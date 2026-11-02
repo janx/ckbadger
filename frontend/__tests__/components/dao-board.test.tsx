@@ -265,7 +265,7 @@ describe('DaoBoard', () => {
     ).toThrow('2024-01-15 has no current depositor count');
   });
 
-  it('keeps the 72 px tier-2 boundary and quiet 13 px tier-2 headings (DAO-20)', () => {
+  it('keeps the 96 px tier-2 boundary and quiet 13 px tier-2 headings (DAO-20, R6)', () => {
     const { container } = render(
       <DaoBoard
         statistics={stats}
@@ -276,15 +276,15 @@ describe('DaoBoard', () => {
     );
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2).not.toBeNull();
-    expect(tier2).toHaveClass('mt-[72px]');
-    // A space-y-* parent's sibling selector overrides the 72 px margin (measured 32 px).
+    expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border');
+    // A space-y-* parent's sibling selector overrides the 96 px margin (measured 32 px).
     expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
     const headings = Array.from(tier2.querySelectorAll('h2'));
     expect(headings.map((h) => h.textContent)).toEqual([
       'The DAO field in every block header · #5',
       'The DAO script',
     ]);
-    for (const h of headings) expect(h).toHaveClass('text-[13px]', 'text-[#a0a8be]');
+    for (const h of headings) expect(h).toHaveClass('text-body', 'text-[#a0a8be]');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {
@@ -705,7 +705,8 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const amount = screen.getByText((_, el) => el?.getAttribute('data-role') === 'deposited');
-    expect(amount).toHaveClass('text-[24px]', 'sm:text-[30px]');
+    // R4: the display step from 640 up, index (26 px) below it: 22 digits at 26 px are 343 px.
+    expect(amount).toHaveClass('text-index', 'sm:text-display');
   });
 
   it('draws AR around its own range, not from zero', async () => {
@@ -732,7 +733,7 @@ describe('DaoBoard tier-1 rhythm (board V63)', () => {
     expect(issuance).not.toHaveClass('border-t');
     expect(issuance.parentElement).toHaveClass('space-y-12');
     expect(within(issuance).getByRole('heading', { level: 2 })).toHaveClass(
-      'text-[15px]',
+      'text-section',
       'font-medium'
     );
   });

@@ -86,10 +86,10 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
   return (
     <section className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-[15px] font-medium">
+        <h2 className="text-text-bright text-section font-medium">
           {expired ? `Expired on ${endDate}` : `Held until ${endDate}`}
         </h2>
-        {note && <span className="text-text-dim text-[12px]">{note}</span>}
+        {note && <span className="text-text-dim text-small">{note}</span>}
       </div>
       <svg
         role="img"

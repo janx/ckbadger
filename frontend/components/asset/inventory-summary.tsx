@@ -17,7 +17,7 @@ export interface InventorySummaryNoticeProps {
 /** The quiet line under each view: what it lists and the canonical anchor of its totals. */
 export function InventorySummaryNotice({ summary, assetType }: InventorySummaryNoticeProps) {
   return (
-    <section aria-label="Inventory totals" className="text-text-dim space-y-2 text-xs">
+    <section aria-label="Inventory totals" className="text-text-dim text-small space-y-2">
       {assetType === 'identity' && (
         // F2 objects (IV-12): the Identities board's one line.
         <p>
@@ -25,7 +25,7 @@ export function InventorySummaryNotice({ summary, assetType }: InventorySummaryN
           lives in its cell on CKB
         </p>
       )}
-      <p className="text-[11px]">
+      <p className="text-meta">
         Canonical asset totals
         {summary.anchor
           ? ` at block ${formatBlockNumber(summary.anchor.blockNumber)}`
@@ -86,8 +86,8 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
   return (
     <section aria-label="Object composition" className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1">
-        <span className="text-text text-[13px]">
-          <span className="text-text-bright text-[15px]">
+        <span className="text-text text-body">
+          <span className="text-text-bright text-body">
             <AssetCount value={onchain} />
           </span>{' '}
           of <AssetCount value={total} /> collections are fully on-chain · so are{' '}
@@ -103,7 +103,7 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
           )}
         </span>
         {spore && mnft && (
-          <span className="text-text-dim text-[12px]">
+          <span className="text-text-dim text-small">
             <AssetCount value={spore.collectionsCount} /> Spore clusters ·{' '}
             <AssetCount value={mnft.collectionsCount} /> m-NFT classes
           </span>
@@ -145,7 +145,7 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
           aria-pressed={!selected}
           onClick={() => onSelect('')}
           className={cn(
-            'rounded border px-3 py-1 text-xs',
+            'text-small rounded border px-3 py-1',
             !selected ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'
           )}
         >
@@ -160,7 +160,7 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
               aria-pressed={selected === c.tier}
               onClick={() => onSelect(c.tier)}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs',
+                'text-small inline-flex items-center gap-1.5 rounded border px-2 py-1',
                 selected === c.tier
                   ? 'border-jade text-text-bright'
                   : 'border-base-border text-text-dim'

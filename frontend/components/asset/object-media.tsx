@@ -25,7 +25,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
       {/* F2 objects (OB-6): the composition badge and its sentence now open the page hero. */}
       {bitcoin.length ? (
         <figure className="border-copper/40 space-y-3 border p-6 text-center">
-          <div className="text-copper text-[18px]">Its image lives on Bitcoin</div>
+          <div className="text-copper text-hero">Its image lives on Bitcoin</div>
           {bitcoin.map((s) => {
             const inscription = parseBtcfsUri(s.uri);
             const href = inscription && bitcoinTxHref(inscription.txid, network);
@@ -34,9 +34,9 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
               `Bitcoin tx ${inscription.txid.slice(0, 4)}…${inscription.txid.slice(-4)} · inscription i${inscription.index}`;
             return (
               <div key={s.uri} className="min-w-0 space-y-2">
-                <div className="text-text-dim break-all text-[11px]">{s.uri}</div>
+                <div className="text-text-dim text-meta break-all">{s.uri}</div>
                 {inscription === null ? (
-                  <p className="text-text-dim text-[11px]">
+                  <p className="text-text-dim text-meta">
                     Not a recognisable btcfs inscription reference.
                   </p>
                 ) : href ? (
@@ -51,7 +51,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
                 ) : (
                   <p className="space-y-1">
                     <span className="text-copper block break-all">{label}</span>
-                    <span className="text-text-dim block text-[11px]">
+                    <span className="text-text-dim text-meta block">
                       The Bitcoin network of testnet inscriptions is not established, so no explorer
                       link is given.
                     </span>
@@ -60,7 +60,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
               </div>
             );
           })}
-          <figcaption className="text-text-dim text-[11px]">
+          <figcaption className="text-text-dim text-meta">
             CKBadger reads CKB only. This object points to Bitcoin; its inscription is not fetched
             here.
           </figcaption>
@@ -73,7 +73,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
           />
         </div>
       ) : (
-        <p className="text-text-dim text-[11px]">
+        <p className="text-text-dim text-meta">
           {profile?.tier === 'decode_pending'
             ? 'Decode pending · awaiting DOB execution.'
             : 'No renderable media available.'}
@@ -82,7 +82,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
       {omiga && (
         <a
           href={omiga}
-          className="text-text-dim hover:text-jade inline-block text-[11px]"
+          className="text-text-dim hover:text-jade text-meta inline-block"
           target="_blank"
           rel="noopener noreferrer"
         >
@@ -90,7 +90,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
         </a>
       )}
       {profile && (
-        <details className="min-w-0 text-[11px]">
+        <details className="text-meta min-w-0">
           <summary className="cursor-pointer">
             Media dependencies · {profile.sources.length} sources
           </summary>

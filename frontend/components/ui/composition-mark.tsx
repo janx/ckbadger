@@ -189,9 +189,7 @@ export function CompositionBadge({
         data-composition={tier}
         className={cn(
           'inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-full border border-transparent font-medium',
-          size === 'sm'
-            ? 'h-[18px] pl-1 pr-1.5 text-[10px]'
-            : 'h-[22px] pl-[5px] pr-[9px] text-[11px]',
+          size === 'sm' ? 'text-meta h-[18px] pl-1 pr-1.5' : 'text-meta h-[22px] pl-[5px] pr-[9px]',
           className
         )}
         style={{
@@ -215,7 +213,7 @@ export function CompositionBadge({
       data-composition={tier}
       className={cn(
         'text-text-dim inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap',
-        size === 'sm' ? 'text-[10px]' : 'text-[12px]',
+        size === 'sm' ? 'text-meta' : 'text-small',
         className
       )}
       title={

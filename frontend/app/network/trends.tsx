@@ -132,7 +132,7 @@ function coverageLine(from: number, to: number): string {
 function TrendPanel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="border-base-border-subtle min-w-0 border-t pt-4">
-      <h3 className="text-text-bright mb-3 font-mono text-[13px] font-medium">{title}</h3>
+      <h3 className="text-text-bright text-body mb-3 font-mono font-medium">{title}</h3>
       {children}
     </div>
   );
@@ -151,16 +151,16 @@ function ShareTrend({
   return (
     <TrendPanel title={title}>
       {error ? (
-        <p role="alert" className="text-negative text-[12px]">
+        <p role="alert" className="text-negative text-small">
           Failed to load {title.toLowerCase()}.
         </p>
       ) : !history ? (
-        <p className="text-text-dim text-[12px]">Loading observations…</p>
+        <p className="text-text-dim text-small">Loading observations…</p>
       ) : history.points.length === 0 ? (
-        <p className="text-text-dim text-[12px]">No completed daily crawler observations yet.</p>
+        <p className="text-text-dim text-small">No completed daily crawler observations yet.</p>
       ) : (
         <>
-          <p className="text-text-dim mb-3 text-[11px]">
+          <p className="text-text-dim text-meta mb-3">
             Retained top-label counts per observed day. The historical total and omitted labels were
             not recorded, so percentages are unavailable.
           </p>
@@ -177,7 +177,7 @@ function ShareTrend({
                 <div
                   role="listitem"
                   key={day.ts}
-                  className="border-base-border-subtle grid grid-cols-[6rem_minmax(0,1fr)] gap-3 border-t py-2 text-[11px]"
+                  className="border-base-border-subtle text-meta grid grid-cols-[6rem_minmax(0,1fr)] gap-3 border-t py-2"
                 >
                   <span className="text-text-dim">{formatDay(day.ts)}</span>
                   <span className="text-text min-w-0 break-words">
@@ -226,8 +226,8 @@ export function NetworkTrends() {
 
   return (
     <section className="space-y-4">
-      <h2 className="text-text-bright font-mono text-[15px] font-medium">Over time</h2>
-      <p className="text-text-dim font-mono text-xs">
+      <h2 className="text-text-bright text-section font-mono font-medium">Over time</h2>
+      <p className="text-text-dim text-small font-mono">
         Daily history of retained verified peers, by UTC+8 day. The current (incomplete) day is
         excluded. Round counts were not recorded. Days older than the crawler&apos;s hourly
         retention show as gaps, never zero.
@@ -238,15 +238,15 @@ export function NetworkTrends() {
 
       <TrendPanel title="Retained verification state (daily)">
         {peerHistoryError ? (
-          <p role="alert" className="text-negative font-mono text-xs">
+          <p role="alert" className="text-negative text-small font-mono">
             {peerHistoryError}
           </p>
         ) : peerHistoryLoading ? (
-          <p role="status" className="text-text-dim font-mono text-xs">
+          <p role="status" className="text-text-dim text-small font-mono">
             Loading verified peer history…
           </p>
         ) : peerCounts.data.length === 0 ? (
-          <p className="text-text-dim font-mono text-xs">
+          <p className="text-text-dim text-small font-mono">
             No completed daily crawler observations yet.
           </p>
         ) : (
@@ -267,7 +267,7 @@ export function NetworkTrends() {
               xTicks={axisTicks(peerCounts.data, 'date', 6)}
               pointDots
             />
-            <p className="text-text-dim mt-2 text-[11px]">
+            <p className="text-text-dim text-meta mt-2">
               {gaps.length > 0 && 'Shaded days have no retained round observation. '}
               Rounds per day are unavailable because the crawler did not record counts.
             </p>

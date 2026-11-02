@@ -117,14 +117,14 @@ export function ChartFigure({
           {href ? (
             <Link
               href={href}
-              className="text-text-bright hover:text-jade block w-fit max-w-full truncate text-[13px] transition-colors"
+              className="text-text-bright hover:text-jade text-body block w-fit max-w-full truncate transition-colors"
             >
               {title}
             </Link>
           ) : (
-            <span className="text-text-bright block max-w-full truncate text-[13px]">{title}</span>
+            <span className="text-text-bright text-body block max-w-full truncate">{title}</span>
           )}
-          <span data-testid={tid('subtitle')} className="text-text-dim text-xs">
+          <span data-testid={tid('subtitle')} className="text-text-dim text-small">
             {readout ? readout.label : subtitle}
           </span>
         </span>
@@ -132,7 +132,7 @@ export function ChartFigure({
           {(readout || headline !== undefined) && (
             <span
               data-testid={tid('headline')}
-              className="text-text-bright text-lg font-medium tabular-nums leading-tight"
+              className="text-text-bright text-hero font-medium tabular-nums leading-tight"
             >
               {readout ? readout.value : headline}
             </span>
@@ -169,7 +169,7 @@ function FigureBody({ body }: { body: ChartBody }) {
       return (
         <div
           role="alert"
-          className="text-rouge flex items-center text-xs"
+          className="text-rouge text-small flex items-center"
           style={{ minHeight: CHART_H }}
         >
           {body.message}
@@ -177,7 +177,7 @@ function FigureBody({ body }: { body: ChartBody }) {
       );
     case 'empty':
       return (
-        <div className="text-text-dim flex items-center text-xs" style={{ height: CHART_H }}>
+        <div className="text-text-dim text-small flex items-center" style={{ height: CHART_H }}>
           {body.message}
         </div>
       );

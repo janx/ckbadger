@@ -125,14 +125,14 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         { label: 'Tokens', href: '/inventory/tokens' },
       ]}
       identity={
-        <span className="text-[13px]">
+        <span className="text-body">
           {formatStandard(t.standard)} ·{' '}
           {t.decimals === null ? 'Decimals unknown' : `${t.decimals} decimals`}
           {t.name && t.name !== t.symbol && <> · {t.name}</>}
         </span>
       }
       intro={
-        <div className="space-y-3 text-xs">
+        <div className="text-small space-y-3">
           <AssetReadState error={token.error} label="token" retained />
           {t.description && (
             <p className="text-text-dim">
@@ -221,7 +221,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
-                      <Hash hash={other.typeScriptHash} copyable={false} className="text-xs" />
+                      <Hash hash={other.typeScriptHash} copyable={false} className="text-small" />
                     </AppLink>
                     , <AssetCount value={other.holdersCount} /> holders
                   </span>
@@ -237,11 +237,11 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           label: 'Supply',
           value: (
             <>
-              <span className="text-[15px]">
+              <span className="text-body">
                 <AssetAmount amount={t.totalSupply} decimals={t.decimals} />
               </span>{' '}
-              <span className="text-text-dim text-[12px]">{t.symbol}</span>
-              <div className="text-text-dim mt-1 text-[12px]">Maximum supply: {maximum}</div>
+              <span className="text-text-dim text-small">{t.symbol}</span>
+              <div className="text-text-dim text-small mt-1">Maximum supply: {maximum}</div>
             </>
           ),
         },
@@ -251,7 +251,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           value: (
             <>
               <AssetCount value={t.transfersCount} />
-              <span className="text-text-dim text-[11px]">
+              <span className="text-text-dim text-meta">
                 {' '}
                 ·{' '}
                 {t.transfers24h === 0 ? (
@@ -275,15 +275,15 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   startChars={12}
                   endChars={6}
                   copyable={false}
-                  className="text-xs"
+                  className="text-small"
                 />
               </AppLink>
-              <p className="text-text-dim mt-1 text-[11px]">
+              <p className="text-text-dim text-meta mt-1">
                 {t.issuer.lockKind ?? 'Lock kind unavailable'} · owner lock proven by token script
               </p>
             </>
           ) : (
-            <span className="text-text-dim text-[12px]">{NOT_ESTABLISHED_ISSUER}</span>
+            <span className="text-text-dim text-small">{NOT_ESTABLISHED_ISSUER}</span>
           ),
         },
         {
@@ -302,7 +302,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         },
         {
           label: 'Type hash',
-          value: <Hash hash={t.typeScriptHash} truncate={false} className="break-all text-xs" />,
+          value: <Hash hash={t.typeScriptHash} truncate={false} className="text-small break-all" />,
         },
       ]}
       feed={
@@ -318,7 +318,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       }
       tier2={
         <DetailSection title="Type script">
-          <dl className="space-y-4 text-xs">
+          <dl className="text-small space-y-4">
             <div>
               <dt className="text-text-dim">Code hash · {t.typeHashType}</dt>
               <dd className="mt-1">
@@ -329,19 +329,19 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                     scriptKind: 'type',
                   })}
                 >
-                  <Hash hash={t.typeCodeHash} truncate={false} className="break-all text-xs" />
+                  <Hash hash={t.typeCodeHash} truncate={false} className="text-small break-all" />
                 </AppLink>
               </dd>
-              <dd className="text-text-dim mt-1 text-[11px]">
+              <dd className="text-text-dim text-meta mt-1">
                 the token’s type script; its code decides what a valid transfer is
               </dd>
             </div>
             <div>
               <dt className="text-text-dim">Args</dt>
               <dd className="mt-1">
-                <Hash hash={t.typeArgs} truncate={false} className="break-all text-xs" />
+                <Hash hash={t.typeArgs} truncate={false} className="text-small break-all" />
               </dd>
-              <dd className="text-text-dim mt-1 text-[11px] [overflow-wrap:anywhere]">
+              <dd className="text-text-dim text-meta mt-1 [overflow-wrap:anywhere]">
                 {t.issuer
                   ? `the lock hash of the owner that can mint (${t.issuer.address ?? t.issuer.lockHash}), proven by the token script`
                   : NOT_ESTABLISHED_ISSUER}
@@ -353,7 +353,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                 {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
                 {t.decimals ?? 'Decimals unknown'}
               </dd>
-              <dd className="text-text-dim mt-1 text-[11px]">{provenanceText(t.metadata)}</dd>
+              <dd className="text-text-dim text-meta mt-1">{provenanceText(t.metadata)}</dd>
             </div>
             <div>
               <dt className="text-text-dim">Live cells</dt>

@@ -235,13 +235,13 @@ export function CanonicalIdentityDetail({
       ]}
       status={
         <>
-          {kind === 'bit-cell' && <span className="text-text-dim text-[12px]">.bit Cell</span>}
+          {kind === 'bit-cell' && <span className="text-text-dim text-small">.bit Cell</span>}
           {state && <IdentityStatusBadge state={state} />}
         </>
       }
       identity={
         kind === 'did' && didDecoded ? (
-          <Hash hash={didDecoded.did} truncate={false} className="text-text text-[13px]" />
+          <Hash hash={didDecoded.did} truncate={false} className="text-text text-body" />
         ) : undefined
       }
       intro={
@@ -356,8 +356,8 @@ export function CanonicalIdentityDetail({
       {children}
       <section aria-label="CKB held in its cell" className="space-y-4">
         <div className="flex flex-wrap items-baseline justify-between gap-4">
-          <h2 className="text-text-bright text-[15px] font-medium">CKB held in its cell</h2>
-          <span className="text-text-dim text-[12px]">1 CKB per byte</span>
+          <h2 className="text-text-bright text-section font-medium">CKB held in its cell</h2>
+          <span className="text-text-dim text-small">1 CKB per byte</span>
         </div>
         {held !== null && occupied !== null && current?.isLive && (
           <p>

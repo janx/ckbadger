@@ -145,9 +145,9 @@ export function HexDisplay({
   };
 
   const sizeClasses = {
-    sm: 'text-xs',
-    md: 'text-sm',
-    lg: 'text-base',
+    sm: 'text-small',
+    md: 'text-body',
+    lg: 'text-body',
   };
 
   const prefixColorClasses = {

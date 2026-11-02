@@ -19,7 +19,7 @@ function Row({
     <div className="border-base-border-subtle grid min-w-0 gap-1 border-t py-3 sm:grid-cols-[210px_minmax(0,1fr)] sm:gap-4">
       <dt className="text-text-dim">
         {term}
-        <span className="text-text-ghost block text-[11px]">{field}</span>
+        <span className="text-text-ghost text-meta block">{field}</span>
       </dt>
       <dd className="flex min-w-0 flex-col gap-1">{children}</dd>
     </div>
@@ -50,8 +50,8 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
   return (
     <section aria-label="DID document" className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-[15px] font-medium">DID document</h2>
-        <span className="text-text-dim text-[12px]">
+        <h2 className="text-text-bright text-section font-medium">DID document</h2>
+        <span className="text-text-dim text-small">
           read from the cell · version {n} of {n}
         </span>
       </div>
@@ -59,7 +59,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
         <Row term="Handle" field="alsoKnownAs">
           {current.handles.length ? (
             current.handles.map((h) => (
-              <span key={h} className="text-text-bright text-[15px] [overflow-wrap:anywhere]">
+              <span key={h} className="text-text-bright text-body [overflow-wrap:anywhere]">
                 at://{h}
               </span>
             ))
@@ -67,7 +67,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             <span className="text-text">none</span>
           )}
           {handleFrom > 0 && (
-            <span className="text-text-dim text-[12px]">
+            <span className="text-text-dim text-small">
               was{' '}
               <span className="text-text">
                 {docs[handleFrom - 1].handles.length
@@ -87,11 +87,11 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
             <a
               href={s.endpoint}
               rel="noreferrer"
-              className="text-text-bright text-[15px] [overflow-wrap:anywhere] hover:underline"
+              className="text-text-bright text-body [overflow-wrap:anywhere] hover:underline"
             >
               {s.endpoint} ↗
             </a>
-            <span className="text-text-dim text-[12px]">
+            <span className="text-text-dim text-small">
               {s.type}
               {s.type === 'AtprotoPersonalDataServer'
                 ? ' · where its posts and data are kept, off chain'
@@ -108,7 +108,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
               field={`verificationMethods.${k.name}`}
             >
               <span className="text-text-bright [overflow-wrap:anywhere]">{k.key}</span>
-              <span className="text-text-dim text-[12px]">
+              <span className="text-text-dim text-small">
                 {from === 0
                   ? 'unchanged since creation'
                   : `set ${formatUtc8Date(versions[from].cell.timestamp)}`}
@@ -118,7 +118,7 @@ export function DidDocumentReadout({ protocol }: { protocol: DidProtocol }) {
         })}
       </dl>
       {current.unreadable.length > 0 && (
-        <p className="text-text-dim text-[12px]">
+        <p className="text-text-dim text-small">
           Not read here: {current.unreadable.join(', ')} — the document as stored is in the raw
           evidence below.
         </p>
@@ -171,8 +171,8 @@ export function AmongDidCkb({
   return (
     <section aria-label="Among did:ckb" className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-[15px] font-medium">Among did:ckb</h2>
-        <AppLink href={collectionHref} className="text-[12px]">
+        <h2 className="text-text-bright text-section font-medium">Among did:ckb</h2>
+        <AppLink href={collectionHref} className="text-small">
           All {total.toLocaleString('en-US')} →
         </AppLink>
       </div>
@@ -193,7 +193,7 @@ export function AmongDidCkb({
           />
         ))}
       </div>
-      <ul className="flex flex-wrap gap-x-6 gap-y-1 text-[12px]">
+      <ul className="text-small flex flex-wrap gap-x-6 gap-y-1">
         {segments.map((s) => (
           <li key={s.key} className="flex items-center gap-1.5">
             <span
@@ -208,7 +208,7 @@ export function AmongDidCkb({
         ))}
       </ul>
       {named !== total && (
-        <p className="text-text-dim text-[12px]">
+        <p className="text-text-dim text-small">
           An identity can name more than one server, so the servers add up to{' '}
           {named.toLocaleString('en-US')}.
         </p>

@@ -9,12 +9,19 @@ export function useDetailTier(): 1 | 2 {
   return useContext(DetailTierContext);
 }
 
-/** The developer-evidence tier: one 72 px boundary, and every section heading inside is quiet. */
+/**
+ * The developer-evidence tier (hierarchy plan R6): one visible boundary — 96 px, a hairline and the
+ * "Evidence · for developers" eyebrow — and every section heading inside is quiet. `className`
+ * lays out the tier's content (its sections), under the eyebrow.
+ */
 export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <DetailTierContext.Provider value={2}>
-      <div data-tier="2" className={cn('mt-[72px] min-w-0 space-y-8', className)}>
-        {children}
+      <div data-tier="2" className="border-base-border mt-24 min-w-0 border-t pt-7">
+        <p className="text-meta text-text-dim uppercase tracking-[0.12em]">
+          Evidence · for developers
+        </p>
+        <div className={cn('mt-7 min-w-0 space-y-8', className)}>{children}</div>
       </div>
     </DetailTierContext.Provider>
   );
@@ -39,7 +46,7 @@ export interface DetailLayoutProps {
   className?: string;
 }
 
-/** Domain first, with one enforced 72 px boundary before developer evidence. */
+/** Domain first, with one enforced boundary (DetailTier2) before developer evidence. */
 export function DetailLayout({
   title,
   kind = 'entity',
@@ -54,14 +61,14 @@ export function DetailLayout({
   className,
 }: DetailLayoutProps) {
   return (
-    <div className={cn('min-w-0 font-mono text-[13px]', className)}>
+    <div className={cn('text-body min-w-0 font-mono', className)}>
       <header className="mb-8">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <h1
               className={cn(
                 'text-text-bright break-words font-medium',
-                kind === 'index' ? 'text-[22px]' : 'text-[26px]'
+                kind === 'entity' ? 'text-entity' : 'text-index'
               )}
             >
               {title}
@@ -71,7 +78,7 @@ export function DetailLayout({
           {actions}
         </div>
         {identity && (
-          <div className="text-text-dim mt-2 min-w-0 text-xs [overflow-wrap:anywhere]">
+          <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
             {identity}
           </div>
         )}
@@ -83,7 +90,7 @@ export function DetailLayout({
                 key={label}
                 className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
               >
-                <dt className="text-text-dim min-w-0 break-words text-xs">{label}</dt>
+                <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
                 <dd className="text-text-bright min-w-0 break-words tabular-nums">{value}</dd>
               </div>
             ))}
@@ -98,10 +105,10 @@ export function DetailLayout({
           {tier2}
           {rawData && (
             <details open={rawOpen} className="border-base-border-subtle border-t pt-4">
-              <summary className="text-text-dim hover:text-text cursor-pointer text-xs">
+              <summary className="text-text-dim hover:text-text text-small cursor-pointer">
                 Raw data
               </summary>
-              <div className="mt-4 min-w-0 overflow-x-auto text-xs">{rawData}</div>
+              <div className="text-small mt-4 min-w-0 overflow-x-auto">{rawData}</div>
             </details>
           )}
         </DetailTier2>
@@ -128,7 +135,7 @@ export function DetailSection({
         <h2
           className={cn(
             'font-medium',
-            tier === 2 ? 'text-[13px] text-[#a0a8be]' : 'text-text-bright text-[15px]'
+            tier === 2 ? 'text-body text-[#a0a8be]' : 'text-text-bright text-section'
           )}
         >
           {title}

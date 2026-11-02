@@ -41,14 +41,14 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
   const stripped = !elf.sections.some((section) => section.name === '.symtab');
   return (
     <section aria-labelledby="code-cell-heading" className="min-w-0 space-y-3">
-      <h2 id="code-cell-heading" className="text-text-bright text-[15px] font-medium">
+      <h2 id="code-cell-heading" className="text-text-bright text-section font-medium">
         This cell is code
       </h2>
-      <p className="max-w-[860px] text-[13px] leading-relaxed">
+      <p className="text-body max-w-[860px] leading-relaxed">
         Its data is a RISC-V program. A script names it in one of two ways, and each way decides
         what happens when the code changes.
       </p>
-      <div className="grid gap-7 text-xs leading-relaxed md:grid-cols-3">
+      <div className="text-small grid gap-7 leading-relaxed md:grid-cols-3">
         <div
           data-testid="code-by-type-hash"
           className="flex min-w-0 flex-col gap-1 border-t-2 pt-2.5"
@@ -106,7 +106,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         </div>
       </div>
       {otherReferences.length > 0 && (
-        <ul className="text-text-dim space-y-1 text-[11px]">
+        <ul className="text-text-dim text-meta space-y-1">
           {otherReferences.map((reference) => (
             <li key={`${reference.referenceHash}-${reference.hashType}`} className="break-all">
               Also named as{' '}
@@ -121,7 +121,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
           ))}
         </ul>
       )}
-      <details className="text-xs">
+      <details className="text-small">
         <summary className="text-text-dim hover:text-text cursor-pointer">
           Type ID lineage of these bytes
         </summary>

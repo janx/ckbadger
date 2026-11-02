@@ -118,7 +118,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: object.ownerLockHash ? (
         <>
           <Address address={object.ownerAddress ?? object.ownerLockHash} />
-          <span className="text-text-dim mt-1 block text-[12px]">
+          <span className="text-text-dim text-small mt-1 block">
             {last?.lockName ?? (history ? 'Unregistered lock' : 'Loading lock…')}
           </span>
         </>
@@ -134,7 +134,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               <>
                 <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
                 {collection.data && (
-                  <span className="text-text-dim text-[12px]">
+                  <span className="text-text-dim text-small">
                     {' '}
                     · {collection.data.liveCount.toLocaleString('en-US')} objects
                   </span>
@@ -149,7 +149,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: first ? (
         <>
           <span>{formatUtc8DateTime(first.timestamp)}</span>
-          <span className="text-text-dim mt-1 block text-[12px]">
+          <span className="text-text-dim text-small mt-1 block">
             <AppLink href={`/blocks/${first.blockNumber}`}>
               {formatBlockNumber(first.blockNumber)}
             </AppLink>{' '}
@@ -172,7 +172,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           ) : (
             <>
               <span>{formatUtc8DateTime(last.timestamp)}</span>
-              <span className="text-text-dim mt-1 block text-[12px]">
+              <span className="text-text-dim text-small mt-1 block">
                 <AppLink href={`/blocks/${last.blockNumber}`}>
                   {formatBlockNumber(last.blockNumber)}
                 </AppLink>{' '}
@@ -189,7 +189,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: (
         <>
           <ExactCkb shannons={held} signed={false} tone="plain" wrap />
-          <span className="text-text-dim mt-1 block text-[12px]">
+          <span className="text-text-dim text-small mt-1 block">
             <span className="text-jade">{ckbText(occupied)}</span> occupied ·{' '}
             {ckbText(held - occupied)} free
           </span>
@@ -219,16 +219,16 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           : []),
       ]}
       status={<LiveBadge live={object.isLive} gone="Melted" />}
-      identity={<Hash hash={id} truncate={false} className="text-[11px]" />}
+      identity={<Hash hash={id} truncate={false} className="text-meta" />}
       intro={
         <div className="space-y-4 pt-1">
           {tier ? (
             <CompositionLine tier={tier} />
           ) : (
-            <span className="text-text-dim text-[11px]">Composition not recorded</span>
+            <span className="text-text-dim text-meta">Composition not recorded</span>
           )}
           {(history || coll) && (
-            <p className="text-text text-[15px] leading-relaxed">
+            <p className="text-text text-body leading-relaxed">
               {history && history.length > 0 && <span>{itemLifeSentence(history, now)}</span>}
               {coll && collectionName && (
                 <span>
@@ -356,7 +356,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       )}
       <div role="region" aria-label="CKB held in its cell" className="space-y-4">
         {!object.isLive && (
-          <p className="text-text-dim text-[11px]">
+          <p className="text-text-dim text-meta">
             No live cell holds capacity for this melted object.
           </p>
         )}
@@ -369,7 +369,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               life
               title="CKB held in its cell"
               actions={
-                <span className="text-text-dim text-[12px]">
+                <span className="text-text-dim text-small">
                   1 CKB per byte ·{' '}
                   {held === occupied ? (
                     <>
@@ -385,14 +385,14 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               }
               intro={
                 versions.data.data.length > 0 && (
-                  <p className="mb-4 text-[13px] leading-relaxed">
+                  <p className="text-body mb-4 leading-relaxed">
                     {cellLifeSentence(versions.data.data, 'object')}
                   </p>
                 )
               }
             />
             {lockFootnote(versions.data.data, 'object') && (
-              <p className="text-text-dim text-[12px]">
+              <p className="text-text-dim text-small">
                 {lockFootnote(versions.data.data, 'object')}
               </p>
             )}
@@ -414,10 +414,10 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       {object.clusterId && (
         <section aria-label={`In ${collectionName ?? 'this collection'}`} className="space-y-3">
           <div className="flex flex-wrap items-baseline justify-between gap-4">
-            <h2 className="text-text-bright text-[15px]">
+            <h2 className="text-text-bright text-section">
               In {collectionName ?? 'this collection'}
             </h2>
-            <AppLink href={collectionHref!} className="text-[12px]">
+            <AppLink href={collectionHref!} className="text-small">
               Open the collection →
             </AppLink>
           </div>
@@ -426,7 +426,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
               <AssetReadState label="collection" error={collection.error} retained />
               <div className="flex flex-wrap items-baseline gap-x-10 gap-y-2">
                 <span>
-                  <span className="text-text-bright text-[15px]">
+                  <span className="text-text-bright text-body">
                     {coll.liveCount.toLocaleString('en-US')}
                   </span>{' '}
                   <span className="text-text-dim">
@@ -436,14 +436,14 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   </span>
                 </span>
                 <span>
-                  <span className="text-text-bright text-[15px]">
+                  <span className="text-text-bright text-body">
                     {coll.holdersCount.toLocaleString('en-US')}
                   </span>{' '}
                   <span className="text-text-dim">holders</span>
                 </span>
                 {coll.composition && onchain !== undefined && (
                   <span className="flex items-center gap-2">
-                    <span className="text-text-bright text-[15px]">
+                    <span className="text-text-bright text-body">
                       {onchain.toLocaleString('en-US')} of {coll.liveCount.toLocaleString('en-US')}
                     </span>
                     <CompositionBadge tier={coll.composition.tier} size="sm" />
@@ -451,7 +451,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                 )}
                 {coll.ownedCapacity !== null && (
                   <span>
-                    <span className="text-text-bright text-[15px]">
+                    <span className="text-text-bright text-body">
                       {ckbText(BigInt(coll.ownedCapacity))}
                     </span>{' '}
                     <span className="text-text-dim">CKB held in their cells</span>
@@ -477,7 +477,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   </div>
                 )}
               {cluster.data && (
-                <p className="text-text-dim text-[12px]">
+                <p className="text-text-dim text-small">
                   Its cluster cell is held by{' '}
                   {cluster.data.ownerAddress || cluster.data.ownerLockHash ? (
                     <Address

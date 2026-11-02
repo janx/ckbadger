@@ -167,10 +167,10 @@ function StageFlowPill({
 }) {
   return (
     <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
-      <div className="text-text/70 text-[11px] uppercase tracking-widest">{title}</div>
+      <div className="text-text/70 text-meta uppercase tracking-widest">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
-        <div className="text-text-bright text-lg font-semibold">{value.toLocaleString()}</div>
-        <div className="text-text/70 text-[11px]">{subtitle}</div>
+        <div className="text-text-bright text-hero font-semibold">{value.toLocaleString()}</div>
+        <div className="text-text/70 text-meta">{subtitle}</div>
       </div>
     </div>
   );
@@ -184,7 +184,7 @@ function StageConnector({ label }: { label: string }) {
         <div className="bg-gold/80 h-2 w-2 rounded-full" />
         <div className="bg-gold/35 absolute inset-0 animate-ping rounded-full" />
       </div>
-      <div className="text-text-dim text-[10px] uppercase tracking-widest">{label}</div>
+      <div className="text-text-dim text-meta uppercase tracking-widest">{label}</div>
       <div className="bg-base-border h-px w-6" />
     </div>
   );
@@ -223,7 +223,7 @@ function TxMetricScatter({
       </div>
 
       {points.length === 0 ? (
-        <div className="text-text-dim flex h-full items-center justify-center px-4 text-center text-xs">
+        <div className="text-text-dim text-small flex h-full items-center justify-center px-4 text-center">
           {emptyText}
         </div>
       ) : (
@@ -262,16 +262,16 @@ function TxMetricScatter({
 
       {!compact && (
         <>
-          <div className="text-text-dim absolute bottom-1 left-2 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute bottom-1 left-2 uppercase tracking-widest">
             Low fee rate
           </div>
-          <div className="text-text-dim absolute bottom-1 right-2 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute bottom-1 right-2 uppercase tracking-widest">
             High fee rate
           </div>
-          <div className="text-text-dim absolute left-1 top-2 -rotate-90 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute left-1 top-2 -rotate-90 uppercase tracking-widest">
             High cycles
           </div>
-          <div className="text-text-dim absolute bottom-2 left-1 -rotate-90 text-[10px] uppercase tracking-widest">
+          <div className="text-text-dim text-meta absolute bottom-2 left-1 -rotate-90 uppercase tracking-widest">
             Low cycles
           </div>
         </>
@@ -305,16 +305,16 @@ function StageScatterCard({
     <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-text-bright text-sm font-semibold sm:text-base">{title}</h3>
-          <div className="text-text-dim text-xs">{subtitle}</div>
+          <h3 className="text-text-bright text-body sm:text-section font-semibold">{title}</h3>
+          <div className="text-text-dim text-small">{subtitle}</div>
         </div>
         <div className="text-right">
-          <div className="text-text-bright text-lg font-bold">{totalCount.toLocaleString()}</div>
-          <div className="text-text-dim text-[11px] uppercase tracking-widest">txns</div>
+          <div className="text-text-bright text-hero font-bold">{totalCount.toLocaleString()}</div>
+          <div className="text-text-dim text-meta uppercase tracking-widest">txns</div>
         </div>
       </div>
 
-      <div className="mb-3 grid grid-cols-2 gap-2 text-xs">
+      <div className="text-small mb-3 grid grid-cols-2 gap-2">
         <div className="border-base-border/50 bg-base-bg/60 rounded-lg border px-2 py-1.5">
           <div className="text-text-dim">Median fee rate</div>
           <div className="text-text-bright font-medium">{medianFeeRate}</div>
@@ -333,7 +333,7 @@ function StageScatterCard({
 function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
   if (blocks.length === 0) {
     return (
-      <div className="border-base-border/50 bg-base-surface/60 text-text-dim rounded-2xl border p-4 text-sm">
+      <div className="border-base-border/50 bg-base-surface/60 text-text-dim text-body rounded-2xl border p-4">
         No committed blocks yet
       </div>
     );
@@ -343,12 +343,12 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
     <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
-          <h3 className="text-text-bright text-sm font-semibold sm:text-base">
+          <h3 className="text-text-bright text-body sm:text-section font-semibold">
             Recent Committed Blocks
           </h3>
-          <div className="text-text-dim text-xs">New blocks stream in as txns get packed</div>
+          <div className="text-text-dim text-small">New blocks stream in as txns get packed</div>
         </div>
-        <div className="border-gold/40 bg-gold/10 text-gold rounded-lg border px-2 py-1 text-xs">
+        <div className="border-gold/40 bg-gold/10 text-gold text-small rounded-lg border px-2 py-1">
           head {formatBlockNumber(blocks[0].block.number)}
         </div>
       </div>
@@ -360,12 +360,12 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
             href={`/blocks/${entry.block.number}`}
             className="hover:border-gold/50 border-base-border/60 bg-base-bg/60 block rounded-xl border p-3 transition-colors"
           >
-            <div className="mb-2 flex items-center justify-between text-xs">
+            <div className="text-small mb-2 flex items-center justify-between">
               <div className="text-text-bright font-medium">
                 {formatBlockNumber(entry.block.number)}
               </div>
               {index === 0 ? (
-                <span className="border-gold/40 bg-gold/20 text-gold rounded-md border px-1.5 py-0.5 text-[10px] uppercase tracking-widest">
+                <span className="border-gold/40 bg-gold/20 text-gold text-meta rounded-md border px-1.5 py-0.5 uppercase tracking-widest">
                   New
                 </span>
               ) : (
@@ -388,8 +388,8 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
 function TriMetricLegend() {
   return (
     <div className="border-base-border/60 bg-base-bg/40 mt-4 rounded-xl border p-3">
-      <div className="text-text-dim text-xs uppercase tracking-widest">Tri-metric encoding</div>
-      <div className="text-text mt-2 grid gap-2 text-xs sm:grid-cols-3">
+      <div className="text-text-dim text-small uppercase tracking-widest">Tri-metric encoding</div>
+      <div className="text-text text-small mt-2 grid gap-2 sm:grid-cols-3">
         <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
           Bubble size = txn size (bytes)
         </div>
@@ -400,7 +400,7 @@ function TriMetricLegend() {
           Y-axis = cycles (higher at top)
         </div>
       </div>
-      <div className="text-text-dim mt-2 text-[11px]">
+      <div className="text-text-dim text-meta mt-2">
         Dashed bubble means cycles data is not available yet; green ring marks cellbase.
       </div>
     </div>
@@ -487,10 +487,10 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
     <div className={containerClassName}>
       {showHeader && (
         <div className="mb-4">
-          <h2 className="text-text-bright text-lg font-bold tracking-tight sm:text-xl">
+          <h2 className="text-text-bright text-section sm:text-hero font-bold tracking-tight">
             Transaction Flow Pipeline
           </h2>
-          <p className="text-text-dim mt-1 text-sm">
+          <p className="text-text-dim text-body mt-1">
             Mempool txns move through proposal queue and are continuously committed into new blocks.
           </p>
         </div>

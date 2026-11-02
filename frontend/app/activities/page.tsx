@@ -38,13 +38,13 @@ export default function ActivitiesPage() {
           title="Activities"
           kind="index"
           actions={
-            <Link href="/transactions" className="text-text-dim hover:text-jade text-xs">
+            <Link href="/transactions" className="text-text-dim hover:text-jade text-small">
               Transactions →
             </Link>
           }
         >
           {summary && count !== undefined ? (
-            <p className="text-text text-[15px]">
+            <p className="text-text text-body">
               <span className="text-text-bright">{count.toLocaleString('en-US')}</span> yesterday
               (UTC+8) ·{' '}
               <span className="text-text-bright">
@@ -53,11 +53,11 @@ export default function ActivitiesPage() {
               addresses took part
             </p>
           ) : error || txStatsError ? (
-            <p role="alert" className="text-text-dim text-xs">
+            <p role="alert" className="text-text-dim text-small">
               Could not load yesterday’s activity: {(error ?? txStatsError)!.message}
             </p>
           ) : data && txStats ? (
-            <p className="text-text-dim text-xs">
+            <p className="text-text-dim text-small">
               No complete activity statistics for {yesterday} (UTC+8).
             </p>
           ) : (

@@ -130,9 +130,9 @@ function Seen({ event }: { event: ReorgEvent }) {
       ) : (
         <span className="text-text-bright">{when}</span>
       )}
-      <span className="text-text-dim block text-[11px]">{formatTimeAgo(event.detectedAt)}</span>
+      <span className="text-text-dim text-meta block">{formatTimeAgo(event.detectedAt)}</span>
       {!href && (
-        <span className="text-text-dim block text-[11px]">
+        <span className="text-text-dim text-meta block">
           {missingAddressWords(event.firstOrphanStatus)}
         </span>
       )}
@@ -146,7 +146,7 @@ function ForkPoint({ event }: { event: ReorgEvent }) {
       <Link href={`/blocks/${event.forkPointNumber}`} className="text-text-bright hover:text-jade">
         {formatBlockNumber(event.forkPointNumber)}
       </Link>
-      <span className="text-text-dim block text-[11px]">depth {event.depth}</span>
+      <span className="text-text-dim text-meta block">depth {event.depth}</span>
     </span>
   );
 }
@@ -203,7 +203,7 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
         fate === 'canonical_now' ? 'the same block now' : 'witness unavailable'
       )}
       {dropped && dropped === winner && (
-        <span className="text-text-dim ml-1.5 text-[11px]">same miner</span>
+        <span className="text-text-dim text-meta ml-1.5">same miner</span>
       )}
     </span>
   );
@@ -220,7 +220,7 @@ function Fate({ event }: { event: ReorgEvent }) {
     return (
       <span>
         <span className="text-text-bright">No rollback at detection</span>
-        <span className="text-text-dim block text-[11px]">
+        <span className="text-text-dim text-meta block">
           indexed {formatBlockNumber(event.oldTipNumber)} → node{' '}
           {formatBlockNumber(event.newTipNumber)}
         </span>
@@ -239,7 +239,7 @@ function Fate({ event }: { event: ReorgEvent }) {
       ) : (
         <span className="text-text-bright">{words}</span>
       )}
-      <span className="text-text-dim block text-[11px]">
+      <span className="text-text-dim text-meta block">
         {noncellbaseTransactions === 0
           ? 'cellbase only'
           : `${committedLaterTransactions.toLocaleString('en-US')} of ${noncellbaseTransactions.toLocaleString('en-US')} tx committed later`}
@@ -272,13 +272,13 @@ export default function ForksPage() {
       <main className="container mx-auto flex min-w-0 max-w-[1280px] flex-col gap-11 px-4 pb-[72px] pt-7">
         <TopicHero
           title="Forks"
-          intro="Two miners sometimes find a block at the same height, a fraction of a second apart. The chain keeps one. The other is not lost: a later block includes it as an uncle, and CKB counts uncles to measure how often this happens and set the difficulty, aiming at one in 40 blocks."
+          lede="Two miners sometimes find a block at the same height, a fraction of a second apart. The chain keeps one. The other is not lost: a later block includes it as an uncle, and CKB counts uncles to measure how often this happens and set the difficulty, aiming at one in 40 blocks."
           figures={data ? heroFigures(data) : undefined}
         />
         <DetailSection
           title="The chain’s record and this node’s view"
           actions={
-            <span className="text-text-dim flex flex-wrap gap-x-[18px] gap-y-1 text-[11.5px]">
+            <span className="text-text-dim text-meta flex flex-wrap gap-x-[18px] gap-y-1">
               <span className="inline-flex items-center gap-1.5">
                 <span
                   className="h-2.5 w-2.5 rounded-sm opacity-50"
@@ -298,7 +298,7 @@ export default function ForksPage() {
         >
           {overview.isLoading && <p role="status">Loading fork history…</p>}
           {overview.error && (
-            <p role="alert" className="text-rouge text-[12px]">
+            <p role="alert" className="text-rouge text-small">
               Fork history unavailable: {(overview.error as Error).message}
             </p>
           )}
@@ -306,23 +306,23 @@ export default function ForksPage() {
             (data.days.length ? (
               <>
                 <ForkDaysChart days={data.days} />
-                <p className="text-text mt-3 max-w-[940px] text-[12.5px] leading-relaxed">
+                <p className="text-text text-body mt-3 max-w-[940px] leading-relaxed">
                   The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
                   {formatCount(data.days.length, 'day')}; this node switched branches{' '}
                   {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only notices
                   a fork when the losing block reached it first and it had to switch. The uncles are
                   the complete record, and they are on chain for anyone to recount.
                 </p>
-                <p className="text-text-dim mt-1 text-[11px]">{data.scope}</p>
+                <p className="text-text-dim text-meta mt-1">{data.scope}</p>
               </>
             ) : (
-              <p className="text-text-dim text-[12px]">No completed fork days are indexed.</p>
+              <p className="text-text-dim text-small">No completed fork days are indexed.</p>
             ))}
         </DetailSection>
         <DetailSection
           title="Branch switches on this node"
           actions={
-            <span className="text-text-dim flex flex-wrap gap-x-4 gap-y-1 text-[11.5px]">
+            <span className="text-text-dim text-meta flex flex-wrap gap-x-4 gap-y-1">
               <span>dashed: the block it dropped</span>
               <span className="text-jade">→ the block that took it as an uncle</span>
               {data && competingLine(data.nodeRecord) && (
@@ -333,7 +333,7 @@ export default function ForksPage() {
         >
           {events.isLoading && <p role="status">Loading branch switches…</p>}
           {events.error && (
-            <p role="alert" className="text-rouge text-[12px]">
+            <p role="alert" className="text-rouge text-small">
               Branch switches unavailable: {(events.error as Error).message}
             </p>
           )}
@@ -384,7 +384,7 @@ export default function ForksPage() {
                   },
                 ]}
                 mobileRow={(event) => (
-                  <div className="min-w-0 space-y-2 text-xs">
+                  <div className="text-small min-w-0 space-y-2">
                     <div className="flex flex-wrap justify-between gap-2">
                       <Seen event={event} />
                       <ForkPoint event={event} />

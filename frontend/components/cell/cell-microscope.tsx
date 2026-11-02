@@ -251,7 +251,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const outOccupied = outParts.filter((p) => p.occupied).reduce((n, p) => n + p.end - p.start, 0);
   if (!breakdown || (molecule && outOccupied + dataBytes.length !== breakdown.totalBytes))
     return (
-      <p role="alert" className="text-rouge text-xs">
+      <p role="alert" className="text-rouge text-small">
         Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied} occupied CellOutput +{' '}
         {dataBytes.length} data) disagree with its occupied size{' '}
         {breakdown ? `${breakdown.totalBytes} B` : '(missing)'}.
@@ -340,7 +340,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         key={`gap:${from}`}
         data-gap={`${from}-${to}`}
         className={cn(
-          'text-text-dim my-1 flex h-[30px] items-center gap-3 border-y border-dashed border-[#1a1f30] text-[11.5px]',
+          'text-text-dim text-meta my-1 flex h-[30px] items-center gap-3 border-y border-dashed border-[#1a1f30]',
           digits === 5 ? 'pl-[74px]' : 'pl-[62px]'
         )}
       >
@@ -402,12 +402,12 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={part.id}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-[13.5px]">{part.label}</span>
-          <span className="text-text-dim whitespace-nowrap text-[11px]">
+          <span className="text-text-bright text-body">{part.label}</span>
+          <span className="text-text-dim text-meta whitespace-nowrap">
             [{fmt(part.start)}..{fmt(part.end)}) · {fmt(part.end - part.start)} B
           </span>
         </div>
-        <p className="mt-1.5 text-[12px] leading-relaxed text-[#a0a8be]">{part.meaning}</p>
+        <p className="text-small mt-1.5 leading-relaxed text-[#a0a8be]">{part.meaning}</p>
         <DetailRows
           rows={[
             [
@@ -444,15 +444,15 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={`group:${g}`}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-[13.5px]">
+          <span className="text-text-bright text-body">
             {g}
             {name ? ` · ${name}` : ''}
           </span>
-          <span className="text-text-dim whitespace-nowrap text-[11px]">
+          <span className="text-text-dim text-meta whitespace-nowrap">
             {fmt(groupBytes[g])} B occupied
           </span>
         </div>
-        <p className="mt-1.5 text-[12px] leading-relaxed text-[#a0a8be]">
+        <p className="text-small mt-1.5 leading-relaxed text-[#a0a8be]">
           {g === 'capacity'
             ? 'The capacity field takes 8 bytes of the capacity it states.'
             : g === 'lock'
@@ -483,13 +483,13 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail={activeRegion.id}>
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-[13.5px]">{activeRegion.label}</span>
-          <span className="text-text-dim whitespace-nowrap text-[11px]">
+          <span className="text-text-bright text-body">{activeRegion.label}</span>
+          <span className="text-text-dim text-meta whitespace-nowrap">
             [{fmt(activeRegion.start)}..{fmt(activeRegion.end)}) ·{' '}
             {fmt(activeRegion.end - activeRegion.start)} B
           </span>
         </div>
-        <p className="mt-1.5 text-[12px] leading-relaxed text-[#a0a8be]">
+        <p className="text-small mt-1.5 leading-relaxed text-[#a0a8be]">
           {activeRegion.partIds.length > 1
             ? `${activeRegion.partIds.length} parts: ${activeRegion.partIds.map((id) => byId.get(id)!.label).join(' · ')}.`
             : byId.get(activeRegion.partIds[0])!.meaning}
@@ -500,14 +500,14 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail="default">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-[13.5px]">
+          <span className="text-text-bright text-body">
             {tapOrHover('a byte, a field or the map', { capital: true })}
           </span>
-          <span className="text-text-dim whitespace-nowrap text-[11px]">
+          <span className="text-text-dim text-meta whitespace-nowrap">
             {fmt(outBytes.length)} + {fmt(dataBytes.length)} bytes
           </span>
         </div>
-        <p className="mt-1.5 text-[12px] leading-relaxed text-[#a0a8be]">
+        <p className="text-small mt-1.5 leading-relaxed text-[#a0a8be]">
           Each byte belongs to exactly one {cell.elf ? 'part' : 'field'}. Colours follow the four
           parts of the cell; grey bytes are CellOutput framing that the cell does not pay for.
         </p>
@@ -544,8 +544,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     <section aria-label="Cell byte microscope" className="min-w-0 space-y-3.5">
       <style>{highlightCss(litIds)}</style>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
-        <h2 className="text-text-bright text-[15px] font-medium">The cell, byte by byte</h2>
-        <span className="text-text-dim text-xs">
+        <h2 className="text-text-bright text-section font-medium">The cell, byte by byte</h2>
+        <span className="text-text-dim text-small">
           {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
           <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span> occupied bytes ·
           room for {room.toLocaleString('en-US')} more
@@ -575,7 +575,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             }
             title={`${g} · ${fmt(groupBytes[g])} bytes`}
             {...handlers({ kind: 'group', group: g })}
-            className="flex items-center justify-center whitespace-nowrap rounded-sm text-[10.5px]"
+            className="text-meta flex items-center justify-center whitespace-nowrap rounded-sm"
             style={{
               flex: `${bytes} 0 0`,
               minWidth: mapSegmentMinWidth(label, big ? 28 : 8),
@@ -591,7 +591,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       </div>
       {regions.length > 0 && (
         <div className="space-y-1.5" onMouseLeave={() => setActive(null)}>
-          <div className="text-text-dim flex justify-between text-[11px]">
+          <div className="text-text-dim text-meta flex justify-between">
             <span>the data, to scale: an ELF file</span>
             <TapOrHoverHint what="a region" />
           </div>
@@ -603,7 +603,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="flex items-center justify-center overflow-hidden rounded-[1px] text-[10px] text-[#0c0e15]"
+                className="text-meta flex items-center justify-center overflow-hidden rounded-[1px] text-[#0c0e15]"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
@@ -617,7 +617,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </button>
             ))}
           </div>
-          <div className="text-text-dim flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+          <div className="text-text-dim text-meta flex flex-wrap gap-x-4 gap-y-1">
             {regions
               .filter((r) => r.label !== 'alignment padding')
               .map((region) => (
@@ -645,7 +645,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               <div key={group} className="relative flex flex-wrap items-center gap-[5px] sm:pl-20">
                 <span
                   data-index-group={group}
-                  className="w-full text-[11px] sm:absolute sm:left-0 sm:top-1 sm:w-[74px]"
+                  className="text-meta w-full sm:absolute sm:left-0 sm:top-1 sm:w-[74px]"
                   style={{ color: CELL_COLORS[group] }}
                 >
                   {group === 'data' && cell.elf ? 'data · ELF' : group}
@@ -657,7 +657,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                     data-pill={part.id}
                     {...handlers({ kind: 'part', id: part.id })}
                     className={cn(
-                      'inline-flex h-6 items-center gap-1.5 rounded border px-2 text-[11.5px]',
+                      'text-meta inline-flex h-6 items-center gap-1.5 rounded border px-2',
                       active?.kind === 'part' && active.id === part.id
                         ? 'border-[#a0a8be]'
                         : 'border-[#1a1f30]',
@@ -670,7 +670,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                       style={{ backgroundColor: part.occupied ? part.tone : '#343c50' }}
                     />
                     {part.block === 'output' ? part.label.split(' · ').at(-1) : part.label}
-                    <span className="text-[10.5px] text-[#4b5266]">
+                    <span className="text-meta text-[#4b5266]">
                       [{fmt(part.start)}..{fmt(part.end)})
                     </span>
                   </button>
@@ -678,7 +678,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               </div>
             ))}
             {hidden > 0 && (
-              <div className="text-text-dim text-[11px] sm:pl-20">
+              <div className="text-text-dim text-meta sm:pl-20">
                 + {hidden} more ELF header fields and program headers:{' '}
                 <TapOrHoverHint what="their bytes" />
               </div>
@@ -689,14 +689,14 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               aria-label="Cell bytes"
               data-cell-bytes=""
               data-active={litIds ? litIds.join(' ') : undefined}
-              className="overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 text-xs tabular-nums"
+              className="text-small overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 tabular-nums"
               onMouseOver={onHover}
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
               {molecule && (
                 <div aria-label="CellOutput byte map">
-                  <div className="text-text-dim flex flex-wrap justify-between gap-x-3 pb-1.5 text-[11px]">
+                  <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
                     <span>outputs[{cell.outputIndex}] · CellOutput · molecule</span>
                     <span>
                       {fmt(outBytes.length)} B · {fmt(outOccupied)} occupied
@@ -718,7 +718,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 aria-label="CellData byte map"
                 className={cn(molecule && 'mt-2.5 border-t border-dashed border-[#1a1f30] pt-3.5')}
               >
-                <div className="text-text-dim flex flex-wrap justify-between gap-x-3 pb-1.5 text-[11px]">
+                <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
                   <span>
                     outputs_data[{cell.outputIndex}]
                     {cell.elf
@@ -749,7 +749,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         <aside
           aria-label="Field detail"
           aria-live="polite"
-          className="min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3 text-xs lg:sticky lg:top-4"
+          className="text-small min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3 lg:sticky lg:top-4"
         >
           {detail}
         </aside>

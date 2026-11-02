@@ -165,11 +165,11 @@ export function HelpPopover({
             }}
           >
             {title && (
-              <div className="text-text-dim border-base-border/50 mb-2 border-b pb-2 font-mono text-[11px] uppercase tracking-wider">
+              <div className="text-text-dim border-base-border/50 text-meta mb-2 border-b pb-2 font-mono uppercase tracking-wider">
                 {title}
               </div>
             )}
-            <div className="space-y-2 text-xs">{children}</div>
+            <div className="text-small space-y-2">{children}</div>
           </div>,
           document.body
         )
@@ -207,7 +207,7 @@ export function HelpPopover({
         className={cn(
           'text-text-dim border-base-border/70 hover:border-emphasis/40 hover:text-emphasis',
           'relative inline-flex h-5 w-5 items-center justify-center rounded-full border',
-          'bg-base-elevated/70 font-mono text-[10px] transition-colors',
+          'bg-base-elevated/70 text-meta font-mono transition-colors',
           'before:absolute before:-inset-3 before:content-[""]'
         )}
         onClick={(event) => {

@@ -42,31 +42,29 @@ export default function FiberChannelDetailPage() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto max-w-[1280px] px-4 pb-[72px] pt-7">
-        <nav aria-label="Breadcrumb" className="text-text-dim text-[12px]">
+        <nav aria-label="Breadcrumb" className="text-text-dim text-small">
           <Link href="/fiber/channels" className="hover:text-text">
             Fiber
           </Link>{' '}
           <span className="text-text-ghost">/</span> channels
         </nav>
         <div className="mt-2.5 flex flex-wrap items-baseline gap-3">
-          <h1 className="text-text-bright text-[26px] font-medium">Fiber channel</h1>
+          <h1 className="text-text-bright text-entity font-medium">Fiber channel</h1>
           {channel.data && (
-            <span className="text-text-dim text-[13px]">
-              {FIBER_STATE_WORDS[channel.data.state]}
-            </span>
+            <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.data.state]}</span>
           )}
         </div>
-        <p className="text-text mt-2.5 break-all text-[13px]">{channelId}</p>
+        <p className="text-text text-body mt-2.5 break-all">{channelId}</p>
         {channel.isPending && (
-          <p className="text-text-dim py-8 text-[13px]">Loading channel evidence…</p>
+          <p className="text-text-dim text-body py-8">Loading channel evidence…</p>
         )}
         {channel.isError && (
-          <p role="alert" className="text-rouge py-8 text-[13px]">
+          <p role="alert" className="text-rouge text-body py-8">
             Channel could not be loaded: {String(channel.error)}
           </p>
         )}
         {token.isError && (
-          <p role="alert" className="text-rouge mt-2 text-[12px]">
+          <p role="alert" className="text-rouge text-small mt-2">
             Funding token could not be loaded: {String(token.error)}
           </p>
         )}

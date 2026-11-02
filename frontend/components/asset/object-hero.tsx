@@ -15,7 +15,7 @@ export function LiveBadge({ live, gone }: { live: boolean; gone: 'Melted' | 'Bur
   return (
     <span
       className={cn(
-        'rounded border px-1.5 text-[11px]',
+        'text-meta rounded border px-1.5',
         live ? 'text-jade border-jade/40' : 'text-text-dim border-base-border'
       )}
     >
@@ -40,7 +40,7 @@ export function CompositionLine({ tier }: { tier: CompositionTier }) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier={tier} />
-      <span className="text-text text-[12.5px]">{COMPOSITION_SENTENCES[tier]}</span>
+      <span className="text-text text-body">{COMPOSITION_SENTENCES[tier]}</span>
     </div>
   );
 }
@@ -105,7 +105,7 @@ export function ObjectTraits({
           );
         })}
       </dl>
-      <p className="text-text-dim text-[11.5px]">
+      <p className="text-text-dim text-meta">
         Each trait is read from the object’s DNA, below ·{' '}
         <TapOrHoverHint what="one to find its gene" />
       </p>

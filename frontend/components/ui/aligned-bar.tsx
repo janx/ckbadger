@@ -78,7 +78,7 @@ export function AlignedBar({
 /** The scale and the consensus cap live in one quiet footnote under the column (Blocks v3). */
 export function AlignedBarFootnote({ scale, cap }: { scale: string; cap: string }) {
   return (
-    <p className="text-text-dim text-[11px]">
+    <p className="text-text-dim text-meta">
       Scale {scale} · {cap}
     </p>
   );

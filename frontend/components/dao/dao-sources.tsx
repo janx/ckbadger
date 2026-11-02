@@ -48,7 +48,7 @@ const DAO_TX_COLUMNS: ListColumn<Transaction>[] = [
     minWidth: 170,
     render: (tx) => (
       <Link href={`/tx/${tx.hash}`} className="hover:underline">
-        <Hash hash={tx.hash} startChars={10} endChars={6} copyable={false} className="text-xs" />
+        <Hash hash={tx.hash} startChars={10} endChars={6} copyable={false} className="text-small" />
       </Link>
     ),
   },
@@ -123,7 +123,7 @@ function GoldCkb({ shannons }: { shannons: bigint }) {
       {parts.integer}
       <span className="opacity-75">{parts.fraction}</span>
       <span className="opacity-40">{parts.ghost}</span>
-      <span className="text-[11px] opacity-70"> CKB</span>
+      <span className="text-meta opacity-70"> CKB</span>
     </span>
   );
 }
@@ -224,24 +224,24 @@ export function DaoSources() {
                 setTab(choice);
                 setCursor(undefined);
               }}
-              className={`-mb-px h-11 border-b-2 text-[15px] font-medium capitalize ${tab === choice ? 'border-jade text-text-bright' : 'text-text-dim hover:text-text border-transparent'}`}
+              className={`text-section -mb-px h-11 border-b-2 font-medium capitalize ${tab === choice ? 'border-jade text-text-bright' : 'text-text-dim hover:text-text border-transparent'}`}
             >
               {choice}
             </button>
           ))}
         </div>
-        <span className="text-text-dim basis-full pb-2 text-[12px] sm:ml-auto sm:basis-auto sm:pb-0">
+        <span className="text-text-dim text-small basis-full pb-2 sm:ml-auto sm:basis-auto sm:pb-0">
           deposits, withdrawal requests and withdrawals · newest first
         </span>
       </div>
       {result.isError ? (
-        <div role="alert" className="text-rouge py-4 text-xs">
+        <div role="alert" className="text-rouge text-small py-4">
           DAO {tab} could not be loaded: {String(result.error)}
         </div>
       ) : result.isLoading ? (
-        <div className="text-text-dim py-7 text-xs">Loading DAO {tab}…</div>
+        <div className="text-text-dim text-small py-7">Loading DAO {tab}…</div>
       ) : !page?.data.length ? (
-        <div className="text-text-dim py-7 text-xs">No DAO {tab} at this indexed tip.</div>
+        <div className="text-text-dim text-small py-7">No DAO {tab} at this indexed tip.</div>
       ) : (
         <>
           {tab === 'activities' ? (
@@ -255,7 +255,7 @@ export function DaoSources() {
             <div className="flex justify-end pt-3.5">
               <button
                 type="button"
-                className="border-base-border text-text hover:text-text-bright h-9 rounded-md border px-4 text-xs"
+                className="border-base-border text-text hover:text-text-bright text-small h-9 rounded-md border px-4"
                 onClick={() => setCursor(page.nextCursor ?? undefined)}
               >
                 Older DAO {tab} →

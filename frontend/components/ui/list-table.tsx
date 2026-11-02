@@ -135,7 +135,7 @@ export function ListTable<T>({
       className={cn('min-w-0 [contain:inline-size]', className)}
     >
       {!rows.length ? (
-        <p className="text-text-dim py-6 text-xs">{empty}</p>
+        <p className="text-text-dim text-small py-6">{empty}</p>
       ) : form === 'rows' ? (
         <div role="list" aria-label={`${label}, compact`}>
           {rows.map((row) => (
@@ -151,7 +151,7 @@ export function ListTable<T>({
       ) : (
         <table
           aria-label={label}
-          className="w-full table-fixed border-collapse text-xs"
+          className="text-small w-full table-fixed border-collapse"
           style={{ minWidth: form === 'table' ? minimum : narrowMinimum! }}
         >
           <colgroup>

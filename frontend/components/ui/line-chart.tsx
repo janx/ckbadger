@@ -476,7 +476,7 @@ export function LineChart({
           title={
             canUseLogScale ? undefined : 'Log scale requires positive values in the visible range'
           }
-          className={`rounded border px-2 py-1 font-mono text-xs transition-colors ${
+          className={`text-small rounded border px-2 py-1 font-mono transition-colors ${
             logScaleActive
               ? 'border-jade text-jade bg-jade/10'
               : 'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text'
@@ -487,7 +487,7 @@ export function LineChart({
         {interactive && isZoomed && (
           <button
             onClick={handleReset}
-            className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-2 py-1 font-mono text-xs transition-colors"
+            className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small rounded border px-2 py-1 font-mono transition-colors"
           >
             Reset Zoom
           </button>
@@ -765,7 +765,7 @@ export function LineChart({
         )}
       </svg>
       {interactive && isZoomed && (
-        <div className="text-text-dim mt-1 text-center font-mono text-xs tabular-nums">
+        <div className="text-text-dim text-small mt-1 text-center font-mono tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}

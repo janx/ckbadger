@@ -15,7 +15,7 @@ export function HolderLabel({ holder }: { holder: CollectionHolder }) {
     return (
       <Link
         href={`/address/${holder.address}`}
-        className="text-text font-mono text-xs hover:underline"
+        className="text-text text-small font-mono hover:underline"
       >
         {holder.address}
       </Link>
@@ -25,11 +25,11 @@ export function HolderLabel({ holder }: { holder: CollectionHolder }) {
     return (
       <Link
         href={`/address/${holder.lockScriptHash}`}
-        className="text-text font-mono text-xs hover:underline"
+        className="text-text text-small font-mono hover:underline"
       >
         <HexDisplay value={holder.lockScriptHash} size="sm" startChars={12} endChars={10} />
       </Link>
     );
   }
-  return <span className="text-text-dim font-mono text-xs">Unknown holder</span>;
+  return <span className="text-text-dim text-small font-mono">Unknown holder</span>;
 }

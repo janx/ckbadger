@@ -167,7 +167,7 @@ export function ProposalGraphRenderer({
 
   return (
     <div className="space-y-4">
-      <div className="text-text-dim flex flex-wrap items-center gap-4 text-sm">
+      <div className="text-text-dim text-body flex flex-wrap items-center gap-4">
         <div className="flex items-center gap-2">
           <div
             className="h-3 w-3 rotate-45"
@@ -196,7 +196,7 @@ export function ProposalGraphRenderer({
         </div>
       </div>
 
-      <div className="flex items-center gap-6 text-sm">
+      <div className="text-body flex items-center gap-6">
         <div className="text-text-dim">
           Total Proposals: <span className="text-text-bright">{metadata.totalProposals}</span>
         </div>

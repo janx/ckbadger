@@ -57,12 +57,12 @@ export function ErrorPageShell({
           >
             <div className="mb-5 flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
               <p
-                className="text-text-bright text-[18px] uppercase tracking-[0.1em] sm:text-[22px]"
+                className="text-text-bright text-hero sm:text-index uppercase tracking-[0.1em]"
                 style={{ fontFamily: 'var(--font-error-display)' }}
               >
                 {status}
               </p>
-              <p className="text-text-dim min-w-0 break-all font-mono text-[11px]">{path}</p>
+              <p className="text-text-dim text-meta min-w-0 break-all font-mono">{path}</p>
             </div>
             <h1
               className="text-text-bright max-w-full break-words uppercase leading-[0.94] tracking-[-0.045em]"
@@ -78,12 +78,12 @@ export function ErrorPageShell({
               className="bg-base-bg/85 text-text-dim min-w-0 max-w-[47rem] py-3 backdrop-blur-[2px]"
             >
               <h2
-                className="text-text-bright mb-2 text-[13px] uppercase tracking-[0.12em]"
+                className="text-text-bright text-body mb-2 uppercase tracking-[0.12em]"
                 style={{ fontFamily: 'var(--font-error-display)' }}
               >
                 Common knowledge cells
               </h2>
-              <p className="break-words text-[12px] leading-relaxed">{caption}</p>
+              <p className="text-small break-words leading-relaxed">{caption}</p>
             </section>
           )}
         </div>

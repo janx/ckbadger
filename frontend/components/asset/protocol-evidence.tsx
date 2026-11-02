@@ -106,7 +106,7 @@ export function ProtocolEvidence({
         <h2
           className={cn(
             'font-medium',
-            tier === 2 ? 'text-text text-[13px]' : 'text-text-bright text-[15px]'
+            tier === 2 ? 'text-text text-body' : 'text-text-bright text-section'
           )}
         >
           {title}
@@ -114,29 +114,32 @@ export function ProtocolEvidence({
         <button
           type="button"
           onClick={copy}
-          className="text-interactive hover:text-interactive-hover text-[11px]"
+          className="text-interactive hover:text-interactive-hover text-meta"
         >
           Copy raw bytes
         </button>
       </div>
       {copied && (
-        <p role={copied.error ? 'alert' : 'status'} className="text-text-dim break-words text-xs">
+        <p
+          role={copied.error ? 'alert' : 'status'}
+          className="text-text-dim text-small break-words"
+        >
           {copied.error ? `Could not copy raw bytes: ${copied.error}` : 'Raw bytes copied.'}
         </p>
       )}
-      <p className="text-text-dim text-[11px]">
+      <p className="text-text-dim text-meta">
         {bytes.length.toLocaleString('en-US')} bytes · {fields.length.toLocaleString('en-US')}{' '}
         described fields · {unexplained.toLocaleString('en-US')} unexplained bytes
       </p>
       {children}
       {bytes.length === 0 ? (
-        <p className="text-text-dim text-xs">Empty cell data (0 bytes).</p>
+        <p className="text-text-dim text-small">Empty cell data (0 bytes).</p>
       ) : (
         <div className="min-w-0 [&_button]:max-w-full [&_button]:break-all [&_p]:break-all">
           {bytes.length > PAGE_BYTES && (
             <nav
               aria-label={`${title} byte pages`}
-              className="mb-3 flex flex-wrap items-center gap-3 text-[11px]"
+              className="text-meta mb-3 flex flex-wrap items-center gap-3"
             >
               <button
                 type="button"
@@ -170,7 +173,7 @@ export function ProtocolEvidence({
         </div>
       )}
       {fields.length > 0 && (
-        <dl aria-label={`${title} field values`} className="grid min-w-0 gap-3 text-xs">
+        <dl aria-label={`${title} field values`} className="text-small grid min-w-0 gap-3">
           {fields.map((field, index) => (
             <div
               key={`${index}:${field.name}`}
@@ -180,7 +183,7 @@ export function ProtocolEvidence({
                 selectedIndex === index ? 'bg-base-elevated min-w-0 rounded p-2' : 'min-w-0 p-2'
               }
             >
-              <dt className="text-text-dim break-words text-[11px]">
+              <dt className="text-text-dim text-meta break-words">
                 {field.name} · [{field.start}, {field.end})
                 {field.start === field.end ? ' · empty field' : ''}
               </dt>
@@ -191,18 +194,18 @@ export function ProtocolEvidence({
       )}
       {decodedJson !== undefined && (
         <details className="min-w-0">
-          <summary className="text-text-dim cursor-pointer text-xs">Decoded fields</summary>
-          <p className="text-text-dim mt-3 text-[11px]">
+          <summary className="text-text-dim text-small cursor-pointer">Decoded fields</summary>
+          <p className="text-text-dim text-meta mt-3">
             Protocol interpretation; raw cell bytes remain the evidence.
           </p>
-          <pre className="text-text mt-2 max-w-full whitespace-pre-wrap break-all text-xs">
+          <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
             {decodedJson}
           </pre>
         </details>
       )}
       <details className="min-w-0">
-        <summary className="text-text-dim cursor-pointer text-xs">Complete raw hex</summary>
-        <pre className="text-text mt-3 max-w-full whitespace-pre-wrap break-all text-xs">
+        <summary className="text-text-dim text-small cursor-pointer">Complete raw hex</summary>
+        <pre className="text-text text-small mt-3 max-w-full whitespace-pre-wrap break-all">
           {dataHex}
         </pre>
       </details>

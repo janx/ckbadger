@@ -60,7 +60,7 @@ describe('FiberChannelsPage', () => {
     );
     render(<FiberChannelsPage />);
     expect(screen.getByRole('heading', { level: 1, name: 'Fiber channels' })).toHaveClass(
-      'text-[26px]'
+      'text-index'
     );
     expect(
       screen.getByText(/Only opening and closing a channel touch the chain/)
@@ -103,7 +103,7 @@ describe('FiberChannelsPage', () => {
       })
     );
     render(<FiberChannelsPage />);
-    expect(await screen.findByRole('heading', { name: 'Channels' })).toHaveClass('text-[15px]');
+    expect(await screen.findByRole('heading', { name: 'Channels' })).toHaveClass('text-section');
     await waitFor(() => expect(requested[0]).toBe('open'));
     const open = await screen.findByRole('button', { name: 'Open 1' });
     expect(open).toHaveAttribute('aria-pressed', 'true');

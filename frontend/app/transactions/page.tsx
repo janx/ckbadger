@@ -78,7 +78,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
       )}
       <PoolInterpretationNotice
         interpretation={tx.interpretation}
-        className="text-warning ml-2 text-[11px]"
+        className="text-warning text-meta ml-2"
       />
     </>
   );
@@ -130,7 +130,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
                 startChars={10}
                 endChars={6}
                 copyable={false}
-                className="text-[13px]"
+                className="text-body"
               />
             </Link>
           ),
@@ -152,7 +152,7 @@ function PoolPhoneRow({ tx, wide }: { tx: PoolRow; wide: boolean }) {
               tone: 'body',
               left: <Dotted parts={[what, value, fee]} />,
               right: (
-                <span className="text-text-dim text-[11px]">
+                <span className="text-text-dim text-meta">
                   <Dotted parts={figures} />
                 </span>
               ),
@@ -242,7 +242,7 @@ export default function TransactionsPage() {
               startChars={12}
               endChars={6}
               copyable={false}
-              className="text-xs"
+              className="text-small"
             />
           </Link>
           <PoolInterpretationNotice interpretation={tx.interpretation} />
@@ -265,7 +265,7 @@ export default function TransactionsPage() {
       label: 'Status · waiting',
       minWidth: 150,
       render: (tx) => (
-        <span className="flex items-center gap-1.5 text-xs">
+        <span className="text-small flex items-center gap-1.5">
           <PoolDot status={tx.status} />
           <span className={tx.status === 'proposed' ? 'text-gold' : 'text-text'}>
             {poolStatusLabel(tx.status)}
@@ -343,13 +343,13 @@ export default function TransactionsPage() {
           title="Transactions"
           kind="index"
           actions={
-            <Link href="/activities" className="text-text-dim hover:text-jade text-xs">
+            <Link href="/activities" className="text-text-dim hover:text-jade text-small">
               Activities →
             </Link>
           }
         >
           <section className="space-y-4" aria-label="Yesterday and the pool">
-            <p className="text-text text-[15px]">
+            <p className="text-text text-body">
               {total === undefined ? (
                 <span className="text-text-dim">Yesterday’s total unavailable</span>
               ) : (
@@ -372,17 +372,17 @@ export default function TransactionsPage() {
               )}
             </p>
             {(dailyError || txStatsError) && (
-              <p role="alert" className="text-text-dim text-xs">
+              <p role="alert" className="text-text-dim text-small">
                 Could not read yesterday’s statistics: {(dailyError ?? txStatsError)!.message}
               </p>
             )}
             {daily && !day && (
-              <p className="text-text-dim text-xs">
+              <p className="text-text-dim text-small">
                 No complete activity statistics for {yesterday} (UTC+8).
               </p>
             )}
             {txStats && total === undefined && (
-              <p className="text-text-dim text-xs">
+              <p className="text-text-dim text-small">
                 No complete transaction count for {yesterday} (UTC+8).
               </p>
             )}
@@ -397,7 +397,7 @@ export default function TransactionsPage() {
                 id="transactions-kind"
                 value={kind}
                 onChange={(e) => chooseKind(e.target.value as TransactionKind)}
-                className="border-base-border bg-base-surface text-text-bright h-8 min-w-0 rounded-md border px-2 text-xs"
+                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 rounded-md border px-2"
               >
                 {KINDS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -413,7 +413,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === 'pool'}
                   onClick={() => setTab(tab === 'pool' ? 'committed' : 'pool')}
                   className={cn(
-                    'flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-xs',
+                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5',
                     tab === 'pool'
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'border-base-border-subtle text-text'
@@ -437,7 +437,7 @@ export default function TransactionsPage() {
                   aria-pressed={kind === option.value}
                   onClick={() => chooseKind(option.value)}
                   className={cn(
-                    'flex min-h-[34px] items-center gap-2 rounded-md border px-3 text-xs',
+                    'text-small flex min-h-[34px] items-center gap-2 rounded-md border px-3',
                     kind === option.value
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'text-text-dim hover:text-text border-transparent'
@@ -454,7 +454,7 @@ export default function TransactionsPage() {
                   ) : null}
                   {option.label}
                   {counts[option.value] !== undefined && (
-                    <span className="text-text-dim text-[11px]">
+                    <span className="text-text-dim text-meta">
                       {counts[option.value]!.toLocaleString('en-US')}
                     </span>
                   )}
@@ -462,7 +462,7 @@ export default function TransactionsPage() {
               ))}
             </div>
             {day && (
-              <p className="text-text-dim text-[11px]">
+              <p className="text-text-dim text-meta">
                 Kind occurrences may overlap; DAO counts actions. “All” counts unique transactions.
               </p>
             )}
@@ -490,13 +490,13 @@ export default function TransactionsPage() {
               </div>
             )}
             {poolHead.error ? (
-              <p role="alert" className="text-text-dim text-xs">
+              <p role="alert" className="text-text-dim text-small">
                 Could not read the pool: {poolHead.error.message}
               </p>
             ) : poolHead.data ? (
               <div
                 data-testid="pool-banner"
-                className="hidden flex-wrap items-center gap-x-4 gap-y-2 text-xs sm:flex"
+                className="text-small hidden flex-wrap items-center gap-x-4 gap-y-2 sm:flex"
               >
                 <span className="text-text-dim">In the pool</span>
                 <span
@@ -540,7 +540,7 @@ export default function TransactionsPage() {
                 </button>
               </div>
             ) : (
-              <p className="text-text-dim text-xs">Reading the pool…</p>
+              <p className="text-text-dim text-small">Reading the pool…</p>
             )}
           </section>
           <div className="border-base-border-subtle flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b">
@@ -556,7 +556,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === value}
                   onClick={() => setTab(value)}
                   className={cn(
-                    '-mb-px flex min-h-11 items-center gap-2 border-b-2 text-[15px] font-medium',
+                    'text-section -mb-px flex min-h-11 items-center gap-2 border-b-2 font-medium',
                     tab === value
                       ? 'border-jade text-text-bright'
                       : 'text-text-dim border-transparent'
@@ -564,7 +564,7 @@ export default function TransactionsPage() {
                 >
                   {value === 'committed' ? 'Committed' : 'In the pool'}
                   {value === 'pool' && poolHead.data && (
-                    <span className="text-text-dim text-xs font-normal">
+                    <span className="text-text-dim text-small font-normal">
                       {(
                         poolHead.data.totals.pending + poolHead.data.totals.proposed
                       ).toLocaleString('en-US')}
@@ -573,7 +573,7 @@ export default function TransactionsPage() {
                 </button>
               ))}
             </div>
-            <span className="text-text-dim text-xs">
+            <span className="text-text-dim text-small">
               {tab === 'committed'
                 ? 'newest first · cellbase rows set back'
                 : 'not yet in a block · newest first'}
@@ -592,7 +592,7 @@ export default function TransactionsPage() {
           {tab === 'committed' && committed.data && (
             <>
               <TransactionListTable transactions={committed.data.data} />
-              <p className="text-text-dim text-xs">
+              <p className="text-text-dim text-small">
                 Value is what the participants received. A cellbase row shows, grey, the reward it
                 pays; no total counts it.
               </p>
@@ -613,29 +613,29 @@ export default function TransactionsPage() {
           )}
           {tab === 'pool' && pool.data && (
             <>
-              <dl className="flex flex-wrap gap-x-9 gap-y-2.5 text-xs" aria-label="Pool summary">
+              <dl className="text-small flex flex-wrap gap-x-9 gap-y-2.5" aria-label="Pool summary">
                 <div>
                   <dt className="text-text-dim">Pending · proposed</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {pool.data.totals.pending.toLocaleString('en-US')} ·{' '}
                     {pool.data.totals.proposed.toLocaleString('en-US')}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-text-dim">Total size</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {BigInt(pool.data.summary.size).toLocaleString('en-US')} B
                   </dd>
                 </div>
                 <div>
                   <dt className="text-text-dim">Total cycles</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {BigInt(pool.data.summary.cycles).toLocaleString('en-US')}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-text-dim">Fee rate, shannon/KB</dt>
-                  <dd className="text-text-bright mt-0.5 text-[15px]">
+                  <dd className="text-text-bright text-body mt-0.5">
                     {pool.data.summary.minFeeRate === null || pool.data.summary.maxFeeRate === null
                       ? 'No fee rates'
                       : `${BigInt(pool.data.summary.minFeeRate).toLocaleString('en-US')} – ${BigInt(pool.data.summary.maxFeeRate).toLocaleString('en-US')}`}
@@ -650,12 +650,12 @@ export default function TransactionsPage() {
                 empty="The node's pool is empty."
                 mobileRow={(tx, wide) => <PoolPhoneRow tx={tx} wide={wide} />}
               />
-              <p className="text-text-dim text-xs">
+              <p className="text-text-dim text-small">
                 Newest first, {limit} a page. A proposed transaction enters a block 2–10 blocks
                 after its proposal.
               </p>
               {pool.data.truncated && (
-                <p className="text-text-dim text-xs">
+                <p className="text-text-dim text-small">
                   This node's tracked pool is truncated; more transactions may be present.
                 </p>
               )}

@@ -75,14 +75,14 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
         }
       />
       {activity.roles.length > 0 && (
-        <p className="text-text-dim pb-2 text-xs">Roles: {activity.roles.join(', ')}</p>
+        <p className="text-text-dim text-small pb-2">Roles: {activity.roles.join(', ')}</p>
       )}
     </div>
   );
 }
 function TxPosition({ tx }: { tx: AddressTransaction }) {
   return (
-    <span className="flex flex-col gap-1 text-xs">
+    <span className="text-small flex flex-col gap-1">
       {tx.blockNumber === null ? (
         <>
           {tx.poolStatus ? <PoolStatusBadge status={tx.poolStatus} /> : <span>Unconfirmed</span>}
@@ -112,15 +112,15 @@ const columns: ListColumn<AddressTransaction>[] = [
             startChars={10}
             endChars={6}
             copyable={false}
-            className="text-xs"
+            className="text-small"
           />
         </Link>
         <PoolInterpretationNotice
           interpretation={tx.interpretation}
-          className="text-warning block text-[11px]"
+          className="text-warning text-meta block"
         />
         {tx.txType === 'named' && (
-          <span className="text-text-dim block text-[11px]">Named participant</span>
+          <span className="text-text-dim text-meta block">Named participant</span>
         )}
       </span>
     ),
@@ -208,7 +208,7 @@ export function AddressTransactions({ rows }: { rows: AddressTransaction[] }) {
       rowKey={(tx) => tx.txHash}
       empty="No transactions."
       mobileRow={(tx) => (
-        <div data-testid="address-tx-row-mobile" className="space-y-3 text-xs">
+        <div data-testid="address-tx-row-mobile" className="text-small space-y-3">
           <div className="flex flex-wrap justify-between gap-2">
             {columns[0].render(tx)}
             <TxPosition tx={tx} />
@@ -233,8 +233,14 @@ const cellColumns: ListColumn<AddressCell>[] = [
     minWidth: 200,
     render: (c) => (
       <Link href={`/cell/${c.txHash}-${c.outputIndex}`}>
-        <Hash hash={c.txHash} startChars={10} endChars={6} copyable={false} className="text-xs" />:
-        {c.outputIndex}
+        <Hash
+          hash={c.txHash}
+          startChars={10}
+          endChars={6}
+          copyable={false}
+          className="text-small"
+        />
+        :{c.outputIndex}
       </Link>
     ),
   },
@@ -260,7 +266,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
                 scriptKind: 'type',
               })}
             >
-              <Hash hash={c.typeScriptHash} className="text-xs" copyable={false} />
+              <Hash hash={c.typeScriptHash} className="text-small" copyable={false} />
             </Link>
           )}
         </span>
@@ -309,7 +315,7 @@ const cellColumns: ListColumn<AddressCell>[] = [
 /** A live cell's quiet figures on a phone: "occupied 61 CKB · created #20,000,000". */
 function OccupiedAndCreated({ cell: c }: { cell: AddressCell }) {
   return (
-    <span className="text-text-dim text-[11px]">
+    <span className="text-text-dim text-meta">
       <Dotted
         parts={[
           <span key="o" className="whitespace-nowrap">

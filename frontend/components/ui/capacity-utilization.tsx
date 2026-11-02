@@ -49,7 +49,7 @@ export function CapacityUtilization({
       <div
         role="alert"
         data-testid="capacity-utilization-error"
-        className={`text-rouge font-mono text-xs ${className ?? ''}`}
+        className={`text-rouge text-small font-mono ${className ?? ''}`}
       >
         {totalLabel} of {subject}: {error instanceof Error ? error.message : String(error)}
       </div>
@@ -73,11 +73,11 @@ export function CapacityUtilization({
   return (
     <div className={className}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
+        <span className="text-text-dim text-small font-mono uppercase tracking-wider">
           {totalLabel}
         </span>
         <span
-          className="text-text-bright font-mono text-xs tabular-nums"
+          className="text-text-bright text-small font-mono tabular-nums"
           title={formatCkbAmount(total.toString()).full + ' CKB'}
         >
           {formatCkbCompact(total.toString()).value} CKB
@@ -107,7 +107,7 @@ export function CapacityUtilization({
       </div>
       <div className="mt-1.5 flex items-center justify-between">
         <span
-          className={`cursor-default font-mono text-xs transition-opacity duration-200 ${hover === 'free' ? 'opacity-25' : ''} text-warning`}
+          className={`text-small cursor-default font-mono transition-opacity duration-200 ${hover === 'free' ? 'opacity-25' : ''} text-warning`}
           title={formatCkbAmount(used.toString()).full + ' CKB'}
           onMouseEnter={() => setHover('used')}
           onMouseLeave={() => setHover(null)}
@@ -116,7 +116,7 @@ export function CapacityUtilization({
           <span className={`text-text-dim ml-1.5`}>({share}% share)</span>
         </span>
         <span
-          className={`cursor-default font-mono text-xs transition-opacity duration-200 ${hover === 'used' ? 'opacity-25' : ''} text-gold`}
+          className={`text-small cursor-default font-mono transition-opacity duration-200 ${hover === 'used' ? 'opacity-25' : ''} text-gold`}
           title={formatCkbAmount(unused.toString()).full + ' CKB'}
           onMouseEnter={() => setHover('free')}
           onMouseLeave={() => setHover(null)}

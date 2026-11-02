@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '@testing-library/react';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { txLinks } from '@/lib/tx-detail-model';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { TYPE_SCALE, type TypeStep } from '@/lib/type-scale';
 
 const inputs = [
   { id: 'in:0', top: 'CKBFS', label: 'in #0', cap: '195' },
@@ -335,8 +336,8 @@ describe('ScriptGroupMatrix form by measured width (T2)', () => {
     const header = screen.getAllByRole('columnheader')[2];
     const sizes = [header, ...header.querySelectorAll('*')].flatMap((el) =>
       [...el.classList].flatMap((c) => {
-        const m = /^text-\[(\d+(?:\.\d+)?)px\]$/.exec(c);
-        return m ? [Number(m[1])] : [];
+        const m = /^text-(meta|small|body|section|hero|index|entity|display)$/.exec(c);
+        return m ? [parseFloat(TYPE_SCALE[m[1] as TypeStep][0])] : [];
       })
     );
     expect(sizes.length).toBeGreaterThan(0);

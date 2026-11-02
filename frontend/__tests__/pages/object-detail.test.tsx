@@ -45,7 +45,7 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   const { container } = render(<SporeDetailPage sporeId={id} />);
   expect(
     await screen.findByRole('heading', { level: 1, name: 'Genes' }, { timeout: 5000 })
-  ).toHaveClass('text-[26px]');
+  ).toHaveClass('text-entity');
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
     '229.00000000'
@@ -53,7 +53,11 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
     '271.00000000'
   );
-  expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+  expect(container.querySelector('[data-tier="2"]')).toHaveClass(
+    'mt-24',
+    'border-t',
+    'border-base-border'
+  );
   expect(api.getItemCellVersions).toHaveBeenCalledWith('spore', id);
 });
 it('renders exact raw protocol bytes and current gene mapping with separate VM provenance', async () => {

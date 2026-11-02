@@ -153,7 +153,7 @@ function ObservationList({ observations }: { observations: NetworkAddressProbeEv
 
 function EvidenceDetail({ detail }: { detail: NetworkPeerDetail }) {
   return (
-    <div className="border-base-border bg-base-bg/70 space-y-4 border-t px-4 py-4 font-mono text-xs">
+    <div className="border-base-border bg-base-bg/70 text-small space-y-4 border-t px-4 py-4 font-mono">
       <div className="flex flex-wrap gap-x-6 gap-y-1">
         <span className="text-text-dim">
           Observation vantage:{' '}
@@ -322,58 +322,62 @@ function peerColumns(peer: NetworkPeerSummary): Array<{
     {
       label: 'Peer ID',
       value: peer.peerId,
-      cell: 'text-aqua truncate font-mono text-xs',
+      cell: 'text-aqua truncate font-mono text-small',
       pair: 'text-aqua [overflow-wrap:anywhere]',
     },
     {
       label: 'Dial alias',
       value: orDash(peer.primaryAddr),
-      cell: 'text-text truncate font-mono text-xs',
+      cell: 'text-text truncate font-mono text-small',
       pair: '[overflow-wrap:anywhere]',
       title: peer.primaryAddr ?? undefined,
     },
     {
       label: 'Participation evidence',
       value: participation.join(' · ') || '—',
-      cell: 'text-text-dim truncate text-xs',
+      cell: 'text-text-dim truncate text-small',
       title: participation.join(' · '),
     },
     {
       label: 'Session initiation',
       value: peer.sessionInitiators.map(sessionInitiatorLabel).join(' · ') || '—',
-      cell: 'text-text-dim truncate font-mono text-xs',
+      cell: 'text-text-dim truncate font-mono text-small',
     },
     {
       label: 'Crawler dial result',
       value: <Badge variant={state.variant}>{state.label}</Badge>,
       cell: '',
     },
-    { label: 'Version', value: orDash(peer.version), cell: 'text-text truncate font-mono text-xs' },
+    {
+      label: 'Version',
+      value: orDash(peer.version),
+      cell: 'text-text truncate font-mono text-small',
+    },
     {
       label: 'Country',
       value: orDash(peer.country),
-      cell: 'text-text truncate text-xs',
+      cell: 'text-text truncate text-small',
       title: peer.country ?? undefined,
     },
     {
       label: 'Latest evidence',
       value: formatTimeAgo(peer.latestPositiveObservedAt * 1000),
-      cell: 'text-text-dim text-xs',
+      cell: 'text-text-dim text-small',
     },
     {
       label: 'Last dial',
       value: optionalAge(peer.lastDialObservedAt),
-      cell: 'text-text-dim text-xs',
+      cell: 'text-text-dim text-small',
     },
     {
       label: 'Last verified',
       value: optionalAge(peer.lastReachableAt),
-      cell: 'text-text-dim text-xs',
+      cell: 'text-text-dim text-small',
     },
     {
       label: 'RTT',
       value: peer.rttMs == null ? '—' : `${peer.rttMs} ms`,
-      cell: 'text-text-dim text-right font-mono text-xs tabular-nums',
+      cell: 'text-text-dim text-right font-mono text-small tabular-nums',
     },
   ];
 }
@@ -386,9 +390,9 @@ function PeerEvidenceRow({ peerId }: { peerId: string }) {
   return (
     <TerminalRow data-testid="peer-evidence-row">
       {detail.isLoading ? (
-        <div className="text-text-dim px-4 py-3 font-mono text-xs">Loading evidence…</div>
+        <div className="text-text-dim text-small px-4 py-3 font-mono">Loading evidence…</div>
       ) : detail.isError || !detail.data ? (
-        <div className="text-negative px-4 py-3 font-mono text-xs">
+        <div className="text-negative text-small px-4 py-3 font-mono">
           Failed to load peer evidence.
         </div>
       ) : (
@@ -424,25 +428,27 @@ function PeerRow({ peer, folded }: { peer: NetworkPeerSummary; folded: boolean }
             {...toggle}
             className="grid min-h-[44px] w-full grid-cols-[14px_auto_minmax(0,1fr)] items-start gap-x-2 gap-y-0.5 px-1 py-2 text-left font-mono sm:px-3"
           >
-            <span aria-hidden="true" className="text-text-dim text-xs">
+            <span aria-hidden="true" className="text-text-dim text-small">
               {expanded ? '▾' : '▸'}
             </span>
             {/* The id keeps its width (already cut in the middle); the dial state takes what is
                 left of the line and wraps inside its badge only when it must. */}
-            <span className="text-aqua whitespace-nowrap text-xs">{truncateHash(peer.peerId)}</span>
+            <span className="text-aqua text-small whitespace-nowrap">
+              {truncateHash(peer.peerId)}
+            </span>
             <span className="min-w-0 justify-self-end">
-              <Badge variant={state.variant} className="text-[11px] leading-snug">
+              <Badge variant={state.variant} className="text-meta leading-snug">
                 {state.label}
               </Badge>
             </span>
-            <span className="text-text col-span-2 col-start-2 min-w-0 truncate text-[11px]">
+            <span className="text-text text-meta col-span-2 col-start-2 min-w-0 truncate">
               {orDash(peer.primaryAddr)}
             </span>
           </button>
           {expanded && (
             <dl
               data-testid="peer-columns"
-              className="grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono text-[11.5px] sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
+              className="text-meta grid grid-cols-[minmax(0,7.5rem)_minmax(0,1fr)] gap-x-3 gap-y-1 pb-3 pl-[26px] pr-1 font-mono sm:pl-[34px] sm:pr-3 lg:grid-cols-[7.5rem_minmax(0,1fr)_7.5rem_minmax(0,1fr)]"
             >
               {columns.map((c) => (
                 <Fragment key={c.label}>
@@ -467,7 +473,7 @@ function PeerRow({ peer, folded }: { peer: NetworkPeerSummary; folded: boolean }
           <button
             type="button"
             {...toggle}
-            className="text-aqua truncate text-left font-mono text-xs hover:underline"
+            className="text-aqua text-small truncate text-left font-mono hover:underline"
           >
             {expanded ? '▾ ' : '▸ '}
             <span>{truncateHash(peer.peerId)}</span>
@@ -536,7 +542,7 @@ export function PeersTable() {
           aria-expanded={filtersOpen}
           aria-controls={filtersId}
           onClick={() => setFiltersOpen((open) => !open)}
-          className="border-base-border bg-base-surface text-text hover:text-text-bright h-8 rounded-md border px-2.5 font-mono text-xs md:hidden"
+          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 rounded-md border px-2.5 font-mono md:hidden"
         >
           filters{activeFilters > 0 ? ` · ${activeFilters}` : ''}{' '}
           <span aria-hidden="true" className="text-text-dim">
@@ -563,7 +569,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by crawler dial state"
-              className="border-base-border bg-base-bg text-text min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
             >
               <option value="">All crawler dial states</option>
               {STATE_OPTIONS.map((option) => (
@@ -583,7 +589,7 @@ export function PeersTable() {
                 })
               }
               aria-label="Filter by address observation"
-              className="border-base-border bg-base-bg text-text min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
             >
               <option value="">All address observations</option>
               {OBSERVATION_OPTIONS.map((option) => (
@@ -600,7 +606,7 @@ export function PeersTable() {
               }
               placeholder="Country"
               aria-label="Filter by country"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
             />
             <input
               type="text"
@@ -610,14 +616,14 @@ export function PeersTable() {
               }
               placeholder="Version"
               aria-label="Filter by version"
-              className="border-base-border bg-base-bg text-text placeholder:text-text-dim min-w-0 max-w-full rounded border px-2 py-0.5 font-mono text-xs"
+              className="border-base-border bg-base-bg text-text placeholder:text-text-dim text-small min-w-0 max-w-full rounded border px-2 py-0.5 font-mono"
             />
           </div>
 
           <div>
             {!folded && (
               <div
-                className="border-base-border bg-base-surface/50 text-text-dim grid items-center gap-x-4 border-b px-4 py-2 font-mono text-xs"
+                className="border-base-border bg-base-surface/50 text-text-dim text-small grid items-center gap-x-4 border-b px-4 py-2 font-mono"
                 style={{ gridTemplateColumns: GRID_TEMPLATE, minWidth: GRID_MIN_PX }}
               >
                 {COLUMNS.map((label, index) => (
@@ -629,15 +635,15 @@ export function PeersTable() {
             )}
 
             {showSkeleton ? (
-              <div className="text-text-dim py-12 text-center font-mono text-sm">
+              <div className="text-text-dim text-body py-12 text-center font-mono">
                 Loading peer evidence…
               </div>
             ) : isError ? (
-              <div className="text-negative py-12 text-center font-mono text-sm">
+              <div className="text-negative text-body py-12 text-center font-mono">
                 Failed to load peer evidence.
               </div>
             ) : showEmpty ? (
-              <div className="text-text-dim py-12 text-center font-mono text-sm">
+              <div className="text-text-dim text-body py-12 text-center font-mono">
                 No peers match these evidence filters
               </div>
             ) : (
@@ -652,7 +658,7 @@ export function PeersTable() {
               type="button"
               onClick={() => setCursor(data.nextCursor ?? undefined)}
               disabled={isFetching}
-              className="text-text-dim hover:text-interactive font-mono text-xs transition-colors disabled:opacity-50"
+              className="text-text-dim hover:text-interactive text-small font-mono transition-colors disabled:opacity-50"
             >
               {isFetching ? 'Loading…' : 'Load more'}
             </button>

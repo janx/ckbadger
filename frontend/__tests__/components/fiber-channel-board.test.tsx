@@ -127,7 +127,7 @@ describe('FiberChannelBoard', () => {
   it('draws what each side put in at open as one split bar (FF-C3)', () => {
     const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
     expect(screen.getByRole('heading', { name: 'What moved inside the channel' })).toHaveClass(
-      'text-[15px]'
+      'text-section'
     );
     const bar = container.querySelector('[data-split="left"]') as HTMLElement;
     expect(parseFloat(bar.style.width)).toBeGreaterThan(94);
@@ -200,15 +200,15 @@ describe('FiberChannelBoard', () => {
     );
   });
 
-  it('keeps the lock evidence in tier 2: 72 px boundary, quiet 13 px headings (FF-C5, FF-C8)', () => {
+  it('keeps the lock evidence in tier 2: 96 px boundary, quiet 13 px headings (FF-C5, FF-C8, R6)', () => {
     const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(tier2).toHaveClass('mt-[72px]');
+    expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border');
     expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
     for (const name of ['The two locks', 'Witnesses and timing']) {
       const heading = screen.getByRole('heading', { name });
       expect(tier2).toContainElement(heading);
-      expect(heading).toHaveClass('text-[13px]', 'text-[#a0a8be]');
+      expect(heading).toHaveClass('text-body', 'text-[#a0a8be]');
     }
     expect(screen.getByText('Fiber Funding Lock · args, 20 bytes')).toBeInTheDocument();
     expect(

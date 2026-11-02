@@ -28,7 +28,7 @@ export function Hash({
       truncate={truncate}
       startChars={startChars}
       endChars={endChars}
-      className={cn('text-sm', className)}
+      className={cn('text-body', className)}
       copyable={copyable}
       variant={variant}
     />

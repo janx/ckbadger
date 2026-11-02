@@ -298,7 +298,7 @@ describe('Token board (F2 objects)', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByText(/xUDT · 8 decimals/, undefined, { timeout: 5000 })).toHaveClass(
-      'text-[13px]'
+      'text-body'
     );
     expect(
       await screen.findByText(/Another token also calls itself TEST/, undefined, { timeout: 5000 })

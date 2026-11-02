@@ -49,7 +49,7 @@ export function HexMap({
               onFocus={() => select(owners[0]?.id ?? null)}
               onBlur={() => select(null)}
               className={cn(
-                'min-w-[2.5ch] rounded-sm px-0.5 py-1 text-xs tabular-nums',
+                'text-small min-w-[2.5ch] rounded-sm px-0.5 py-1 tabular-nums',
                 highlighted ? 'bg-base-elevated text-text-bright' : 'text-text-dim'
               )}
               style={{ color: owners[0]?.color }}
@@ -69,7 +69,7 @@ export function HexMap({
             onFocus={() => select(f.id)}
             onBlur={() => select(null)}
             className={cn(
-              'text-left text-[11px]',
+              'text-meta text-left',
               active === f.id ? 'text-text-bright' : 'text-text-dim'
             )}
           >
@@ -80,7 +80,7 @@ export function HexMap({
           </button>
         ))}
       </div>
-      <p aria-live="polite" className="text-text min-h-5 text-xs">
+      <p aria-live="polite" className="text-text text-small min-h-5">
         {selected ? selected.description : `${bytes.length} bytes · inspect a field or byte`}
       </p>
     </div>

@@ -33,9 +33,9 @@ export function ChartCard({
       )}
     >
       <div className="from-base-elevated/50 border-base-border flex items-center justify-between border-b bg-gradient-to-r to-transparent px-3 py-2">
-        <h3 className="text-text font-mono text-sm uppercase tracking-wide">{title}</h3>
+        <h3 className="text-text text-body font-mono uppercase tracking-wide">{title}</h3>
         {href && (
-          <span className="text-jade font-mono text-xs opacity-0 transition-opacity group-hover:opacity-100">
+          <span className="text-jade text-small font-mono opacity-0 transition-opacity group-hover:opacity-100">
             VIEW →
           </span>
         )}
@@ -52,7 +52,7 @@ export function ChartCard({
             </div>
           </div>
         ) : error ? (
-          <div className="text-text-dim flex h-full items-center justify-center text-sm">
+          <div className="text-text-dim text-body flex h-full items-center justify-center">
             Failed to load data
           </div>
         ) : (
@@ -82,7 +82,7 @@ interface ChartSectionProps {
 export function ChartSection({ title, children, className }: ChartSectionProps) {
   return (
     <section className={cn('mb-6', className)}>
-      <h2 className="text-text-bright mb-4 flex items-center gap-3 font-mono text-lg uppercase tracking-wider">
+      <h2 className="text-text-bright text-section mb-4 flex items-center gap-3 font-mono uppercase tracking-wider">
         <span className="bg-emphasis h-2 w-2 rounded-full" />
         {title}
       </h2>
@@ -125,18 +125,18 @@ export function StatCard({
 
   return (
     <div className={cn('min-w-0 text-center', className)}>
-      <div className="text-text-dim font-mono text-[11px] uppercase tracking-wider">{label}</div>
+      <div className="text-text-dim text-meta font-mono uppercase tracking-wider">{label}</div>
       <div
         className={cn(
-          'text-text-bright mt-1 break-words font-mono text-xl font-bold tabular-nums leading-tight',
+          'text-text-bright text-hero mt-1 break-words font-mono font-bold tabular-nums leading-tight',
           valueClassName
         )}
       >
         {value}
       </div>
-      {subValue && <div className="text-text mt-0.5 text-sm">{subValue}</div>}
+      {subValue && <div className="text-text text-body mt-0.5">{subValue}</div>}
       {trend && (
-        <div className={cn('mt-0.5 font-mono text-xs', trendColors[trend.direction])}>
+        <div className={cn('text-small mt-0.5 font-mono', trendColors[trend.direction])}>
           {trendIcons[trend.direction]} {trend.value}
         </div>
       )}
@@ -164,7 +164,7 @@ export function FilterButtonGroup({
           key={option.label}
           onClick={() => onChange(option.value)}
           className={cn(
-            'rounded px-3 py-1 font-mono text-xs transition-colors',
+            'text-small rounded px-3 py-1 font-mono transition-colors',
             selected === option.value
               ? 'bg-emphasis text-base-bg'
               : 'bg-base-elevated text-text-dim hover:bg-base-border hover:text-text'

@@ -37,9 +37,13 @@ describe('Asset domain layout', () => {
         <p>Capacity history</p>
       </AssetDetailShell>
     );
-    expect(screen.getByRole('heading', { level: 1, name: 'Object' })).toHaveClass('text-[26px]');
+    expect(screen.getByRole('heading', { level: 1, name: 'Object' })).toHaveClass('text-entity');
     expect(container.querySelector('[data-tier="1"]')).toHaveTextContent('Capacity history');
-    expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+    expect(container.querySelector('[data-tier="2"]')).toHaveClass(
+      'mt-24',
+      'border-t',
+      'border-base-border'
+    );
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Inventory');
   });
   it('retains an explicit error when previously loaded data remains', () => {

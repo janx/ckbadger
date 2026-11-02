@@ -78,13 +78,13 @@ export function BlockContents({
           ))}
         </svg>
         {showCount && (
-          <span className="text-text-dim text-[11px]">
+          <span className="text-text-dim text-meta">
             {transactionSizes.length.toLocaleString('en-US')} tx
           </span>
         )}
       </span>
       {showCount && (userSizes.length > shown.length || proposalsCount > dots) && (
-        <span className="text-text-dim text-[11px]">
+        <span className="text-text-dim text-meta">
           {[
             ...(userSizes.length > shown.length
               ? [`+${userSizes.length - shown.length} tiles`]
@@ -202,7 +202,7 @@ export function ScaleHeader({
       <span
         data-scale-ticks
         aria-hidden="true"
-        className="flex justify-between text-[9.5px]"
+        className="text-meta flex justify-between"
         style={{ width: `${trackWidth}px` }}
       >
         <span>0</span>
@@ -238,7 +238,7 @@ export function BlocksLimitsFootnote({ blocks }: { blocks: readonly LimitRow[] }
   const bytesLimit = BigInt(maxBlockBytes);
   const cyclesLimit = BigInt(maxBlockCycles);
   return (
-    <p className="text-text-dim text-xs">
+    <p className="text-text-dim text-small">
       Size and cycles · Fullest of these {blocks.length.toLocaleString('en-US')}:{' '}
       <span className="text-text-bright">{fullest.size.toLocaleString('en-US')}</span> bytes,{' '}
       {formatPercent(BigInt(fullest.size), bytesLimit)}% of the{' '}

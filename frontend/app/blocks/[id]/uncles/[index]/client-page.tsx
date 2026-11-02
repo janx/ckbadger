@@ -132,12 +132,10 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
           value: (
             <>
               {formatUtc8DateTime(uncle.timestamp)}
-              <span className="text-text-dim block text-[11px]">
+              <span className="text-text-dim text-meta block">
                 {formatTimeAgo(uncle.timestamp)}
               </span>
-              {delay && (
-                <span className="text-text-dim block text-[11px]">{delay} its sibling</span>
-              )}
+              {delay && <span className="text-text-dim text-meta block">{delay} its sibling</span>}
             </>
           ),
         },
@@ -150,7 +148,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         <>
           <DetailSection title={`Proposals it carried (${uncle.proposalIds.length})`}>
             {uncle.proposalIds.length ? (
-              <ul className="space-y-1 font-mono text-xs">
+              <ul className="text-small space-y-1 font-mono">
                 {uncle.proposalIds.map((proposal) => (
                   <li key={proposal} className="break-all">
                     {proposal}
@@ -158,11 +156,11 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
                 ))}
               </ul>
             ) : (
-              <p className="text-text-dim text-xs">This uncle proposed nothing.</p>
+              <p className="text-text-dim text-small">This uncle proposed nothing.</p>
             )}
           </DetailSection>
           <DetailSection title="Header">
-            <dl className="grid min-w-0 gap-3 text-xs">
+            <dl className="text-small grid min-w-0 gap-3">
               <div className="text-text-dim">Header version {uncle.version}</div>
               <div className="grid gap-1 sm:grid-cols-[160px_minmax(0,1fr)]">
                 <dt className="text-text-dim">difficulty</dt>
@@ -197,7 +195,7 @@ function UncleEvidence({ uncle, id, index }: { uncle: BlockUncle; id: string; in
         </>
       }
     >
-      <p className="text-[13px] leading-relaxed">
+      <p className="text-body leading-relaxed">
         Uncle at height {formatBlockNumber(uncle.number)}, included by{' '}
         {blockLink(uncle.includedBy.number)}; {formatBlockNumber(uncle.number)} on the canonical
         chain is{' '}

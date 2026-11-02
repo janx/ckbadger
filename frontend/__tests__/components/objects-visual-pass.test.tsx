@@ -60,9 +60,9 @@ it('styles tier-2 evidence headings as tier 2 and names one byte as "byte N"', (
       />
     </DetailTier2>
   );
-  expect(screen.getByRole('heading', { name: 'DNA evidence' })).toHaveClass('text-[13px]');
+  expect(screen.getByRole('heading', { name: 'DNA evidence' })).toHaveClass('text-body');
   expect(screen.getByRole('heading', { name: 'What its configuration permits' })).toHaveClass(
-    'text-[13px]'
+    'text-body'
   );
   const evidence = screen.getByLabelText('DNA evidence');
   expect(evidence).toHaveTextContent('Color byte 32');

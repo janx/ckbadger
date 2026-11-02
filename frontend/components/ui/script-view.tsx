@@ -42,7 +42,7 @@ export function ScriptView({
 
   const headerContent = (
     <div className="flex items-center gap-2">
-      <span className="text-text font-mono text-sm font-medium">{label}</span>
+      <span className="text-text text-body font-mono font-medium">{label}</span>
       {scriptInfo && (
         <AppLink
           href={getScriptDetailHref({
@@ -52,7 +52,7 @@ export function ScriptView({
             scriptKind: scriptInfo.scriptKind,
           })}
           onClick={(e) => e.stopPropagation()}
-          className="border-base-border bg-base-elevated/70 text-text hover:bg-base-elevated inline-flex items-center gap-1 rounded border px-2 py-0.5 text-xs transition-colors"
+          className="border-base-border bg-base-elevated/70 text-text hover:bg-base-elevated text-small inline-flex items-center gap-1 rounded border px-2 py-0.5 transition-colors"
         >
           {scriptInfo.name}
           {scriptInfo.scriptKind && (
@@ -80,14 +80,14 @@ export function ScriptView({
         </div>
       )}
       {expanded && (
-        <div className="space-y-2 p-3 font-mono text-sm">
+        <div className="text-body space-y-2 p-3 font-mono">
           <div className="flex items-start gap-2">
             <span className="text-text-dim w-20 shrink-0">code_hash:</span>
             <Hash hash={script.codeHash} className="text-text" />
           </div>
           <div className="flex items-start gap-2">
             <span className="text-text-dim w-20 shrink-0">hash_type:</span>
-            <span className="border-base-border bg-base-elevated/70 text-text rounded border px-2 py-0.5 text-xs">
+            <span className="border-base-border bg-base-elevated/70 text-text text-small rounded border px-2 py-0.5">
               {getScriptRefBadgeLabel(script.hashType)}
             </span>
           </div>

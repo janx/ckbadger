@@ -48,7 +48,7 @@ export function StoreCatchingUpBanner() {
   if (detail === null) return null;
   return (
     <div role="status" aria-label="Catching up" className={BANNER_CLASS}>
-      <div className="container mx-auto flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs">
+      <div className="text-small container mx-auto flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
         <span className="text-emphasis">Catching up</span>
         <span>Catching up with the indexer. Retrying automatically.</span>
         <span className="text-text-dim min-w-0 truncate">{detail}</span>
@@ -67,7 +67,7 @@ export function DerivePendingBanner() {
   if (error === null) return null;
   return (
     <div role="status" aria-label="Being derived" className={BANNER_CLASS}>
-      <div className="container mx-auto flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono text-xs">
+      <div className="text-small container mx-auto flex flex-wrap items-baseline gap-x-3 gap-y-1 font-mono">
         <span className="text-emphasis">Being derived</span>
         {/* Without the optional `derive` field the API's own message is the whole statement. */}
         <span>{error.derive ? derivationSentence(error.derive) : error.apiMessage}</span>

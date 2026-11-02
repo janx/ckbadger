@@ -6,7 +6,7 @@ import type { ProposalGraphProps } from '@/components/proposal-graph-renderer';
 const ProposalGraphRenderer = dynamic(() => import('@/components/proposal-graph-renderer'), {
   loading: (props: ProposalGraphProps) => (
     <div className="space-y-4">
-      <div className="text-text-dim flex flex-wrap items-center gap-4 text-sm">
+      <div className="text-text-dim text-body flex flex-wrap items-center gap-4">
         <span>Loading proposal graph...</span>
       </div>
       <div

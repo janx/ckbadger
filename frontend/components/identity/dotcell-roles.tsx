@@ -70,8 +70,8 @@ export function DotcellRoles({
   return (
     <section aria-label="Owner and manager" className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 className="text-text-bright text-[15px] font-medium">Owner and manager</h2>
-        <span className="text-text-dim text-[12px]">
+        <h2 className="text-text-bright text-section font-medium">Owner and manager</h2>
+        <span className="text-text-dim text-small">
           stored as 20-byte lock-hash prefixes in the name&apos;s cell
         </span>
       </div>
@@ -86,17 +86,17 @@ export function DotcellRoles({
               c.accent ? 'border-identity/50' : 'border-base-border'
             )}
           >
-            <span className="text-text-dim text-[12px]">{c.label}</span>
+            <span className="text-text-dim text-small">{c.label}</span>
             <span>
               <PartyLine party={c.party} size={14} />
             </span>
-            <span className="text-text-dim text-[12px]">
+            <span className="text-text-dim text-small">
               since {formatUtc8Date(c.since)} · {c.note}
             </span>
           </div>
         ))}
       </div>
-      <h3 className="text-text-dim pt-1 text-[12px] font-normal">Owners so far</h3>
+      <h3 className="text-text-dim text-small pt-1 font-normal">Owners so far</h3>
       <ol className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-stretch">
         {runs.map((run, i) => {
           const step = i === runs.length - 1 ? 'now' : i === 0 ? 'registered' : '';
@@ -110,19 +110,19 @@ export function DotcellRoles({
                 step === 'now' ? 'border-identity/60' : 'border-base-border border-dashed'
               )}
             >
-              <span className="text-text-dim text-[11.5px]">
+              <span className="text-text-dim text-meta">
                 {formatUtc8Date(run.since.cell.timestamp)}
                 {step ? ` · ${step}` : ''}
               </span>
               <span
                 className={cn(
-                  'truncate text-[12.5px]',
+                  'text-body truncate',
                   step === 'now' ? 'text-text-bright' : 'text-text'
                 )}
               >
                 {partyShort(party)}
               </span>
-              <span className="text-text-dim text-[11.5px]">
+              <span className="text-text-dim text-meta">
                 {party.scriptName ?? 'lock not named'}
               </span>
             </li>

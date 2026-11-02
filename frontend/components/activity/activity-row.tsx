@@ -60,16 +60,16 @@ export function ActivityRowHead({
 }) {
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
-      <span data-role="headline" className="text-text-bright text-[13px] font-medium">
+      <span data-role="headline" className="text-text-bright text-body font-medium">
         {title}
       </span>
       {showEvidence && evidence !== undefined && (
-        <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
+        <span data-role="evidence" className="text-text-dim text-meta shrink-0">
           {evidence}
         </span>
       )}
       {showEvidence && evidence === undefined && (
-        <span data-role="evidence" className="text-text-dim shrink-0 text-[11px]">
+        <span data-role="evidence" className="text-text-dim text-meta shrink-0">
           {blockNumber !== null ? (
             <Link href={`/blocks/${blockNumber}`} className="hover:text-text transition-colors">
               {formatBlockNumber(blockNumber)}
@@ -100,8 +100,8 @@ export function ActivityRowHead({
 /** A detail line under the headline, indented: a short dim label column, then the text. */
 function DetailLine({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div data-role="detail" className="text-text flex items-baseline gap-2 pl-3.5 text-xs">
-      <span className="text-text-dim w-[30px] shrink-0 text-[11px]">{label}</span>
+    <div data-role="detail" className="text-text text-small flex items-baseline gap-2 pl-3.5">
+      <span className="text-text-dim text-meta w-[30px] shrink-0">{label}</span>
       <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
     </div>
   );
@@ -239,7 +239,7 @@ export function formatOccupiedDelta(usedDelta: string): string {
 // content width, too narrow for the 4/5-track rows (their item track started at x≈605). The tracks
 // start at md.
 const PARTICIPANT_GRID =
-  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)] md:items-baseline md:gap-x-3';
+  'flex flex-col gap-y-0.5 pl-3.5 text-small md:grid md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
@@ -253,7 +253,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 // ── F2 objects (round 2): the asset boards' participant line — lock kind as its own unwrapped
 // column (IV-14, OB-12), and a batch of objects folded behind "+N more objects" (OB-M3). ──
 const PARTICIPANT_GRID_LOCK =
-  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)] md:items-baseline md:gap-x-3';
+  'flex flex-col gap-y-0.5 pl-3.5 text-small md:grid md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 function FoldedItemDeltas({
   items,
   focusItemId,
@@ -286,7 +286,7 @@ function FoldedItemDeltas({
         type="button"
         aria-expanded={false}
         onClick={() => setOpen(true)}
-        className="border-base-border text-text hover:text-text-bright h-6 rounded-md border px-2 text-[11.5px]"
+        className="border-base-border text-text hover:text-text-bright text-meta h-6 rounded-md border px-2"
       >
         +{objects.length - 1} more object{objects.length - 1 === 1 ? '' : 's'}
       </button>
@@ -348,12 +348,12 @@ function ParticipantLine({
         >
           <ParticipantRefView participant={p} compact quiet />
           {!lockColumn && p.lockKind && (
-            <span className="text-text-dim shrink-0 whitespace-nowrap text-[11px] md:ml-2">
+            <span className="text-text-dim text-meta shrink-0 whitespace-nowrap md:ml-2">
               {p.lockKind}
             </span>
           )}
           {p.lockHash !== null && notes?.has(p.lockHash) && (
-            <span data-role="participant-note" className="text-text-dim text-[11px] md:ml-2">
+            <span data-role="participant-note" className="text-text-dim text-meta md:ml-2">
               {notes.get(p.lockHash)}
             </span>
           )}
@@ -363,7 +363,7 @@ function ParticipantLine({
         {lockColumn && (
           <div
             data-role="lock-kind"
-            className="text-text-dim shrink-0 whitespace-nowrap text-[11.5px] md:col-start-2 md:block md:min-w-0 md:truncate"
+            className="text-text-dim text-meta shrink-0 whitespace-nowrap md:col-start-2 md:block md:min-w-0 md:truncate"
             title={p.lockKind ?? undefined}
           >
             {p.lockKind ?? ''}
@@ -387,7 +387,7 @@ function ParticipantLine({
             data-role="object-count"
             aria-expanded={objectsOpen}
             onClick={() => setObjectsOpen((open) => !open)}
-            className="border-base-border text-text hover:text-text-bright h-6 whitespace-nowrap rounded-md border px-2 text-[11.5px]"
+            className="border-base-border text-text hover:text-text-bright text-meta h-6 whitespace-nowrap rounded-md border px-2"
           >
             {objectCountLabel(p.itemDeltas)}
           </button>
@@ -400,7 +400,7 @@ function ParticipantLine({
         <div
           data-role="occupied"
           className={cn(
-            'text-text-dim col-start-2 whitespace-nowrap text-right text-[11px] md:basis-auto',
+            'text-text-dim text-meta col-start-2 whitespace-nowrap text-right md:basis-auto',
             // The asset boards' phone form keeps occupied on the participant's line.
             !foldObjects && 'basis-full',
             lockColumn ? 'md:col-start-4' : 'md:col-start-3'
@@ -482,7 +482,7 @@ function Participants({
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade col-span-full self-start bg-transparent py-1 text-xs transition-colors md:justify-self-start"
+          className="text-interactive hover:text-jade text-small col-span-full self-start bg-transparent py-1 transition-colors md:justify-self-start"
         >
           {expanded ? 'Show fewer participants' : `+${hidden} participants`}
         </button>

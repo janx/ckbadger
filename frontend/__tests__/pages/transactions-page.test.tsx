@@ -101,7 +101,7 @@ describe('TransactionsPage', () => {
     const hash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     expect(screen.getAllByTitle(hash)).toHaveLength(1);
     for (const hashDisplay of screen.getAllByTitle(hash)) {
-      expect(hashDisplay).toHaveClass('text-text', 'text-xs');
+      expect(hashDisplay).toHaveClass('text-text', 'text-small');
       expect(hashDisplay.children).toHaveLength(0);
       expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
     }
@@ -224,7 +224,7 @@ describe('Transactions pool view', () => {
     expect(pool).toHaveTextContent('Status · waiting');
     expect(pool).not.toHaveTextContent('Seen');
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
-      expect(hash).toHaveClass('text-text', 'text-xs');
+      expect(hash).toHaveClass('text-text', 'text-small');
       expect(hash).toHaveTextContent('0xababababab...ababab');
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);

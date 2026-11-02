@@ -425,23 +425,23 @@ export function Chart({
         }
       >
         <span>
-          <span className="text-text-bright block text-[15px] font-medium">{title}</span>
-          <span className="text-text-dim text-[11px]">
+          <span className="text-text-bright text-body block font-medium">{title}</span>
+          <span className="text-text-dim text-meta">
             {activeIndex === null ? subtitle : selected && formatLabel(selected.label)}
           </span>
         </span>
         {!seriesLegend && (
-          <span className="text-text-bright flex flex-wrap justify-end gap-3 text-[18px] tabular-nums">
+          <span className="text-text-bright text-hero flex flex-wrap justify-end gap-3 tabular-nums">
             {selected &&
               series.map((s, i) => (
                 <span key={s.key}>
                   {series.length > 1 && (
-                    <span className="mr-2 text-[11px]" style={{ color: color(i) }}>
+                    <span className="text-meta mr-2" style={{ color: color(i) }}>
                       {s.label}
                     </span>
                   )}
                   {formatValue(selected.values[s.key])}
-                  <span className="text-text-dim text-[11px]"> {unit}</span>
+                  <span className="text-text-dim text-meta"> {unit}</span>
                 </span>
               ))}
           </span>
@@ -449,11 +449,11 @@ export function Chart({
       </figcaption>
       <div ref={ref} className="min-w-0" style={{ minHeight: height }}>
         {!data.length ? (
-          <p className="text-text-dim py-8 text-xs">No data in this range.</p>
+          <p className="text-text-dim text-small py-8">No data in this range.</p>
         ) : kind === 'ranked' ? (
           <ol className="space-y-3">
             {data.map((p, i) => (
-              <li key={`${p.label}:${i}`} className="text-xs">
+              <li key={`${p.label}:${i}`} className="text-small">
                 <div className="flex flex-wrap justify-between gap-2">
                   <span>{p.label}</span>
                   <span className="tabular-nums">
@@ -838,7 +838,7 @@ export function Chart({
         </div>
       )}
       {seriesLegend && (
-        <ul aria-label={`${title} legend`} className="mt-3 flex flex-col gap-1 text-[13px]">
+        <ul aria-label={`${title} legend`} className="text-body mt-3 flex flex-col gap-1">
           {series.map((s, i) => (
             <li key={s.key} className="flex min-w-0 flex-wrap items-baseline justify-start gap-x-2">
               <span className="flex min-w-0 items-baseline gap-2">
@@ -853,7 +853,7 @@ export function Chart({
               {selected && (
                 <span className="text-text-bright whitespace-nowrap tabular-nums">
                   {formatValue(selected.values[s.key])}
-                  <span className="text-text-dim text-[11px]"> {unit}</span>
+                  <span className="text-text-dim text-meta"> {unit}</span>
                 </span>
               )}
             </li>
@@ -869,7 +869,7 @@ export function Chart({
         </span>
       )}
       {markers.length > 0 && !hideMarkerLegend && (
-        <div className="text-text-dim mt-2 flex flex-wrap gap-4 text-[11px]">
+        <div className="text-text-dim text-meta mt-2 flex flex-wrap gap-4">
           {markers.map((m) => (
             <Link key={`${m.index}:${m.label}`} href={m.href} className="hover:text-jade">
               {m.label} · {data[m.index].label}

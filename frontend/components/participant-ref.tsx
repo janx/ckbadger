@@ -52,7 +52,7 @@ export function ParticipantRefView({
           <Link
             href={`/address/${address}`}
             className={cn(
-              'shrink-0 font-mono text-xs transition-colors',
+              'text-small shrink-0 font-mono transition-colors',
               quiet
                 ? 'text-text hover:text-jade'
                 : isCkbAddr
@@ -67,7 +67,7 @@ export function ParticipantRefView({
         ) : (
           <Address address={address} />
         )}
-        {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+        {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
     );
   }
@@ -80,14 +80,14 @@ export function ParticipantRefView({
           href={`/address/${lockHash}`}
           className={cn(
             'text-text-dim hover:text-aqua font-mono transition-colors',
-            compact ? 'shrink-0 text-xs' : 'text-sm'
+            compact ? 'text-small shrink-0' : 'text-body'
           )}
           title={lockHash}
           onClick={(e) => e.stopPropagation()}
         >
           {compact ? compactLabel(lockHash) : truncateHash(lockHash, 10, 6)}
         </Link>
-        {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+        {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
       </span>
     );
   }
@@ -101,20 +101,20 @@ export function ParticipantRefView({
   return (
     <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
       <span
-        className={cn('text-text-dim font-mono', compact ? 'text-xs' : 'text-sm')}
+        className={cn('text-text-dim font-mono', compact ? 'text-small' : 'text-body')}
         title={prefix}
       >
         {compact ? compactLabel(prefix) : truncateHash(prefix, 10, 6)}
       </span>
       <span
         className={cn(
-          'text-text-dim/70 font-mono text-[10px] uppercase',
+          'text-text-dim/70 text-meta font-mono uppercase',
           !compact && 'border-border rounded border px-1'
         )}
       >
         unresolved
       </span>
-      {roles && <span className="text-text-dim font-mono text-[10px]">{roles}</span>}
+      {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
     </span>
   );
 }

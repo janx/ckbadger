@@ -41,7 +41,7 @@ export function scriptCodeWord(family: ScriptFamilyDetail): string | null {
 export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   const code = scriptCodeWord(family);
   return (
-    <span className="text-text-dim text-[13px]">
+    <span className="text-text-dim text-body">
       {roleNoun(family.scriptKind)}
       {code ? ` · ${code}` : ''}
     </span>
@@ -78,7 +78,7 @@ export function ScriptSummarySentence({
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
   return (
-    <p data-testid="script-summary" className="max-w-[780px] text-[15px] leading-relaxed">
+    <p data-testid="script-summary" className="text-body max-w-[780px] leading-relaxed">
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
@@ -108,7 +108,7 @@ export function ScriptSummarySentence({
 function RailFact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <dt className="text-text-dim text-xs">{label}</dt>
+      <dt className="text-text-dim text-small">{label}</dt>
       {children}
     </div>
   );
@@ -135,10 +135,10 @@ export function ScriptFactsRail({
     <aside aria-label="Script facts" className="min-w-0 lg:sticky lg:top-4 lg:pt-8">
       <dl className="flex flex-col gap-4">
         <RailFact label="Live cells">
-          <dd className="text-text-bright mt-1 text-[18px] font-medium tabular-nums">
+          <dd className="text-text-bright text-hero mt-1 font-medium tabular-nums">
             {family.liveCellsCount.toLocaleString('en-US')}
           </dd>
-          <dd className="text-text-dim mt-1 text-xs">
+          <dd className="text-text-dim text-small mt-1">
             of {family.cellsCount.toLocaleString('en-US')} that ever used it ·{' '}
             <a href="#its-cells" className="hover:text-text-bright whitespace-nowrap">
               list them →
@@ -146,7 +146,7 @@ export function ScriptFactsRail({
           </dd>
         </RailFact>
         <RailFact label="CKB in its cells">
-          <dd className="mt-1 text-[15px]">
+          <dd className="text-body mt-1">
             <ExactCkb shannons={capacity} signed={false} tone="plain" />
           </dd>
           {share && (
@@ -160,7 +160,7 @@ export function ScriptFactsRail({
               <span className="flex-1" style={{ backgroundColor: '#2c3348' }} />
             </dd>
           )}
-          <dd className="text-text-dim mt-1 text-xs">
+          <dd className="text-text-dim text-small mt-1">
             <span style={{ color: DATA_COLOR }}>
               <ExactCkb shannons={occupied} signed={false} tone="plain" />
             </span>{' '}
@@ -169,13 +169,13 @@ export function ScriptFactsRail({
         </RailFact>
         {code && (
           <RailFact label="Code">
-            <dd className="text-text-bright mt-1 text-[15px]">
+            <dd className="text-text-bright text-body mt-1">
               {code === 'immutable'
                 ? 'Immutable'
                 : `Upgradable · ${formatCount(family.versionsCount, 'version')}`}
             </dd>
             {code === 'upgradable' && last && lineage!.length > 1 && (
-              <dd className="text-text-dim mt-1 text-xs">
+              <dd className="text-text-dim text-small mt-1">
                 last replaced {formatUtc8Date(last.timestamp)}
               </dd>
             )}
@@ -183,7 +183,7 @@ export function ScriptFactsRail({
         )}
         {last && (
           <RailFact label="Code cell held by">
-            <dd className="mt-1 text-xs">
+            <dd className="text-small mt-1">
               <Link
                 href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
                 className="text-text hover:text-jade"
@@ -192,13 +192,13 @@ export function ScriptFactsRail({
               </Link>
             </dd>
             {last.custody.witnessState === 'never_signed' && (
-              <dd className="text-text-dim mt-0.5 text-xs">has never signed</dd>
+              <dd className="text-text-dim text-small mt-0.5">has never signed</dd>
             )}
           </RailFact>
         )}
         {Number.isFinite(firstDeployed) && (
           <RailFact label="In use since">
-            <dd className="text-text-bright mt-1 text-[15px]">{formatUtc8Date(firstDeployed)}</dd>
+            <dd className="text-text-bright text-body mt-1">{formatUtc8Date(firstDeployed)}</dd>
           </RailFact>
         )}
       </dl>
@@ -274,13 +274,15 @@ export function ScriptHistory({
       <div
         aria-live="polite"
         data-testid="script-history-reading"
-        className="border-base-elevated flex min-h-10 flex-wrap items-baseline gap-x-6 gap-y-1.5 border-b pb-2.5 text-xs"
+        className="border-base-elevated text-small flex min-h-10 flex-wrap items-baseline gap-x-6 gap-y-1.5 border-b pb-2.5"
       >
         {point && used !== null && unused !== null ? (
           <>
-            <span className="text-text-bright text-[13px]">
+            <span className="text-text-bright text-body">
               {point.date}
-              {active === null && <span className="text-text-dim text-xs"> · last full day</span>}
+              {active === null && (
+                <span className="text-text-dim text-small"> · last full day</span>
+              )}
             </span>
             <span className="flex items-baseline gap-1.5">
               <span className="text-text-dim">CKB held</span>{' '}
@@ -336,7 +338,7 @@ export function ScriptHistory({
             );
           })}
         </div>
-        <p className="text-text-dim mb-1 mt-3 text-[11px]">CKB in {family.name} cells</p>
+        <p className="text-text-dim text-meta mb-1 mt-3">CKB in {family.name} cells</p>
         <Chart
           {...shared}
           title={`CKB in ${family.name} cells`}
@@ -347,9 +349,7 @@ export function ScriptHistory({
             { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
           ]}
         />
-        <p className="text-text-dim mb-1 mt-4 text-[11px]">
-          Occupied by those cells&apos; own bytes
-        </p>
+        <p className="text-text-dim text-meta mb-1 mt-4">Occupied by those cells&apos; own bytes</p>
         <Chart
           {...shared}
           title="Occupied by those cells' own bytes"
@@ -359,7 +359,7 @@ export function ScriptHistory({
           series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
         />
         {lineage && chart.data.length > 0 && (
-          <div aria-label="Code track" className="mt-2 text-[10.5px]">
+          <div aria-label="Code track" className="text-meta mt-2">
             <div className="relative h-8 pl-[88px] pr-[10px]">
               <span className="text-text-dim absolute left-0 top-0">code</span>
               <div className="relative h-full">
@@ -423,7 +423,7 @@ export function ScriptHistory({
         )}
       </div>
       {peak && (
-        <p data-testid="script-history-peak" className="text-text-dim mt-3 text-xs">
+        <p data-testid="script-history-peak" className="text-text-dim text-small mt-3">
           CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
           on {peak.date}
           {capacity > BigInt(0) && (
@@ -438,7 +438,7 @@ export function ScriptHistory({
           )}
         </p>
       )}
-      <p className="text-text-dim mt-3 max-w-[780px] text-xs leading-relaxed">
+      <p className="text-text-dim text-small mt-3 max-w-[780px] leading-relaxed">
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-[#a0a8be]">free</span> is CKB its owners keep
@@ -477,13 +477,13 @@ export function ScriptCustodyFigure({
     const classes = family.codeClasses ?? [];
     if (classes.length && classes.every((row) => isImmutableClass(row.class)))
       return (
-        <p className="max-w-[780px] text-[13px] leading-relaxed">
+        <p className="text-body max-w-[780px] leading-relaxed">
           No one. {family.name} cells name their code by its data hash, or through a code cell that
           can never be spent, so the code they run cannot be replaced.
         </p>
       );
     return (
-      <div className="space-y-3 text-xs">
+      <div className="text-small space-y-3">
         {(family.references ?? []).map((reference) => (
           <div key={`${reference.hashType}:${reference.referenceHash}`}>
             <div className="text-text-dim mb-1 break-all">
@@ -518,7 +518,7 @@ export function ScriptCustodyFigure({
   });
   return (
     <div className="min-w-0 space-y-4">
-      <p className="max-w-[780px] text-[13px] leading-relaxed">
+      <p className="text-body max-w-[780px] leading-relaxed">
         {family.name} cells point at their code through one code cell&apos;s type id, not at a fixed
         binary. Whoever can spend that cell can put new code in it, and every {family.name} cell
         runs the new code from the next block. {NUMBER_WORDS[holders.length] ?? holders.length}{' '}
@@ -537,13 +537,13 @@ export function ScriptCustodyFigure({
         style={{ ['--holders' as string]: holders.length }}
       >
         {holders.map((holder, i) => (
-          <li key={holder.lockArgs} data-holder={holder.lockArgs} className="min-w-0 text-xs">
-            <div className="text-text-dim text-[11px]">
+          <li key={holder.lockArgs} data-holder={holder.lockArgs} className="text-small min-w-0">
+            <div className="text-text-dim text-meta">
               {holder.until
                 ? `${formatUtc8Date(holder.from.timestamp)} → ${formatUtc8Date(holder.until.timestamp)}`
                 : `since ${formatUtc8Date(holder.from.timestamp)}`}
             </div>
-            <div className="text-text-bright mt-1 text-[13.5px]">
+            <div className="text-text-bright text-body mt-1">
               {i > 0 && (
                 <span aria-hidden="true" className="text-[#4b5266]">
                   →{' '}
@@ -556,7 +556,7 @@ export function ScriptCustodyFigure({
                 {signingText(holder)}
               </div>
             )}
-            <div className="text-text-dim mt-0.5 text-[11px]">
+            <div className="text-text-dim text-meta mt-0.5">
               {holder.signed.length
                 ? `signed ${versionList(holder.signed)}`
                 : holder.neverSigned
@@ -569,7 +569,7 @@ export function ScriptCustodyFigure({
                   <li
                     key={key}
                     data-kept={kept(i, key)}
-                    className="flex items-center gap-2 text-[11px]"
+                    className="text-meta flex items-center gap-2"
                   >
                     <svg width="8" height="8" aria-hidden="true" className="shrink-0">
                       <circle
@@ -587,7 +587,7 @@ export function ScriptCustodyFigure({
                 ))}
               </ul>
             ) : holder.neverSigned ? (
-              <div className="mt-3 rounded border border-dashed border-[#343c50] p-3 text-[11.5px] text-[#a0a8be]">
+              <div className="text-meta mt-3 rounded border border-dashed border-[#343c50] p-3 text-[#a0a8be]">
                 Its keys and threshold appear on chain the first time it signs.
               </div>
             ) : null}
@@ -595,7 +595,7 @@ export function ScriptCustodyFigure({
         ))}
       </ol>
       {handovers.map((handover) => (
-        <p key={handover.day} className="text-text-dim text-[11px]">
+        <p key={handover.day} className="text-text-dim text-meta">
           ● kept across the handover on {handover.day}: {handover.common} of {handover.total} keys ·
           ○ replaced: {handover.total - handover.common} of {handover.total}
         </p>
@@ -619,7 +619,7 @@ export function ScriptUseInTransaction({ family }: { family: ScriptFamilyDetail 
         return (
           <dl
             key={`${reference.hashType}:${reference.referenceHash}`}
-            className="grid gap-x-10 gap-y-3 text-xs md:grid-cols-3"
+            className="text-small grid gap-x-10 gap-y-3 md:grid-cols-3"
           >
             <div className="min-w-0">
               <dt className="text-text-dim">Code hash · hash type</dt>
@@ -683,7 +683,7 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
         ? 'as their type'
         : 'as lock or type';
   return (
-    <span data-testid="script-cells-summary" className="text-text-dim text-xs">
+    <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
       <ExactCkb shannons={BigInt(family.ownedCapacitySum)} signed={false} tone="plain" />,{' '}
       <ExactCkb shannons={BigInt(family.ownedKnowledgeSum)} signed={false} tone="plain" /> of it

@@ -56,11 +56,13 @@ export function TransactionEvidence({
   });
   if (transaction.isPending || dependencies.isPending)
     return (
-      <p className="text-text-dim text-xs">Loading {label.toLowerCase()} transaction evidence…</p>
+      <p className="text-text-dim text-small">
+        Loading {label.toLowerCase()} transaction evidence…
+      </p>
     );
   if (transaction.error || dependencies.error)
     return (
-      <p role="alert" className="text-rouge break-all text-xs">
+      <p role="alert" className="text-rouge text-small break-all">
         {label} transaction evidence unavailable: {String(transaction.error ?? dependencies.error)}
       </p>
     );
@@ -137,7 +139,7 @@ export function TransactionEvidence({
   });
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-baseline gap-3 text-xs">
+      <div className="text-small flex flex-wrap items-baseline gap-3">
         <span className="text-text-bright">{label}</span>
         <Link href={`/tx/${hash}`} className="break-all text-[#7aa7d6]">
           {hash}
@@ -180,7 +182,7 @@ function NotSpentYet({
   return (
     <div
       data-testid="not-spent-yet"
-      className="flex max-w-[640px] flex-col gap-1.5 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5 text-xs"
+      className="text-small flex max-w-[640px] flex-col gap-1.5 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5"
     >
       <div className="flex flex-wrap justify-between gap-2">
         <span className="text-text-bright">{replaced ? 'Not replaced yet' : 'Not spent yet'}</span>
@@ -238,7 +240,7 @@ function NotSpentYet({
           </div>
         ))}
       </div>
-      <p className="text-text-dim text-[11px]">
+      <p className="text-text-dim text-meta">
         Current code cells at the indexed tip; the spender picks its own cell deps.
       </p>
     </div>

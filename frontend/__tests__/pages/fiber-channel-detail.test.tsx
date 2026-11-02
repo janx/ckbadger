@@ -44,7 +44,7 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
       '/mainnet/fiber/channels'
     );
     expect(screen.getByRole('heading', { level: 1, name: 'Fiber channel' })).toHaveClass(
-      'text-[26px]'
+      'text-entity'
     );
     expect(await screen.findByText('force-closed · settled')).toBeInTheDocument();
     // no jade uppercase eyebrow (FF-C6)

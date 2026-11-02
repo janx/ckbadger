@@ -23,24 +23,24 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
   });
 
   if (isLoading) {
-    return <div className="text-text-dim px-4 py-3 text-xs">Loading code cells...</div>;
+    return <div className="text-text-dim text-small px-4 py-3">Loading code cells...</div>;
   }
 
   if (data?.ambiguity) {
     return (
-      <div className="text-text-dim px-4 py-3 text-xs">
+      <div className="text-text-dim text-small px-4 py-3">
         Current live script resolution is ambiguous across multiple bytecode versions.
       </div>
     );
   }
 
   if (!data || data.codeCells.length === 0) {
-    return <div className="text-text-dim px-4 py-3 text-xs">No code cells found</div>;
+    return <div className="text-text-dim text-small px-4 py-3">No code cells found</div>;
   }
 
   return (
     <div>
-      <div className="border-base-border bg-base-surface/50 text-text-dim flex items-center gap-x-4 border-b px-4 py-2 font-mono text-xs uppercase tracking-wider">
+      <div className="border-base-border bg-base-surface/50 text-text-dim text-small flex items-center gap-x-4 border-b px-4 py-2 font-mono uppercase tracking-wider">
         <div className="w-48">Outpoint</div>
         <div className="w-20">Status</div>
         <div className="w-28 text-right">Created At</div>
@@ -67,13 +67,13 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
             <div className="w-28 text-right">
               <Link
                 href={`/blocks/${cell.createdAtBlock}`}
-                className="text-emphasis font-mono text-xs hover:underline"
+                className="text-emphasis text-small font-mono hover:underline"
               >
                 {formatBlockNumber(cell.createdAtBlock)}
               </Link>
             </div>
             <div className="flex-1 text-right">
-              <Capacity value={cell.capacity} className="text-sm" />
+              <Capacity value={cell.capacity} className="text-body" />
             </div>
           </div>
         </TerminalRow>
@@ -92,7 +92,7 @@ export function CodeCellsSummary({
   const consumedCount = totalCount - liveCount;
   if (totalCount === 0) return <span className="text-text-dim">-</span>;
   return (
-    <span className="text-text-dim text-xs">
+    <span className="text-text-dim text-small">
       {liveCount > 0 && <span className="text-positive">{liveCount} live</span>}
       {liveCount > 0 && consumedCount > 0 && ', '}
       {consumedCount > 0 && <span>{consumedCount} consumed</span>}

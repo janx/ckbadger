@@ -30,26 +30,26 @@ export function ObjectCollectionStatCards({
     <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
-          <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+          <div className="text-text-dim text-small font-mono uppercase tracking-wider">
             {totalLabel}
           </div>
-          <div className="text-warning text-2xl font-semibold tabular-nums">
+          <div className="text-warning text-index font-semibold tabular-nums">
             {formatNumber(totalCount)}
           </div>
-          <div className="text-text-dim font-mono text-xs">Full collection supply</div>
+          <div className="text-text-dim text-small font-mono">Full collection supply</div>
         </TerminalPanelContent>
       </TerminalPanel>
 
       {showLiveCount && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim text-small font-mono uppercase tracking-wider">
               Live Items
             </div>
-            <div className="text-gold text-2xl font-semibold tabular-nums">
+            <div className="text-gold text-index font-semibold tabular-nums">
               {formatNumber(liveCount)}
             </div>
-            <div className="text-text-dim font-mono text-xs">Currently on-chain</div>
+            <div className="text-text-dim text-small font-mono">Currently on-chain</div>
           </TerminalPanelContent>
         </TerminalPanel>
       )}
@@ -57,17 +57,17 @@ export function ObjectCollectionStatCards({
       {compositionTier && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim text-small font-mono uppercase tracking-wider">
               Storage Integrity
             </div>
-            <div className="flex items-center gap-1 text-base font-semibold">
+            <div className="text-body flex items-center gap-1 font-semibold">
               <span className={compositionTierCardStyle(compositionTier).text}>
                 {formatCompositionTier(compositionTier)}
               </span>
               <CompositionTierTooltip tier={compositionTier} />
             </div>
             {storageOnchainRatio && (
-              <div className="text-text-dim font-mono text-xs">
+              <div className="text-text-dim text-small font-mono">
                 On-chain ratio: {formatDecimal(storageOnchainRatio, 2, 100)}%
               </div>
             )}
@@ -78,16 +78,18 @@ export function ObjectCollectionStatCards({
       {createdAtBlock !== undefined && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-dim font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim text-small font-mono uppercase tracking-wider">
               Created At
             </div>
             <Link
               href={`/blocks/${createdAtBlock}`}
-              className="text-gold font-mono text-lg hover:underline"
+              className="text-gold text-hero font-mono hover:underline"
             >
               {formatBlockNumber(createdAtBlock)}
             </Link>
-            <div className="text-text-dim font-mono text-xs">Genesis block of this collection</div>
+            <div className="text-text-dim text-small font-mono">
+              Genesis block of this collection
+            </div>
           </TerminalPanelContent>
         </TerminalPanel>
       )}

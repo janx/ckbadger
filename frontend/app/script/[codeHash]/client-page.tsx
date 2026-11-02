@@ -93,7 +93,7 @@ export default function ScriptByCodeHashPage({
       <div className="bg-base-bg min-h-screen">
         <Header />
         <main className="container mx-auto px-4 py-8">
-          <div className="text-text-dim text-sm">Resolving script page...</div>
+          <div className="text-text-dim text-body">Resolving script page...</div>
         </main>
       </div>
     );

@@ -15,7 +15,23 @@ import {
   formatUnixSecondsUtc8,
   hexToBytes,
   bytesToHex,
+  cn,
 } from '@/lib/utils';
+
+describe('cn and the type scale', () => {
+  // twMerge reads an unknown `text-<word>` as a colour: without the scale it dropped
+  // `text-text-dim` from `text-text-dim text-meta`, so every tokenised size cost its colour.
+  it('keeps a size step beside a colour class', () => {
+    expect(cn('text-text-dim', 'text-meta')).toBe('text-text-dim text-meta');
+    expect(cn('text-section text-[#a0a8be]')).toBe('text-section text-[#a0a8be]');
+    expect(cn('text-jade', 'text-display')).toBe('text-jade text-display');
+  });
+  it('lets a later size win over an earlier one, per breakpoint', () => {
+    expect(cn('text-body', 'text-section')).toBe('text-section');
+    expect(cn('text-meta', 'text-small')).toBe('text-small');
+    expect(cn('text-index', 'sm:text-display')).toBe('text-index sm:text-display');
+  });
+});
 
 describe('formatCkbCompact', () => {
   it('rounds a large shannon amount without losing the threshold bit', () => {

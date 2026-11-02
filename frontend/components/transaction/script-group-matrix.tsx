@@ -132,10 +132,10 @@ export function ScriptGroupMatrix({
     );
   return (
     <div ref={ref} className="min-w-0">
-      <div role="table" aria-label="Script groups" className="text-xs">
+      <div role="table" aria-label="Script groups" className="text-small">
         <div
           role="row"
-          className="border-base-border-subtle text-text-dim grid items-end border-b pb-1.5 text-[11px]"
+          className="border-base-border-subtle text-text-dim text-meta grid items-end border-b pb-1.5"
           style={{ gridTemplateColumns: template }}
         >
           <span role="columnheader">Script</span>
@@ -158,11 +158,11 @@ export function ScriptGroupMatrix({
                     dim(lit?.cells.has(c.id) ?? false) && 'opacity-25'
                   )}
                 >
-                  <span title={c.top} className="text-text-ghost max-w-[68px] truncate text-[11px]">
+                  <span title={c.top} className="text-text-ghost text-meta max-w-[68px] truncate">
                     {c.top}
                   </span>
                   <span>{c.label}</span>
-                  <span className="text-text-dim text-[11px]">{c.cap ?? ''}</span>
+                  <span className="text-text-dim text-meta">{c.cap ?? ''}</span>
                 </span>
               ) : (
                 <span key={`arrow-${i}`} aria-hidden="true" className="text-text-ghost text-center">
@@ -202,7 +202,7 @@ export function ScriptGroupMatrix({
             >
               <span role="cell" className="flex min-w-0 flex-col py-1.5 pr-3">
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className="text-text-dim text-[11px]">{g.kind}</span>
+                  <span className="text-text-dim text-meta">{g.kind}</span>
                   {g.mark && <ClassMark kind={g.mark} size={12} />}
                   {g.href ? (
                     <Link
@@ -322,7 +322,7 @@ function GroupList({
   onHover: (hover: TxHover | null) => void;
 }) {
   return (
-    <ul aria-label="Script groups" className="text-xs">
+    <ul aria-label="Script groups" className="text-small">
       {groups.map((g, i) => {
         const on = lit?.groups.has(g.id) ?? false;
         return (
@@ -372,11 +372,11 @@ function GroupList({
                   {g.ran ? '' : ' of the outputs'}
                 </span>
               </span>
-              <span className="whitespace-nowrap text-[11px]">
+              <span className="text-meta whitespace-nowrap">
                 {g.ran || g.status ? cyclesLine(g, 'cycles not available') : 'not run'}
               </span>
             </div>
-            <p data-line="runs" className="text-[11.5px]">
+            <p data-line="runs" className="text-meta">
               <span
                 aria-hidden="true"
                 data-dot={g.ran ? 'ran' : 'attached'}
@@ -422,7 +422,7 @@ function GroupList({
             </p>
             <div
               data-line="evidence"
-              className="text-text-dim flex flex-wrap gap-x-3 gap-y-0.5 text-[11px]"
+              className="text-text-dim text-meta flex flex-wrap gap-x-3 gap-y-0.5"
             >
               <span className="min-w-0 [overflow-wrap:anywhere]">{g.sub}</span>
               {g.code !== null && (

@@ -23,7 +23,7 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 it('renders exact canonical protocol, whole cell history and raw bytes for did', async () => {
   render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-[26px]');
+  expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-entity');
   expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
     /[Cc]ell data · \d+ bytes/
   );

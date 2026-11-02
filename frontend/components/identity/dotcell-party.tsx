@@ -62,7 +62,7 @@ function PartyIdentity({ party, truncate }: { party: PartyDisplay; truncate: boo
   if (party.hashPrefix) {
     return (
       <>
-        <span className="text-text-bright font-mono text-sm" title={party.hashPrefix}>
+        <span className="text-text-bright text-body font-mono" title={party.hashPrefix}>
           {truncate ? truncateHash(party.hashPrefix, 12, 10) : party.hashPrefix}
         </span>
         <Badge variant="gray">unresolved</Badge>
@@ -70,5 +70,5 @@ function PartyIdentity({ party, truncate }: { party: PartyDisplay; truncate: boo
     );
   }
 
-  return <span className="text-text-dim font-mono text-sm">Unavailable</span>;
+  return <span className="text-text-dim text-body font-mono">Unavailable</span>;
 }

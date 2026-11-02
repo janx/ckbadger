@@ -81,8 +81,8 @@ function Section({
   return (
     <section className="min-w-0" aria-label={title}>
       <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-[15px] font-medium">{title}</h2>
-        {note && <span className="text-text-dim text-[12px]">{note}</span>}
+        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+        {note && <span className="text-text-dim text-small">{note}</span>}
       </div>
       {children}
     </section>
@@ -102,9 +102,9 @@ function Metric({
 }) {
   return (
     <div className={`min-w-0 ${className ?? ''}`}>
-      <dt className="text-text-dim text-xs">{label}</dt>
-      <dd className="text-text-bright mt-1 text-[18px] leading-tight">{children}</dd>
-      {detail && <dd className="text-text-dim mt-1 text-[11.5px]">{detail}</dd>}
+      <dt className="text-text-dim text-small">{label}</dt>
+      <dd className="text-text-bright text-hero mt-1 leading-tight">{children}</dd>
+      {detail && <dd className="text-text-dim text-meta mt-1">{detail}</dd>}
     </div>
   );
 }
@@ -145,16 +145,16 @@ function Hero({
     >
       <div className="flex min-w-0 flex-col gap-1">
         {intro && <div className="mb-5">{intro}</div>}
-        <span className="text-text-dim text-xs">deposited</span>
+        <span className="text-text-dim text-small">deposited</span>
         <span
           data-role="deposited"
-          className="text-text-bright text-[24px] font-medium leading-tight sm:text-[30px]"
+          className="text-text-bright text-index sm:text-display font-medium leading-tight"
         >
           <Amount value={evidence.phase0.capacity} />{' '}
-          <span className="text-text-dim text-[14px]">CKB</span>
+          <span className="text-text-dim text-body">CKB</span>
         </span>
         {share && deposited && (
-          <span className="text-text-dim text-[13px]">
+          <span className="text-text-dim text-body">
             <span className="text-gold">{ratioText(share.value)}%</span> of circulating CKB on{' '}
             {share.date}
             {peak && (
@@ -215,7 +215,7 @@ function Hero({
               <CkbDecimal value={change!} signed />
             </span>
           )}{' '}
-          <span className="text-text-dim text-[12px]">CKB</span>
+          <span className="text-text-dim text-small">CKB</span>
         </Metric>
       </dl>
     </section>
@@ -235,15 +235,15 @@ function History({
     <section aria-label="History" className="min-w-0">
       {error ? (
         <>
-          <h2 className="text-text-bright mb-3 text-[15px] font-medium">History</h2>
-          <div role="alert" className="text-rouge text-xs">
+          <h2 className="text-text-bright text-section mb-3 font-medium">History</h2>
+          <div role="alert" className="text-rouge text-small">
             DAO daily history could not be loaded from indexed snapshots.
           </div>
         </>
       ) : !deposited || !ratio ? (
         <>
-          <h2 className="text-text-bright mb-3 text-[15px] font-medium">History</h2>
-          <div className="text-text-dim text-xs">Loading canonical daily history…</div>
+          <h2 className="text-text-bright text-section mb-3 font-medium">History</h2>
+          <div className="text-text-dim text-small">Loading canonical daily history…</div>
         </>
       ) : (
         <DaoHistory deposited={deposited} ratio={ratio} />
@@ -397,7 +397,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
     >
       <div ref={ref} className="min-w-0">
         {root === null ? (
-          <div className="text-text-dim text-[12px]">
+          <div className="text-text-dim text-small">
             No secondary issuance has accrued at this indexed block; allocation shares are
             undefined.
           </div>
@@ -416,7 +416,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
       {root !== null && narrow && (
         <ul
           aria-label="Secondary issuance parts"
-          className="mt-3 space-y-2 text-[12px] leading-relaxed"
+          className="text-small mt-3 space-y-2 leading-relaxed"
         >
           <li className="text-text-bright">
             Secondary issuance since genesis <Amount value={total.toString()} /> CKB ·{' '}
@@ -450,13 +450,13 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         </ul>
       )}
       <div className="mt-6 grid gap-7 md:grid-cols-[300px_minmax(0,1fr)] md:items-start">
-        <p className="text-text text-[12.5px] leading-relaxed">
+        <p className="text-text text-body leading-relaxed">
           Every block splits its share the same way. The proportions are simply how all{' '}
           <Amount value={issued.toString()} /> CKB issued by block{' '}
           {formatBlockNumber(statistics.tipBlockNumber)} is used right now.
         </p>
         <div className="flex min-w-0 flex-col gap-2">
-          <div className="text-text-dim text-[12px]">
+          <div className="text-text-dim text-small">
             Current capacity use at statistics block {formatBlockNumber(statistics.tipBlockNumber)}
           </div>
           <div
@@ -474,7 +474,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
               />
             ))}
           </div>
-          <div className="text-text-dim flex flex-wrap gap-x-7 gap-y-1.5 text-[12px]">
+          <div className="text-text-dim text-small flex flex-wrap gap-x-7 gap-y-1.5">
             <span>
               <Swatch color={DAO_ISSUANCE_COLORS.miners} />
               occupied by cells{' '}
@@ -495,17 +495,17 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
               <span className="text-text-bright">{formatPercent(other, issued, 2)}%</span> → burnt
             </span>
           </div>
-          <span className="text-text-dim text-[11.5px]">
+          <span className="text-text-dim text-meta">
             So a deposit keeps its share of all CKB through secondary issuance. Free CKB outside the
             DAO receives nothing: its share of each block&apos;s issuance is burnt.
           </span>
-          <span className="text-text-dim text-[11px]">
+          <span className="text-text-dim text-meta">
             Protocol occupied includes the genesis virtual occupied baseline; it is not the real
             occupied size of live cells.
           </span>
           <Link
             href={`/blocks/${statistics.tipBlockNumber}`}
-            className="text-text hover:text-text-bright text-[11px] hover:underline"
+            className="text-text hover:text-text-bright text-meta hover:underline"
           >
             Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
           </Link>
@@ -554,7 +554,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     );
   return (
     <Section title="When deposits can leave" note={`at indexed epoch ${evidence.tipEpoch.display}`}>
-      <p className="text-text mb-4 text-[13px] leading-relaxed">
+      <p className="text-text text-body mb-4 leading-relaxed">
         A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A
         withdrawal completes only at the end of a cycle. Each bar is the CKB whose current cycle
         ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
@@ -584,18 +584,18 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
                 className={`bg-gold w-full rounded-t-sm transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
                 style={{ height: `${height}%` }}
               />
-              <span className="text-text-dim mt-1 text-center font-mono text-[10px]">
+              <span className="text-text-dim text-meta mt-1 text-center font-mono">
                 {row.nominalDay % 5 === 0 || row.nominalDay === 1 ? row.nominalDay : ''}
               </span>
             </div>
           );
         })}
       </div>
-      <div className="text-text-dim mt-1 flex justify-between text-[11px]">
+      <div className="text-text-dim text-meta mt-1 flex justify-between">
         <span>days from now · 6 epochs a day</span>
         <span>{plural(evidence.phase0.count, 'deposit')}</span>
       </div>
-      <div className="text-text-bright mt-2 min-h-5 text-[12px]" aria-live="polite">
+      <div className="text-text-bright text-small mt-2 min-h-5" aria-live="polite">
         {selectedDay === null
           ? null
           : (() => {
@@ -609,14 +609,14 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               );
             })()}
       </div>
-      <p className="text-[12.5px]">
+      <p className="text-body">
         <span className="text-text-bright">
           <Amount value={first.capacity} /> CKB
         </span>{' '}
         in {plural(first.count, 'deposit')} ends its cycle within a day.
       </p>
       <div className="border-base-border-subtle mt-3 flex flex-col gap-1.5 border-t pt-3">
-        <span className="text-text-dim text-[12px]">
+        <span className="text-text-dim text-small">
           withdrawals already requested · {plural(evidence.phase1.count, 'cell')} ·{' '}
           <span className="text-text">
             <Amount value={evidence.phase1.capacity} /> CKB
@@ -638,7 +638,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
             />
           </div>
         )}
-        <span className="text-[12px] leading-relaxed">
+        <span className="text-small leading-relaxed">
           <span className="text-text-bright">
             <Amount value={ready.capacity} /> CKB
           </span>{' '}
@@ -649,7 +649,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           </span>{' '}
           in {plural(waiting.count, 'cell')} waits for its window.
         </span>
-        <span className="text-text-dim text-[11px]">
+        <span className="text-text-dim text-meta">
           Epoch-lock readiness alone does not prove a complete withdraw transaction; the required
           input, headers, witnesses and script execution still apply.
         </span>
@@ -780,7 +780,7 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
         rowKey={(o) => o.lockScriptHash}
         empty="No live deposits at this indexed tip."
         mobileRow={(o) => (
-          <div className="space-y-1 text-[12px]">
+          <div className="text-small space-y-1">
             <div className="flex items-baseline justify-between gap-3">
               <span className="min-w-0">
                 <span className="text-text-dim mr-2">{o.rank}</span>
@@ -880,7 +880,7 @@ function RawEvidence({
       <DetailSection
         title={`The DAO field in every block header · ${formatBlockNumber(header.blockNumber)}`}
       >
-        <div className="text-[12px]">
+        <div className="text-small">
           {fields.map((field) => (
             <div
               key={field.key}
@@ -892,8 +892,8 @@ function RawEvidence({
             </div>
           ))}
         </div>
-        <div className="text-text-dim mt-3 break-all font-mono text-[11px]">{header.daoHex}</div>
-        <p className="text-text-dim mt-3 text-[12px] leading-relaxed">
+        <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
+        <p className="text-text-dim text-small mt-3 leading-relaxed">
           Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
           {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
           capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
@@ -908,7 +908,7 @@ function RawEvidence({
           does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.
         </p>
         {evidence.ar.year365 && (
-          <div className="text-text-dim mt-2 font-mono text-[11px]">
+          <div className="text-text-dim text-meta mt-2 font-mono">
             365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} · chain
             time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
             {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
@@ -921,13 +921,13 @@ function RawEvidence({
         )}
         <Link
           href={`/blocks/${header.blockNumber}`}
-          className="text-text hover:text-text-bright mt-2 inline-block text-[12px] hover:underline"
+          className="text-text hover:text-text-bright text-small mt-2 inline-block hover:underline"
         >
           Open source block →
         </Link>
       </DetailSection>
       <DetailSection title="The DAO script">
-        <dl className="flex flex-col gap-2.5 text-[12px]">
+        <dl className="text-small flex flex-col gap-2.5">
           <div>
             <dt className="text-text-dim">Type script · type</dt>
             <dd className="mt-0.5">

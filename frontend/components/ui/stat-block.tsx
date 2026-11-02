@@ -27,9 +27,9 @@ interface StatBlockProps {
 }
 
 const sizeClasses = {
-  sm: { label: 'text-xs', value: 'text-lg', trend: 'text-xs', gap: 'gap-1' },
-  md: { label: 'text-sm', value: 'text-2xl', trend: 'text-sm', gap: 'gap-2' },
-  lg: { label: 'text-base', value: 'text-3xl', trend: 'text-base', gap: 'gap-3' },
+  sm: { label: 'text-small', value: 'text-hero', trend: 'text-small', gap: 'gap-1' },
+  md: { label: 'text-body', value: 'text-index', trend: 'text-body', gap: 'gap-2' },
+  lg: { label: 'text-body', value: 'text-entity', trend: 'text-body', gap: 'gap-3' },
 };
 
 const colorClasses: Record<AccentColor, string> = {
@@ -154,7 +154,7 @@ export function StatBlock({
         )}
       </div>
 
-      {subtext && <div className="text-text-dim font-mono text-sm">{subtext}</div>}
+      {subtext && <div className="text-text-dim text-body font-mono">{subtext}</div>}
     </div>
   );
 }
@@ -223,8 +223,10 @@ export function MiniStat({ label, value, color = 'dim', className }: MiniStatPro
 
   return (
     <div className={cn('flex items-center justify-between gap-4', className)}>
-      <span className="text-text-dim font-mono text-xs uppercase tracking-wide">{label}</span>
-      <span className={cn('font-mono text-sm tabular-nums', miniColorClasses[color])}>{value}</span>
+      <span className="text-text-dim text-small font-mono uppercase tracking-wide">{label}</span>
+      <span className={cn('text-body font-mono tabular-nums', miniColorClasses[color])}>
+        {value}
+      </span>
     </div>
   );
 }

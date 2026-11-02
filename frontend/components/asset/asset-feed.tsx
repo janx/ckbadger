@@ -107,7 +107,13 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       minWidth: 178,
       render: (r) => (
         <AppLink href={`/tx/${r.hash}`}>
-          <Hash hash={r.hash} copyable={false} startChars={10} endChars={6} className="text-xs" />
+          <Hash
+            hash={r.hash}
+            copyable={false}
+            startChars={10}
+            endChars={6}
+            className="text-small"
+          />
         </AppLink>
       ),
     },
@@ -123,7 +129,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
             {' '}
             · {identity ? formatUtc8Date(r.timestamp) : formatTimeAgo(r.timestamp)}
           </span>
-          <span className="text-text-dim block text-[11px]">tx {r.index} in block</span>
+          <span className="text-text-dim text-meta block">tx {r.index} in block</span>
         </>
       ),
     },
@@ -287,7 +293,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                       copyable={false}
                       startChars={10}
                       endChars={6}
-                      className="text-[13px]"
+                      className="text-body"
                     />
                   </AppLink>
                 ),
@@ -309,7 +315,7 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
                     tone: 'body',
                     left: <Dotted parts={[...did, output]} />,
                     right: (
-                      <span className="text-text-dim text-[11px]">
+                      <span className="text-text-dim text-meta">
                         <Dotted parts={figures} />
                       </span>
                     ),
@@ -405,12 +411,12 @@ export function AssetFeed({
             role="tab"
             aria-selected={tab === t}
             onClick={() => setTab(t)}
-            className={`border-b-2 py-3 text-[15px] ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
+            className={`text-section border-b-2 py-3 ${tab === t ? 'border-jade text-text-bright' : 'text-text-dim border-transparent'}`}
           >
             {t === 'activities' ? 'Activities' : 'Transactions'}
           </button>
         ))}
-        <span className="text-text-dim pb-2 text-[11px] sm:ml-auto">{scope} · newest first</span>
+        <span className="text-text-dim text-meta pb-2 sm:ml-auto">{scope} · newest first</span>
       </div>
       {current.data ? (
         <>
@@ -458,7 +464,7 @@ export function AssetFeed({
                 );
               })
             ) : (
-              <p className="text-text-dim py-6 text-xs">No activities.</p>
+              <p className="text-text-dim text-small py-6">No activities.</p>
             )
           ) : (
             <AssetTransactions

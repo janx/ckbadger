@@ -30,7 +30,7 @@ describe('ForksPage', () => {
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     render(<ForksPage />);
     expect(await screen.findByRole('heading', { level: 1, name: 'Forks' })).toHaveClass(
-      'text-[26px]'
+      'text-index'
     );
     expect(screen.getByText(/aiming at one in 40 blocks/)).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(4));

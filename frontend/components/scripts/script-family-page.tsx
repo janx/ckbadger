@@ -257,7 +257,7 @@ export function ScriptFamilyPage({
   const versionCell = (row: Row) => (
     <span className="text-text-bright">
       v{row.number}
-      {row.current && <span className="text-jade block text-[11px]">current</span>}
+      {row.current && <span className="text-jade text-meta block">current</span>}
     </span>
   );
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
@@ -273,7 +273,7 @@ export function ScriptFamilyPage({
             <span key={outpointKey(d)} className="block">
               {formatUtc8Date(d.deployedAt)}
               {d.createdAtBlock !== undefined && (
-                <span className="block text-[11px]">{blockLink(d.createdAtBlock)}</span>
+                <span className="text-meta block">{blockLink(d.createdAtBlock)}</span>
               )}
             </span>
           ))
@@ -292,12 +292,12 @@ export function ScriptFamilyPage({
           {row.version.deployments.map((d) => (
             <span key={outpointKey(d)} className="block">
               {outpointLink(d)}
-              <span className="text-text-dim block text-[11px]">
+              <span className="text-text-dim text-meta block">
                 {binarySize(d)} · {signedText(d)}
               </span>
             </span>
           ))}
-          <span className="text-text-dim block text-[11px] [overflow-wrap:anywhere]">
+          <span className="text-text-dim text-meta block [overflow-wrap:anywhere]">
             {row.version.versionHash}
           </span>
         </>
@@ -405,7 +405,7 @@ export function ScriptFamilyPage({
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <nav aria-label="Breadcrumb" className="text-text-dim mb-2 text-xs">
+        <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
           <Link href="/scripts" className="hover:text-text-bright">
             Scripts
           </Link>
@@ -421,11 +421,11 @@ export function ScriptFamilyPage({
           status={
             <>
               <ScriptHeading family={family} />
-              {deprecated && <span className="text-text-dim text-xs">· Deprecated</span>}
+              {deprecated && <span className="text-text-dim text-small">· Deprecated</span>}
             </>
           }
           identity={
-            <span className="text-text text-[13px]">
+            <span className="text-text text-body">
               {family.description}
               {family.website && (
                 <>
@@ -480,7 +480,7 @@ export function ScriptFamilyPage({
                   },
                 ]}
                 mobileRow={(row) => (
-                  <div className="space-y-2 text-xs">
+                  <div className="text-small space-y-2">
                     <div className="break-all">
                       {row.hashType} · {row.referenceHash}
                     </div>
@@ -506,9 +506,9 @@ export function ScriptFamilyPage({
                 actions={<CapacityRangeSelector value={capacityRange} onChange={onCapacityRange} />}
               >
                 {chartLoading ? (
-                  <p className="text-text-dim py-6 text-xs">Loading capacity history…</p>
+                  <p className="text-text-dim text-small py-6">Loading capacity history…</p>
                 ) : chartError ? (
-                  <p role="alert" className="text-negative text-xs">
+                  <p role="alert" className="text-negative text-small">
                     Capacity history unavailable: {chartError.message}
                   </p>
                 ) : chart?.data.length ? (
@@ -520,7 +520,7 @@ export function ScriptFamilyPage({
                     holders={holders}
                   />
                 ) : (
-                  <p className="text-text-dim py-6 text-xs">No capacity history yet</p>
+                  <p className="text-text-dim text-small py-6">No capacity history yet</p>
                 )}
               </DetailSection>
               <DetailSection title="Who can change its code">
@@ -532,7 +532,7 @@ export function ScriptFamilyPage({
           <DetailSection
             title="Code versions"
             actions={
-              <span className="text-text-dim text-xs">
+              <span className="text-text-dim text-small">
                 {typeReference
                   ? `one type id, ${shortHex(typeReference, 8, 6)}, ${rows.length} binaries`
                   : `${rows.length} binaries`}
@@ -562,7 +562,7 @@ export function ScriptFamilyPage({
                         <span key={outpointKey(deployment)} className="block">
                           {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
                           {deployment.createdAtBlock !== undefined && (
-                            <span className="block text-[11px]">
+                            <span className="text-meta block">
                               {blockLink(deployment.createdAtBlock)}
                             </span>
                           )}
@@ -595,7 +595,7 @@ export function ScriptFamilyPage({
                   minWidth: 220,
                   width: '24%',
                   render: (row) => (
-                    <span className="text-text-dim text-[11px] [overflow-wrap:anywhere]">
+                    <span className="text-text-dim text-meta [overflow-wrap:anywhere]">
                       {row.version.versionHash}
                     </span>
                   ),
@@ -611,7 +611,7 @@ export function ScriptFamilyPage({
                       return (
                         <span key={outpointKey(deployment)} className="block">
                           {outpointLink(deployment)}
-                          <span className="text-text-dim block text-[11px]">
+                          <span className="text-text-dim text-meta block">
                             {state?.cell && (
                               <>
                                 <ExactCkb
@@ -639,7 +639,7 @@ export function ScriptFamilyPage({
                       return marked ? (
                         <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
                           {who}
-                          <span className="text-text-dim block text-[11px]">{note}</span>
+                          <span className="text-text-dim text-meta block">{note}</span>
                         </span>
                       ) : (
                         <span key={outpointKey(deployment)} className="text-text-dim block">
@@ -666,10 +666,10 @@ export function ScriptFamilyPage({
           </DetailSection>
           <section id="its-cells" className="min-w-0">
             <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <h2 className="text-text-bright text-[15px] font-medium">Its cells</h2>
+              <h2 className="text-text-bright text-section font-medium">Its cells</h2>
               <ScriptCellsSummary family={family} />
             </div>
-            <div className="text-text-dim mb-3 flex flex-wrap gap-x-4 gap-y-1 text-[11px]">
+            <div className="text-text-dim text-meta mb-3 flex flex-wrap gap-x-4 gap-y-1">
               {ANATOMY_LEGEND.map(([name, color]) => (
                 <span key={name} className="inline-flex items-center gap-1.5">
                   <span
@@ -682,7 +682,7 @@ export function ScriptFamilyPage({
               ))}
             </div>
             {cells.loading ? (
-              <p className="text-text-dim py-6 text-xs">Loading cells…</p>
+              <p className="text-text-dim text-small py-6">Loading cells…</p>
             ) : (
               <ListTable
                 label="Its cells"
@@ -758,7 +758,7 @@ export function ScriptFamilyPage({
                   },
                 ]}
                 mobileRow={(cell) => (
-                  <div className="min-w-0 space-y-1.5 text-xs">
+                  <div className="text-small min-w-0 space-y-1.5">
                     <Link
                       href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                       className="text-[#6aa9c4]"
@@ -781,7 +781,7 @@ export function ScriptFamilyPage({
               />
             )}
             {cells.rows.length > 0 && (
-              <p className="text-text-dim mt-2 text-xs">
+              <p className="text-text-dim text-small mt-2">
                 Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
                 {family.liveCellsCount.toLocaleString('en-US')}
               </p>

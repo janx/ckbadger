@@ -74,7 +74,7 @@ export function PipelineLegend() {
   return (
     <div
       data-testid="pipeline-legend"
-      className={`${FOOTER_ROW} text-text-dim gap-x-3.5 text-[10px]`}
+      className={`${FOOTER_ROW} text-text-dim text-meta gap-x-3.5`}
     >
       <Key>
         <svg width={9} height={9} viewBox="0 0 9 9" aria-hidden>

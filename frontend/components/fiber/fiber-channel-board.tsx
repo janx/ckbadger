@@ -132,7 +132,7 @@ function Summary({
   return (
     <p
       data-testid="channel-summary"
-      className="text-text mt-2 max-w-[900px] text-[15px] leading-relaxed"
+      className="text-text text-body mt-2 max-w-[900px] leading-relaxed"
     >
       {putIn.length > 0 && (
         <>
@@ -340,7 +340,7 @@ function StageWitnesses({ stage }: { stage: FiberChannelEvidence['stages'][numbe
 
 function Grid({ children }: { children: ReactNode }) {
   return (
-    <div className="grid min-w-0 grid-cols-1 gap-x-3 gap-y-1.5 text-[12px] sm:grid-cols-[150px_minmax(0,1fr)]">
+    <div className="text-small grid min-w-0 grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[150px_minmax(0,1fr)]">
       {children}
     </div>
   );
@@ -376,7 +376,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
         <div>
           <div
             data-testid="channel-pair"
-            className="flex flex-wrap items-baseline gap-x-7 gap-y-1.5 text-[13px]"
+            className="text-body flex flex-wrap items-baseline gap-x-7 gap-y-1.5"
           >
             {channel.observedParties.length > 0 && (
               <span>
@@ -403,7 +403,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           </div>
           <Summary channel={channel} evidence={evidence} />
           {evidenceError && (
-            <p role="alert" className="text-rouge mt-3 break-all text-[12px]">
+            <p role="alert" className="text-rouge text-small mt-3 break-all">
               Local node evidence unavailable: {evidenceError}
             </p>
           )}
@@ -411,7 +411,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
 
         {atOpen && (
           <DetailSection title="What moved inside the channel">
-            <p className="text-text-dim mb-3.5 max-w-[900px] text-[12.5px]">
+            <p className="text-text-dim text-body mb-3.5 max-w-[900px]">
               The chain never sees a Fiber payment, only the split when the channel opens and the
               split when it closes.
               {atClose &&
@@ -468,7 +468,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
         <DetailTier2>
           <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
             <DetailSection title="The two locks">
-              <div className="flex flex-col gap-3 text-[12px]">
+              <div className="text-small flex flex-col gap-3">
                 <div>
                   <div className="text-text-dim">
                     Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
@@ -568,7 +568,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           </div>
           {evidence.openingPartyFlows.length > 0 && (
             <DetailSection title="Opening transaction, per party">
-              <p className="text-text-dim mb-2 text-[11.5px]">
+              <p className="text-text-dim text-meta mb-2">
                 Non-Fiber locks on the opening transaction’s inputs or outputs. An output-only lock
                 did not necessarily sign it. Net input includes fees and any unrelated outputs in
                 the same transaction; it is not a proven channel balance or payment.
@@ -606,7 +606,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           )}
           {evidence.settlementOutputs.length > 0 && (
             <DetailSection title="Final transaction outputs">
-              <p className="text-text-dim mb-2 text-[11.5px]">
+              <p className="text-text-dim text-meta mb-2">
                 All final transaction outputs are shown, the payouts and any change alike.
               </p>
               <Grid>

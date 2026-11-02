@@ -284,13 +284,13 @@ describe('protocol byte evidence in tier 2', () => {
       </DetailTier2>
     );
     expect(screen.getByRole('heading', { name: 'Account cell data' })).toHaveClass(
-      'text-[13px]',
+      'text-body',
       'text-text'
     );
     unmount();
     render(<ProtocolEvidence title="Account cell data" dataHex="0x01aabbcc" fields={fields} />);
     expect(screen.getByRole('heading', { name: 'Account cell data' })).toHaveClass(
-      'text-[15px]',
+      'text-section',
       'text-text-bright'
     );
   });

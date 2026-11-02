@@ -307,7 +307,7 @@ export function MultiSeriesLineChart({
           <button
             key={s.key}
             onClick={() => toggleSeries(s.key)}
-            className={`flex items-center gap-2 rounded border px-3 py-1.5 font-mono text-xs transition-colors ${
+            className={`text-small flex items-center gap-2 rounded border px-3 py-1.5 font-mono transition-colors ${
               visibleSeries.has(s.key)
                 ? 'border-base-border bg-base-elevated text-text-bright'
                 : 'border-base-border bg-base-surface text-text-dim'
@@ -326,7 +326,7 @@ export function MultiSeriesLineChart({
         {isZoomed && (
           <button
             onClick={handleReset}
-            className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text rounded border px-2 py-1 font-mono text-xs transition-colors"
+            className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small rounded border px-2 py-1 font-mono transition-colors"
           >
             Reset Zoom
           </button>
@@ -482,12 +482,12 @@ export function MultiSeriesLineChart({
       </svg>
 
       {isZoomed && (
-        <div className="text-text-dim mt-1 text-center font-mono text-xs tabular-nums">
+        <div className="text-text-dim text-small mt-1 text-center font-mono tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}
 
-      <div className="text-text-dim mt-4 text-center font-mono text-xs">
+      <div className="text-text-dim text-small mt-4 text-center font-mono">
         Drag to select range | Scroll to zoom | Middle-click drag to pan
       </div>
     </div>

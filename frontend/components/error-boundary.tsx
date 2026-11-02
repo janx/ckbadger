@@ -58,12 +58,12 @@ export function ErrorFallback({
 }: ErrorFallbackProps) {
   return (
     <div className="border-negative/30 bg-negative/10 flex min-h-[200px] flex-col items-center justify-center rounded-lg border p-6">
-      <div className="text-negative mb-2 text-xl">{title}</div>
-      <div className="text-text-dim mb-4 text-sm">{message}</div>
+      <div className="text-negative text-hero mb-2">{title}</div>
+      <div className="text-text-dim text-body mb-4">{message}</div>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="bg-negative hover:bg-negative-bright rounded px-4 py-2 text-sm text-white transition"
+          className="bg-negative hover:bg-negative-bright text-body rounded px-4 py-2 text-white transition"
         >
           Try again
         </button>

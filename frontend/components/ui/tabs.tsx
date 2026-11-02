@@ -62,7 +62,7 @@ export function TabsTrigger({ value, children, className }: TabsTriggerProps) {
     <button
       onClick={() => context.onChange(value)}
       className={cn(
-        'px-4 py-2 font-mono text-sm font-medium transition',
+        'text-body px-4 py-2 font-mono font-medium transition',
         isActive ? 'border-jade text-jade border-b-2' : 'text-text-dim hover:text-text',
         className
       )}

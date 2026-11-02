@@ -305,7 +305,7 @@ describe('Identities view (IV-12, IV-02)', () => {
     render(<IdentitiesPage />);
     const table = await screen.findByRole('table', { name: 'Identity systems' }, { timeout: 5000 });
     const name = within(table).getByRole('link', { name: '.bit' });
-    expect(name).toHaveClass('text-[15px]');
+    expect(name).toHaveClass('text-body');
     expect(screen.queryByRole('group', { name: 'Standard filters' })).not.toBeInTheDocument();
     expect(within(table).getAllByText('.bit')).toHaveLength(1);
     expect(

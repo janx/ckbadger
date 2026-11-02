@@ -34,11 +34,11 @@ export function HMultiplier({
   return (
     <div className={className}>
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-text-dim font-mono text-xs uppercase tracking-wider">
+        <span className="text-text-dim text-small font-mono uppercase tracking-wider">
           {totalLabel}
         </span>
         <span
-          className="text-text-bright font-mono text-xs tabular-nums"
+          className="text-text-bright text-small font-mono tabular-nums"
           title={formatCkbAmount(total.toString()).full + ' CKB'}
         >
           {formatCkbCompact(total.toString()).value} CKB
@@ -53,13 +53,13 @@ export function HMultiplier({
       </div>
       <div className="mt-1.5 flex items-center justify-between">
         <span
-          className="text-warning font-mono text-xs"
+          className="text-warning text-small font-mono"
           title={formatCkbAmount(used.toString()).full + ' CKB'}
         >
           Common Knowledge: {formatCkbCompact(used.toString()).value} CKB
         </span>
         <span className="inline-flex items-center gap-1.5">
-          <span className="text-gold font-mono text-xs tabular-nums">HMul: {hmul}x</span>
+          <span className="text-gold text-small font-mono tabular-nums">HMul: {hmul}x</span>
           <HMulHelpPopover align="end" />
         </span>
       </div>

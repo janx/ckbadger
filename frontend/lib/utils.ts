@@ -1,7 +1,14 @@
 import { clsx, type ClassValue } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
 import { formatScaledInteger } from '@/lib/exact-integer';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
+import { TYPE_STEPS } from '@/lib/type-scale';
+
+// tailwind-merge reads an unknown `text-<word>` as a colour; the scale's steps are sizes, so
+// `text-text-dim text-meta` keeps both classes and `text-body text-section` keeps the last.
+const twMerge = extendTailwindMerge({
+  extend: { classGroups: { 'font-size': [{ text: [...TYPE_STEPS] }] } },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

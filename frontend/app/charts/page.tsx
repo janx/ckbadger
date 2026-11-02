@@ -21,7 +21,7 @@ export default function ChartsPage() {
           actions={
             <nav
               aria-label="Chart sections"
-              className="flex flex-wrap gap-x-[18px] gap-y-1 text-[12px]"
+              className="text-small flex flex-wrap gap-x-[18px] gap-y-1"
             >
               {CHART_SECTIONS.map((section) => (
                 <a
@@ -38,13 +38,13 @@ export default function ChartsPage() {
           {network.data?.syncStatus?.chartDataMayBeIncomplete && (
             <p
               role="status"
-              className="text-warning border-warning/30 bg-warning/10 rounded border px-3 py-2 text-xs"
+              className="text-warning border-warning/30 bg-warning/10 text-small rounded border px-3 py-2"
             >
               Chart data may be incomplete while the indexer synchronizes history.
             </p>
           )}
           {network.error && (
-            <p role="alert" className="text-negative text-xs">
+            <p role="alert" className="text-negative text-small">
               Network sync status unavailable: {network.error.message}
             </p>
           )}
@@ -59,7 +59,7 @@ export default function ChartsPage() {
               </DetailSection>
             </div>
           ))}
-          <p className="text-text-dim text-[12px]">
+          <p className="text-text-dim text-small">
             Every chart stops at the last complete day. Open a chart for its full resolution and
             source; there, <TapOrHoverHint what="the chart" /> to read any point.
           </p>

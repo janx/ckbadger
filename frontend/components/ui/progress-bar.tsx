@@ -94,7 +94,7 @@ export function ProgressBar({
         />
       </div>
       {showLabel && (
-        <div className="text-text-dim mt-1 font-mono text-xs tabular-nums">{formatLabel()}</div>
+        <div className="text-text-dim text-small mt-1 font-mono tabular-nums">{formatLabel()}</div>
       )}
     </div>
   );
@@ -120,7 +120,7 @@ export function UsageBar({ value, max, unit = '', className }: UsageBarProps) {
   return (
     <span
       className={cn(
-        'bg-base-elevated text-text-bright relative inline-flex overflow-hidden rounded px-2 py-1 font-mono text-sm',
+        'bg-base-elevated text-text-bright text-body relative inline-flex overflow-hidden rounded px-2 py-1 font-mono',
         className
       )}
     >

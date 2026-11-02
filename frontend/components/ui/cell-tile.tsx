@@ -47,7 +47,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
       onFocus={() => onHover?.(cell.id)}
       onBlur={() => onHover?.(null)}
       className={cn(
-        'bg-base-surface min-w-0 rounded-md border px-3 py-2 text-xs transition-colors',
+        'bg-base-surface text-small min-w-0 rounded-md border px-3 py-2 transition-colors',
         highlighted
           ? 'border-jade io-linked-highlight border-emphasis/70'
           : 'border-base-border-subtle',
@@ -80,7 +80,7 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
           />
         </div>
       )}
-      <div className="text-text-dim mt-2 flex flex-wrap justify-between gap-2 text-[11px]">
+      <div className="text-text-dim text-meta mt-2 flex flex-wrap justify-between gap-2">
         {/* F2-tx (TX-19): occupied capacity is bytes, so the board writes it whole: "occupied 195". */}
         <span>occupied {occupiedBytes(cell.id, occupied).toLocaleString('en-US')}</span>
         <span>{cell.state}</span>

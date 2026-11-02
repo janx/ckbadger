@@ -331,13 +331,13 @@ export const PipelineTooltip = forwardRef<HTMLDivElement, PipelineTooltipProps>(
         ref={ref}
         data-testid="pipeline-tooltip"
         role="tooltip"
-        className="border-base-border bg-base-surface/95 text-text pointer-events-none fixed z-50 w-max min-w-[268px] max-w-[calc(100vw-16px)] rounded-lg border px-3 pb-2.5 pt-2 font-mono text-[11px] leading-[1.55] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
+        className="border-base-border bg-base-surface/95 text-text text-meta pointer-events-none fixed z-50 w-max min-w-[268px] max-w-[calc(100vw-16px)] rounded-lg border px-3 pb-2.5 pt-2 font-mono leading-[1.55] shadow-[0_12px_32px_rgba(0,0,0,0.5)]"
       >
         <div className="border-base-border text-text-bright mb-1.5 flex items-center justify-between gap-2.5 border-b pb-1.5">
           <span>{content.title}</span>
           {content.tag && (
             <span
-              className="whitespace-nowrap rounded border px-1.5 py-[3px] text-[10px] leading-none"
+              className="text-meta whitespace-nowrap rounded border px-1.5 py-[3px] leading-none"
               style={{ color: content.tone, borderColor: content.tone }}
             >
               {content.tag}
@@ -355,7 +355,7 @@ export const PipelineTooltip = forwardRef<HTMLDivElement, PipelineTooltipProps>(
           ))}
         </dl>
         {content.foot && (
-          <div className="text-text-dim mt-[7px] w-0 min-w-full text-[10px] leading-[1.45]">
+          <div className="text-text-dim text-meta mt-[7px] w-0 min-w-full leading-[1.45]">
             {content.foot}
           </div>
         )}

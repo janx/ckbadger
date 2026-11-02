@@ -83,7 +83,7 @@ export function ScriptDeploymentTimeline({
 
   if (marks.length === 0) {
     return (
-      <p className="text-text-dim text-[12px]">
+      <p className="text-text-dim text-small">
         No named script-version code-cell deployments are indexed yet.
       </p>
     );
@@ -114,14 +114,14 @@ export function ScriptDeploymentTimeline({
   return (
     <div className="min-w-0">
       {labelAbove && (
-        <span className="text-text-dim mb-1 block text-[10.5px]" style={{ paddingLeft: left }}>
+        <span className="text-text-dim text-meta mb-1 block" style={{ paddingLeft: left }}>
           {caption}
         </span>
       )}
       <div className="relative" style={{ height: rows * ROW_PX + 6 }}>
         {!labelAbove && (
           <span
-            className="text-text-dim absolute left-0 top-0 text-[10.5px] leading-tight"
+            className="text-text-dim text-meta absolute left-0 top-0 leading-tight"
             style={{ width: left - 8 }}
           >
             {caption}
@@ -176,7 +176,7 @@ export function DeploymentEvidence({
   pinned: boolean;
 }) {
   return (
-    <aside aria-label="Selected script deployment evidence" className="mt-3 min-w-0 text-[12px]">
+    <aside aria-label="Selected script deployment evidence" className="text-small mt-3 min-w-0">
       <ReadoutRow
         label="Script version readout"
         pinned={pinned}

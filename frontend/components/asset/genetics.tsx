@@ -72,7 +72,7 @@ export function ObjectGeneticsView({
   };
   const { dnaHex, cachedVmTraits: cached } = evidence;
   if (dnaHex === null)
-    return <p className="text-text-dim text-[11px]">This object has no DOB DNA.</p>;
+    return <p className="text-text-dim text-meta">This object has no DOB DNA.</p>;
   const layout = sequencingGenes(evidence, subject);
   const geneNames = [...new Set(layout.genes.map((g) => g.name))];
   const pointer = layout.genes.find((g) => g.owns && /^btcfs/i.test(g.ruleName));
@@ -87,15 +87,15 @@ export function ObjectGeneticsView({
   return (
     <section aria-labelledby="h-dna" className="min-w-0 space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 id="h-dna" className="text-text-bright text-[15px]">
+        <h2 id="h-dna" className="text-text-bright text-section">
           DNA
         </h2>
-        <span className="text-text-dim text-[12px]">
+        <span className="text-text-dim text-small">
           {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
           {evidence.number !== null ? ` · number ${evidence.number}` : ''}
         </span>
       </div>
-      <p className="text-[13px] leading-relaxed">
+      <p className="text-body leading-relaxed">
         The object’s traits are not stored as text. It carries {layout.bytes.length} bytes of DNA,
         and the collection’s decoder reads each gene to express a trait.
         {pointer && tier === 'btc_ckb'
@@ -121,19 +121,19 @@ export function ObjectGeneticsView({
             <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
           )}
           {layout.unsupported.map((u) => (
-            <p key={u.step} role="status" className="text-text-dim text-[11px]">
+            <p key={u.step} role="status" className="text-text-dim text-meta">
               Decoder {u.step + 1}: byte mapping unavailable — {u.reason}
             </p>
           ))}
           {collection && (
             <div className="border-base-border space-y-2 border-t pt-3">
               <div className="flex flex-wrap items-baseline justify-between gap-4">
-                <span className="text-text text-[12.5px]">
+                <span className="text-text text-body">
                   Among {collectionName ?? 'its collection'} · its variant in each gene, and how
                   common it is among the {collection.genetics.eligibleItems.toLocaleString('en-US')}
                 </span>
                 {collectionHref && (
-                  <AppLink href={collectionHref} className="text-[12px]">
+                  <AppLink href={collectionHref} className="text-small">
                     Open the collection →
                   </AppLink>
                 )}
@@ -159,14 +159,14 @@ export function ObjectGeneticsView({
                     )}
                   />
                   {own3.absent.length > 0 && (
-                    <p role="status" className="text-text-dim text-[11px]">
+                    <p role="status" className="text-text-dim text-meta">
                       Its {own3.absent.join(', ')} variant is not among the collection’s counted
                       variants.
                     </p>
                   )}
                 </>
               ) : (
-                <p role="status" className="text-text-dim text-[11px]">
+                <p role="status" className="text-text-dim text-meta">
                   Collection variant frequencies await complete decoding.
                 </p>
               )}
@@ -198,19 +198,19 @@ export function ObjectGeneticsEvidence({
     <section aria-label="DNA evidence" className="min-w-0 space-y-3">
       <h2
         className={
-          tier === 2 ? 'text-[13px] font-medium text-[#a0a8be]' : 'text-text-bright text-[15px]'
+          tier === 2 ? 'text-body font-medium text-[#a0a8be]' : 'text-text-bright text-section'
         }
       >
         DNA evidence
       </h2>
-      <p className="text-text-dim text-[11px]">
+      <p className="text-text-dim text-meta">
         The byte map describes the current decoder. Trait values are cached VM results
         {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
         the original decoder binary hash was not recorded. These are separate pieces of evidence.
       </p>
-      {dnaHex !== null && <p className="break-all text-[11px]">DNA {dnaHex}</p>}
+      {dnaHex !== null && <p className="text-meta break-all">DNA {dnaHex}</p>}
       {layout && (
-        <dl className="divide-base-elevated divide-y text-[11px]">
+        <dl className="divide-base-elevated text-meta divide-y">
           {layout.genes.map((g) => (
             <div key={g.key} className="py-2">
               <dt>
@@ -241,7 +241,7 @@ export function ObjectGeneticsEvidence({
         </dl>
       )}
       {decoded && decoded.media.length > 0 && (
-        <ul aria-label="Decoder output" className="space-y-1 text-[11px]">
+        <ul aria-label="Decoder output" className="text-meta space-y-1">
           {decoded.media.map((m) => (
             <li key={`${m.hash}:${m.step ?? 'x'}`} className="break-all">
               <span className="text-text">
@@ -263,7 +263,7 @@ export function ObjectGeneticsEvidence({
         </ul>
       )}
       {cached.traits.length > 0 && (
-        <dl aria-label="Cached VM traits" className="grid gap-2 text-[11px] sm:grid-cols-2">
+        <dl aria-label="Cached VM traits" className="text-meta grid gap-2 sm:grid-cols-2">
           {cached.traits.map((t, i) => (
             <div key={`${t.name}:${i}`} className="min-w-0">
               <dt className="text-text-dim">{t.name}</dt>
@@ -379,11 +379,11 @@ export interface CurrentPatternEvidenceProps {
 }
 export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps) {
   if (pattern.status === 'notDob')
-    return <p className="text-text-dim text-[11px]">No DOB blueprint in this collection.</p>;
+    return <p className="text-text-dim text-meta">No DOB blueprint in this collection.</p>;
   return (
     <section aria-label="Current decoder blueprint" className="space-y-6">
-      <h2 className="text-text-bright text-[15px]">Current decoder blueprint</h2>
-      <p className="text-text-dim text-[11px]">
+      <h2 className="text-text-bright text-section">Current decoder blueprint</h2>
+      <p className="text-text-dim text-meta">
         {pattern.version === null ? 'DOB version not stated' : `DOB/${pattern.version}`}
       </p>
       {pattern.steps.map((step) => (
@@ -391,10 +391,10 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
           <h3>
             Step {step.step + 1} · {step.decoderReference.type}
           </h3>
-          <div className="break-all text-[11px]">
+          <div className="text-meta break-all">
             Reference <Hash hash={step.decoderReference.hash} truncate={false} />
           </div>
-          <div className="break-all text-[11px]">
+          <div className="text-meta break-all">
             Current binary{' '}
             {step.decoderBinaryHash ? (
               <AppLink href={`/script/${step.decoderBinaryHash}`}>
@@ -410,7 +410,7 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
             </p>
           ) : (
             <>
-              <p className="text-text-dim text-[11px]">
+              <p className="text-text-dim text-meta">
                 {step.description.format} · {step.description.rangePolicy}
               </p>
               {/* F2 objects (OB-C12): the blueprint as a table of genes and value domains; in a

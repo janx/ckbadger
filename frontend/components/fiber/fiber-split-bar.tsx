@@ -23,7 +23,7 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
   const leftPercent = Number((left.shannons * BigInt(1_000_000)) / total) / 10_000;
   return (
     <div data-split-bar className="min-w-0">
-      <div className="mb-1.5 flex flex-wrap justify-between gap-4 text-[12.5px]">
+      <div className="text-body mb-1.5 flex flex-wrap justify-between gap-4">
         <span>
           <span className="text-text-dim">{left.name}</span>{' '}
           <ExactCkb shannons={left.shannons} signed={false} tone="plain" />
@@ -45,7 +45,7 @@ export function FiberSplitBar({ left, right, note }: { left: Side; right: Side; 
           style={{ background: FIBER_COLORS.openFill }}
         />
       </div>
-      <div className="text-text-dim mt-1.5 text-[11.5px]">{note}</div>
+      <div className="text-text-dim text-meta mt-1.5">{note}</div>
     </div>
   );
 }

@@ -193,7 +193,7 @@ export function AssetHistory({
       render: (e) => (
         <>
           <AppLink href={`/blocks/${e.blockNumber}`}>{formatBlockNumber(e.blockNumber)}</AppLink>
-          <AppLink className="text-text-dim block text-[11px]" href={`/tx/${e.txHash}`}>
+          <AppLink className="text-text-dim text-meta block" href={`/tx/${e.txHash}`}>
             tx {e.txIndex} · sequence {e.transferSequence}
           </AppLink>
         </>
@@ -232,10 +232,10 @@ export function AssetHistory({
               copyable={false}
               startChars={8}
               endChars={4}
-              className="text-xs"
+              className="text-small"
             />
           </AppLink>
-          <span className="text-text-dim block text-[11px]">
+          <span className="text-text-dim text-meta block">
             {e.lockKind ?? 'Lock kind unavailable'}
           </span>
         </>
@@ -251,7 +251,7 @@ export function AssetHistory({
             <button
               key={r}
               aria-pressed={range === r}
-              className={`border-base-border rounded border px-2 py-1 text-xs ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
+              className={`border-base-border text-small rounded border px-2 py-1 ${range === r ? 'bg-base-elevated text-text-bright' : 'text-text-dim'}`}
               onClick={() => {
                 setRange(r);
                 setSelectedDate(null);
@@ -263,7 +263,7 @@ export function AssetHistory({
         </div>
       }
     >
-      <p className="text-text-dim mb-3 text-[11px]">
+      <p className="text-text-dim text-meta mb-3">
         Complete UTC+8 days through {completeThrough} · indexed chain time
       </p>
       {point ? (
@@ -271,7 +271,7 @@ export function AssetHistory({
           <div
             aria-live="polite"
             aria-label="History readout"
-            className="border-base-border mb-2 flex flex-wrap gap-x-5 gap-y-2 border-b pb-3 text-xs"
+            className="border-base-border text-small mb-2 flex flex-wrap gap-x-5 gap-y-2 border-b pb-3"
           >
             <span className="text-text-bright">{point.date}</span>
             <span>
@@ -360,31 +360,31 @@ export function AssetHistory({
           )}
         </>
       ) : (
-        <p className="text-text-dim py-6 text-xs">No complete daily history in this range.</p>
+        <p className="text-text-dim text-small py-6">No complete daily history in this range.</p>
       )}
-      {footnote && <div className="text-text-dim mt-3 text-xs">{footnote}</div>}
+      {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
       {peak && (
-        <p className="text-text-dim mt-3 text-xs">
+        <p className="text-text-dim text-small mt-3">
           CKB held peaked at{' '}
           <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
           {peak.date}, among complete days.
         </p>
       )}
-      <p className="text-text-dim mt-3 text-xs">
+      <p className="text-text-dim text-small mt-3">
         Occupied pays for the state kept on CKB. Free is CKB held in the same cells beyond that byte
         cost.
       </p>
       {supplyEvents && token && (
         <details className="border-base-border mt-4 border-t pt-3">
-          <summary className="cursor-pointer text-xs">
+          <summary className="text-small cursor-pointer">
             Every change to the supply ({supplyEvents.total.toLocaleString('en-US')})
           </summary>
           {!supplyPager && supplyEvents.rows.length < supplyEvents.total && (
-            <p className="text-text-dim mt-2 text-[11px]">
+            <p className="text-text-dim text-meta mt-2">
               The newest {supplyEvents.rows.length.toLocaleString('en-US')} are listed.
             </p>
           )}
-          <p className="text-text-dim my-3 text-[11px]">
+          <p className="text-text-dim text-meta my-3">
             Event dates use raw block timestamps in UTC+8. Daily charts use indexed chain time,
             which preserves time through backward block timestamps.
           </p>
@@ -422,7 +422,7 @@ export function AssetHistory({
                       copyable={false}
                       startChars={8}
                       endChars={4}
-                      className="text-[11px]"
+                      className="text-meta"
                     />
                   </AppLink>{' '}
                   {e.lockKind ?? 'Lock kind unavailable'}

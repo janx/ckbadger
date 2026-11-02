@@ -29,7 +29,7 @@ export function AssetEcosystem() {
   const headerActions = (
     <Link
       href="/tokens"
-      className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
+      className="text-text-dim hover:text-jade text-small font-mono transition-colors"
     >
       VIEW ALL &rarr;
     </Link>
@@ -45,7 +45,7 @@ export function AssetEcosystem() {
       <TerminalPanelContent padding="md">
         {/* Top Tokens */}
         <div className="mb-4">
-          <div className="text-text-dim mb-2 text-[10px] uppercase tracking-wider">Top Tokens</div>
+          <div className="text-text-dim text-meta mb-2 uppercase tracking-wider">Top Tokens</div>
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }, (_, i) => (
@@ -58,11 +58,11 @@ export function AssetEcosystem() {
                 <div key={token.typeScriptHash} className="flex items-baseline justify-between">
                   <Link
                     href={`/tokens/${token.typeScriptHash}`}
-                    className="text-text-bright hover:text-jade font-mono text-xs transition-colors"
+                    className="text-text-bright hover:text-jade text-small font-mono transition-colors"
                   >
                     {token.name ?? token.symbol ?? token.typeScriptHash.slice(0, 10)}
                   </Link>
-                  <span className="text-text-dim font-mono text-xs tabular-nums">
+                  <span className="text-text-dim text-small font-mono tabular-nums">
                     {token.holdersCount.toLocaleString()} holders
                   </span>
                 </div>
@@ -73,7 +73,7 @@ export function AssetEcosystem() {
 
         {/* Capacity Breakdown */}
         <div>
-          <div className="text-text-dim mb-2 text-[10px] uppercase tracking-wider">
+          <div className="text-text-dim text-meta mb-2 uppercase tracking-wider">
             Capacity Breakdown
           </div>
           {isLoading ? (
@@ -101,10 +101,10 @@ export function AssetEcosystem() {
                       className="inline-block h-2 w-2 rounded-full"
                       style={{ backgroundColor: ASSET_CATEGORY_COLORS[cat.category] ?? '#666' }}
                     />
-                    <span className="text-text-dim font-mono text-xs">
+                    <span className="text-text-dim text-small font-mono">
                       {CATEGORY_LABELS[cat.category] ?? cat.category}
                     </span>
-                    <span className="text-text-bright font-mono text-xs tabular-nums">
+                    <span className="text-text-bright text-small font-mono tabular-nums">
                       {formatDecimal(cat.percentage, 1)}%
                     </span>
                   </span>

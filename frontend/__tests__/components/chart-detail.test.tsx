@@ -147,8 +147,8 @@ describe('shared chart detail', () => {
     const related = await screen.findByRole('heading', { name: 'Related charts' });
     const method = screen.getByRole('heading', { name: 'How it is computed / Evidence' });
     expect(related.compareDocumentPosition(method) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(related).toHaveClass('text-[15px]');
-    expect(method).toHaveClass('text-[13px]', 'text-[#a0a8be]');
+    expect(related).toHaveClass('text-section');
+    expect(method).toHaveClass('text-body', 'text-[#a0a8be]');
     expect(method.closest('[data-tier="2"]')).not.toBeNull();
   });
 

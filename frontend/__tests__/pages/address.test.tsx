@@ -200,7 +200,11 @@ describe('Address v3', () => {
     expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent(
       '9,589,480.00000000'
     );
-    expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+    expect(container.querySelector('[data-tier="2"]')).toHaveClass(
+      'mt-24',
+      'border-t',
+      'border-base-border'
+    );
   });
   it('shows all four holdings classes with exact distinct counts', async () => {
     render(<AddressDetailPage />);

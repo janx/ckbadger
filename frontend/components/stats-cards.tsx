@@ -30,9 +30,9 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
       <div className="relative z-10 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="bg-jade h-2 w-2 animate-pulse rounded-full" />
-          <span className="text-gold-dim font-mono text-sm font-medium">BULK SYNCING...</span>
+          <span className="text-gold-dim text-body font-mono font-medium">BULK SYNCING...</span>
         </div>
-        <span className="text-gold-dim font-mono text-sm">
+        <span className="text-gold-dim text-body font-mono">
           <TerminalNumber value={syncStatus.progress.toFixed(1)} glowIntensity="subtle" />% (
           <TerminalNumber
             value={syncStatus.syncedBlock.toLocaleString()}
@@ -41,7 +41,7 @@ export function SyncBanner({ stats }: { stats: NetworkStats }) {
         </span>
       </div>
       {hasExtraInfo && (
-        <div className="text-gold-dim relative z-10 mt-1 flex items-center gap-3 font-mono text-xs">
+        <div className="text-gold-dim text-small relative z-10 mt-1 flex items-center gap-3 font-mono">
           {syncSpeed && (
             <span>
               <TerminalNumber value={syncSpeed} glowIntensity="subtle" /> blocks/s
@@ -92,11 +92,11 @@ export function StatsCards() {
       <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
         {cards.map((card) => (
           <div key={card.label} className="terminal-card terminal-border-glow p-4">
-            <div className="text-text-dim relative z-10 font-mono text-xs uppercase tracking-wider">
+            <div className="text-text-dim text-small relative z-10 font-mono uppercase tracking-wider">
               {card.label}
             </div>
             <div
-              className={`relative z-10 mt-1 text-lg font-semibold ${isLoading ? 'animate-terminal-flicker' : ''}`}
+              className={`text-hero relative z-10 mt-1 font-semibold ${isLoading ? 'animate-terminal-flicker' : ''}`}
             >
               <TerminalNumber value={card.value} glowIntensity={card.glow} animate={!isLoading} />
             </div>

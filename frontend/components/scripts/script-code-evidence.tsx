@@ -134,7 +134,7 @@ export function ScriptCodeClassSummary({
     <DetailSection title={title}>
       {total > BigInt(0) && (
         <>
-          <p data-testid="code-class-sentence" className="mb-3 text-[13px] leading-relaxed">
+          <p data-testid="code-class-sentence" className="text-body mb-3 leading-relaxed">
             Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
             {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
             {joinClauses(
@@ -168,7 +168,7 @@ export function ScriptCodeClassSummary({
       )}
       <ul
         aria-label="Code classes"
-        className="text-text-dim flex flex-wrap gap-x-7 gap-y-1.5 text-[11.5px]"
+        className="text-text-dim text-meta flex flex-wrap gap-x-7 gap-y-1.5"
       >
         {ordered.map((row) => (
           <li key={row.class} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -183,7 +183,7 @@ export function ScriptCodeClassSummary({
         ))}
       </ul>
       {classes.some((row) => row.class === 'unspendable') && (
-        <p data-testid="unspendable-note" className="text-text-dim mt-2 text-[11px]">
+        <p data-testid="unspendable-note" className="text-text-dim text-meta mt-2">
           Unspendable: the code cell sits under a lock no one can unlock — the all-zero lock, or a
           secp256k1 lock over 20 zero bytes, which no known key matches — so its code is effectively
           immutable.
@@ -196,7 +196,7 @@ export function ScriptCodeClassSummary({
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
   return (
-    <div className="min-w-0 text-xs">
+    <div className="text-small min-w-0">
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
       {custody.class === 'multisig' && custody.witnessState === 'verified' && (
         <div className="text-text-dim mt-1">
@@ -213,10 +213,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
         </div>
       )}
       {custody.lockArgs && (
-        <div
-          className="text-text-dim mt-1 break-all font-mono text-[11px]"
-          title={custody.lockArgs}
-        >
+        <div className="text-text-dim text-meta mt-1 break-all font-mono" title={custody.lockArgs}>
           Lock args {custody.lockArgs}
         </div>
       )}
@@ -225,7 +222,7 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
           <summary className="cursor-pointer">
             {custody.keyHashes.length} committed key hashes
           </summary>
-          <ul className="mt-1 space-y-1 break-all font-mono text-[11px]">
+          <ul className="text-meta mt-1 space-y-1 break-all font-mono">
             {custody.keyHashes.map((hash) => (
               <li key={hash}>{hash}</li>
             ))}
@@ -262,7 +259,7 @@ export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi
   return (
     <DetailSection title="Code history">
       {markers.length === 0 ? (
-        <p className="text-text-dim text-xs">
+        <p className="text-text-dim text-small">
           No observed code cell events for registered references.
         </p>
       ) : (
@@ -272,7 +269,7 @@ export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi
               key={`${marker.referenceHash}:${marker.hashType}:${marker.codeCellTxHash}:${marker.codeCellOutputIndex}:${marker.event}`}
               className="border-base-border border-b py-3 last:border-b-0"
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+              <div className="text-small flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-text-bright capitalize">{marker.event}</span>
                 <AppLink
                   href={`/blocks/${marker.blockNumber}`}
@@ -281,17 +278,17 @@ export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi
                   Block {formatBlockNumber(marker.blockNumber)}
                 </AppLink>
               </div>
-              <div className="text-text-dim mt-1 break-all font-mono text-[11px]">
+              <div className="text-text-dim text-meta mt-1 break-all font-mono">
                 {marker.hashType} reference {truncateHash(marker.referenceHash, 16, 8)} · version{' '}
                 {marker.versionHash ? truncateHash(marker.versionHash, 16, 8) : 'unresolved'}
               </div>
-              <div className="text-text-dim mt-1 text-[11px]">
+              <div className="text-text-dim text-meta mt-1">
                 Chart day {marker.indexedDay} · code cell holder:{' '}
                 {scriptClassLabel(marker.custody.class)}
               </div>
               <AppLink
                 href={`/tx/${marker.eventTxHash}`}
-                className="text-emphasis text-[11px] hover:underline"
+                className="text-emphasis text-meta hover:underline"
               >
                 Event transaction {truncateHash(marker.eventTxHash, 12, 8)}
               </AppLink>
@@ -404,7 +401,7 @@ export function ScriptCapacityEvidenceChart({
       {chart.data.length > 0 && (
         <div
           aria-label="Custodian band aligned with capacity chart days"
-          className="mt-3 text-[11px]"
+          className="text-meta mt-3"
         >
           <div className="text-text-dim mb-1">
             Custodian track · blank intervals are retired gaps
@@ -427,7 +424,7 @@ export function ScriptCapacityEvidenceChart({
       )}
       {markers.length > 0 && (
         <div className="border-base-border mt-4 border-t pt-3">
-          <div className="text-text-dim mb-2 text-[11px]">
+          <div className="text-text-dim text-meta mb-2">
             Code and custodian events on the same indexed calendar as the chart
           </div>
           <div className="flex max-w-full gap-2 overflow-x-auto pb-2">
@@ -437,7 +434,7 @@ export function ScriptCapacityEvidenceChart({
                 type="button"
                 onClick={() => setSelectedKey(key(marker))}
                 aria-pressed={selected === marker}
-                className="border-base-border text-text-dim hover:text-text-bright shrink-0 rounded border px-2 py-1 text-[11px]"
+                className="border-base-border text-text-dim hover:text-text-bright text-meta shrink-0 rounded border px-2 py-1"
               >
                 {marker.indexedDay} · {marker.event} · {formatBlockNumber(marker.blockNumber)} ·{' '}
                 {truncateHash(marker.referenceHash, 8, 6)}:{marker.codeCellOutputIndex}
@@ -445,7 +442,7 @@ export function ScriptCapacityEvidenceChart({
             ))}
           </div>
           {selected && (
-            <div className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
+            <div className="text-small mt-3 grid gap-3 sm:grid-cols-2">
               <div>
                 <div className="text-text-dim">
                   {selected.event === 'deployed' ? 'New code cell holder' : 'Old code cell holder'}
