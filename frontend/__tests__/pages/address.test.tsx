@@ -1013,8 +1013,11 @@ describe('Address board · F2 blocks', () => {
 
   it('draws every activity as the shared ActivityRow, this address first and once (C3)', async () => {
     const second = { ...addressActivitiesFixture[0], txHash: fixtureHash(801), ckbDelta: '-5' };
-    vi.mocked(api.getAddressActivities).mockResolvedValue(
-      pageFixture([...addressActivitiesFixture, second])
+    const page = pageFixture([...addressActivitiesFixture, second]);
+    // C14 asks each filter chip for a one-row page; answer it with one row and hasMore, as the
+    // API would, so the feed's two rows do not reach the chip's one-row invariant.
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
+      p?.limit === 1 ? { ...page, data: page.data.slice(0, 1), hasMore: true } : page
     );
     render(<AddressDetailPage />);
     const history = await screen.findByRole('region', { name: 'History' });
