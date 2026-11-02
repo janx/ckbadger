@@ -88,7 +88,7 @@ describe('CompositionSet', () => {
       />
     );
     expect(screen.getByRole('group')).toHaveTextContent(
-      '90 of 200 collections fully on-chain · so are 4,200 live objects'
+      '90 of 200 collections are fully on-chain · so are 4,200 live objects'
     );
   });
 
@@ -105,12 +105,12 @@ describe('CompositionSet', () => {
     const chips = screen.getByRole('group', { name: 'Filter by composition' });
     const buttons = within(chips).getAllByRole('button');
     expect(buttons.map((b) => b.textContent)).toEqual([
-      'All200',
-      'Pure CKB90',
-      'BTC+CKB0',
-      'Decentralized mix0',
-      'Centralized mix110',
-      'Unknown0',
+      'All 200',
+      'Pure CKB 90',
+      'BTC+CKB 0',
+      'Decentralized mix 0',
+      'Centralized mix 110',
+      'Unknown 0',
     ]);
     expect(buttons[1]).toHaveAttribute('aria-pressed', 'true');
     expect(buttons[2]).toBeDisabled();

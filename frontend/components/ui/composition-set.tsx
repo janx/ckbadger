@@ -146,7 +146,7 @@ export function CompositionSet({
           }
         >
           {COMPOSITION_TIER_LABELS[tier]}
-        </span>
+        </span>{' '}
         <span
           data-count
           className={cn('tabular-nums', zero ? 'text-text-ghost' : 'text-text-bright')}
@@ -163,7 +163,9 @@ export function CompositionSet({
           <span className="text-text-bright font-medium tabular-nums">
             {n(fully)} of {n(total)}
           </span>{' '}
-          <span className="text-text">{noun === 'objects' ? '' : `${noun} `}fully on-chain</span>
+          <span className="text-text">
+            {noun === 'objects' ? '' : `${noun} are `}fully on-chain
+          </span>
           {said && <span className="text-text-dim"> · {said}</span>}
         </span>
         {aside && <span className="text-text-dim text-meta">{aside}</span>}
@@ -208,7 +210,7 @@ export function CompositionSet({
               !filter.selected ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'
             )}
           >
-            All<span className="text-text-bright tabular-nums">{n(total)}</span>
+            All <span className="text-text-bright tabular-nums">{n(total)}</span>
           </button>
           {legend.map((tier) => (
             <button
