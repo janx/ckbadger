@@ -6,7 +6,6 @@ import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import type { HardforkScriptDeployment } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
-import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 interface Props {
   deployments: HardforkScriptDeployment[];
@@ -177,13 +176,12 @@ export function DeploymentEvidence({
 }) {
   return (
     <aside aria-label="Selected script deployment evidence" className="text-small mt-3 min-w-0">
+      {/* The row's own "tap or hover" is the section's one hint (R14); the idle line says what a
+          dot reads. */}
       <ReadoutRow
         label="Script version readout"
         pinned={pinned}
-        idle={tapOrHover(
-          'a dot, or focus it, for that script version, its first code cell and its block.',
-          { capital: true }
-        )}
+        idle="a dot reads its script version, its first code cell and its block"
       >
         {selected
           ? `${markName(selected)} · deployed ${formatUtc8Date(selected.timestampMs)}`

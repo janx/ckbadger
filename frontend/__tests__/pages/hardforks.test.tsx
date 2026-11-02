@@ -213,8 +213,9 @@ describe('HardforksPage', () => {
     getHardforksMock.mockResolvedValue(mockTimeline);
     render(<HardforksPage />);
     const timeline = await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    // Hierarchy v3 (H1): the plain lead is tier 2's opening paragraph now.
     expect(
-      screen.getByText(
+      within(document.querySelector('[data-tier="2"]') as HTMLElement).getByText(
         /CKB changes its rules in editions\. Each one switches on at an agreed epoch/
       )
     ).toBeInTheDocument();
@@ -362,5 +363,69 @@ describe('HardforksPage', () => {
     getHardforksMock.mockResolvedValue({ ...producerDeployments, ...ends, hashTypeLanes: lanes });
     render(<HardforksPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent(/has no registered hash types/);
+  });
+
+  // --- Hierarchy v3 (lane H, plan §1b R11–R16) ---
+  it('opens with the title row and one short lede, then the VM timeline as the display element (H1, R13)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    const { container } = render(<HardforksPage />);
+    const timeline = await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const hero = screen.getByRole('region', { name: 'Hardforks' });
+    // The hero is tier 1's first section: title row, lede and the picture, nothing above it.
+    expect(tier1.querySelector('section')).toBe(hero);
+    expect(tier1.firstElementChild).toBe(hero);
+    const h1 = within(hero).getByRole('heading', { level: 1, name: 'Hardforks' });
+    expect(h1).toHaveClass('text-index', 'text-text-bright');
+    // "mainnet · tip epoch N" sits on the h1's row.
+    expect(h1.parentElement).toContainElement(within(hero).getByText('mainnet · tip epoch 13,000'));
+    const lede = within(hero).getByText(
+      /^Editions change CKB's rules; a script's hash type picks its VM\.$/
+    );
+    expect(lede.textContent!.length).toBeLessThanOrEqual(90);
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // No figure: the timeline follows the lede directly, with no h2 of its own (it is the hero).
+    expect(hero).toContainElement(timeline);
+    expect(lede.compareDocumentPosition(timeline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(hero).queryAllByRole('heading', { level: 2 })).toHaveLength(0);
+    expect(screen.queryByRole('heading', { name: 'Which VM runs a script, over time' })).toBeNull();
+    expect(Number(timeline.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    // Its name and its hint line are inside the plot, top-left; no figcaption.
+    expect(timeline.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      'which VM runs a script, over time · dots: when each known script version was deployed'
+    );
+    expect(tier1.querySelector('figcaption')).toBeNull();
+    // "tap or hover" once in the hero (R14): the readout row's.
+    expect(hero.querySelectorAll('[data-hint="tap-or-hover"]')).toHaveLength(1);
+    expect(hero.textContent!.match(/tap or hover/gi)).toHaveLength(1);
+  });
+
+  it('keeps the title row and the lede while the timeline loads or fails (H1)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockRejectedValue(new Error('network down'));
+    render(<HardforksPage />);
+    const hero = screen.getByRole('region', { name: 'Hardforks' });
+    expect(within(hero).getByRole('heading', { level: 1, name: 'Hardforks' })).toBeInTheDocument();
+    expect(within(hero).getByText(/^Editions change CKB's rules/)).toBeInTheDocument();
+    expect(await within(hero).findByRole('alert')).toHaveTextContent(
+      'Failed to load hardfork timeline'
+    );
+  });
+
+  it('moves the whole opening paragraph to tier 2 "How hash_type picks a VM" (H1)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    const { container } = render(<HardforksPage />);
+    await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(within(tier2).getByRole('heading', { name: 'How hash_type picks a VM' })).toHaveClass(
+      'text-body'
+    );
+    expect(tier2).toHaveTextContent(
+      "CKB changes its rules in editions. Each one switches on at an agreed epoch, and every node must run it from there on. Both so far brought a new version of CKB-VM, the machine that runs scripts, and a cell's scripts choose which one runs them through their hash type."
+    );
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1).not.toHaveTextContent(/Each one switches on at an agreed epoch/);
   });
 });
