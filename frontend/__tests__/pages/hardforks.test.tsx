@@ -263,8 +263,9 @@ describe('HardforksPage', () => {
       '1 known version',
     ])
       expect(text).toContain(label);
+    // Hierarchy v3 (H2): the sentence with every lane's count is tier 2's.
     expect(
-      screen.getByText(
+      within(document.querySelector('[data-tier="2"]') as HTMLElement).getByText(
         /Live cells reference registered scripts 1,830,780 times by type hash, 98,551 by data1, 0 by data2 and 472 by data\./
       )
     ).toBeInTheDocument();
@@ -427,5 +428,33 @@ describe('HardforksPage', () => {
     );
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     expect(tier1).not.toHaveTextContent(/Each one switches on at an agreed epoch/);
+  });
+
+  it('says under the timeline, in one caption, what a hash type pins; the full text is tier 2 (H2)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    const { container } = render(<HardforksPage />);
+    await screen.findByRole('img', { name: /which VM each hash type runs/i });
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const hero = screen.getByRole('region', { name: 'Hardforks' });
+    // Footnote budget under the graphic: its readout row (inside the hero) and ONE caption.
+    const caption = within(tier1).getByText(
+      /^A script named by its type hash follows every upgrade; one named by its data hash stays on the VM its hash type pins\./
+    );
+    expect(hero.nextElementSibling).toBe(caption);
+    expect(caption.tagName).toBe('P');
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    expect(caption.textContent!.length).toBeLessThanOrEqual(160);
+    // The way down to the whole explanation.
+    const how = within(caption).getByRole('link', { name: 'How it works ↓' });
+    expect(how).toHaveAttribute('href', '#how-hash-type-picks-a-vm');
+    const target = container.querySelector('#how-hash-type-picks-a-vm') as HTMLElement;
+    expect(target).toContainElement(container.querySelector('[data-tier="2"]') as HTMLElement);
+    // The 4-line paragraph left tier 1 whole and reads in full in tier 2.
+    expect(tier1).not.toHaveTextContent(/data-pinned script runs/);
+    expect(tier1).not.toHaveTextContent(/Live cells reference registered scripts/);
+    expect(target).toHaveTextContent(
+      'A script named by its type hash follows every upgrade: the same code runs on VM0, then VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a hardfork never changes how an existing data-pinned script runs. Live cells reference registered scripts 1,830,780 times by type hash, 98,551 by data1, 0 by data2 and 472 by data.'
+    );
   });
 });

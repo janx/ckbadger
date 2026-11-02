@@ -10,6 +10,7 @@ import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { LANE_ORDER, VmLaneTimeline, dayStartMs } from '@/components/hardforks/vm-lane-timeline';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatExactDecimal } from '@/lib/exact-integer';
+import type { HardforkHashTypeLaneF2 } from '@/lib/api';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -161,19 +162,32 @@ function Lede() {
   );
 }
 
+/** The caption's link down to the explanation (and the tier-2 anchor it lands on). */
+const HOW_ID = 'how-hash-type-picks-a-vm';
+
 /**
- * Tier 2 (hierarchy v3): the explanation tier 1 states as a timeline — the opening paragraph the
- * page used to lead with (CH-43).
+ * Tier 2 (hierarchy v3): the explanation tier 1 states as a timeline and one caption — the opening
+ * paragraph the page used to lead with (CH-43) and the paragraph that stood under the timeline,
+ * with every lane's live references (CH-41). Two columns from lg, prose at most 640 px wide.
  */
-function HowHashTypePicksAVm() {
+function HowHashTypePicksAVm({ lanes }: { lanes: readonly HardforkHashTypeLaneF2[] }) {
   return (
     <DetailSection title="How hash_type picks a VM">
-      <div className="flex max-w-[640px] flex-col gap-3.5">
-        <p className="text-text-dim text-body">
+      <div className="grid items-start gap-x-14 gap-y-3.5 lg:grid-cols-2">
+        <p className="text-text-dim text-body max-w-[640px]">
           CKB changes its rules in editions. Each one switches on at an agreed epoch, and every node
           must run it from there on. Both so far brought a new version of CKB-VM, the machine that
           runs scripts, and a cell&apos;s scripts choose which one runs them through their hash
           type.
+        </p>
+        <p className="text-text-dim text-body max-w-[640px]">
+          A script named by its type hash follows every upgrade: the same code runs on VM0, then
+          VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a
+          hardfork never changes how an existing data-pinned script runs. Live cells reference
+          registered scripts {formatExactDecimal(lanes[0].liveReferences, 'type live references')}{' '}
+          times by type hash, {formatExactDecimal(lanes[1].liveReferences, 'data1 live references')}{' '}
+          by data1, {formatExactDecimal(lanes[2].liveReferences, 'data2 live references')} by data2
+          and {formatExactDecimal(lanes[3].liveReferences, 'data live references')} by data.
         </p>
       </div>
     </DetailSection>
@@ -277,18 +291,20 @@ export default function HardforksPage() {
               )}
             </section>
             {ready && (
+              // Footnote budget under the timeline: its readout row and this one caption (R4, R14).
+              <p className="text-text text-body mt-3.5 max-w-[640px]">
+                A script named by its type hash follows every upgrade; one named by its data hash
+                stays on the VM its hash type pins.{' '}
+                <a
+                  href={`#${HOW_ID}`}
+                  className="text-text-dim hover:text-text-bright whitespace-nowrap hover:underline"
+                >
+                  How it works ↓
+                </a>
+              </p>
+            )}
+            {ready && (
               <div className="mt-8 min-w-0 space-y-8">
-                <p className="text-text text-body max-w-[940px] leading-relaxed">
-                  A script named by its type hash follows every upgrade: the same code runs on VM0,
-                  then VM1, then VM2. A script named by its data hash stays on the VM its hash type
-                  pins, so a hardfork never changes how an existing data-pinned script runs. Live
-                  cells reference registered scripts{' '}
-                  {formatExactDecimal(lanes![0].liveReferences, 'type live references')} times by
-                  type hash, {formatExactDecimal(lanes![1].liveReferences, 'data1 live references')}{' '}
-                  by data1, {formatExactDecimal(lanes![2].liveReferences, 'data2 live references')}{' '}
-                  by data2 and{' '}
-                  {formatExactDecimal(lanes![3].liveReferences, 'data live references')} by data.
-                </p>
                 <div className="grid min-w-0 items-start gap-12 md:grid-cols-2">
                   {events.map((event) => (
                     <EditionCard
@@ -330,9 +346,12 @@ export default function HardforksPage() {
             )}
           </div>
           {ready && (
-            <DetailTier2>
-              <HowHashTypePicksAVm />
-            </DetailTier2>
+            // "How it works ↓" under the timeline lands on the evidence boundary.
+            <div id={HOW_ID} className="scroll-mt-4">
+              <DetailTier2>
+                <HowHashTypePicksAVm lanes={lanes!} />
+              </DetailTier2>
+            </div>
           )}
         </div>
       </main>
