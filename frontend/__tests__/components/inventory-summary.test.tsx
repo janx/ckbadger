@@ -1,6 +1,6 @@
 import { inventoryProducer } from '@/__tests__/msw/fixtures/asset-producer';
 import { InventoryRows } from '@/components/asset/inventory-table';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { InventorySummaryNotice, ObjectComposition } from '@/components/asset/inventory-summary';
 import type { InventorySummary } from '@/lib/api';
 export const summary: InventorySummary = {
@@ -64,9 +64,13 @@ it('consumes a real cached pending-page and independent canonical summary respon
   expect(screen.getByRole('table', { name: 'Object collections' })).toHaveTextContent(
     'Decode pending'
   );
-  expect(screen.getByRole('table', { name: 'Object collections' })).toHaveTextContent(
-    'of 2 minted'
-  );
+  // Table-rows L2-2: "of N minted" left the row for its title (a ghost "/ N" shows only when
+  // minted differs from live).
+  expect(
+    within(screen.getByRole('table', { name: 'Object collections' }))
+      .getAllByRole('row')[1]
+      .getAttribute('title')
+  ).toMatch(/ live of 2 minted · /);
   expect(screen.getByRole('region', { name: 'Object composition' })).toHaveTextContent(
     '2 await DOB decoding'
   );
