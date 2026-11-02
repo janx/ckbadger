@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AlignedBar, AlignedBarFootnote } from '@/components/ui/aligned-bar';
 import { IciclePartition } from '@/components/ui/icicle-partition';
@@ -346,6 +347,70 @@ describe('ConcentrationBar (DAO-12)', () => {
         />
       )
     ).toThrow('x: parts sum to 9, not the total 10');
+  });
+});
+
+// ---- hierarchy v3 (DAO page, R15): additive ConcentrationBar option ----
+describe('ConcentrationBar with the group names inside its segments (hierarchy v3, R15)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const groups = [
+    { label: 'largest', value: BigInt(83) },
+    { label: 'next 9', value: BigInt(179) },
+    { label: 'next 90', value: BigInt(311) },
+    { label: 'the other 16,541', value: BigInt(427) },
+  ];
+  const bar = (width: number) => {
+    stubChartWidth(width);
+    return render(
+      <ConcentrationBar
+        label="Share of deposits"
+        assetClass="dao"
+        total={BigInt(1000)}
+        groups={groups}
+        labelsInside
+      />
+    );
+  };
+
+  it('draws a 28 px bar with each name and share inside its segment, and no legend row', () => {
+    const { container } = bar(1408);
+    const img = screen.getByRole('img', { name: /^Share of deposits/ });
+    expect(img).toHaveClass('h-[28px]');
+    const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
+    expect(segments.map((s) => s.textContent)).toEqual([
+      'largest 8.30%',
+      'next 9 · 17.90%',
+      'next 90 · 31.10%',
+      'the other 16,541 · 42.70%',
+    ]);
+    // The fade is the background's, so the words keep full ink: dark on the strong segments.
+    expect(segments.map((s) => s.style.opacity)).toEqual(['', '', '', '']);
+    expect(segments[0]).toHaveClass('text-base-bg');
+    expect(segments[3]).toHaveClass('text-text-bright');
+    expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
+  });
+
+  it('keeps the legend row when a segment is too narrow for its words', () => {
+    const { container } = bar(358);
+    const segments = Array.from(container.querySelectorAll('[data-segment]')) as HTMLElement[];
+    // 8.3 % of 358 px holds neither "largest 8.30%" nor "8.30%"
+    expect(segments[0].textContent).toBe('');
+    expect(container.querySelector('[data-role="concentration-legend"]')).toHaveTextContent(
+      'largest 8.30%'
+    );
+  });
+
+  it('is the original thin bar with a legend row when not asked', () => {
+    stubChartWidth(1408);
+    const { container } = render(
+      <ConcentrationBar label="x" assetClass="dao" total={BigInt(1000)} groups={groups} />
+    );
+    expect(screen.getByRole('img', { name: /^x/ })).toHaveClass('h-3');
+    expect(container.querySelector('[data-segment="largest"]')!.textContent).toBe('');
+    expect(screen.getByText('next 9').parentElement).toHaveTextContent('next 9 17.90%');
   });
 });
 

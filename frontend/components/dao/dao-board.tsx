@@ -873,13 +873,16 @@ function lockLink(owner: Owner) {
       className="text-text-dim hover:text-text-bright font-mono hover:underline"
       title={`${owner.lockCodeHash} (${owner.lockHashType})`}
     >
-      {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`} · {owner.lockHashType}
+      {owner.lockKind ?? `${owner.lockCodeHash.slice(0, 10)}…`}
     </Link>
   );
 }
 
-/** Board v2: depositor rows read at body (13 px) under 12 px column heads, as the board sets them. */
-const OWNER_CELL = 'text-body';
+/**
+ * Board v2: depositor rows read at body (13 px) under 12 px column heads, as the board sets them;
+ * v3 (R15): 6 px above and below the line, rows of 32–34 px.
+ */
+const OWNER_CELL = 'text-body py-1.5';
 
 const OWNER_COLUMNS: ListColumn<Owner>[] = [
   {
@@ -933,11 +936,13 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
     >
       {total > BigInt(0) && (
         <div className="mb-4">
+          {/* R15: 28 px, the group names inside their segments, no legend row where they fit. */}
           <ConcentrationBar
             label="Share of deposits"
             assetClass="dao"
             total={total}
             groups={groups}
+            labelsInside
           />
         </div>
       )}

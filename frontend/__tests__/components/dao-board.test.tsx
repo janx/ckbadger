@@ -998,6 +998,36 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     );
   });
 
+  it('writes the group names and shares inside a 28 px concentration bar, with no legend row (R15)', () => {
+    stubCalculator();
+    stubChartWidth(1408);
+    const many = {
+      ...evidence,
+      phase0: { capacity: '10000', count: 20000 },
+      concentration: {
+        ...evidence.concentration,
+        currentDepositors: 16641,
+        top1Capacity: '827',
+        top10Capacity: '2620',
+        top100Capacity: '5727',
+      },
+    };
+    const { container } = render(
+      <DaoBoard statistics={{ ...stats, totalDeposited: '10000' }} evidence={many} />
+    );
+    const bar = within(who()).getByRole('img', { name: /^Share of deposits/ });
+    expect(bar).toHaveClass('h-[28px]');
+    expect(Array.from(bar.children).map((s) => s.textContent)).toEqual([
+      'largest 8.27%',
+      'next 9 · 17.93%',
+      'next 90 · 31.07%',
+      'the other 16,541 · 42.73%',
+    ]);
+    expect(container.querySelector('[data-role="concentration-legend"]')).toBeNull();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
   it('names only the groups that exist when there are few depositors', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
@@ -1011,9 +1041,17 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     stubChartWidth(1248);
     const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     const table = within(who()).getByRole('table', { name: 'Largest depositors' });
-    // Board v2: depositor rows read at body (13 px) under quieter column heads.
+    // Board v2: depositor rows read at body (13 px) under quieter column heads; v3 (R15): rows of
+    // 32–34 px (6 px above and below a 20.8 px line).
     for (const cell of Array.from(table.querySelectorAll('tbody td')))
-      expect(cell).toHaveClass('text-body');
+      expect(cell).toHaveClass('text-body', 'py-1.5');
+    // The Lock column names the lock; its code hash and hash type are the link's title.
+    const lock = within(table).getAllByRole('link', { name: /^0x9bd7e06f/ })[0];
+    expect(lock.textContent).toBe('0x9bd7e06f…');
+    expect(lock).toHaveAttribute(
+      'title',
+      '0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8 (type)'
+    );
     unmount();
     vi.unstubAllGlobals();
     stubChartWidth(358);
