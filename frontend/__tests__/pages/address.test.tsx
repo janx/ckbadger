@@ -380,7 +380,16 @@ describe('Address v3', () => {
       expect.stringContaining('/identities/dotcell/')
     );
     expect(screen.getByText(/These rights do not add/)).toBeInTheDocument();
-    expect(await screen.findByText('Roles: owner')).toBeInTheDocument();
+    // Consistency C3: the role is on this address's participant line (was a "Roles: owner" line
+    // under the row, which repeated it).
+    const history = screen.getByRole('region', { name: 'History' });
+    const party = await waitFor(() => {
+      const p = history.querySelector('article[data-feed-row] [data-role="party"]');
+      expect(p).not.toBeNull();
+      return p as HTMLElement;
+    });
+    expect(party).toHaveTextContent('owner');
+    expect(history).not.toHaveTextContent('Roles: owner');
     await tab('Transactions');
     expect((await screen.findAllByText('Named participant')).length).toBeGreaterThan(0);
   });
@@ -958,8 +967,41 @@ describe('Address board · F2 blocks', () => {
       expect(e).not.toBeNull();
       return e as HTMLElement;
     });
-    expect(evidence).toHaveTextContent(/^#18,672,923 · 0x.+ · 2026-02-21$/);
+    // Consistency C3: block · date, the site's one row head (was "#… · 0x… · 2026-02-21"); the
+    // hash and the age are the row's hover, the headline is the link to the tx.
+    expect(evidence).toHaveTextContent(/^#18,672,923 · 2026-02-21$/);
     expect(evidence).not.toHaveTextContent('ago');
+    expect(evidence.closest('article')).toHaveAttribute(
+      'title',
+      expect.stringMatching(new RegExp(`^${addressActivitiesFixture[0].txHash} · \\d+d ago$`))
+    );
+  });
+
+  it('draws every activity as the shared ActivityRow, this address first and once (C3)', async () => {
+    const second = { ...addressActivitiesFixture[0], txHash: fixtureHash(801), ckbDelta: '-5' };
+    vi.mocked(api.getAddressActivities).mockResolvedValue(
+      pageFixture([...addressActivitiesFixture, second])
+    );
+    render(<AddressDetailPage />);
+    const history = await screen.findByRole('region', { name: 'History' });
+    const rows = await waitFor(() => {
+      const r = [...history.querySelectorAll<HTMLElement>('article[data-feed-row]')];
+      expect(r).toHaveLength(2);
+      return r;
+    });
+    expect(rows.map((r) => r.getAttribute('data-feed-row'))).toEqual([
+      addressActivitiesFixture[0].txHash,
+      second.txHash,
+    ]);
+    for (const row of rows) {
+      // The endpoint supplies this participant's deltas only: one participant line per row.
+      expect(row.querySelectorAll('[data-role="participant"]')).toHaveLength(1);
+      expect(within(row).getAllByText('this address')).toHaveLength(1);
+      const party = row.querySelector('[data-role="party"]') as HTMLElement;
+      expect(within(party).queryByRole('link')).toBeNull();
+      expect(within(party).getByTitle(addressText)).toBeInTheDocument();
+    }
+    expect(within(history).getAllByText('this address')).toHaveLength(2);
   });
 
   it('marks the Scripts column by class with display names, and dates the Block column (BA-36)', async () => {

@@ -5,6 +5,7 @@ import type { GlobalActivity, ParticipantInfo } from '@/lib/api';
 import { api } from '@/lib/api';
 import { dailyActivities } from '@/__tests__/msw/fixtures/home';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { formatUtc8Date } from '@/lib/utils';
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 
@@ -301,12 +302,13 @@ describe('ActivitiesStreamExplorer', () => {
   });
 
   it('renders each activity row with tx hash, event rows, and participant lines', async () => {
+    const timestamp = String(Date.now() - 23_000);
     vi.mocked(api.getGlobalActivities).mockResolvedValue({
       data: [
         makeActivity({
           txHash: '0xscriptcall0000000000000000000000000000000000000000000000000001',
           blockNumber: 123_456,
-          timestamp: String(Date.now() - 23_000),
+          timestamp,
           typeCalls: [
             {
               scriptHash: '0x1111111111111111111111111111111111111111111111111111111111111111',
@@ -335,7 +337,8 @@ describe('ActivitiesStreamExplorer', () => {
 
     expect(screen.getByText('Today')).toBeInTheDocument();
     // T7 (option A): the tx hash is the row's hover; the headline is the link to the tx.
-    expect(row).toHaveAttribute('title', expect.stringMatching(/^0xscriptca/));
+    // Consistency C3: the age joins the hash in that hover.
+    expect(row).toHaveAttribute('title', expect.stringMatching(/^0xscriptca.* · \d+s ago$/));
     expect(row).not.toHaveTextContent(/0xscriptca/);
     expect(within(row).getByRole('link', { name: 'Script call' })).toHaveAttribute(
       'href',
@@ -343,8 +346,10 @@ describe('ActivitiesStreamExplorer', () => {
     );
     // Block number shown
     expect(within(row).getByText('#123,456')).toBeInTheDocument();
-    // Time shown
-    expect(within(row).getByText(/ago$/i)).toBeInTheDocument();
+    // Time shown: consistency C3, the absolute UTC+8 date (was the age, /ago$/), the age its hover.
+    const date = formatUtc8Date(timestamp);
+    expect(within(row).getByText(date)).toHaveAttribute('title', expect.stringMatching(/ago$/));
+    expect(row.querySelector('[data-role="evidence"]')).not.toHaveTextContent('ago');
     // Script call event row (badge includes icon prefix)
     expect(within(row).getByText('Script call')).toBeInTheDocument();
     expect(within(row).getByText('.bit Time Index State')).toBeInTheDocument();

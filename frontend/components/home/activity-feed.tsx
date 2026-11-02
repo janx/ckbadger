@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { ActivityRow, ActivityRowHead } from '@/components/activity/activity-row';
+import { ActivityRow, ActivityRowHead, activityRowTitle } from '@/components/activity/activity-row';
 export { formatOccupiedDelta } from '@/components/activity/activity-row';
 import { useFreshKeys } from '@/hooks/useFreshKeys';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
@@ -161,6 +161,8 @@ function TxRow({ tx, fresh }: { tx: Transaction; fresh: boolean }) {
     <article
       data-feed-row={tx.hash}
       data-tx-row={tx.hash}
+      // Consistency C3: the activity row's hover, the hash and the age (the row shows the date).
+      title={activityRowTitle(tx.hash, tx.timestamp)}
       data-highlighted={highlighted}
       // A committed tx anchors the proposal window on the block that committed it.
       onPointerEnter={() =>
