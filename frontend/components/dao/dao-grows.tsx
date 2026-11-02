@@ -11,7 +11,6 @@ import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Date } from '@/lib/utils';
-import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 
 /** The board's example deposit: 10,000 CKB, in shannons. */
 const EXAMPLE_DEPOSIT = '1000000000000';
@@ -148,17 +147,17 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
     return { from, percent: formatPercent(b - a, a, 2) };
   });
   const yearMax = Math.max(...years.map((y) => Number(y.percent)), 0);
-  const year365 = evidence.ar.year365;
 
+  // Hierarchy D4: the figure first, one caption at the bottom; what AR is reads in tier 2.
   return (
     <section aria-label="How a deposit grows" className="flex min-w-0 flex-col gap-3">
-      <h2 className="text-text-bright text-section font-medium">How a deposit grows</h2>
-      <p className="text-text text-body leading-relaxed">
-        AR, in every block header, is the DAO&apos;s growth index:{' '}
-        {formatAccumulatedRate(ar(evidence.ar.genesisAr, 'DAO genesis AR'))} at genesis,{' '}
-        {formatAccumulatedRate(tipAr)} now. A deposit grows by AR at its withdrawal request ÷ AR at
-        its deposit, on the capacity it does not occupy.
-      </p>
+      <div className="mb-1.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-text-bright text-section font-medium">How a deposit grows</h2>
+        <span className="text-text-dim text-meta">
+          AR {arAtFourPlaces(tipAr)} at the tip · +{evidence.ar.sinceGenesisGrowthPercent}% since
+          genesis
+        </span>
+      </div>
       {history.isError ? (
         <div role="alert" className="text-rouge text-small">
           AR history could not be read: {String(history.error)}
@@ -201,15 +200,20 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
           </div>
         </div>
       )}
-      {years.length > 0 && year365 && (
-        <span className="text-text-dim text-meta">
-          The curve flattens as more CKB exists: the first year compensated {years[0].percent}%, the
-          last 365 days {year365.observedGrowthPercent}%. <TapOrHoverHint capital what="a date" />{' '}
-          to see the compensation owed to a deposit made then.
-        </span>
-      )}
+      <p className="text-text text-body mt-1">
+        A deposit grows by AR at its withdrawal request ÷ AR at its deposit, on the capacity it does
+        not occupy. The curve flattens as more CKB exists.
+      </p>
     </section>
   );
+}
+
+/** AR cut to four decimal places for the heading note (the exact rate is in tier 2). */
+function arAtFourPlaces(value: bigint): string {
+  const exact = formatAccumulatedRate(value);
+  const m = /^(\d+\.\d{4})\d*$/.exec(exact);
+  if (!m) throw new Error(`DAO AR ${exact} is not a decimal rate`);
+  return m[1];
 }
 
 function OwedAmount({ shannons }: { shannons: bigint }) {

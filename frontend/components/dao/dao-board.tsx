@@ -1051,8 +1051,9 @@ function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
           secondary issuance, while free CKB outside the DAO receives nothing.
         </p>
         <p>
-          The depositors&apos; share counts phase-0 deposits, free capacity + compensation already
-          accrued; withdrawal requests take no share.
+          AR, in every block header, is the DAO&apos;s growth index. The depositors&apos; share
+          counts phase-0 deposits, free capacity + compensation already accrued; withdrawal requests
+          take no share.
         </p>
         <p>
           Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real

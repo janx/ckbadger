@@ -601,6 +601,29 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // Anniversary to anniversary only: the year in progress (to the tip) is not a bar.
     expect(years.querySelectorAll('[data-year]')).toHaveLength(1);
     expect(years).toHaveTextContent('1.00%from 1970-01');
+    // Evidence first (D4): the chart, its reading and the year bars, then ONE caption at the bottom.
+    const caption = within(grows()).getByText(
+      'A deposit grows by AR at its withdrawal request ÷ AR at its deposit, on the capacity it does not occupy. The curve flattens as more CKB exists.'
+    );
+    expect(chart.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(years.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(caption).toHaveClass('text-body');
+    expect(grows().lastElementChild).toBe(caption);
+  });
+
+  it('notes AR at the tip and its growth since genesis beside the heading (D4)', () => {
+    stubCalculator();
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const heading = within(grows()).getByRole('heading', { level: 2 });
+    expect(heading).toHaveTextContent('How a deposit grows');
+    expect(heading.parentElement).toHaveTextContent(
+      'How a deposit growsAR 1.0200 at the tip · +2.0000% since genesis'
+    );
+    // The opening paragraph left tier 1: what AR is now reads in the evidence.
+    expect(grows()).not.toHaveTextContent(/growth index/);
+    expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
+      "AR, in every block header, is the DAO's growth index."
+    );
   });
 
   it('a tap on the AR chart pins that day in the reading under it; a second tap lets go (R6)', async () => {
