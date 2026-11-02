@@ -1,0 +1,39 @@
+{
+  "cachedVmTraits": {
+    "decodedAt": "1793498385",
+    "originalDecoderHashRecorded": false,
+    "source": "cachedVm",
+    "status": "decoded",
+    "traits": [
+      { "name": "prev.type", "value": "image" },
+      {
+        "name": "prev.bg",
+        "value": "btcfs://b49a594116033b944ba6e90a40b1a60d8da10b48f62d86853c3f983b68d7bee9i0"
+      },
+      { "name": "prev.view", "value": "0" },
+      { "name": "Entity", "value": "3449712379062204799" }
+    ]
+  },
+  "currentPattern": {
+    "source": "currentCanonicalDecoder",
+    "status": "dob",
+    "steps": [
+      {
+        "bytes": [],
+        "decoderBinaryHash": "0x1c84212ebd817e9de09d2a79f85cc421b684eda63409cfa75688f98716e77b5f",
+        "decoderReference": {
+          "hash": "0x1c84212ebd817e9de09d2a79f85cc421b684eda63409cfa75688f98716e77b5f",
+          "type": "code_hash"
+        },
+        "description": {
+          "reason": "byte mapping is not defined for decoder binary 0x1c84212ebd817e9de09d2a79f85cc421b684eda63409cfa75688f98716e77b5f",
+          "status": "unsupported"
+        },
+        "step": 0
+      }
+    ],
+    "version": 0
+  },
+  "dnaHex": "0x62746366733a2f2f623439613539343131363033336239343462613665393061343062316136306438646131306234386636326438363835336333663938336236386437626565396930007f3945a321d7df2f",
+  "number": null
+}

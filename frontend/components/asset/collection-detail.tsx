@@ -567,7 +567,13 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
                   )}
                   {cluster.data && <StoredDescription description={cluster.data.description} />}
                 </section>
-                {insights.data && <ClusterPatternReading clusterId={id} insights={insights.data} />}
+                {insights.data && (
+                  <ClusterPatternReading
+                    clusterId={id}
+                    insights={insights.data}
+                    description={cluster.data?.description}
+                  />
+                )}
               </div>
             )}
             {/* F2 objects (OB-K5): the configure decoding is developer evidence (Mnft board tier 2). */}

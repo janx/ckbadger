@@ -15,6 +15,12 @@ import {
 import type { CurrentPattern, ObjectGenetics, ItemProtocol } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
+import {
+  HEADWEAR_OBJECT,
+  headwearDescription,
+  headwearGenetics,
+  headwearInsights,
+} from '@/__tests__/fixtures/objects/nervape-headwear';
 describe('Independent DOB evidence', () => {
   // the gels lay themselves out for their measured box; 896 px is the object page's DNA plate
   beforeEach(() => stubChartWidth(896));
@@ -371,5 +377,143 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
     expect(Array.from(own.querySelectorAll('text')).map((t) => t.textContent)).toEqual([
       'this one',
     ]);
+  });
+});
+
+// Lane E follow-up (the page the user reviewed): Nervape Headwear is DOB/0 whose decoder binary the
+// API has no reviewed byte mapping for; its description declares the pattern, and the Main board's
+// ruler (prev.bg 0–74, prev.view 74, Entity 75–83, prev.type sharing byte 0) and gene table are
+// built from that declaration. Before the fix the chain said "0 genes" and drew neither.
+describe('How an object is read · a pattern declared in the description (Nervape Headwear)', () => {
+  beforeEach(() => stubChartWidth(560));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const sample = {
+    id: HEADWEAR_OBJECT,
+    href: `/objects/${HEADWEAR_OBJECT}`,
+    dnaHex: headwearGenetics.dnaHex,
+    traits: headwearGenetics.cachedVmTraits.traits,
+    decodeStatus: 'decoded',
+  };
+  it('draws the declared ruler and gene table with what the 1,298 objects show', () => {
+    render(
+      <CurrentPatternEvidence
+        pattern={headwearInsights.currentPattern}
+        genetics={headwearInsights.genetics}
+        sample={sample}
+        description={headwearDescription}
+      />
+    );
+    const section = screen.getByRole('region', { name: 'How an object is read' });
+    expect(section).not.toHaveTextContent('0 genes');
+    expect(within(section).getAllByRole('listitem')[1]).toHaveTextContent(
+      'stored in this cluster’s description: 4 genes, each a byte range and a rule.'
+    );
+    expect(within(section).getAllByRole('listitem')[0]).toHaveTextContent(
+      '83 bytes of DNA in its cell data.'
+    );
+    const ruler = screen.getByRole('group', { name: 'DNA byte map' });
+    expect(
+      [...ruler.querySelectorAll('[data-segment]')].map((p) => p.getAttribute('data-target'))
+    ).toEqual(['0:1', '0:2', '0:3']);
+    expect(screen.getByText('prev.type reads byte 0 too')).toBeInTheDocument();
+    const table = screen.getByRole('table', { name: 'DOB blueprint' });
+    expect(
+      within(table).getByRole('columnheader', { name: 'found across 1,298' })
+    ).toBeInTheDocument();
+    const row = (name: RegExp) => within(table).getByRole('row', { name });
+    expect(row(/^prev\.type/)).toHaveTextContent('byte 0 · 1');
+    expect(row(/^prev\.type/)).toHaveTextContent('image, for all');
+    expect(row(/^prev\.bg/)).toHaveTextContent('bytes 0–73 · 74');
+    expect(row(/^prev\.bg/)).toHaveTextContent('52 values');
+    expect(row(/^prev\.view/)).toHaveTextContent('range 0 – 255');
+    expect(row(/^prev\.view/)).toHaveTextContent('0 for 1,139 · 1 for 159');
+    expect(row(/^Entity/)).toHaveTextContent('bytes 75–82 · 8');
+    // the declaration is named as such: the decoder binary maps no bytes to check it against
+    expect(section).toHaveTextContent(
+      'These ranges are the pattern’s own declaration, in the cluster’s description; the decoder binary names no byte mapping to check them against.'
+    );
+    // the one object reads through the four genes; none is "outside the pattern"
+    const card = screen.getByRole('group', { name: 'One object, read this way' });
+    expect(within(card).getByText('prev.view').nextElementSibling).toHaveTextContent('0');
+    expect(within(card).getByText('Entity').nextElementSibling).toHaveTextContent(
+      '3449712379062204799'
+    );
+    expect(card).not.toHaveTextContent('outside the pattern');
+  });
+});
+
+describe('The object page reads a declared pattern too (Nervape Headwear object)', () => {
+  beforeEach(() => stubChartWidth(896));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  it('maps the object’s 83 DNA bytes gene by gene in its DNA evidence and its sequencing gel', () => {
+    render(
+      <>
+        <ObjectGeneticsView
+          evidence={headwearGenetics}
+          subject="Nervape Headwear"
+          description={headwearDescription}
+        />
+        <ObjectGeneticsEvidence
+          evidence={headwearGenetics}
+          subject="Nervape Headwear"
+          description={headwearDescription}
+        />
+      </>
+    );
+    expect(screen.getByRole('region', { name: 'DNA' })).toHaveTextContent('83 bytes · 4 genes');
+    const evidence = screen.getByLabelText('DNA evidence');
+    const genes = within(evidence).getByRole('table', { name: 'DNA genes' });
+    expect(
+      within(genes)
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => r.firstChild?.textContent)
+    ).toEqual(['prev.type', 'prev.bg', 'prev.view', 'Entity']);
+    expect(within(genes).getByRole('row', { name: /^Entity/ })).toHaveAttribute(
+      'title',
+      expect.stringContaining('raw 0x7f3945a321d7df2f')
+    );
+    expect(within(genes).getByRole('row', { name: /^prev\.view/ })).toHaveTextContent('byte 74');
+    expect(
+      within(evidence).getByRole('group', { name: 'Object DNA byte map' })
+    ).toBeInTheDocument();
+    // named as the pattern's declaration, as on the cluster page
+    expect(evidence).toHaveTextContent(
+      'These ranges are the pattern’s own declaration, in the cluster’s description; the decoder binary names no byte mapping to check them against.'
+    );
+  });
+});
+
+describe('DNA ruler labels (Nervape Headwear at 560 px)', () => {
+  beforeEach(() => stubChartWidth(560));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  it('keeps the byte count inside a part too narrow for its gene name', () => {
+    render(
+      <CurrentPatternEvidence
+        pattern={headwearInsights.currentPattern}
+        sample={{
+          id: HEADWEAR_OBJECT,
+          href: `/objects/${HEADWEAR_OBJECT}`,
+          dnaHex: headwearGenetics.dnaHex,
+          traits: headwearGenetics.cachedVmTraits.traits,
+          decodeStatus: 'decoded',
+        }}
+        description={headwearDescription}
+      />
+    );
+    const parts = [
+      ...screen.getByRole('group', { name: 'DNA byte map' }).querySelectorAll('[data-segment]'),
+    ].map((p) => p.textContent);
+    expect(parts[0]).toBe('prev.bg 74');
+    expect(parts[2]).toMatch(/^(Entity 8|8)$/);
   });
 });
