@@ -25,7 +25,7 @@ import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
-import { HMultiplierReading } from '@/components/ui/hmul-info';
+import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { CompositionTier } from '@/lib/asset-utils';
@@ -166,6 +166,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       ? (cluster.data?.name ?? 'Unnamed collection')
       : (data?.name ??
         (kind === 'identity' ? formatStandard(data?.standard ?? id) : 'Object collection'));
+  // C1: the tab names the collection by what it is — a Spore cluster, an m-NFT class, an
+  // identity collection.
+  const documentTitle = [
+    title,
+    kind === 'spore' ? 'cluster' : kind === 'object' ? 'class' : 'collection',
+  ];
   if (!data && isNotFoundApiError(detail.error)) {
     const path = kind === 'identity' ? 'identities' : 'objects';
     return (
@@ -182,6 +188,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     return (
       <AssetDetailShell
         title={title}
+        documentTitle={documentTitle}
         kind={kind === 'identity' ? 'identities' : 'objects'}
         breadcrumb={[
           {
@@ -198,17 +205,21 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
   const weekly = insights.data?.weeklyActivity;
   const mints = weekly?.reduce((n, w) => n + w.mintTransactions, 0);
   const transfers = weekly?.reduce((n, w) => n + w.transferTransactions, 0);
-  const melted = data.totalCount - data.liveCount;
+  const burned = data.totalCount - data.liveCount;
   const objectFacts = [
     {
       label: 'Objects',
       value: (
         <>
           {data.liveCount.toLocaleString('en-US')}
-          <span className="text-text-dim text-small mt-1 block">
-            {melted === 0
-              ? 'all live · none melted'
-              : `live · ${melted.toLocaleString('en-US')} of ${data.totalCount.toLocaleString('en-US')} ${kind === 'spore' ? 'melted' : 'burned'}`}
+          {/* C12: the feed's word, "burned", for every kind; Spore's own word stays in the title. */}
+          <span
+            className="text-text-dim text-small mt-1 block"
+            title={kind === 'spore' ? 'melted, in Spore’s words' : undefined}
+          >
+            {burned === 0
+              ? 'all live · none burned'
+              : `live · ${burned.toLocaleString('en-US')} of ${data.totalCount.toLocaleString('en-US')} burned`}
           </span>
         </>
       ),
@@ -336,6 +347,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
   return (
     <AssetDetailShell
       title={title}
+      documentTitle={documentTitle}
       kind={kind === 'identity' ? 'identities' : 'objects'}
       breadcrumb={[
         {

@@ -46,6 +46,8 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   expect(
     await screen.findByRole('heading', { level: 1, name: 'Genes' }, { timeout: 5000 })
   ).toHaveClass('text-entity');
+  // Consistency plan C1: the tab names the page.
+  expect(document.title).toBe('Genes · object · CKBadger');
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
     '229.00000000'
@@ -100,9 +102,17 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
   history.data[0].consumedAtBlock = 101;
   vi.mocked(api.getItemCellVersions).mockResolvedValue(history);
   render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByText('Melted')).toBeInTheDocument();
-  expect(screen.getByText(/No live cell holds capacity/)).toBeInTheDocument();
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0.00000000');
+  // Consistency plan C12 (old: "Melted" / "this melted object"): the feed's word, Spore's in the title.
+  expect(await screen.findByText('Burned')).toBeInTheDocument();
+  expect(screen.getByText('No live cell holds capacity for this burned object.')).toHaveAttribute(
+    'title',
+    'melted, in Spore’s words'
+  );
+  // Consistency plan C4: the zero is "0 CKB" (was "0.00000000").
+  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0 CKB');
+  expect(screen.getByLabelText(`Object ${id} capacity partition`)).not.toHaveTextContent(
+    '0.00000000'
+  );
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
 });
 it('fails with item context when capacity violates the occupied invariant', async () => {

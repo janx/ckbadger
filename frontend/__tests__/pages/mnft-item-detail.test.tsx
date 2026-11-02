@@ -114,6 +114,8 @@ describe('MnftItemDetailPage', () => {
   it('renders identity, canonical ownership, class totals, whole-life feeds and raw evidence', async () => {
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('heading', { name: 'Class A #99' })).toBeInTheDocument();
+    // Consistency plan C1: the tab names the page.
+    expect(document.title).toBe('Class A #99 · object · CKBadger');
     await screen.findByRole('region', { name: 'Raw item evidence' });
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Objects');
     expect(screen.getByRole('link', { name: /^Objects$/ })).toHaveAttribute(

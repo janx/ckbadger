@@ -55,9 +55,10 @@ it('keeps live, created and burned counts separate and never adds the cluster ce
   render(<ClusterPage clusterId={id} />);
   await screen.findByRole('heading', { name: 'Genes' });
   const facts = screen.getByRole('complementary', { name: 'Facts' });
-  // F2 objects (OB-C8): the board rail — live objects, "all live · none melted", CKB held.
+  // F2 objects (OB-C8): the board rail — live objects, "all live · none burned", CKB held
+  // (consistency plan C12: the feed's word "burned", not Spore's "melted").
   expect(within(facts).getByText('Objects').nextElementSibling).toHaveTextContent(
-    '8all live · none melted'
+    '8all live · none burned'
   );
   expect(within(facts).getByText('CKB held in their cells').nextElementSibling).toHaveTextContent(
     '4,000'

@@ -33,6 +33,7 @@ import {
 import { MinerLink, minerName } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
 import { formatUtc8Date, formatUtc8DateTime, formatUtc8Time } from '@/lib/utils';
+import { DocumentTitle } from '@/lib/use-document-title';
 
 type MinerBlock = {
   number: number;
@@ -91,6 +92,7 @@ export default function ForkDetailPage() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto min-w-0 max-w-[1280px] px-4 pb-[72px] pt-7">
+        <DocumentTitle parts={[formatBlockNumber(route.height), route.orphan, 'fork']} />
         {query.isLoading && <p role="status">Loading fork evidence…</p>}
         {query.error && (
           <p role="alert" className="text-rouge text-body">

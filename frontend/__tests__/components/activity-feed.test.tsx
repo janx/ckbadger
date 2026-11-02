@@ -139,7 +139,8 @@ describe('ActivityFeed', () => {
     const amounts = [
       ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
     ].map((e) => e.textContent);
-    expect(amounts).toEqual([`${MINUS}412.32488212 CKB`, '+412.32486750 CKB', '0.00000000 CKB']);
+    // Consistency plan C4: the zero party's amount is a ghost "0 CKB" (was "0.00000000 CKB").
+    expect(amounts).toEqual([`${MINUS}412.32488212 CKB`, '+412.32486750 CKB', '0 CKB']);
     // Occupied only where it changed: two of three.
     expect([...row.querySelectorAll('[data-role="occupied"]')].map((e) => e.textContent)).toEqual([
       `occupied ${MINUS}61`,

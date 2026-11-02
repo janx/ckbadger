@@ -45,6 +45,13 @@ interface InventoryPageClientProps {
   subtitle?: string;
   panelTitle?: string;
 }
+/** C1: the tab names the inventory view it shows. */
+const INVENTORY_VIEW_TITLE: Record<AssetType, string> = {
+  token: 'Tokens',
+  object: 'Objects',
+  identity: 'Identities',
+};
+
 export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
   const router = useRouter(),
     pathname = usePathname(),
@@ -130,6 +137,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
         <DetailLayout
           kind="index"
           title="Inventory"
+          documentTitle={[INVENTORY_VIEW_TITLE[assetType], 'Inventory']}
           identity="Everything people hold on CKB besides plain CKB"
           actions={
             <div className="flex max-w-full flex-wrap gap-2">

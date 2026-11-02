@@ -41,6 +41,7 @@ import {
   typeLineage,
   versionNumbers,
 } from '@/lib/script-lineage';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 /** One code cell of a version, as its own `/cells` request resolved (or failed). */
 export interface CodeCellState {
@@ -314,6 +315,8 @@ export function ScriptFamilyPage({
   codeCells,
   cells,
 }: ScriptFamilyPageProps) {
+  // C1: the page's own header (not DetailLayout) names the tab.
+  useDocumentTitle([family.name, 'script']);
   // One hover state for the whole history: the picture and its reading.
   const [active, setActive] = useState<number | null>(null);
   if (!family.references || !family.history)

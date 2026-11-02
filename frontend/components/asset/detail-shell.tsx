@@ -7,9 +7,13 @@ import { DetailTier2 } from '@/components/ui/detail-layout';
 import type { AssetClass } from '@/lib/design-tokens';
 import { readErrorText } from '@/lib/read-error';
 import { cn } from '@/lib/utils';
+import {
+  documentTitleParts,
+  useDocumentTitle,
+  type DocumentTitleProps,
+} from '@/lib/use-document-title';
 
-export interface AssetDetailShellProps {
-  title: ReactNode;
+interface AssetDetailShellBaseProps {
   kind: AssetClass;
   breadcrumb: readonly { label: string; href: string }[];
   status?: ReactNode;
@@ -38,9 +42,15 @@ export interface AssetDetailShellProps {
    */
   railAfterHeader?: boolean;
 }
+/**
+ * `title` is the h1; `documentTitle` (C1) names the browser tab — asset pages give
+ * `[displayName, kind]` (`['RGB++', 'token']`, `['.cell deeds', 'cluster']`).
+ */
+export type AssetDetailShellProps = AssetDetailShellBaseProps & DocumentTitleProps;
 /** The domain and its capacity history are tier one; raw evidence follows a 72px boundary. */
 export function AssetDetailShell({
   title,
+  documentTitle,
   kind,
   breadcrumb,
   status,
@@ -54,6 +64,7 @@ export function AssetDetailShell({
   media,
   railAfterHeader = false,
 }: AssetDetailShellProps) {
+  useDocumentTitle(documentTitleParts(title, documentTitle));
   const titleId = useId();
   const named = (
     <>

@@ -156,6 +156,8 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
   const characteristic = hexBytes(item.characteristicHex, 'm-NFT characteristic');
   const classHref = getMnftClassDetailHref(item.class.classId);
   const className = item.class.name ?? 'm-NFT class';
+  // The m-NFT's index in its class (not a block height), as the h1 writes it.
+  const tokenNumber = item.tokenIndex.toLocaleString('en-US');
   const evidenceState = (
     <AssetReadState
       error={protocol.error}
@@ -171,6 +173,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           {className} #<AssetCount value={item.tokenIndex} />
         </>
       }
+      documentTitle={[`${className} #${tokenNumber}`, 'object']}
       breadcrumb={[
         { label: 'Inventory', href: '/inventory/objects' },
         { label: 'Objects', href: '/inventory/objects' },

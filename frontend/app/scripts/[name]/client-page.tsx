@@ -1248,6 +1248,7 @@ export default function ScriptDetailPage({
       <main className="container mx-auto px-4 py-8">
         <DetailLayout
           title={pageTitle}
+          documentTitle={[pageTitle, 'script']}
           identity={isCodeHashMode ? pageHash : pageSubtitle}
           status={
             <span className="text-text-dim text-small">

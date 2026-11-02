@@ -32,6 +32,7 @@ import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script
 import { formatCkbAmount, formatUtc8Date, truncateHash } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
 import { formatTick, niceCeil } from '@/lib/chart-ticks';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -388,7 +389,10 @@ function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
   );
 }
 
+const SCRIPTS_TITLE = ['Scripts'] as const;
+
 export default function ScriptsPage() {
+  useDocumentTitle(SCRIPTS_TITLE);
   const searchParams = useSearchParams();
   const pathname = usePathname();
   const router = useRouter();

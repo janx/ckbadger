@@ -48,6 +48,8 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
       'text-entity'
     );
     expect(await screen.findByText('force-closed · settled')).toBeInTheDocument();
+    // Consistency plan C1: the tab names the page.
+    expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · Fiber channel · CKBadger$/);
     // no jade uppercase eyebrow (FF-C6)
     expect(screen.queryByText(/on-chain channel/i)).toBeNull();
     expect(

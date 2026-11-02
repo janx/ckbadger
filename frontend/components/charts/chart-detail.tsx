@@ -321,6 +321,7 @@ function DetailBody({
       </nav>
       <DetailLayout
         title={definition.title}
+        documentTitle={[definition.title, 'chart']}
         identity={definition.subtitle}
         actions={readings}
         facts={facts.length ? facts : undefined}
@@ -559,7 +560,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           />
         )}
         {data.error && !model && !modelError && (
-          <DetailLayout title={definition.title}>
+          <DetailLayout title={definition.title} documentTitle={[definition.title, 'chart']}>
             <div role="alert" className="text-negative break-words">
               Failed to load {definition.title}: {data.error.message}
               <button
@@ -573,7 +574,7 @@ export function ChartDetail({ slug }: { slug: string }) {
           </DetailLayout>
         )}
         {modelError && (
-          <DetailLayout title={definition.title}>
+          <DetailLayout title={definition.title} documentTitle={[definition.title, 'chart']}>
             <p role="alert" className="text-negative break-words">
               Invalid {definition.title} chart data: {modelError}
             </p>

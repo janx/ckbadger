@@ -66,6 +66,7 @@ import dynamic from '@/lib/dynamic-client';
 import { isFieldLayoutLock, lockArgsLine } from '@/lib/lock-args';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
+import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
   loading: () => <p className="text-text-dim text-small">Loading graph section...</p>,
@@ -1139,6 +1140,7 @@ export default function TransactionDetailPage() {
         className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-[auto_auto_1fr] lg:gap-x-14"
       >
         <header className="flex min-w-0 flex-col gap-2 lg:col-start-1">
+          <DocumentTitle parts={[titleHash(tx.hash), 'transaction']} />
           <span className="text-text-dim text-small">Transaction</span>
           <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
           {summary}

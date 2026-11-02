@@ -224,6 +224,7 @@ export default function BlockDetailPage() {
           </p>
         )}
         <DetailLayout
+          documentTitle={[formatBlockNumber(block.number), 'block']}
           title={
             <span className="flex items-center gap-2.5">
               {block.number > 0 && (

@@ -4,8 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { DaoBoard, DaoHeading, DaoLede } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
+import { useDocumentTitle } from '@/lib/use-document-title';
+
+const DAO_TITLE = ['Nervos DAO'] as const;
 
 export default function DaoPage() {
+  useDocumentTitle(DAO_TITLE);
   const statistics = useQuery({ queryKey: ['dao-statistics'], queryFn: api.getDaoStatistics });
   const evidence = useQuery({ queryKey: ['dao-evidence'], queryFn: api.getDaoEvidence });
   const deposited = useQuery({

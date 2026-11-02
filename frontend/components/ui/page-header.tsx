@@ -3,9 +3,12 @@
 import { ReactNode, useState } from 'react';
 import Link from '@/components/ui/link';
 import { cn } from '@/lib/utils';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 interface PageHeaderProps {
   title: string;
+  /** C1: the browser tab's name when it is not `[title]`. */
+  documentTitle?: readonly string[];
   kind?: 'index' | 'entity' | 'topic';
   subtitle?: ReactNode;
   hash?: string;
@@ -20,6 +23,7 @@ interface PageHeaderProps {
 
 export function PageHeader({
   title,
+  documentTitle,
   kind = 'entity',
   subtitle,
   hash,
@@ -28,6 +32,7 @@ export function PageHeader({
   actions,
   className,
 }: PageHeaderProps) {
+  useDocumentTitle(documentTitle ?? [title]);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {

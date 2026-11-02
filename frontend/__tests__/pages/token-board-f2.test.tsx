@@ -199,6 +199,8 @@ describe('Token board (F2 objects)', () => {
     });
     const { container } = render(<TokenDetailPage typeHash={hash} />);
     await screen.findByRole('heading', { name: 'RGB++_Jump' }, { timeout: 5000 });
+    // Consistency plan C1: the tab names the page.
+    expect(document.title).toBe('RGB++_Jump · token · CKBadger');
     const tier2 = container.querySelector('[data-tier="2"]')!;
     expect(tier2).toHaveTextContent(
       'from a curated label shipped with CKBadger, not from the chain'

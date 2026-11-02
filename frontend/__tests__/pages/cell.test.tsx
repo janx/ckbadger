@@ -110,6 +110,8 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('Loading cell evidence…')).toBeInTheDocument();
     resolve(base);
     expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
+    // Consistency plan C1: the tab names the page.
+    expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · cell · CKBadger$/);
     expect(screen.getByText('Unspent for').parentElement).toHaveTextContent(
       /^Unspent for1 mas of #125$/
     );
