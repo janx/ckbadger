@@ -96,7 +96,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('In use since2023-10-07');
   });
 
-  it('draws History with occupied in jade, a separate occupied panel and the code track (SC-S2, SC-S3)', async () => {
+  it('draws History with occupied in jade, a separate occupied panel and the version days in the plot (SC-S2, SC-S3, L1-3 ruling)', async () => {
     const { container } = { container: document.body };
     await renderJoyid();
     const fills = [...container.querySelectorAll('svg path[fill]')].map((p) =>
@@ -113,12 +113,18 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
     expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
-    const track = screen.getByLabelText('Code track');
-    expect(within(track).getByText('v1 · v2')).toBeInTheDocument();
-    expect(within(track).getByText('v3 · v4')).toBeInTheDocument();
-    expect(within(track).getByText('v5')).toBeInTheDocument();
-    expect(track).toHaveTextContent('multisig 0xd1db…b95c · 3 of 5 signatures');
-    expect(track).toHaveTextContent('multisig 0x6598…d696 · signers not on chain yet');
+    // Table-rows L1-3 ruling (board ScriptDetail): no code track under the chart. The version days
+    // are ghost labels inside the plot; the holders are the timeline's segments.
+    expect(screen.queryByLabelText('Code track')).toBeNull();
+    const history = screen.getByTestId('script-history');
+    expect(
+      [...history.querySelectorAll<HTMLElement>('[data-upgrade-label]')].map((l) => l.textContent)
+    ).toEqual(['v3 · v4', 'v5']);
+    const timeline = screen.getByTestId('holder-timeline');
+    expect(timeline).toHaveTextContent('multisig 0xd1db…b95c · 3 of 5 signatures');
+    expect(
+      [...timeline.querySelectorAll<HTMLElement>('[data-holder]')].map((s) => s.title).join(' ')
+    ).toContain('multisig 0x65983f…d696 · signers not on chain yet');
     expect(document.body.textContent).not.toMatch(/common knowledge/i);
   });
 
@@ -255,18 +261,39 @@ describe('JoyID script page · visual pass', () => {
     expect(within(history).queryByRole('link', { name: /v1 · v2 · 2023-10-07/ })).toBeNull();
   });
 
-  it('staggers code-track labels so neighbours never overlap (390 px)', async () => {
+  // Table-rows L1-3 ruling: the code track's staggered rows are gone with the track. The plot's
+  // version labels share the name's line, one per deployment day, the newest first: a label that
+  // would touch the plot's name or a newer label is left out (its dashed line stays).
+  it('labels the upgrade days in the plot, one per day, never over the plot name or each other', async () => {
     await renderJoyid();
-    const track = screen.getByLabelText('Code track');
-    expect(
-      [...track.querySelectorAll<HTMLElement>('[data-upgrade-day]')].map((n) => n.dataset.row)
-    ).toEqual(['0', '1', '0']);
-    const custodians = [...track.querySelectorAll<HTMLElement>('[data-custodian-label]')];
-    // one row per holder: at 390 px the first and last labels would otherwise collide
-    expect(custodians.map((n) => n.dataset.row)).toEqual(['0', '1', '2']);
-    // a label that starts past the middle hangs from the right edge instead of running off it
-    expect(custodians[2].style.right).toBe('0%');
-    expect(custodians[0].style.left).toBe('0%');
+    const history = screen.getByTestId('script-history');
+    const labels = [...history.querySelectorAll<HTMLElement>('[data-upgrade-label]')];
+    expect(labels.map((l) => l.dataset.upgradeLabel)).toEqual(['2025-08-28', '2025-11-21']);
+    expect(labels.map((l) => l.style.left)).toEqual(['60%', '80%']);
+    for (const l of labels) expect(l).toHaveClass('text-meta', 'text-[#4b5266]');
+    // The first day sits under the plot's name at the left edge: its line, not its label.
+    expect(history.querySelector('[data-upgrade-label="2023-10-07"]')).toBeNull();
+    expect(history.querySelectorAll('[data-custodian]')).toHaveLength(0);
+  });
+
+  // At 358 px the plot's name takes 274 of the 348 px line: no label fits beside it, so none is
+  // written; the three dashed lines stay, and the versions are the timeline's ticks.
+  it('writes no version label over the plot name on a phone (358 px); the lines stay', async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    stubLayoutWidths({ chart: 358, list: 358 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+    render(<ScriptDetailPage name="JoyID" />);
+    await screen.findByRole('heading', { name: 'JoyID', level: 1 });
+    const history = await screen.findByTestId('script-history');
+    expect(history.querySelectorAll('[data-upgrade-label]')).toHaveLength(0);
+    expect(history.querySelectorAll('[data-upgrade-line]')).toHaveLength(3);
+    expect(screen.getAllByTestId('holder-timeline')[0]).toHaveTextContent('v5 2025-11-21');
   });
 
   it('states the peak of CKB held from the API (SC-S8, R2b-b totalPeak)', async () => {
@@ -375,13 +402,13 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     for (const t of ticks) expect(t.getAttribute('text-anchor')).not.toBe('end');
   });
 
-  it('reads the last full day in one row under the code track, then the remaining figures in one quiet row (R13)', async () => {
+  // Table-rows L1-3 ruling: no code track between the picture and its reading any more.
+  it('reads the last full day in one row under the picture, then the remaining figures in one quiet row (R13)', async () => {
     await renderJoyid();
-    const track = screen.getByLabelText('Code track');
+    expect(screen.queryByLabelText('Code track')).toBeNull();
     const reading = screen.getByTestId('script-history-reading');
     const metrics = screen.getByLabelText('Script figures');
-    expect(follows(hero(), track)).toBe(true);
-    expect(follows(track, reading)).toBe(true);
+    expect(follows(hero(), reading)).toBe(true);
     expect(follows(reading, metrics)).toBe(true);
     expect(reading).toHaveClass('text-small', 'border-t');
     expect(reading).toHaveTextContent('2026-10-29');

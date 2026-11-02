@@ -1,6 +1,7 @@
 'use client';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
@@ -249,6 +250,68 @@ function UpgradeLines({
   );
 }
 
+/** A monospace advance at 11 px: whole pixels where Chromium snaps them. */
+const LABEL_ADVANCE = Math.max(Math.round(0.6 * 11), 0.6 * 11);
+/** px between a version label and its dashed line, and between two labels or a label and the name. */
+const LABEL_PAD = 4;
+const LABEL_GAP = 8;
+
+/**
+ * The version days written inside the main plot (board ScriptDetail: "v3 · v4", "v5" in ghost ink on
+ * the name's line), one label per deployment day. The newest day is placed first; a label that
+ * would touch the plot's name or a label already placed is left out — its dashed line stays, and
+ * its versions are the timeline's ticks and the versions table's rows.
+ */
+function UpgradeLabels({
+  upgradeList,
+  position,
+  width,
+  plotName,
+}: {
+  upgradeList: readonly [string, number[]][];
+  position: (day: string) => number | null;
+  width: number | null;
+  plotName: string;
+}) {
+  if (width === null) return null;
+  const plot = width - 10;
+  const taken: [number, number][] = [[0, LABEL_PAD * 2 + plotName.length * LABEL_ADVANCE]];
+  const placed: { day: string; text: string; at: number; right: boolean }[] = [];
+  const days = upgradeList
+    .map(([day, versions]) => ({ day, versions, at: position(day) }))
+    .filter((d): d is { day: string; versions: number[]; at: number } => d.at !== null)
+    .sort((a, b) => b.at - a.at);
+  for (const { day, versions, at } of days) {
+    const text = versions.map((n) => `v${n}`).join(' · ');
+    const w = text.length * LABEL_ADVANCE;
+    const x = (at / 100) * plot;
+    const right = x + LABEL_PAD + w > plot;
+    const box: [number, number] = right ? [x - LABEL_PAD - w, x] : [x, x + LABEL_PAD + w];
+    if (taken.some(([a, b]) => box[0] < b + LABEL_GAP && a < box[1] + LABEL_GAP)) continue;
+    taken.push(box);
+    placed.push({ day, text, at, right });
+  }
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute left-0 right-[10px] top-0 h-[28px]"
+    >
+      {placed
+        .sort((a, b) => a.at - b.at)
+        .map(({ day, text, at, right }) => (
+          <span
+            key={day}
+            data-upgrade-label={day}
+            className={`text-meta absolute top-[5px] whitespace-nowrap leading-[14px] text-[#4b5266] ${right ? 'pr-1' : 'pl-1'}`}
+            style={right ? { right: `${100 - at}%` } : { left: `${at}%` }}
+          >
+            {text}
+          </span>
+        ))}
+    </div>
+  );
+}
+
 /**
  * The hero's picture (Script board History, hierarchy v3 R13): CKB in its cells with the occupied
  * part in jade (300 px, its name and values inside the plot), then occupied on its own scale; the
@@ -269,6 +332,7 @@ export function ScriptHistoryFigure({
   active: number | null;
   onActive: (index: number | null) => void;
 }) {
+  const [ref, width] = useElementWidth<HTMLDivElement>();
   for (const key of ['used', 'unused'])
     if (!chart.series.some((series) => series.key === key))
       throw new Error(`${family.name} capacity history has no ${key} series`);
@@ -277,6 +341,7 @@ export function ScriptHistoryFigure({
     values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
   }));
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
+  const plotName = `CKB in ${family.name} cells · occupied and free`;
   const shared = {
     data,
     unit: 'CKB',
@@ -287,13 +352,19 @@ export function ScriptHistoryFigure({
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
   return (
-    <div data-testid="script-history" className="relative mt-[18px] min-w-0">
+    <div ref={ref} data-testid="script-history" className="relative mt-[18px] min-w-0">
       <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-line" />
+      <UpgradeLabels
+        upgradeList={upgradeList}
+        position={position}
+        width={width}
+        plotName={plotName}
+      />
       <Chart
         {...shared}
         title={`CKB in ${family.name} cells`}
         subtitle="Occupied and free capacity, indexed chain day"
-        plotName={`CKB in ${family.name} cells · occupied and free`}
+        plotName={plotName}
         kind="stacked"
         height={300}
         series={[
@@ -311,84 +382,6 @@ export function ScriptHistoryFigure({
           height={96}
           series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
         />
-      </div>
-    </div>
-  );
-}
-
-/**
- * The code track under the history, on the same time axis: the versions deployed on each upgrade
- * day and the band of every code cell holder.
- */
-export function ScriptCodeTrack({
-  chart,
-  lineage,
-  numbers,
-  holders,
-}: {
-  chart: StackedAreaChartResponse;
-  lineage: readonly ScriptHistoryMarkerApi[] | null;
-  numbers: ReadonlyMap<string, number>;
-  holders: readonly CodeHolder[];
-}) {
-  if (!lineage || chart.data.length === 0) return null;
-  const { position, upgradeList } = historyAxis(chart, lineage, numbers);
-  return (
-    <div aria-label="Code track" className="text-meta relative mt-1 min-w-0">
-      <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-tick" />
-      <div className="text-text-dim pt-1.5">code · who held the code cell</div>
-      <div className="relative h-8 pr-[10px]">
-        <div className="relative h-full">
-          {upgradeList.map(([day, versions], i) => {
-            const at = position(day);
-            return at === null ? null : (
-              <span
-                key={day}
-                data-upgrade-day={day}
-                data-row={i % 2}
-                className="text-text-bright absolute whitespace-nowrap pl-1"
-                style={{ left: `${at}%`, top: i % 2 ? 14 : 0 }}
-              >
-                {versions.map((n) => `v${n}`).join(' · ')}
-              </span>
-            );
-          })}
-        </div>
-      </div>
-      <div className="relative mt-1 pr-[10px]" style={{ height: 16 + holders.length * 14 }}>
-        <div className="relative h-full">
-          {holders.map((holder, i) => {
-            const start = position(holder.from.indexedDay);
-            if (start === null) return null;
-            const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
-            // Past the middle a label hangs from its band's end, so it never runs off the
-            // page; each holder's label has its own row, so labels never overlap.
-            const anchor = start > 50 ? { right: `${100 - end}%` } : { left: `${start}%` };
-            return (
-              <div key={holder.lockArgs}>
-                <div
-                  data-custodian={holder.lockArgs}
-                  className={`absolute top-0 h-2 rounded-sm border ${holder.neverSigned ? 'border-dashed' : ''}`}
-                  style={{
-                    left: `${start}%`,
-                    width: `${Math.max(end - start, 0)}%`,
-                    borderColor: 'rgba(160,168,190,.7)',
-                    backgroundColor: holder.neverSigned ? 'transparent' : 'rgba(160,168,190,.22)',
-                  }}
-                />
-                <span
-                  data-custodian-label={holder.lockArgs}
-                  data-row={i}
-                  className="absolute whitespace-nowrap text-[#a0a8be]"
-                  style={{ ...anchor, top: 12 + i * 14 }}
-                >
-                  {holderName(holder.custody)}
-                  {signingText(holder) ? ` · ${signingText(holder)}` : ''}
-                </span>
-              </div>
-            );
-          })}
-        </div>
       </div>
     </div>
   );

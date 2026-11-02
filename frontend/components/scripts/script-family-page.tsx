@@ -13,7 +13,6 @@ import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/sc
 import { HolderTimeline } from '@/components/scripts/holder-timeline';
 import {
   ScriptCellsSummary,
-  ScriptCodeTrack,
   ScriptCustodyFigure,
   ScriptCustodyMechanism,
   ScriptHeading,
@@ -315,7 +314,7 @@ export function ScriptFamilyPage({
   codeCells,
   cells,
 }: ScriptFamilyPageProps) {
-  // One hover state for the whole history: the picture, its code track and its reading.
+  // One hover state for the whole history: the picture and its reading.
   const [active, setActive] = useState<number | null>(null);
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
@@ -808,20 +807,12 @@ export function ScriptFamilyPage({
               )}
             </section>
             {!chartLoading && !chartError && chart?.data.length ? (
-              <>
-                <ScriptCodeTrack
-                  chart={chart}
-                  lineage={lineage}
-                  numbers={numbers}
-                  holders={holders}
-                />
-                <ScriptHistoryReading
-                  chart={chart}
-                  lineage={lineage}
-                  numbers={numbers}
-                  active={active}
-                />
-              </>
+              <ScriptHistoryReading
+                chart={chart}
+                lineage={lineage}
+                numbers={numbers}
+                active={active}
+              />
             ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
             <Section title="Who can change its code" className="mt-16">
