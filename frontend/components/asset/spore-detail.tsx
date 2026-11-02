@@ -246,7 +246,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           ? [{ label: collectionName ?? 'Collection', href: collectionHref! }]
           : []),
       ]}
-      status={<LiveBadge live={object.isLive} gone="Melted" />}
+      status={<LiveBadge live={object.isLive} gone="Burned" />}
       identity={<Hash hash={id} truncate={false} className="text-meta" />}
       // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
       // moved to tier 2 ("This object, in words").
@@ -381,8 +381,8 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       )}
       <div role="region" aria-label="CKB held in its cell" className="space-y-4">
         {!object.isLive && (
-          <p className="text-text-dim text-meta">
-            No live cell holds capacity for this melted object.
+          <p className="text-text-dim text-meta" title="melted, in Spore’s words">
+            No live cell holds capacity for this burned object.
           </p>
         )}
         {versions.data ? (

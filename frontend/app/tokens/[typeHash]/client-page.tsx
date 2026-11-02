@@ -18,7 +18,7 @@ import { formatTimeAgo, truncateHash } from '@/lib/utils';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
-import { HMultiplierReading } from '@/components/ui/hmul-info';
+import { HMultiplierReading } from '@/components/ui/h-multiplier';
 /** The supply-event route always reports its total; a page without one is a contract break. */
 function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
@@ -405,7 +405,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   {held !== null && occupied !== null && occupied > BigInt(0) && (
                     <>
                       {' '}
-                      · <HMultiplierReading held={held} occupied={occupied} />: CKB held ÷ occupied
+                      · <HMultiplierReading held={held} occupied={occupied} />
                     </>
                   )}
                 </>

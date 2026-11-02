@@ -214,11 +214,27 @@ it('gives the rail the board facts (OB-C8) and the history its minting line (OB-
   const rail = screen.getByRole('complementary', { name: 'Facts' });
   for (const label of ['Objects', 'Holders', 'CKB held in their cells', 'Activity', 'Created'])
     expect(within(rail).getByText(label)).toBeInTheDocument();
-  expect(rail).toHaveTextContent('all live · none melted');
+  expect(rail).toHaveTextContent('all live · none burned');
   expect(rail).toHaveTextContent('184 · 90 mints, 94 transfers through 2026-10-24');
-  expect(screen.getByRole('region', { name: 'History' })).toHaveTextContent(
-    'Minted in 90 transactions · 94 transfers since'
+  const history = screen.getByRole('region', { name: 'History' });
+  expect(history).toHaveTextContent('Minted in 90 transactions · 94 transfers since');
+  // Consistency plan C12: the H-multiplier is never bare; its definition reads with it.
+  expect(history.querySelector('[data-role="h-multiplier-reading"]')).toHaveTextContent(
+    'H-multiplier ×1.00: CKB held ÷ occupied'
   );
+});
+
+it('says "burned" for the objects no longer live, Spore\'s "melted" kept in the title (C12)', async () => {
+  vi.mocked(api.getObjectCollection).mockResolvedValue({
+    ...(await api.getObjectCollection(NERVAPE3X_CLUSTER)),
+    liveCount: 88,
+    totalCount: 90,
+  });
+  const { container } = await page();
+  const rail = screen.getByRole('complementary', { name: 'Facts' });
+  const line = within(rail).getByText('live · 2 of 90 burned');
+  expect(line).toHaveAttribute('title', 'melted, in Spore’s words');
+  expect(container.textContent).not.toMatch(/melted/);
 });
 
 it('keeps decode coverage and the decoder blueprint in tier 2, as a table (OB-C11, OB-C12)', async () => {

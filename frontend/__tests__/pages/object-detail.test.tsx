@@ -100,8 +100,12 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
   history.data[0].consumedAtBlock = 101;
   vi.mocked(api.getItemCellVersions).mockResolvedValue(history);
   render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByText('Melted')).toBeInTheDocument();
-  expect(screen.getByText(/No live cell holds capacity/)).toBeInTheDocument();
+  // Consistency plan C12 (old: "Melted" / "this melted object"): the feed's word, Spore's in the title.
+  expect(await screen.findByText('Burned')).toBeInTheDocument();
+  expect(screen.getByText('No live cell holds capacity for this burned object.')).toHaveAttribute(
+    'title',
+    'melted, in Spore’s words'
+  );
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0.00000000');
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
 });

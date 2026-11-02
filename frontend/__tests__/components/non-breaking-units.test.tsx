@@ -4,7 +4,7 @@
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { CkbDelta } from '@/components/activity-event-row';
 import { ItemEvidence } from '@/components/asset/item-evidence';
-import { HMultiplierReading } from '@/components/ui/hmul-info';
+import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { didProtocolProducer } from '@/__tests__/msw/fixtures/item-producer';
 import type { ItemProtocol } from '@/lib/api';
