@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { stubChartWidth } from '../utils/chart-width';
+import { expectTier1Budget } from '../utils/hierarchy';
 import producerMainnet from '@/__tests__/fixtures/network-api-producer/hardforks-mainnet.json';
 import producerDeployments from '@/__tests__/fixtures/network-api-producer/hardforks-deployments.json';
 
@@ -456,5 +457,124 @@ describe('HardforksPage', () => {
     expect(target).toHaveTextContent(
       'A script named by its type hash follows every upgrade: the same code runs on VM0, then VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a hardfork never changes how an existing data-pinned script runs. Live cells reference registered scripts 1,830,780 times by type hash, 98,551 by data1, 0 by data2 and 472 by data.'
     );
+  });
+
+  it('sets each edition card as title, date line and at most two sentences; RFC rows and links stay (H3)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    const { container } = render(<HardforksPage />);
+    const mirana = await screen.findByRole('article', { name: 'CKB Edition Mirana' });
+    const meepo = screen.getByRole('article', { name: 'CKB Edition Meepo' });
+    const story = (card: HTMLElement, opening: RegExp) => {
+      const p = within(card).getByText(opening);
+      expect(p.tagName).toBe('P');
+      expect(p).toHaveClass('text-body', 'max-w-[640px]');
+      expect(p.textContent!.length).toBeLessThanOrEqual(160);
+      expect(p.textContent!.match(/[.!?](?=\s|$)/g)!.length).toBeLessThanOrEqual(2);
+      return p;
+    };
+    expect(story(mirana, /^Added CKB-VM version 1/)).toHaveTextContent(
+      /^Added CKB-VM version 1 and the hash type data1 to pin it\.$/
+    );
+    expect(story(meepo, /^Added CKB-VM version 2/)).toHaveTextContent(
+      /^Added CKB-VM version 2, with the Spawn syscalls, and the hash type data2\. No script CKBadger knows uses data2 yet, 486 days on\.$/
+    );
+    for (const card of [mirana, meepo]) {
+      expect(within(card).getByRole('heading', { level: 3 })).toHaveClass('text-section');
+      // The date line is meta; the status beside the title is plain ink, not jade (R11).
+      expect(within(card).getByText(/^epoch [\d,]+ ·/)).toHaveClass('text-meta', 'text-text-dim');
+      expect(within(card).getByText('activated')).toHaveClass('text-text-dim');
+      expect(card).not.toHaveTextContent(/Scripts named by type hash moved/);
+    }
+    // RFC rows and links unchanged, the links in plain ink (R11).
+    expect(meepo).toHaveTextContent('RFC 0049CKB-VM version 2');
+    const overview = within(meepo).getByRole('link', { name: 'CKB2023 overview ↗' });
+    expect(overview).toHaveAttribute('href', 'https://example.com/ckb2023');
+    expect(overview).toHaveClass('text-text');
+    // What left the cards reads in tier 2.
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2).toHaveTextContent(
+      "Scripts named by type hash moved to VM1 at Mirana's epoch, 5,414, and to VM2 at Meepo's, 12,293. Meepo's Spawn syscalls let scripts start and talk to other scripts."
+    );
+  });
+
+  it('keeps the consensus grid as it is, its closing sentence at meta, sections 64 and 72 px apart (H3, R6)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue(mockTimeline);
+    render(<HardforksPage />);
+    const consensus = await screen.findByRole('region', {
+      name: "As this node's consensus states it",
+    });
+    const h2 = within(consensus).getByRole('heading', { level: 2 });
+    expect(h2).toHaveClass('text-section', 'text-text-bright', 'mb-[18px]');
+    expect(within(consensus).getByText('get_consensus · hardfork_features · mainnet')).toHaveClass(
+      'text-small'
+    );
+    const cells = consensus.querySelectorAll('dl > div');
+    expect(cells).toHaveLength(9);
+    expect(cells[0]).toHaveTextContent('RFC 0028epoch 5,414');
+    expect(
+      within(consensus).getByText(
+        "Today's node applies RFC 0029, 0030, 0031, 0036 and 0038 from epoch 0, so they do not show as switching on with an edition."
+      )
+    ).toHaveClass('text-meta', 'text-text-dim');
+    // Rhythm: hero → caption → the editions 64 px under it → the consensus 72 px under them.
+    const hero = screen.getByRole('region', { name: 'Hardforks' });
+    const caption = hero.nextElementSibling as HTMLElement;
+    const editions = caption.nextElementSibling as HTMLElement;
+    expect(editions).toContainElement(screen.getByRole('article', { name: 'CKB Edition Mirana' }));
+    expect(editions).toHaveClass('mt-16');
+    expect(editions.nextElementSibling).toBe(consensus);
+    expect(consensus).toHaveClass('mt-[72px]');
+  });
+
+  it('writes no coloured text in tier 1: no figure, so no gold, jade or rouge words (R11)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    getHardforksMock.mockResolvedValue({
+      ...producerDeployments,
+      ...ends,
+      hashTypeLanes: lanes,
+      consensusFeatures: features,
+      scriptDeployments: producerDeployments.scriptDeployments.map((d) => ({
+        ...d,
+        hashTypes: [],
+      })),
+    });
+    const { container } = render(<HardforksPage />);
+    // A focused dot opens its evidence links in tier 1: they too are plain ink.
+    fireEvent.focus(await screen.findByRole('button', { name: /Known Lock v2.*block #10/i }));
+    expect(screen.getByRole('link', { name: 'Block #10' })).toBeInTheDocument();
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const COLOURED =
+      /^text-(jade|emphasis|positive|negative|gold|warning|rouge|aqua|info|interactive)(-dim|-bright)?(\/\d+)?$/;
+    const coloured = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => COLOURED.test(c))
+    );
+    expect(coloured.map((el) => `${el.tagName} ${el.textContent}`)).toEqual([]);
+    for (const t of Array.from(tier1.querySelectorAll('svg text, svg tspan')))
+      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(/#2edba3|#f2c55c|#e8555a/);
+  });
+
+  it('keeps tier 1 within the prose budget: at most three caption-length blocks (§0, §4)', async () => {
+    const { default: HardforksPage } = await import('@/app/hardforks/page');
+    const base = producerDeployments.scriptDeployments[0];
+    getHardforksMock.mockResolvedValue({
+      ...mockTimeline,
+      scriptDeployments: [
+        {
+          ...base,
+          versionName: 'xUDT',
+          versionHash: `0x${'b'.repeat(64)}`,
+          timestampMs: Date.parse('2024-01-08T12:00:00+08:00'),
+          hashTypes: ['data1'],
+        },
+      ],
+    });
+    const { container } = render(<HardforksPage />);
+    await screen.findByRole('article', { name: 'CKB Edition Mirana' });
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 });

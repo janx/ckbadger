@@ -201,20 +201,24 @@ export function DeploymentEvidence({
             <dt className="text-text-dim">Version</dt>
             <dd className="break-all font-mono">{selected.versionHash}</dd>
             <dt className="text-text-dim">Evidence</dt>
+            {/* Plain ink: no coloured words in the hardforks page's tier 1 (R11). */}
             <dd className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
               <Link
                 href={`/scripts/${encodeURIComponent(selected.familyName)}`}
-                className="text-jade hover:underline"
+                className="text-text hover:text-text-bright hover:underline"
               >
                 {selected.familyName} family
               </Link>
               <Link
                 href={`/cell/${selected.codeCellTxHash}-${selected.codeCellOutputIndex}`}
-                className="text-jade hover:underline"
+                className="text-text hover:text-text-bright hover:underline"
               >
                 Code cell {selected.codeCellTxHash.slice(0, 10)}…:{selected.codeCellOutputIndex}
               </Link>
-              <Link href={`/blocks/${selected.blockNumber}`} className="text-jade hover:underline">
+              <Link
+                href={`/blocks/${selected.blockNumber}`}
+                className="text-text hover:text-text-bright hover:underline"
+              >
                 Block {formatBlockNumber(selected.blockNumber)}
               </Link>
             </dd>
