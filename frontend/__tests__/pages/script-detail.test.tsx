@@ -473,8 +473,9 @@ describe('ScriptDetailPage', () => {
     expect(
       within(tier1 as HTMLElement).getByRole('heading', { name: 'Its cells' })
     ).toBeInTheDocument();
+    // Table-rows L1-5: the registered references are tier 2's "The script" facts.
     expect(
-      within(tier2 as HTMLElement).getByRole('heading', { name: 'Registered references' })
+      within(tier2 as HTMLElement).getByRole('heading', { name: 'The script' })
     ).toBeInTheDocument();
     expect(screen.getByRole('table', { name: 'Code versions' })).toBeInTheDocument();
     expect(screen.queryByRole('table', { name: 'Code cell deployments' })).toBeNull();
@@ -499,7 +500,8 @@ describe('ScriptDetailPage', () => {
     );
   });
 
-  it('wraps the complete current binary in the compact registered reference row', async () => {
+  // Table-rows L1-5: the compact references row became the script facts' "current code" entry.
+  it('wraps the complete current binary in the script facts at phone width', async () => {
     setViewportWidth(390);
     atContainerWidth(358);
     onTestFinished(() => {
@@ -513,14 +515,20 @@ describe('ScriptDetailPage', () => {
           referenceHash: sharedObservedData1Reference,
           hashType: 'type',
           currentVersionHash: sharedVersionCodeHash,
+          liveCellsCount: 7,
+          cellsCount: 8,
+          ownedCapacitySum: '9000000000',
+          ownedKnowledgeSum: '5490000000',
         },
       ],
     } as any);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
-    const compact = await screen.findByRole('list', { name: 'Registered references, compact' });
-    const current = within(compact).getByText(`Current code: ${sharedVersionCodeHash}`);
-    expect(current).toHaveClass('break-all');
-    expect(current).toHaveTextContent(sharedVersionCodeHash);
+    const facts = (await screen.findByRole('heading', { name: 'The script' })).closest(
+      'section'
+    ) as HTMLElement;
+    const current = within(facts).getByText(sharedVersionCodeHash);
+    expect(current).toHaveClass('[overflow-wrap:anywhere]');
+    expect(current.previousElementSibling).toHaveTextContent('current code');
   });
 
   it.each([

@@ -23,13 +23,15 @@ import {
   ScriptHistoryNotes,
   ScriptHistoryReading,
   ScriptSummarySentence,
-  ScriptUseInTransaction,
   blockLink,
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
 import type { CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
+import { cn } from '@/lib/utils';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { RowTag } from '@/components/ui/row-tag';
 import {
   codeHolders,
@@ -168,43 +170,109 @@ const ANATOMY_LEGEND = [
 
 type ReferenceRow = NonNullable<ScriptFamilyDetail['references']>[number];
 
-/** Tier 2's "Registered references" table: each reference, its current code and its holder. */
-const REFERENCE_COLUMNS: ListColumn<ReferenceRow>[] = [
-  {
-    key: 'reference',
-    label: 'Reference',
-    minWidth: 250,
-    width: '35%',
-    render: (row) => (
-      <span className="text-text-bright break-all">
-        {row.hashType} · {row.referenceHash}
-      </span>
-    ),
-  },
-  {
-    key: 'code',
-    label: 'Current code version',
-    minWidth: 210,
-    width: '30%',
-    render: (row) => (
-      <span className="text-text-dim break-all">
-        {row.currentVersionHash ?? 'Retired · no current code cell'}
-      </span>
-    ),
-  },
-  {
-    key: 'custody',
-    label: 'Code cell holder',
-    minWidth: 235,
-    width: '35%',
-    render: (row) =>
-      row.custody ? (
-        <ScriptCustodyEvidence custody={row.custody} />
-      ) : (
-        <span className="text-text-dim">Evidence unavailable</span>
-      ),
-  },
-];
+/**
+ * Tier 2's "The script" (table-rows L1-5, board ScriptDetail): its cells, then one definition list
+ * per registered reference — the reference and how it follows the code, the current code and how to
+ * pin it instead, the cell dep that serves it, and the evidence of who holds its code cell. The
+ * former "Use it in a transaction" and "Registered references" blocks, fact for fact.
+ */
+function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
+  const references: ReferenceRow[] = family.references ?? [];
+  const term = 'text-text-dim';
+  const value = 'm-0 min-w-0 [overflow-wrap:anywhere]';
+  return (
+    <div className="text-small space-y-5">
+      {(references.length ? references : [null]).map((reference, i) => {
+        const version = reference
+          ? family.versions.find((v) => v.versionHash === reference.currentVersionHash)
+          : undefined;
+        const live = version?.deployments.filter((d) => d.status === 'live') ?? [];
+        return (
+          <dl
+            key={reference ? `${reference.hashType}:${reference.referenceHash}` : 'cells'}
+            className={cn(
+              'grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1',
+              i > 0 && 'border-base-border-subtle border-t pt-4'
+            )}
+          >
+            {i === 0 && (
+              <>
+                <dt className={term}>its cells</dt>
+                <dd className={value}>
+                  <ScriptCellsSummary family={family} />
+                </dd>
+              </>
+            )}
+            {reference && (
+              <>
+                <dt className={term}>code hash</dt>
+                <dd className={value}>{reference.referenceHash}</dd>
+                <dt className={term}>hash type</dt>
+                <dd className={value}>
+                  {reference.hashType} ·{' '}
+                  {reference.hashType === 'type'
+                    ? 'follows every upgrade'
+                    : 'pins this exact binary'}{' '}
+                  · {formatCount(reference.liveCellsCount, 'live cell')}
+                </dd>
+                <dt className={term}>current code</dt>
+                <dd className={value}>
+                  {reference.currentVersionHash ?? 'Retired · no current code cell'}
+                </dd>
+                {reference.hashType === 'type' && version && (
+                  <>
+                    <dt className={term}>pin instead</dt>
+                    <dd className={cn(value, 'text-text-dim')}>
+                      its data hash with hash type data1 or data2 pins this exact binary; an upgrade
+                      will not reach cells that pin it
+                    </dd>
+                  </>
+                )}
+                <dt className={term}>cell dep</dt>
+                <dd className={value}>
+                  {live.length ? (
+                    live.map((deployment) => (
+                      <span
+                        key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
+                        className="block"
+                      >
+                        <Link
+                          href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
+                          className="text-text hover:text-jade"
+                        >
+                          {deployment.codeCellTxHash}
+                          <OutpointIndex index={deployment.codeCellOutputIndex} />
+                        </Link>
+                        <span className="text-text-dim">
+                          {' '}
+                          · dep type code · the live code cell of the current version
+                        </span>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-text-dim">
+                      {reference.currentVersionHash
+                        ? 'No live code cell for the current version'
+                        : 'Retired: no current code cell'}
+                    </span>
+                  )}
+                </dd>
+                <dt className={term}>held by</dt>
+                <dd className={value}>
+                  {reference.custody ? (
+                    <ScriptCustodyEvidence custody={reference.custody} />
+                  ) : (
+                    <span className="text-text-dim">Evidence unavailable</span>
+                  )}
+                </dd>
+              </>
+            )}
+          </dl>
+        );
+      })}
+    </div>
+  );
+}
 
 /** A tier-1 section (hierarchy R6): h2 at section size, 18 px above its evidence. */
 function Section({
@@ -801,6 +869,8 @@ export function ScriptFamilyPage({
                   rows={cells.rows}
                   rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
                   empty={`No live cells use ${family.name}`}
+                  // T5: body ink for the row, the cell alone bright.
+                  rowClassName={() => 'text-text'}
                   columns={[
                     {
                       key: 'cell',
@@ -810,7 +880,7 @@ export function ScriptFamilyPage({
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-text hover:text-jade hover:underline"
+                          className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
                         >
                           {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
                         </Link>
@@ -915,45 +985,21 @@ export function ScriptFamilyPage({
           </div>
           <div id="evidence" className="scroll-mt-4">
             <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+              {/* Board ScriptDetail (table-rows L1-5): one paragraph, then the script's facts. */}
               <DetailSection title="How to read this page">
-                <div className="space-y-3">
-                  <ScriptSummarySentence family={family} lineage={lineage} />
-                  <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} />
-                  <p className="text-body max-w-[640px]">
-                    <ScriptCellsSummary family={family} />
-                  </p>
-                </div>
+                <p className="text-body max-w-[640px]">
+                  <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} inline />{' '}
+                  <ScriptSummarySentence family={family} lineage={lineage} inline />{' '}
+                  <ScriptCustodyMechanism
+                    family={family}
+                    lineage={lineage}
+                    binaries={binaries}
+                    inline
+                  />
+                </p>
               </DetailSection>
-              <DetailSection title="How its code can change">
-                <div className="space-y-3">
-                  <ScriptCustodyMechanism family={family} lineage={lineage} binaries={binaries} />
-                </div>
-              </DetailSection>
-              <DetailSection title="Use it in a transaction" className="lg:col-span-2">
-                <ScriptUseInTransaction family={family} />
-              </DetailSection>
-              <DetailSection title="Registered references" className="lg:col-span-2">
-                <ListTable
-                  label="Registered references"
-                  rows={family.references}
-                  rowKey={(row) => `${row.hashType}:${row.referenceHash}`}
-                  columns={REFERENCE_COLUMNS}
-                  mobileRow={(row) => (
-                    <div className="text-small space-y-2">
-                      <div className="break-all">
-                        {row.hashType} · {row.referenceHash}
-                      </div>
-                      <div className="break-all">
-                        Current code: {row.currentVersionHash ?? 'retired'}
-                      </div>
-                      {row.custody ? (
-                        <ScriptCustodyEvidence custody={row.custody} />
-                      ) : (
-                        'Evidence unavailable'
-                      )}
-                    </div>
-                  )}
-                />
+              <DetailSection title="The script">
+                <ScriptFacts family={family} />
               </DetailSection>
             </DetailTier2>
           </div>

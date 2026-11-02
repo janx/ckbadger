@@ -17,7 +17,6 @@ import { formatCount } from '@/lib/format-count';
 import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
-import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
@@ -63,9 +62,12 @@ function holderSentence(custody: ScriptCustodyApi): string {
 export function ScriptSummarySentence({
   family,
   lineage,
+  inline = false,
 }: {
   family: ScriptFamilyDetail;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
+  /** A span inside a paragraph (table-rows L1-5) instead of a paragraph of its own. */
+  inline?: boolean;
 }) {
   const firstDeployed = firstDeployedAt(family);
   const verb =
@@ -76,8 +78,12 @@ export function ScriptSummarySentence({
         : 'guards';
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
+  const Sentence = inline ? 'span' : 'p';
   return (
-    <p data-testid="script-summary" className="text-body max-w-[640px]">
+    <Sentence
+      data-testid="script-summary"
+      className={inline ? undefined : 'text-body max-w-[640px]'}
+    >
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
@@ -100,7 +106,7 @@ export function ScriptSummarySentence({
       {code === 'upgradable' && lineage && lineage.length === 1 && (
         <> Its code is upgradable by {holderSentence(lineage[0].custody)}.</>
       )}
-    </p>
+    </Sentence>
   );
 }
 
@@ -466,27 +472,33 @@ export function ScriptHistoryNotes({
   family,
   chart,
   lineage,
+  inline = false,
 }: {
   family: ScriptFamilyDetail;
   chart: StackedAreaChartResponse | undefined;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
+  /** Spans inside a paragraph (table-rows L1-5) instead of two paragraphs. */
+  inline?: boolean;
 }) {
   if (chart && chart.totalPeak === undefined)
     throw new Error(`${family.name} capacity history has no totalPeak`);
   const peak = chart?.totalPeak;
   const capacity = BigInt(family.ownedCapacitySum);
   const occupiedNow = BigInt(family.ownedKnowledgeSum);
+  const Sentence = inline ? 'span' : 'p';
+  const block = inline ? undefined : 'text-body max-w-[640px]';
   return (
     <>
-      <p className="text-body max-w-[640px]">
+      <Sentence className={block}>
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-[#a0a8be]">free</span> is CKB its owners keep
         there.
         {lineage && lineage.length > 1 ? ' Dashed lines mark the days its code was replaced.' : ''}
-      </p>
+      </Sentence>
+      {inline && peak && ' '}
       {peak && (
-        <p data-testid="script-history-peak" className="text-body max-w-[640px]">
+        <Sentence data-testid="script-history-peak" className={block}>
           CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
           on {peak.date}
           {capacity > BigInt(0) && (
@@ -499,7 +511,8 @@ export function ScriptHistoryNotes({
               />, {scriptShare(occupiedNow, capacity)} of what the cells hold
             </>
           )}
-        </p>
+          {inline && '.'}
+        </Sentence>
       )}
     </>
   );
@@ -667,93 +680,30 @@ export function ScriptCustodyMechanism({
   family,
   lineage,
   binaries,
+  inline = false,
 }: {
   family: ScriptFamilyDetail;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
   /** The Code versions table's former heading note ("one type id, …, N binaries"). */
   binaries: string;
+  /** Spans inside a paragraph (table-rows L1-5) instead of two paragraphs. */
+  inline?: boolean;
 }) {
+  const Sentence = inline ? 'span' : 'p';
   return (
     <>
       {lineage && (
-        <p className="text-body max-w-[640px]">
+        <Sentence className={inline ? undefined : 'text-body max-w-[640px]'}>
           {family.name} cells point at their code through one code cell&apos;s type id, not at a
           fixed binary. Whoever can spend that cell can put new code in it, and every {family.name}{' '}
           cell runs the new code from the next block.
-        </p>
+        </Sentence>
       )}
-      <p className="text-text-dim text-body max-w-[640px]">Code versions: {binaries}.</p>
+      {inline && lineage && ' '}
+      <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-[640px]'}>
+        Code versions: {binaries}.
+      </Sentence>
     </>
-  );
-}
-
-/** "Use it in a transaction": the reference to put in a script, and the cell dep that serves it. */
-export function ScriptUseInTransaction({ family }: { family: ScriptFamilyDetail }) {
-  const references = family.references ?? [];
-  if (!references.length) return null;
-  return (
-    <div className="space-y-5">
-      {references.map((reference) => {
-        const version = family.versions.find(
-          (candidate) => candidate.versionHash === reference.currentVersionHash
-        );
-        const live =
-          version?.deployments.filter((deployment) => deployment.status === 'live') ?? [];
-        return (
-          <dl
-            key={`${reference.hashType}:${reference.referenceHash}`}
-            className="text-small grid gap-x-10 gap-y-3 md:grid-cols-3"
-          >
-            <div className="min-w-0">
-              <dt className="text-text-dim">Code hash · hash type</dt>
-              <dd className="mt-0.5 [overflow-wrap:anywhere]">{reference.referenceHash}</dd>
-              <dd className="text-text-dim mt-0.5">
-                {reference.hashType} ·{' '}
-                {reference.hashType === 'type' ? 'follows every upgrade' : 'pins this exact binary'}
-              </dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-text-dim">Cell dep · dep type code</dt>
-              {live.length ? (
-                live.map((deployment) => (
-                  <dd
-                    key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                    className="mt-0.5 [overflow-wrap:anywhere]"
-                  >
-                    <Link
-                      href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                      className="text-text hover:text-jade"
-                    >
-                      {deployment.codeCellTxHash}
-                      <OutpointIndex index={deployment.codeCellOutputIndex} />
-                    </Link>
-                  </dd>
-                ))
-              ) : (
-                <dd className="text-text-dim mt-0.5">
-                  {reference.currentVersionHash
-                    ? 'No live code cell for the current version'
-                    : 'Retired: no current code cell'}
-                </dd>
-              )}
-              {live.length > 0 && (
-                <dd className="text-text-dim mt-0.5">the live code cell of the current version</dd>
-              )}
-            </div>
-            {reference.hashType === 'type' && version && (
-              <div className="min-w-0">
-                <dt className="text-text-dim">Pin this exact binary instead</dt>
-                <dd className="mt-0.5 [overflow-wrap:anywhere]">{version.versionHash}</dd>
-                <dd className="text-text-dim mt-0.5">
-                  its data hash, with hash type data1 or data2; an upgrade will not reach cells that
-                  pin it
-                </dd>
-              </div>
-            )}
-          </dl>
-        );
-      })}
-    </div>
   );
 }
 

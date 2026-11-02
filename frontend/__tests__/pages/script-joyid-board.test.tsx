@@ -175,11 +175,10 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(screen.getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)).toBeInTheDocument();
   });
 
-  it('says how to use it in a transaction (SC-S6)', async () => {
+  // Table-rows L1-5: the recipe is "The script" facts (board ScriptDetail's tier 2).
+  it('says how to use it in a transaction, in the script facts (SC-S6, L1-5)', async () => {
     await renderJoyid();
-    const section = screen
-      .getByRole('heading', { name: 'Use it in a transaction' })
-      .closest('section')!;
+    const section = screen.getByRole('heading', { name: 'The script' }).closest('section')!;
     expect(section).toHaveTextContent(
       '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323'
     );
@@ -187,7 +186,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(section).toHaveTextContent(
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0'
     );
-    expect(section).toHaveTextContent('Pin this exact binary instead');
+    expect(section).toHaveTextContent('pin instead');
+    expect(section).toHaveTextContent('pins this exact binary');
     expect(section).toHaveTextContent(
       '0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe'
     );
@@ -220,14 +220,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
   });
 
-  it('keeps registered references in the developer tier (SC-S9)', async () => {
+  // Table-rows L1-5: the registered references are "The script" facts, one list per reference.
+  it('keeps registered references in the developer tier (SC-S9, L1-5)', async () => {
     await renderJoyid();
     const tier1 = document.querySelector('[data-tier="1"]') as HTMLElement;
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(within(tier1).queryByRole('heading', { name: 'Registered references' })).toBeNull();
-    expect(
-      within(tier2).getByRole('heading', { name: 'Registered references' })
-    ).toBeInTheDocument();
+    expect(within(tier1).queryByRole('heading', { name: 'The script' })).toBeNull();
+    const facts = within(tier2).getByRole('heading', { name: 'The script' }).closest('section')!;
+    expect(facts.querySelectorAll('dl')).toHaveLength(fixture.family.references.length);
+    expect(facts).toHaveTextContent('Lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696');
   });
 });
 
@@ -464,19 +465,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(
       within(tier2()).getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)
     ).toBeInTheDocument();
-    expect(
-      within(tier2()).getByRole('heading', { name: 'Use it in a transaction' })
-    ).toBeInTheDocument();
-    expect(within(tier1()).queryByRole('heading', { name: 'Use it in a transaction' })).toBeNull();
+    // Table-rows L1-5: the recipe is "The script" facts.
+    expect(within(tier2()).getByRole('heading', { name: 'The script' })).toBeInTheDocument();
+    expect(within(tier1()).queryByRole('heading', { name: 'The script' })).toBeNull();
     // The cells' summary line, with its exact totals, is tier 2's too (R14).
     expect(within(tier2()).getByTestId('script-cells-summary')).toBeInTheDocument();
-    // Tier 2: the two prose sections side by side from lg, the recipe and references full width.
+    // Tier 2: the board's two blocks side by side from lg, nothing else.
     const read = within(tier2()).getByRole('heading', { name: 'How to read this page' });
     expect(read.closest('section')!.parentElement).toHaveClass('grid', 'lg:grid-cols-2');
-    for (const name of ['Use it in a transaction', 'Registered references'])
-      expect(within(tier2()).getByRole('heading', { name }).closest('section')).toHaveClass(
-        'lg:col-span-2'
-      );
+    expect(read.closest('section')!.parentElement!.children).toHaveLength(2);
   });
 
   it('spaces tier 1 like the DAO page: 64 px under the hero, then 72 px, h2 18 px above its evidence (R6)', async () => {
