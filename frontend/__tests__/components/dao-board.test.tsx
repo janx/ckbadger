@@ -188,9 +188,10 @@ describe('DaoBoard', () => {
   });
 
   it("draws the depositors' share from their allocation weight, not DAO free capacity (DAO-2)", () => {
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
-    // The board legend (hierarchy D3 wording): the weight's 4.50%, not DAO free capacity's 4.00%.
-    expect(screen.getByRole('region', { name: 'Where secondary issuance goes' })).toHaveTextContent(
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    // The board legend (hierarchy D3 wording, tier 2 since v3): the weight's 4.50%, not DAO free
+    // capacity's 4.00%.
+    expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
     expect(screen.getByTitle('DAO depositors: 450.00000000 CKB')).toBeInTheDocument();
@@ -566,11 +567,16 @@ describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
   });
 });
 
-describe('DaoBoard secondary issuance (DAO-7)', () => {
-  afterEach(() => vi.restoreAllMocks());
+describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   const issuance = () => screen.getByRole('region', { name: 'Where secondary issuance goes' });
+  const tier2 = (container: HTMLElement) =>
+    container.querySelector('[data-tier="2"]') as HTMLElement;
 
-  it('splits issuance three ways and only compensation two ways, as an aligned icicle', () => {
+  it('splits issuance three ways and only compensation two ways, as an aligned 48 / 48 / 32 px icicle naming each part and its share', () => {
     stubChartWidth(1400);
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const svg = within(issuance()).getByRole('img', {
@@ -579,55 +585,98 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     const box = (key: string) => svg.querySelector(`[data-node="${key}"]`)!;
     for (const key of ['total', 'miners', 'compensation', 'burnt', 'paid', 'owed'])
       expect(box(key)).not.toBeNull();
+    expect(['total', 'miners', 'paid'].map((k) => box(k).getAttribute('height'))).toEqual([
+      '48',
+      '48',
+      '32',
+    ]);
     // compensation's two parts sit exactly under it
     expect(box('paid').getAttribute('x')).toBe(box('compensation').getAttribute('x'));
-    expect(svg.querySelector('[data-label="compensation"]')).toHaveTextContent(
-      'compensation for depositors'
-    );
-    // Hierarchy D3: the burnt-for-good caveat is tier-2 evidence, not a box under the icicle.
-    expect(svg.querySelector('[data-placeholder="burnt"]')).toBeNull();
-    expect(svg.querySelector('[data-placeholder="miners"]')).toHaveTextContent('paid in cellbases');
-    expect(issuance()).toHaveTextContent('still owed');
+    // R12: inside each box only the name and the share (1 + 3 + 3 CKB; 1 of 3 paid out).
+    const label = (key: string) => svg.querySelector(`[data-label="${key}"]`)!.textContent;
+    expect(label('total')).toBe('secondary issuance since genesis 7 CKB');
+    expect(label('miners')).toBe('miners 14.29%');
+    expect(label('compensation')).toBe('depositors 42.86%');
+    expect(label('burnt')).toBe('burnt 42.86% · no cell can ever claim it');
+    expect(label('paid')).toBe('paid out 33.3%');
+    expect(label('owed')).toBe('still owed 66.7%');
+    // No exact amount and no word under the boxes.
+    expect(svg.textContent).not.toMatch(/\.\d{8}/);
+    expect(svg.querySelector('[data-placeholder]')).toBeNull();
+    expect(svg.querySelector('[data-note]')).toBeNull();
     expect(issuance()).not.toHaveTextContent(/interest|earned/i);
   });
 
-  it('says where each share of capacity use goes, and why a deposit keeps its share, in one caption', () => {
+  it('gathers every exact amount in one quiet line under the icicle, then one caption', () => {
+    stubChartWidth(1400);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const line = within(issuance()).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'exact-amounts'
+    );
+    expect(line).toHaveTextContent(
+      'to miners 1.00000000 · for depositors 3.00000000 (paid out 1.00000000 · still owed 2.00000000 to 22,379 live cells) · burnt 3.00000000 CKB'
+    );
+    expect(line).toHaveClass('text-small', 'text-text-dim');
+    const svg = within(issuance()).getByRole('img', { name: /split three ways/ });
+    expect(svg.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const caption = within(issuance()).getByText(
+      '1.344 billion CKB a year, split in every block by how CKB is used: a deposit keeps its share, free CKB outside the DAO has its share burnt.'
+    );
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(line.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(issuance().lastElementChild).toBe(caption);
+  });
+
+  it('moves capacity use, its legend and its line, and the section note to tier 2 (V7)', () => {
     const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-    expect(issuance()).toHaveTextContent(
+    expect(within(issuance()).queryByLabelText('Current capacity use partition')).toBeNull();
+    expect(issuance()).not.toHaveTextContent(
+      /is used at block|occupied by cells|exact to the shannon/
+    );
+    // No note beside the heading.
+    expect(
+      within(issuance()).getByRole('heading', { level: 2 }).parentElement!.children
+    ).toHaveLength(1);
+    const works = within(tier2(container))
+      .getByRole('heading', { name: 'How the Nervos DAO works' })
+      .closest('section')!;
+    expect(within(works).getByLabelText('Current capacity use partition')).toBeInTheDocument();
+    expect(works).toHaveTextContent(
       'How all 10,000.00000000 CKB issued so far is used at block #5 · every block splits its issuance in these proportions'
     );
-    expect(issuance()).toHaveTextContent('occupied by cells 0.01% → miners');
-    expect(issuance()).toHaveTextContent(
+    expect(works).toHaveTextContent('occupied by cells 0.01% → miners');
+    expect(works).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
-    expect(issuance()).toHaveTextContent('everything else 95.49% → burnt');
-    // One caption under the bar (D3), after the bar and its legend in reading order.
-    const caption = within(issuance()).getByText(
-      "A deposit keeps its share of all CKB. Free CKB outside the DAO receives nothing: its share of every block's issuance is burnt."
+    expect(works).toHaveTextContent('everything else 95.49% → burnt');
+    expect(works).toHaveTextContent('Statistics are exact to the shannon at block #5');
+    // The icicle's former notes, in words.
+    expect(works).toHaveTextContent(
+      "The miners' share is s × U ÷ C of each block's secondary issuance s, paid in cellbases; the depositors' share accrues via AR and is paid out at withdrawals."
     );
-    const bar = within(issuance()).getByLabelText('Current capacity use partition');
-    expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The protocol caveats and the anchor link left tier 1 for the evidence (D3, D8).
-    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-    const caveats = [
+    // The former caption's long form stays in the explanation.
+    expect(works).toHaveTextContent(
+      'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
+    );
+    // The protocol caveats and the anchor link stay in tier 2 (D3, D8).
+    for (const caveat of [
       /Protocol occupied \(U\) includes the genesis virtual occupied baseline; it is not the real occupied size of live cells\./,
       /No cell can ever claim the burnt share\. A hardfork could only put future secondary issuance to use; what is burnt stays burnt\./,
       /withdrawal requests take no share/,
-    ];
-    for (const caveat of caveats) {
+    ]) {
       expect(issuance()).not.toHaveTextContent(caveat);
-      expect(tier2).toHaveTextContent(caveat);
+      expect(tier2(container)).toHaveTextContent(caveat);
     }
     expect(
       within(issuance()).queryByRole('link', { name: /Verify statistics anchor block/ })
     ).toBeNull();
   });
 
-  it('draws capacity use as a 22 px bar with each share written inside the segments that fit (R9)', () => {
+  it('draws capacity use as an 18 px bar with each share written inside the segments that fit (R9)', () => {
     stubChartWidth(1400);
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const bar = within(issuance()).getByLabelText('Current capacity use partition');
-    expect(bar).toHaveClass('h-[22px]');
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(tier2(container)).getByLabelText('Current capacity use partition');
+    expect(bar).toHaveClass('h-[18px]');
     const segments = Array.from(bar.children) as HTMLElement[];
     expect(segments.map((s) => s.title)).toEqual([
       'Occupied: 1.00000000 CKB',
@@ -642,22 +691,22 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     ]);
   });
 
-  it('writes no share inside the bar before its width is known or where a segment is too narrow', () => {
+  it('writes no share inside the capacity bar before its width is known or where a segment is too narrow', () => {
     stubChartWidth(358);
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const bar = within(issuance()).getByLabelText('Current capacity use partition');
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(tier2(container)).getByLabelText('Current capacity use partition');
     // 4.50 % of 358 px is 16 px, too narrow for "4.50%"; the legend still states every share.
     expect(Array.from(bar.children).map((s) => s.textContent)).toEqual([
       '',
       '',
       'everything else 95.49% → burnt',
     ]);
-    expect(issuance()).toHaveTextContent(
+    expect(tier2(container)).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50%'
     );
   });
 
-  it('states every part in words at phone width instead of shrinking the drawing', () => {
+  it('states every part with its share and exact amount at phone width instead of shrinking the drawing', () => {
     stubChartWidth(358);
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const svg = within(issuance()).getByRole('img', {
@@ -665,12 +714,16 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     });
     expect(svg.querySelectorAll('text')).toHaveLength(0);
     const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
-    expect(legend).toHaveTextContent('to miners');
-    expect(legend).toHaveTextContent('paid out');
-    expect(legend).toHaveTextContent('burnt');
-    // Hierarchy D3: "gone for good" stays; the caveat behind it is tier-2 evidence.
-    expect(legend).toHaveTextContent('gone for good');
-    expect(legend).not.toHaveTextContent(/No cell can ever claim/);
+    expect(legend).toHaveTextContent('secondary issuance since genesis 7.00000000 CKB');
+    expect(legend).toHaveTextContent('miners 14.29% · 1.00000000');
+    expect(legend).toHaveTextContent('depositors 42.86% · 3.00000000');
+    expect(legend).toHaveTextContent('paid out 33.3% · 1.00000000');
+    expect(legend).toHaveTextContent('still owed 66.7% · 2.00000000 to 22,379 live cells');
+    expect(legend).toHaveTextContent('burnt 42.86% · 3.00000000 · no cell can ever claim it');
+    // The one line is the desktop form; the list replaces it.
+    expect(
+      within(issuance()).queryByText((_, el) => el?.getAttribute('data-role') === 'exact-amounts')
+    ).toBeNull();
   });
 });
 
@@ -1055,12 +1108,8 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     expect(block('Who deposits')).toHaveClass('mt-[72px]');
     expect(screen.getByTestId('sources').parentElement).toHaveClass('mt-[72px]');
     for (const child of Array.from(tier1.children)) expect(child.parentElement).toBe(tier1);
-    // No rule between tier-1 sections; their headings are the section step, notes meta (board).
+    // No rule between tier-1 sections; their headings are the section step (board).
     const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
-    expect(within(issuance).getByText(/^since genesis · exact to the shannon/)).toHaveClass(
-      'text-meta',
-      'text-text-dim'
-    );
     expect(
       within(screen.getByRole('region', { name: 'Who deposits' })).getByRole('link', {
         name: /depositors →$/,

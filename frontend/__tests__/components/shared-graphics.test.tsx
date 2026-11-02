@@ -202,6 +202,118 @@ describe('IciclePartition label placement and pixel width (F2 dao)', () => {
   });
 });
 
+// ---- hierarchy v3 (DAO page, R12): additive IciclePartition options ----
+describe('IciclePartition rows and words inside the boxes (hierarchy v3, R9, R12)', () => {
+  const tree = {
+    key: 'total',
+    label: 'Secondary issuance since genesis',
+    value: BigInt(100),
+    tone: 'ckb' as const,
+    color: '#4b5266',
+    ink: 'bright' as const,
+    boxLabel: { name: 'secondary issuance since genesis', share: '100', unit: 'CKB' },
+    children: [
+      {
+        key: 'm',
+        label: 'to miners',
+        value: BigInt(10),
+        tone: 'ckb' as const,
+        color: '#a0a8be',
+        ink: 'dark' as const,
+        boxLabel: { name: 'miners', share: '10.00%' },
+      },
+      {
+        key: 'c',
+        label: 'compensation',
+        value: BigInt(20),
+        tone: 'dao' as const,
+        ink: 'dark' as const,
+        boxLabel: { name: 'depositors', share: '20.00%' },
+        children: [
+          {
+            key: 'p',
+            label: 'paid out',
+            value: BigInt(10),
+            tone: 'dao' as const,
+            ink: 'dark' as const,
+            boxLabel: { name: 'paid out', share: '50.0%' },
+          },
+          {
+            key: 'o',
+            label: 'still owed',
+            value: BigInt(10),
+            tone: 'dao' as const,
+            ink: 'bright' as const,
+            boxLabel: { name: 'still owed', share: '50.0%' },
+          },
+        ],
+      },
+      {
+        key: 'b',
+        label: 'burnt',
+        value: BigInt(70),
+        tone: 'other' as const,
+        ink: 'bright' as const,
+        boxLabel: { name: 'burnt', share: '70.00%', note: 'no cell can ever claim it' },
+      },
+    ],
+  };
+  const rows = { heights: [48, 48, 32], gap: 3 };
+
+  it('stacks rows of the given heights a gap apart and sets sibling boxes a gap apart', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
+    );
+    expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 1200 134');
+    const box = (key: string) => container.querySelector(`[data-node="${key}"]`)!;
+    expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('y'))).toEqual(['0', '51', '102']);
+    expect(['total', 'm', 'p'].map((k) => box(k).getAttribute('height'))).toEqual([
+      '48',
+      '48',
+      '32',
+    ]);
+    // Siblings share the row less the gaps: (1200 − 2 × 3) split 10 : 20 : 70.
+    expect(box('m').getAttribute('x')).toBe('0');
+    expect(box('m').getAttribute('width')).toBe('119.4');
+    expect(box('c').getAttribute('x')).toBe('122.4');
+    expect(box('b').getAttribute('x')).toBe('364.2');
+    // compensation's two parts sit exactly under it, a gap apart
+    expect(box('p').getAttribute('x')).toBe('122.4');
+    expect(box('o').getAttribute('x')).toBe('243.3');
+  });
+
+  it('writes the name and share inside each box, falling back to the share alone where the words do not fit', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={1200} rows={rows} />
+    );
+    const label = (key: string) => container.querySelector(`[data-label="${key}"]`);
+    expect(label('total')).toHaveTextContent('secondary issuance since genesis 100 CKB');
+    expect(label('total')!.getAttribute('y')).toBe('29');
+    // 119 px holds "10.00%" but not "miners 10.00%" at 13 px
+    expect(label('m')!.textContent).toBe('10.00%');
+    expect(label('c')!.textContent).toBe('depositors 20.00%');
+    expect(label('b')!.textContent).toBe('burnt 70.00% · no cell can ever claim it');
+    expect(label('b')!.querySelector('[data-part="note"]')).toHaveClass('fill-text-dim');
+    // the 32 px row reads at 11 px: "paid out 50.0%" fits 118 px, "still owed 50.0%" does not
+    expect(label('p')!.textContent).toBe('paid out 50.0%');
+    expect(label('p')).toHaveAttribute('font-size', '11');
+    expect(label('o')!.textContent).toBe('50.0%');
+    // ink: the page colour on light boxes, the bright ink on dark ones
+    expect(label('m')).toHaveClass('fill-base-bg');
+    expect(label('b')).toHaveClass('fill-text-bright');
+    // no words under the boxes (R12)
+    expect(container.querySelectorAll('[data-note]')).toHaveLength(0);
+  });
+
+  it('writes nothing in a box too narrow for its share', () => {
+    const { container } = render(
+      <IciclePartition root={tree} label="issuance" formatValue={String} width={358} rows={rows} />
+    );
+    expect(container.querySelector('[data-label="m"]')).toBeNull();
+    expect(container.querySelector('[data-label="b"]')!.textContent).toBe('burnt 70.00%');
+  });
+});
+
 describe('ConcentrationBar (DAO-12)', () => {
   it('splits a total into ranked groups of one class colour with exact shares', () => {
     const { container } = render(
