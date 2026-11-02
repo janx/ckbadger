@@ -79,16 +79,16 @@ describe('cell microscope', () => {
     fireEvent.mouseOver(byte);
     fireEvent.click(byte);
     fireEvent.mouseLeave(box);
-    expect(readout).toHaveTextContent(/^tapped unclassified bytes · \[2\.\.4\) · 2 B/);
+    expect(readout).toHaveTextContent(/^selected unclassified bytes · \[2\.\.4\) · 2 B/);
     expect(detail).toHaveTextContent('unclassified bytes');
     expect(box).toHaveAttribute('data-active', 'data:unclassified-2');
     // a tap on a field pill or a map part moves the pin there
     fireEvent.click(screen.getByRole('button', { name: /^length word \[0\.\.2\)/ }));
-    expect(readout).toHaveTextContent(/^tapped length word · \[0\.\.2\) · 2 B · 16/);
+    expect(readout).toHaveTextContent(/^selected length word · \[0\.\.2\) · 2 B · 16/);
     const map = screen.getByRole('group', { name: 'Capacity map' });
     fireEvent.click(within(map).getByTitle('data · 4 bytes'));
     fireEvent.mouseLeave(map);
-    expect(readout).toHaveTextContent(/^tapped data · 4 B occupied/);
+    expect(readout).toHaveTextContent(/^selected data · 4 B occupied/);
     expect(within(map).getByTitle('data · 4 bytes')).toHaveAttribute('aria-pressed', 'true');
     // the second tap on it lets go, though the emulated hover is still on it
     fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));

@@ -245,6 +245,10 @@ describe('How an object is read (C5)', () => {
     const ruler = screen.getByRole('group', { name: 'DNA byte map' });
     fireEvent.click(ruler.querySelector('[data-target]')!);
     expect(screen.getByRole('status', { name: 'DNA ruler readout' })).toHaveTextContent(/prev\.bg/);
+    // C11: a click on a pointer device selects; the word "tapped" is a touch screen's
+    expect(screen.getByRole('status', { name: 'DNA ruler readout' })).toHaveTextContent(
+      /^selected prev\.bg/
+    );
     // a decoder upgrade: the pinned gene is gone
     rerender(<CurrentPatternEvidence pattern={objectGeneticsProducer.currentPattern} />);
     expect(screen.getByRole('status', { name: 'DNA ruler readout' })).not.toHaveTextContent(

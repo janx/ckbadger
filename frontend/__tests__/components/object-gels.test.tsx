@@ -293,7 +293,9 @@ describe('SequencingGel at the measured width (V3)', () => {
     expect(color).toHaveAttribute('data-active', 'true');
     expect(color).toHaveAttribute('aria-pressed', 'true');
     const readout = screen.getByRole('status', { name: 'Gene readout' });
-    expect(readout).toHaveTextContent(/^tapped Color · byte 32 · nervapeColor · 03 → Nature Green/);
+    expect(readout).toHaveTextContent(
+      /^selected Color · byte 32 · nervapeColor · 03 → Nature Green/
+    );
     fireEvent.click(color);
     expect(container.querySelector('[data-span]')).toBeNull();
     expect(container.querySelector('[data-nibble="0"]')).toHaveAttribute('opacity', '1');
@@ -398,7 +400,7 @@ describe('AlleleGel at the measured width (R3, responsive V2)', () => {
     fireEvent.click(band);
     fireEvent.mouseLeave(band);
     expect(readout).toHaveTextContent(
-      new RegExp(`^tapped Color · ${calm.label} · ${calm.count} of 90 objects`)
+      new RegExp(`^selected Color · ${calm.label} · ${calm.count} of 90 objects`)
     );
     // on the collection page the same tap also filters by the variant
     expect(onBand).toHaveBeenCalledWith('Color', 'Calm Blue');

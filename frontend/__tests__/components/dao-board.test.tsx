@@ -836,12 +836,12 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // a touch tap on the last day (the plot ends at 590 of 600 px): the pointer leaves first
     fireEvent.pointerLeave(chart);
     fireEvent.click(chart, { clientX: 590 });
-    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited 2019-11-19 →/);
+    expect(reading).toHaveTextContent(/^selected 10,000 CKB deposited 2019-11-19 →/);
     await waitFor(() =>
       expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 4, 5)
     );
     fireEvent.pointerLeave(chart);
-    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited 2019-11-19/);
+    expect(reading).toHaveTextContent(/^selected 10,000 CKB deposited 2019-11-19/);
     fireEvent.click(chart, { clientX: 590 });
     expect(reading).toHaveTextContent(/^10,000 CKB deposited 2019-11-16 →/);
   });

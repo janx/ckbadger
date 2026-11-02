@@ -116,7 +116,7 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     render(<Chart days={days} />);
     const readout = screen.getByRole('status', { name: 'Day readout' });
     expect(readout).toHaveTextContent(`${LAST}tap or hover`);
-    expect(readout).not.toHaveTextContent(/^tapped/);
+    expect(readout).not.toHaveTextContent(/^selected/);
     const hints = [screen.getByRole('region', { name: 'hero' }), screen.getByTestId('under')].map(
       (el) => (el.textContent!.match(/tap or hover/gi) ?? []).length
     );
@@ -134,7 +134,7 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     fireEvent.click(day(1));
     fireEvent.mouseLeave(svg);
     expect(readout()).toHaveTextContent(
-      /^tapped 2026-10-21 · 263 uncles on chain · this node switched branches 12 times/
+      /^selected 2026-10-21 · 263 uncles on chain · this node switched branches 12 times/
     );
     expect(day(0)).toHaveAttribute('opacity', '0.55');
     // a second tap on the same day clears it, though the emulated hover is still on it
@@ -142,7 +142,7 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     fireEvent.click(day(1));
     expect(readout()).toHaveTextContent(new RegExp(`^${LAST}`));
     fireEvent.click(day(2));
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-22 · 199 uncles/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-22 · 199 uncles/);
     act(() => {
       fireEvent.keyDown(window, { key: 'Escape' });
     });
@@ -153,10 +153,10 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     const { container, rerender } = render(<Chart days={days} />);
     const readout = () => screen.getByRole('status', { name: 'Day readout' });
     fireEvent.click(container.querySelectorAll('[data-day]')[1]);
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-21 · 263 uncles/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-21 · 263 uncles/);
     const next = { date: '2026-10-23', canonicalBlocks: 9000, uncles: 210, nodeSwitches: 0 };
     rerender(<Chart days={[...days.slice(1), next]} />);
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-21 · 263 uncles/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-21 · 263 uncles/);
     rerender(<Chart days={[...days.slice(2), next]} />);
     expect(readout()).toHaveTextContent(/^2026-10-23 · 210 uncles on chain/);
   });

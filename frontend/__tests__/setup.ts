@@ -37,8 +37,9 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 }
 
 // jsdom has no matchMedia. Answer width queries from window.innerWidth (jsdom: 1024, a desktop,
-// so lists keep their own page size) and reduced motion as not asked for; any other query is a
-// test that must bring its own stub. Tests that need another answer stub their own.
+// so lists keep their own page size), reduced motion as not asked for and the primary pointer as a
+// mouse; any other query is a test that must bring its own stub. Tests that need another answer
+// stub their own.
 if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
   window.matchMedia = ((query: string) => {
     const width = /^\((min|max)-width:\s*(\d+)px\)$/.exec(query);
@@ -49,6 +50,8 @@ if (typeof window !== 'undefined' && typeof window.matchMedia === 'undefined') {
           ? window.innerWidth >= Number(width[2])
           : window.innerWidth <= Number(width[2]);
     else if (query === '(prefers-reduced-motion: reduce)') matches = false;
+    // a mouse, not a touch screen (C11: a pinned reading is "selected", not "tapped")
+    else if (query === '(pointer: coarse)') matches = false;
     else throw new Error(`setup.ts matchMedia: unsupported query ${query}`);
     return {
       matches,

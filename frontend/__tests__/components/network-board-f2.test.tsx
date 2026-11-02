@@ -192,7 +192,7 @@ describe('Network board (F2 charts)', () => {
     fireEvent.click(dot);
     fireEvent.mouseLeave(svg);
     expect(readout).toHaveTextContent(
-      /^tapped \/ip4\/203\.0\.113\.7\/tcp\/8115 · peer 12200fce0b…a2d1b5 · US · reachable now · ckb\/0\.204\.0/
+      /^selected \/ip4\/203\.0\.113\.7\/tcp\/8115 · peer 12200fce0b…a2d1b5 · US · reachable now · ckb\/0\.204\.0/
     );
     expect(dot).toHaveAttribute('aria-pressed', 'true');
     expect(panel.querySelector('p')).toHaveTextContent('/ip4/203.0.113.7/tcp/8115');
@@ -213,7 +213,7 @@ describe('Network board (F2 charts)', () => {
     );
     fireEvent.click(await screen.findByRole('button', { name: /^US peer 12200fce0b…/ }));
     const readout = screen.getByRole('status', { name: 'Node readout' });
-    expect(readout).toHaveTextContent(/^tapped /);
+    expect(readout).toHaveTextContent(/^selected /);
     const gone = { ...map, points: map.points.slice(1) };
     act(() => {
       client.setQueryData(['network', 'map'], gone);
