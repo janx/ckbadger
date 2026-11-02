@@ -54,7 +54,13 @@ describe('Independent DOB evidence', () => {
     };
     render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/awaiting DOB execution/)).toBeInTheDocument();
-    expect(screen.getByText(/Unrecognized binary/)).toBeInTheDocument();
+    // Lane E (C12 wording): the ruled sentence, the API's reason kept in the line's title.
+    expect(
+      screen.getByText(
+        'Decoder 1: the decoder binary describes no byte mapping; the pattern alone is used.'
+      )
+    ).toHaveAttribute('title', 'Unrecognized binary');
+    expect(screen.queryByText(/mapping unavailable/i)).toBeNull();
     expect(screen.queryByLabelText('Cached VM traits')).not.toBeInTheDocument();
   });
   it('preserves multiple VM values for one trait name', () => {

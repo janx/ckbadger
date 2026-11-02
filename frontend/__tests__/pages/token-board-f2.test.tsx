@@ -315,6 +315,18 @@ describe('Token board (F2 objects)', () => {
       'the token’s type script; its code decides what a valid transfer is'
     );
     expect(tier2).toHaveTextContent('Live cells150');
+    // Lane E (C6): the type script drawn as its occupied bytes, one row per part.
+    const args = (mockToken.typeArgs.length - 2) / 2;
+    expect(tier2).toHaveTextContent(`Script · ${33 + args} occupied bytes in every cell it types`);
+    expect(
+      [
+        ...within(tier2 as HTMLElement).getByRole('group', { name: 'type script byte map' })
+          .children,
+      ].map((p) => (p as HTMLElement).dataset.segment)
+    ).toEqual(['code_hash', 'hash_type', 'args']);
+    expect(within(tier2 as HTMLElement).getByLabelText('type script parts')).toHaveTextContent(
+      `hash_type${mockToken.typeHashType} (`
+    );
   });
 
   // Responsive gate (2026-11-01): the issuer's full address inside the args note had no break

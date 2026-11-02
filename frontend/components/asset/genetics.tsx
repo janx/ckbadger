@@ -165,8 +165,9 @@ export function ObjectGeneticsView({
             <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
           )}
           {layout.unsupported.map((u) => (
-            <p key={u.step} role="status" className="text-text-dim text-meta">
-              Decoder {u.step + 1}: byte mapping unavailable — {u.reason}
+            <p key={u.step} role="status" title={u.reason} className="text-text-dim text-meta">
+              Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern alone
+              is used.
             </p>
           ))}
           {collection && (
