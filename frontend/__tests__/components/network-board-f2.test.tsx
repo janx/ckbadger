@@ -334,7 +334,10 @@ describe('Network board (F2 charts)', () => {
     expect(await screen.findAllByRole('heading', { name: 'Peer evidence' })).toHaveLength(1);
     expect(screen.queryByText('Observed network peers')).toBeNull();
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(tier2.querySelector('.uppercase')).toBeNull();
+    // The tier's own eyebrow (R6) is its one line of tracked capitals; the table title has none.
+    expect([...tier2.querySelectorAll('.uppercase')].map((el) => el.textContent)).toEqual([
+      'Evidence · for developers',
+    ]);
   });
 
   it('keeps country clusters and their labels apart, as the board relaxes them (visual pass)', () => {

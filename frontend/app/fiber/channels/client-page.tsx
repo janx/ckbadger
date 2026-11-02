@@ -250,7 +250,7 @@ export default function FiberChannelsPage() {
       <main className="container mx-auto flex max-w-[1280px] flex-col gap-11 px-4 pb-[72px] pt-7">
         <TopicHero
           title="Fiber channels"
-          intro="Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in one shared cell and pay each other off chain as often as they like. Only opening and closing a channel touch the chain, so that is what CKBadger sees."
+          lede="Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in one shared cell and pay each other off chain as often as they like. Only opening and closing a channel touch the chain, so that is what CKBadger sees."
           figures={summary ? heroFigures(summary) : undefined}
         />
         {network.isError && (

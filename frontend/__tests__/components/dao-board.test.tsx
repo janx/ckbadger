@@ -265,7 +265,7 @@ describe('DaoBoard', () => {
     ).toThrow('2024-01-15 has no current depositor count');
   });
 
-  it('keeps the 72 px tier-2 boundary and quiet 13 px tier-2 headings (DAO-20)', () => {
+  it('keeps the 96 px tier-2 boundary and quiet 13 px tier-2 headings (DAO-20, R6)', () => {
     const { container } = render(
       <DaoBoard
         statistics={stats}
@@ -276,8 +276,8 @@ describe('DaoBoard', () => {
     );
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2).not.toBeNull();
-    expect(tier2).toHaveClass('mt-[72px]');
-    // A space-y-* parent's sibling selector overrides the 72 px margin (measured 32 px).
+    expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border');
+    // A space-y-* parent's sibling selector overrides the 96 px margin (measured 32 px).
     expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
     const headings = Array.from(tier2.querySelectorAll('h2'));
     expect(headings.map((h) => h.textContent)).toEqual([

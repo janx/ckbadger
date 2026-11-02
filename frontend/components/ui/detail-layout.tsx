@@ -9,12 +9,19 @@ export function useDetailTier(): 1 | 2 {
   return useContext(DetailTierContext);
 }
 
-/** The developer-evidence tier: one 72 px boundary, and every section heading inside is quiet. */
+/**
+ * The developer-evidence tier (hierarchy plan R6): one visible boundary — 96 px, a hairline and the
+ * "Evidence · for developers" eyebrow — and every section heading inside is quiet. `className`
+ * lays out the tier's content (its sections), under the eyebrow.
+ */
 export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <DetailTierContext.Provider value={2}>
-      <div data-tier="2" className={cn('mt-[72px] min-w-0 space-y-8', className)}>
-        {children}
+      <div data-tier="2" className="border-base-border mt-24 min-w-0 border-t pt-7">
+        <p className="text-meta text-text-dim uppercase tracking-[0.12em]">
+          Evidence · for developers
+        </p>
+        <div className={cn('mt-7 min-w-0 space-y-8', className)}>{children}</div>
       </div>
     </DetailTierContext.Provider>
   );
@@ -39,7 +46,7 @@ export interface DetailLayoutProps {
   className?: string;
 }
 
-/** Domain first, with one enforced 72 px boundary before developer evidence. */
+/** Domain first, with one enforced boundary (DetailTier2) before developer evidence. */
 export function DetailLayout({
   title,
   kind = 'entity',

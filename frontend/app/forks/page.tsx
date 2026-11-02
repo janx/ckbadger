@@ -272,7 +272,7 @@ export default function ForksPage() {
       <main className="container mx-auto flex min-w-0 max-w-[1280px] flex-col gap-11 px-4 pb-[72px] pt-7">
         <TopicHero
           title="Forks"
-          intro="Two miners sometimes find a block at the same height, a fraction of a second apart. The chain keeps one. The other is not lost: a later block includes it as an uncle, and CKB counts uncles to measure how often this happens and set the difficulty, aiming at one in 40 blocks."
+          lede="Two miners sometimes find a block at the same height, a fraction of a second apart. The chain keeps one. The other is not lost: a later block includes it as an uncle, and CKB counts uncles to measure how often this happens and set the difficulty, aiming at one in 40 blocks."
           figures={data ? heroFigures(data) : undefined}
         />
         <DetailSection

@@ -488,7 +488,11 @@ describe('ScriptDetailPage', () => {
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('list', { name: 'Code versions, compact' })).toBeInTheDocument();
     expect(await screen.findByRole('list', { name: 'Its cells, compact' })).toBeInTheDocument();
-    expect(document.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+    expect(document.querySelector('[data-tier="2"]')).toHaveClass(
+      'mt-24',
+      'border-t',
+      'border-base-border'
+    );
   });
 
   it('wraps the complete current binary in the compact registered reference row', async () => {

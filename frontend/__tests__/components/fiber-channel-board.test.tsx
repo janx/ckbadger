@@ -200,10 +200,10 @@ describe('FiberChannelBoard', () => {
     );
   });
 
-  it('keeps the lock evidence in tier 2: 72 px boundary, quiet 13 px headings (FF-C5, FF-C8)', () => {
+  it('keeps the lock evidence in tier 2: 96 px boundary, quiet 13 px headings (FF-C5, FF-C8, R6)', () => {
     const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(tier2).toHaveClass('mt-[72px]');
+    expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border');
     expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
     for (const name of ['The two locks', 'Witnesses and timing']) {
       const heading = screen.getByRole('heading', { name });

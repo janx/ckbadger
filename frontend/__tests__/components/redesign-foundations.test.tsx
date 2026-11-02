@@ -36,7 +36,7 @@ const cell: CellTileData = {
 };
 
 describe('detail and list foundations', () => {
-  it('keeps domain content above a 72 px evidence boundary and raw data collapsed', () => {
+  it('keeps domain content above a 96 px evidence boundary and raw data collapsed', () => {
     const { container } = render(
       <DetailLayout
         title="Transaction"
@@ -56,7 +56,11 @@ describe('detail and list foundations', () => {
     expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('text-section');
     expect(screen.getByRole('heading', { name: 'Activity' })).not.toHaveClass('text-body');
     expect(screen.getByRole('heading', { name: 'Transaction' })).toHaveClass('text-entity');
-    expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+    expect(container.querySelector('[data-tier="2"]')).toHaveClass(
+      'mt-24',
+      'border-t',
+      'border-base-border'
+    );
     expect(container.querySelector('details')).not.toHaveAttribute('open');
     expect(container.querySelector('dt')).toHaveTextContent('Block');
     expect(container.querySelector('dd')).toHaveTextContent('12');

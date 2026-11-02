@@ -479,7 +479,9 @@ describe('BlockDetailPage', () => {
     expect(screen.getByText('ckb 0.210.0')).toBeInTheDocument();
     expect(screen.getByText(/10 s after its parent/)).toBeInTheDocument();
     expect(screen.getByTestId('block-tier2-facts').closest('[data-tier="2"]')).toHaveClass(
-      'mt-[72px]'
+      'mt-24',
+      'border-t',
+      'border-base-border'
     );
     expect(
       await screen.findByRole('img', {

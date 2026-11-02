@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { screen } from '@testing-library/react';
 import { render } from '../utils/test-utils';
-import { DetailLayout } from '@/components/ui/detail-layout';
+import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
 describe('DetailLayout identity', () => {
   it('keeps prose words intact while allowing an unbroken identifier to wrap', () => {
@@ -16,5 +16,56 @@ describe('DetailLayout identity', () => {
     expect(description).toHaveTextContent(identity);
     expect(description).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
     expect(description).not.toHaveClass('break-all');
+  });
+});
+
+describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
+  it('sets the h1 by page kind: index for topic and list pages, entity for entity pages', () => {
+    const { rerender } = render(<DetailLayout title="Blocks" kind="index" children="rows" />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-index');
+    rerender(<DetailLayout title="Nervos DAO" kind="topic" children="board" />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-index');
+    rerender(<DetailLayout title="Transaction" children="tx" />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveClass('text-entity');
+  });
+
+  it('heads tier-1 sections at section size and tier-2 sections quietly at body, ink', () => {
+    render(
+      <DetailLayout
+        title="Cell"
+        tier2={<DetailSection title="Script groups">evidence</DetailSection>}
+      >
+        <DetailSection title="Capacity">figure</DetailSection>
+      </DetailLayout>
+    );
+    expect(screen.getByRole('heading', { name: 'Capacity' })).toHaveClass(
+      'text-section',
+      'text-text-bright'
+    );
+    expect(screen.getByRole('heading', { name: 'Script groups' })).toHaveClass(
+      'text-body',
+      'text-[#a0a8be]'
+    );
+  });
+
+  it('opens tier 2 with one boundary: 96 px, a hairline, then the evidence eyebrow above the content', () => {
+    const { container } = render(
+      <DetailTier2 className="grid lg:grid-cols-2">
+        <DetailSection title="The DAO script">script</DetailSection>
+      </DetailTier2>
+    );
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border', 'pt-7');
+    const eyebrow = tier2.firstElementChild as HTMLElement;
+    expect(eyebrow).toHaveTextContent(/^Evidence · for developers$/);
+    expect(eyebrow).toHaveClass('text-meta', 'text-text-dim', 'uppercase', 'tracking-[0.12em]');
+    const heading = screen.getByRole('heading', { name: 'The DAO script' });
+    expect(
+      eyebrow.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    // The caller's classes lay out the sections under the eyebrow, not the boundary itself.
+    const content = heading.closest('section')!.parentElement!;
+    expect(content).toHaveClass('grid', 'lg:grid-cols-2');
+    expect(tier2).not.toHaveClass('grid');
   });
 });

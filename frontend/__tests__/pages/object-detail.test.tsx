@@ -53,7 +53,11 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
     '271.00000000'
   );
-  expect(container.querySelector('[data-tier="2"]')).toHaveClass('mt-[72px]');
+  expect(container.querySelector('[data-tier="2"]')).toHaveClass(
+    'mt-24',
+    'border-t',
+    'border-base-border'
+  );
   expect(api.getItemCellVersions).toHaveBeenCalledWith('spore', id);
 });
 it('renders exact raw protocol bytes and current gene mapping with separate VM provenance', async () => {

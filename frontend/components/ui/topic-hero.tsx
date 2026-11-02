@@ -1,8 +1,9 @@
 import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
-// F2 group `fiber`: the hero of the Fiber and Forks boards (V65, V67) — title and a plain
-// paragraph on the left, a 2 × 2 grid of figures on the right.
+// F2 group `fiber`: the hero of the Fiber and Forks boards (V65, V67) — title and a one-sentence
+// lede on the left, a 2 × 2 grid of figures on the right (hierarchy plan R1: index title, body
+// lede, hero figures, meta labels).
 
 export interface TopicFigure {
   label: ReactNode;
@@ -13,12 +14,13 @@ export interface TopicFigure {
 
 export function TopicHero({
   title,
-  intro,
+  lede,
   figures,
   breadcrumb,
 }: {
   title: ReactNode;
-  intro: ReactNode;
+  /** One sentence under the title; the concept prose belongs in tier 2. */
+  lede: ReactNode;
   /** Undefined while the data loads: no empty grid. */
   figures: readonly TopicFigure[] | undefined;
   breadcrumb?: ReactNode;
@@ -28,13 +30,13 @@ export function TopicHero({
       <div className="flex min-w-0 flex-col gap-2.5">
         {breadcrumb}
         <h1 className="text-text-bright text-index font-medium">{title}</h1>
-        <p className="text-text text-body max-w-[720px] leading-relaxed">{intro}</p>
+        <p className="text-text text-body max-w-[720px] leading-relaxed">{lede}</p>
       </div>
       {figures && (
         <dl className="grid min-w-0 grid-cols-2 gap-x-7 gap-y-4">
           {figures.map((figure, index) => (
             <div key={index} className="min-w-0">
-              <dt className="text-text-dim text-small">{figure.label}</dt>
+              <dt className="text-text-dim text-meta">{figure.label}</dt>
               <dd
                 className={cn(
                   'text-hero mt-[3px] tabular-nums',
