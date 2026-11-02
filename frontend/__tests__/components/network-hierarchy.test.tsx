@@ -190,6 +190,8 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     expect(figure).toHaveTextContent(/^62$/);
     // R4: display from 640 up, index below; R11: the page's class colour.
     expect(figure).toHaveClass('text-jade', 'text-index', 'sm:text-display');
+    // One display-size line box holds the figure and its scale.
+    expect(figure.parentElement).toHaveClass('text-index', 'sm:text-display', 'whitespace-nowrap');
     const row = figure.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline');
     expect(row).toHaveTextContent(/^62 of 66answered as CKB mainnet nodes$/);

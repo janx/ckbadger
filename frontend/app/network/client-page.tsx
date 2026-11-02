@@ -250,7 +250,8 @@ function Hero({
         <div data-role="figure" className="mt-9 min-w-0">
           <div className="text-text-dim text-meta mb-1.5">Reachable now</div>
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-            <span className="whitespace-nowrap">
+            {/* The display line box (40 px) holds the figure and its scale as one line. */}
+            <span className="text-index sm:text-display whitespace-nowrap">
               <span
                 data-role="reachable"
                 className="text-jade text-index sm:text-display font-medium tabular-nums"
