@@ -482,7 +482,11 @@ describe('HardforksPage', () => {
     for (const card of [mirana, meepo]) {
       expect(within(card).getByRole('heading', { level: 3 })).toHaveClass('text-section');
       // The date line is meta; the status beside the title is plain ink, not jade (R11).
-      expect(within(card).getByText(/^epoch [\d,]+ ·/)).toHaveClass('text-meta', 'text-text-dim');
+      expect(within(card).getByText(/^epoch [\d,]+ ·/)).toHaveClass(
+        'text-meta',
+        'text-text-dim',
+        'self-start'
+      );
       expect(within(card).getByText('activated')).toHaveClass('text-text-dim');
       expect(card).not.toHaveTextContent(/Scripts named by type hash moved/);
     }
@@ -491,11 +495,12 @@ describe('HardforksPage', () => {
     const overview = within(meepo).getByRole('link', { name: 'CKB2023 overview ↗' });
     expect(overview).toHaveAttribute('href', 'https://example.com/ckb2023');
     expect(overview).toHaveClass('text-text');
-    // What left the cards reads in tier 2.
+    // What left the cards reads in tier 2, after the paragraph on editions it continues.
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(tier2).toHaveTextContent(
+    const moved = within(tier2).getByText(
       "Scripts named by type hash moved to VM1 at Mirana's epoch, 5,414, and to VM2 at Meepo's, 12,293. Meepo's Spawn syscalls let scripts start and talk to other scripts."
     );
+    expect(moved.previousElementSibling).toHaveTextContent(/^CKB changes its rules in editions\./);
   });
 
   it('keeps the consensus grid as it is, its closing sentence at meta, sections 64 and 72 px apart (H3, R6)', async () => {
@@ -505,10 +510,16 @@ describe('HardforksPage', () => {
     const consensus = await screen.findByRole('region', {
       name: "As this node's consensus states it",
     });
+    // The DAO page's section head: the h2 in its own row, 18 px above the evidence, so the
+    // heading's box is its words, not the column (R6; the R16 text-area rule counts boxes).
     const h2 = within(consensus).getByRole('heading', { level: 2 });
-    expect(h2).toHaveClass('text-section', 'text-text-bright', 'mb-[18px]');
+    expect(h2).toHaveClass('text-section', 'text-text-bright');
+    expect(h2.parentElement).toHaveClass('flex', 'mb-[18px]');
+    expect(h2.parentElement!.parentElement).toBe(consensus);
+    // One-line source label: as wide as its words.
     expect(within(consensus).getByText('get_consensus · hardfork_features · mainnet')).toHaveClass(
-      'text-small'
+      'text-small',
+      'w-fit'
     );
     const cells = consensus.querySelectorAll('dl > div');
     expect(cells).toHaveLength(9);
@@ -517,7 +528,7 @@ describe('HardforksPage', () => {
       within(consensus).getByText(
         "Today's node applies RFC 0029, 0030, 0031, 0036 and 0038 from epoch 0, so they do not show as switching on with an edition."
       )
-    ).toHaveClass('text-meta', 'text-text-dim');
+    ).toHaveClass('text-meta', 'text-text-dim', 'max-w-[640px]');
     // Rhythm: hero → caption → the editions 64 px under it → the consensus 72 px under them.
     const hero = screen.getByRole('region', { name: 'Hardforks' });
     const caption = hero.nextElementSibling as HTMLElement;

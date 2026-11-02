@@ -91,7 +91,7 @@ function EditionCard({
         {/* R11: no coloured words in tier 1 on a page without a figure. */}
         <span className="text-text-dim text-small">{event.status}</span>
       </div>
-      <p className="text-text-dim text-meta">
+      <p className="text-text-dim text-meta self-start">
         epoch {event.activationEpoch.toLocaleString()} ·{' '}
         {event.activationBlock !== null && (
           <>
@@ -146,7 +146,10 @@ function EditionCard({
   );
 }
 
-/** A tier-1 section (R6): the h2 at section size, 18 px above its evidence. */
+/**
+ * A tier-1 section (R6), as the DAO page heads its sections: the h2 at section size in its own row,
+ * 18 px above the evidence.
+ */
 function Section({
   title,
   className,
@@ -158,7 +161,9 @@ function Section({
 }) {
   return (
     <section aria-label={title} className={cn('min-w-0', className)}>
-      <h2 className="text-text-bright text-section mb-[18px] font-medium">{title}</h2>
+      <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+      </div>
       {children}
     </section>
   );
@@ -205,22 +210,12 @@ function HowHashTypePicksAVm({
   return (
     <DetailSection title="How hash_type picks a VM">
       <div className="grid items-start gap-x-14 gap-y-3.5 lg:grid-cols-2">
-        <p className="text-text-dim text-body max-w-[640px]">
-          CKB changes its rules in editions. Each one switches on at an agreed epoch, and every node
-          must run it from there on. Both so far brought a new version of CKB-VM, the machine that
-          runs scripts, and a cell&apos;s scripts choose which one runs them through their hash
-          type.
-        </p>
         <div className="flex min-w-0 max-w-[640px] flex-col gap-3.5">
           <p className="text-text-dim text-body">
-            A script named by its type hash follows every upgrade: the same code runs on VM0, then
-            VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a
-            hardfork never changes how an existing data-pinned script runs. Live cells reference
-            registered scripts {formatExactDecimal(lanes[0].liveReferences, 'type live references')}{' '}
-            times by type hash,{' '}
-            {formatExactDecimal(lanes[1].liveReferences, 'data1 live references')} by data1,{' '}
-            {formatExactDecimal(lanes[2].liveReferences, 'data2 live references')} by data2 and{' '}
-            {formatExactDecimal(lanes[3].liveReferences, 'data live references')} by data.
+            CKB changes its rules in editions. Each one switches on at an agreed epoch, and every
+            node must run it from there on. Both so far brought a new version of CKB-VM, the machine
+            that runs scripts, and a cell&apos;s scripts choose which one runs them through their
+            hash type.
           </p>
           {/* Moved from the edition cards (H3): what each edition did to type-hash scripts. */}
           <p className="text-text-dim text-body">
@@ -230,6 +225,15 @@ function HowHashTypePicksAVm({
             scripts start and talk to other scripts.
           </p>
         </div>
+        <p className="text-text-dim text-body max-w-[640px]">
+          A script named by its type hash follows every upgrade: the same code runs on VM0, then
+          VM1, then VM2. A script named by its data hash stays on the VM its hash type pins, so a
+          hardfork never changes how an existing data-pinned script runs. Live cells reference
+          registered scripts {formatExactDecimal(lanes[0].liveReferences, 'type live references')}{' '}
+          times by type hash, {formatExactDecimal(lanes[1].liveReferences, 'data1 live references')}{' '}
+          by data1, {formatExactDecimal(lanes[2].liveReferences, 'data2 live references')} by data2
+          and {formatExactDecimal(lanes[3].liveReferences, 'data live references')} by data.
+        </p>
       </div>
     </DetailSection>
   );
@@ -363,7 +367,7 @@ export default function HardforksPage() {
             )}
             {ready && (
               <Section title="As this node's consensus states it" className="mt-[72px]">
-                <p className="text-text-dim text-small mb-3">
+                <p className="text-text-dim text-small mb-3 w-fit">
                   get_consensus · hardfork_features · {ready.data.network}
                 </p>
                 <dl className="grid grid-cols-3 gap-2 sm:grid-cols-5 lg:grid-cols-9">
@@ -382,7 +386,7 @@ export default function HardforksPage() {
                   ))}
                 </dl>
                 {genesisFeatures.length > 0 && (
-                  <p className="text-text-dim text-meta mt-3">
+                  <p className="text-text-dim text-meta mt-3 max-w-[640px]">
                     Today&apos;s node applies RFC{' '}
                     {joinWords(genesisFeatures.map((feature) => feature.rfc))} from epoch 0, so they
                     do not show as switching on with an edition.
