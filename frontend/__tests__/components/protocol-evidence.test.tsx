@@ -56,6 +56,30 @@ describe('protocol byte evidence', () => {
     expect(within(detail).getByText('aa')).toBeInTheDocument();
   });
 
+  it('starts the detail over when the data changes (a version switch keeps no stale pin)', () => {
+    const { rerender } = render(
+      <ProtocolEvidence title="DID cell data" dataHex="0x01aabbcc" fields={fields} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^\[1\.\.2\) · 1 B · no field/ }));
+    expect(
+      screen.getByRole('complementary', { name: 'DID cell data field detail' })
+    ).toHaveAttribute('data-detail', 'gap:1-2');
+    // the next version has no undescribed run at [1..2)
+    rerender(
+      <ProtocolEvidence
+        title="DID cell data"
+        dataHex="0x01bbcc"
+        fields={[
+          { name: 'Version', start: 0, end: 1, valueHex: '0x01' },
+          { name: 'Document', start: 1, end: 3, valueHex: '0xbbcc' },
+        ]}
+      />
+    );
+    expect(
+      screen.getByRole('complementary', { name: 'DID cell data field detail' })
+    ).toHaveAttribute('data-detail', 'field-0');
+  });
+
   it('gives a field its meaning and the shape its bytes show', () => {
     const name = '0b0000002e63656c6c206465656473';
     render(

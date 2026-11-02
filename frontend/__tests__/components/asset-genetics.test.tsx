@@ -238,6 +238,20 @@ describe('How an object is read (C5)', () => {
     expect(screen.queryByText(/Mapping unavailable/)).toBeNull();
   });
 
+  it('starts the ruler reading over when the pattern changes under a pin', () => {
+    const { rerender } = render(
+      <CurrentPatternEvidence pattern={nervape3xInsights.currentPattern} sample={sample} />
+    );
+    const ruler = screen.getByRole('group', { name: 'DNA byte map' });
+    fireEvent.click(ruler.querySelector('[data-target]')!);
+    expect(screen.getByRole('status', { name: 'DNA ruler readout' })).toHaveTextContent(/prev\.bg/);
+    // a decoder upgrade: the pinned gene is gone
+    rerender(<CurrentPatternEvidence pattern={objectGeneticsProducer.currentPattern} />);
+    expect(screen.getByRole('status', { name: 'DNA ruler readout' })).not.toHaveTextContent(
+      /prev\.bg/
+    );
+  });
+
   it('folds a run of numbered one-byte genes into one row and keeps every gene in a fold', () => {
     const pattern = structuredClone(objectGeneticsProducer.currentPattern);
     if (pattern.status !== 'dob' || pattern.steps[0].description.status !== 'supported')

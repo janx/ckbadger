@@ -72,7 +72,12 @@ interface Reading {
  * ASCII. A field longer than 64 bytes shows 32 and folds the rest; the whole data as hex, with
  * copy, is folded at the end.
  */
-export function ProtocolEvidence({
+export function ProtocolEvidence(props: ProtocolEvidenceProps) {
+  // Other bytes (a version switch) start the reading over: no hover, pin or copy result carries.
+  return <ProtocolEvidenceView key={props.dataHex} {...props} />;
+}
+
+function ProtocolEvidenceView({
   title,
   dataHex,
   fields,

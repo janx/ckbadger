@@ -263,7 +263,12 @@ export function ObjectGeneticsEvidence({
         {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
         the original decoder binary hash was not recorded. These are separate pieces of evidence.
       </p>
-      {layout && <ObjectDnaReading layout={layout} />}
+      {layout && (
+        <ObjectDnaReading
+          key={`${dnaHex}#${layout.genes.map((g) => g.key).join(',')}`}
+          layout={layout}
+        />
+      )}
       {dnaHex !== null && (
         <details className="min-w-0">
           <summary className="text-text-dim text-small cursor-pointer">
@@ -496,12 +501,22 @@ const count = (n: number) => n.toLocaleString('en-US');
  * the cluster's description → the decoder, as three tiles; the DNA ruler with a part per gene; the
  * gene table with what the decoded objects show; one real object read through it; the status line.
  */
-export function CurrentPatternEvidence({
-  pattern,
-  genetics,
-  sample,
-  status,
-}: CurrentPatternEvidenceProps) {
+export function CurrentPatternEvidence(props: CurrentPatternEvidenceProps) {
+  // Another pattern (a decoder upgrade) or another object starts the reading over: no stale pin.
+  const key =
+    props.pattern.status === 'dob'
+      ? props.pattern.steps
+          .map((step) =>
+            step.description.status === 'supported'
+              ? `${step.step}:${step.description.genes.map((g) => g.index).join(',')}`
+              : `${step.step}:-`
+          )
+          .join('|') + `#${props.sample?.dnaHex ?? ''}`
+      : 'notDob';
+  return <PatternReading key={key} {...props} />;
+}
+
+function PatternReading({ pattern, genetics, sample, status }: CurrentPatternEvidenceProps) {
   const tier = useDetailTier();
   const readout = usePinnedReadout<string>();
   if (pattern.status === 'notDob')
