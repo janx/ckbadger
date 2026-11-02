@@ -494,8 +494,8 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
  *
  * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
  * to the page it is on, and carries a "this address" tag after its lock tag (Address.dc.html →
- * History). When all its objects share one composition tier, the line says it once after its
- * items (`lineCompositionTier`); mixed tiers keep one badge per object.
+ * History). When every item on it is an object of one composition tier, the line says it once
+ * after its items (`lineCompositionTier`); otherwise each object keeps its own badge.
  *
  * The asset boards' phone form (`foldObjects`, B#12) stays: below md the objects are one count
  * chip ("+2 objects") that opens them in place; tokens and identities stay as facts.
