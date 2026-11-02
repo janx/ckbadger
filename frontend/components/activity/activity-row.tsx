@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -200,56 +200,69 @@ function FoldedCalls({ parts, noun }: { parts: ReactNode[]; noun: 'types' | 'loc
   );
 }
 
-/**
- * A called script by name only (T7): the registry name, else its code hash; the call with its
- * full args — and a lock's "args not decoded" reason — is the name's hover, never dropped.
- */
-function CallName({ name, href, call }: { name: string; href: string; call: string }) {
-  return (
-    <Link
-      href={href}
-      title={call}
-      className="text-text-dim hover:text-jade whitespace-nowrap transition-colors"
-      onClick={(e) => e.stopPropagation()}
-    >
-      {name}
-    </Link>
-  );
+/** A called script as the row names it (T7): its name, its page, and the call with its full args. */
+interface CallRef {
+  name: string;
+  href: string;
+  call: string;
 }
 
-function typeCallName(sc: ActivityTypeCall): ReactNode {
+function typeCallRef(sc: ActivityTypeCall): CallRef {
   const name = formatScriptRef({ codeHash: sc.typeCodeHash, scriptName: sc.scriptName });
-  return (
-    <CallName
-      name={name}
-      call={sc.typeArgs === '0x' ? name : `${name}(${sc.typeArgs})`}
-      href={getScriptDetailHref({
-        name: sc.scriptName,
-        codeHash: sc.typeCodeHash,
-        hashType: sc.typeHashType,
-        scriptKind: 'type',
-      })}
-    />
-  );
+  return {
+    name,
+    call: sc.typeArgs === '0x' ? name : `${name}(${sc.typeArgs})`,
+    href: getScriptDetailHref({
+      name: sc.scriptName,
+      codeHash: sc.typeCodeHash,
+      hashType: sc.typeHashType,
+      scriptKind: 'type',
+    }),
+  };
 }
 
-function lockCallName(lc: ActivityLockCall): ReactNode {
+function lockCallRef(lc: ActivityLockCall): CallRef {
   const name = formatScriptRef({ codeHash: lc.lockCodeHash, scriptName: lc.scriptName });
   const call = lc.lockArgs === '0x' ? name : `${name}(${lc.lockArgs})`;
   // Revised R-8: args that do not fit the lock's registry layout carry the API's reason.
   const notDecoded = lc.decodeError ? lockArgsLine(lc.decoded, lc.decodeError) : null;
-  return (
-    <CallName
-      name={name}
-      call={notDecoded ? `${call} ${notDecoded}` : call}
-      href={getScriptDetailHref({
-        name: lc.scriptName,
-        codeHash: lc.lockCodeHash,
-        hashType: lc.lockHashType,
-        scriptKind: 'lock',
-      })}
-    />
-  );
+  return {
+    name,
+    call: notDecoded ? `${call} ${notDecoded}` : call,
+    href: getScriptDetailHref({
+      name: lc.scriptName,
+      codeHash: lc.lockCodeHash,
+      hashType: lc.lockHashType,
+      scriptKind: 'lock',
+    }),
+  };
+}
+
+/**
+ * The calls by name, once per script (name and page), in first-call order, each with its count
+ * and every call it stands for. Without args on the row, two calls of one script would read
+ * ".bit Lock · .bit Lock"; one name, "×2" and the calls in its hover say the same.
+ */
+function callNames(refs: CallRef[]): ReactNode[] {
+  const groups: { name: string; href: string; calls: string[] }[] = [];
+  for (const r of refs) {
+    const same = groups.find((g) => g.name === r.name && g.href === r.href);
+    if (same) same.calls.push(r.call);
+    else groups.push({ name: r.name, href: r.href, calls: [r.call] });
+  }
+  return groups.map((g) => (
+    <span key={`${g.href}:${g.name}`} className="whitespace-nowrap">
+      <Link
+        href={g.href}
+        title={g.calls.join('\n')}
+        className="text-text-dim hover:text-jade transition-colors"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {g.name}
+      </Link>
+      {g.calls.length > 1 && <span className="text-text-dim"> ×{g.calls.length}</span>}
+    </span>
+  ));
 }
 
 /** One inline group of tx-level facts after the headline, led by a dim middle dot. */
@@ -321,24 +334,14 @@ function activityDetails(
   if (showScriptDetails && types.length > 0)
     runs.push(
       <DetailRun key="type">
-        <FoldedCalls
-          noun="types"
-          parts={types.map((sc, i) => (
-            <Fragment key={i}>{typeCallName(sc)}</Fragment>
-          ))}
-        />
+        <FoldedCalls noun="types" parts={callNames(types.map(typeCallRef))} />
       </DetailRun>
     );
   if (showScriptDetails && locks.length > 0)
     runs.push(
       <DetailRun key="lock">
         {'lock '}
-        <FoldedCalls
-          noun="locks"
-          parts={locks.map((lc, i) => (
-            <Fragment key={i}>{lockCallName(lc)}</Fragment>
-          ))}
-        />
+        <FoldedCalls noun="locks" parts={callNames(locks.map(lockCallRef))} />
       </DetailRun>
     );
   return { runs: <>{runs}</>, errors: <>{errors}</> };

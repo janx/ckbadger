@@ -202,8 +202,32 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
     ]);
   });
 
-  it('folds a long lock run behind "+N more locks" and opens it in place', () => {
+  it('says 29 calls of one lock once, ×29, every call with its args in the hover', () => {
+    // T7: names only on the row. The 29 ".bit Lock" calls of report B#26 differ only in args, so
+    // the row names the lock once with its count; each call stays whole in the hover.
     const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
+    const lockLine = [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
+      l.textContent?.startsWith('lock')
+    ) as HTMLElement;
+    expect(lockLine).toHaveTextContent(/^lock \.bit Lock ×29$/);
+    const link = within(lockLine).getByRole('link', { name: '.bit Lock' });
+    const calls = link.getAttribute('title')!.split('\n');
+    expect(calls).toHaveLength(29);
+    expect(calls[0]).toBe(`.bit Lock(0x0000${'ab'.repeat(20)})`);
+    expect(calls[28]).toBe(`.bit Lock(0x0028${'ab'.repeat(20)})`);
+  });
+
+  it('folds a run of more than six lock names behind "+N more locks" and opens it in place', () => {
+    const named = dotbitRegistration();
+    const distinct = {
+      ...named,
+      lockCalls: named.lockCalls.map((l, i) => ({
+        ...l,
+        lockCodeHash: '0x' + String(i).padStart(64, '0'),
+        scriptName: `Lock ${i}`,
+      })),
+    } as ActivityRowData;
+    const { container } = render(<ActivityRow activity={distinct} />);
     const lockLine = () =>
       [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
         l.textContent?.startsWith('lock')

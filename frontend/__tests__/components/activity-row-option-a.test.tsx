@@ -173,6 +173,34 @@ describe('option A: the headline line', () => {
     ).toHaveAttribute('title', `Nervape Shadow Lock(0x0131da${'00'.repeat(28)}5d74)`);
   });
 
+  it('says a script called more than once by its name once, with the count, every call in its hover', () => {
+    // Without the args on the row, two calls of one lock read ".bit Lock · .bit Lock"; one name
+    // and its count say the same, and the hover keeps each call whole.
+    const bitLock = (args: string) => ({
+      lockCodeHash: '0x' + '93'.repeat(32),
+      lockHashType: 'type',
+      lockArgs: args,
+      scriptHash: '0x' + args.slice(2).padStart(64, '0'),
+      scriptName: '.bit Lock',
+      decoded: null,
+      decodeError: null,
+    });
+    const { container } = render(
+      <ActivityRow
+        activity={row([party('r43nr7')], {
+          lockCalls: [bitLock('0x05' + 'aa'.repeat(20)), bitLock('0x05' + 'bb'.repeat(20))],
+        })}
+      />
+    );
+    const detail = head(container).querySelector('[data-role="detail"]') as HTMLElement;
+    expect(detail).toHaveTextContent(/^lock \.bit Lock ×2$/);
+    expect(within(detail).getAllByRole('link')).toHaveLength(1);
+    expect(within(detail).getByRole('link', { name: '.bit Lock' })).toHaveAttribute(
+      'title',
+      `.bit Lock(0x05${'aa'.repeat(20)})\n.bit Lock(0x05${'bb'.repeat(20)})`
+    );
+  });
+
   it('keeps a caller’s own evidence (block pages) and then leaves the headline unlinked', () => {
     const { container } = render(
       <ActivityRow activity={transfer} evidence={<>#3 · {TX.slice(0, 10)}</>} />

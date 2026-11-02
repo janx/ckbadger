@@ -108,7 +108,7 @@ describe('ActivityFeed', () => {
     expect(first).not.toHaveTextContent(/type calls/);
     // A line breaks between calls, never inside one.
     const call = within(type).getByRole('link', { name: '.bit Time Info' });
-    expect(call).toHaveClass('whitespace-nowrap');
+    expect(call.parentElement).toHaveClass('whitespace-nowrap');
     expect(call).toHaveAttribute('title', '.bit Time Info(0x00)');
     expect(call).toHaveClass('text-text-dim');
     expect(first.querySelector('[class*="gold"]')).toBeNull();
