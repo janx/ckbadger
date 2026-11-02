@@ -118,9 +118,9 @@ describe('DaoBoard', () => {
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
     );
-    // Board wording (DAO-14) for the same readiness partition.
+    // Board wording (DAO-14; hierarchy v3) for the same readiness partition.
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      '500.00000000 CKB in 1 cell waits for its window'
+      'waiting for its window 500.00000000 CKB · 1 cell'
     );
     // Hierarchy D5: the epoch-lock caveat is developer evidence (tier 2), not under the bars.
     expect(
@@ -866,50 +866,111 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
   });
 });
 
-describe('DaoBoard when deposits can leave (DAO-14)', () => {
-  it('says what ends its cycle within a day and what is already requested, chart first (D5)', () => {
+describe('DaoBoard when deposits can leave (DAO-14; hierarchy v3 V4)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const windows = () => screen.getByRole('region', { name: 'When deposits can leave' });
+
+  it('draws 200 px bars named inside the plot, one axis line and one reading row (V4)', () => {
     stubCalculator();
-    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-    const windows = screen.getByRole('region', { name: 'When deposits can leave' });
-    expect(windows).toHaveTextContent('days from now · 6 epochs a day2 deposits');
-    // The readout row under the bars (hairline, tap or hover) opens on the next day's cycle end.
-    const reading = within(windows).getByRole('status', { name: 'Cycle reading' });
-    expect(reading).toHaveClass('border-t', 'text-small');
-    expect(reading).toHaveTextContent(
-      '300.00000000 CKB in 1 deposit ends its cycle within a day · epochs +0 to +6tap or hover'
-    );
-    expect(windows).toHaveTextContent('withdrawals already requested · 2 cells · 900.00000000 CKB');
-    expect(windows).toHaveTextContent(
-      '400.00000000 CKB in 1 cell is past its window and can be claimed now · 500.00000000 CKB in 1 cell waits for its window'
-    );
-    const ready = within(windows).getByRole('img', { name: /^Withdrawal requests/ });
-    expect(ready).toHaveAccessibleName(
-      'Withdrawal requests: past the window 400.00000000 CKB, waiting 500.00000000 CKB'
-    );
-    expect(ready).toHaveClass('h-[18px]');
-    // The next day's bar leads; the rest are quieter (board). Bars are 180 px tall (R9).
-    const cycles = within(windows).getByRole('list', { name: 'Phase-0 cycle boundaries' });
-    for (const item of within(cycles).getAllByRole('listitem'))
-      expect(item).toHaveClass('h-[180px]');
-    const bars = windows.querySelectorAll('[data-window-bar]');
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const cycles = within(windows()).getByRole('list', { name: 'Phase-0 cycle boundaries' });
+    const items = within(cycles).getAllByRole('listitem');
+    for (const item of items) {
+      expect(item).toHaveClass('h-[200px]');
+      // no day number under each bar any more: the axis line names the days
+      expect(item.textContent).toBe('');
+    }
+    const name = within(windows()).getByText('CKB whose 180-epoch cycle ends in the next 30 days');
+    expect(name).toHaveClass('text-meta', 'text-text-dim', 'absolute');
+    expect(name.parentElement).toContainElement(cycles);
+    const axis = cycles.parentElement!.nextElementSibling!;
+    expect(Array.from(axis.children).map((c) => c.textContent)).toEqual([
+      'in a day',
+      'day 10',
+      'day 20',
+      'day 30',
+    ]);
+    expect(axis).toHaveClass('text-meta');
+    // The next day's bar leads; the rest are quieter (board).
+    const bars = windows().querySelectorAll('[data-window-bar]');
     expect(bars).toHaveLength(30);
     expect(bars[0]).toHaveClass('opacity-90');
     expect(bars[1]).toHaveClass('opacity-50');
-    // ONE caption, at the bottom, after the evidence.
-    const caption = within(windows).getByText(
-      'A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A withdrawal completes only when a cycle ends.'
+    // The readout row under the bars (hairline, tap or hover): the next day's cycle end, one line.
+    const reading = within(windows()).getByRole('status', { name: 'Cycle reading' });
+    expect(reading).toHaveClass('border-t', 'text-small');
+    expect(reading).toHaveTextContent(
+      /^300\.00000000 CKB in 1 deposit ends its cycle within a daytap or hover$/
     );
-    expect(cycles.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(ready.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(caption).toHaveClass('text-body');
-    // How to read the bars, and what a request's compensation does, moved to tier 2.
+    // No note beside the heading, no "days from now" line.
+    const heading = within(windows()).getByRole('heading', { level: 2 });
+    expect(heading.parentElement!.children).toHaveLength(1);
+    expect(windows()).not.toHaveTextContent(/indexed epoch|days from now|6 epochs a day/);
+  });
+
+  it('reads any day of the bars on focus or hover, exactly', () => {
+    stubCalculator();
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    fireEvent.focus(
+      screen.getByTitle(/Nominal day 1, epochs \+0 to \+6: 1 deposits, 30000000000 shannons/)
+    );
+    expect(within(windows()).getByRole('status', { name: 'Cycle reading' })).toHaveTextContent(
+      'Nominal day 1 · epochs +0 through +6 · 300.00000000 CKB in 1 deposits'
+    );
+  });
+
+  it('draws the requested withdrawals as a 28 px bar with the claimable amount inside it and the waiting one under it', () => {
+    stubCalculator();
+    stubChartWidth(800);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(windows()).toHaveTextContent('withdrawals already requested · 2 cells');
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar).toHaveAccessibleName(
+      'Withdrawal requests: past the window 400.00000000 CKB, waiting 500.00000000 CKB'
+    );
+    expect(bar).toHaveClass('h-[28px]');
+    // 400 of 900 is 44 % of 800 px: room for the claimable words inside its segment.
+    expect(bar.firstElementChild).toHaveTextContent('claimable now 400.00000000 CKB · 1 cell');
+    const waiting = bar.nextElementSibling!;
+    expect(waiting).toHaveTextContent(/^waiting for its window 500\.00000000 CKB · 1 cell$/);
+    expect(waiting).toHaveClass('text-meta', 'text-right');
+  });
+
+  it('writes the claimable amount under the bar where its segment is too narrow for it', () => {
+    stubCalculator();
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar.firstElementChild!.textContent).toBe('');
+    const under = bar.nextElementSibling!;
+    expect(under).toHaveTextContent(
+      'claimable now 400.00000000 CKB · 1 cellwaiting for its window 500.00000000 CKB · 1 cell'
+    );
+  });
+
+  it('ends with one one-line caption and keeps the cycle notes, the epoch and the caveats in tier 2', () => {
+    stubCalculator();
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const caption = within(windows()).getByText(
+      'A withdrawal completes only at the end of a 180-epoch cycle, about 30 days.'
+    );
+    const bar = within(windows()).getByRole('img', { name: /^Withdrawal requests/ });
+    expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    expect(windows().lastElementChild).toBe(caption);
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     for (const moved of [
+      /A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made\./,
       /each bar is the CKB whose current cycle ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted calendar dates\./,
       /compensation stopped growing at the request/,
       /Epoch-lock readiness alone does not prove a complete withdraw transaction; the required input, headers, witnesses and script execution still apply\./,
+      /the indexed epoch is 185\+2\/4/,
     ]) {
-      expect(windows).not.toHaveTextContent(moved);
+      expect(windows()).not.toHaveTextContent(moved);
       expect(tier2).toHaveTextContent(moved);
     }
   });

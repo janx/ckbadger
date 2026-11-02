@@ -653,8 +653,15 @@ function plural(count: number, word: string): string {
   return `${count.toLocaleString('en-US')} ${word}${count === 1 ? '' : 's'}`;
 }
 
+/**
+ * "When deposits can leave" (hierarchy v3, V4): 200 px bars of the CKB whose cycle ends on each of
+ * the next 30 days, named inside the plot, one axis line and one reading row; the requested
+ * withdrawals as one 28 px bar with the claimable amount inside it; one caption. How to read the
+ * bars, the indexed epoch and the epoch-lock caveat are tier 2.
+ */
 function Windows({ evidence }: { evidence: DaoEvidence }) {
   const [selectedDay, setSelectedDay] = useState<number | null>(null);
+  const [barRef, barWidth] = useElementWidth<HTMLDivElement>();
   const max = evidence.windows.reduce((largest, row) => {
     const value = parseShannons(row.capacity, 'window capacity');
     return value > largest ? value : largest;
@@ -676,44 +683,64 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     throw new Error(
       `DAO phase-1 readiness does not partition the requests at ${formatBlockNumber(evidence.tipBlockNumber)}`
     );
+  const claimable = (
+    <>
+      claimable now{' '}
+      <span className="text-text-bright">
+        <Amount value={ready.capacity} /> CKB
+      </span>{' '}
+      <span className="text-text-dim">· {plural(ready.count, 'cell')}</span>
+    </>
+  );
+  // R12: the claimable words sit inside their segment where they fit (12 px, 12 px padding).
+  const readyPercent = requested > BigInt(0) ? formatPercent(readyShannons, requested, 4) : '0';
+  const claimableChars =
+    `claimable now ${formatCapacity(readyShannons)} · ${plural(ready.count, 'cell')}`.length;
+  const claimableInside =
+    barWidth !== null &&
+    ((barWidth - 2) * Number(readyPercent)) / 100 >= claimableChars * monoAdvance(12) + 24;
   return (
-    <Section title="When deposits can leave" note={`at indexed epoch ${evidence.tipEpoch.display}`}>
-      <div
-        className="grid grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]"
-        role="list"
-        aria-label="Phase-0 cycle boundaries"
-      >
-        {evidence.windows.map((row) => {
-          const value = parseShannons(row.capacity, 'window capacity');
-          const height = max === BigInt(0) ? 0 : Number((value * BigInt(100)) / max);
-          return (
-            <div
-              key={row.nominalDay}
-              role="listitem"
-              tabIndex={0}
-              aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
-              onFocus={() => setSelectedDay(row.nominalDay)}
-              onMouseEnter={() => setSelectedDay(row.nominalDay)}
-              className="focus:outline-interactive group flex h-[180px] flex-col justify-end focus:outline"
-              title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
-            >
+    <Section title="When deposits can leave">
+      <div className="relative">
+        <span className="text-text-dim text-meta pointer-events-none absolute left-2 top-1">
+          CKB whose 180-epoch cycle ends in the next 30 days
+        </span>
+        <div
+          className="grid grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]"
+          role="list"
+          aria-label="Phase-0 cycle boundaries"
+        >
+          {evidence.windows.map((row) => {
+            const value = parseShannons(row.capacity, 'window capacity');
+            const height = max === BigInt(0) ? 0 : Number((value * BigInt(100)) / max);
+            return (
               <div
-                data-window-bar
-                className={`bg-gold w-full rounded-t-sm transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
-                style={{ height: `${height}%` }}
-              />
-              <span className="text-text-dim text-meta mt-1 text-center font-mono">
-                {row.nominalDay % 5 === 0 || row.nominalDay === 1 ? row.nominalDay : ''}
-              </span>
-            </div>
-          );
-        })}
+                key={row.nominalDay}
+                role="listitem"
+                tabIndex={0}
+                aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
+                onFocus={() => setSelectedDay(row.nominalDay)}
+                onMouseEnter={() => setSelectedDay(row.nominalDay)}
+                className="focus:outline-interactive group flex h-[200px] flex-col justify-end pt-6 focus:outline"
+                title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
+              >
+                <div
+                  data-window-bar
+                  className={`bg-gold w-full rounded-t-sm transition-opacity group-hover:opacity-100 ${row.nominalDay === 1 ? 'opacity-90' : 'opacity-50'}`}
+                  style={{ height: `${height}%` }}
+                />
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <div className="text-text-dim text-meta mt-0.5 flex justify-between">
-        <span>days from now · 6 epochs a day</span>
-        <span>{plural(evidence.phase0.count, 'deposit')}</span>
+      <div aria-hidden="true" className="text-text-dim text-meta mt-1 flex justify-between">
+        <span>in a day</span>
+        <span>day 10</span>
+        <span>day 20</span>
+        <span>day 30</span>
       </div>
-      {/* Hierarchy D5: one readout row under the bars, opening on the next day's cycle end. */}
+      {/* Hierarchy D5 / v3: one readout row under the bars, opening on the next day's cycle end. */}
       <div className="mt-2.5">
         <ReadoutRow
           label="Cycle reading"
@@ -723,10 +750,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               <span className="text-text-bright">
                 <Amount value={first.capacity} /> CKB
               </span>{' '}
-              in {plural(first.count, 'deposit')} ends its cycle within a day ·{' '}
-              <span className="whitespace-nowrap">
-                epochs +{first.fromEpochOffset} to +{first.throughEpochOffset}
-              </span>
+              in {plural(first.count, 'deposit')} ends its cycle within a day
             </>
           }
         >
@@ -746,41 +770,44 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
       </div>
       <div className="mt-5 flex flex-col">
         <div className="text-text-dim text-meta">
-          withdrawals already requested · {plural(evidence.phase1.count, 'cell')} ·{' '}
-          <span className="text-text">
-            <Amount value={evidence.phase1.capacity} /> CKB
-          </span>
+          withdrawals already requested · {plural(evidence.phase1.count, 'cell')}
         </div>
         {requested > BigInt(0) && (
-          <div
-            role="img"
-            aria-label={`Withdrawal requests: past the window ${formatCapacity(readyShannons)}, waiting ${formatCapacity(waitingShannons)}`}
-            className="mt-2 flex h-[18px] w-full gap-0.5 overflow-hidden"
-          >
-            <span
-              className="bg-gold rounded-[3px] opacity-45"
-              style={{ width: `${formatPercent(readyShannons, requested, 4)}%` }}
-            />
-            <span
-              className="bg-gold rounded-[3px]"
-              style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
-            />
+          <div ref={barRef} className="mt-1.5 min-w-0">
+            <div
+              role="img"
+              aria-label={`Withdrawal requests: past the window ${formatCapacity(readyShannons)}, waiting ${formatCapacity(waitingShannons)}`}
+              className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden"
+            >
+              <span
+                className="bg-gold/45 text-text flex items-center overflow-hidden whitespace-nowrap rounded-[3px] px-3"
+                style={{ width: `${readyPercent}%` }}
+              >
+                {/* One flex item, so the spaces between its words stay. */}
+                {claimableInside ? <span>{claimable}</span> : null}
+              </span>
+              <span
+                className="bg-gold rounded-[3px]"
+                style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
+              />
+            </div>
+            <div
+              className={`text-text-dim text-meta mt-1 flex flex-wrap gap-x-6 gap-y-0.5 ${claimableInside ? 'justify-end text-right' : 'justify-between'}`}
+            >
+              {!claimableInside && <span>{claimable}</span>}
+              <span>
+                waiting for its window{' '}
+                <span className="text-text">
+                  <Amount value={waiting.capacity} /> CKB
+                </span>{' '}
+                · {plural(waiting.count, 'cell')}
+              </span>
+            </div>
           </div>
         )}
-        <p className="text-text-dim text-small mt-2">
-          <span className="text-text-bright">
-            <Amount value={ready.capacity} /> CKB
-          </span>{' '}
-          in {plural(ready.count, 'cell')} is past its window and can be claimed now ·{' '}
-          <span className="text-text-bright">
-            <Amount value={waiting.capacity} /> CKB
-          </span>{' '}
-          in {plural(waiting.count, 'cell')} waits for its window
-        </p>
       </div>
-      <p className="text-text text-body mt-4">
-        A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A
-        withdrawal completes only when a cycle ends.
+      <p className="text-text text-body mt-3.5 max-w-[640px]">
+        A withdrawal completes only at the end of a 180-epoch cycle, about 30 days.
       </p>
     </Section>
   );
@@ -1079,7 +1106,7 @@ function RawEvidence({
       {/* The explanation column is the wider one, so its body prose keeps tier 2 short. */}
       <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-8">
-          <HowItWorks statistics={statistics} />
+          <HowItWorks statistics={statistics} evidence={evidence} />
           <DetailSection title="The DAO script">
             <dl className="text-small flex flex-col gap-2.5">
               <div>
@@ -1131,7 +1158,13 @@ function RawEvidence({
  * hero used to open with, how each block splits its issuance, how to read the sections' charts, and
  * every protocol caveat, then the statistics anchor block to verify against.
  */
-function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
+function HowItWorks({
+  statistics,
+  evidence,
+}: {
+  statistics: DaoStatistics;
+  evidence: DaoEvidence;
+}) {
   return (
     <DetailSection title="How the Nervos DAO works">
       {/* R1 roles: the explanation is prose (body); the protocol notes after it read as small. */}
@@ -1150,6 +1183,7 @@ function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
         {/* Hierarchy v3 (V7): how every block splits its issuance, moved from tier 1. */}
         <CapacityUse statistics={statistics} />
         <p className="text-text-dim text-small mt-3.5">
+          A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made.
           In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle ends
           that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
           calendar dates. Epoch-lock readiness alone does not prove a complete withdraw transaction;
@@ -1161,7 +1195,8 @@ function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
           secondary issuance to use; what is burnt stays burnt. Estimated APC is at today&apos;s
           issuance and deposits; &ldquo;Compensation, last 365 days&rdquo; is on free capacity, from
           the header&apos;s AR. Statistics are exact to the shannon at block{' '}
-          {formatBlockNumber(statistics.tipBlockNumber)}.
+          {formatBlockNumber(statistics.tipBlockNumber)}; the indexed epoch is{' '}
+          {evidence.tipEpoch.display}.
         </p>
       </div>
       <Link

@@ -137,9 +137,9 @@ describe('DaoPage', () => {
     expect(
       await screen.findByRole('heading', { name: 'When deposits can leave' })
     ).toBeInTheDocument();
-    expect(screen.getByText(/at indexed epoch 185\+2\/4/)).toBeInTheDocument();
+    expect(screen.getByText(/the indexed epoch is 185\+2\/4/)).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      '400.00000000 CKB in 1 cell is past its window and can be claimed now'
+      'claimable now 400.00000000 CKB · 1 cell'
     );
     expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
       'depositors 2'
