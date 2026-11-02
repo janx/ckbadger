@@ -208,7 +208,9 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
     <section aria-label="Balance" className="min-w-0">
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
         <div className="min-w-0">
-          <span className="text-text-dim text-meta block uppercase tracking-[0.08em]">balance</span>
+          <span className="text-text-dim text-meta block w-fit uppercase tracking-[0.08em]">
+            balance
+          </span>
           <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
             {zero ? (
               <span data-ghost className="text-text-ghost text-entity sm:text-display font-medium">
@@ -262,9 +264,10 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
                   }}
                 >
                   {fits && (
-                    <>
+                    // the label is text on a graphic: its own box, not the part's
+                    <span>
                       {p.key} <span className="ml-2 font-medium">{share(p.value)}</span>
-                    </>
+                    </span>
                   )}
                 </div>
               );
