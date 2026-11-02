@@ -691,6 +691,8 @@ export default function ScriptsPage() {
                   empty="No scripts found"
                   density="row"
                   rowTitle={scriptRowTitle}
+                  // T5: body ink for the row, the name alone bright.
+                  rowClassName={() => 'text-text'}
                   mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
                 />
               )}

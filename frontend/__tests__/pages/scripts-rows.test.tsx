@@ -198,6 +198,9 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     ]);
     // The description is the row's hover, not a second line.
     expect(script).not.toHaveTextContent('An universal Account Protocol');
+    // One bright thing a row — the name; the rest in body ink or dim.
+    expect(rowOf(t, 'JoyID')).toHaveClass('text-text');
+    expect(rowOf(t, 'JoyID').querySelectorAll('.text-text-bright')).toHaveLength(1);
   });
 
   it('writes the code status on one dim line, "by whom · since" in its title (D3)', async () => {
