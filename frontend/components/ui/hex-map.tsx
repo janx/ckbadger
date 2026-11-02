@@ -180,6 +180,9 @@ function HexScaleMap({
   );
 }
 
+/** The padding either side of a label inside a part. */
+const LABEL_PAD_PX = 4;
+
 /** One part of a to-scale byte map, `[start, end)`; an empty part is drawn as a sliver. */
 export interface ScaleSegment {
   key: string;
@@ -247,7 +250,7 @@ export function ByteScaleMap({
   const [ref, width] = useElementWidth<HTMLDivElement>();
   // Many parts (a 72-gene DNA ruler) share 1 px gaps, so the gaps do not eat a phone column.
   const options = { ...SCALE_DEFAULTS, gap: segments.length > 24 ? 1 : SCALE_DEFAULTS.gap };
-  const room = (text: string) => text.length * META_CHAR_PX + 8;
+  const room = (text: string) => text.length * META_CHAR_PX + 2 * LABEL_PAD_PX;
   const fits = (text: string, w: number) => room(text) <= w;
   // Each part keeps room for its byte count (its short label), as the cell page's map does.
   const layout =
@@ -298,9 +301,12 @@ export function ByteScaleMap({
               : tint(s.color, on ? 0.28 : 0.12),
             borderTop: `2px solid ${s.color}`,
             color: s.quiet ? '#7c849c' : s.color,
+            // padding only around a label: an empty 3 px part must stay 3 px (border-box)
+            paddingLeft: text ? LABEL_PAD_PX : 0,
+            paddingRight: text ? LABEL_PAD_PX : 0,
           };
           const className = cn(
-            'text-meta flex items-center justify-center overflow-hidden whitespace-nowrap rounded-sm px-1',
+            'text-meta flex min-w-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-sm',
             on && 'outline outline-1 outline-[#a0a8be]'
           );
           return s.target !== undefined && (onHover || onSelect) ? (

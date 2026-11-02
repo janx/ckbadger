@@ -153,5 +153,12 @@ describe('ByteScaleMap with many parts', () => {
     // 71 one-byte genes at the 3 px floor, the 40-byte gene with the rest — wider than 60 px
     expect(widths.slice(1).every((w) => w === 3)).toBe(true);
     expect(widths[0]).toBeGreaterThan(60);
+    // a part with no label inside carries no padding, so a 3 px part is 3 px (the 390 px gate:
+    // 4 px of padding a side made each stripe 8 px and pushed the ruler 324 px past the page)
+    const parts = [...container.querySelectorAll<HTMLElement>('[data-segment]')];
+    expect(parts[0]).toHaveStyle({ paddingLeft: '4px', paddingRight: '4px' });
+    for (const p of parts.slice(1))
+      expect(p).toHaveStyle({ paddingLeft: '0px', paddingRight: '0px' });
+    for (const p of parts) expect(p).not.toHaveClass('px-1');
   });
 });

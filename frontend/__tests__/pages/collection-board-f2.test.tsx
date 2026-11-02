@@ -278,8 +278,12 @@ it('lays the decoder blueprint out as phone rows in a 358 px column, nothing scr
   const prevBg = rows.find((r) => r.textContent?.includes('prev.bg')) as HTMLElement;
   expect(prevBg).toHaveTextContent('bytes 0–31');
   expect(prevBg).toHaveTextContent('btcfs');
-  // the phone row keeps every column: gene and bytes, rule and what the objects show
-  expect(prevBg.querySelectorAll('[data-line]').length).toBeGreaterThanOrEqual(2);
+  // the phone row keeps every column: gene and bytes, the rule, what the objects show — the last
+  // on its own wrapping line (as a right part, a long reading pushed a 390 px page 4 px wide)
+  expect(
+    [...prevBg.querySelectorAll('[data-line]')].map((l) => l.getAttribute('data-line'))
+  ).toEqual(['gene', 'rule', 'found']);
+  expect(prevBg.querySelector('[data-line="found"] [data-part="right"]')).toBeNull();
   const relief = rows.find((r) => r.textContent?.includes('relief')) as HTMLElement;
   expect(relief).toHaveTextContent('options · NERVAPE 3X');
   expect(relief).toHaveTextContent('NERVAPE 3X, for all');

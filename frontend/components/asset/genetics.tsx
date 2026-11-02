@@ -601,7 +601,9 @@ export function CurrentPatternEvidence({
         <PhoneRow
           lines={[
             { key: 'gene', tone: 'head', left: row.label, right: row.span },
-            { key: 'rule', tone: 'body', left: row.rule, right: found(row) ?? undefined },
+            { key: 'rule', tone: 'body', left: row.rule },
+            // what the objects show can be long: it wraps on its own line, never a right part
+            { key: 'found', tone: 'quiet', left: found(row) ?? '—' },
           ]}
         />
       )}
