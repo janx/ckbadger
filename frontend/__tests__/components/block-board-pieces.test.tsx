@@ -8,7 +8,7 @@ import {
   BlockTransactionsTable,
 } from '@/components/blocks/block-transactions-table';
 import { positionSentence } from '@/components/blocks/block-position';
-import { BlocksLimitsFootnote, ScaleHeader } from '@/components/blocks/block-visual';
+import { BlocksLimitsFootnote, ScaleHeader, resourceScale } from '@/components/blocks/block-visual';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -122,6 +122,46 @@ describe('BlockTransactionsTable', () => {
     wrap(<BlockTransactionsTable transactions={[tx(0)]} blockNumber={7} />);
     expect(BLOCK_TXS_MIN_WIDTH).toBeLessThanOrEqual(968);
     expect(screen.getByRole('table').style.minWidth).toBe(`${BLOCK_TXS_MIN_WIDTH}px`);
+  });
+  // Table-rows R2: the bar heads are the shared ScaleHeader, at the geometry this table has always
+  // drawn (a 96 px tick row 3 px under the name), so the lift changes no pixel.
+  it('heads its bars with the shared ScaleHeader: 96 px ticks, 3 px under the name', () => {
+    wrap(
+      <BlockTransactionsTable
+        transactions={[tx(0), tx(1, { cycles: 1000, txSize: 700 })]}
+        blockNumber={7}
+      />
+    );
+    const heads = Array.from(screen.getByRole('table').querySelectorAll('thead th'));
+    const size = resourceScale([300, 700]).toLocaleString('en-US');
+    const cycles = resourceScale([0, 1000]).toLocaleString('en-US');
+    expect(heads.map((h) => h.textContent)).toEqual([
+      '#',
+      'Transaction',
+      'Proposed in',
+      'Cells',
+      'Output capacity',
+      'Fee',
+      `Size, bytes0${size}`,
+      `Cycles0${cycles}`,
+    ]);
+    for (const [i, end] of [
+      [6, size],
+      [7, cycles],
+    ] as const) {
+      const ticks = heads[i].querySelector('[data-scale-ticks]') as HTMLElement;
+      expect(ticks.style.width).toBe('96px');
+      expect((ticks.parentElement as HTMLElement).style.gap).toBe('3px');
+      expect(Array.from(ticks.children).map((t) => t.textContent)).toEqual(['0', end]);
+    }
+    // Its row bars: 8 px, exact width, no minimum (300 of the size scale on 96 px).
+    const fill = screen
+      .getByRole('table')
+      .querySelector('tbody tr [data-segment="size"]') as HTMLElement;
+    expect(fill.style.width).toBe(
+      `${Math.round((300 / resourceScale([300, 700])) * 96 * 100) / 100}px`
+    );
+    expect((fill.parentElement as HTMLElement).style.height).toBe('8px');
   });
   it('writes "+distance" beside the proposing block', () => {
     wrap(
