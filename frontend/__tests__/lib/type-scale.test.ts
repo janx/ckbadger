@@ -5,10 +5,13 @@ import { describe, expect, it } from 'vitest';
 import tailwindConfig from '@/tailwind.config';
 
 /**
- * Gate for the one type scale (hierarchy plan 2026-11-02, rulings R1–R3): the tailwind theme has
- * exactly eight font-size steps, and no page code sets a size outside them — no arbitrary
- * `text-[Npx]` class and no inline `fontSize` style on an HTML element. Ruling R3 exempts only
- * chart renderers' own text: SVG `<text fontSize=…>` / `<tspan>` attributes and canvas `ctx.font`.
+ * Gate for the one type scale (hierarchy plan 2026-11-02, rulings R1–R3, S8): the tailwind theme's
+ * whole `fontSize` is the eight steps (Tailwind's defaults `text-xs` … `text-9xl` do not exist), and
+ * no page code sets a size outside them — no arbitrary `text-[Npx]` class, no default size class and
+ * no inline `fontSize` style on an HTML element. Ruling R3 exempts only chart renderers' own text:
+ * SVG `<text fontSize=…>` / `<tspan>` attributes and canvas `ctx.font`. Sizes relative to their
+ * parent (`text-[0.85em]` decimals and units) and the error pages' fluid `clamp()` artwork type are
+ * not steps of their own and are not gated; the measurement script reports them as `offScaleRel`.
  */
 
 /** R1, smallest first: name, font size, line height. */
@@ -43,7 +46,9 @@ const ALLOWLIST: Record<string, string> = {};
 
 const SCAN_DIRS = ['app', 'components', 'hooks', 'lib', 'src'];
 const SVG_TEXT_TAGS = new Set(['svg', 'g', 'text', 'tspan', 'textPath']);
-const ARBITRARY_SIZE = /(?:[\w-]+:)*text-\[(?:length:)?\d*\.?\d+(?:px|rem)\]/g;
+/** An arbitrary px/rem size (`text-[13px]`) or a Tailwind default size (`text-xs` … `text-9xl`). */
+const OFF_SCALE =
+  /(?<![\w-])(?:[\w-]+:)*text-(?:\[(?:length:)?\d*\.?\d+(?:px|rem)\]|(?:xs|sm|base|lg|xl|[2-9]xl)(?![\w-]))/g;
 const CSS_FONT_SIZE = /font-size\s*:\s*\d/;
 
 interface Offence {
@@ -51,11 +56,11 @@ interface Offence {
   what: string;
 }
 
-/** Every arbitrary font-size class in a source text (comments included: keep them in words). */
-function arbitrarySizeClasses(code: string): Offence[] {
+/** Every off-scale size class in a source text (comments included: keep them in words). */
+function offScaleClasses(code: string): Offence[] {
   const out: Offence[] = [];
   code.split('\n').forEach((text, i) => {
-    for (const m of text.matchAll(ARBITRARY_SIZE)) out.push({ line: i + 1, what: m[0] });
+    for (const m of text.matchAll(OFF_SCALE)) out.push({ line: i + 1, what: m[0] });
   });
   return out;
 }
@@ -137,9 +142,14 @@ function sourceFiles(root: string): string[] {
 }
 
 describe('the type scale (R1)', () => {
-  it('defines exactly the eight R1 steps, smallest first, with their line heights', () => {
-    const fontSize = tailwindConfig.theme.extend.fontSize;
-    expect(Object.entries(fontSize)).toEqual(R1.map(([name, size, lh]) => [name, [size, lh]]));
+  it('makes the eight R1 steps the whole font-size theme, smallest first, with line heights', () => {
+    const theme = tailwindConfig.theme as { fontSize?: object; extend: { fontSize?: object } };
+    expect(theme.fontSize, 'theme.fontSize').toBeDefined();
+    expect(Object.entries(theme.fontSize!)).toEqual(
+      R1.map(([name, size, lh]) => [name, [size, lh]])
+    );
+    // Under `extend` the steps would sit beside Tailwind's defaults, text-xs … text-9xl (S8).
+    expect(theme.extend.fontSize, 'theme.extend.fontSize').toBeUndefined();
   });
 
   it('keeps neighbouring steps at least 1.2 × apart, except the reasoned pairs', () => {
@@ -161,12 +171,27 @@ describe('the scale gate finds what it must, and only that', () => {
       '<b className="text-meta sm:text-[30px] md:hover:text-[length:12.5px]">',
       "const T = 'text-[0.14px] text-[1.5rem] text-section text-[0.85em]';",
     ].join('\n');
-    expect(arbitrarySizeClasses(code)).toEqual([
+    expect(offScaleClasses(code)).toEqual([
       { line: 1, what: 'text-[13px]' },
       { line: 2, what: 'sm:text-[30px]' },
       { line: 2, what: 'md:hover:text-[length:12.5px]' },
       { line: 3, what: 'text-[0.14px]' },
       { line: 3, what: 'text-[1.5rem]' },
+    ]);
+  });
+
+  it('flags Tailwind default sizes in any variant, never a step or a look-alike class (S8)', () => {
+    const code = [
+      '<p className="text-xs text-small sm:text-base md:hover:text-2xl">',
+      "const s = { sm: 'text-sm/6', lg: 'text-9xl', md: 'text-body' };",
+      '<i className="text-smooth text-xs-wide context-xl max-w-sm rounded-xl text-text-dim">',
+    ].join('\n');
+    expect(offScaleClasses(code)).toEqual([
+      { line: 1, what: 'text-xs' },
+      { line: 1, what: 'sm:text-base' },
+      { line: 1, what: 'md:hover:text-2xl' },
+      { line: 2, what: 'text-sm' },
+      { line: 2, what: 'text-9xl' },
     ]);
   });
 
@@ -196,7 +221,7 @@ describe('no font size outside the scale (R2, R3)', () => {
   const offences = files.flatMap((file) => {
     const code = readFileSync(file, 'utf8');
     const path = relative(root, file);
-    return [...arbitrarySizeClasses(code), ...inlineFontSizes(file, code)].map(
+    return [...offScaleClasses(code), ...inlineFontSizes(file, code)].map(
       (o) => `${path}:${o.line} ${o.what}`
     );
   });
@@ -206,7 +231,7 @@ describe('no font size outside the scale (R2, R3)', () => {
     expect(files.length).toBeGreaterThan(300);
   });
 
-  it('finds no text-[Npx] class and no inline fontSize on an HTML element', () => {
+  it('finds no off-scale class (text-[Npx], text-xs …) and no inline fontSize on an HTML element', () => {
     expect(offences.filter((o) => !(key(o) in ALLOWLIST))).toEqual([]);
   });
 
