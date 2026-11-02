@@ -297,7 +297,12 @@ it('keeps decoder provenance out of tier 1 and in the DNA evidence below (OB-8)'
   expect(tier1).not.toHaveTextContent('Cached VM result');
   const tier2 = container.querySelector('[data-tier="2"]')!;
   expect(tier2).toHaveTextContent('original decoder binary hash was not recorded');
-  expect(tier2).toHaveTextContent('Declared bytes 0 + 32');
+  // Lane E (C5): one row per gene; the declared range in words is the row's title.
+  const genes = within(tier2 as HTMLElement).getByRole('table', { name: 'DNA genes' });
+  expect(within(genes).getByRole('row', { name: /^prev\.bg/ })).toHaveAttribute(
+    'title',
+    expect.stringContaining('Declared bytes 0 + 32')
+  );
 });
 
 // OB-14 (Object.dc.html): the object's media sits beside the title in the hero (300 px column),

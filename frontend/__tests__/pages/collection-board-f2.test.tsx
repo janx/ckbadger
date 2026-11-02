@@ -251,9 +251,15 @@ it('keeps decode coverage and the decoder blueprint in tier 2, as a table (OB-C1
   const prevBg = within(blueprint).getByRole('row', { name: /prev\.bg/ });
   expect(prevBg).toHaveTextContent('bytes 0–31');
   expect(prevBg).toHaveTextContent('btcfs');
+  // Lane E (C5): the rule cell names its options; the last cell says what the 90 objects show.
   const relief = within(blueprint).getByRole('row', { name: /relief/ });
-  expect(relief).toHaveTextContent('1 option: NERVAPE 3X');
+  expect(relief).toHaveTextContent('options · NERVAPE 3X');
+  expect(relief).toHaveTextContent('NERVAPE 3X, for all');
   expect(tier2).not.toHaveTextContent('["NERVAPE 3X"]');
+  // one real object, read through the pattern (the newest gallery object)
+  expect(
+    await within(tier2 as HTMLElement).findByRole('group', { name: 'One object, read this way' })
+  ).toHaveTextContent('relief');
 });
 
 // Responsive plan 2026-11-01 (the leftover after lane V): the blueprint table had a 480 px floor
@@ -265,15 +271,22 @@ it('lays the decoder blueprint out as phone rows in a 358 px column, nothing scr
   const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
   const list = await within(tier2).findByRole('list', { name: 'DOB blueprint, compact' });
   expect(within(tier2).queryByRole('table', { name: 'DOB blueprint' })).toBeNull();
-  const blueprint = within(tier2).getByRole('region', { name: 'Current decoder blueprint' });
+  // Lane E (C5): the section is "How an object is read" (was "Current decoder blueprint").
+  const blueprint = within(tier2).getByRole('region', { name: 'How an object is read' });
   expect(blueprint.querySelector('.overflow-x-auto, .min-w-\\[480px\\]')).toBeNull();
   const rows = within(list).getAllByRole('listitem');
   const prevBg = rows.find((r) => r.textContent?.includes('prev.bg')) as HTMLElement;
   expect(prevBg).toHaveTextContent('bytes 0–31');
   expect(prevBg).toHaveTextContent('btcfs');
-  expect(prevBg.querySelectorAll('[data-line]').length).toBeGreaterThanOrEqual(3);
+  // the phone row keeps every column: gene and bytes, the rule, what the objects show — the last
+  // on its own wrapping line (as a right part, a long reading pushed a 390 px page 4 px wide)
+  expect(
+    [...prevBg.querySelectorAll('[data-line]')].map((l) => l.getAttribute('data-line'))
+  ).toEqual(['gene', 'rule', 'found']);
+  expect(prevBg.querySelector('[data-line="found"] [data-part="right"]')).toBeNull();
   const relief = rows.find((r) => r.textContent?.includes('relief')) as HTMLElement;
-  expect(relief).toHaveTextContent('1 option: NERVAPE 3X');
+  expect(relief).toHaveTextContent('options · NERVAPE 3X');
+  expect(relief).toHaveTextContent('NERVAPE 3X, for all');
 });
 
 it('draws holder bars in the objects colour (OB-C7)', async () => {

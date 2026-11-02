@@ -12,7 +12,7 @@ import {
   didProtocolProducer,
   itemTransactionsProducer,
 } from '@/__tests__/msw/fixtures/item-producer';
-import type { ObjectGenetics, ItemProtocol } from '@/lib/api';
+import type { CurrentPattern, ObjectGenetics, ItemProtocol } from '@/lib/api';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { nervape3xGenetics, nervape3xInsights } from '@/__tests__/fixtures/objects/nervape3x';
 describe('Independent DOB evidence', () => {
@@ -54,7 +54,13 @@ describe('Independent DOB evidence', () => {
     };
     render(<ObjectGeneticsView evidence={data} subject="Spore" />);
     expect(screen.getByText(/awaiting DOB execution/)).toBeInTheDocument();
-    expect(screen.getByText(/Unrecognized binary/)).toBeInTheDocument();
+    // Lane E (C12 wording): the ruled sentence, the API's reason kept in the line's title.
+    expect(
+      screen.getByText(
+        'Decoder 1: the decoder binary describes no byte mapping; the pattern alone is used.'
+      )
+    ).toHaveAttribute('title', 'Unrecognized binary');
+    expect(screen.queryByText(/mapping unavailable/i)).toBeNull();
     expect(screen.queryByLabelText('Cached VM traits')).not.toBeInTheDocument();
   });
   it('preserves multiple VM values for one trait name', () => {
@@ -98,59 +104,177 @@ describe('Independent DOB evidence', () => {
       'bytes disagree with DNA'
     );
   });
-  it('shows current binary and declared rules without converting exact offsets', () => {
+  it('keeps exact declared offsets in the gene table and its row title (C5)', () => {
     const pattern = structuredClone(objectGeneticsProducer.currentPattern);
     pattern.steps[0].description.genes[0].byteOffset = '18446744073709551615';
     render(<CurrentPatternEvidence pattern={pattern} />);
-    // Table-rows L2-5: the exact offset is in the gene's one-line span and in the row title.
-    expect(screen.getByText('byte 18446744073709551615 · 1')).toBeInTheDocument();
-    expect(screen.getByRole('row', { name: /Face/ })).toHaveAttribute(
+    const table = screen.getByRole('table', { name: 'DOB blueprint' });
+    const row = within(table).getByRole('row', { name: /^Face/ });
+    expect(row).toHaveTextContent('byte 18446744073709551615 · 1');
+    expect(row).toHaveTextContent('options · Red, Blue');
+    expect(row).toHaveAttribute(
       'title',
-      'Face · byte offset 18446744073709551615 · length 1 · byte 18446744073709551615 · options · String · 2 options: Red, Blue'
+      'Face · byte 18446744073709551615 · 1 · options · Red, Blue'
     );
-    // F2 objects (OB-C12): the blueprint table names the rule and its value domain.
-    expect(screen.getAllByText(/options/).length).toBeGreaterThan(0);
-    expect(screen.getByText('2 options: Red, Blue')).toBeInTheDocument();
+    // a range past what can be drawn: no ruler, said so
+    expect(screen.queryByRole('group', { name: 'DNA byte map' })).toBeNull();
+    expect(
+      screen.getByText('Its ranges run past what a ruler can draw; the table gives them exactly.')
+    ).toBeInTheDocument();
   });
 });
-// Table-rows round, lane L2-5: the blueprint's genes on one line each — the gene bright at 13 px,
-// "bytes 0–39 · 40" (span · length) in one cell, rule and values one line; the declared offset and
-// length in words go to the row title.
-describe('DOB blueprint table on the row rules (table-rows L2-5)', () => {
-  it('writes each gene on one row-density line with the byte span and length together', () => {
+
+// Consistency lane E (C5, Main board "How an object is read"): the decoder steps become a chain
+// of three tiles, the DNA ruler, the gene table with what the decoded objects show, one real object
+// read through it and the status line; "Mapping unavailable" is gone.
+describe('How an object is read (C5)', () => {
+  beforeEach(() => stubChartWidth(560));
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const sample = {
+    id: '0x' + 'ab'.repeat(32),
+    href: '/objects/0x' + 'ab'.repeat(32),
+    dnaHex: nervape3xGenetics.dnaHex,
+    traits: nervape3xGenetics.cachedVmTraits.traits,
+    decodeStatus: 'decoded',
+  };
+  it('chains each object’s DNA, the pattern and the decoder in three tiles', () => {
+    render(
+      <CurrentPatternEvidence
+        pattern={nervape3xInsights.currentPattern}
+        genetics={nervape3xInsights.genetics}
+        sample={sample}
+      />
+    );
+    const section = screen.getByRole('region', { name: 'How an object is read' });
+    expect(
+      within(section).getByRole('heading', { name: 'How an object is read' })
+    ).toBeInTheDocument();
+    expect(section).toHaveTextContent('DOB/0 · 90 of 90 decoded');
+    const tiles = within(section).getAllByRole('listitem');
+    expect(tiles.map((t) => t.querySelector('b')?.textContent)).toEqual([
+      'Each object',
+      'The pattern',
+      'The decoder',
+    ]);
+    expect(tiles[0]).toHaveTextContent(
+      `${(nervape3xGenetics.dnaHex!.length - 2) / 2} bytes of DNA in its cell data.`
+    );
+    expect(tiles[1]).toHaveTextContent(
+      'stored in this cluster’s description: 6 genes, each a byte range and a rule.'
+    );
+    expect(tiles[2]).toHaveTextContent(
+      'by type_id 0xf9e6…8e3d, binary unresolved' +
+        'reads the genes · Nervape JSON DOB/0 · clipped to the DNA'
+    );
+    expect(section).not.toHaveTextContent(/Mapping unavailable|Step 1 ·|Current binary/);
+  });
+
+  it('draws one ruler part per gene, noting the genes read inside a wider one', () => {
+    render(<CurrentPatternEvidence pattern={nervape3xInsights.currentPattern} sample={sample} />);
+    const ruler = screen.getByRole('group', { name: 'DNA byte map' });
+    const parts = [...ruler.querySelectorAll('[data-target]')].map((p) =>
+      p.getAttribute('data-target')
+    );
+    const genes =
+      nervape3xInsights.currentPattern.status === 'dob' &&
+      nervape3xInsights.currentPattern.steps[0].description.status === 'supported'
+        ? nervape3xInsights.currentPattern.steps[0].description.genes
+        : [];
+    // prev.bg owns bytes 0–31; prev.type and relief read byte 0 inside it
+    expect(screen.getByText('prev.type and relief read byte 0 too')).toBeInTheDocument();
+    expect(new Set(parts).size + 2).toBe(genes.length);
+    fireEvent.mouseEnter(ruler.querySelector('[data-target]')!);
+    expect(screen.getByRole('status', { name: 'DNA ruler readout' })).toHaveTextContent(
+      /prev\.bg · bytes 0–31 · 32/
+    );
+    expect(screen.getByRole('row', { name: /^prev\.bg/ })).toHaveClass('bg-[#10131c]');
+  });
+
+  it('says what the decoded objects show for each gene and reads one real object', () => {
+    render(
+      <CurrentPatternEvidence
+        pattern={nervape3xInsights.currentPattern}
+        genetics={nervape3xInsights.genetics}
+        sample={sample}
+        status={<p>90 of 90 DOB objects decoded · 0 pending</p>}
+      />
+    );
+    const table = screen.getByRole('table', { name: 'DOB blueprint' });
+    expect(
+      within(table)
+        .getAllByRole('columnheader')
+        .map((h) => h.textContent)
+    ).toEqual(['gene', 'bytes', 'rule', 'found across 90']);
+    expect(within(table).getByRole('row', { name: /^relief/ })).toHaveTextContent(
+      'NERVAPE 3X, for all'
+    );
+    const card = screen.getByRole('group', { name: 'One object, read this way' });
+    expect(within(card).getByRole('link')).toHaveAttribute('href', `/mainnet${sample.href}`);
+    expect(within(card).getByText('relief').nextElementSibling).toHaveTextContent('NERVAPE 3X');
+    expect(screen.getByText('90 of 90 DOB objects decoded · 0 pending')).toBeInTheDocument();
+  });
+
+  it('replaces "Mapping unavailable" with the ruled sentence, the reason kept in the title', () => {
+    const pattern: CurrentPattern = structuredClone(nervape3xInsights.currentPattern);
+    if (pattern.status !== 'dob') throw new Error('fixture');
+    const reason = 'byte mapping is not defined for decoder binary 0x' + 'da35'.repeat(16);
+    pattern.steps.push({
+      ...pattern.steps[0],
+      step: 1,
+      bytes: [],
+      description: { status: 'unsupported', reason },
+    });
+    render(<CurrentPatternEvidence pattern={pattern} />);
+    const decoder = screen.getAllByRole('listitem')[2];
+    expect(decoder.querySelector('b')).toHaveTextContent('The decoders');
+    const line = within(decoder).getByRole('status');
+    expect(line).toHaveTextContent(
+      'The decoder binary describes no byte mapping; the pattern alone is used.'
+    );
+    expect(line).toHaveAttribute('title', reason);
+    expect(screen.queryByText(/Mapping unavailable/)).toBeNull();
+  });
+
+  it('starts the ruler reading over when the pattern changes under a pin', () => {
+    const { rerender } = render(
+      <CurrentPatternEvidence pattern={nervape3xInsights.currentPattern} sample={sample} />
+    );
+    const ruler = screen.getByRole('group', { name: 'DNA byte map' });
+    fireEvent.click(ruler.querySelector('[data-target]')!);
+    expect(screen.getByRole('status', { name: 'DNA ruler readout' })).toHaveTextContent(/prev\.bg/);
+    // a decoder upgrade: the pinned gene is gone
+    rerender(<CurrentPatternEvidence pattern={objectGeneticsProducer.currentPattern} />);
+    expect(screen.getByRole('status', { name: 'DNA ruler readout' })).not.toHaveTextContent(
+      /prev\.bg/
+    );
+  });
+
+  it('folds a run of numbered one-byte genes into one row and keeps every gene in a fold', () => {
     const pattern = structuredClone(objectGeneticsProducer.currentPattern);
     if (pattern.status !== 'dob' || pattern.steps[0].description.status !== 'supported')
       throw new Error('fixture');
-    pattern.steps[0].description.genes.push({
-      ...pattern.steps[0].description.genes[0],
-      index: 1,
-      name: 'name',
-      byteOffset: '0',
-      byteLength: '40',
-      rule: 'utf8',
-      ruleArguments: [],
-    });
+    pattern.steps[0].description.genes = Array.from({ length: 12 }, (_, i) => ({
+      ...objectGeneticsProducer.currentPattern.steps[0].description.genes[0],
+      index: i,
+      name: `_m${i}`,
+      byteOffset: String(i),
+      ruleArguments: ['0', '1'],
+    }));
     render(<CurrentPatternEvidence pattern={pattern} />);
     const table = screen.getByRole('table', { name: 'DOB blueprint' });
-    // Every column head is its words in an inline box, never a bare text node filling the cell.
-    for (const th of table.querySelectorAll('thead th'))
-      expect(th.firstElementChild?.tagName).toBe('SPAN');
-    for (const td of table.querySelectorAll('tbody td'))
-      expect(td).toHaveClass('py-[11px]', 'align-middle');
-    const row = within(table).getByRole('row', { name: /^name/ });
-    expect(within(row).getByText('name')).toHaveClass(
-      'text-body',
-      'text-text-bright',
-      'leading-[18px]',
-      'truncate'
+    expect(within(table).getAllByRole('row')).toHaveLength(2);
+    expect(within(table).getByRole('row', { name: /^_m0 – _m11/ })).toHaveTextContent(
+      'bytes 0–11 · 12 × 1'
     );
-    expect(row).toHaveTextContent('bytes 0–39 · 40');
-    expect(row).not.toHaveTextContent('byte offset');
-    expect(row).toHaveAttribute(
-      'title',
-      'name · byte offset 0 · length 40 · bytes 0–39 · utf8 · String · 0 arguments'
-    );
-    expect(within(row).getByText('0 arguments')).toHaveClass('block', 'truncate');
+    const all = screen.getByText('All 12 genes, one row each').closest('details')!;
+    expect(within(all).getAllByRole('row')).toHaveLength(13);
+    // the ruler still draws one part per gene
+    expect(
+      screen.getByRole('group', { name: 'DNA byte map' }).querySelectorAll('[data-target]')
+    ).toHaveLength(12);
   });
 });
 
@@ -171,6 +295,13 @@ describe('Per-version raw protocol and item context', () => {
       `/mainnet/cell/${old.cell.txHash}-0`
     );
     expect(screen.getByText(/18446744073709551615/)).toBeInTheDocument();
+    // Lane E (C6): each folded script is its occupied bytes, one row per part (was a code hash /
+    // args definition list).
+    const lock = screen.getByText(/^lock script ·/).closest('details')!;
+    expect(within(lock).getByRole('group', { name: 'lock script byte map' })).toBeInTheDocument();
+    expect(within(lock).getByLabelText('lock script parts')).toHaveTextContent(
+      protocol.versions[1].cell.lock.codeHash
+    );
   });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];

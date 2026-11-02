@@ -16,39 +16,120 @@ afterEach(() => {
 });
 
 describe('protocol byte evidence', () => {
-  it('keeps described and unexplained bytes, with field and byte focus association', () => {
+  it('draws the bytes to scale, one part per field and one per run no field describes (C5)', () => {
     const { container } = render(
       <ProtocolEvidence title="DID cell data" dataHex="0x01aabbcc" fields={fields} />
     );
-    expect(container.querySelectorAll('[data-byte-offset]')).toHaveLength(4);
+    const map = screen.getByRole('group', { name: 'DID cell data byte map' });
     expect(
-      screen.getByText('4 bytes · 2 described fields · 1 unexplained bytes')
+      [...map.querySelectorAll('[data-segment]')].map((s) => s.getAttribute('data-target'))
+    ).toEqual(['field-0', 'gap:1-2', 'field-1']);
+    expect(container.querySelectorAll('[data-byte-offset]')).toHaveLength(0);
+    expect(
+      screen.getByText('4 bytes · 2 described fields · 1 byte no field describes')
     ).toBeInTheDocument();
-    fireEvent.focus(screen.getByRole('button', { name: 'Document bytes 2–3' }));
-    expect(container.querySelector('[data-byte-offset="2"]')).toHaveAttribute(
-      'data-highlighted',
-      'true'
+    expect(screen.queryByText(/unexplained/)).not.toBeInTheDocument();
+  });
+
+  it('explains the hovered or tapped field in one detail box (C5)', () => {
+    render(<ProtocolEvidence title="DID cell data" dataHex="0x01aabbcc" fields={fields} />);
+    const detail = screen.getByRole('complementary', { name: 'DID cell data field detail' });
+    // nothing hovered: the first field
+    expect(within(detail).getByText('Version')).toBeInTheDocument();
+    expect(within(detail).getByText('[0..1) · 1 B')).toBeInTheDocument();
+    const document = screen.getByRole('button', { name: /^Document · \[2\.\.4\)/ });
+    fireEvent.mouseEnter(document);
+    expect(detail).toHaveAttribute('data-detail', 'field-1');
+    expect(within(detail).getByText('Document')).toBeInTheDocument();
+    expect(within(detail).getByText('[2..4) · 2 B')).toBeInTheDocument();
+    expect(within(detail).getByText('bbcc')).toBeInTheDocument();
+    fireEvent.mouseLeave(screen.getByRole('group', { name: 'DID cell data byte map' }));
+    expect(detail).toHaveAttribute('data-detail', 'field-0');
+    // a tap pins it
+    fireEvent.click(document);
+    expect(document).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.mouseLeave(screen.getByRole('group', { name: 'DID cell data byte map' }));
+    expect(detail).toHaveAttribute('data-detail', 'field-1');
+    // the run no field describes has its own reading
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /^\[1\.\.2\) · 1 B · no field/ }));
+    expect(within(detail).getByText('1 byte no field describes')).toBeInTheDocument();
+    expect(within(detail).getByText('aa')).toBeInTheDocument();
+  });
+
+  it('starts the detail over when the data changes (a version switch keeps no stale pin)', () => {
+    const { rerender } = render(
+      <ProtocolEvidence title="DID cell data" dataHex="0x01aabbcc" fields={fields} />
     );
-    expect(container.querySelector('[data-byte-offset="0"]')).toHaveAttribute(
-      'data-highlighted',
-      'false'
+    fireEvent.click(screen.getByRole('button', { name: /^\[1\.\.2\) · 1 B · no field/ }));
+    expect(
+      screen.getByRole('complementary', { name: 'DID cell data field detail' })
+    ).toHaveAttribute('data-detail', 'gap:1-2');
+    // the next version has no undescribed run at [1..2)
+    rerender(
+      <ProtocolEvidence
+        title="DID cell data"
+        dataHex="0x01bbcc"
+        fields={[
+          { name: 'Version', start: 0, end: 1, valueHex: '0x01' },
+          { name: 'Document', start: 1, end: 3, valueHex: '0xbbcc' },
+        ]}
+      />
     );
-    expect(container.querySelector('[data-field-index="1"]')).toHaveAttribute(
-      'data-active',
-      'true'
+    expect(
+      screen.getByRole('complementary', { name: 'DID cell data field detail' })
+    ).toHaveAttribute('data-detail', 'field-0');
+  });
+
+  it('gives a field its meaning and the shape its bytes show', () => {
+    const name = '0b0000002e63656c6c206465656473';
+    render(
+      <ProtocolEvidence
+        title="Cluster"
+        dataHex={`0x${name}`}
+        fields={[
+          {
+            name: 'name',
+            start: 0,
+            end: 15,
+            valueHex: `0x${name}`,
+            meaning: 'The cluster’s name.',
+          },
+        ]}
+      />
     );
-    fireEvent.blur(screen.getByRole('button', { name: 'Document bytes 2–3' }));
-    fireEvent.mouseEnter(screen.getByTitle('Byte 0: 0x01 · Version'));
-    expect(container.querySelector('[data-field-index="0"]')).toHaveAttribute(
-      'data-active',
-      'true'
+    const detail = screen.getByRole('complementary', { name: 'Cluster field detail' });
+    expect(
+      within(detail).getByText(
+        'The cluster’s name. A 4-byte length (11), then 11 bytes of UTF-8 text.'
+      )
+    ).toBeInTheDocument();
+    // 4-byte words, the length word dim, printable ASCII beside them
+    expect(within(detail).getByText('0b000000')).toHaveAttribute('data-dim', 'true');
+    expect(within(detail).getByText('2e63656c')).toHaveAttribute('data-dim', 'false');
+    expect(within(detail).getByText('.....cell deeds')).toBeInTheDocument();
+  });
+
+  it('names a molecule table header only when the bytes prove it', () => {
+    // total 24 · header 12 · fields at 12 and 20
+    const dataHex = '0x180000000c00000014000000' + '04000000616263640000000' + '0';
+    render(
+      <ProtocolEvidence
+        title="Table"
+        dataHex={dataHex}
+        fields={[
+          { name: 'a', start: 12, end: 20, valueHex: '0x0400000061626364' },
+          { name: 'b', start: 20, end: 24, valueHex: '0x00000000' },
+        ]}
+      />
     );
-    fireEvent.mouseLeave(screen.getByTitle('Byte 0: 0x01 · Version'));
-    fireEvent.focus(screen.getByTitle('Byte 1: 0xaa'));
-    expect(container.querySelectorAll('[data-field-index][data-active="true"]')).toHaveLength(0);
-    expect(container.querySelectorAll('[data-byte-offset][data-highlighted="true"]')).toHaveLength(
-      0
-    );
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /^\[0\.\.12\)/ }));
+    const detail = screen.getByRole('complementary', { name: 'Table field detail' });
+    expect(within(detail).getByText('molecule table header')).toBeInTheDocument();
+    expect(
+      within(detail).getByText(
+        'No field describes these bytes: a molecule table header, the size of all 24 bytes, then where its 2 fields start: 12, 20.'
+      )
+    ).toBeInTheDocument();
   });
 
   it('accepts overlapping evidence without double-counting explained bytes', () => {
@@ -63,9 +144,9 @@ describe('protocol byte evidence', () => {
       />
     );
     expect(
-      screen.getByText('3 bytes · 2 described fields · 0 unexplained bytes')
+      screen.getByText('3 bytes · 2 described fields · 0 bytes no field describes')
     ).toBeInTheDocument();
-    expect(screen.getByTitle('Byte 1: 0x02 · Full, Tail')).toBeInTheDocument();
+    expect(screen.getByTitle('Full, Tail · [1..3) · 2 B')).toBeInTheDocument();
   });
 
   it('preserves empty payloads and zero-width optional fields explicitly', () => {
@@ -77,8 +158,11 @@ describe('protocol byte evidence', () => {
       />
     );
     expect(screen.getByText('Empty cell data (0 bytes).')).toBeInTheDocument();
-    expect(screen.getByText('Optional local ID · [0, 0) · empty field')).toBeInTheDocument();
-    expect(container.querySelectorAll('[data-byte-offset]')).toHaveLength(0);
+    const detail = screen.getByRole('complementary', { name: 'Empty data field detail' });
+    expect(within(detail).getByText('Optional local ID')).toBeInTheDocument();
+    expect(within(detail).getByText('[0..0) · 0 B')).toBeInTheDocument();
+    expect(within(detail).getByText('Empty: no bytes.')).toBeInTheDocument();
+    expect(container.querySelectorAll('[data-segment]')).toHaveLength(0);
   });
 
   it.each([
@@ -131,47 +215,44 @@ describe('protocol byte evidence', () => {
         fields={[{ name: 'Bytes', start: 0, end: 2, valueHex: 'aabb' }]}
       />
     );
-    expect(screen.getByTitle('Byte 0: 0xaa · Bytes')).toBeInTheDocument();
-    const raw = screen.getByText('Complete raw hex').closest('details')!;
+    expect(screen.getByTitle('Bytes · [0..2) · 2 B')).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('complementary', { name: 'Case field detail' })).getByText('aabb')
+    ).toBeInTheDocument();
+    const raw = screen.getByText('All 2 bytes as hex').closest('details')!;
     expect(raw).not.toHaveAttribute('open');
     expect(within(raw).getByText('0xAABB')).toBeInTheDocument();
   });
 
-  it('pages large payloads with absolute offsets and reaches every byte', () => {
+  it('draws a large payload whole and folds a field longer than 64 bytes (C5)', () => {
     const dataHex = '0x' + '00'.repeat(255) + 'aabbccdd';
-    const { container, rerender } = render(
+    const { container } = render(
       <ProtocolEvidence
         title="Large data"
         dataHex={dataHex}
-        fields={[{ name: 'Boundary', start: 255, end: 258, valueHex: 'aabbcc' }]}
+        fields={[
+          { name: 'Boundary', start: 255, end: 258, valueHex: 'aabbcc' },
+          { name: 'Long', start: 0, end: 100, valueHex: '00'.repeat(100) },
+        ]}
       />
     );
-    expect(container.querySelectorAll('[data-byte-offset]')).toHaveLength(256);
-    expect(screen.getByText('Bytes 0–255 of 259')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous bytes' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Boundary bytes 255–255' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Next bytes' }));
-    expect(container.querySelectorAll('[data-byte-offset]')).toHaveLength(3);
-    expect(screen.getByText('Bytes 256–258 of 259')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Next bytes' })).toBeDisabled();
-    fireEvent.focus(screen.getByRole('button', { name: 'Boundary bytes 256–257' }));
-    expect(container.querySelector('[data-byte-offset="256"]')).toHaveAttribute(
-      'data-highlighted',
-      'true'
-    );
-    expect(container.querySelector('[data-byte-offset="258"]')).toHaveAttribute(
-      'data-highlighted',
-      'false'
-    );
-    expect(screen.getByTitle('Byte 258: 0xdd')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Previous bytes' }));
-    expect(screen.getByText('Bytes 0–255 of 259')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Next bytes' }));
-    rerender(<ProtocolEvidence title="Large data" dataHex="0x01" fields={[]} />);
-    expect(screen.getByTitle('Byte 0: 0x01')).toBeInTheDocument();
+    expect(screen.queryByRole('navigation')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Bytes 0–255/)).not.toBeInTheDocument();
     expect(
-      screen.queryByRole('navigation', { name: 'Large data byte pages' })
-    ).not.toBeInTheDocument();
+      [...container.querySelectorAll('[data-segment]')].map((s) => s.getAttribute('data-target'))
+    ).toEqual(['field-1', 'gap:100-255', 'field-0', 'gap:258-259']);
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /^Long · \[0\.\.100\)/ }));
+    const detail = screen.getByRole('complementary', { name: 'Large data field detail' });
+    // 32 bytes in two rows, then the rest folded with its full hex
+    expect(detail.querySelectorAll('[data-hex-row]')).toHaveLength(2);
+    expect(within(detail).getByText('… 68 more bytes')).toBeInTheDocument();
+    const all = within(detail).getByText('All 100 bytes of Long').closest('details')!;
+    expect(all).not.toHaveAttribute('open');
+    expect(all.querySelector('pre')).toHaveTextContent('0x' + '00'.repeat(100));
+    // a field of 64 bytes or fewer is shown whole
+    fireEvent.mouseEnter(screen.getByRole('button', { name: /^Boundary · \[255\.\.258\)/ }));
+    expect(detail.querySelectorAll('[data-hex-row]')).toHaveLength(1);
+    expect(within(detail).queryByText(/more bytes/)).not.toBeInTheDocument();
   });
 
   it('preserves structured decoded evidence, lossless CBOR tags and arbitrary text', () => {
@@ -258,7 +339,7 @@ describe('protocol byte evidence', () => {
       'Could not copy raw bytes: clipboard denied'
     );
     expect(
-      within(screen.getByText('Complete raw hex').closest('details')!).getByText('0x0102')
+      within(screen.getByText('All 2 bytes as hex').closest('details')!).getByText('0x0102')
     ).toBeInTheDocument();
   });
 

@@ -17,7 +17,9 @@ export interface ByteRange {
 export function validateByteRanges(
   ranges: readonly ByteRange[],
   byteLength: number,
-  context: string
+  context: string,
+  /** Lane E (C5): a to-scale map draws an empty field (length 0) as a sliver at its offset. */
+  { allowEmpty = false }: { allowEmpty?: boolean } = {}
 ): void {
   const ids = new Set<string>();
   for (const range of ranges) {
@@ -27,7 +29,7 @@ export function validateByteRanges(
       !Number.isSafeInteger(range.offset) ||
       !Number.isSafeInteger(range.length) ||
       range.offset < 0 ||
-      range.length <= 0 ||
+      range.length < (allowEmpty ? 0 : 1) ||
       range.offset + range.length > byteLength
     )
       throw new Error(

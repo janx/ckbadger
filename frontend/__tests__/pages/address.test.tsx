@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { render, createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -346,7 +347,14 @@ describe('Address v3', () => {
     render(<AddressDetailPage />);
     await loaded();
     expect(screen.getByRole('heading', { name: 'Address' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Lock script' })).toBeInTheDocument();
+    // Lane E (C6): the Address board's tier-2 heading (was "Lock script").
+    expect(
+      screen.getByRole('heading', { name: 'The lock script this address names' })
+    ).toBeInTheDocument();
+    // with no address, the derived names are the lock hash alone
+    expect(
+      within(screen.getByRole('region', { name: 'Derived names' })).getAllByRole('list')
+    ).toHaveLength(1);
     expect(screen.queryByText('Active')).not.toBeInTheDocument();
   });
   it('does not invent zero totals when holdings cannot be read', async () => {
@@ -1035,8 +1043,8 @@ describe('Address board · F2 blocks', () => {
 
   it('names the lock code and offers JSON and Markdown in the Lock script section (BA-38)', async () => {
     render(<AddressDetailPage />);
-    const lock = await section(/^Lock script/);
-    expect(lock).toHaveTextContent(/code hash0x0+64 · JoyID/);
+    const lock = await section(/^The lock script this address names/);
+    expect(lock).toHaveTextContent(/code_hash0x0+64 · JoyID/);
     // Responsive fix plan 2026-11-01 (A3): in the break-all box the lock name split "Def/ault Lock".
     expect(within(lock).getByText('JoyID')).toHaveClass('whitespace-nowrap');
     expect(within(lock).getByRole('link', { name: 'Markdown' }).getAttribute('href')).toBe(
@@ -1045,6 +1053,32 @@ describe('Address board · F2 blocks', () => {
     expect(within(lock).getByRole('link', { name: 'JSON' }).getAttribute('href')).toMatch(
       new RegExp(`/addresses/${addressText}$`)
     );
+  });
+
+  it('draws the lock script as its occupied bytes and derives its two names (C6)', async () => {
+    stubChartWidth(600);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    render(<AddressDetailPage />);
+    const lock = await section(/^The lock script this address names/);
+    const args = (addressFixture.lockScript!.args.length - 2) / 2;
+    expect(lock).toHaveTextContent(`Script · ${33 + args} occupied bytes in every cell it locks`);
+    expect(
+      [...within(lock).getByRole('group', { name: 'lock script byte map' }).children].map(
+        (p) => (p as HTMLElement).dataset.segment
+      )
+    ).toEqual(['code_hash', 'hash_type', 'args']);
+    expect(
+      within(lock).getByRole('img', { name: `lock script offsets: 0, 32, 33, ${33 + args}` })
+    ).toBeInTheDocument();
+    expect(within(lock).getByText('hash_type').nextElementSibling).toHaveTextContent(
+      `${addressFixture.lockScript!.hashType} (`
+    );
+    const names = screen.getByRole('region', { name: 'Derived names' });
+    expect(names).toHaveTextContent(addressFixture.lockScriptHash);
+    expect(names).toHaveTextContent(addressFixture.address!);
   });
 
   it('writes "1 cell" for a single identity cell (BA-45)', async () => {

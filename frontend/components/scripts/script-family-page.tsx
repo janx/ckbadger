@@ -9,7 +9,12 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
+import {
+  ScriptCustodyEvidence,
+  isImmutableClass,
+  scriptClassLabel,
+} from '@/components/scripts/script-code-evidence';
+import { ScriptByteMap } from '@/components/ui/script-byte-map';
 import { HolderTimeline } from '@/components/scripts/holder-timeline';
 import {
   ScriptCellsSummary,
@@ -170,106 +175,219 @@ const ANATOMY_LEGEND = [
 
 type ReferenceRow = NonNullable<ScriptFamilyDetail['references']>[number];
 
-/**
- * Tier 2's "The script" (table-rows L1-5, board ScriptDetail): its cells, then one definition list
- * per registered reference — the reference and how it follows the code, the current code and how to
- * pin it instead, the cell dep that serves it, and the evidence of who holds its code cell. The
- * former "Use it in a transaction" and "Registered references" blocks, fact for fact.
- */
-function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
-  const references: ReferenceRow[] = family.references ?? [];
+/** A reference's live code cells: the deployments of its current version that are live. */
+function liveDeployments(family: ScriptFamilyDetail, reference: ReferenceRow) {
+  const version = family.versions.find((v) => v.versionHash === reference.currentVersionHash);
+  return { version, live: version?.deployments.filter((d) => d.status === 'live') ?? [] };
+}
+
+const shortTx = (hash: string) => `${hash.slice(0, 8)}…${hash.slice(-4)}`;
+
+/** One registered reference in full: the former tier-2 definition list (table-rows L1-5). */
+function ReferenceFacts({
+  family,
+  reference,
+}: {
+  family: ScriptFamilyDetail;
+  reference: ReferenceRow;
+}) {
+  const { version, live } = liveDeployments(family, reference);
   const term = 'text-text-dim';
   const value = 'm-0 min-w-0 [overflow-wrap:anywhere]';
   return (
-    <div className="text-small space-y-5">
-      {(references.length ? references : [null]).map((reference, i) => {
-        const version = reference
-          ? family.versions.find((v) => v.versionHash === reference.currentVersionHash)
-          : undefined;
-        const live = version?.deployments.filter((d) => d.status === 'live') ?? [];
-        return (
-          <dl
-            key={reference ? `${reference.hashType}:${reference.referenceHash}` : 'cells'}
-            className={cn(
-              'grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1',
-              i > 0 && 'border-base-border-subtle border-t pt-4'
+    <dl className="border-base-border-subtle grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1 border-t pt-3 first:border-t-0 first:pt-0">
+      <dt className={term}>code hash</dt>
+      <dd className={value}>{reference.referenceHash}</dd>
+      <dt className={term}>hash type</dt>
+      <dd className={value}>
+        {reference.hashType} ·{' '}
+        {reference.hashType === 'type' ? 'follows every upgrade' : 'pins this exact binary'} ·{' '}
+        {formatCount(reference.liveCellsCount, 'live cell')}
+      </dd>
+      <dt className={term}>current code</dt>
+      <dd className={value}>{reference.currentVersionHash ?? 'Retired · no current code cell'}</dd>
+      {reference.hashType === 'type' && version && (
+        <>
+          <dt className={term}>pin instead</dt>
+          <dd className={cn(value, 'text-text-dim')}>
+            its data hash with hash type data1 or data2 pins this exact binary; an upgrade will not
+            reach cells that pin it
+          </dd>
+        </>
+      )}
+      <dt className={term}>cell dep</dt>
+      <dd className={value}>
+        {live.length ? (
+          live.map((deployment) => (
+            <span
+              key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
+              className="block"
+            >
+              <Link
+                href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
+                className="text-text hover:text-jade"
+              >
+                {deployment.codeCellTxHash}
+                <OutpointIndex index={deployment.codeCellOutputIndex} />
+              </Link>
+              <span className="text-text-dim">
+                {' '}
+                · dep type code · the live code cell of the current version
+              </span>
+            </span>
+          ))
+        ) : (
+          <span className="text-text-dim">
+            {reference.currentVersionHash
+              ? 'No live code cell for the current version'
+              : 'Retired: no current code cell'}
+          </span>
+        )}
+      </dd>
+      <dt className={term}>held by</dt>
+      <dd className={value}>
+        {reference.custody ? (
+          <ScriptCustodyEvidence custody={reference.custody} />
+        ) : (
+          <span className="text-text-dim">Evidence unavailable</span>
+        )}
+      </dd>
+    </dl>
+  );
+}
+
+/**
+ * Tier 2's "The script" (consistency C6, board ScriptDetail): its cells in one line, the script's
+ * shape drawn once (code_hash 32 · hash_type 1, then the args each cell sets), and one row per
+ * registered reference — hash type, code hash, live cells, the cell dep that serves it, who holds
+ * its code cell. Each reference's full facts (the former definition lists) are folded beneath.
+ */
+function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
+  const references: ReferenceRow[] = family.references ?? [];
+  const kind =
+    family.scriptKind === 'lock' || family.scriptKind === 'type' ? family.scriptKind : undefined;
+  const depOf = (reference: ReferenceRow) => {
+    const { live } = liveDeployments(family, reference);
+    if (!live.length)
+      return (
+        <span className="text-text-dim">
+          {reference.currentVersionHash ? 'no live code cell' : 'retired'}
+        </span>
+      );
+    const [first] = live;
+    return (
+      <>
+        <Link
+          href={`/cell/${first.codeCellTxHash}-${first.codeCellOutputIndex}`}
+          className="text-text hover:text-jade"
+        >
+          {shortTx(first.codeCellTxHash)}
+          <OutpointIndex index={first.codeCellOutputIndex} />
+        </Link>
+        {live.length > 1 && <span className="text-text-dim"> +{live.length - 1}</span>}
+      </>
+    );
+  };
+  const holder = (reference: ReferenceRow) =>
+    reference.custody ? scriptClassLabel(reference.custody.class) : 'Evidence unavailable';
+  const title = (reference: ReferenceRow) => {
+    const { live } = liveDeployments(family, reference);
+    return [
+      `${reference.hashType} · ${reference.hashType === 'type' ? 'follows every upgrade' : 'pins this exact binary'}`,
+      `code hash ${reference.referenceHash}`,
+      `current code ${reference.currentVersionHash ?? 'retired'}`,
+      formatCount(reference.liveCellsCount, 'live cell'),
+      live.length
+        ? `cell dep ${live.map((d) => `${d.codeCellTxHash}:${d.codeCellOutputIndex}`).join(', ')}`
+        : 'no live code cell',
+      `held by: ${holder(reference)}`,
+    ].join(' · ');
+  };
+  const columns: readonly ListColumn<ReferenceRow>[] = [
+    {
+      key: 'hashType',
+      label: 'hash type',
+      minWidth: 56,
+      render: (r) => <span className="text-text-bright">{r.hashType}</span>,
+    },
+    {
+      key: 'codeHash',
+      label: 'code hash',
+      minWidth: 118,
+      render: (r) => <span className="whitespace-nowrap">{shortTx(r.referenceHash)}</span>,
+    },
+    {
+      key: 'cells',
+      label: 'live cells',
+      minWidth: 76,
+      numeric: true,
+      render: (r) => r.liveCellsCount.toLocaleString('en-US'),
+    },
+    {
+      key: 'dep',
+      label: 'cell dep',
+      minWidth: 128,
+      render: (r) => <span className="whitespace-nowrap">{depOf(r)}</span>,
+    },
+    {
+      key: 'holder',
+      label: 'held by',
+      minWidth: 150,
+      render: (r) => <span className="block truncate">{holder(r)}</span>,
+    },
+  ];
+  return (
+    <div className="text-small min-w-0 space-y-4">
+      <p className="m-0 min-w-0 [overflow-wrap:anywhere]">
+        <ScriptCellsSummary family={family} />
+      </p>
+      <ScriptByteMap kind={kind} script={null} />
+      {references.length > 0 && (
+        <>
+          <ListTable
+            label="Registered references"
+            columns={columns.map((c) => ({
+              ...c,
+              header: <span className="text-meta whitespace-nowrap">{c.label}</span>,
+            }))}
+            rows={references}
+            rowKey={(r) => `${r.hashType}:${r.referenceHash}`}
+            density="row"
+            rowTitle={title}
+            mobileRow={(r) => (
+              <PhoneRow
+                lines={[
+                  {
+                    key: 'ref',
+                    tone: 'head',
+                    left: `${r.hashType} · ${shortTx(r.referenceHash)}`,
+                    right: formatCount(r.liveCellsCount, 'live cell'),
+                  },
+                  { key: 'dep', tone: 'body', left: depOf(r), right: holder(r) },
+                ]}
+              />
             )}
-          >
-            {i === 0 && (
-              <>
-                <dt className={term}>its cells</dt>
-                <dd className={value}>
-                  <ScriptCellsSummary family={family} />
-                </dd>
-              </>
-            )}
-            {reference && (
-              <>
-                <dt className={term}>code hash</dt>
-                <dd className={value}>{reference.referenceHash}</dd>
-                <dt className={term}>hash type</dt>
-                <dd className={value}>
-                  {reference.hashType} ·{' '}
-                  {reference.hashType === 'type'
-                    ? 'follows every upgrade'
-                    : 'pins this exact binary'}{' '}
-                  · {formatCount(reference.liveCellsCount, 'live cell')}
-                </dd>
-                <dt className={term}>current code</dt>
-                <dd className={value}>
-                  {reference.currentVersionHash ?? 'Retired · no current code cell'}
-                </dd>
-                {reference.hashType === 'type' && version && (
-                  <>
-                    <dt className={term}>pin instead</dt>
-                    <dd className={cn(value, 'text-text-dim')}>
-                      its data hash with hash type data1 or data2 pins this exact binary; an upgrade
-                      will not reach cells that pin it
-                    </dd>
-                  </>
-                )}
-                <dt className={term}>cell dep</dt>
-                <dd className={value}>
-                  {live.length ? (
-                    live.map((deployment) => (
-                      <span
-                        key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                        className="block"
-                      >
-                        <Link
-                          href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                          className="text-text hover:text-jade"
-                        >
-                          {deployment.codeCellTxHash}
-                          <OutpointIndex index={deployment.codeCellOutputIndex} />
-                        </Link>
-                        <span className="text-text-dim">
-                          {' '}
-                          · dep type code · the live code cell of the current version
-                        </span>
-                      </span>
-                    ))
-                  ) : (
-                    <span className="text-text-dim">
-                      {reference.currentVersionHash
-                        ? 'No live code cell for the current version'
-                        : 'Retired: no current code cell'}
-                    </span>
-                  )}
-                </dd>
-                <dt className={term}>held by</dt>
-                <dd className={value}>
-                  {reference.custody ? (
-                    <ScriptCustodyEvidence custody={reference.custody} />
-                  ) : (
-                    <span className="text-text-dim">Evidence unavailable</span>
-                  )}
-                </dd>
-              </>
-            )}
-          </dl>
-        );
-      })}
+          />
+          {references.some((r) => r.hashType === 'type') && (
+            <p className="text-text-dim m-0">
+              A type reference follows every upgrade; its data hash with hash type data1 or data2
+              pins this exact binary; an upgrade will not reach cells that pin it.
+            </p>
+          )}
+          <details className="min-w-0">
+            <summary className="text-text-dim cursor-pointer">Each reference in full</summary>
+            <div className="mt-3 space-y-3">
+              {references.map((reference) => (
+                <ReferenceFacts
+                  key={`${reference.hashType}:${reference.referenceHash}`}
+                  family={family}
+                  reference={reference}
+                />
+              ))}
+            </div>
+          </details>
+        </>
+      )}
     </div>
   );
 }

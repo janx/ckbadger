@@ -33,6 +33,7 @@ import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { usePageSize } from '@/hooks/usePageSize';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
+import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
 
 const activityFilters = [
   ['all', 'All'],
@@ -242,71 +243,45 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               </span>
             }
             tier2={
-              <DetailSection
-                title="Lock script"
-                actions={
-                  <span className="text-small">
-                    {/* F2 blocks (BA-38): the address JSON (its lock script) and this page as Markdown. */}
-                    <a
-                      href={`${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      JSON
-                    </a>
-                    {' · '}
-                    <Link href={`/address/${addr}.md`} target="_blank" rel="noreferrer">
-                      Markdown
-                    </Link>
-                  </span>
-                }
-              >
-                <dl className="text-small grid grid-cols-[90px_minmax(0,1fr)] gap-x-4 gap-y-3">
+              // Lane E (C6, Address board tier 2): the lock script as its bytes, then its two names.
+              <div className="grid min-w-0 items-start gap-x-16 gap-y-10 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+                <DetailSection
+                  title="The lock script this address names"
+                  actions={
+                    <span className="text-small">
+                      {/* F2 blocks (BA-38): the address JSON (its lock script) and this page as Markdown. */}
+                      <a
+                        href={`${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        JSON
+                      </a>
+                      {' · '}
+                      <Link href={`/address/${addr}.md`} target="_blank" rel="noreferrer">
+                        Markdown
+                      </Link>
+                    </span>
+                  }
+                >
                   {a.lockScript ? (
-                    <>
-                      <dt className="text-text-dim">code hash</dt>
-                      <dd className="break-all">
-                        <Link
-                          href={getScriptDetailHref({
-                            name: a.lockScriptInfo?.name,
-                            codeHash: a.lockScript.codeHash,
-                            hashType: a.lockScript.hashType,
-                            scriptKind: 'lock',
-                          })}
-                        >
-                          <Hash
-                            hash={a.lockScript.codeHash}
-                            truncate={false}
-                            copyable={false}
-                            className="text-small"
-                          />
-                        </Link>
-                        {a.lockScriptInfo?.name && (
-                          <span className="text-text-dim">
-                            {' · '}
-                            <span className="whitespace-nowrap">{a.lockScriptInfo.name}</span>
-                          </span>
-                        )}
-                      </dd>
-                      <dt className="text-text-dim">hash type</dt>
-                      <dd>{a.lockScript.hashType}</dd>
-                      <dt className="text-text-dim">args</dt>
-                      <dd className="break-all">
-                        <Hash hash={a.lockScript.args} truncate={false} className="text-small" />
-                      </dd>
-                    </>
+                    <ScriptByteMap
+                      kind="lock"
+                      script={a.lockScript}
+                      name={a.lockScriptInfo?.name}
+                      href={getScriptDetailHref({
+                        name: a.lockScriptInfo?.name,
+                        codeHash: a.lockScript.codeHash,
+                        hashType: a.lockScript.hashType,
+                        scriptKind: 'lock',
+                      })}
+                    />
                   ) : (
-                    <>
-                      <dt>Script</dt>
-                      <dd>Unavailable</dd>
-                    </>
+                    <p className="text-text-dim text-small">Script unavailable</p>
                   )}
-                  <dt className="text-text-dim">lock hash</dt>
-                  <dd className="break-all">
-                    <Hash hash={a.lockScriptHash} truncate={false} className="text-small" />
-                  </dd>
-                </dl>
-              </DetailSection>
+                </DetailSection>
+                <ScriptNames lockHash={a.lockScriptHash} address={a.address ?? null} />
+              </div>
             }
           >
             {a && <AddressStaleNotice error={address.error} label="address metadata" />}

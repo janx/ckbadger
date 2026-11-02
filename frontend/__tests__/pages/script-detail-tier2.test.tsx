@@ -109,30 +109,50 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     );
   });
 
-  it('lists the script facts per reference: code hash, hash type, current code, cell dep, holder and its cells', async () => {
+  // Lane E (C6): one map of the script's shape and one row per reference, instead of one definition
+  // list per reference; every fact of the former lists is in a row, its title, or the fold below.
+  it('draws the script once and gives each reference one row, the full facts folded', async () => {
     await renderJoyid();
     const facts = within(tier2()).getByRole('heading', { name: 'The script' }).closest('section')!;
-    const lists = facts.querySelectorAll('dl');
-    expect(lists).toHaveLength(1);
-    const terms = within(lists[0])
-      .getAllByRole('term')
-      .map((t) => t.textContent);
-    expect(terms).toEqual([
-      'its cells',
-      'code hash',
-      'hash type',
-      'current code',
-      'pin instead',
-      'cell dep',
-      'held by',
-    ]);
-    const dd = (term: string) =>
-      within(lists[0])
-        .getAllByRole('term')
-        .find((t) => t.textContent === term)!.nextElementSibling as HTMLElement;
-    expect(within(dd('its cells')).getByTestId('script-cells-summary')).toHaveTextContent(
+    expect(within(facts).getByTestId('script-cells-summary')).toHaveTextContent(
       '161,049 live cells use JoyID as their lock'
     );
+    expect(facts).toHaveTextContent('Script · 33 bytes, then the args each cell sets');
+    expect(
+      [...within(facts).getByRole('group', { name: 'lock script byte map' }).children].map(
+        (p) => (p as HTMLElement).dataset.segment
+      )
+    ).toEqual(['code_hash', 'hash_type']);
+    const table = within(facts).getByRole('table', { name: 'Registered references' });
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(fixture.family.references.length);
+    expect(rows[0]).toHaveTextContent('type');
+    expect(rows[0]).toHaveTextContent('161,049');
+    expect(rows[0]).toHaveAttribute(
+      'title',
+      expect.stringContaining('0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323')
+    );
+    expect(within(rows[0]).getByRole('link', { name: /0x673e18…55f9:0/ })).toHaveAttribute(
+      'href',
+      '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
+    );
+    await waitFor(() => expect(rows[0]).toHaveTextContent('A multisig can replace'));
+    expect(facts).toHaveTextContent(
+      'A type reference follows every upgrade; its data hash with hash type data1 or data2 pins this exact binary; an upgrade will not reach cells that pin it.'
+    );
+    // the former definition list, per reference, in one fold
+    const full = within(facts).getByText('Each reference in full').closest('details')!;
+    expect(full).not.toHaveAttribute('open');
+    const list = full.querySelector('dl')!;
+    expect(
+      within(list)
+        .getAllByRole('term')
+        .map((t) => t.textContent)
+    ).toEqual(['code hash', 'hash type', 'current code', 'pin instead', 'cell dep', 'held by']);
+    const dd = (term: string) =>
+      within(list)
+        .getAllByRole('term')
+        .find((t) => t.textContent === term)!.nextElementSibling as HTMLElement;
     expect(dd('code hash')).toHaveTextContent(
       /^0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323$/
     );
@@ -142,17 +162,9 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     expect(dd('current code')).toHaveTextContent(
       /^0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe$/
     );
-    expect(dd('pin instead')).toHaveTextContent(
-      'its data hash with hash type data1 or data2 pins this exact binary; an upgrade will not reach cells that pin it'
-    );
     expect(dd('cell dep')).toHaveTextContent(
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0 · dep type code · the live code cell of the current version'
     );
-    expect(within(dd('cell dep')).getByRole('link')).toHaveAttribute(
-      'href',
-      '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
-    );
-    await waitFor(() => expect(dd('held by')).toHaveTextContent('A multisig can replace'));
     expect(dd('held by')).toHaveTextContent('Lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696');
   });
 });

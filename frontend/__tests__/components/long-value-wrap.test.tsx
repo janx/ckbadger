@@ -13,6 +13,10 @@ it('wraps a decoder reason that names a hash inside its box', () => {
   const reason = `byte mapping is not defined for binary 0x${'da35'.repeat(16)}`;
   data.currentPattern.steps[0].description = { status: 'unsupported', reason };
   render(<CurrentPatternEvidence pattern={data.currentPattern} />);
-  expect(screen.getByRole('status')).toHaveTextContent(reason);
+  // Lane E (C5): the ruled sentence is shown; the API's reason (with its hash) is the title.
+  expect(screen.getByRole('status')).toHaveTextContent(
+    'The decoder binary describes no byte mapping; the pattern alone is used.'
+  );
+  expect(screen.getByRole('status')).toHaveAttribute('title', reason);
   expect(screen.getByRole('status')).toHaveClass('[overflow-wrap:anywhere]');
 });

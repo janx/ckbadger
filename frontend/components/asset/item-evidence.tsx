@@ -2,6 +2,8 @@
 import { useState } from 'react';
 import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from '@/lib/api';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
+import { withFieldMeanings } from '@/lib/protocol-field-meanings';
+import { ScriptByteMap } from '@/components/ui/script-byte-map';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -61,26 +63,19 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
               <summary className="cursor-pointer">
                 {kind} script · {name ?? 'Unregistered'}
               </summary>
-              <dl className="mt-3 space-y-2">
-                <div>
-                  <dt>Code hash · {script.hashType}</dt>
-                  <dd className="break-all">
-                    <AppLink
-                      href={getScriptDetailHref({
-                        codeHash: script.codeHash,
-                        hashType: script.hashType,
-                        scriptKind: kind,
-                      })}
-                    >
-                      <Hash hash={script.codeHash} truncate={false} copyable={false} />
-                    </AppLink>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Args</dt>
-                  <dd className="break-all">{script.args}</dd>
-                </div>
-              </dl>
+              {/* Lane E (C6): the script as its occupied bytes, one row per part. */}
+              <div className="mt-3">
+                <ScriptByteMap
+                  kind={kind}
+                  script={script}
+                  name={name}
+                  href={getScriptDetailHref({
+                    codeHash: script.codeHash,
+                    hashType: script.hashType,
+                    scriptKind: kind,
+                  })}
+                />
+              </div>
             </details>
           )
       )}
@@ -96,7 +91,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
             : `${protocol.kind} cell data · version ${protocol.versions.findIndex((v) => v.cell.txHash === cell.txHash && v.cell.outputIndex === cell.outputIndex) + 1}`
         }
         dataHex={version.dataHex}
-        fields={version.fields}
+        fields={withFieldMeanings(protocol.kind, version.fields)}
         decoded={version.decoded}
       />
     </section>

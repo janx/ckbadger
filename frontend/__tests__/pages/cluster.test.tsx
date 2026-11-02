@@ -129,9 +129,14 @@ it('retains the stored description and exact current decoder version without inv
     currentPattern: { ...collectionInsightsProducer.currentPattern, status: 'dob', version: null },
   });
   render(<ClusterPage clusterId={id} />);
-  await screen.findByRole('heading', { name: 'Current decoder blueprint' });
+  await screen.findByRole('heading', { name: 'How an object is read' });
   expect(screen.getByText(/DOB version not stated/)).toBeInTheDocument();
-  expect(screen.getByText(clusterDetailProducer.description!)).toBeInTheDocument();
+  // Lane E (C5): the stored description is folded, pretty-printed and tinted, nothing changed.
+  const stored = screen
+    .getByText('Description, as stored · pretty JSON')
+    .closest('details')!
+    .querySelector('pre')!;
+  expect(JSON.parse(stored.textContent!)).toEqual(JSON.parse(clusterDetailProducer.description!));
 });
 it('handles empty gallery and holder sets without using collection totals as page lengths', async () => {
   vi.mocked(api.getCollectionGallery).mockResolvedValue(emptyPage());

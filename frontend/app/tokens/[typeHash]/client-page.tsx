@@ -19,6 +19,7 @@ import { ExactCkb, formatStandard, activityHeadline } from '@/components/activit
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
+import { ScriptByteMap } from '@/components/ui/script-byte-map';
 /** The supply-event route always reports its total; a page without one is a contract break. */
 function supplyEventsTotal(page: { total?: number }): number {
   if (page.total === undefined) throw new Error('supply events page has no total');
@@ -319,49 +320,35 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       }
       tier2={
         <DetailSection title="Type script">
-          <dl className="text-small space-y-4">
-            <div>
-              <dt className="text-text-dim">Code hash · {t.typeHashType}</dt>
-              <dd className="mt-1">
-                <AppLink
-                  href={getScriptDetailHref({
-                    codeHash: t.typeCodeHash,
-                    hashType: t.typeHashType,
-                    scriptKind: 'type',
-                  })}
-                >
-                  <Hash hash={t.typeCodeHash} truncate={false} className="text-small break-all" />
-                </AppLink>
-              </dd>
-              <dd className="text-text-dim text-meta mt-1">
-                the token’s type script; its code decides what a valid transfer is
-              </dd>
-            </div>
-            <div>
-              <dt className="text-text-dim">Args</dt>
-              <dd className="mt-1">
-                <Hash hash={t.typeArgs} truncate={false} className="text-small break-all" />
-              </dd>
-              <dd className="text-text-dim text-meta mt-1 [overflow-wrap:anywhere]">
+          {/* Lane E (C6): the type script as its occupied bytes, one row per part. */}
+          <ScriptByteMap
+            kind="type"
+            script={{ codeHash: t.typeCodeHash, hashType: t.typeHashType, args: t.typeArgs }}
+            href={getScriptDetailHref({
+              codeHash: t.typeCodeHash,
+              hashType: t.typeHashType,
+              scriptKind: 'type',
+            })}
+            codeNote="the token’s type script; its code decides what a valid transfer is"
+            argsNote={
+              <span className="[overflow-wrap:anywhere]">
                 {t.issuer
                   ? `the lock hash of the owner that can mint (${t.issuer.address ?? t.issuer.lockHash}), proven by the token script`
                   : NOT_ESTABLISHED_ISSUER}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-text-dim">Name · symbol · decimals</dt>
-              <dd className="mt-1">
-                {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
-                {t.decimals ?? 'Decimals unknown'}
-              </dd>
-              <dd className="text-text-dim text-meta mt-1">{provenanceText(t.metadata)}</dd>
-            </div>
-            <div>
-              <dt className="text-text-dim">Live cells</dt>
-              <dd className="mt-1">
-                <AssetCount value={t.cellsCount} />
-              </dd>
-            </div>
+              </span>
+            }
+          />
+          <dl className="text-small mt-4 grid grid-cols-[88px_minmax(0,1fr)] gap-x-4 gap-y-1.5 sm:grid-cols-[168px_minmax(0,1fr)]">
+            <dt className="text-text-dim">Name · symbol · decimals</dt>
+            <dd className="m-0 min-w-0 text-[#a0a8be]">
+              {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
+              {t.decimals ?? 'Decimals unknown'}
+              <span className="text-text-dim text-meta block">{provenanceText(t.metadata)}</span>
+            </dd>
+            <dt className="text-text-dim">Live cells</dt>
+            <dd className="m-0 text-[#a0a8be]">
+              <AssetCount value={t.cellsCount} />
+            </dd>
           </dl>
         </DetailSection>
       }

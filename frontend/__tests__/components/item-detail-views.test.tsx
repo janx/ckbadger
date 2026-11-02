@@ -45,7 +45,9 @@ it('does not identify cluster metadata ownership as a current cell without canon
 it('links a canonically resolved cluster cell through the one-segment outpoint route', async () => {
   vi.mocked(api.getSporeClusterProtocol).mockResolvedValue(clusterProtocolProducer);
   render(<CollectionDetail id={clusterDetailProducer.clusterId} kind="spore" />);
-  const link = await screen.findByRole('link', { name: 'Current cluster cell →' });
+  // Lane E (C5): the out point in the cell's "live cell" row is the link (was "Current cluster cell →").
+  const cell = await screen.findByRole('region', { name: 'The cluster cell, byte by byte' });
+  const link = within(within(cell).getByLabelText('The cluster cell')).getAllByRole('link')[0];
   expect(link).toHaveAttribute(
     'href',
     `/mainnet/cell/${clusterProtocolProducer.current.cell.txHash}-${clusterProtocolProducer.current.cell.outputIndex}`
@@ -108,6 +110,9 @@ it('draws an identity collection its weekly transfers from the insights it is se
   ).toBeInTheDocument();
   expect(api.getCollectionInsights).toHaveBeenCalledWith('dotbit', 'identity');
   expect(screen.queryByText(/not indexed for identity collections/)).not.toBeInTheDocument();
+  // Lane E: an identity collection has no developer evidence; no empty tier 2 (was an eyebrow and
+  // an empty "Collection metadata" heading).
+  expect(document.querySelector('[data-tier="2"]')).toBeNull();
 });
 it('separates physical cell ownership from protocol-named .cell parties', async () => {
   const p = dotcellProtocolProducer;
