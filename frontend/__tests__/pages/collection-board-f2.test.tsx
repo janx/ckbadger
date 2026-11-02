@@ -263,19 +263,26 @@ it('keeps decode coverage and the decoder blueprint in tier 2, as a table (OB-C1
 });
 
 // Responsive plan 2026-11-01 (the leftover after lane V): the blueprint table had a 480 px floor
-// and scrolled sideways in a phone column. Lane E (C5): the gene table is four fluid columns that
-// truncate (each row's title keeps the whole line), so a 358 px column holds it as it is.
-it('keeps the gene table in a 358 px column without scrolling sideways', async () => {
+// and scrolled sideways in a phone column. It is a ListTable now, so a column too narrow for its
+// columns gets one phone row per gene with every column on its lines (RESPONSIVE_LAYOUT rules 1, 2).
+it('lays the decoder blueprint out as phone rows in a 358 px column, nothing scrolling sideways', async () => {
   atContainerWidth(358);
   const { container } = await page();
   const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
-  const blueprint = await within(tier2).findByRole('region', { name: 'How an object is read' });
-  expect(blueprint.querySelector('.overflow-x-auto, [class*="min-w-["]')).toBeNull();
-  const table = within(blueprint).getByRole('table', { name: 'DOB blueprint' });
-  const prevBg = within(table).getByRole('row', { name: /prev\.bg/ });
+  const list = await within(tier2).findByRole('list', { name: 'DOB blueprint, compact' });
+  expect(within(tier2).queryByRole('table', { name: 'DOB blueprint' })).toBeNull();
+  // Lane E (C5): the section is "How an object is read" (was "Current decoder blueprint").
+  const blueprint = within(tier2).getByRole('region', { name: 'How an object is read' });
+  expect(blueprint.querySelector('.overflow-x-auto, .min-w-\\[480px\\]')).toBeNull();
+  const rows = within(list).getAllByRole('listitem');
+  const prevBg = rows.find((r) => r.textContent?.includes('prev.bg')) as HTMLElement;
   expect(prevBg).toHaveTextContent('bytes 0–31');
-  expect(prevBg).toHaveAttribute('title', expect.stringContaining('btcfs'));
-  for (const cell of prevBg.querySelectorAll('[role="cell"]')) expect(cell).toHaveClass('truncate');
+  expect(prevBg).toHaveTextContent('btcfs');
+  // the phone row keeps every column: gene and bytes, rule and what the objects show
+  expect(prevBg.querySelectorAll('[data-line]').length).toBeGreaterThanOrEqual(2);
+  const relief = rows.find((r) => r.textContent?.includes('relief')) as HTMLElement;
+  expect(relief).toHaveTextContent('options · NERVAPE 3X');
+  expect(relief).toHaveTextContent('NERVAPE 3X, for all');
 });
 
 it('draws holder bars in the objects colour (OB-C7)', async () => {

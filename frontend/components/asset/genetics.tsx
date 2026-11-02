@@ -14,6 +14,8 @@ import { AppLink } from '@/components/ui/app-link';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { ByteScaleMap } from '@/components/ui/hex-map';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { ListTable } from '@/components/ui/list-table';
+import { PhoneRow } from '@/components/ui/phone-row';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
 import { COMPOSITION_BADGES, GENE_COLORS } from '@/lib/design-tokens';
@@ -367,44 +369,80 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
         />
       )}
       {layout.genes.length > 0 && (
-        <div role="table" aria-label="DNA genes" className="text-small min-w-0">
-          <div
-            role="row"
-            className="text-meta text-text-dim grid h-6 grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-x-3.5"
-          >
-            <span role="columnheader">gene</span>
-            <span role="columnheader">bytes</span>
-            <span role="columnheader">rule</span>
-            <span role="columnheader">this object</span>
-          </div>
-          {layout.genes.map((g) => (
-            <div
-              key={g.key}
-              role="row"
-              title={title(g)}
-              data-active={readout.active === g.key}
-              className="text-text-dim grid h-8 grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-x-3.5 border-t border-[#1a1f30] data-[active=true]:bg-[#10131c]"
-            >
-              <span
-                role="cell"
-                className="truncate"
-                style={{ color: g.owns ? g.color : undefined }}
-              >
-                {g.name}
-              </span>
-              <span role="cell" className="truncate tabular-nums">
-                {span(g.offset, g.length)}
-                {g.truncated ? ' · clipped' : ''}
-              </span>
-              <span role="cell" className="truncate">
-                {g.rule}
-              </span>
-              <span role="cell" className="truncate text-[#a0a8be]">
-                {g.value ?? `0x${g.raw}`}
-              </span>
-            </div>
-          ))}
-        </div>
+        <ListTable
+          label="DNA genes"
+          density="row"
+          rows={layout.genes}
+          rowKey={(g) => g.key}
+          rowTitle={title}
+          rowClassName={(g) => (readout.active === g.key ? 'bg-[#10131c]' : '')}
+          columns={[
+            {
+              key: 'gene',
+              label: 'gene',
+              minWidth: 100,
+              header: <span className="text-meta">gene</span>,
+              render: (g) => (
+                <span
+                  className="block truncate leading-[18px]"
+                  style={{ color: g.owns ? g.color : undefined }}
+                >
+                  {g.name}
+                </span>
+              ),
+            },
+            {
+              key: 'bytes',
+              label: 'bytes',
+              minWidth: 110,
+              header: <span className="text-meta">bytes</span>,
+              render: (g) => (
+                <span className="text-text-dim block truncate tabular-nums leading-[18px]">
+                  {span(g.offset, g.length)}
+                  {g.truncated ? ' · clipped' : ''}
+                </span>
+              ),
+            },
+            {
+              key: 'rule',
+              label: 'rule',
+              minWidth: 100,
+              header: <span className="text-meta">rule</span>,
+              render: (g) => (
+                <span className="text-text-dim block truncate leading-[18px]">{g.rule}</span>
+              ),
+            },
+            {
+              key: 'value',
+              label: 'this object',
+              minWidth: 150,
+              header: <span className="text-meta">this object</span>,
+              render: (g) => (
+                <span className="block truncate leading-[18px] text-[#a0a8be]">
+                  {g.value ?? `0x${g.raw}`}
+                </span>
+              ),
+            },
+          ]}
+          mobileRow={(g) => (
+            <PhoneRow
+              lines={[
+                {
+                  key: 'gene',
+                  tone: 'head',
+                  left: g.name,
+                  right: `${span(g.offset, g.length)}${g.truncated ? ' · clipped' : ''}`,
+                },
+                {
+                  key: 'value',
+                  tone: 'body',
+                  left: <span className="[overflow-wrap:anywhere]">{g.value ?? `0x${g.raw}`}</span>,
+                  right: g.rule,
+                },
+              ]}
+            />
+          )}
+        />
       )}
       {clipped.length > 0 && (
         <p className="text-text-dim text-meta">
@@ -514,46 +552,60 @@ export function CurrentPatternEvidence({
       .filter(Boolean)
       .join(' · ');
   const steps = pattern.steps;
+  const foundHead = genetics?.complete ? `found across ${count(genetics.eligibleItems)}` : 'found';
+  const cell = 'block truncate leading-[18px]';
+  // Responsive R1: a table while its columns fit the measured column, else one phone row a gene.
   const geneTable = (shown: readonly GeneRow[], label: string) => (
-    <div role="table" aria-label={label} className="text-small min-w-0">
-      <div
-        role="row"
-        className="text-meta text-text-dim grid h-6 grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] items-center gap-x-3.5"
-      >
-        <span role="columnheader">gene</span>
-        <span role="columnheader">bytes</span>
-        <span role="columnheader">rule</span>
-        <span role="columnheader">
-          {genetics
-            ? genetics.complete
-              ? `found across ${count(genetics.eligibleItems)}`
-              : 'found'
-            : 'found'}
-        </span>
-      </div>
-      {shown.map((row) => (
-        <div
-          key={row.genes[0].key}
-          role="row"
-          title={rowTitle(row)}
-          data-active={activeGene !== null && row.genes.some((g) => g.key === activeGene)}
-          className="text-text-dim grid h-8 grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] items-center gap-x-3.5 border-t border-[#1a1f30] data-[active=true]:bg-[#10131c]"
-        >
-          <span role="cell" className="text-text-bright truncate">
-            {row.label}
-          </span>
-          <span role="cell" className="truncate tabular-nums">
-            {row.span}
-          </span>
-          <span role="cell" className="truncate">
-            {row.rule}
-          </span>
-          <span role="cell" className="truncate">
-            {found(row) ?? '—'}
-          </span>
-        </div>
-      ))}
-    </div>
+    <ListTable
+      label={label}
+      density="row"
+      rows={shown}
+      rowKey={(row) => row.genes[0].key}
+      rowTitle={rowTitle}
+      rowClassName={(row) =>
+        activeGene !== null && row.genes.some((g) => g.key === activeGene) ? 'bg-[#10131c]' : ''
+      }
+      columns={[
+        {
+          key: 'gene',
+          label: 'gene',
+          minWidth: 110,
+          header: <span className="text-meta">gene</span>,
+          render: (row) => <span className={cn(cell, 'text-text-bright')}>{row.label}</span>,
+        },
+        {
+          key: 'bytes',
+          label: 'bytes',
+          minWidth: 130,
+          header: <span className="text-meta">bytes</span>,
+          render: (row) => (
+            <span className={cn(cell, 'text-text-dim tabular-nums')}>{row.span}</span>
+          ),
+        },
+        {
+          key: 'rule',
+          label: 'rule',
+          minWidth: 120,
+          header: <span className="text-meta">rule</span>,
+          render: (row) => <span className={cn(cell, 'text-text-dim')}>{row.rule}</span>,
+        },
+        {
+          key: 'found',
+          label: foundHead,
+          minWidth: 140,
+          header: <span className="text-meta">{foundHead}</span>,
+          render: (row) => <span className={cn(cell, 'text-text-dim')}>{found(row) ?? '—'}</span>,
+        },
+      ]}
+      mobileRow={(row) => (
+        <PhoneRow
+          lines={[
+            { key: 'gene', tone: 'head', left: row.label, right: row.span },
+            { key: 'rule', tone: 'body', left: row.rule, right: found(row) ?? undefined },
+          ]}
+        />
+      )}
+    />
   );
   const folded = rows.length < genes.length;
   const sampleTraits = sample?.traits ?? [];
