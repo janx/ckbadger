@@ -52,6 +52,18 @@ export function isImmutableClass(value: ScriptCodeClassTotalApi['class']): boole
 }
 
 /**
+ * Why a script's code cannot change, in the Code column's words ("code cell unspendable · pinned
+ * by data hash"), the unspendable code cell first: the "immutable" tag's title on the scripts
+ * list and the script page.
+ */
+export function immutableHow(classes: readonly ScriptCodeClassTotalApi['class'][]): string[] {
+  return classes
+    .filter(isImmutableClass)
+    .sort((a, b) => Number(b === 'unspendable') - Number(a === 'unspendable'))
+    .map((c) => (c === 'fixed' ? 'pinned by data hash' : 'code cell unspendable'));
+}
+
+/**
  * `part / total` as the Scripts board writes a share: one decimal from 10 %, two from 0.1 %,
  * two significant digits below that, rounded half-up and never a false `0.00%`.
  */

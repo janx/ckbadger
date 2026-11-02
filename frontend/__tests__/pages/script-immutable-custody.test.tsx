@@ -91,6 +91,18 @@ describe('Script page · who can change immutable code (table-rows L1-3)', () =>
     vi.restoreAllMocks();
   });
 
+  // Lane F follow-up: the hero line names immutable code as its accent tag, the hint in its title.
+  it('tags the hero line "immutable" as the accent, why in its title', async () => {
+    await renderJoyid();
+    const hero = screen.getByRole('region', { name: 'JoyID' });
+    const tag = within(hero).getByText('immutable');
+    expect(tag).toHaveAttribute('data-row-tag', 'accent');
+    expect(tag).toHaveClass('text-jade');
+    expect(tag).toHaveAttribute('title', 'immutable · code cell unspendable');
+    expect(tag.parentElement).toHaveTextContent(/^lock script · immutable$/);
+    expect(hero.querySelectorAll('h1.text-text-bright')).toHaveLength(1);
+  });
+
   it('says no one can replace it, without a holder timeline', async () => {
     await renderJoyid();
     const section = screen.getByRole('region', { name: 'Who can change its code' });

@@ -17,6 +17,7 @@ import {
   ScriptCodeClassLegend,
   ScriptCodeClassSummary,
   codeClassTotals,
+  immutableHow,
   isImmutableClass,
   scriptClassLabel,
   scriptShare,
@@ -74,9 +75,7 @@ function scriptCodeClass(
       head: 'Immutable',
       sub: [
         ...(first ? [first.blockNumber === 0 ? 'genesis' : formatUtc8Date(first.timestampMs)] : []),
-        ...[...immutable]
-          .sort((a, b) => Number(b.class === 'unspendable') - Number(a.class === 'unspendable'))
-          .map((row) => (row.class === 'fixed' ? 'pinned by data hash' : 'code cell unspendable')),
+        ...immutableHow(immutable.map((row) => row.class)),
       ].join(' · '),
       replaceable: false,
     };
@@ -110,8 +109,10 @@ function CodeClassPip({ replaceable }: { replaceable: boolean }) {
 }
 
 /**
- * The Code column on one line (table-rows L1-1, board Scripts): "immutable" or "upgradable · N
- * versions" in dim ink with its pip; by whom and since when are its title (and the row's).
+ * The Code column on one line (table-rows L1-1, board Scripts): "upgradable · N versions" in dim
+ * ink with its pip; immutable code — the rarer, stronger fact — is the cell's one accent, a jade
+ * "immutable" row tag (lane F follow-up). By whom, since when and how it is pinned are its title
+ * (and the row's).
  */
 function ScriptCodeClass({ script }: { script: KnownScript }) {
   const code = scriptCodeClass(script);
@@ -122,9 +123,13 @@ function ScriptCodeClass({ script }: { script: KnownScript }) {
       className="text-text-dim flex min-w-0 items-center gap-2 whitespace-nowrap"
     >
       {code && <CodeClassPip replaceable={code.replaceable} />}
-      <span className="truncate">
-        {code ? code.head.toLowerCase() : 'code evidence unavailable'}
-      </span>
+      {code && !code.replaceable ? (
+        <RowTag variant="accent">immutable</RowTag>
+      ) : (
+        <span className="truncate">
+          {code ? code.head.toLowerCase() : 'code evidence unavailable'}
+        </span>
+      )}
     </span>
   );
 }
@@ -150,7 +155,12 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
       {code ? (
         <>
           <CodeClassPip replaceable={code.replaceable} />
-          <span className={code.replaceable ? 'text-text-bright' : undefined}>{code.head}</span>
+          {/* Lane F follow-up: immutable is the accent tag; the name stays the one bright thing. */}
+          {code.replaceable ? (
+            <span>{code.head}</span>
+          ) : (
+            <RowTag variant="accent">immutable</RowTag>
+          )}
           <span className="text-text-dim">· {code.sub}</span>
         </>
       ) : (
