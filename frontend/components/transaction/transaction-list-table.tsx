@@ -322,7 +322,9 @@ export function TransactionListTable({
     {
       key: 'cells',
       label: 'Cells',
-      minWidth: 56,
+      // "10 → 2" (6 characters, 43.2 px) and the 16 px gap, on one line: it wrapped at 56.
+      minWidth: 62,
+      className: 'whitespace-nowrap',
       render: (tx) => (
         <span className="text-text-dim text-small">
           {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount}

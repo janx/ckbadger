@@ -189,6 +189,22 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     expect(row.querySelector('td:nth-child(4) [data-zero]')).toBeInTheDocument();
   });
 
+  // The Cells column held "3 → 3" but wrapped "10 → 2" onto a second line (a 61 px row): it is
+  // 62 px wide and never wraps (coordinator ruling on lane M's report).
+  it('keeps a two-digit cells count on one line (62 px, nowrap)', () => {
+    render(
+      <TransactionListTable transactions={[{ ...transfer, inputsCount: 10, outputsCount: 2 }]} />
+    );
+    const table = screen.getByRole('table', { name: 'Committed transactions' });
+    const heads = within(table).getAllByRole('columnheader');
+    const at = heads.findIndex((th) => th.textContent === 'Cells');
+    expect((table.querySelectorAll('col')[at] as HTMLElement).style.width).toBe('62px');
+    const cell = within(table).getAllByRole('row')[1].querySelectorAll('td')[at];
+    expect(cell).toHaveTextContent(/^10 → 2$/);
+    expect(cell).toHaveClass('whitespace-nowrap');
+    expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(1248);
+  });
+
   // Table-rows T5: one bright thing per row, the key cell at body. The 18 px line keeps the row
   // at its one-line height (a 13 px line is 20.8 px and would make it 45.8).
   it('leads each row with its hash at 13 px bright on an 18 px line; a cellbase keeps its dim row (T5)', () => {
