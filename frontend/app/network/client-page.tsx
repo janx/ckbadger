@@ -217,6 +217,10 @@ function Hero({
   enabled: boolean;
 }) {
   const network = useActiveNetwork();
+  if (lastRound.reachablePeers > lastRound.verifiedRetainedPeers)
+    throw new Error(
+      `crawler round #${lastRound.roundId}: ${lastRound.reachablePeers} reachable exceed the ${lastRound.verifiedRetainedPeers} verified`
+    );
   const map = useNetworkMap(lastRound.peerOutcomes.exhausted.withoutRetainedVerification);
   const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
   return (
@@ -246,11 +250,18 @@ function Hero({
         <div data-role="figure" className="mt-9 min-w-0">
           <div className="text-text-dim text-meta mb-1.5">Reachable now</div>
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
-            <span
-              data-role="reachable"
-              className="text-jade text-index sm:text-display font-medium tabular-nums"
-            >
-              {lastRound.reachablePeers.toLocaleString()}
+            <span className="whitespace-nowrap">
+              <span
+                data-role="reachable"
+                className="text-jade text-index sm:text-display font-medium tabular-nums"
+              >
+                {lastRound.reachablePeers.toLocaleString()}
+              </span>
+              {/* Its scale, dim, as the DAO figure's fraction: of the verified nodes retained. */}
+              <span data-role="reachable-of" className="text-hero text-text-dim tabular-nums">
+                {' '}
+                of {lastRound.verifiedRetainedPeers.toLocaleString()}
+              </span>
             </span>
             <span className="text-text-dim text-body">answered as CKB {network} nodes</span>
           </div>

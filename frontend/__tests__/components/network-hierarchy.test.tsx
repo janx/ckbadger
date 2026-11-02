@@ -190,9 +190,14 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     expect(figure).toHaveTextContent(/^62$/);
     // R4: display from 640 up, index below; R11: the page's class colour.
     expect(figure).toHaveClass('text-jade', 'text-index', 'sm:text-display');
-    const row = figure.parentElement!;
+    const row = figure.parentElement!.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline');
-    expect(row).toHaveTextContent(/^62answered as CKB mainnet nodes$/);
+    expect(row).toHaveTextContent(/^62 of 66answered as CKB mainnet nodes$/);
+    // Its scale, the verified nodes, beside it at hero size in the dim ink (as the DAO figure's
+    // fraction): the figure's second display-size run.
+    const scale = row.querySelector('[data-role="reachable-of"]')!;
+    expect(scale).toHaveTextContent(/^of 66$/);
+    expect(scale).toHaveClass('text-hero', 'text-text-dim');
     expect(row.querySelector('.text-jade:not([data-role="reachable"])')).toBeNull();
     // Its label over it, quiet; no tracked capitals on this page (CH-53).
     expect(row.previousElementSibling).toHaveTextContent(/^Reachable now$/);

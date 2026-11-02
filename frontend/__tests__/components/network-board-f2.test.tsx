@@ -119,7 +119,7 @@ describe('Network board (F2 charts)', () => {
     expect(await screen.findByText(/^Nodes find each other by word of mouth/)).toBeInTheDocument();
     // Hierarchy v3 (R13): reachable now is the hero's figure; the other three share one quiet row.
     const hero = screen.getByRole('region', { name: 'Where the nodes are' });
-    expect(hero).toHaveTextContent(/Reachable now\s*62\s*answered as CKB mainnet nodes/);
+    expect(hero).toHaveTextContent(/Reachable now\s*62 of 66\s*answered as CKB mainnet nodes/);
     const figures = screen.getByRole('group', { name: 'Latest crawler round' });
     expect(figures).toHaveTextContent(/Verified before, not now\s*4/);
     expect(figures).toHaveTextContent(/Heard of\s*181 · 115 never verified/);
