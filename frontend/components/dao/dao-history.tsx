@@ -122,9 +122,12 @@ function timeTicks(days: readonly Day[], range: Range, x: (i: number) => number)
 export function DaoHistory({
   deposited,
   ratio,
+  actions,
 }: {
   deposited: ChartResponse;
   ratio: ChartResponse;
+  /** Links set beside the range control, e.g. the DAO charts. */
+  actions?: ReactNode;
 }) {
   const [range, setRange] = useState<Range>('All');
   const [hover, setHover] = useState<number | null>(null);
@@ -427,21 +430,24 @@ export function DaoHistory({
     <div>
       <div className="mb-1 flex flex-wrap items-center justify-between gap-4">
         <h2 className="text-text-bright text-section font-medium">History</h2>
-        <div role="group" aria-label="History range" className="flex gap-1">
-          {(['1M', '1Y', 'All'] as const).map((choice) => (
-            <button
-              key={choice}
-              type="button"
-              aria-pressed={range === choice}
-              onClick={() => {
-                setRange(choice);
-                setHover(null);
-              }}
-              className={`text-small h-7 rounded-md border px-2.5 font-mono ${range === choice ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
-            >
-              {choice}
-            </button>
-          ))}
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {actions}
+          <div role="group" aria-label="History range" className="flex gap-1">
+            {(['1M', '1Y', 'All'] as const).map((choice) => (
+              <button
+                key={choice}
+                type="button"
+                aria-pressed={range === choice}
+                onClick={() => {
+                  setRange(choice);
+                  setHover(null);
+                }}
+                className={`text-small h-7 rounded-md border px-2.5 font-mono ${range === choice ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+              >
+                {choice}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
       {reading}

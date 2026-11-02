@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
@@ -147,6 +147,32 @@ describe('DaoPage', () => {
       'href',
       '/mainnet/blocks/5'
     );
+  });
+
+  it('opens with the title and one sentence that points to the evidence (D1, D8)', async () => {
+    const { container } = render(<DaoPage />);
+    await screen.findByRole('heading', { name: 'When deposits can leave' });
+    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
+    expect(within(hero).getByRole('heading', { level: 1 })).toHaveTextContent('Nervos DAO');
+    const intro = within(hero).getByText(
+      /^CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance dilutes everything else\./
+    );
+    expect(intro.textContent!.length).toBeLessThanOrEqual(160);
+    expect(within(intro).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+      'href',
+      '#evidence'
+    );
+    expect(container.querySelector('#evidence')).not.toBeNull();
+    // The former 262-character hero paragraph left tier 1 for "How the Nervos DAO works".
+    const former =
+      'CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344 billion CKB a year, is split by how CKB is used: depositors are compensated with the share their deposits make up, miners get the share that is occupied, and the rest is burnt.';
+    expect(former).toHaveLength(262);
+    expect(container.querySelector('[data-tier="1"]')).not.toHaveTextContent(former);
+    expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(former);
+    // "Explore DAO charts →" is kept, beside the History charts it continues.
+    const charts = screen.getByRole('link', { name: 'Explore DAO charts →' });
+    expect(charts).toHaveAttribute('href', '/mainnet/charts/total-deposit');
+    expect(screen.getByRole('region', { name: 'History' })).toContainElement(charts);
   });
 
   it('shows evidence API errors instead of fabricated zero values', async () => {

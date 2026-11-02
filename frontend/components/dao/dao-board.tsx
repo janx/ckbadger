@@ -93,26 +93,65 @@ function Metric({
   label,
   children,
   detail,
-  className,
 }: {
   label: string;
   children: ReactNode;
   detail?: ReactNode;
-  className?: string;
 }) {
   return (
-    <div className={`min-w-0 ${className ?? ''}`}>
-      <dt className="text-text-dim text-small">{label}</dt>
-      <dd className="text-text-bright text-hero mt-1 leading-tight">{children}</dd>
+    <div className="min-w-0">
+      <dt className="text-text-dim text-meta">{label}</dt>
+      <dd className="text-text-bright text-hero mt-1">{children}</dd>
       {detail && <dd className="text-text-dim text-meta mt-1">{detail}</dd>}
     </div>
   );
 }
 
+/** The page's one figure (R4): display from 640 up, index below; the fraction hero, the unit body. */
+function DepositedFigure({ shannons }: { shannons: string }) {
+  const parts = splitCkbAmount(parseShannons(shannons, 'DAO deposited'));
+  return (
+    <span
+      data-role="deposited"
+      className="text-text-bright text-index sm:text-display mt-1.5 font-medium"
+    >
+      <span className="whitespace-nowrap font-mono tabular-nums">
+        {parts.integer}
+        <span className="text-hero text-text-dim font-normal">
+          {parts.fraction}
+          <span className="opacity-50">{parts.ghost}</span>
+        </span>
+      </span>
+      {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
+      <span className="text-body text-text-dim font-normal"> CKB</span>
+    </span>
+  );
+}
+
+/** A signed CKB decimal that keeps its sign's hue: the fraction quieter, not grey. */
+function SignedCkbDecimal({ value }: { value: string }) {
+  const parts = splitCkbAmount(parseCkbDecimal(value));
+  return (
+    <span className="whitespace-nowrap font-mono tabular-nums">
+      {parts.sign}
+      {parts.integer}
+      <span className="opacity-70">{parts.fraction}</span>
+      <span className="opacity-40">{parts.ghost}</span>
+    </span>
+  );
+}
+
+/** A signed whole count: "+9", "−9" (U+2212), "0". */
+function signedCount(n: number): string {
+  const abs = Math.abs(n).toLocaleString('en-US');
+  return n > 0 ? `+${abs}` : n < 0 ? `\u2212${abs}` : abs;
+}
+
 /**
- * The hero (board V63): deposited, its share of circulation on the last complete day and its peak,
- * then the metrics. Deposited, deposits and depositors are the evidence anchor's phase-0 facts;
- * Estimated APC and the 24 h change are the statistics anchor's.
+ * The hero (hierarchy board v2): the page intro, then deposited as the page's one display figure
+ * with its share of circulation and peak and its 24 h change under it, beside four metrics.
+ * Deposited, deposits and depositors are the evidence anchor's phase-0 facts; Estimated APC and the
+ * 24 h figures are the statistics anchor's.
  */
 function Hero({
   statistics,
@@ -139,85 +178,84 @@ function Hero({
   const changeShannons = change === null ? null : parseCkbDecimal(change);
   const year = evidence.ar.year365;
   return (
-    <section
-      aria-label="Nervos DAO summary"
-      className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_460px] lg:items-end lg:gap-12"
-    >
-      <div className="flex min-w-0 flex-col gap-1">
-        {intro && <div className="mb-5">{intro}</div>}
-        <span className="text-text-dim text-small">deposited</span>
-        <span
-          data-role="deposited"
-          className="text-text-bright text-index sm:text-display font-medium leading-tight"
-        >
-          <Amount value={evidence.phase0.capacity} />{' '}
-          <span className="text-text-dim text-body">CKB</span>
-        </span>
-        {share && deposited && (
-          <span className="text-text-dim text-body">
-            <span className="text-gold">{ratioText(share.value)}%</span> of circulating CKB on{' '}
-            {share.date}
-            {peak && (
-              <>
-                {' · '}peak{' '}
-                <span className="text-text">
-                  <CkbDecimal value={peak.value} />
-                </span>{' '}
-                CKB on {peak.date}
-              </>
-            )}
-          </span>
-        )}
-      </div>
-      <dl className="m-0 grid grid-cols-2 gap-x-7 gap-y-[18px]">
-        <Metric label="Estimated APC" detail="at today's issuance and deposits">
-          {statistics.estimatedApc}%
-        </Metric>
-        <Metric
-          label="Compensation, last 365 days"
-          detail={
-            year ? "on free capacity, from the header's AR" : 'the chain is younger than 365 days'
-          }
-        >
-          {year ? `${year.observedGrowthPercent}%` : '—'}
-        </Metric>
-        <Metric label="Depositors">
-          {evidence.concentration.currentDepositors.toLocaleString('en-US')}
-        </Metric>
-        <Metric
-          label="Deposits"
-          detail={`+ ${evidence.phase1.count.toLocaleString('en-US')} withdrawals requested`}
-        >
-          {evidence.phase0.count.toLocaleString('en-US')}
-        </Metric>
-        <Metric
-          label="Change in 24 h"
-          className="col-span-2"
-          detail={
-            statistics.deposits24h === null || statistics.withdrawalRequests24h === null
-              ? undefined
-              : `${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`
-          }
-        >
-          {changeShannons === null ? (
-            <span className="text-text-dim">—</span>
-          ) : (
-            <span
-              data-role="change24h"
-              className={
-                changeShannons > BigInt(0)
-                  ? 'text-positive'
-                  : changeShannons < BigInt(0)
-                    ? 'text-negative'
-                    : 'text-text'
-              }
-            >
-              <CkbDecimal value={change!} signed />
+    <section aria-label="Nervos DAO summary" className="min-w-0">
+      {intro}
+      <div
+        className={`grid gap-8 lg:grid-cols-[minmax(0,1fr)_520px] lg:items-end lg:gap-12 ${intro ? 'mt-9' : ''}`}
+      >
+        <div data-role="figure" className="flex min-w-0 flex-col">
+          <span className="text-text-dim text-meta uppercase tracking-[0.08em]">deposited</span>
+          <DepositedFigure shannons={evidence.phase0.capacity} />
+          {share && deposited && (
+            <span className="text-text text-body mt-3">
+              <span className="text-gold font-medium">{ratioText(share.value)}%</span> of
+              circulating CKB on <span className="whitespace-nowrap">{share.date}</span>
+              {peak && (
+                <>
+                  {' · '}peak{' '}
+                  <span className="text-text-bright">
+                    <CkbDecimal value={peak.value} />
+                  </span>{' '}
+                  CKB on <span className="whitespace-nowrap">{peak.date}</span>
+                </>
+              )}
             </span>
-          )}{' '}
-          <span className="text-text-dim text-small">CKB</span>
-        </Metric>
-      </dl>
+          )}
+          <span className="text-body mt-1.5">
+            {changeShannons === null ? (
+              <span className="text-text-dim">—</span>
+            ) : (
+              <span
+                data-role="change24h"
+                className={
+                  changeShannons > BigInt(0)
+                    ? 'text-positive'
+                    : changeShannons < BigInt(0)
+                      ? 'text-negative'
+                      : 'text-text'
+                }
+              >
+                <SignedCkbDecimal value={change!} /> CKB
+              </span>
+            )}{' '}
+            <span className="text-text-dim">
+              in 24 h
+              {statistics.deposits24h !== null &&
+                statistics.withdrawalRequests24h !== null &&
+                ` · ${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`}
+            </span>
+          </span>
+        </div>
+        <dl className="m-0 grid grid-cols-2 gap-x-7 gap-y-[22px]">
+          <Metric label="Estimated APC" detail="at today's issuance and deposits">
+            {statistics.estimatedApc}%
+          </Metric>
+          <Metric
+            label="Compensation, last 365 days"
+            detail={
+              year ? "on free capacity, from the header's AR" : 'the chain is younger than 365 days'
+            }
+          >
+            {year ? `${year.observedGrowthPercent}%` : '—'}
+          </Metric>
+          <Metric
+            label="Depositors"
+            detail={
+              statistics.depositorsChange24h === null
+                ? undefined
+                : `${signedCount(statistics.depositorsChange24h)} in 24 h`
+            }
+          >
+            {evidence.concentration.currentDepositors.toLocaleString('en-US')}
+          </Metric>
+          <Metric
+            label="Deposits"
+            detail={`+ ${evidence.phase1.count.toLocaleString('en-US')} withdrawals requested`}
+          >
+            {evidence.phase0.count.toLocaleString('en-US')}
+          </Metric>
+        </dl>
+      </div>
     </section>
   );
 }
@@ -231,22 +269,37 @@ function History({
   ratio?: ChartResponse;
   error?: boolean;
 }) {
+  // The hero's former "Explore DAO charts →" sits beside the charts it continues (hierarchy D1).
+  const charts = (
+    <Link
+      href="/charts/total-deposit"
+      className="text-text hover:text-text-bright text-small font-mono hover:underline"
+    >
+      Explore DAO charts →
+    </Link>
+  );
+  const heading = (
+    <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <h2 className="text-text-bright text-section font-medium">History</h2>
+      {charts}
+    </div>
+  );
   return (
     <section aria-label="History" className="min-w-0">
       {error ? (
         <>
-          <h2 className="text-text-bright text-section mb-3 font-medium">History</h2>
+          {heading}
           <div role="alert" className="text-rouge text-small">
             DAO daily history could not be loaded from indexed snapshots.
           </div>
         </>
       ) : !deposited || !ratio ? (
         <>
-          <h2 className="text-text-bright text-section mb-3 font-medium">History</h2>
+          {heading}
           <div className="text-text-dim text-small">Loading canonical daily history…</div>
         </>
       ) : (
-        <DaoHistory deposited={deposited} ratio={ratio} />
+        <DaoHistory deposited={deposited} ratio={ratio} actions={charts} />
       )}
     </section>
   );
@@ -1035,7 +1088,7 @@ export function DaoBoard({
   }
   return (
     <div>
-      <div className="space-y-12">
+      <div data-tier="1" className="min-w-0 space-y-12">
         <Hero
           statistics={statistics}
           evidence={evidence}
