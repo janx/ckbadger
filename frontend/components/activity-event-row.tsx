@@ -902,15 +902,18 @@ export function ExactCkb({
 
 /**
  * A participant's Layer-2 change as a fact: `±amount SYMBOL`, or `<id> arrived / departed`.
- * `tone="sign"` (F2-tx, for the Address board) colours a token amount by its sign; the default
- * draws it bright, as the Activities, Token and Transaction boards do.
+ * `tone="sign"` colours a token amount by its sign (the Address board, and the T7 activity rows);
+ * the default draws it bright. `symbol="dim"` (T7) draws the symbol dim beside the amount, as the
+ * unit beside an exact CKB amount; the default keeps it in the amount's ink.
  */
 export function ItemDeltaFact({
   item,
   tone = 'plain',
+  symbol = 'same',
 }: {
   item: ItemDelta;
   tone?: 'plain' | 'sign';
+  symbol?: 'same' | 'dim';
 }) {
   switch (item.kind) {
     case 'token': {
@@ -936,7 +939,8 @@ export function ItemDeltaFact({
             onClick={(e) => e.stopPropagation()}
           >
             {sign}
-            {formatTokenBalanceWithRawMarker(abs, item.decimals ?? null)} {label}
+            {formatTokenBalanceWithRawMarker(abs, item.decimals ?? null)}{' '}
+            {symbol === 'dim' ? <span className="text-text-dim">{label}</span> : label}
           </Link>
         </span>
       );

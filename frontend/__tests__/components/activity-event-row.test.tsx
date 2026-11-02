@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { render, screen } from '../utils/test-utils';
+import { render, screen, within } from '../utils/test-utils';
 import {
   ActivityEventGroup,
   ExactCkb,
@@ -961,5 +961,22 @@ describe('row parts (F2-tx)', () => {
       />
     );
     expect(screen.getByRole('link')).toHaveClass('text-negative');
+  });
+
+  it('draws the symbol dim beside a signed amount when a row asks for it (T7 feed rows)', () => {
+    const item = {
+      kind: 'token' as const,
+      typeScriptHash: '0xickb',
+      delta: '-8465187699473',
+      symbol: 'iCKB',
+      decimals: 8,
+    };
+    const { rerender } = render(<ItemDeltaFact tone="sign" item={item} />);
+    // Default: the symbol shares the amount's ink (Address board, unchanged).
+    expect(screen.getByText(/iCKB$/)).toBe(screen.getByRole('link'));
+    rerender(<ItemDeltaFact tone="sign" symbol="dim" item={item} />);
+    const link = screen.getByRole('link', { name: `${MINUS}84,651.87699473 iCKB` });
+    expect(link).toHaveClass('text-negative');
+    expect(within(link).getByText('iCKB')).toHaveClass('text-text-dim');
   });
 });

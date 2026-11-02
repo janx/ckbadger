@@ -40,7 +40,7 @@ function activity(participants: ParticipantInfo[]): ActivityRowData {
   };
 }
 
-/** Every Tailwind class in the participants grid, the grid itself included. */
+/** Every Tailwind class in the participants box, the box itself included. */
 function gridClasses(container: HTMLElement): string[] {
   const grid = container.querySelector('[data-role="participants"]') as HTMLElement;
   expect(grid).not.toBeNull();
@@ -49,14 +49,14 @@ function gridClasses(container: HTMLElement): string[] {
   );
 }
 
-describe('activity participant grid (A1: the stacked form up to 767 px)', () => {
-  // At 640 the container is 608 px; a 4- or 5-track grid put the item track at x≈605 and pushed
-  // the page 100–150 px sideways (report B#1–5), and its 136 px party track clipped the role to
-  // "ow"/"ma" (B#11). The tracks start at md (768), the 390 stacked form serves 640.
+describe('activity participant lines (A1 → T7: one wrapping line at every width)', () => {
+  // A1 kept the 4/5-track grid off the 640 band (it pushed the page 100–150 px sideways, report
+  // B#1–5) and the 136 px party track clipped roles to "ow" (B#11). Option A (T7) has no tracks:
+  // one wrapping line per participant at every width, so there is no breakpoint to get wrong.
   it.each([
-    ['the plain grid', false],
-    ['the lock-column grid', true],
-  ])('%s keeps the stacked form below md and no sm: track or column', (_name, lockColumn) => {
+    ['a plain row', false],
+    ['a lockColumn row (the prop no longer changes the row)', true],
+  ])('%s draws a flex column of wrapping lines, no grid, no sm:/md: track', (_name, lockColumn) => {
     const { container } = render(
       <ActivityRow
         lockColumn={lockColumn}
@@ -66,13 +66,13 @@ describe('activity participant grid (A1: the stacked form up to 767 px)', () => 
         ])}
       />
     );
-    const grid = container.querySelector('[data-role="participants"]') as HTMLElement;
-    // Below md one participant per line group (A3 made the line a wrapping row); the grid's tracks
-    // start at md.
-    expect(grid).toHaveClass('flex', 'flex-col', 'md:grid');
-    expect(grid.className).toMatch(/(^|\s)md:grid-cols-\[/);
+    const box = container.querySelector('[data-role="participants"]') as HTMLElement;
+    expect(box).toHaveClass('flex', 'flex-col');
     const classes = gridClasses(container);
+    expect(classes.filter((c) => /grid|col-start|col-span|contents/.test(c))).toEqual([]);
     expect(classes.filter((c) => c.startsWith('sm:'))).toEqual([]);
+    for (const line of container.querySelectorAll('[data-role="participant"]'))
+      expect(line).toHaveClass('flex', 'flex-wrap');
     // The role is whole text in the party cell, not a clipped prefix.
     const parties = [...container.querySelectorAll('[data-party]')];
     expect(parties[0]).toHaveTextContent('owner_from');
@@ -80,10 +80,10 @@ describe('activity participant grid (A1: the stacked form up to 767 px)', () => 
   });
 });
 
-describe('activity participant line (A3: address and lock kind are one unit)', () => {
-  // Report A#15: the lock label wrapped alone or split "Default / Lock" beside a long amount. Below
-  // md the party (address, roles, lock kind) is one unit that never breaks; the amount stays at
-  // the right end of the line and drops under the party when the line cannot hold both.
+describe('activity participant line (A3 → T7: party, tag, amount wrap as whole items)', () => {
+  // Report A#15: the lock label wrapped alone or split "Default / Lock" beside a long amount. On
+  // the T7 line the address, the lock tag and the amount are each one unbreakable item; the line
+  // wraps between them, in that order.
   function plainRow(p: ParticipantInfo) {
     const { container } = render(<ActivityRow activity={activity([p])} />);
     const row = container.querySelector('[data-role="participant"]') as HTMLElement;
@@ -91,30 +91,29 @@ describe('activity participant line (A3: address and lock kind are one unit)', (
     return row;
   }
 
-  it('keeps the address and its lock kind together and lets the amount drop', () => {
+  it('keeps the address, then its lock tag, then the amount, each whole', () => {
     const row = plainRow(party({ ckbDelta: '67073483600000000' }));
-    expect(row).toHaveClass('flex', 'flex-wrap', 'md:contents');
-    const unit = row.querySelector('[data-role="party-unit"]') as HTMLElement;
-    expect(unit).toHaveClass('flex', 'md:contents');
-    const cell = unit.querySelector('[data-party]') as HTMLElement;
-    expect(cell).toHaveTextContent('ckb1qzda...3x8k26Default Lock');
-    expect(within(cell).getByText('Default Lock')).toHaveClass('shrink-0', 'whitespace-nowrap');
-    const amount = row.querySelector('[data-ckb-amount]')!.parentElement as HTMLElement;
-    expect(amount).toHaveClass('ml-auto', 'text-right', 'md:ml-0');
-    expect(row.querySelector('[data-role="occupied"]')).toHaveClass(
-      'basis-full',
-      'whitespace-nowrap',
-      'md:basis-auto'
-    );
+    expect(row).toHaveClass('flex', 'flex-wrap');
+    expect([...row.children].map((e) => e.getAttribute('data-role'))).toEqual([
+      'party',
+      'lock-kind',
+      'ckb',
+      'occupied',
+    ]);
+    expect(row.querySelector('[data-party]')).toHaveTextContent('ckb1qzda...3x8k26');
+    expect(within(row).getByText('Default Lock')).toHaveClass('whitespace-nowrap');
+    expect(row.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
+    expect(row.querySelector('[data-role="occupied"]')).toHaveClass('whitespace-nowrap');
+    expect(row.querySelector('[data-role="occupied"]')).not.toHaveClass('basis-full');
   });
 
-  it('never lets the party cell shrink below its content below md', () => {
-    // An overflow-hidden flex item may shrink to nothing and clip the address; the clip is the md
-    // grid's 136 px track only.
+  it('never lets the party cell shrink below its content or clip it', () => {
+    // An overflow-hidden flex item may shrink to nothing and clip the address; the party is never
+    // clipped, at any width (the md grid's 136 px clip went with the grid).
     const cell = plainRow(party()).querySelector('[data-party]') as HTMLElement;
     expect(cell).not.toHaveClass('min-w-0');
     expect(cell).not.toHaveClass('overflow-hidden');
-    expect(cell).toHaveClass('md:min-w-0', 'md:overflow-hidden');
+    expect([...cell.classList].filter((c) => c.startsWith('md:'))).toEqual([]);
   });
 
   it('lets the roles wrap under the address instead of being clipped to "ow"', () => {
@@ -126,31 +125,30 @@ describe('activity participant line (A3: address and lock kind are one unit)', (
   });
 });
 
-describe('activity lock-column line below md (A8: the narrow form keeps the lock kind)', () => {
+describe('activity lock kind at every width (A8 → T7: the tag is on every line)', () => {
   // Report C#8: the Activities page dropped each participant's lock kind at 390 (its column was
-  // `hidden` below the grid breakpoint) while 640 showed it. Below md it is now the tail of the
-  // party unit, the same element that is the lock column from md up.
-  it('shows the lock kind beside the address below md and in its own column from md', () => {
+  // `hidden` below the grid breakpoint). On the T7 line the tag is the item right after the
+  // party, with no breakpoint class, so no width can hide it.
+  it('shows the lock kind as a tag right after the address, at every width', () => {
     const { container } = render(
       <ActivityRow lockColumn activity={activity([party({ lockKind: 'JoyID' })])} />
     );
-    const unit = container.querySelector('[data-role="party-unit"]') as HTMLElement;
     const kinds = container.querySelectorAll('[data-role="lock-kind"]');
     expect(kinds).toHaveLength(1);
     const kind = kinds[0] as HTMLElement;
     expect(kind).toHaveTextContent('JoyID');
-    expect(kind.parentElement).toBe(unit);
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
-    expect(kind).not.toHaveClass('hidden');
-    expect(kind).toHaveClass('shrink-0', 'whitespace-nowrap', 'md:col-start-2');
+    expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
+    expect(kind).toHaveClass('whitespace-nowrap', 'rounded-[3px]', 'border');
     // Not repeated in the party cell.
-    expect(unit.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
+    expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
   });
 
-  it('wraps a lock kind that cannot follow the address and roles under them, whole', () => {
+  it('wraps a lock kind that cannot follow the address and roles to the next line, whole', () => {
     // Gate at 390 (cluster): with "owner_to, manager_to" the unit shrank, the roles wrapped inside
     // the party cell, and the lock kind sat at the far end of the line, away from its address.
-    // The unit wraps instead: the party cell keeps its width, the lock kind starts the next line.
+    // The tag is its own unbreakable item: when it cannot follow the party, it starts the next
+    // line whole; the party cell never exceeds the line.
     const { container } = render(
       <ActivityRow
         lockColumn
@@ -159,10 +157,10 @@ describe('activity lock-column line below md (A8: the narrow form keeps the lock
         ])}
       />
     );
-    const unit = container.querySelector('[data-role="party-unit"]') as HTMLElement;
-    expect(unit).toHaveClass('flex-wrap', 'max-w-full');
-    expect(unit.querySelector('[data-party]')).toHaveClass('flex-wrap');
-    expect(unit.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
+    const line = container.querySelector('[data-role="participant"]') as HTMLElement;
+    expect(line).toHaveClass('flex-wrap');
+    expect(line.querySelector('[data-party]')).toHaveClass('max-w-full');
+    expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass('whitespace-nowrap');
   });
 });
 
@@ -204,8 +202,32 @@ describe('activity detail lines (A12c: repeats collapse, long call runs fold)', 
     ]);
   });
 
-  it('folds a long lock run behind "+N more locks" and opens it in place', () => {
+  it('says 29 calls of one lock once, ×29, every call with its args in the hover', () => {
+    // T7: names only on the row. The 29 ".bit Lock" calls of report B#26 differ only in args, so
+    // the row names the lock once with its count; each call stays whole in the hover.
     const { container } = render(<ActivityRow activity={dotbitRegistration()} />);
+    const lockLine = [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
+      l.textContent?.startsWith('lock')
+    ) as HTMLElement;
+    expect(lockLine).toHaveTextContent(/^lock \.bit Lock ×29$/);
+    const link = within(lockLine).getByRole('link', { name: '.bit Lock' });
+    const calls = link.getAttribute('title')!.split('\n');
+    expect(calls).toHaveLength(29);
+    expect(calls[0]).toBe(`.bit Lock(0x0000${'ab'.repeat(20)})`);
+    expect(calls[28]).toBe(`.bit Lock(0x0028${'ab'.repeat(20)})`);
+  });
+
+  it('folds a run of more than six lock names behind "+N more locks" and opens it in place', () => {
+    const named = dotbitRegistration();
+    const distinct = {
+      ...named,
+      lockCalls: named.lockCalls.map((l, i) => ({
+        ...l,
+        lockCodeHash: '0x' + String(i).padStart(64, '0'),
+        scriptName: `Lock ${i}`,
+      })),
+    } as ActivityRowData;
+    const { container } = render(<ActivityRow activity={distinct} />);
     const lockLine = () =>
       [...container.querySelectorAll('[data-role="detail"]')].find((l) =>
         l.textContent?.startsWith('lock')
