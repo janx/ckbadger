@@ -2,8 +2,12 @@
 
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { api, type NetworkHistory } from '@/lib/api';
+import { api, type LabelCount, type NetworkHistory } from '@/lib/api';
 import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/components/ui/chart';
+import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { PhoneRow } from '@/components/ui/phone-row';
+import { resourceScale } from '@/components/blocks/block-visual';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatUtc8Date } from '@/lib/utils';
@@ -138,6 +142,153 @@ function TrendPanel({ title, children }: { title: string; children: ReactNode })
   );
 }
 
+/** One day of a share history: its retained labels, or why it has none. */
+interface ShareDay {
+  ts: number;
+  day: string;
+  /** Null: no retained round that day. */
+  buckets: LabelCount[] | null;
+}
+
+/** The day's labels, most common first (ties by label), and their exact sum. */
+function ranked(buckets: readonly LabelCount[]): { labels: LabelCount[]; sum: number } {
+  const labels = [...buckets].sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  let sum = 0;
+  for (const bucket of labels) {
+    if (!Number.isSafeInteger(bucket.count) || bucket.count < 0)
+      throw new Error(`share history: invalid count ${bucket.count} for ${bucket.label}`);
+    sum += bucket.count;
+  }
+  return { labels, sum };
+}
+
+/** What a day's row says in words: every label and count (the row's title, table-rows T8). */
+function shareDayWords(row: ShareDay): string {
+  if (row.buckets === null) return 'No retained round observation';
+  if (row.buckets.length === 0) return 'No retained labels';
+  return row.buckets
+    .map((bucket) => `${bucket.label} ${bucket.count.toLocaleString()}`)
+    .join(' · ');
+}
+
+const SHARE_TRACK = 80;
+
+/**
+ * Table-rows T8: a share history is one line a day — the day (the row's key), a count
+ * bar of its retained labels with the most common in jade, how many labels, and the most common
+ * with its count. Every label and count is the row's title; a day without a round says so.
+ */
+function ShareDays({ title, days }: { title: string; days: readonly ShareDay[] }) {
+  const sums = days.flatMap((row) => (row.buckets ? [ranked(row.buckets).sum] : []));
+  const scale = sums.some((sum) => sum > 0) ? resourceScale(sums) : null;
+  const quiet = (words: string) => <span className="text-text-dim text-meta">{words}</span>;
+  const bar = (row: ShareDay) => {
+    if (row.buckets === null) return null;
+    const { labels, sum } = ranked(row.buckets);
+    if (sum === 0 || scale === null) return null;
+    return (
+      <AlignedBar
+        label="Retained count"
+        scale={scale}
+        trackWidth={SHARE_TRACK}
+        minFill={2}
+        segments={[
+          { key: 'leader', label: labels[0].label, value: labels[0].count, tone: 'data' },
+          { key: 'rest', label: 'other labels', value: sum - labels[0].count, tone: 'overhead' },
+        ]}
+      />
+    );
+  };
+  // The widest cell says why a day has no bar, on the day's one line.
+  const leader = (row: ShareDay) => {
+    if (!row.buckets?.length) return quiet(shareDayWords(row));
+    const top = ranked(row.buckets).labels[0];
+    return (
+      <span className="flex min-w-0 items-baseline gap-2">
+        <span className="text-text min-w-0 truncate">{top.label}</span>{' '}
+        <span className="text-text shrink-0 tabular-nums">{top.count.toLocaleString()}</span>
+      </span>
+    );
+  };
+  const columns: ListColumn<ShareDay>[] = [
+    {
+      key: 'day',
+      label: 'Day',
+      // Each head holds its words in a span, so its text box is its words (R16), not the cell.
+      header: <span>Day</span>,
+      minWidth: 96,
+      render: (row) => (
+        <span className="text-body text-text-bright whitespace-nowrap leading-[18px]">
+          {row.day}
+        </span>
+      ),
+    },
+    {
+      key: 'count',
+      label: 'Retained count',
+      header:
+        scale === null ? (
+          <span>Retained count</span>
+        ) : (
+          <ScaleHeader label="Retained count" scale={scale} trackWidth={SHARE_TRACK} />
+        ),
+      minWidth: 136,
+      render: bar,
+    },
+    {
+      key: 'labels',
+      label: 'Labels',
+      header: <span>Labels</span>,
+      minWidth: 64,
+      numeric: true,
+      render: (row) =>
+        row.buckets?.length ? (
+          <span className="text-text-dim">{row.buckets.length.toLocaleString()}</span>
+        ) : null,
+    },
+    {
+      key: 'leader',
+      label: 'Most common',
+      header: <span>Most common</span>,
+      minWidth: 200,
+      width: 'auto',
+      render: leader,
+    },
+  ];
+  return (
+    <ListTable
+      label={title + ' daily observations'}
+      density="row"
+      columns={columns}
+      rows={days}
+      rowKey={(row) => String(row.ts)}
+      rowTitle={(row) => `${row.day} · ${shareDayWords(row)}`}
+      mobileRow={(row) => (
+        <PhoneRow
+          testId="share-day-row-mobile"
+          lines={[
+            { key: 'day', tone: 'head', left: row.day, right: bar(row) },
+            {
+              key: 'leader',
+              tone: 'body',
+              left: leader(row),
+              right: row.buckets?.length ? (
+                <span className="text-text-dim">{row.buckets.length.toLocaleString()} labels</span>
+              ) : undefined,
+            },
+            // A title is no hover on a touch screen: every label and count, quiet, last.
+            Boolean(row.buckets?.length) && {
+              key: 'labels',
+              tone: 'quiet',
+              left: shareDayWords(row),
+            },
+          ]}
+        />
+      )}
+    />
+  );
+}
+
 function ShareTrend({
   title,
   history,
@@ -148,6 +299,12 @@ function ShareTrend({
   error: boolean;
 }) {
   const byDay = new Map(history?.points.map((point) => [point.ts, point]) ?? []);
+  const days: ShareDay[] = (history?.dailyCoverage ?? []).map((day) => {
+    const point = byDay.get(day.ts);
+    if (day.hasRetainedObservation !== Boolean(point))
+      throw new Error(title + ' coverage disagrees with point at ' + formatDay(day.ts));
+    return { ts: day.ts, day: formatDay(day.ts), buckets: point ? point.buckets : null };
+  });
   return (
     <TrendPanel title={title}>
       {error ? (
@@ -162,34 +319,12 @@ function ShareTrend({
         <>
           <p className="text-text-dim text-body mb-3">
             Retained top-label counts per observed day. The historical total and omitted labels were
-            not recorded, so percentages are unavailable.
+            not recorded, so percentages are unavailable. Each bar is a day&apos;s retained count,
+            its most common label in jade; every label is in the row&apos;s title.
           </p>
-          <div
-            className="max-h-72 overflow-y-auto"
-            role="list"
-            aria-label={title + ' daily observations'}
-          >
-            {history.dailyCoverage.map((day) => {
-              const point = byDay.get(day.ts);
-              if (day.hasRetainedObservation !== Boolean(point))
-                throw new Error(title + ' coverage disagrees with point at ' + formatDay(day.ts));
-              return (
-                <div
-                  role="listitem"
-                  key={day.ts}
-                  className="border-base-border-subtle text-meta grid grid-cols-[6rem_minmax(0,1fr)] gap-3 border-t py-2"
-                >
-                  <span className="text-text-dim">{formatDay(day.ts)}</span>
-                  <span className="text-text min-w-0 break-words">
-                    {point
-                      ? point.buckets
-                          .map((bucket) => bucket.label + ' ' + bucket.count.toLocaleString())
-                          .join(' · ') || 'No retained labels'
-                      : 'No retained round observation'}
-                  </span>
-                </div>
-              );
-            })}
+          {/* The head and six one-line days (61 + 6 × 41 px); a longer retention scrolls, raw data. */}
+          <div className="max-h-80 overflow-y-auto">
+            <ShareDays title={title} days={days} />
           </div>
         </>
       )}

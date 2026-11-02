@@ -48,33 +48,31 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
       {visible.length === 0 ? (
         <p className="text-text-dim text-small">No retained advertisement edges for this round.</p>
       ) : (
-        <div
-          role="list"
-          aria-label="Directed advertiser to advertised endpoint graph"
-          className="grid gap-x-8 gap-y-0 md:grid-cols-2"
-        >
+        <div role="list" aria-label="Directed advertiser to advertised endpoint graph">
           {visible.map((edge) => (
             <div
               role="listitem"
               key={edge.advertiserPeerId + ':' + edge.targetPeerId + ':' + edge.alias}
-              className="border-base-border-subtle text-meta grid min-w-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] gap-x-2 gap-y-0.5 border-t py-2"
+              className="border-base-border-subtle flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 border-t py-2.5"
             >
-              {/* Two lines (board T3): who named whom, the ids cut in the middle so both ends
-                  stay; then the address it named, wrapping whole rather than losing its port. */}
+              {/* One line (table-rows T8): who, "named", whom — the row's one bright thing — then
+                  the address it named. The ids are cut in the middle so both ends stay, whole in
+                  their titles; where the line is too short the address wraps under them, whole
+                  rather than losing its port (board T3). */}
               <span
                 title={edge.advertiserPeerId}
-                className="text-text-bright min-w-0 [overflow-wrap:anywhere]"
+                className="text-text text-small whitespace-nowrap"
               >
                 {truncateHash(edge.advertiserPeerId)}
               </span>
-              <span className="text-text-dim">named</span>
+              <span className="text-text-dim text-meta">named</span>
               <span
                 title={edge.targetPeerId}
-                className="text-text-bright min-w-0 [overflow-wrap:anywhere]"
+                className="text-body text-text-bright whitespace-nowrap leading-[18px]"
               >
                 {truncateHash(edge.targetPeerId)}
               </span>
-              <span className="text-text-dim col-span-3 min-w-0 [overflow-wrap:anywhere]">
+              <span className="text-text-dim text-meta min-w-0 [overflow-wrap:anywhere]">
                 {edge.alias}
               </span>
             </div>

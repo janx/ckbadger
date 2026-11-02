@@ -598,7 +598,7 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     expect(limits).toEqual(['5', '50']);
   });
 
-  it('shows who named whom in five rows of two, then every observation on demand', async () => {
+  it('shows who named whom in ten one-line rows, then every observation on demand', async () => {
     stubChartWidth(1248);
     server.use(
       http.get(`${API_BASE}/network/advertisements`, () =>

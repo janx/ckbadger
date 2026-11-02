@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, onTestFinished, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { render, screen, waitFor } from '../utils/test-utils';
+import { render, screen, waitFor, within } from '../utils/test-utils';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
 import {
   mergePeerCounts,
@@ -323,8 +324,9 @@ describe('NetworkTrends', () => {
       'Same-network reachable 70 peers · Verified (retained) 120 peers'
     );
     // Historical totals were not persisted, so these are exact retained counts rather than shares.
-    expect(screen.getAllByText(/0.114.0 4 · 0.113.0 2/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/United States 3 · Germany 2/).length).toBeGreaterThan(0);
+    // Table-rows T8: every day is one line; its whole label list is the row's title.
+    expect(screen.getAllByTitle(/0.114.0 4 · 0.113.0 2/)).toHaveLength(3);
+    expect(screen.getAllByTitle(/United States 3 · Germany 2/)).toHaveLength(3);
     expect(screen.getAllByText(/percentages are unavailable/).length).toBeGreaterThan(0);
   });
 
@@ -386,6 +388,139 @@ describe('NetworkTrends', () => {
     render(<NetworkTrends />);
 
     expect(await screen.findByText(/reachablePeers 5 exceeds verifiedPeers 4/)).toBeInTheDocument();
+  });
+
+  // Table-rows T8: a day is one line — the day (the row's key), a count bar of its retained
+  // labels with the most common one in jade, how many labels, and the most common with its count;
+  // every label and count stays in the row's title, a day without a round says so on its line.
+  it('draws each day as one line with a count bar; every label and count in its title (T8)', async () => {
+    const days = [1751299200, 1751385600, 1751472000, 1751558400];
+    const observed = days.filter((ts) => ts !== 1751472000);
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) => {
+        const metric = new URL(request.url).searchParams.get('metric') ?? '';
+        return HttpResponse.json({
+          metric,
+          granularity: 'day',
+          dailyCoverage: days.map((ts) => ({
+            ts,
+            hasRetainedObservation: observed.includes(ts),
+            roundsPerDay: null,
+          })),
+          coverageFrom: days[0],
+          coverageTo: days[3],
+          roundCountAvailability: 'notRecorded',
+          points: observed.map((ts, i) => ({
+            ts,
+            scalar: 0,
+            buckets:
+              i === 2
+                ? []
+                : [
+                    { label: '0.210.0 (2592ddf 2026-09-17)', count: 35 + i },
+                    { label: '0.209.0 (d166e28 2026-07-29)', count: 8 },
+                    { label: '0.5.3', count: 1 },
+                  ],
+          })),
+        });
+      })
+    );
+    render(<NetworkShareHistory />);
+    const table = await screen.findByRole('table', {
+      name: 'Client Version Share daily observations',
+    });
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows).toHaveLength(4);
+    expect(within(table).getByText('Retained count').closest('th')).not.toBeNull();
+    // Every head holds its words in an inline element, so its text box is its words (R16).
+    for (const head of within(table).getAllByRole('columnheader'))
+      expect(head.firstElementChild?.tagName).toBe('SPAN');
+    // The first day: the key, the bar (35 of 44 in jade), 3 labels, the most common.
+    const [first, , missing, empty] = rows;
+    expect(first).toHaveAttribute(
+      'title',
+      '2025-07-01 · 0.210.0 (2592ddf 2026-09-17) 35 · 0.209.0 (d166e28 2026-07-29) 8 · 0.5.3 1'
+    );
+    expect(within(first).getByText('2025-07-01')).toHaveClass(
+      'text-body',
+      'text-text-bright',
+      'leading-[18px]'
+    );
+    expect(
+      within(first).getByRole('img', {
+        name: 'Retained count: 44, 35 0.210.0 (2592ddf 2026-09-17), 9 other labels',
+      })
+    ).toBeInTheDocument();
+    expect(first.querySelector('[data-segment="leader"]')).toHaveStyle({
+      backgroundColor: 'rgb(46, 219, 163)',
+    });
+    expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
+    const cells = within(first).getAllByRole('cell');
+    expect(cells.map((cell) => cell.textContent)).toEqual([
+      '2025-07-01',
+      '44',
+      '3',
+      '0.210.0 (2592ddf 2026-09-17) 35',
+    ]);
+    // One line per day: no cell holds a second block.
+    for (const cell of cells) expect(cell.querySelector('.block, p, div')).toBeNull();
+    expect(missing).toHaveAttribute('title', '2025-07-03 · No retained round observation');
+    expect(missing).toHaveTextContent('No retained round observation');
+    expect(missing.querySelector('[data-aligned-bar]')).toBeNull();
+    expect(empty).toHaveAttribute('title', '2025-07-04 · No retained labels');
+    expect(empty).toHaveTextContent('No retained labels');
+  });
+
+  // A title is no hover on a touch screen: the phone row also says every label, quietly, last.
+  it('keeps every column of a day on its phone row, and every label in a quiet last line', async () => {
+    const days = [1751299200, 1751385600];
+    server.use(
+      http.get(`${API_BASE}/network/history`, ({ request }) =>
+        HttpResponse.json({
+          metric: new URL(request.url).searchParams.get('metric'),
+          granularity: 'day',
+          dailyCoverage: days.map((ts, i) => ({
+            ts,
+            hasRetainedObservation: i === 0,
+            roundsPerDay: null,
+          })),
+          coverageFrom: days[0],
+          coverageTo: days[1],
+          roundCountAvailability: 'notRecorded',
+          points: [
+            {
+              ts: days[0],
+              scalar: 0,
+              buckets: [
+                { label: 'US', count: 12 },
+                { label: 'DE', count: 10 },
+              ],
+            },
+          ],
+        })
+      )
+    );
+    atContainerWidth(358);
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+    render(<NetworkShareHistory />);
+    const rows = await screen.findAllByTestId('share-day-row-mobile');
+    expect(rows).toHaveLength(4);
+    expect(phoneLines(rows[0]).map((l) => [l.key, l.tone, l.left, l.right])).toEqual([
+      ['day', 'head', '2025-07-01', '22'],
+      ['leader', 'body', 'US 12', '2 labels'],
+      ['labels', 'quiet', 'US 12 · DE 10', null],
+    ]);
+    expect(phoneLines(rows[1]).map((l) => [l.key, l.left, l.right])).toEqual([
+      ['day', '2025-07-02', null],
+      ['leader', 'No retained round observation', null],
+    ]);
+    expect(rows[0].closest('[role="listitem"]')).toHaveAttribute(
+      'title',
+      '2025-07-01 · US 12 · DE 10'
+    );
   });
 
   it('shows a version-history request failure instead of an empty share', async () => {
