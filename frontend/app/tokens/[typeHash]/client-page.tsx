@@ -132,7 +132,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         </span>
       }
       intro={
-        <div className="space-y-3 text-xs">
+        <div className="text-small space-y-3">
           <AssetReadState error={token.error} label="token" retained />
           {t.description && (
             <p className="text-text-dim">
@@ -221,7 +221,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   <span key={other.typeScriptHash}>
                     {i > 0 && '; '}
                     <AppLink href={`/tokens/${other.typeScriptHash}`}>
-                      <Hash hash={other.typeScriptHash} copyable={false} className="text-xs" />
+                      <Hash hash={other.typeScriptHash} copyable={false} className="text-small" />
                     </AppLink>
                     , <AssetCount value={other.holdersCount} /> holders
                   </span>
@@ -275,7 +275,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                   startChars={12}
                   endChars={6}
                   copyable={false}
-                  className="text-xs"
+                  className="text-small"
                 />
               </AppLink>
               <p className="text-text-dim text-meta mt-1">
@@ -302,7 +302,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
         },
         {
           label: 'Type hash',
-          value: <Hash hash={t.typeScriptHash} truncate={false} className="break-all text-xs" />,
+          value: <Hash hash={t.typeScriptHash} truncate={false} className="text-small break-all" />,
         },
       ]}
       feed={
@@ -318,7 +318,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       }
       tier2={
         <DetailSection title="Type script">
-          <dl className="space-y-4 text-xs">
+          <dl className="text-small space-y-4">
             <div>
               <dt className="text-text-dim">Code hash · {t.typeHashType}</dt>
               <dd className="mt-1">
@@ -329,7 +329,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                     scriptKind: 'type',
                   })}
                 >
-                  <Hash hash={t.typeCodeHash} truncate={false} className="break-all text-xs" />
+                  <Hash hash={t.typeCodeHash} truncate={false} className="text-small break-all" />
                 </AppLink>
               </dd>
               <dd className="text-text-dim text-meta mt-1">
@@ -339,7 +339,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             <div>
               <dt className="text-text-dim">Args</dt>
               <dd className="mt-1">
-                <Hash hash={t.typeArgs} truncate={false} className="break-all text-xs" />
+                <Hash hash={t.typeArgs} truncate={false} className="text-small break-all" />
               </dd>
               <dd className="text-text-dim text-meta mt-1 [overflow-wrap:anywhere]">
                 {t.issuer

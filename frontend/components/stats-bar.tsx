@@ -63,7 +63,7 @@ const PLACE = {
 const STACKED = 'flex flex-col gap-px sm:flex-row sm:items-baseline sm:gap-1.5 md:gap-2';
 const INLINE = 'flex items-baseline gap-1.5 md:gap-2';
 
-const LABEL = 'text-text-dim text-meta md:text-xs';
+const LABEL = 'text-text-dim text-meta md:text-small';
 const VALUE =
   'text-text-bright group-hover:text-jade text-body font-medium tabular-nums transition-colors';
 
@@ -113,7 +113,7 @@ function BlockTime({ value }: { value: string | null }) {
     return (
       <div role="alert" data-testid="vitals-block-time-error" className={STACKED}>
         <span className={LABEL}>Block time</span>
-        <span className="text-rouge text-xs">{`block time ${JSON.stringify(value)} is not <seconds>s`}</span>
+        <span className="text-rouge text-small">{`block time ${JSON.stringify(value)} is not <seconds>s`}</span>
       </div>
     );
   return (
@@ -164,7 +164,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
         className={`flex items-baseline gap-2 ${PLACE.line}`}
       >
         <span className={LABEL}>Epoch</span>
-        <span className="text-rouge text-xs">{`unreadable: ${read.error}`}</span>
+        <span className="text-rouge text-small">{`unreadable: ${read.error}`}</span>
       </div>
     );
   }
@@ -191,7 +191,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
           style={{ width: `${pct}%` }}
         />
       </span>
-      <span className="text-text text-meta tabular-nums md:text-xs">
+      <span className="text-text text-meta md:text-small tabular-nums">
         {index} / {length}
       </span>
       <span className={LABEL}>{estimatedLeft === null ? '—' : `≈ ${estimatedLeft} left`}</span>
@@ -205,7 +205,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
  */
 function VitalsError({ message }: { message: string }) {
   return (
-    <span role="alert" data-testid="vitals-error" className={`text-rouge text-xs ${PLACE.line}`}>
+    <span role="alert" data-testid="vitals-error" className={`text-rouge text-small ${PLACE.line}`}>
       {`Chain vitals unavailable: ${message}`}
     </span>
   );

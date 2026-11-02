@@ -246,7 +246,13 @@ export function TransactionListTable({
       minWidth: 160,
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash hash={tx.hash} startChars={10} endChars={6} copyable={false} className="text-xs" />
+          <Hash
+            hash={tx.hash}
+            startChars={10}
+            endChars={6}
+            copyable={false}
+            className="text-small"
+          />
         </Link>
       ),
     },
@@ -255,7 +261,7 @@ export function TransactionListTable({
       label: 'Block · age',
       minWidth: 175,
       render: (tx) => (
-        <span className="whitespace-nowrap text-xs">
+        <span className="text-small whitespace-nowrap">
           <Link href={`/blocks/${tx.blockNumber}`} className="hover:text-jade">
             {formatBlockNumber(tx.blockNumber)}
           </Link>
@@ -275,7 +281,7 @@ export function TransactionListTable({
             <span className={tx.isCellbase ? 'text-text flex-none' : 'text-text-bright flex-none'}>
               {tx.isCellbase ? 'Cellbase' : activityHeadline(tx.activity!)}
             </span>
-            <span className="text-text-dim min-w-0 truncate text-xs">
+            <span className="text-text-dim text-small min-w-0 truncate">
               {tx.isCellbase ? paysNote(tx) : whatNote(tx.activity!)}
             </span>
           </span>
@@ -332,7 +338,7 @@ export function TransactionListTable({
       label: 'Cells',
       minWidth: 56,
       render: (tx) => (
-        <span className="text-text-dim text-xs">
+        <span className="text-text-dim text-small">
           {tx.isCellbase ? 0 : tx.inputsCount} → {tx.outputsCount}
         </span>
       ),
@@ -365,7 +371,7 @@ export function TransactionListTable({
       header: <ScaleHeader label="Cycles" scale={cycleScale} />,
       render: (tx) =>
         tx.cycles === null ? (
-          <span className="text-text-dim text-xs">
+          <span className="text-text-dim text-small">
             {tx.cyclesStatus === 'failed' ? 'replay failed' : 'not yet run'}
           </span>
         ) : (

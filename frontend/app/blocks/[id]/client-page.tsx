@@ -249,7 +249,7 @@ export default function BlockDetailPage() {
           }
           status={
             activation && (
-              <Link href="/hardforks" className="text-text-dim text-xs">
+              <Link href="/hardforks" className="text-text-dim text-small">
                 HARDFORK ACTIVATION · {activation.shortName.toUpperCase()}
               </Link>
             )
@@ -259,7 +259,7 @@ export default function BlockDetailPage() {
             <>
               <dl
                 data-testid="block-tier2-facts"
-                className="grid gap-x-10 gap-y-5 text-xs [grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))]"
+                className="text-small grid gap-x-10 gap-y-5 [grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr))]"
               >
                 <div>
                   <dt className="text-text-dim mb-1">Epoch</dt>
@@ -368,7 +368,7 @@ export default function BlockDetailPage() {
                 <DetailSection
                   title="Uncles"
                   actions={
-                    <span className="text-text-dim text-xs">
+                    <span className="text-text-dim text-small">
                       {block.unclesCount.toLocaleString('en-US')} · counted toward the NC-Max orphan
                       rate
                     </span>
@@ -385,14 +385,14 @@ export default function BlockDetailPage() {
                     />
                   ))}
                   {block.unclesCount === 0 && (
-                    <p className="text-text-dim text-xs">No uncles in this block.</p>
+                    <p className="text-text-dim text-small">No uncles in this block.</p>
                   )}
                 </DetailSection>
                 <DetailSection
                   title="Proposals"
                   actions={
                     ownProposals && (
-                      <span className="text-text-dim text-xs">
+                      <span className="text-text-dim text-small">
                         {proposalsSummary(
                           ownProposals.length,
                           ownProposals.filter((p) => p.committedTxHash !== null).length
@@ -405,7 +405,7 @@ export default function BlockDetailPage() {
                     <p
                       role="alert"
                       data-testid="block-proposals-error"
-                      className="text-text-dim text-xs"
+                      className="text-text-dim text-small"
                     >
                       Failed to load proposals: {proposalsError.message}
                     </p>
@@ -414,7 +414,7 @@ export default function BlockDetailPage() {
                       <article
                         key={`${proposal.uncle?.hash}:${proposal.proposalIndex}`}
                         data-testid="block-proposal-row"
-                        className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5 text-xs"
+                        className="border-base-border-subtle text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-b py-2.5"
                       >
                         <p className="flex flex-wrap items-baseline gap-2">
                           <span className="text-gold">●</span>
@@ -443,7 +443,7 @@ export default function BlockDetailPage() {
                               <Hash
                                 hash={proposal.committedTxHash}
                                 copyable={false}
-                                className="text-xs"
+                                className="text-small"
                               />
                             </Link>{' '}
                             in{' '}
@@ -467,19 +467,19 @@ export default function BlockDetailPage() {
                   {!proposalsError &&
                     (proposals?.length === 0 ||
                       (block.proposalsCount === 0 && block.unclesCount === 0)) && (
-                      <p className="text-text-dim text-xs">No proposals in this block</p>
+                      <p className="text-text-dim text-small">No proposals in this block</p>
                     )}
                   {!proposalsError &&
                     proposals === undefined &&
                     (block.proposalsCount > 0 || block.unclesCount > 0) && (
-                      <p className="text-text-dim text-xs">Loading proposals...</p>
+                      <p className="text-text-dim text-small">Loading proposals...</p>
                     )}
                 </DetailSection>
               </div>
             </>
           }
           rawData={
-            <dl className="grid min-w-0 gap-3 text-xs">
+            <dl className="text-small grid min-w-0 gap-3">
               <div className="flex flex-wrap items-baseline justify-between gap-3">
                 <span className="text-text-dim">Header · version {block.version} · 208 bytes</span>
                 <span>
@@ -545,7 +545,7 @@ export default function BlockDetailPage() {
                     target="_blank"
                     rel="noreferrer"
                     data-testid="block-hardfork-resource-link"
-                    className="text-interactive text-xs"
+                    className="text-interactive text-small"
                   >
                     {resource.label}
                   </a>
@@ -632,7 +632,7 @@ export default function BlockDetailPage() {
                         />
                       ))}
                       {activityRows.length === 0 && (
-                        <p className="text-text-dim text-xs">No activities in this block.</p>
+                        <p className="text-text-dim text-small">No activities in this block.</p>
                       )}
                       {(activities.data.hasMore || activityPagination.hasPrevious) && (
                         <CursorPagination
@@ -675,7 +675,7 @@ export default function BlockDetailPage() {
                 </>
               )}
             </div>
-            <aside aria-label="Block facts" className="min-w-0 text-xs">
+            <aside aria-label="Block facts" className="text-small min-w-0">
               <p className="text-jade mb-5">
                 Canonical · {block.confirmations.toLocaleString('en-US')} confirmations
               </p>
@@ -825,7 +825,7 @@ function CommittedFrom({
   }
   const [only] = origins.keys();
   return (
-    <span className="text-text-dim text-xs">
+    <span className="text-text-dim text-small">
       {origins.size === 1
         ? `${committed.length.toLocaleString('en-US')} committed from ${formatBlockNumber(only)}'s proposals, ${formatCount(block.number - only, 'block')} later`
         : `${committed.length.toLocaleString('en-US')} committed from the proposals of ${origins.size.toLocaleString('en-US')} blocks`}
@@ -852,14 +852,14 @@ function UncleRow({
       `Uncle ${index} of block ${formatBlockNumber(blockNumber)}: sibling facts disagree`
     );
   return (
-    <article className="border-base-border-subtle flex flex-col gap-0.5 border-b py-2.5 text-xs">
+    <article className="border-base-border-subtle text-small flex flex-col gap-0.5 border-b py-2.5">
       <span className="flex flex-wrap items-baseline gap-x-2">
         <Link href={getUncleDetailHref(blockNumber, index)} className="text-text-bright">
           {formatBlockNumber(uncle.number)}
         </Link>
         <span className="text-text-dim">uncle</span>
         <Link href={getUncleDetailHref(blockNumber, index)}>
-          <Hash hash={uncle.hash} copyable={false} className="text-xs" />
+          <Hash hash={uncle.hash} copyable={false} className="text-small" />
         </Link>
       </span>
       <span className="text-text-dim">
@@ -878,7 +878,7 @@ function UncleRow({
                 startChars={6}
                 endChars={4}
                 copyable={false}
-                className="text-xs"
+                className="text-small"
               />
             </Link>
             , same parent{' '}

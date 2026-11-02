@@ -176,8 +176,8 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
           left: wide ? (
             <>
               {name}
-              <span className="text-text-dim text-xs"> · </span>
-              <span className="text-text-dim text-xs">{kind}</span>
+              <span className="text-text-dim text-small"> · </span>
+              <span className="text-text-dim text-small">{kind}</span>
             </>
           ) : (
             name
@@ -361,7 +361,7 @@ export default function ScriptsPage() {
                 onChange={(event) => setSearchInput(event.target.value)}
                 placeholder="Search by name or code hash"
                 aria-label="Search scripts"
-                className="border-base-border bg-base-surface text-text-bright min-w-0 rounded border px-3 py-1.5 text-xs sm:w-64"
+                className="border-base-border bg-base-surface text-text-bright text-small min-w-0 rounded border px-3 py-1.5 sm:w-64"
               />
               {search && (
                 <button
@@ -379,7 +379,7 @@ export default function ScriptsPage() {
               )}
               <button
                 type="submit"
-                className="border-base-border text-text-bright rounded border px-3 py-1.5 text-xs"
+                className="border-base-border text-text-bright text-small rounded border px-3 py-1.5"
               >
                 Search
               </button>
@@ -410,7 +410,7 @@ export default function ScriptsPage() {
               >
                 {label}{' '}
                 {count !== undefined && (
-                  <span className="text-text-dim text-xs font-normal">
+                  <span className="text-text-dim text-small font-normal">
                     {count.toLocaleString('en-US')}
                   </span>
                 )}
@@ -424,7 +424,7 @@ export default function ScriptsPage() {
             />
           )}
           <section aria-label="Script list" className="min-w-0">
-            <div className="text-text-dim mb-3 flex flex-wrap items-center gap-2 text-xs">
+            <div className="text-text-dim text-small mb-3 flex flex-wrap items-center gap-2">
               <label htmlFor="scripts-sort">sorted by</label>
               <select
                 id="scripts-sort"
@@ -434,7 +434,7 @@ export default function ScriptsPage() {
                   const next = event.target.value as SortKey;
                   sortBy(next, next === 'name' ? 'asc' : 'desc');
                 }}
-                className="border-base-border bg-base-surface text-text rounded border px-2 py-1 text-xs"
+                className="border-base-border bg-base-surface text-text text-small rounded border px-2 py-1"
               >
                 <option value="capacity">CKB in their cells</option>
                 <option value="used">Occupied CKB</option>
@@ -455,9 +455,9 @@ export default function ScriptsPage() {
               )}
             </div>
             {isLoading ? (
-              <div className="text-text-dim py-8 text-xs">Loading scripts...</div>
+              <div className="text-text-dim text-small py-8">Loading scripts...</div>
             ) : isError ? (
-              <div role="alert" className="text-negative py-8 text-xs">
+              <div role="alert" className="text-negative text-small py-8">
                 <strong>Failed to load scripts</strong>:{' '}
                 {error instanceof Error ? error.message : 'Unknown error'}
               </div>

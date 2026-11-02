@@ -78,7 +78,7 @@ export function DetailLayout({
           {actions}
         </div>
         {identity && (
-          <div className="text-text-dim mt-2 min-w-0 text-xs [overflow-wrap:anywhere]">
+          <div className="text-text-dim text-small mt-2 min-w-0 [overflow-wrap:anywhere]">
             {identity}
           </div>
         )}
@@ -90,7 +90,7 @@ export function DetailLayout({
                 key={label}
                 className="grid min-w-0 grid-cols-1 items-baseline gap-x-3 gap-y-1 sm:grid-cols-[minmax(80px,1fr)_minmax(0,2fr)]"
               >
-                <dt className="text-text-dim min-w-0 break-words text-xs">{label}</dt>
+                <dt className="text-text-dim text-small min-w-0 break-words">{label}</dt>
                 <dd className="text-text-bright min-w-0 break-words tabular-nums">{value}</dd>
               </div>
             ))}
@@ -105,10 +105,10 @@ export function DetailLayout({
           {tier2}
           {rawData && (
             <details open={rawOpen} className="border-base-border-subtle border-t pt-4">
-              <summary className="text-text-dim hover:text-text cursor-pointer text-xs">
+              <summary className="text-text-dim hover:text-text text-small cursor-pointer">
                 Raw data
               </summary>
-              <div className="mt-4 min-w-0 overflow-x-auto text-xs">{rawData}</div>
+              <div className="text-small mt-4 min-w-0 overflow-x-auto">{rawData}</div>
             </details>
           )}
         </DetailTier2>

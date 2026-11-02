@@ -20,7 +20,7 @@ function ChartDataWarning({ show }: { show: boolean }) {
     <div className="border-warning/30 bg-warning/10 mb-6 rounded border px-4 py-3">
       <div className="flex items-center gap-2">
         <span className="text-warning">⚠</span>
-        <span className="text-warning font-mono text-sm">
+        <span className="text-warning text-body font-mono">
           Chart data may be incomplete. The indexer is still syncing historical statistics.
         </span>
       </div>
@@ -73,7 +73,10 @@ export function ChartPage({
       <Header />
       <main className="container mx-auto px-4 py-8">
         <div className="mb-6">
-          <Link href={backLink} className="hover:text-jade text-text-dim text-sm transition-colors">
+          <Link
+            href={backLink}
+            className="hover:text-jade text-text-dim text-body transition-colors"
+          >
             ← {backLabel}
           </Link>
         </div>
@@ -105,7 +108,7 @@ export function ChartPage({
                     queryKey === 'chart-hash-rate' || queryKey === 'chart-difficulty'
                   }
                 />
-                <div className="mt-6 flex items-center justify-center gap-6 text-sm">
+                <div className="text-body mt-6 flex items-center justify-center gap-6">
                   <div className="flex items-center gap-2">
                     <span
                       className={
@@ -121,7 +124,7 @@ export function ChartPage({
                     </div>
                   )}
                 </div>
-                <div className="text-text-dim mt-4 text-center font-mono text-xs">
+                <div className="text-text-dim text-small mt-4 text-center font-mono">
                   Drag to select range • Scroll to zoom • Middle-click drag to pan • Click Reset to
                   restore
                 </div>

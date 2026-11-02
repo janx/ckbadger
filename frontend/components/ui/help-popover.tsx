@@ -169,7 +169,7 @@ export function HelpPopover({
                 {title}
               </div>
             )}
-            <div className="space-y-2 text-xs">{children}</div>
+            <div className="text-small space-y-2">{children}</div>
           </div>,
           document.body
         )

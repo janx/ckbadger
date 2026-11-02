@@ -4,7 +4,7 @@
  * at full size; a narrower box shows fewer bytes a row, never smaller ones.
  */
 
-/** The advance of one 12 px JetBrains Mono glyph (the dump's text-xs). */
+/** The advance of one 12 px JetBrains Mono glyph (the dump's text-small). */
 const DUMP_CHAR_PX = 7.2;
 /** One hex byte: two glyphs plus its 1 px padding on each side (`px-px`). */
 const HEX_CELL_PX = 2 * DUMP_CHAR_PX + 2;

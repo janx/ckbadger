@@ -14,13 +14,13 @@ interface Props {
  */
 export function DotCellRecordsTable({ records }: Props) {
   if (records.length === 0) {
-    return <div className="text-text-dim p-4 font-mono text-sm">No records set.</div>;
+    return <div className="text-text-dim text-body p-4 font-mono">No records set.</div>;
   }
   return (
     <div className="overflow-x-auto">
-      <table className="w-full text-left font-mono text-sm">
+      <table className="text-body w-full text-left font-mono">
         <thead>
-          <tr className="border-base-border text-text-dim border-b text-xs uppercase tracking-wider">
+          <tr className="border-base-border text-text-dim text-small border-b uppercase tracking-wider">
             <th className="px-4 py-2 font-normal">Key</th>
             <th className="px-4 py-2 font-normal">Label</th>
             <th className="px-4 py-2 font-normal">Value</th>

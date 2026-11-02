@@ -38,7 +38,7 @@ export default function ActivitiesPage() {
           title="Activities"
           kind="index"
           actions={
-            <Link href="/transactions" className="text-text-dim hover:text-jade text-xs">
+            <Link href="/transactions" className="text-text-dim hover:text-jade text-small">
               Transactions →
             </Link>
           }
@@ -53,11 +53,11 @@ export default function ActivitiesPage() {
               addresses took part
             </p>
           ) : error || txStatsError ? (
-            <p role="alert" className="text-text-dim text-xs">
+            <p role="alert" className="text-text-dim text-small">
               Could not load yesterday’s activity: {(error ?? txStatsError)!.message}
             </p>
           ) : data && txStats ? (
-            <p className="text-text-dim text-xs">
+            <p className="text-text-dim text-small">
               No complete activity statistics for {yesterday} (UTC+8).
             </p>
           ) : (

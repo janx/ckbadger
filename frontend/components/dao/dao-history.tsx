@@ -186,7 +186,7 @@ export function DaoHistory({
       </span>
     </div>
   ) : (
-    <p className="text-text-dim text-xs">No complete daily history yet.</p>
+    <p className="text-text-dim text-small">No complete daily history yet.</p>
   );
 
   let figure: ReactNode = null;

@@ -110,7 +110,7 @@ function ScopedCollectionHolders({
         address: holder.address,
       }}
       truncate
-      className="max-w-full break-all [&>span]:text-xs"
+      className="[&>span]:text-small max-w-full break-all"
     />
   );
   const columns: ListColumn<CollectionHolder>[] = [
@@ -224,7 +224,7 @@ function ScopedCollectionHolders({
                       amount={
                         <span className="whitespace-nowrap">
                           <AssetCount value={holder.itemCount} />{' '}
-                          <span className="text-text-dim text-xs">
+                          <span className="text-text-dim text-small">
                             {holder.itemCount === 1 ? 'item' : 'items'}
                           </span>
                         </span>

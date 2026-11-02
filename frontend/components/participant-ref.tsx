@@ -52,7 +52,7 @@ export function ParticipantRefView({
           <Link
             href={`/address/${address}`}
             className={cn(
-              'shrink-0 font-mono text-xs transition-colors',
+              'text-small shrink-0 font-mono transition-colors',
               quiet
                 ? 'text-text hover:text-jade'
                 : isCkbAddr
@@ -80,7 +80,7 @@ export function ParticipantRefView({
           href={`/address/${lockHash}`}
           className={cn(
             'text-text-dim hover:text-aqua font-mono transition-colors',
-            compact ? 'shrink-0 text-xs' : 'text-sm'
+            compact ? 'text-small shrink-0' : 'text-body'
           )}
           title={lockHash}
           onClick={(e) => e.stopPropagation()}
@@ -101,7 +101,7 @@ export function ParticipantRefView({
   return (
     <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
       <span
-        className={cn('text-text-dim font-mono', compact ? 'text-xs' : 'text-sm')}
+        className={cn('text-text-dim font-mono', compact ? 'text-small' : 'text-body')}
         title={prefix}
       >
         {compact ? compactLabel(prefix) : truncateHash(prefix, 10, 6)}

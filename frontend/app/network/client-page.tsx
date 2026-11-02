@@ -41,7 +41,7 @@ function ReachabilityCaveat({ className }: { className?: string }) {
     <div
       className={`border-base-border bg-base-surface rounded border px-4 py-3 ${className ?? ''}`}
     >
-      <p className="text-text-dim font-mono text-xs leading-relaxed">
+      <p className="text-text-dim text-small font-mono leading-relaxed">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
         network; nodes behind NAT or firewalls can stay hidden.
@@ -61,7 +61,7 @@ function PeersOnboarding({
     <div className="space-y-4">
       {enabled && (
         <div className="border-info/30 bg-info/10 rounded border px-4 py-3">
-          <p className="text-info font-mono text-sm">
+          <p className="text-info text-body font-mono">
             {activeRound?.blockedReason
               ? `Crawler round #${activeRound.roundId} blocked — ${activeRound.blockedReason}`
               : activeRound
@@ -72,8 +72,10 @@ function PeersOnboarding({
       )}
 
       <div className="border-base-border bg-base-surface rounded border p-6">
-        <h2 className="text-text-bright mb-2 font-mono text-lg font-bold">The CKB peer crawler</h2>
-        <p className="text-text-dim mb-4 text-sm leading-relaxed">
+        <h2 className="text-text-bright text-section mb-2 font-mono font-bold">
+          The CKB peer crawler
+        </h2>
+        <p className="text-text-dim text-body mb-4 leading-relaxed">
           The peer crawler performs whole-network CKB L1 node discovery: starting from bootnodes it
           dials outward across the p2p network and records each same-network peer this observer
           verifies. It is <span className="text-text">local-first</span> — you run the crawl, and
@@ -82,19 +84,19 @@ function PeersOnboarding({
 
         <ReachabilityCaveat className="mb-4" />
 
-        <h3 className="text-text-bright mb-2 font-mono text-sm font-bold">How to enable</h3>
-        <p className="text-text-dim mb-2 text-sm">
+        <h3 className="text-text-bright text-body mb-2 font-mono font-bold">How to enable</h3>
+        <p className="text-text-dim text-body mb-2">
           Set the crawler to enabled in{' '}
           <code className="text-aqua">this network&apos;s config.toml</code> and restart:
         </p>
-        <pre className="border-base-border bg-base-bg text-text overflow-x-auto rounded border p-3 font-mono text-xs">
+        <pre className="border-base-border bg-base-bg text-text text-small overflow-x-auto rounded border p-3 font-mono">
           {`[crawler]
 enabled = true
 # optional geo / ASN enrichment (MaxMind GeoLite2):
 # geoip_city_path = "/path/to/GeoLite2-City.mmdb"
 # geoip_asn_path  = "/path/to/GeoLite2-ASN.mmdb"`}
         </pre>
-        <p className="text-text-dim mt-3 text-xs leading-relaxed">
+        <p className="text-text-dim text-small mt-3 leading-relaxed">
           Note: enabling performs outbound whole-network crawling from your host. Geo / ASN columns
           stay empty unless the optional MaxMind GeoLite2 databases are configured.
         </p>
@@ -125,7 +127,7 @@ function MaxMindAttribution() {
   if (!data || !hasGeoData(data.countries)) return null;
 
   return (
-    <p className="text-text-dim border-base-border/60 mt-2 border-t pt-3 font-mono text-xs">
+    <p className="text-text-dim border-base-border/60 text-small mt-2 border-t pt-3 font-mono">
       Geo/ASN data © MaxMind (GeoLite2)
     </p>
   );
@@ -203,7 +205,7 @@ function PeersDashboard({
         </p>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-text-dim text-xs">
+        <span className="text-text-dim text-small">
           Round #{lastRound.roundId} · updated {updatedAgo}
         </span>
         {activeRound && (
@@ -216,7 +218,7 @@ function PeersDashboard({
       </div>
 
       {activeRound?.blockedReason && (
-        <p className="border-negative/30 bg-negative/10 text-negative rounded border px-3 py-2 font-mono text-xs">
+        <p className="border-negative/30 bg-negative/10 text-negative text-small rounded border px-3 py-2 font-mono">
           Active crawler round blocked: {activeRound.blockedReason}
         </p>
       )}
@@ -234,7 +236,7 @@ function PeersDashboard({
       <MaxMindAttribution />
       <DetailTier2>
         <DetailSection title="Crawler round evidence">
-          <p className="text-text-dim text-xs leading-relaxed">
+          <p className="text-text-dim text-small leading-relaxed">
             Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
             attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
             observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates ·{' '}

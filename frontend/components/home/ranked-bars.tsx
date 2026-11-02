@@ -32,7 +32,7 @@ export function RankedBars({
   testId?: string;
 }) {
   const grid = cn(
-    'grid items-center gap-2.5 py-1 text-xs',
+    'grid items-center gap-2.5 py-1 text-small',
     wideLabels
       ? 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_52px]'
       : 'grid-cols-[92px_minmax(0,1fr)_52px]'
@@ -42,12 +42,12 @@ export function RankedBars({
       {titleHref ? (
         <Link
           href={titleHref}
-          className="text-text-dim hover:text-jade w-fit text-xs transition-colors"
+          className="text-text-dim hover:text-jade text-small w-fit transition-colors"
         >
           {title}
         </Link>
       ) : (
-        <span className="text-text-dim text-xs">{title}</span>
+        <span className="text-text-dim text-small">{title}</span>
       )}
       <ul className="m-0 flex list-none flex-col gap-0.5 p-0">
         {rows.map((row) => {

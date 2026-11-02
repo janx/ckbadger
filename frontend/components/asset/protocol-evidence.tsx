@@ -120,7 +120,10 @@ export function ProtocolEvidence({
         </button>
       </div>
       {copied && (
-        <p role={copied.error ? 'alert' : 'status'} className="text-text-dim break-words text-xs">
+        <p
+          role={copied.error ? 'alert' : 'status'}
+          className="text-text-dim text-small break-words"
+        >
           {copied.error ? `Could not copy raw bytes: ${copied.error}` : 'Raw bytes copied.'}
         </p>
       )}
@@ -130,7 +133,7 @@ export function ProtocolEvidence({
       </p>
       {children}
       {bytes.length === 0 ? (
-        <p className="text-text-dim text-xs">Empty cell data (0 bytes).</p>
+        <p className="text-text-dim text-small">Empty cell data (0 bytes).</p>
       ) : (
         <div className="min-w-0 [&_button]:max-w-full [&_button]:break-all [&_p]:break-all">
           {bytes.length > PAGE_BYTES && (
@@ -170,7 +173,7 @@ export function ProtocolEvidence({
         </div>
       )}
       {fields.length > 0 && (
-        <dl aria-label={`${title} field values`} className="grid min-w-0 gap-3 text-xs">
+        <dl aria-label={`${title} field values`} className="text-small grid min-w-0 gap-3">
           {fields.map((field, index) => (
             <div
               key={`${index}:${field.name}`}
@@ -191,18 +194,18 @@ export function ProtocolEvidence({
       )}
       {decodedJson !== undefined && (
         <details className="min-w-0">
-          <summary className="text-text-dim cursor-pointer text-xs">Decoded fields</summary>
+          <summary className="text-text-dim text-small cursor-pointer">Decoded fields</summary>
           <p className="text-text-dim text-meta mt-3">
             Protocol interpretation; raw cell bytes remain the evidence.
           </p>
-          <pre className="text-text mt-2 max-w-full whitespace-pre-wrap break-all text-xs">
+          <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
             {decodedJson}
           </pre>
         </details>
       )}
       <details className="min-w-0">
-        <summary className="text-text-dim cursor-pointer text-xs">Complete raw hex</summary>
-        <pre className="text-text mt-3 max-w-full whitespace-pre-wrap break-all text-xs">
+        <summary className="text-text-dim text-small cursor-pointer">Complete raw hex</summary>
+        <pre className="text-text text-small mt-3 max-w-full whitespace-pre-wrap break-all">
           {dataHex}
         </pre>
       </details>

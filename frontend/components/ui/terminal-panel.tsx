@@ -105,7 +105,7 @@ export function TerminalPanelHeader({
     >
       <div className="flex min-w-0 items-center gap-3">
         {renderIndicator()}
-        <div className="text-text-dim min-w-0 break-words font-mono text-sm uppercase tracking-wider">
+        <div className="text-text-dim text-body min-w-0 break-words font-mono uppercase tracking-wider">
           {children}
         </div>
       </div>
@@ -167,7 +167,9 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
     return (
       <div className={cn('flex items-center gap-3 py-2', className)}>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="text-text-dim font-mono text-xs uppercase tracking-widest">{label}</span>
+        <span className="text-text-dim text-small font-mono uppercase tracking-widest">
+          {label}
+        </span>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
       </div>
     );

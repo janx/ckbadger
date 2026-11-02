@@ -20,7 +20,7 @@ export interface PhoneLine {
 
 const TONE: Record<PhoneLineTone, string> = {
   head: 'text-body text-text-bright',
-  body: 'text-xs text-text',
+  body: 'text-small text-text',
   // An exact amount takes the ink of its line here (ExactCkb sets its own), so the developer
   // figures stay quiet; a part that wraps itself in brighter ink keeps it.
   quiet: 'text-meta text-text-dim [&_[data-ckb-amount]]:[color:inherit]',
@@ -71,7 +71,7 @@ export function PhoneRow({
               data-part="right"
               className={cn(
                 'ml-auto shrink-0 text-right tabular-nums',
-                line.tone === 'head' && 'text-text text-xs'
+                line.tone === 'head' && 'text-text text-small'
               )}
             >
               {line.right}

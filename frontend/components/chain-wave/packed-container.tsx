@@ -211,7 +211,7 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
         typeof window !== 'undefined' &&
         createPortal(
           <div
-            className="border-base-border/50 bg-base-surface/95 pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg border px-3 py-2 text-xs shadow-xl backdrop-blur-sm"
+            className="border-base-border/50 bg-base-surface/95 text-small pointer-events-none fixed z-[9999] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-lg border px-3 py-2 shadow-xl backdrop-blur-sm"
             style={{
               left: tooltipPos.x,
               top: tooltipPos.y - 8,
@@ -293,10 +293,10 @@ export function PackedContainer({
     >
       <div className="mb-2 flex items-center justify-between sm:mb-3">
         <div>
-          <h3 className={cn('text-sm font-bold sm:text-base', config.titleColor)}>{title}</h3>
-          {subtitle && <div className="text-text-dim text-meta sm:text-xs">{subtitle}</div>}
+          <h3 className={cn('text-body sm:text-section font-bold', config.titleColor)}>{title}</h3>
+          {subtitle && <div className="text-text-dim text-meta sm:text-small">{subtitle}</div>}
         </div>
-        <div className={cn('text-right text-xs sm:text-sm', config.countColor)}>
+        <div className={cn('text-small sm:text-body text-right', config.countColor)}>
           <span className="text-text-bright font-bold">{totalCount.toLocaleString()}</span>
           <span className="ml-1">txs</span>
         </div>
@@ -304,7 +304,7 @@ export function PackedContainer({
 
       <div ref={containerRef} className="relative flex-1 overflow-hidden rounded-lg bg-black/20">
         {items.length === 0 ? (
-          <div className="text-text-dim flex h-full w-full items-center justify-center text-xs">
+          <div className="text-text-dim text-small flex h-full w-full items-center justify-center">
             {emptyText}
           </div>
         ) : (

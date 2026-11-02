@@ -68,7 +68,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 
 const DeferredCellGraph = dynamic(() => import('@/components/cell-graph'), {
-  loading: () => <p className="text-text-dim text-xs">Loading graph section...</p>,
+  loading: () => <p className="text-text-dim text-small">Loading graph section...</p>,
 });
 const POLL_MS = 3000;
 function provisional(tx: TransactionDetail | undefined): boolean {
@@ -422,7 +422,7 @@ function WitnessRow({
       onFocus={() => onHover({ t: 'witness', index: w.index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 rounded border-b px-1.5 py-2.5 text-left text-xs transition-opacity',
+        'border-base-elevated text-small -mx-1.5 flex w-[calc(100%+12px)] flex-col gap-1 rounded border-b px-1.5 py-2.5 text-left transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
@@ -461,7 +461,7 @@ function WitnessRow({
 function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: TransactionWitness }) {
   return (
     <div data-testid="tx-witness-deterministic-section" className="mt-4 space-y-4">
-      <h3 className="text-text-bright text-xs">
+      <h3 className="text-text-bright text-small">
         {witness.kind === 'witness_args'
           ? 'WitnessArgs'
           : witness.kind === 'opaque'
@@ -485,7 +485,7 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
         ?.filter((name) => name.outputIndex === witness.index)
         .map((name) => (
           <div key={name.identityId} data-testid="tx-witness-dotcell-records">
-            <p className="text-text-dim mb-3 text-xs">
+            <p className="text-text-dim text-small mb-3">
               records payload of{' '}
               <Link
                 href={getIdentityItemDetailHref('dotcell', name.label)}
@@ -537,7 +537,7 @@ function DepRow({
       onFocus={() => onHover({ t: 'dep', index })}
       onBlur={() => onHover(null)}
       className={cn(
-        'border-base-elevated -mx-1.5 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 rounded border-b px-1.5 py-2.5 text-xs transition-opacity',
+        'border-base-elevated text-small -mx-1.5 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 rounded border-b px-1.5 py-2.5 transition-opacity',
         on && 'bg-base-surface',
         lit !== null && !on && 'opacity-25'
       )}
@@ -585,7 +585,7 @@ function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
     <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
       <h2 className="text-body font-medium text-[#a0a8be]">{title}</h2>
-      <span className="text-text-dim text-xs">{note}</span>
+      <span className="text-text-dim text-small">{note}</span>
     </div>
   );
 }
@@ -690,9 +690,12 @@ export default function TransactionDetailPage() {
       <DetailLayout
         title="Transaction"
         identity={hash}
-        status={<span className="text-text-dim text-xs">Pending</span>}
+        status={<span className="text-text-dim text-small">Pending</span>}
       >
-        <div data-testid="tx-inputs-not-yet-resolvable" className="text-text-dim space-y-3 text-xs">
+        <div
+          data-testid="tx-inputs-not-yet-resolvable"
+          className="text-text-dim text-small space-y-3"
+        >
           <p>
             waiting for the node... the inputs of this unconfirmed transaction cannot be resolved
             yet. Retrying automatically.
@@ -716,7 +719,7 @@ export default function TransactionDetailPage() {
     const message = error instanceof Error ? error.message : 'Transaction response is empty';
     return shell(
       <DetailLayout title="Failed to load transaction">
-        <p role="alert" className="text-text-dim break-words text-xs">
+        <p role="alert" className="text-text-dim text-small break-words">
           {message}
         </p>
       </DetailLayout>
@@ -893,7 +896,7 @@ export default function TransactionDetailPage() {
         ? activityHeadline(activity)
         : 'Transaction';
   const summary = isProvisional ? (
-    <p className="text-text-dim text-xs">
+    <p className="text-text-dim text-small">
       Activity and canonical cell structure are available once this transaction is committed and
       indexed.
     </p>
@@ -925,13 +928,13 @@ export default function TransactionDetailPage() {
       .
     </p>
   ) : activityError ? (
-    <p role="alert" className="text-xs">
+    <p role="alert" className="text-small">
       Cannot read activity for {hash}: {activityError.message}
     </p>
   ) : activity === undefined ? (
     <div className="bg-base-surface h-5 w-96 max-w-full animate-pulse" />
   ) : activity === null ? (
-    <p role="alert" className="text-xs">
+    <p role="alert" className="text-small">
       Transaction {hash} has no indexed activity.
     </p>
   ) : (
@@ -1109,7 +1112,7 @@ export default function TransactionDetailPage() {
   return shell(
     <div className="text-body min-w-0 font-mono">
       {error && (
-        <p role="alert" className="mb-4 text-xs">
+        <p role="alert" className="text-small mb-4">
           Unable to refresh transaction: {error.message}. Showing previously loaded data.
         </p>
       )}
@@ -1121,10 +1124,10 @@ export default function TransactionDetailPage() {
         className="grid grid-cols-[minmax(0,1fr)] items-start gap-y-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:grid-rows-[auto_auto_1fr] lg:gap-x-14"
       >
         <header className="flex min-w-0 flex-col gap-2 lg:col-start-1">
-          <span className="text-text-dim text-xs">Transaction</span>
+          <span className="text-text-dim text-small">Transaction</span>
           <h1 className="text-text-bright text-entity break-words font-medium">{headline}</h1>
           {summary}
-          <div className="flex min-w-0 items-center gap-0.5 text-xs">
+          <div className="text-small flex min-w-0 items-center gap-0.5">
             <span className="text-text-dim min-w-0 [overflow-wrap:anywhere]">{tx.hash}</span>
             <CopyHash hash={tx.hash} />
           </div>
@@ -1145,14 +1148,14 @@ export default function TransactionDetailPage() {
               {status}
             </span>
             {!isProvisional && (
-              <span className="text-text-dim text-xs">
+              <span className="text-text-dim text-small">
                 {formatCount(required(tx.confirmations, hash, 'confirmations'), 'confirmation')}
               </span>
             )}
           </div>
           <dl className="flex flex-col gap-4">
             <div className="flex flex-col gap-0.5">
-              <dt className="text-text-dim text-xs">Time</dt>
+              <dt className="text-text-dim text-small">Time</dt>
               <dd className="text-text-bright">
                 {isProvisional ? (
                   <PendingValue />
@@ -1161,7 +1164,7 @@ export default function TransactionDetailPage() {
                     dateTime={new Date(required(tx.timestamp, hash, 'timestamp')).toISOString()}
                   >
                     {formatUtc8DateTime(required(tx.timestamp, hash, 'timestamp'))}
-                    <span className="text-text-dim block text-xs">
+                    <span className="text-text-dim text-small block">
                       {formatAgeTwoUnits(required(tx.timestamp, hash, 'timestamp'))}
                     </span>
                   </time>
@@ -1169,7 +1172,7 @@ export default function TransactionDetailPage() {
               </dd>
             </div>
             <div className="flex flex-col gap-0.5">
-              <dt className="text-text-dim text-xs">Block</dt>
+              <dt className="text-text-dim text-small">Block</dt>
               <dd className="text-text-bright">
                 {tx.blockNumber !== undefined ? (
                   <Link href={`/blocks/${tx.blockNumber}`}>
@@ -1181,7 +1184,7 @@ export default function TransactionDetailPage() {
               </dd>
             </div>
             <div className="flex flex-col gap-0.5">
-              <dt className="text-text-dim text-xs">Fee</dt>
+              <dt className="text-text-dim text-small">Fee</dt>
               <dd className="text-body">
                 <ExactCkb
                   shannons={exactUnsignedInteger(tx.fee, `${hash}: fee`)}
@@ -1190,7 +1193,7 @@ export default function TransactionDetailPage() {
                 />
               </dd>
               {feePaidBy.length > 0 && (
-                <dd className="text-text-dim text-xs">
+                <dd className="text-text-dim text-small">
                   paid by{' '}
                   <ParticipantRefView
                     participant={{
@@ -1209,10 +1212,10 @@ export default function TransactionDetailPage() {
             </div>
             {isProvisional && tx.pendingSince && (
               <div className="flex flex-col gap-0.5">
-                <dt className="text-text-dim text-xs">Pending since</dt>
+                <dt className="text-text-dim text-small">Pending since</dt>
                 <dd>
                   {formatUtc8DateTime(tx.pendingSince)}
-                  <span className="text-text-dim block text-xs">
+                  <span className="text-text-dim text-small block">
                     {formatAgeTwoUnits(tx.pendingSince)}
                   </span>
                 </dd>
@@ -1270,7 +1273,7 @@ export default function TransactionDetailPage() {
                 )
               }
             >
-              <p className="text-text-dim -mt-2 mb-4 text-xs">
+              <p className="text-text-dim text-small -mt-2 mb-4">
                 {tx.isCellbase
                   ? 'A cellbase consumes no cell: it creates the reward of a block that is now final.'
                   : compensation
@@ -1297,7 +1300,7 @@ export default function TransactionDetailPage() {
       </div>
 
       {/* Tier 2, set quieter: the evidence behind tier 1, linked to it by hover. */}
-      <DetailTier2 className="text-xs">
+      <DetailTier2 className="text-small">
         <DetailSection
           title="Script groups"
           actions={
@@ -1606,10 +1609,10 @@ export default function TransactionDetailPage() {
         </dl>
 
         <details open={graphOpen} className="border-base-border-subtle border-t pt-4">
-          <summary className="text-text-dim hover:text-text cursor-pointer text-xs">
+          <summary className="text-text-dim hover:text-text text-small cursor-pointer">
             Raw data
           </summary>
-          <div className="mt-4 min-w-0 overflow-x-auto text-xs">{raw}</div>
+          <div className="text-small mt-4 min-w-0 overflow-x-auto">{raw}</div>
         </details>
       </DetailTier2>
     </div>

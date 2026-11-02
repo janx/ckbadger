@@ -109,7 +109,7 @@ export function CellVersions({
               onFocus={() => setActive(key)}
               onBlur={() => setActive(null)}
               className={cn(
-                'border-base-border-subtle grid min-w-0 gap-3 border-b py-3 text-xs sm:grid-cols-[130px_minmax(0,1fr)_160px]',
+                'border-base-border-subtle text-small grid min-w-0 gap-3 border-b py-3 sm:grid-cols-[130px_minmax(0,1fr)_160px]',
                 active && active !== key && 'opacity-35'
               )}
             >
@@ -193,7 +193,7 @@ export function CellVersions({
           );
         })}
         {history.data.length === 0 && (
-          <p className="text-text-dim text-xs">No canonical cell versions.</p>
+          <p className="text-text-dim text-small">No canonical cell versions.</p>
         )}
       </div>
     </DetailSection>

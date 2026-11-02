@@ -60,7 +60,7 @@ export function CapacityPartition({
   return (
     <div className={className} aria-label={`${subject} capacity partition`}>
       {showTotal && (
-        <div className="mb-3 flex flex-wrap justify-between gap-2 text-xs">
+        <div className="text-small mb-3 flex flex-wrap justify-between gap-2">
           <span className="text-text-dim">CKB held</span>
           <ExactCkb shannons={sum} signed={false} tone="plain" />
         </div>
@@ -102,7 +102,7 @@ export function CapacityPartition({
           ))}
         </div>
       )}
-      <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-3 text-xs">
+      <dl className="text-small mt-3 flex flex-wrap gap-x-6 gap-y-3">
         {parts.map((p) => (
           <div
             key={p.label}

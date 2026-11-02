@@ -17,7 +17,7 @@ export function CapacityRangeSelector({ value, onChange }: CapacityRangeSelector
             key={option.key}
             type="button"
             onClick={() => onChange(option.key)}
-            className={`rounded px-2 py-1 font-mono text-xs transition-colors ${
+            className={`text-small rounded px-2 py-1 font-mono transition-colors ${
               active
                 ? 'bg-jade/15 text-jade border-jade-dim border'
                 : 'text-text-dim hover:bg-base-elevated hover:text-text-bright'

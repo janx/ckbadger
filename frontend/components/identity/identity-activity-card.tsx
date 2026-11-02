@@ -37,7 +37,7 @@ export function IdentityActivityCard({
   return (
     <div className="border-base-border bg-base-surface/40 space-y-2 rounded border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="text-text-dim font-mono text-xs">
+        <div className="text-text-dim text-small font-mono">
           Block{' '}
           <Link href={`/blocks/${blockNumber}`} className="text-gold hover:underline">
             {formatBlockNumber(blockNumber)}
@@ -61,13 +61,15 @@ export function IdentityActivityCard({
             ))}
           </div>
         ) : (
-          <div className="text-text font-mono text-xs">{displayActions.join(', ')}</div>
+          <div className="text-text text-small font-mono">{displayActions.join(', ')}</div>
         )}
       </div>
-      <Link href={`/tx/${txHash}`} className="text-text block font-mono text-xs hover:underline">
+      <Link href={`/tx/${txHash}`} className="text-text text-small block font-mono hover:underline">
         <HexDisplay value={txHash} size="sm" startChars={14} endChars={10} />
       </Link>
-      {timestamp && <div className="text-text-dim font-mono text-xs">Timestamp: {timestamp}</div>}
+      {timestamp && (
+        <div className="text-text-dim text-small font-mono">Timestamp: {timestamp}</div>
+      )}
     </div>
   );
 }

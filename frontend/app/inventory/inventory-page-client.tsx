@@ -139,7 +139,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
               <input
                 id="inventory-search"
                 type="search"
-                className="border-base-border bg-base-surface min-w-0 rounded border px-3 py-2 text-xs"
+                className="border-base-border bg-base-surface text-small min-w-0 rounded border px-3 py-2"
                 placeholder="Search by name..."
                 value={searchInput}
                 onChange={(e) => setSearchInput(e.target.value)}
@@ -196,7 +196,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                   key={s}
                   type="button"
                   aria-pressed={(standard ?? '') === s}
-                  className={`rounded border px-3 py-1.5 text-xs ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
+                  className={`text-small rounded border px-3 py-1.5 ${standard === s || (!standard && !s) ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'}`}
                   onClick={() => filter('standard', s)}
                 >
                   {s ? (
@@ -320,7 +320,7 @@ export function InventoryPageFallback() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <p role="status" className="text-text-dim text-xs">
+        <p role="status" className="text-text-dim text-small">
           Loading inventory…
         </p>
       </main>

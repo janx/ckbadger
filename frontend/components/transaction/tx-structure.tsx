@@ -166,7 +166,7 @@ export function TxStructure({
   const poolBottom = ys.length ? Math.max(...ys) + 16 : 0;
   const column = (cells: readonly CellTileData[], label: string) => (
     <div className="min-w-0">
-      <h3 className="text-text-dim mb-3 text-xs">
+      <h3 className="text-text-dim text-small mb-3">
         {formatCount(cells.length, 'cell')} {label}
       </h3>
       <div className="space-y-3">
@@ -376,7 +376,7 @@ export function TxStructure({
                 onFocus={() => setHover({ kind: 'group', id: g.id })}
                 onBlur={() => setHover(null)}
                 className={cn(
-                  'grid min-w-0 gap-2 py-3 text-xs sm:grid-cols-2 lg:grid-cols-4',
+                  'text-small grid min-w-0 gap-2 py-3 sm:grid-cols-2 lg:grid-cols-4',
                   (hover?.id === g.id ||
                     (hover?.kind === 'cell' && g.cellIds.includes(hover.id))) &&
                     'bg-base-surface'
@@ -432,7 +432,7 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
       data-inflow={inflow.tone}
       data-testid="tx-inflow"
       className={cn(
-        'rounded-md border border-dashed px-3 py-2 text-xs',
+        'text-small rounded-md border border-dashed px-3 py-2',
         inflow.tone === 'dao' ? 'border-gold/60 text-gold' : 'border-text-dim/60 text-text'
       )}
     >

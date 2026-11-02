@@ -156,7 +156,7 @@ export function PieChart({
           {slices.slice(0, 15).map((slice, i) => (
             <div
               key={i}
-              className={`flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm transition-colors ${
+              className={`text-body flex cursor-pointer items-center gap-2 rounded px-2 py-1 transition-colors ${
                 activeIndex === i ? 'bg-base-elevated' : 'hover:bg-base-elevated/50'
               }`}
               onMouseEnter={() => {
@@ -183,7 +183,7 @@ export function PieChart({
             </div>
           ))}
           {slices.length > 15 && (
-            <div className="text-text-dim px-2 py-1 text-xs">+{slices.length - 15} more</div>
+            <div className="text-text-dim text-small px-2 py-1">+{slices.length - 15} more</div>
           )}
         </div>
       )}

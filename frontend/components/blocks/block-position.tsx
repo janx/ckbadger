@@ -160,24 +160,24 @@ export function BlockPosition({
   }, [currentX, block.number]);
   return (
     <div className="min-w-0 space-y-3">
-      <p className="text-text-dim text-xs">
+      <p className="text-text-dim text-small">
         {positionSentence(block, links)}
         {(page > 1 || hasMore) && `. Incoming relationships cover transaction page ${page} only.`}
       </p>
       {transactionsError ? (
-        <p role="alert" className="text-text-dim text-xs">
+        <p role="alert" className="text-text-dim text-small">
           Proposal origins unavailable: {transactionsError}
         </p>
       ) : transactions === undefined ? (
-        <p className="text-text-dim text-xs">Reading transaction proposal origins…</p>
+        <p className="text-text-dim text-small">Reading transaction proposal origins…</p>
       ) : null}
       {proposalsError && (
-        <p role="alert" className="text-text-dim text-xs">
+        <p role="alert" className="text-text-dim text-small">
           Outgoing commitments unavailable: {proposalsError}
         </p>
       )}
       <div aria-label="Chain position relationships" className="min-w-0 space-y-4 md:hidden">
-        <div className="space-y-2 rounded-md bg-[#123029] p-3 text-xs">
+        <div className="text-small space-y-2 rounded-md bg-[#123029] p-3">
           <Link href={`/blocks/${block.hash}`} className="text-text-bright block">
             Current block {formatBlockNumber(block.number)}
           </Link>
@@ -187,7 +187,7 @@ export function BlockPosition({
             unclesCount={block.unclesCount}
           />
         </div>
-        <nav aria-label="Chain neighbors" className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
+        <nav aria-label="Chain neighbors" className="text-small flex flex-wrap gap-x-5 gap-y-2">
           {block.number > 0 && (
             <Link href={`/blocks/${block.parentHash}`}>
               ← {formatBlockNumber(block.number - 1)}
@@ -202,7 +202,7 @@ export function BlockPosition({
         {links.map((arc) => (
           <div
             key={`${arc.from}:${arc.to}`}
-            className="border-base-border-subtle space-y-2 border-t pt-3 text-xs"
+            className="border-base-border-subtle text-small space-y-2 border-t pt-3"
           >
             <p className="text-gold">
               {arc.hashes.size.toLocaleString('en-US')} proposed → committed · +{arc.to - arc.from}{' '}
@@ -225,7 +225,7 @@ export function BlockPosition({
         {block.uncles.map((uncle, index) => (
           <div
             key={uncle.hash}
-            className="border-base-border-subtle min-w-0 space-y-2 border-t border-dashed pt-3 text-xs"
+            className="border-base-border-subtle text-small min-w-0 space-y-2 border-t border-dashed pt-3"
           >
             <p className="text-text-dim">Uncle parent → included uncle</p>
             <Link href={`/blocks/${uncle.parentHash}`} className="block break-all">

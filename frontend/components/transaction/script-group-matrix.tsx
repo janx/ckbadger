@@ -132,7 +132,7 @@ export function ScriptGroupMatrix({
     );
   return (
     <div ref={ref} className="min-w-0">
-      <div role="table" aria-label="Script groups" className="text-xs">
+      <div role="table" aria-label="Script groups" className="text-small">
         <div
           role="row"
           className="border-base-border-subtle text-text-dim text-meta grid items-end border-b pb-1.5"
@@ -322,7 +322,7 @@ function GroupList({
   onHover: (hover: TxHover | null) => void;
 }) {
   return (
-    <ul aria-label="Script groups" className="text-xs">
+    <ul aria-label="Script groups" className="text-small">
       {groups.map((g, i) => {
         const on = lit?.groups.has(g.id) ?? false;
         return (

@@ -122,15 +122,18 @@ export default function DaoDepositorsPage() {
           }
         >
           {query.isError ? (
-            <div role="alert" className="text-rouge text-xs">
+            <div role="alert" className="text-rouge text-small">
               DAO depositors could not be loaded: {String(query.error)}
             </div>
           ) : !page ? (
-            <div className="text-text-dim py-6 text-xs">Ranking every depositor…</div>
+            <div className="text-text-dim text-small py-6">Ranking every depositor…</div>
           ) : (
             <>
               {moved && (
-                <p data-testid="ranking-moved" className="text-text-dim mb-3 max-w-[80ch] text-xs">
+                <p
+                  data-testid="ranking-moved"
+                  className="text-text-dim text-small mb-3 max-w-[80ch]"
+                >
                   The chain tip moved since the first page (ranked at block{' '}
                   {formatBlockNumber(moved.from)}): this page continues the ranking at block{' '}
                   {formatBlockNumber(moved.to)}, so a depositor whose rank changed may repeat or be
@@ -168,7 +171,7 @@ export default function DaoDepositorsPage() {
                   <button
                     type="button"
                     onClick={() => setCursors((c) => c.slice(0, -1))}
-                    className="border-base-border text-text hover:text-text-bright h-9 rounded-md border px-4 text-xs"
+                    className="border-base-border text-text hover:text-text-bright text-small h-9 rounded-md border px-4"
                   >
                     ← Previous
                   </button>
@@ -179,7 +182,7 @@ export default function DaoDepositorsPage() {
                   <button
                     type="button"
                     onClick={() => setCursors((c) => [...c, page.nextCursor ?? undefined])}
-                    className="border-base-border text-text hover:text-text-bright h-9 rounded-md border px-4 text-xs"
+                    className="border-base-border text-text hover:text-text-bright text-small h-9 rounded-md border px-4"
                   >
                     Next {pageSize} →
                   </button>

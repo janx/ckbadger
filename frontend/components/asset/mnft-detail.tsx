@@ -261,7 +261,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
             current ? (
               <>
                 <AppLink href={`/address/${current.ownerAddress}`}>
-                  <Hash hash={current.ownerAddress} className="text-xs" copyable={false} />
+                  <Hash hash={current.ownerAddress} className="text-small" copyable={false} />
                 </AppLink>
                 <span className="text-text-dim text-small mt-1 block">
                   {current.lockName ?? 'Unregistered lock'} · since{' '}

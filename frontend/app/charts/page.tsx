@@ -38,13 +38,13 @@ export default function ChartsPage() {
           {network.data?.syncStatus?.chartDataMayBeIncomplete && (
             <p
               role="status"
-              className="text-warning border-warning/30 bg-warning/10 rounded border px-3 py-2 text-xs"
+              className="text-warning border-warning/30 bg-warning/10 text-small rounded border px-3 py-2"
             >
               Chart data may be incomplete while the indexer synchronizes history.
             </p>
           )}
           {network.error && (
-            <p role="alert" className="text-negative text-xs">
+            <p role="alert" className="text-negative text-small">
               Network sync status unavailable: {network.error.message}
             </p>
           )}

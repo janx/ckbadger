@@ -143,7 +143,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
     const name = (
       <AppLink href={href} className="text-text-bright">
         <span className="font-medium">
-          {a.symbol ?? a.name ?? <Hash hash={a.id} copyable={false} className="text-xs" />}
+          {a.symbol ?? a.name ?? <Hash hash={a.id} copyable={false} className="text-small" />}
         </span>
         {a.symbol && a.name && <span className="text-text"> {a.name}</span>}
       </AppLink>
@@ -174,7 +174,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
             left: wide ? (
               <>
                 {name}
-                <span className="text-text-dim text-xs"> · {standard}</span>
+                <span className="text-text-dim text-small"> · {standard}</span>
               </>
             ) : (
               name
@@ -205,7 +205,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
   }
   const title = (
     <AppLink href={href} className="text-text-bright font-medium">
-      {a.name || <Hash hash={a.id} copyable={false} className="text-xs" />}
+      {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
     </AppLink>
   );
   if (a.assetType === 'object') {
@@ -246,7 +246,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
             left: wide ? (
               <>
                 {title}
-                <span className="text-text-dim text-xs"> · {standard}</span>
+                <span className="text-text-dim text-small"> · {standard}</span>
               </>
             ) : (
               title
@@ -287,7 +287,7 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
             wide && sub ? (
               <>
                 {title}
-                <span className="text-text-dim text-xs"> · {sub}</span>
+                <span className="text-text-dim text-small"> · {sub}</span>
               </>
             ) : (
               title
@@ -361,7 +361,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
                   assetType === 'identity' && 'text-body'
                 )}
               >
-                {title || <Hash hash={a.id} copyable={false} className="text-xs" />}
+                {title || <Hash hash={a.id} copyable={false} className="text-small" />}
               </AppLink>
               {sub && <span className="text-text-dim text-meta">{sub}</span>}
               {a.assetType === 'object' && (

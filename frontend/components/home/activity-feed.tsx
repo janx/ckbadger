@@ -51,7 +51,7 @@ export function ActivityFeed() {
               aria-pressed={tab === t.id}
               onClick={() => setTab(t.id)}
               className={cn(
-                'sm:text-section -mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 text-sm transition-colors',
+                'sm:text-section text-body -mb-px h-11 whitespace-nowrap border-b-2 bg-transparent p-0 transition-colors',
                 tab === t.id
                   ? 'border-jade text-text-bright font-medium'
                   : 'text-text-dim hover:text-text border-transparent'
@@ -63,7 +63,7 @@ export function ActivityFeed() {
         </div>
         <Link
           href={active.viewAll}
-          className="text-interactive hover:text-jade whitespace-nowrap text-xs transition-colors"
+          className="text-interactive hover:text-jade text-small whitespace-nowrap transition-colors"
         >
           View all →
         </Link>
@@ -111,7 +111,7 @@ function FeedList<T>({
   const fresh = useFreshKeys(visible ? visible.map(keyOf) : null);
   if (query.error && !visible) {
     return (
-      <div role="alert" className="text-rouge py-3 text-xs">
+      <div role="alert" className="text-rouge text-small py-3">
         {`Failed to load the latest ${what}: ${query.error.message}`}
       </div>
     );
@@ -135,7 +135,7 @@ function FeedList<T>({
     );
   }
   if (visible.length === 0) {
-    return <div className="text-text-dim py-3 text-xs">{`No ${what} yet.`}</div>;
+    return <div className="text-text-dim text-small py-3">{`No ${what} yet.`}</div>;
   }
   return (
     <ul className="m-0 list-none p-0" data-testid="feed-rows">

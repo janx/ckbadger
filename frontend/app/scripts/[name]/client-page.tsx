@@ -1002,7 +1002,7 @@ export default function ScriptDetailPage({
         <Header />
         <main className="container mx-auto px-4 py-8">
           <DetailLayout title="Script data unavailable" identity={normalizedCodeHash ?? name}>
-            <p role="alert" className="text-negative break-words py-8 text-xs">
+            <p role="alert" className="text-negative text-small break-words py-8">
               Failed to load {failedRequest.source}: {failedRequest.error.message}
             </p>
           </DetailLayout>
@@ -1021,10 +1021,10 @@ export default function ScriptDetailPage({
         <main className="container mx-auto px-4 py-8">
           <DetailLayout title="Ambiguous script reference" identity={normalizedCodeHash}>
             <DetailSection title="Conflicting live bytecode">
-              <p className="text-text-dim mb-4 text-xs">
+              <p className="text-text-dim text-small mb-4">
                 Current live type resolution points to more than one bytecode version.
               </p>
-              <ul className="space-y-2 text-xs">
+              <ul className="text-small space-y-2">
                 {codeHashAmbiguity.versionHashes.map((hash) => (
                   <li key={hash} className="break-all">
                     {hash}
@@ -1076,7 +1076,7 @@ export default function ScriptDetailPage({
         <Header />
         <main className="container mx-auto px-4 py-8">
           <DetailLayout title="No script deployments">
-            <p className="text-text-dim py-8 text-xs">
+            <p className="text-text-dim text-small py-8">
               The script request returned no code-cell deployments.
             </p>
           </DetailLayout>
@@ -1249,14 +1249,14 @@ export default function ScriptDetailPage({
           title={pageTitle}
           identity={isCodeHashMode ? pageHash : pageSubtitle}
           status={
-            <span className="text-text-dim text-xs">
+            <span className="text-text-dim text-small">
               {inferredScriptKind ?? namedScriptDetail?.scriptKind ?? 'role unregistered'}
               {pageDeprecated ? ' · Deprecated' : ''}
             </span>
           }
           actions={
             pageWebsite && (
-              <a href={pageWebsite} className="text-emphasis text-xs hover:underline">
+              <a href={pageWebsite} className="text-emphasis text-small hover:underline">
                 Website ↗
               </a>
             )
@@ -1290,7 +1290,7 @@ export default function ScriptDetailPage({
               <DetailSection
                 title="Code versions"
                 actions={
-                  <span className="text-text-dim text-xs">
+                  <span className="text-text-dim text-small">
                     Select a version to inspect its deployment and cells
                   </span>
                 }
@@ -1362,7 +1362,7 @@ export default function ScriptDetailPage({
                     <button
                       type="button"
                       onClick={() => handleVersionClick(row)}
-                      className="w-full space-y-2 text-left text-xs"
+                      className="text-small w-full space-y-2 text-left"
                     >
                       <span className="text-emphasis break-all">{row.codeHash}</span>
                       <span className="text-text-dim block">
@@ -1439,7 +1439,7 @@ export default function ScriptDetailPage({
                       },
                     ]}
                     mobileRow={(row) => (
-                      <div className="space-y-2 text-xs">
+                      <div className="text-small space-y-2">
                         <Link
                           href={`/cell/${row.deployment.codeCellTxHash}-${row.deployment.codeCellOutputIndex}`}
                           className="text-emphasis break-all"
@@ -1462,13 +1462,13 @@ export default function ScriptDetailPage({
                 <DetailSection
                   title="Its cells"
                   actions={
-                    <span className="text-text-dim text-xs">
+                    <span className="text-text-dim text-small">
                       Live cells using the selected code version
                     </span>
                   }
                 >
                   {isVersionCellsLoading ? (
-                    <p className="text-text-dim py-6 text-xs">Loading cells...</p>
+                    <p className="text-text-dim text-small py-6">Loading cells...</p>
                   ) : (
                     <ListTable
                       label="Its cells"
@@ -1541,7 +1541,7 @@ export default function ScriptDetailPage({
                         },
                       ]}
                       mobileRow={(cell) => (
-                        <div className="min-w-0 space-y-2 text-xs">
+                        <div className="text-small min-w-0 space-y-2">
                           <Link
                             href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                             className="text-emphasis break-all"
@@ -1590,23 +1590,23 @@ export default function ScriptDetailPage({
           }
         >
           <DetailSection title="Capacity history">
-            <p className="text-text-dim mb-3 text-xs">
+            <p className="text-text-dim text-small mb-3">
               Live capacity and common knowledge across{' '}
               {isCodeHashMode ? 'this code reference' : 'all registered family references'}.
             </p>
             <CapacityRangeSelector value={capacityRange} onChange={setCapacityRange} />
             {(isCodeHashMode ? isSelectedCapacityChartLoading : isFamilyCapacityChartLoading) ? (
-              <p className="text-text-dim py-6 text-xs">Loading capacity history...</p>
+              <p className="text-text-dim text-small py-6">Loading capacity history...</p>
             ) : (isCodeHashMode ? selectedCapacityChart : familyCapacityChart)?.data.length ? (
               <ScriptCapacityEvidenceChart
                 chart={(isCodeHashMode ? selectedCapacityChart : familyCapacityChart)!}
                 markers={namedScriptDetail?.history ?? []}
               />
             ) : (
-              <p className="text-text-dim py-6 text-xs">No capacity history yet</p>
+              <p className="text-text-dim text-small py-6">No capacity history yet</p>
             )}
             {!isCodeHashMode && familyCapacityChartError && (
-              <p role="alert" className="text-negative text-xs">
+              <p role="alert" className="text-negative text-small">
                 Capacity history unavailable: {String(familyCapacityChartError)}
               </p>
             )}
@@ -1654,7 +1654,7 @@ export default function ScriptDetailPage({
                   },
                 ]}
                 mobileRow={(row) => (
-                  <div className="space-y-2 text-xs">
+                  <div className="text-small space-y-2">
                     <div className="break-all">
                       {row.hashType} · {row.referenceHash}
                     </div>

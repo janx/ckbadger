@@ -64,7 +64,7 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
                 startChars={10}
                 endChars={6}
                 copyable={false}
-                className="text-xs"
+                className="text-small"
               />
             )}
           </span>
@@ -77,7 +77,7 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
                 startChars={10}
                 endChars={6}
                 copyable={false}
-                className="text-xs"
+                className="text-small"
               />
             ) : null}
           </>

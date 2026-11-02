@@ -124,7 +124,7 @@ function ObjectCard({
           {/* Top row: primary label + status */}
           <div className="flex items-center justify-between gap-2">
             <CardLink
-              className={`min-w-0 truncate font-mono text-sm font-semibold hover:underline ${
+              className={`text-body min-w-0 truncate font-mono font-semibold hover:underline ${
                 isIdentity
                   ? 'text-aqua hover:text-interactive-hover'
                   : 'text-text-bright hover:text-emphasis'
@@ -220,7 +220,7 @@ function SporeObjectCard({ spore, resolvedOwnerAddress }: SporeObjectCardProps) 
           <div className="flex items-center justify-between gap-2">
             <Link
               href={href}
-              className="hover:text-emphasis text-text-bright min-w-0 truncate font-mono text-sm font-semibold hover:underline"
+              className="hover:text-emphasis text-text-bright text-body min-w-0 truncate font-mono font-semibold hover:underline"
             >
               <HexDisplay value={spore.sporeId} size="sm" startChars={8} endChars={6} />
             </Link>
@@ -374,7 +374,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           value={props.statusFilter}
           onChange={(e) => props.onStatusFilterChange!(e.target.value as ItemStatusFilter)}
           aria-label="Status Filter"
-          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright text-small rounded border px-2.5 py-1.5 font-mono outline-none transition-colors"
         >
           <option value="all">All</option>
           <option value="live">Live</option>
@@ -386,9 +386,9 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           onChange={(e) => props.onSearchInputChange!(e.target.value)}
           placeholder={props.searchLabel || 'Search...'}
           aria-label={props.searchLabel || 'Search'}
-          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim w-44 rounded border px-2.5 py-1.5 font-mono text-xs outline-none transition-colors"
+          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim text-small w-44 rounded border px-2.5 py-1.5 font-mono outline-none transition-colors"
         />
-        {isFetching && <span className="text-text-dim font-mono text-xs">Searching...</span>}
+        {isFetching && <span className="text-text-dim text-small font-mono">Searching...</span>}
       </>
     ) : null;
 

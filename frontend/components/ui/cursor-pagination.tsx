@@ -22,7 +22,7 @@ interface CursorPaginationProps {
 }
 
 const PAGER_BUTTON =
-  'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text shrink-0 whitespace-nowrap rounded border px-3 py-2 font-mono text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:px-4';
+  'hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text shrink-0 whitespace-nowrap rounded border px-3 py-2 font-mono text-body transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:px-4';
 
 export function CursorPagination({
   total,
@@ -58,7 +58,7 @@ export function CursorPagination({
         className
       )}
     >
-      <span className="text-text-dim font-mono text-sm">
+      <span className="text-text-dim text-body font-mono">
         {summary !== undefined ? (
           summary
         ) : canShowRange ? (
@@ -84,7 +84,7 @@ export function CursorPagination({
           {previousLabel}
         </button>
         {page !== undefined && (
-          <span className="text-text-dim whitespace-nowrap font-mono text-sm">
+          <span className="text-text-dim text-body whitespace-nowrap font-mono">
             Page {page.toLocaleString('en-US')}
             {totalPages !== undefined ? ` of ${totalPages.toLocaleString('en-US')}` : ''}
           </span>

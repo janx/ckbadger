@@ -128,7 +128,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         />
       )}
       {error && (
-        <div role="alert" className="text-negative break-words text-xs">
+        <div role="alert" className="text-negative text-small break-words">
           {definition.title}: {error.message}
           <button type="button" onClick={() => void refetch()} className="text-jade ml-2 underline">
             Retry
@@ -136,12 +136,12 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
         </div>
       )}
       {modelError && (
-        <p role="alert" className="text-negative break-words text-xs">
+        <p role="alert" className="text-negative text-small break-words">
           {modelError}
         </p>
       )}
       {model && !model.latest && (
-        <p className="text-text-dim py-8 text-xs">No indexed observations for this chart.</p>
+        <p className="text-text-dim text-small py-8">No indexed observations for this chart.</p>
       )}
       {model?.latest &&
         (model.kind === 'ranked' ? (

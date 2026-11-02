@@ -185,7 +185,7 @@ export function Header() {
                             key={child.href}
                             href={child.href}
                             onClick={() => setIsMenuOpen(false)}
-                            className={`block rounded-md px-3 py-2 font-mono text-xs transition ${
+                            className={`text-small block rounded-md px-3 py-2 font-mono transition ${
                               isLinkActive(child.href)
                                 ? 'text-jade bg-jade/8'
                                 : 'text-text-dim hover:text-jade'

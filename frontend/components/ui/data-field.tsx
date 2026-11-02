@@ -37,7 +37,9 @@ export function DataField({
     return (
       <div className={cn('flex flex-col gap-1', className)}>
         <div className={cn('flex items-center gap-2', labelClassName)}>
-          <span className="text-text-dim font-mono text-xs uppercase tracking-wider">{label}</span>
+          <span className="text-text-dim text-small font-mono uppercase tracking-wider">
+            {label}
+          </span>
           {helpText && (
             <span
               className="text-text-dim hover:text-text relative cursor-help before:absolute before:-inset-3 before:content-['']"
@@ -49,7 +51,7 @@ export function DataField({
         </div>
         <div
           className={cn(
-            'text-text-bright min-w-0 break-words font-mono text-sm',
+            'text-text-bright text-body min-w-0 break-words font-mono',
             copyValue && 'hover:text-jade cursor-pointer transition-colors',
             valueClassName
           )}
@@ -69,7 +71,7 @@ export function DataField({
       )}
     >
       <div className={cn('flex shrink-0 items-center gap-2', labelClassName)}>
-        <span className="text-text-dim text-sm">{label}</span>
+        <span className="text-text-dim text-body">{label}</span>
         {helpText && (
           <span
             className="text-text-dim hover:text-text relative cursor-help before:absolute before:-inset-3 before:content-['']"
@@ -81,7 +83,7 @@ export function DataField({
       </div>
       <div
         className={cn(
-          'text-text-bright flex w-full min-w-0 items-center gap-2 break-words text-left font-mono text-sm sm:w-auto sm:justify-end sm:text-right',
+          'text-text-bright text-body flex w-full min-w-0 items-center gap-2 break-words text-left font-mono sm:w-auto sm:justify-end sm:text-right',
           copyValue && 'hover:text-jade group cursor-pointer transition-colors',
           valueClassName
         )}
@@ -128,7 +130,7 @@ export function DataSection({ title, children, className }: DataSectionProps) {
   return (
     <div className={cn('', className)}>
       {title && (
-        <h3 className="border-base-border text-text-dim mb-3 border-b pb-2 font-mono text-xs uppercase tracking-wider">
+        <h3 className="border-base-border text-text-dim text-small mb-3 border-b pb-2 font-mono uppercase tracking-wider">
           {title}
         </h3>
       )}

@@ -405,7 +405,7 @@ export function ScriptFamilyPage({
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <nav aria-label="Breadcrumb" className="text-text-dim mb-2 text-xs">
+        <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
           <Link href="/scripts" className="hover:text-text-bright">
             Scripts
           </Link>
@@ -421,7 +421,7 @@ export function ScriptFamilyPage({
           status={
             <>
               <ScriptHeading family={family} />
-              {deprecated && <span className="text-text-dim text-xs">· Deprecated</span>}
+              {deprecated && <span className="text-text-dim text-small">· Deprecated</span>}
             </>
           }
           identity={
@@ -480,7 +480,7 @@ export function ScriptFamilyPage({
                   },
                 ]}
                 mobileRow={(row) => (
-                  <div className="space-y-2 text-xs">
+                  <div className="text-small space-y-2">
                     <div className="break-all">
                       {row.hashType} · {row.referenceHash}
                     </div>
@@ -506,9 +506,9 @@ export function ScriptFamilyPage({
                 actions={<CapacityRangeSelector value={capacityRange} onChange={onCapacityRange} />}
               >
                 {chartLoading ? (
-                  <p className="text-text-dim py-6 text-xs">Loading capacity history…</p>
+                  <p className="text-text-dim text-small py-6">Loading capacity history…</p>
                 ) : chartError ? (
-                  <p role="alert" className="text-negative text-xs">
+                  <p role="alert" className="text-negative text-small">
                     Capacity history unavailable: {chartError.message}
                   </p>
                 ) : chart?.data.length ? (
@@ -520,7 +520,7 @@ export function ScriptFamilyPage({
                     holders={holders}
                   />
                 ) : (
-                  <p className="text-text-dim py-6 text-xs">No capacity history yet</p>
+                  <p className="text-text-dim text-small py-6">No capacity history yet</p>
                 )}
               </DetailSection>
               <DetailSection title="Who can change its code">
@@ -532,7 +532,7 @@ export function ScriptFamilyPage({
           <DetailSection
             title="Code versions"
             actions={
-              <span className="text-text-dim text-xs">
+              <span className="text-text-dim text-small">
                 {typeReference
                   ? `one type id, ${shortHex(typeReference, 8, 6)}, ${rows.length} binaries`
                   : `${rows.length} binaries`}
@@ -682,7 +682,7 @@ export function ScriptFamilyPage({
               ))}
             </div>
             {cells.loading ? (
-              <p className="text-text-dim py-6 text-xs">Loading cells…</p>
+              <p className="text-text-dim text-small py-6">Loading cells…</p>
             ) : (
               <ListTable
                 label="Its cells"
@@ -758,7 +758,7 @@ export function ScriptFamilyPage({
                   },
                 ]}
                 mobileRow={(cell) => (
-                  <div className="min-w-0 space-y-1.5 text-xs">
+                  <div className="text-small min-w-0 space-y-1.5">
                     <Link
                       href={`/cell/${cell.txHash}-${cell.outputIndex}`}
                       className="text-[#6aa9c4]"
@@ -781,7 +781,7 @@ export function ScriptFamilyPage({
               />
             )}
             {cells.rows.length > 0 && (
-              <p className="text-text-dim mt-2 text-xs">
+              <p className="text-text-dim text-small mt-2">
                 Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
                 {family.liveCellsCount.toLocaleString('en-US')}
               </p>

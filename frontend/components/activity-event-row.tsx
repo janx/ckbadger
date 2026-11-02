@@ -86,7 +86,7 @@ export function CkbDelta({ delta }: { delta: string }) {
   return (
     <span
       className={cn(
-        'whitespace-nowrap font-mono text-xs tabular-nums',
+        'text-small whitespace-nowrap font-mono tabular-nums',
         isPositive && 'text-positive',
         isNegative && 'text-negative',
         !isPositive && !isNegative && 'text-text-dim'
@@ -206,7 +206,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
       const label = symbol || truncateHash(item.typeScriptHash, 8, 6);
       return {
         badge: (
-          <span className="text-token font-mono text-xs">
+          <span className="text-token text-small font-mono">
             {'\u25CF'} {label} Transfer
           </span>
         ),
@@ -214,7 +214,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
           <Link
             href={getTokenDetailHref(item.typeScriptHash)}
             className={cn(
-              'font-mono text-xs tabular-nums transition-colors hover:underline',
+              'text-small font-mono tabular-nums transition-colors hover:underline',
               color
             )}
             onClick={(e) => e.stopPropagation()}
@@ -230,14 +230,14 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
       const actionLabel = isAdd ? 'Received' : 'Sent';
       return {
         badge: (
-          <span className="text-lavender font-mono text-xs">
+          <span className="text-lavender text-small font-mono">
             {'\u2B21'} Object {actionLabel}
           </span>
         ),
         value: (
           <Link
             href={getObjectDetailHref(item.objectId)}
-            className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
+            className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {truncateHash(item.objectId, 8, 6)}
@@ -250,14 +250,14 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
       const actionLabel = isAdd ? 'Registered' : 'Released';
       return {
         badge: (
-          <span className="text-aqua font-mono text-xs">
+          <span className="text-aqua text-small font-mono">
             {'\u2736'} Identity {actionLabel}
           </span>
         ),
         value: (
           <Link
             href={getIdentityItemDetailHref(item.standard, item.identityId)}
-            className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
+            className="text-aqua/80 hover:text-aqua text-small font-mono transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {truncateHash(item.identityId, 8, 6)}
@@ -292,12 +292,12 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
     case 'deposit':
       return {
         badge: (
-          <span className="text-gold font-mono text-xs">
+          <span className="text-gold text-small font-mono">
             {'\u25C6'} {label}
           </span>
         ),
         value: (
-          <span className="text-positive font-mono text-xs tabular-nums">
+          <span className="text-positive text-small font-mono tabular-nums">
             +{formatCkbAmount(capacity as bigint).full} CKB locked
           </span>
         ),
@@ -305,12 +305,12 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
     case 'withdraw_request':
       return {
         badge: (
-          <span className="text-gold font-mono text-xs">
+          <span className="text-gold text-small font-mono">
             {'\u25C6'} {label}
           </span>
         ),
         value: (
-          <span className="text-gold font-mono text-xs tabular-nums">
+          <span className="text-gold text-small font-mono tabular-nums">
             {formatCkbAmount(capacity as bigint).full} CKB
           </span>
         ),
@@ -318,13 +318,13 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
     case 'withdraw_complete':
       return {
         badge: (
-          <span className="text-positive font-mono text-xs">
+          <span className="text-positive text-small font-mono">
             {'\u25C6'} {label}
           </span>
         ),
         value: (
           <div className="flex flex-col items-end gap-0.5">
-            <span className="text-positive font-mono text-xs tabular-nums">
+            <span className="text-positive text-small font-mono tabular-nums">
               +{formatCkbAmount(capacity as bigint).full} CKB
             </span>
             {compensation !== null && (
@@ -338,13 +338,13 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
     default:
       return {
         badge: (
-          <span className="text-gold font-mono text-xs">
+          <span className="text-gold text-small font-mono">
             {'\u25C6'} {label}
           </span>
         ),
         value:
           capacity !== null ? (
-            <span className="text-gold font-mono text-xs tabular-nums">
+            <span className="text-gold text-small font-mono tabular-nums">
               {formatCkbAmount(capacity).full} CKB
             </span>
           ) : null,
@@ -355,12 +355,12 @@ function getDaoEventParts(pa: ActivityProtocolAction): EventParts {
 function getTypeEventParts(sc: ActivityTypeCall): EventParts {
   return {
     badge: (
-      <span className="text-amber font-mono text-xs">
+      <span className="text-amber text-small font-mono">
         {'\u2699'} {TYPE_SCRIPT_CALL_LABEL}
       </span>
     ),
     value: (
-      <span className="font-mono text-xs">
+      <span className="text-small font-mono">
         <TypeCallExpr sc={sc} />
       </span>
     ),
@@ -370,12 +370,12 @@ function getTypeEventParts(sc: ActivityTypeCall): EventParts {
 function getLockEventParts(lc: ActivityLockCall): EventParts {
   return {
     badge: (
-      <span className="text-violet font-mono text-xs">
+      <span className="text-violet text-small font-mono">
         {'\u26A1'} {LOCK_SCRIPT_CALL_LABEL}
       </span>
     ),
     value: (
-      <span className="font-mono text-xs">
+      <span className="text-small font-mono">
         <LockCallExpr lc={lc} />
       </span>
     ),
@@ -436,7 +436,7 @@ export function ActivityReadError({ txHash, error }: { txHash: string; error: un
     <span
       role="alert"
       data-testid="activity-read-error"
-      className="text-rouge block whitespace-normal break-all font-mono text-xs"
+      className="text-rouge text-small block whitespace-normal break-all font-mono"
     >
       {`Cannot read tx ${txHash}: ${message}`}
     </span>
@@ -464,14 +464,16 @@ function getProtocolActionEventParts(pa: ActivityProtocolAction): EventParts {
 
   return {
     badge: (
-      <span className={cn('font-mono text-xs', isFiber ? 'text-violet' : 'text-orange')}>
+      <span className={cn('text-small font-mono', isFiber ? 'text-violet' : 'text-orange')}>
         {isFiber ? '\u26A1' : '\u2B21'} {label}
       </span>
     ),
     value: btcTxid ? (
-      <span className="text-text-dim font-mono text-xs">btc:{truncateHash(btcTxid, 8, 6)}</span>
+      <span className="text-text-dim text-small font-mono">btc:{truncateHash(btcTxid, 8, 6)}</span>
     ) : isFiber && capacity !== null ? (
-      <span className="text-text-dim font-mono text-xs">{formatCkbAmount(capacity).full} CKB</span>
+      <span className="text-text-dim text-small font-mono">
+        {formatCkbAmount(capacity).full} CKB
+      </span>
     ) : null,
   };
 }
@@ -498,7 +500,7 @@ function getCkbEventParts(
 
   return {
     badge: (
-      <span className={cn('font-mono text-xs', colorClass)}>
+      <span className={cn('text-small font-mono', colorClass)}>
         {icon} {label}
       </span>
     ),
@@ -591,7 +593,7 @@ export function ActivityEventGroup({
       {/* === Narrow viewport (< md): self-contained stacked card === */}
       <div className="border-base-border/50 border-b px-4 py-2 last:border-b-0 md:hidden">
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 font-mono text-xs">
+          <div className="text-small flex items-center gap-1.5 font-mono">
             <Link href={txLink} className="text-text hover:text-aqua transition-colors">
               {truncateHash(activity.txHash, 8, 6)}
             </Link>
@@ -627,7 +629,7 @@ export function ActivityEventGroup({
           {/* Col 1: TX hash — first row only */}
           <div className={cn('hidden items-center pl-4 md:flex', cellPy(i))}>
             {i === 0 ? (
-              <div className="flex items-center gap-1.5 font-mono text-xs">
+              <div className="text-small flex items-center gap-1.5 font-mono">
                 <Link href={txLink} className="text-text hover:text-aqua transition-colors">
                   {truncateHash(activity.txHash, 8, 6)}
                 </Link>
@@ -678,7 +680,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       return (
         <Link
           href={getTokenDetailHref(item.typeScriptHash)}
-          className={cn('font-mono text-xs tabular-nums hover:underline', color)}
+          className={cn('text-small font-mono tabular-nums hover:underline', color)}
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
@@ -691,7 +693,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       return (
         <Link
           href={getObjectDetailHref(item.objectId)}
-          className="text-lavender/80 hover:text-lavender font-mono text-xs transition-colors"
+          className="text-lavender/80 hover:text-lavender text-small font-mono transition-colors"
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
@@ -704,7 +706,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       return (
         <Link
           href={getIdentityItemDetailHref(item.standard, item.identityId)}
-          className="text-aqua/80 hover:text-aqua font-mono text-xs transition-colors"
+          className="text-aqua/80 hover:text-aqua text-small font-mono transition-colors"
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}

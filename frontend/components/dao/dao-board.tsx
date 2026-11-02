@@ -102,7 +102,7 @@ function Metric({
 }) {
   return (
     <div className={`min-w-0 ${className ?? ''}`}>
-      <dt className="text-text-dim text-xs">{label}</dt>
+      <dt className="text-text-dim text-small">{label}</dt>
       <dd className="text-text-bright text-hero mt-1 leading-tight">{children}</dd>
       {detail && <dd className="text-text-dim text-meta mt-1">{detail}</dd>}
     </div>
@@ -145,7 +145,7 @@ function Hero({
     >
       <div className="flex min-w-0 flex-col gap-1">
         {intro && <div className="mb-5">{intro}</div>}
-        <span className="text-text-dim text-xs">deposited</span>
+        <span className="text-text-dim text-small">deposited</span>
         <span
           data-role="deposited"
           className="text-text-bright text-index sm:text-display font-medium leading-tight"
@@ -236,14 +236,14 @@ function History({
       {error ? (
         <>
           <h2 className="text-text-bright text-section mb-3 font-medium">History</h2>
-          <div role="alert" className="text-rouge text-xs">
+          <div role="alert" className="text-rouge text-small">
             DAO daily history could not be loaded from indexed snapshots.
           </div>
         </>
       ) : !deposited || !ratio ? (
         <>
           <h2 className="text-text-bright text-section mb-3 font-medium">History</h2>
-          <div className="text-text-dim text-xs">Loading canonical daily history…</div>
+          <div className="text-text-dim text-small">Loading canonical daily history…</div>
         </>
       ) : (
         <DaoHistory deposited={deposited} ratio={ratio} />

@@ -204,7 +204,7 @@ function ActivityStreamToolbar({
             aria-pressed={selectedFilter === option.value}
             onClick={() => onFilterChange(option.value)}
             className={cn(
-              'flex items-center gap-2 rounded-md border px-3 py-2 text-xs transition-colors',
+              'text-small flex items-center gap-2 rounded-md border px-3 py-2 transition-colors',
               selectedFilter === option.value
                 ? 'border-base-border text-text-bright bg-base-surface'
                 : 'text-text-dim hover:text-text border-transparent'
@@ -271,7 +271,7 @@ function ActivityDayDivider({ label }: { label: string }) {
 function LoadingRows() {
   return (
     <>
-      <p role="status" className="text-text-dim py-3 text-xs">
+      <p role="status" className="text-text-dim text-small py-3">
         Reading activities…
       </p>
       <SkeletonRows />
@@ -468,7 +468,7 @@ export function ActivitiesStreamExplorer({
       <div ref={topAnchorRef} />
 
       {headQuery.isError && visibleItems.length > 0 && (
-        <div className="border-base-border bg-base-surface/90 text-text-dim rounded-lg border px-3 py-2 font-mono text-xs">
+        <div className="border-base-border bg-base-surface/90 text-text-dim text-small rounded-lg border px-3 py-2 font-mono">
           Could not refresh:{' '}
           {headQuery.error instanceof Error
             ? headQuery.error.message
@@ -496,7 +496,7 @@ export function ActivitiesStreamExplorer({
               aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
               className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-1.5 text-left transition-colors hover:bg-[#060a11] sm:py-2"
             >
-              <span className="text-text text-xs">
+              <span className="text-text text-small">
                 {pendingNewItems.length} new activit{pendingNewItems.length === 1 ? 'y' : 'ies'} ·
                 Show at top
               </span>
@@ -513,7 +513,7 @@ export function ActivitiesStreamExplorer({
         {isLoading ? (
           <LoadingRows />
         ) : initialError ? (
-          <div role="alert" className="flex flex-col gap-1 py-4 text-xs">
+          <div role="alert" className="text-small flex flex-col gap-1 py-4">
             <p className="text-text">Could not read activities</p>
             <p className="text-text-dim break-words">
               {error instanceof Error ? error.message : String(error)}
@@ -545,7 +545,7 @@ export function ActivitiesStreamExplorer({
                 <button
                   type="button"
                   onClick={() => void fetchNextPage()}
-                  className="border-base-border text-text hover:text-text-bright rounded-md border px-5 py-2 text-xs"
+                  className="border-base-border text-text hover:text-text-bright text-small rounded-md border px-5 py-2"
                 >
                   Older
                 </button>
@@ -553,17 +553,17 @@ export function ActivitiesStreamExplorer({
             )}
 
             {isFetchingNextPage && (
-              <p role="status" className="text-text-dim py-3 text-center text-xs">
+              <p role="status" className="text-text-dim text-small py-3 text-center">
                 Reading older activities…
               </p>
             )}
 
             {isFetchNextPageError && (
               <div className="border-base-border/50 border-t px-3 py-3 text-center">
-                <p className="text-text text-xs">Could not read older activities</p>
+                <p className="text-text text-small">Could not read older activities</p>
                 <button
                   type="button"
-                  className="text-jade hover:text-jade/80 mt-1 cursor-pointer text-xs underline transition-colors"
+                  className="text-jade hover:text-jade/80 text-small mt-1 cursor-pointer underline transition-colors"
                   onClick={() => void fetchNextPage()}
                 >
                   Retry

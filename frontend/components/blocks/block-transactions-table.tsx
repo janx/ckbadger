@@ -120,7 +120,13 @@ export function BlockTransactionsTable({
       minWidth: 140,
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
-          <Hash hash={tx.hash} startChars={8} endChars={6} copyable={false} className="text-xs" />
+          <Hash
+            hash={tx.hash}
+            startChars={8}
+            endChars={6}
+            copyable={false}
+            className="text-small"
+          />
         </Link>
       ),
     },

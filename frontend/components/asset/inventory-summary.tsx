@@ -17,7 +17,7 @@ export interface InventorySummaryNoticeProps {
 /** The quiet line under each view: what it lists and the canonical anchor of its totals. */
 export function InventorySummaryNotice({ summary, assetType }: InventorySummaryNoticeProps) {
   return (
-    <section aria-label="Inventory totals" className="text-text-dim space-y-2 text-xs">
+    <section aria-label="Inventory totals" className="text-text-dim text-small space-y-2">
       {assetType === 'identity' && (
         // F2 objects (IV-12): the Identities board's one line.
         <p>
@@ -145,7 +145,7 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
           aria-pressed={!selected}
           onClick={() => onSelect('')}
           className={cn(
-            'rounded border px-3 py-1 text-xs',
+            'text-small rounded border px-3 py-1',
             !selected ? 'border-jade text-text-bright' : 'border-base-border text-text-dim'
           )}
         >
@@ -160,7 +160,7 @@ export function ObjectComposition({ summary, selected, onSelect }: ObjectComposi
               aria-pressed={selected === c.tier}
               onClick={() => onSelect(c.tier)}
               className={cn(
-                'inline-flex items-center gap-1.5 rounded border px-2 py-1 text-xs',
+                'text-small inline-flex items-center gap-1.5 rounded border px-2 py-1',
                 selected === c.tier
                   ? 'border-jade text-text-bright'
                   : 'border-base-border text-text-dim'

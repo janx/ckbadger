@@ -108,7 +108,7 @@ export function ScriptSummarySentence({
 function RailFact({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div>
-      <dt className="text-text-dim text-xs">{label}</dt>
+      <dt className="text-text-dim text-small">{label}</dt>
       {children}
     </div>
   );
@@ -138,7 +138,7 @@ export function ScriptFactsRail({
           <dd className="text-text-bright text-hero mt-1 font-medium tabular-nums">
             {family.liveCellsCount.toLocaleString('en-US')}
           </dd>
-          <dd className="text-text-dim mt-1 text-xs">
+          <dd className="text-text-dim text-small mt-1">
             of {family.cellsCount.toLocaleString('en-US')} that ever used it ·{' '}
             <a href="#its-cells" className="hover:text-text-bright whitespace-nowrap">
               list them →
@@ -160,7 +160,7 @@ export function ScriptFactsRail({
               <span className="flex-1" style={{ backgroundColor: '#2c3348' }} />
             </dd>
           )}
-          <dd className="text-text-dim mt-1 text-xs">
+          <dd className="text-text-dim text-small mt-1">
             <span style={{ color: DATA_COLOR }}>
               <ExactCkb shannons={occupied} signed={false} tone="plain" />
             </span>{' '}
@@ -175,7 +175,7 @@ export function ScriptFactsRail({
                 : `Upgradable · ${formatCount(family.versionsCount, 'version')}`}
             </dd>
             {code === 'upgradable' && last && lineage!.length > 1 && (
-              <dd className="text-text-dim mt-1 text-xs">
+              <dd className="text-text-dim text-small mt-1">
                 last replaced {formatUtc8Date(last.timestamp)}
               </dd>
             )}
@@ -183,7 +183,7 @@ export function ScriptFactsRail({
         )}
         {last && (
           <RailFact label="Code cell held by">
-            <dd className="mt-1 text-xs">
+            <dd className="text-small mt-1">
               <Link
                 href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
                 className="text-text hover:text-jade"
@@ -192,7 +192,7 @@ export function ScriptFactsRail({
               </Link>
             </dd>
             {last.custody.witnessState === 'never_signed' && (
-              <dd className="text-text-dim mt-0.5 text-xs">has never signed</dd>
+              <dd className="text-text-dim text-small mt-0.5">has never signed</dd>
             )}
           </RailFact>
         )}
@@ -274,13 +274,15 @@ export function ScriptHistory({
       <div
         aria-live="polite"
         data-testid="script-history-reading"
-        className="border-base-elevated flex min-h-10 flex-wrap items-baseline gap-x-6 gap-y-1.5 border-b pb-2.5 text-xs"
+        className="border-base-elevated text-small flex min-h-10 flex-wrap items-baseline gap-x-6 gap-y-1.5 border-b pb-2.5"
       >
         {point && used !== null && unused !== null ? (
           <>
             <span className="text-text-bright text-body">
               {point.date}
-              {active === null && <span className="text-text-dim text-xs"> · last full day</span>}
+              {active === null && (
+                <span className="text-text-dim text-small"> · last full day</span>
+              )}
             </span>
             <span className="flex items-baseline gap-1.5">
               <span className="text-text-dim">CKB held</span>{' '}
@@ -421,7 +423,7 @@ export function ScriptHistory({
         )}
       </div>
       {peak && (
-        <p data-testid="script-history-peak" className="text-text-dim mt-3 text-xs">
+        <p data-testid="script-history-peak" className="text-text-dim text-small mt-3">
           CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
           on {peak.date}
           {capacity > BigInt(0) && (
@@ -436,7 +438,7 @@ export function ScriptHistory({
           )}
         </p>
       )}
-      <p className="text-text-dim mt-3 max-w-[780px] text-xs leading-relaxed">
+      <p className="text-text-dim text-small mt-3 max-w-[780px] leading-relaxed">
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-[#a0a8be]">free</span> is CKB its owners keep
@@ -481,7 +483,7 @@ export function ScriptCustodyFigure({
         </p>
       );
     return (
-      <div className="space-y-3 text-xs">
+      <div className="text-small space-y-3">
         {(family.references ?? []).map((reference) => (
           <div key={`${reference.hashType}:${reference.referenceHash}`}>
             <div className="text-text-dim mb-1 break-all">
@@ -535,7 +537,7 @@ export function ScriptCustodyFigure({
         style={{ ['--holders' as string]: holders.length }}
       >
         {holders.map((holder, i) => (
-          <li key={holder.lockArgs} data-holder={holder.lockArgs} className="min-w-0 text-xs">
+          <li key={holder.lockArgs} data-holder={holder.lockArgs} className="text-small min-w-0">
             <div className="text-text-dim text-meta">
               {holder.until
                 ? `${formatUtc8Date(holder.from.timestamp)} → ${formatUtc8Date(holder.until.timestamp)}`
@@ -617,7 +619,7 @@ export function ScriptUseInTransaction({ family }: { family: ScriptFamilyDetail 
         return (
           <dl
             key={`${reference.hashType}:${reference.referenceHash}`}
-            className="grid gap-x-10 gap-y-3 text-xs md:grid-cols-3"
+            className="text-small grid gap-x-10 gap-y-3 md:grid-cols-3"
           >
             <div className="min-w-0">
               <dt className="text-text-dim">Code hash · hash type</dt>
@@ -681,7 +683,7 @@ export function ScriptCellsSummary({ family }: { family: ScriptFamilyDetail }) {
         ? 'as their type'
         : 'as lock or type';
   return (
-    <span data-testid="script-cells-summary" className="text-text-dim text-xs">
+    <span data-testid="script-cells-summary" className="text-text-dim text-small">
       {family.liveCellsCount.toLocaleString('en-US')} live cells use {family.name} {role} ·{' '}
       <ExactCkb shannons={BigInt(family.ownedCapacitySum)} signed={false} tone="plain" />,{' '}
       <ExactCkb shannons={BigInt(family.ownedKnowledgeSum)} signed={false} tone="plain" /> of it

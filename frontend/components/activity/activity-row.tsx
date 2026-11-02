@@ -100,7 +100,7 @@ export function ActivityRowHead({
 /** A detail line under the headline, indented: a short dim label column, then the text. */
 function DetailLine({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div data-role="detail" className="text-text flex items-baseline gap-2 pl-3.5 text-xs">
+    <div data-role="detail" className="text-text text-small flex items-baseline gap-2 pl-3.5">
       <span className="text-text-dim text-meta w-[30px] shrink-0">{label}</span>
       <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
     </div>
@@ -239,7 +239,7 @@ export function formatOccupiedDelta(usedDelta: string): string {
 // content width, too narrow for the 4/5-track rows (their item track started at x≈605). The tracks
 // start at md.
 const PARTICIPANT_GRID =
-  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)] md:items-baseline md:gap-x-3';
+  'flex flex-col gap-y-0.5 pl-3.5 text-small md:grid md:grid-cols-[minmax(0,136px)_minmax(150px,max-content)_minmax(0,104px)_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 
 function partyKey(p: ParticipantInfo, i: number): string {
   return `${p.lockHash ?? p.lockHashPrefix ?? p.address ?? 'party'}:${i}`;
@@ -253,7 +253,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 // ── F2 objects (round 2): the asset boards' participant line — lock kind as its own unwrapped
 // column (IV-14, OB-12), and a batch of objects folded behind "+N more objects" (OB-M3). ──
 const PARTICIPANT_GRID_LOCK =
-  'flex flex-col gap-y-0.5 pl-3.5 text-xs md:grid md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)] md:items-baseline md:gap-x-3';
+  'flex flex-col gap-y-0.5 pl-3.5 text-small md:grid md:grid-cols-[minmax(0,136px)_minmax(0,150px)_minmax(150px,max-content)_max-content_minmax(0,1fr)] md:items-baseline md:gap-x-3';
 function FoldedItemDeltas({
   items,
   focusItemId,
@@ -482,7 +482,7 @@ function Participants({
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((e) => !e)}
-          className="text-interactive hover:text-jade col-span-full self-start bg-transparent py-1 text-xs transition-colors md:justify-self-start"
+          className="text-interactive hover:text-jade text-small col-span-full self-start bg-transparent py-1 transition-colors md:justify-self-start"
         >
           {expanded ? 'Show fewer participants' : `+${hidden} participants`}
         </button>

@@ -43,7 +43,7 @@ export function AddressLoadState({
   label: string;
 }) {
   return (
-    <p className="text-text-dim py-3 text-xs" role={error ? 'alert' : 'status'}>
+    <p className="text-text-dim text-small py-3" role={error ? 'alert' : 'status'}>
       {error
         ? `Could not load ${label}: ${error.message}`
         : loading
@@ -54,7 +54,7 @@ export function AddressLoadState({
 }
 export function AddressStaleNotice({ error, label }: { error: Error | null; label: string }) {
   return error ? (
-    <p role="alert" className="text-warning py-2 text-xs">
+    <p role="alert" className="text-warning text-small py-2">
       Could not refresh {label}: {error.message}. Showing previously loaded data.
     </p>
   ) : null;
@@ -78,7 +78,7 @@ export function AddressPagination({
   return (
     <nav
       aria-label={`${label} pages`}
-      className="mt-4 flex flex-wrap items-center justify-between gap-3 text-xs"
+      className="text-small mt-4 flex flex-wrap items-center justify-between gap-3"
     >
       <span className="text-text-dim">
         Showing {start.toLocaleString('en-US')}-
@@ -121,7 +121,7 @@ function Composition({ counts, total }: { counts: AddressObjectComposition; tota
     throw new Error('Address object composition counts do not equal object holdings');
   return (
     <div className="space-y-2 py-3">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+      <div className="text-small flex flex-wrap items-center justify-between gap-2">
         <span>
           <strong className="text-text-bright font-medium">
             {counts.pureCkb + counts.btcCkb} of {total}
@@ -278,7 +278,7 @@ function HoldingSection({
           <ClassMark kind={cls.mark} size={16} />
           {kind === 'dao' ? 'Nervos DAO deposits' : cls.label}
         </h3>
-        <span className="text-text-dim max-w-full text-xs">{summary}</span>
+        <span className="text-text-dim text-small max-w-full">{summary}</span>
       </div>
       {children}
     </section>
@@ -378,7 +378,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
         <h2 id="holdings-heading" className="text-text-bright text-section font-medium">
           Holdings
         </h2>
-        <nav aria-label="Holdings" className="flex flex-wrap gap-x-5 gap-y-2 text-xs">
+        <nav aria-label="Holdings" className="text-small flex flex-wrap gap-x-5 gap-y-2">
           {ADDRESS_CLASSES.slice(0, 4).map((c) => (
             <a
               key={c.key}
@@ -394,7 +394,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       </div>
       <div className="grid gap-8 lg:grid-cols-2 lg:gap-12">
         <div className="space-y-3">
-          <p className="text-text-dim text-xs">
+          <p className="text-text-dim text-small">
             {total.toLocaleString('en-US')} holdings, one mark each
             {total > 128 ? ' (first 128 per class shown)' : ''}
           </p>
@@ -429,7 +429,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           </div>
         </div>
         <div className="space-y-2">
-          <div className="flex flex-wrap justify-between gap-2 text-xs">
+          <div className="text-small flex flex-wrap justify-between gap-2">
             <span className="text-text-dim">On-chain space they take</span>
             <span>
               {formatCkbAmount(occupied).full.replace(/\.0{8}$/, '')} CKB occupied in{' '}
@@ -457,7 +457,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
               />
             ))}
           </div>
-          <div className="grid grid-cols-1 gap-x-4 gap-y-1 text-xs sm:grid-cols-2">
+          <div className="text-small grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
             {spaceOrder(holdings).map((c) => (
               <button
                 key={c.key}
@@ -493,14 +493,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       <div className="grid items-start gap-x-12 gap-y-9 lg:grid-cols-2">
         <HoldingSection kind="dao" summary={summary('dao')} active={active} onActive={setActive}>
           {holdings.holdings.dao === 0 ? (
-            <p className="text-text-dim py-4 text-xs">No live DAO holdings.</p>
+            <p className="text-text-dim text-small py-4">No live DAO holdings.</p>
           ) : (
             <>
-              <p className="text-text-dim pt-3 text-xs">
+              <p className="text-text-dim text-small pt-3">
                 {holdings.depositCellsCount} deposits · {holdings.withdrawalRequestCellsCount}{' '}
                 withdrawal requests
               </p>
-              <dl className="grid gap-3 py-3 text-xs sm:grid-cols-3">
+              <dl className="text-small grid gap-3 py-3 sm:grid-cols-3">
                 <div>
                   <dt className="text-text-dim">
                     {holdings.withdrawalRequestCellsCount === 0 ? 'Deposited' : 'CKB held'}
@@ -557,7 +557,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       <div
                         key={`${cell.txHash}:${cell.outputIndex}`}
                         data-dao-cell
-                        className="border-base-elevated flex flex-wrap items-baseline justify-between gap-2 border-t py-2 text-xs"
+                        className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-t py-2"
                       >
                         <span className="text-text-dim">
                           <Link href={`/cell/${cell.txHash}-${cell.outputIndex}`}>
@@ -614,14 +614,14 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
         >
           {tokens.data && <AddressStaleNotice error={tokens.error} label="tokens" />}
           {holdings.holdings.token === 0 ? (
-            <p className="text-text-dim py-4 text-xs">No tokens held.</p>
+            <p className="text-text-dim text-small py-4">No tokens held.</p>
           ) : tokens.data ? (
             <>
               {tokens.data.data.map((t) => (
                 <div
                   key={t.typeScriptHash}
                   data-token-row={t.typeScriptHash}
-                  className="border-base-elevated flex flex-wrap items-baseline justify-between gap-2 border-b py-2 text-xs"
+                  className="border-base-elevated text-small flex flex-wrap items-baseline justify-between gap-2 border-b py-2"
                 >
                   <span className="min-w-0">
                     <Link
@@ -629,7 +629,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       className="text-text-bright hover:text-jade"
                     >
                       {tokenName(t) ?? (
-                        <Hash hash={t.typeScriptHash} copyable={false} className="text-xs" />
+                        <Hash hash={t.typeScriptHash} copyable={false} className="text-small" />
                       )}
                     </Link>{' '}
                     <span className="text-text-dim">{formatStandard(t.standard)}</span>
@@ -678,7 +678,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           <Composition counts={holdings.objectComposition} total={holdings.holdings.object} />
           {objects.data && <AddressStaleNotice error={objects.error} label="objects" />}
           {holdings.holdings.object === 0 ? (
-            <p className="text-text-dim py-4 text-xs">No objects held.</p>
+            <p className="text-text-dim text-small py-4">No objects held.</p>
           ) : objects.data ? (
             <>
               {collectionOrder(holdings.objectCollections).map((g) => {
@@ -697,11 +697,13 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                     data-collection-row={g.name ?? g.id ?? `uncollected ${g.standard}`}
                     className="border-base-elevated space-y-2 border-b py-3"
                   >
-                    <div className="flex flex-wrap justify-between gap-2 text-xs">
+                    <div className="text-small flex flex-wrap justify-between gap-2">
                       <span>
                         {href ? (
                           <Link href={href} className="text-text-bright">
-                            {g.name ?? <Hash hash={g.id!} copyable={false} className="text-xs" />}
+                            {g.name ?? (
+                              <Hash hash={g.id!} copyable={false} className="text-small" />
+                            )}
                           </Link>
                         ) : (
                           <span>Uncollected {formatStandard(g.standard)}</span>
@@ -783,7 +785,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
         >
           {identities.data && <AddressStaleNotice error={identities.error} label="identities" />}
           {holdings.holdings.identity === 0 ? (
-            <p className="text-text-dim py-4 text-xs">No identity cells held.</p>
+            <p className="text-text-dim text-small py-4">No identity cells held.</p>
           ) : identities.data ? (
             <>
               {identities.data.data.map((c) => {
@@ -804,9 +806,9 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       >
                         {d.name ?? <Hash hash={d.id} copyable={false} />}
                       </Link>
-                      <span className="text-text-dim text-xs">{formatStandard(d.standard)}</span>
+                      <span className="text-text-dim text-small">{formatStandard(d.standard)}</span>
                     </div>
-                    <div className="text-text-dim flex flex-wrap justify-between gap-2 text-xs">
+                    <div className="text-text-dim text-small flex flex-wrap justify-between gap-2">
                       <span>
                         {c.expiresAt === null
                           ? 'Expiry unavailable'

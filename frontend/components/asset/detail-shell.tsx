@@ -63,7 +63,7 @@ export function AssetDetailShell({
     >
       <nav
         aria-label="Breadcrumb"
-        className="text-text-dim flex flex-wrap items-center gap-2 text-xs"
+        className="text-text-dim text-small flex flex-wrap items-center gap-2"
       >
         {breadcrumb.map((b, i) => (
           <span key={`${b.href}:${b.label}`}>
@@ -151,7 +151,7 @@ export function AssetReadState({
     // proxy's internal URL, and the line breaks anywhere so no long token widens a 390 px page.
     <p
       role={error ? 'alert' : 'status'}
-      className="text-text-dim py-3 text-xs [overflow-wrap:anywhere]"
+      className="text-text-dim text-small py-3 [overflow-wrap:anywhere]"
     >
       {error
         ? `Could not ${retained ? 'refresh' : 'load'} ${label}: ${readErrorText(error)}.${retained ? ' Showing previously loaded data.' : ''}`

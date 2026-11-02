@@ -384,7 +384,7 @@ export default function ForksPage() {
                   },
                 ]}
                 mobileRow={(event) => (
-                  <div className="min-w-0 space-y-2 text-xs">
+                  <div className="text-small min-w-0 space-y-2">
                     <div className="flex flex-wrap justify-between gap-2">
                       <Seen event={event} />
                       <ForkPoint event={event} />

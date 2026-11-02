@@ -449,11 +449,11 @@ export function Chart({
       </figcaption>
       <div ref={ref} className="min-w-0" style={{ minHeight: height }}>
         {!data.length ? (
-          <p className="text-text-dim py-8 text-xs">No data in this range.</p>
+          <p className="text-text-dim text-small py-8">No data in this range.</p>
         ) : kind === 'ranked' ? (
           <ol className="space-y-3">
             {data.map((p, i) => (
-              <li key={`${p.label}:${i}`} className="text-xs">
+              <li key={`${p.label}:${i}`} className="text-small">
                 <div className="flex flex-wrap justify-between gap-2">
                   <span>{p.label}</span>
                   <span className="tabular-nums">

@@ -38,7 +38,10 @@ export function ActivityStats() {
     <div data-testid="home-activity-stats" className="flex min-w-0 flex-col gap-[22px]">
       <div className="border-base-border-subtle flex h-11 items-center justify-between gap-4 border-b">
         <h2 className={SECTION_HEADING_CLASS}>Activity, last 24 h</h2>
-        <Link href="/charts" className="text-interactive hover:text-jade text-xs transition-colors">
+        <Link
+          href="/charts"
+          className="text-interactive hover:text-jade text-small transition-colors"
+        >
           Charts →
         </Link>
       </div>
@@ -46,11 +49,11 @@ export function ActivityStats() {
         <div aria-hidden="true" className="bg-base-surface h-40 animate-pulse rounded" />
       )}
       {d.state === 'error' && (
-        <div role="alert" className="text-rouge text-xs">
+        <div role="alert" className="text-rouge text-small">
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-xs">{d.message}</div>}
+      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
       {d.state === 'ready' && <Summary view={d.view} />}
       <DailyActivityFigure />
     </div>
@@ -101,7 +104,7 @@ function summaryView(s: ActivitySummary24h): SummaryView {
 function Kpi({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-text-dim text-xs">{label}</dt>
+      <dt className="text-text-dim text-small">{label}</dt>
       <dd className="text-text-bright text-hero m-0 font-medium tabular-nums">{children}</dd>
     </div>
   );

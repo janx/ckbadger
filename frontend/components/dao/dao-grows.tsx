@@ -160,13 +160,13 @@ export function DaoGrows({ evidence }: { evidence: DaoEvidence }) {
         its deposit, on the capacity it does not occupy.
       </p>
       {history.isError ? (
-        <div role="alert" className="text-rouge text-xs">
+        <div role="alert" className="text-rouge text-small">
           AR history could not be read: {String(history.error)}
         </div>
       ) : history.data === undefined ? (
-        <div className="text-text-dim text-xs">Loading the daily AR history…</div>
+        <div className="text-text-dim text-small">Loading the daily AR history…</div>
       ) : history.data.length === 0 ? (
-        <div className="text-text-dim text-xs">No complete day has closed yet.</div>
+        <div className="text-text-dim text-small">No complete day has closed yet.</div>
       ) : (
         <ArByDay days={history.data} evidence={evidence} />
       )}

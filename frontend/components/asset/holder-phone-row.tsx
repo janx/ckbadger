@@ -38,7 +38,7 @@ export function HolderPhoneRow({
       {lock !== undefined && (
         <>
           {' '}
-          <span className="text-text-dim whitespace-nowrap text-xs">{lock}</span>
+          <span className="text-text-dim text-small whitespace-nowrap">{lock}</span>
         </>
       )}
     </>

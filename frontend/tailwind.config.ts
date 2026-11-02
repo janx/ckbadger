@@ -5,6 +5,9 @@ export default {
   content: ['./app/**/*.{js,ts,jsx,tsx,mdx}', './components/**/*.{js,ts,jsx,tsx,mdx}'],
   darkMode: 'class',
   theme: {
+    // The one type scale (hierarchy plan R1, S8): `text-meta` … `text-display`, defined in lib. Set
+    // as the whole theme, not under `extend`, so Tailwind's default sizes (text-xs …) do not exist.
+    fontSize: TYPE_SCALE,
     container: {
       center: true,
       screens: {
@@ -111,8 +114,6 @@ export default {
         'accent-11': '#9888c8',
         'accent-12': '#b07028',
       },
-      // The one type scale (hierarchy plan R1): `text-meta` … `text-display`, defined in lib.
-      fontSize: TYPE_SCALE,
       fontFamily: {
         mono: ['var(--font-mono)', 'ui-monospace', 'monospace'],
         display: ['var(--font-mono)', 'ui-monospace', 'monospace'],

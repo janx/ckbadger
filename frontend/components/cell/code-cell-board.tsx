@@ -48,7 +48,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         Its data is a RISC-V program. A script names it in one of two ways, and each way decides
         what happens when the code changes.
       </p>
-      <div className="grid gap-7 text-xs leading-relaxed md:grid-cols-3">
+      <div className="text-small grid gap-7 leading-relaxed md:grid-cols-3">
         <div
           data-testid="code-by-type-hash"
           className="flex min-w-0 flex-col gap-1 border-t-2 pt-2.5"
@@ -121,7 +121,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
           ))}
         </ul>
       )}
-      <details className="text-xs">
+      <details className="text-small">
         <summary className="text-text-dim hover:text-text cursor-pointer">
           Type ID lineage of these bytes
         </summary>

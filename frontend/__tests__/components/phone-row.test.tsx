@@ -26,7 +26,7 @@ describe('PhoneRow (boards L1–L8)', () => {
     ]);
     const [head, body, quiet] = Array.from(row.children);
     expect(head).toHaveClass('text-body', 'text-text-bright');
-    expect(body).toHaveClass('text-xs', 'text-text');
+    expect(body).toHaveClass('text-small', 'text-text');
     // Quiet figures: 11 px dim, and an exact amount takes the line's ink.
     expect(quiet).toHaveClass(
       'text-meta',

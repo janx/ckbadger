@@ -221,7 +221,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
             copyable={false}
             startChars={12}
             endChars={6}
-            className="text-xs"
+            className="text-small"
           />
         </AppLink>
       ),
@@ -319,7 +319,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
       title="Who holds it"
       actions={
         <button
-          className="text-jade text-xs"
+          className="text-jade text-small"
           onClick={() => {
             setAll(!all);
             pagination.reset();

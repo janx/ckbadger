@@ -395,7 +395,7 @@ export function StackedAreaChart({
       {interactive && isZoomed && (
         <button
           onClick={handleReset}
-          className="bg-base-elevated text-text hover:bg-base-elevated/80 absolute right-2 top-2 z-10 rounded px-2 py-1 text-xs"
+          className="bg-base-elevated text-text hover:bg-base-elevated/80 text-small absolute right-2 top-2 z-10 rounded px-2 py-1"
         >
           Reset Zoom
         </button>
@@ -586,7 +586,7 @@ export function StackedAreaChart({
         )}
       </svg>
       {interactive && isZoomed && (
-        <div className="text-text-dim mt-1 text-center font-mono text-xs tabular-nums">
+        <div className="text-text-dim text-small mt-1 text-center font-mono tabular-nums">
           Showing {data[0]?.date} - {data[data.length - 1]?.date} ({data.length} points)
         </div>
       )}

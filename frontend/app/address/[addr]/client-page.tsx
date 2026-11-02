@@ -204,7 +204,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             title="Address"
             identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
             status={
-              <span className="text-text-dim flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+              <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">
                 {a.lockScript && (
                   <span>
                     lock{' '}
@@ -218,7 +218,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       className="text-text-bright"
                     >
                       {a.lockScriptInfo?.name ?? (
-                        <Hash hash={a.lockScript.codeHash} className="text-xs" copyable={false} />
+                        <Hash
+                          hash={a.lockScript.codeHash}
+                          className="text-small"
+                          copyable={false}
+                        />
                       )}
                     </Link>
                   </span>
@@ -236,7 +240,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               <DetailSection
                 title="Lock script"
                 actions={
-                  <span className="text-xs">
+                  <span className="text-small">
                     {/* F2 blocks (BA-38): the address JSON (its lock script) and this page as Markdown. */}
                     <a
                       href={`${apiBaseFor(network)}/addresses/${encodeURIComponent(addr)}`}
@@ -252,7 +256,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   </span>
                 }
               >
-                <dl className="grid grid-cols-[90px_minmax(0,1fr)] gap-x-4 gap-y-3 text-xs">
+                <dl className="text-small grid grid-cols-[90px_minmax(0,1fr)] gap-x-4 gap-y-3">
                   {a.lockScript ? (
                     <>
                       <dt className="text-text-dim">code hash</dt>
@@ -269,7 +273,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                             hash={a.lockScript.codeHash}
                             truncate={false}
                             copyable={false}
-                            className="text-xs"
+                            className="text-small"
                           />
                         </Link>
                         {a.lockScriptInfo?.name && (
@@ -283,7 +287,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       <dd>{a.lockScript.hashType}</dd>
                       <dt className="text-text-dim">args</dt>
                       <dd className="break-all">
-                        <Hash hash={a.lockScript.args} truncate={false} className="text-xs" />
+                        <Hash hash={a.lockScript.args} truncate={false} className="text-small" />
                       </dd>
                     </>
                   ) : (
@@ -294,7 +298,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   )}
                   <dt className="text-text-dim">lock hash</dt>
                   <dd className="break-all">
-                    <Hash hash={a.lockScriptHash} truncate={false} className="text-xs" />
+                    <Hash hash={a.lockScriptHash} truncate={false} className="text-small" />
                   </dd>
                 </dl>
               </DetailSection>
@@ -314,7 +318,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
             {a.pendingSummary !== null && a.pendingSummary.txCount > 0 && (
               <aside
                 aria-label="Unconfirmed"
-                className="text-text-dim flex flex-wrap items-baseline gap-3 text-xs"
+                className="text-text-dim text-small flex flex-wrap items-baseline gap-3"
               >
                 <span>Unconfirmed</span>
                 <span>{a.pendingSummary.txCount} tx</span>
@@ -333,14 +337,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               names.data.data.length > 0 && (
                 <DetailSection title=".cell named rights">
                   <div data-testid="address-dotcell-names">
-                    <p className="text-text-dim mb-3 text-xs">
+                    <p className="text-text-dim text-small mb-3">
                       Names this protocol assigns to the address. These rights do not add the name
                       cell’s capacity to this address’s physical holdings.
                     </p>
                     {names.data.data.map((n) => (
                       <div
                         key={n.identityId}
-                        className="border-base-elevated flex flex-wrap justify-between gap-2 border-b py-2 text-xs"
+                        className="border-base-elevated text-small flex flex-wrap justify-between gap-2 border-b py-2"
                       >
                         <Link
                           href={getIdentityItemDetailHref('dotcell', n.identityId)}
@@ -373,22 +377,22 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
               fiber.data &&
               fiber.data.length > 0 && (
                 <DetailSection title="Fiber channels">
-                  <p className="text-text-dim mb-3 text-xs">
+                  <p className="text-text-dim text-small mb-3">
                     Up to 100 indexed channels associated with this address.
                   </p>
                   {fiber.data.map((c) => (
                     <div
                       key={c.channelId}
-                      className="border-base-elevated flex flex-wrap justify-between gap-3 border-b py-3 text-xs"
+                      className="border-base-elevated text-small flex flex-wrap justify-between gap-3 border-b py-3"
                     >
                       <Link href={`/fiber/channels/${c.channelId}`}>
-                        <Hash hash={c.channelId} className="text-xs" copyable={false} />
+                        <Hash hash={c.channelId} className="text-small" copyable={false} />
                       </Link>
                       <span>{c.state}</span>
                       <span className="flex flex-wrap gap-2">
                         {c.participants.map((p) => (
                           <Link href={`/address/${p}`} key={p}>
-                            <Hash hash={p} copyable={false} className="text-xs" />
+                            <Hash hash={p} copyable={false} className="text-small" />
                           </Link>
                         ))}
                       </span>
@@ -436,17 +440,17 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     >
                       {label}
                       {id === 'activities' && activitiesCount.data !== undefined && (
-                        <span className="text-text-dim text-xs font-normal">
+                        <span className="text-text-dim text-small font-normal">
                           {activitiesCount.data.toLocaleString('en-US')}
                         </span>
                       )}
                       {id === 'transactions' && (
-                        <span className="text-text-dim text-xs font-normal">
+                        <span className="text-text-dim text-small font-normal">
                           {a.transactionsCount.toLocaleString('en-US')}
                         </span>
                       )}
                       {id === 'cells' && holdings.data && (
-                        <span className="text-text-dim text-xs font-normal">
+                        <span className="text-text-dim text-small font-normal">
                           {holdings.data.liveCellsCount.toLocaleString('en-US')}
                         </span>
                       )}
@@ -468,7 +472,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           activityPage.reset();
                         }}
                         className={cn(
-                          'rounded border px-2.5 py-1.5 text-xs',
+                          'text-small rounded border px-2.5 py-1.5',
                           filter === value
                             ? 'border-base-border bg-base-elevated text-text-bright'
                             : 'border-base-border-subtle text-text-dim'
@@ -496,7 +500,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           cellPage.reset();
                         }}
                         className={cn(
-                          'flex items-center gap-1.5 rounded border px-2.5 py-1.5 text-xs',
+                          'text-small flex items-center gap-1.5 rounded border px-2.5 py-1.5',
                           cellClass === c.key
                             ? 'border-base-border bg-base-elevated text-text-bright'
                             : 'border-base-border-subtle text-text-dim'
@@ -522,7 +526,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         <AddressActivity key={row.txHash} activity={row} address={a} />
                       ))
                     ) : (
-                      <p className="text-text-dim py-6 text-xs">
+                      <p className="text-text-dim text-small py-6">
                         {filter === 'all'
                           ? 'No activities.'
                           : `No ${activityFilters.find((f) => f[0] === filter)![1]} activities on this page.`}

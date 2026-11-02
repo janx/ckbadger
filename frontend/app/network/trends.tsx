@@ -227,7 +227,7 @@ export function NetworkTrends() {
   return (
     <section className="space-y-4">
       <h2 className="text-text-bright text-section font-mono font-medium">Over time</h2>
-      <p className="text-text-dim font-mono text-xs">
+      <p className="text-text-dim text-small font-mono">
         Daily history of retained verified peers, by UTC+8 day. The current (incomplete) day is
         excluded. Round counts were not recorded. Days older than the crawler&apos;s hourly
         retention show as gaps, never zero.
@@ -238,15 +238,15 @@ export function NetworkTrends() {
 
       <TrendPanel title="Retained verification state (daily)">
         {peerHistoryError ? (
-          <p role="alert" className="text-negative font-mono text-xs">
+          <p role="alert" className="text-negative text-small font-mono">
             {peerHistoryError}
           </p>
         ) : peerHistoryLoading ? (
-          <p role="status" className="text-text-dim font-mono text-xs">
+          <p role="status" className="text-text-dim text-small font-mono">
             Loading verified peer history…
           </p>
         ) : peerCounts.data.length === 0 ? (
-          <p className="text-text-dim font-mono text-xs">
+          <p className="text-text-dim text-small font-mono">
             No completed daily crawler observations yet.
           </p>
         ) : (

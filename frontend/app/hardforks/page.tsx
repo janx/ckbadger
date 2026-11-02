@@ -186,7 +186,7 @@ export default function HardforksPage() {
           }
           status={
             data && (
-              <span className="text-text-dim text-xs">
+              <span className="text-text-dim text-small">
                 {data.network} · tip epoch {data.tipEpoch.toLocaleString()}
               </span>
             )

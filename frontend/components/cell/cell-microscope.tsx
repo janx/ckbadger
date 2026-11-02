@@ -251,7 +251,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
   const outOccupied = outParts.filter((p) => p.occupied).reduce((n, p) => n + p.end - p.start, 0);
   if (!breakdown || (molecule && outOccupied + dataBytes.length !== breakdown.totalBytes))
     return (
-      <p role="alert" className="text-rouge text-xs">
+      <p role="alert" className="text-rouge text-small">
         Cell {cell.txHash}:{cell.outputIndex}: its bytes ({outOccupied} occupied CellOutput +{' '}
         {dataBytes.length} data) disagree with its occupied size{' '}
         {breakdown ? `${breakdown.totalBytes} B` : '(missing)'}.
@@ -545,7 +545,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       <style>{highlightCss(litIds)}</style>
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h2 className="text-text-bright text-section font-medium">The cell, byte by byte</h2>
-        <span className="text-text-dim text-xs">
+        <span className="text-text-dim text-small">
           {GROUPS.map((g) => fmt(groupBytes[g])).join(' + ')} ={' '}
           <span style={{ color: DATA_COLOR }}>{fmt(breakdown.totalBytes)}</span> occupied bytes ·
           room for {room.toLocaleString('en-US')} more
@@ -689,7 +689,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               aria-label="Cell bytes"
               data-cell-bytes=""
               data-active={litIds ? litIds.join(' ') : undefined}
-              className="overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 text-xs tabular-nums"
+              className="text-small overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 tabular-nums"
               onMouseOver={onHover}
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
@@ -749,7 +749,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         <aside
           aria-label="Field detail"
           aria-live="polite"
-          className="min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3 text-xs lg:sticky lg:top-4"
+          className="text-small min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3 lg:sticky lg:top-4"
         >
           {detail}
         </aside>

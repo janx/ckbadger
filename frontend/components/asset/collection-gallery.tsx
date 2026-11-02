@@ -56,7 +56,7 @@ function ItemOwner({ item }: { item: CollectionItem }) {
 function mnftRowTitle(item: CollectionItem): ReactNode {
   if (item.tokenIndex === undefined)
     return (
-      <span role="alert" className="text-rouge font-mono text-xs">
+      <span role="alert" className="text-rouge text-small font-mono">
         m-NFT item {item.nftId} has no tokenIndex
       </span>
     );

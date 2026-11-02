@@ -150,7 +150,7 @@ function CellFacts({
     amounts = checkedCapacity(cell);
   } catch (error) {
     return (
-      <p role="alert" data-testid="cell-capacity-error" className="text-rouge text-xs">
+      <p role="alert" data-testid="cell-capacity-error" className="text-rouge text-small">
         {String(error)}
       </p>
     );
@@ -160,14 +160,14 @@ function CellFacts({
   return (
     <section
       aria-label="Cell facts"
-      className="border-base-border flex flex-wrap gap-x-10 gap-y-3.5 border-y py-3.5 text-xs"
+      className="border-base-border text-small flex flex-wrap gap-x-10 gap-y-3.5 border-y py-3.5"
     >
       <Fact label="Capacity">
         <ExactCkb shannons={capacity} signed={false} tone="plain" />
       </Fact>
       <Fact label="Occupied">
         <span style={{ color: DATA_COLOR }}>{breakdown.totalBytes.toLocaleString('en-US')} B</span>{' '}
-        <span className="text-text-dim text-xs">
+        <span className="text-text-dim text-small">
           ·{' '}
           {capacity === occupied ? (
             '0'
@@ -268,7 +268,7 @@ function CodeCellOf({ cell }: { cell: Cell }) {
     (item) => item.codeCellTxHash === cell.txHash && item.codeCellOutputIndex === cell.outputIndex
   );
   return (
-    <span data-testid="code-cell-of" className="text-text-dim text-xs">
+    <span data-testid="code-cell-of" className="text-text-dim text-small">
       · code cell of{' '}
       {cell.codeCellOf.map((script, i) => (
         <span key={`${script.codeHash}:${script.hashType}`}>
@@ -291,7 +291,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
   const outpoint = `${cell.txHash}:${cell.outputIndex}`;
   return (
     <>
-      <nav aria-label="Breadcrumb" className="text-text-dim mb-2 text-xs">
+      <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
         <Link href={`/tx/${cell.txHash}`} className="hover:text-text-bright">
           Transaction {short(cell.txHash)}
         </Link>{' '}
@@ -302,7 +302,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         status={
           <span className="flex flex-wrap items-center gap-3">
             <span
-              className="inline-flex items-center gap-1.5 text-xs"
+              className="text-small inline-flex items-center gap-1.5"
               style={{ color: cell.status === 'live' ? DATA_COLOR : EXPIRED_COLOR }}
             >
               <span
@@ -343,7 +343,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         <CellFacts cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.daoInfo && (
           <DetailSection title="Nervos DAO">
-            <p className="text-text-dim text-xs">
+            <p className="text-text-dim text-small">
               {cell.daoInfo.daoStatus} · deposit block{' '}
               {formatBlockNumber(cell.daoInfo.depositBlockNumber)}
               {cell.daoInfo.compensationCkb != null ? (
@@ -370,7 +370,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         <CellMicroscope key={outpoint} cell={cell} lockName={names.lock} typeName={names.type} />
         {cell.isDepGroup && (
           <DetailSection title="Dep group">
-            <ul className="space-y-2 text-xs">
+            <ul className="text-small space-y-2">
               {cell.depGroupItems?.map((item) => (
                 <li key={`${item.txHash}:${item.outputIndex}`}>
                   <Link
@@ -412,23 +412,23 @@ export default function CellDetailPage() {
   }
   const body = !parts ? (
     <DetailLayout title="Invalid cell outpoint">
-      <p role="alert" className="text-rouge break-all text-xs">
+      <p role="alert" className="text-rouge text-small break-all">
         {String(outpoint)}
       </p>
     </DetailLayout>
   ) : query.isPending ? (
     <DetailLayout title="Cell">
-      <p className="text-text-dim text-xs">Loading cell evidence…</p>
+      <p className="text-text-dim text-small">Loading cell evidence…</p>
     </DetailLayout>
   ) : query.error && !query.data ? (
     <DetailLayout title="Cell data unavailable">
-      <p role="alert" className="text-rouge break-all text-xs">
+      <p role="alert" className="text-rouge text-small break-all">
         {query.error.message}
       </p>
     </DetailLayout>
   ) : !query.data ? (
     <DetailLayout title="Cell data unavailable">
-      <p role="alert" className="text-rouge text-xs">
+      <p role="alert" className="text-rouge text-small">
         Cell response was empty.
       </p>
     </DetailLayout>

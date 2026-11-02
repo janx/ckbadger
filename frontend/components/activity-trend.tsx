@@ -76,7 +76,7 @@ export function ActivityTrend() {
   const headerActions = (
     <Link
       href="/charts"
-      className="text-text-dim hover:text-jade font-mono text-xs transition-colors"
+      className="text-text-dim hover:text-jade text-small font-mono transition-colors"
     >
       VIEW ALL &rarr;
     </Link>
@@ -136,7 +136,7 @@ export function ActivityTrend() {
             {isLoading ? (
               <div className="bg-base-elevated mt-1 inline-block h-5 w-16 animate-pulse rounded" />
             ) : (
-              <div className="text-text-bright mt-1 font-mono text-sm font-bold tabular-nums">
+              <div className="text-text-bright text-body mt-1 font-mono font-bold tabular-nums">
                 {summary ? summary.uniqueAddressCount.toLocaleString() : '\u2014'}
               </div>
             )}
@@ -146,7 +146,7 @@ export function ActivityTrend() {
             {isLoading ? (
               <div className="bg-base-elevated mt-1 inline-block h-5 w-16 animate-pulse rounded" />
             ) : (
-              <div className="text-text-bright mt-1 font-mono text-sm font-bold tabular-nums">
+              <div className="text-text-bright text-body mt-1 font-mono font-bold tabular-nums">
                 {summary ? formatCkbCompact(summary.totalCkbMoved) : '\u2014'}
               </div>
             )}

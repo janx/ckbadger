@@ -47,7 +47,7 @@ function CapacityUtilizationOrState({
       <div
         data-testid="capacity-statistics-state"
         data-state="not-recorded"
-        className="text-text-dim mb-3 font-mono text-xs"
+        className="text-text-dim text-small mb-3 font-mono"
       >
         {totalCapacityLabel} is not recorded for {subject}
       </div>
@@ -58,7 +58,7 @@ function CapacityUtilizationOrState({
       <div
         data-testid="capacity-statistics-state"
         data-state="none-live"
-        className="text-text-dim mb-3 font-mono text-xs"
+        className="text-text-dim text-small mb-3 font-mono"
       >
         {totalCapacityLabel}: no live cells hold capacity right now
       </div>

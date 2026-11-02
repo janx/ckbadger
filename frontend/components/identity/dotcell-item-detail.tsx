@@ -63,13 +63,15 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
           </li>
         ))}
       </ul>
-      {more.isError && <p className="text-negative mt-2 text-xs">Failed to load more sub-names</p>}
+      {more.isError && (
+        <p className="text-negative text-small mt-2">Failed to load more sub-names</p>
+      )}
       {hasMore && (
         <button
           type="button"
           disabled={more.isFetching}
           onClick={() => (wantsMore ? void more.fetchNextPage() : setWantsMore(true))}
-          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text mt-2 rounded border px-3 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+          className="hover:border-jade hover:text-jade border-base-border bg-base-elevated text-text text-small mt-2 rounded border px-3 py-1 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
         >
           Show more sub-names
         </button>

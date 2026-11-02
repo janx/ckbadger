@@ -107,7 +107,13 @@ export function AssetTransactions({ rows, token, context, identity }: AssetTrans
       minWidth: 178,
       render: (r) => (
         <AppLink href={`/tx/${r.hash}`}>
-          <Hash hash={r.hash} copyable={false} startChars={10} endChars={6} className="text-xs" />
+          <Hash
+            hash={r.hash}
+            copyable={false}
+            startChars={10}
+            endChars={6}
+            className="text-small"
+          />
         </AppLink>
       ),
     },
@@ -458,7 +464,7 @@ export function AssetFeed({
                 );
               })
             ) : (
-              <p className="text-text-dim py-6 text-xs">No activities.</p>
+              <p className="text-text-dim text-small py-6">No activities.</p>
             )
           ) : (
             <AssetTransactions

@@ -28,7 +28,7 @@ describe('cn and the type scale', () => {
   });
   it('lets a later size win over an earlier one, per breakpoint', () => {
     expect(cn('text-body', 'text-section')).toBe('text-section');
-    expect(cn('text-xs', 'text-small')).toBe('text-small');
+    expect(cn('text-meta', 'text-small')).toBe('text-small');
     expect(cn('text-index', 'sm:text-display')).toBe('text-index sm:text-display');
   });
 });

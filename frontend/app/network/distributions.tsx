@@ -24,7 +24,7 @@ function useDistributions() {
 function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
   const top = [...items].sort((a, b) => b.count - a.count).slice(0, TOP_N);
   const max = top.reduce((m, it) => Math.max(m, it.count), 0);
-  if (top.length === 0) return <p className="text-text-dim text-xs">No data yet</p>;
+  if (top.length === 0) return <p className="text-text-dim text-small">No data yet</p>;
   return (
     <div className="flex max-w-[720px] flex-col gap-1">
       {top.map((it, i) => (

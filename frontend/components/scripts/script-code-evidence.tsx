@@ -196,7 +196,7 @@ export function ScriptCodeClassSummary({
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
   return (
-    <div className="min-w-0 text-xs">
+    <div className="text-small min-w-0">
       <div className="text-text-bright">{scriptClassLabel(custody.class)}</div>
       {custody.class === 'multisig' && custody.witnessState === 'verified' && (
         <div className="text-text-dim mt-1">
@@ -259,7 +259,7 @@ export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi
   return (
     <DetailSection title="Code history">
       {markers.length === 0 ? (
-        <p className="text-text-dim text-xs">
+        <p className="text-text-dim text-small">
           No observed code cell events for registered references.
         </p>
       ) : (
@@ -269,7 +269,7 @@ export function ScriptCodeHistory({ markers }: { markers: ScriptHistoryMarkerApi
               key={`${marker.referenceHash}:${marker.hashType}:${marker.codeCellTxHash}:${marker.codeCellOutputIndex}:${marker.event}`}
               className="border-base-border border-b py-3 last:border-b-0"
             >
-              <div className="flex flex-wrap items-baseline justify-between gap-2 text-xs">
+              <div className="text-small flex flex-wrap items-baseline justify-between gap-2">
                 <span className="text-text-bright capitalize">{marker.event}</span>
                 <AppLink
                   href={`/blocks/${marker.blockNumber}`}
@@ -442,7 +442,7 @@ export function ScriptCapacityEvidenceChart({
             ))}
           </div>
           {selected && (
-            <div className="mt-3 grid gap-3 text-xs sm:grid-cols-2">
+            <div className="text-small mt-3 grid gap-3 sm:grid-cols-2">
               <div>
                 <div className="text-text-dim">
                   {selected.event === 'deployed' ? 'New code cell holder' : 'Old code cell holder'}

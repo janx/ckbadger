@@ -198,8 +198,8 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
                 tone: 'head',
                 left: (
                   <>
-                    {id} <span className="text-text-dim text-xs">· </span>
-                    <span className="text-xs">{pair}</span>
+                    {id} <span className="text-text-dim text-small">· </span>
+                    <span className="text-small">{pair}</span>
                   </>
                 ),
                 right: capacity,

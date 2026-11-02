@@ -178,7 +178,7 @@ export default function BlocksPage() {
               <BlocksLimitsFootnote blocks={data.data} />
               <CursorPagination
                 summary={
-                  <span className="text-xs">{blocksRange(data.data, data.total, page)}</span>
+                  <span className="text-small">{blocksRange(data.data, data.total, page)}</span>
                 }
                 hasMore={data.hasMore}
                 hasPrevious={hasPrevious}
@@ -209,7 +209,7 @@ function BlocksLegend() {
   return (
     <div
       aria-label="Legend"
-      className="text-text-dim flex flex-wrap items-center gap-x-[18px] gap-y-1.5 text-xs"
+      className="text-text-dim text-small flex flex-wrap items-center gap-x-[18px] gap-y-1.5"
     >
       <span className="flex items-center gap-1.5">
         <svg aria-hidden="true" width="10" height="10" viewBox="0 0 10 10">
@@ -271,7 +271,7 @@ function miner(block: Block) {
       address={block.minerAddress}
       pool={block.minerPool}
       unnamed={
-        <Address address={block.minerAddress} startChars={10} endChars={6} className="text-xs" />
+        <Address address={block.minerAddress} startChars={10} endChars={6} className="text-small" />
       }
     />
   ) : (

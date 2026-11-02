@@ -144,7 +144,7 @@ function Allocation({ data, error }: { data: CkbytesAllocation | undefined; erro
       <div
         role="alert"
         data-testid="ckbytes-allocation-error"
-        className="border-negative/40 text-negative rounded border px-3 py-2 text-xs"
+        className="border-negative/40 text-negative text-small rounded border px-3 py-2"
       >
         {d.message}
       </div>
@@ -215,7 +215,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
         <span className="text-text-dim text-[0.5em]"> CKB</span>
         <span
           data-testid="ckbytes-block"
-          className="text-text-dim ml-3 align-middle text-xs font-normal"
+          className="text-text-dim text-small ml-3 align-middle font-normal"
         >
           at {formatBlockNumber(view.blockNumber)}
         </span>
@@ -247,7 +247,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
           />
         )}
       </div>
-      <div className="flex flex-wrap gap-x-8 gap-y-1 text-xs">
+      <div className="text-small flex flex-wrap gap-x-8 gap-y-1">
         <LegendItem
           swatch="bg-jade"
           name="Knowledge"
@@ -430,7 +430,7 @@ export function daoView(stats: DaoStatistics): DaoView {
 function DaoStat({ term, children }: { term: string; children: ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-text-dim text-xs">{term}</dt>
+      <dt className="text-text-dim text-small">{term}</dt>
       <dd className="text-text-bright text-body m-0 tabular-nums">{children}</dd>
     </div>
   );
@@ -448,21 +448,21 @@ function DaoBlock() {
     <div data-testid="home-dao" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-col gap-0.5">
         <span className="text-text-bright text-body">Nervos DAO</span>
-        <span className="text-text-dim text-xs">deposited</span>
+        <span className="text-text-dim text-small">deposited</span>
       </div>
       {d.state === 'loading' && (
         <div aria-hidden="true" className="bg-base-surface h-24 animate-pulse rounded" />
       )}
       {d.state === 'error' && (
-        <div role="alert" className="text-rouge text-xs">
+        <div role="alert" className="text-rouge text-small">
           {d.message}
         </div>
       )}
-      {d.state === 'empty' && <div className="text-text-dim text-xs">{d.message}</div>}
+      {d.state === 'empty' && <div className="text-text-dim text-small">{d.message}</div>}
       {d.state === 'ready' && <DaoFigures view={d.view} />}
       <Link
         href="/dao"
-        className="text-interactive hover:text-jade w-fit text-xs transition-colors"
+        className="text-interactive hover:text-jade text-small w-fit transition-colors"
       >
         DAO details →
       </Link>
@@ -487,14 +487,14 @@ function DaoFigures({ view }: { view: DaoView }) {
       >
         {deposited.integer}
         <span className="text-text-dim">.{deposited.decimal}</span>
-        <span className="text-text-dim text-xs"> CKB</span>
+        <span className="text-text-dim text-small"> CKB</span>
       </div>
       <dl className="m-0 grid grid-cols-2 gap-x-10 gap-y-3.5">
         <DaoStat term="Estimated APC">{view.apc}%</DaoStat>
         <DaoStat term="Depositors">
           {view.depositors.toLocaleString('en-US')}
           {view.depositorsChange !== null && (
-            <span className="text-text-dim text-xs">
+            <span className="text-text-dim text-small">
               {` ${formatSignedCount(view.depositorsChange)} in 24 h`}
             </span>
           )}

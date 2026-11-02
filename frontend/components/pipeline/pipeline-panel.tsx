@@ -100,7 +100,7 @@ function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null 
 function Stat({ label, value, tone }: { label: string; value: string; tone: string }) {
   return (
     <span className="flex items-baseline gap-1.5 font-mono">
-      <span className="text-text-dim text-xs uppercase tracking-wider">{label}</span>
+      <span className="text-text-dim text-small uppercase tracking-wider">{label}</span>
       <span className={`text-body font-semibold tabular-nums ${tone}`}>{value}</span>
     </span>
   );
@@ -126,7 +126,7 @@ function PipelineActions({ snapshot }: { snapshot: PipelineSnapshot | undefined 
       <PipelineStats snapshot={snapshot} />
       <Link
         href="/blocks"
-        className="text-interactive hover:text-jade font-mono text-xs transition-colors"
+        className="text-interactive hover:text-jade text-small font-mono transition-colors"
       >
         All blocks →
       </Link>
@@ -139,7 +139,7 @@ function StatusRow({ testId, tone, children }: { testId: string; tone: string; c
     <div
       data-testid={testId}
       role={testId === 'pipeline-error' ? 'alert' : undefined}
-      className={`flex items-center px-3 font-mono text-sm ${tone}`}
+      className={`text-body flex items-center px-3 font-mono ${tone}`}
       style={{ height: G.H }}
     >
       {children}

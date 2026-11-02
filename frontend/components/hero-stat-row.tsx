@@ -60,10 +60,10 @@ interface StatItemProps {
 function StatItem({ value, label, href }: StatItemProps) {
   return (
     <Link href={href} className="group flex flex-col items-center text-center">
-      <span className="text-emphasis group-hover:text-accent font-mono text-xl font-bold tabular-nums transition-colors">
+      <span className="text-emphasis group-hover:text-accent text-hero font-mono font-bold tabular-nums transition-colors">
         {value}
       </span>
-      <span className="text-text-dim text-xs uppercase tracking-wider">{label}</span>
+      <span className="text-text-dim text-small uppercase tracking-wider">{label}</span>
     </Link>
   );
 }

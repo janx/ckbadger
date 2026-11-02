@@ -230,12 +230,12 @@ export function BalanceChanges({
                     className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5"
                   >
                     <span className="text-body">{ckb}</span>
-                    <span className="text-text whitespace-nowrap text-xs">{occupied}</span>
+                    <span className="text-text text-small whitespace-nowrap">{occupied}</span>
                   </div>
                   {p.itemDeltas.length > 0 && (
                     <div
                       data-line="items"
-                      className="flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5 text-xs"
+                      className="text-small flex flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                     >
                       <Items participant={p} />
                     </div>
@@ -264,13 +264,13 @@ export function BalanceChanges({
                   </div>
                   <div
                     data-role="items"
-                    className="flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5 text-xs"
+                    className="text-small flex min-w-0 flex-wrap items-baseline gap-x-3.5 gap-y-0.5"
                   >
                     <Items participant={p} />
                   </div>
                   <div
                     data-role="occupied"
-                    className="text-text whitespace-nowrap text-right text-xs"
+                    className="text-text text-small whitespace-nowrap text-right"
                   >
                     {occupied}
                   </div>
@@ -279,7 +279,7 @@ export function BalanceChanges({
             })}
             <li
               data-testid="tx-balance-net"
-              className="border-base-border-subtle text-text-dim flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t pt-2.5 text-xs"
+              className="border-base-border-subtle text-text-dim text-small flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 border-t pt-2.5"
             >
               {readable(activity.txHash, () => {
                 const n = net();

@@ -90,17 +90,19 @@ export function ClusterDescription({
   return (
     <div className="w-full space-y-3 text-left">
       {showSummary && (
-        <p className="text-text whitespace-pre-wrap break-words text-sm leading-relaxed">
+        <p className="text-text text-body whitespace-pre-wrap break-words leading-relaxed">
           {parsed.summary}
         </p>
       )}
 
       {entries.length > 0 && (
-        <div className="flex flex-wrap gap-x-6 gap-y-1 font-mono text-sm">
+        <div className="text-body flex flex-wrap gap-x-6 gap-y-1 font-mono">
           {entries.map((entry) => (
             <div key={entry.key} className="flex items-baseline gap-2">
-              <span className="text-text-dim text-xs uppercase tracking-wider">{entry.label}</span>
-              <span className="text-text-bright text-xs tabular-nums">{entry.value}</span>
+              <span className="text-text-dim text-small uppercase tracking-wider">
+                {entry.label}
+              </span>
+              <span className="text-text-bright text-small tabular-nums">{entry.value}</span>
             </div>
           ))}
         </div>
@@ -108,10 +110,10 @@ export function ClusterDescription({
 
       {showRawJson && (
         <details className="border-base-border bg-base-bg/40 w-full overflow-hidden rounded border">
-          <summary className="text-text-dim cursor-pointer px-3 py-2 text-left font-mono text-xs uppercase tracking-wider">
+          <summary className="text-text-dim text-small cursor-pointer px-3 py-2 text-left font-mono uppercase tracking-wider">
             View Raw Cluster Metadata JSON
           </summary>
-          <pre className="border-base-border bg-base-bg/90 text-text-bright max-h-64 overflow-auto whitespace-pre-wrap break-all border-t px-3 py-2 text-left font-mono text-xs">
+          <pre className="border-base-border bg-base-bg/90 text-text-bright text-small max-h-64 overflow-auto whitespace-pre-wrap break-all border-t px-3 py-2 text-left font-mono">
             {parsed.rawJson}
           </pre>
         </details>

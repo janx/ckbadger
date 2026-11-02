@@ -350,7 +350,7 @@ function TransactionsFigure() {
               aria-pressed={txRange === r}
               onClick={() => setTxRange(r)}
               className={cn(
-                'h-8 whitespace-nowrap px-[9px] text-xs transition-colors',
+                'text-small h-8 whitespace-nowrap px-[9px] transition-colors',
                 txRange === r
                   ? 'bg-base-border-subtle text-text-bright'
                   : 'text-text-dim hover:text-text bg-transparent'
