@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -16,7 +16,8 @@ import {
   type FiberChannelEvidence,
   type FiberEpochDelay,
 } from '@/lib/api';
-import { epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
+import { FIBER_STATE_WORDS, epochDelayWords, fiberDuration, stageEpoch } from '@/lib/fiber-format';
+import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatCount } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
@@ -130,10 +131,7 @@ function Summary({
           ? `${lifetime} later one side closed it without a joint signature: the commitment carries the last agreed split, and it can be paid out after a wait of ${delay}.`
           : `${lifetime} later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of ${delay} the settlement paid it out.`;
   return (
-    <p
-      data-testid="channel-summary"
-      className="text-text text-body mt-2 max-w-[900px] leading-relaxed"
-    >
+    <p data-testid="channel-summary" className="text-text-dim text-body">
       {putIn.length > 0 && (
         <>
           <PartyLink party={putIn[0].party} /> put {ckb(putIn[0].net)} net into the opening
@@ -149,6 +147,47 @@ function Summary({
       )}
       {story}
     </p>
+  );
+}
+
+/**
+ * The hero's lede (hierarchy v3, R13): the channel's story in one line of ≤ 90 characters; the
+ * full story, with what each side put in, is the tier-2 `Summary`.
+ */
+function ledeSentence(channel: FiberChannelDetail): string {
+  const id = channel.channelId;
+  const lifetime = fiberDuration(
+    required(channel.observedLifetimeMs, 'a lifetime', id),
+    `${id} lifetime`
+  );
+  const delay = () => epochDelayWords(required(channel.delayEpochDecoded, 'a decoded delay', id));
+  switch (channel.state) {
+    case 'open':
+      return `Open for ${lifetime}; the payments inside it never touch the chain.`;
+    case 'cooperativelyClosed':
+      return `Closed together ${lifetime} after it opened, in one transaction.`;
+    case 'forceClosed':
+      return `Force-closed ${lifetime} after it opened; the payout waits ${delay()}.`;
+    case 'settled':
+      return `Force-closed ${lifetime} after it opened, then settled after a wait of ${delay()}.`;
+  }
+}
+
+/** The channel's capacity as the page's display figure (R4): exact, its decimals a step quieter. */
+function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
+  const parts = splitCkbAmount(parseShannons(channel.capacity, `${channel.channelId} capacity`));
+  return (
+    <div data-role="capacity" className="text-text-bright text-index sm:text-display font-medium">
+      <span className="whitespace-nowrap tabular-nums">
+        {parts.integer}
+        <span className="text-hero text-text-dim font-normal">
+          {parts.fraction}
+          <span className="opacity-50">{parts.ghost}</span>
+        </span>
+      </span>
+      {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
+      <span className="text-body text-text-dim font-normal"> CKB</span>
+    </div>
   );
 }
 
@@ -243,8 +282,9 @@ function channelSteps(
       txHash: channel.closeTxHash,
       blockNumber: required(channel.closeBlock, 'a close block', id),
       timestamp: required(channel.closeTimestamp, 'a close time', id),
+      // R13 / R14: one caption per step; what the wait is for is said in tier 2.
       description: forced
-        ? `One side posted the commitment: the last state both had signed. It moves the funding cell to a commitment lock with a wait of ${delay}, so the other side can answer with a newer state.`
+        ? 'One side posted the commitment: the last state both had signed.'
         : 'Both signed one transaction that spent the funding cell and paid out the final split.',
       consumes: { ...funding, role: 'Fiber funding' },
       carries: carriesCommitment,
@@ -370,16 +410,28 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   const argsBytes = (hex: string) => (hex.length - 2) / 2;
   const partyOf = (lockHash: string) =>
     channel.observedParties.find((party) => party.lockScriptHash === lockHash);
+  const titleId = useId();
   return (
     <div>
-      <div className="flex flex-col gap-11">
-        <div>
-          <div
-            data-testid="channel-pair"
-            className="text-body flex flex-wrap items-baseline gap-x-7 gap-y-1.5"
-          >
-            {channel.observedParties.length > 0 && (
-              <span>
+      {/* Hierarchy v3 (R13): the hero — title, id, one lede, the capacity and the pair — then
+          each section's evidence first with one caption; the prose is tier 2. */}
+      <div data-tier="1" className="min-w-0">
+        <section aria-labelledby={titleId} className="min-w-0">
+          <div className="flex flex-wrap items-baseline gap-3">
+            <h1 id={titleId} className="text-text-bright text-entity font-medium">
+              Fiber channel
+            </h1>
+            <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.state]}</span>
+          </div>
+          <p className="text-text-dim text-small mt-1.5 break-all">{channel.channelId}</p>
+          <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{ledeSentence(channel)}</p>
+          <div data-role="figure" className="mt-9 min-w-0">
+            <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
+              capacity
+            </div>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+              <CapacityFigure channel={channel} />
+              <p data-testid="channel-pair" className="text-body min-w-0">
                 {first && <PartyLink party={first} />}
                 {second && (
                   <>
@@ -387,262 +439,286 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                     <span className="text-[#4b5266]">↔</span> <PartyLink party={second} />
                   </>
                 )}
-              </span>
-            )}
-            <span>
-              <span className="text-text-dim">capacity</span> {ckb(channel.capacity)}
-              {channel.udtTypeHash && channel.udtAmount !== null && token && (
-                <>
-                  {' '}
-                  <span className="text-text-dim">· holds</span>{' '}
-                  <AssetAmount amount={channel.udtAmount} decimals={token.decimals} />{' '}
-                  {token.symbol ?? 'tokens'}
-                </>
-              )}
-            </span>
+                {channel.udtTypeHash && channel.udtAmount !== null && token && (
+                  <>
+                    {' '}
+                    <span className="text-text-dim">· holds</span>{' '}
+                    <AssetAmount amount={channel.udtAmount} decimals={token.decimals} />{' '}
+                    {token.symbol ?? 'tokens'}
+                  </>
+                )}
+              </p>
+            </div>
           </div>
-          <Summary channel={channel} evidence={evidence} />
           {evidenceError && (
             <p role="alert" className="text-rouge text-small mt-3 break-all">
               Local node evidence unavailable: {evidenceError}
             </p>
           )}
-        </div>
+        </section>
 
-        {atOpen && (
-          <DetailSection title="What moved inside the channel">
-            <p className="text-text-dim text-body mb-3.5 max-w-[900px]">
-              The chain never sees a Fiber payment, only the split when the channel opens and the
-              split when it closes.
-              {atClose &&
-                ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
-            </p>
-            <div className="flex flex-col gap-4">
-              <FiberSplitBar
-                left={{ name: tail(atOpen[0].party), shannons: atOpen[0].amount }}
-                right={{ name: tail(atOpen[1].party), shannons: atOpen[1].amount }}
-                note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
-              />
-              {atClose && closing && (
+        <div className="mt-16 flex flex-col gap-[72px]">
+          {atOpen && (
+            <DetailSection title="What moved inside the channel">
+              <div className="flex flex-col gap-4">
                 <FiberSplitBar
-                  left={{ name: tail(atClose[0].party), shannons: atClose[0].amount }}
-                  right={{ name: tail(atClose[1].party), shannons: atClose[1].amount }}
-                  note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${
-                    closing.stage === STAGE_KEYS.settle ? 'settlement' : 'closing'
-                  } transaction, payout and change alike`}
+                  left={{ name: tail(atOpen[0].party), shannons: atOpen[0].amount }}
+                  right={{ name: tail(atOpen[1].party), shannons: atOpen[1].amount }}
+                  note={`at open, ${formatUtc8Date(channel.openTimestamp)} · net input to the opening transaction, its fee included`}
                 />
+                {atClose && closing && (
+                  <FiberSplitBar
+                    left={{ name: tail(atClose[0].party), shannons: atClose[0].amount }}
+                    right={{ name: tail(atClose[1].party), shannons: atClose[1].amount }}
+                    note={`at the close, ${formatUtc8Date(closing.timestamp)} · net received in the ${
+                      closing.stage === STAGE_KEYS.settle ? 'settlement' : 'closing'
+                    } transaction, payout and change alike`}
+                  />
+                )}
+              </div>
+              <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+                The chain sees no Fiber payment, only the split at the open and at the close.
+              </p>
+            </DetailSection>
+          )}
+
+          <DetailSection
+            title={
+              channel.state === 'open' || channel.state === 'forceClosed'
+                ? `On chain, so far in ${STEP_WORDS[steps.length]} step${steps.length === 1 ? '' : 's'}`
+                : `On chain, in ${STEP_WORDS[steps.length]} steps`
+            }
+          >
+            <div className="flex flex-col gap-[22px]">
+              <FiberChannelTimeline channel={channel} />
+              {steps.map((step, index) => (
+                <FiberChannelStep
+                  key={step.key}
+                  n={index + 1}
+                  title={step.title}
+                  txHash={step.txHash}
+                  blockNumber={step.blockNumber}
+                  timestamp={step.timestamp}
+                  description={step.description}
+                  epoch={stageOf(evidence, step.stage)?.epoch}
+                  consumes={step.consumes}
+                  carries={step.carries}
+                  box={step.box}
+                />
+              ))}
+            </div>
+          </DetailSection>
+        </div>
+      </div>
+
+      <div id="evidence" className="scroll-mt-4">
+        <DetailTier2>
+          <DetailSection title="The channel, in words">
+            <div className="flex flex-col gap-3">
+              <Summary channel={channel} evidence={evidence} />
+              {(channel.state === 'forceClosed' || channel.state === 'settled') && (
+                <p className="text-text-dim text-body">
+                  A force close moves the funding cell to a commitment lock with a wait of{' '}
+                  {epochDelayWords(
+                    required(channel.delayEpochDecoded, 'a decoded delay', channel.channelId)
+                  )}
+                  , so the other side can answer with a newer state.
+                </p>
+              )}
+              {atOpen && (
+                <p className="text-text-dim text-body">
+                  The chain never sees a Fiber payment, only the split when the channel opens and
+                  the split when it closes.
+                  {atClose &&
+                    ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
+                </p>
               )}
             </div>
           </DetailSection>
-        )}
-
-        <DetailSection
-          title={
-            channel.state === 'open' || channel.state === 'forceClosed'
-              ? `On chain, so far in ${STEP_WORDS[steps.length]} step${steps.length === 1 ? '' : 's'}`
-              : `On chain, in ${STEP_WORDS[steps.length]} steps`
-          }
-        >
-          <div className="flex flex-col gap-[22px]">
-            <FiberChannelTimeline channel={channel} />
-            {steps.map((step, index) => (
-              <FiberChannelStep
-                key={step.key}
-                n={index + 1}
-                title={step.title}
-                txHash={step.txHash}
-                blockNumber={step.blockNumber}
-                timestamp={step.timestamp}
-                description={step.description}
-                epoch={stageOf(evidence, step.stage)?.epoch}
-                consumes={step.consumes}
-                carries={step.carries}
-                box={step.box}
-              />
-            ))}
-          </div>
-        </DetailSection>
-      </div>
-
-      {evidence && (
-        <DetailTier2>
-          <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
-            <DetailSection title="The two locks">
-              <div className="text-small flex flex-col gap-3">
-                <div>
-                  <div className="text-text-dim">
-                    Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
-                  </div>
-                  <div className="text-text-bright break-all">{evidence.funding.lockArgs}</div>
-                  <div className="text-text-dim">
-                    blake160 of the two parties’ aggregated public key
-                  </div>
-                  <Link
-                    href={`/script/${evidence.funding.lockCodeHash}?hashType=${evidence.funding.lockHashType}`}
-                    className="break-all text-[#6aa9c4]"
-                  >
-                    {evidence.funding.lockCodeHash}
-                  </Link>
-                </div>
-                {tracked ? (
-                  <div>
-                    <div className="text-text-dim mb-1">
-                      Fiber Commitment Lock · args, {argsBytes(tracked.lockArgs)} bytes ·{' '}
-                      {tracked.lockFormat}
+          {evidence && (
+            <>
+              <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
+                <DetailSection title="The two locks">
+                  <div className="text-small flex flex-col gap-3">
+                    <div>
+                      <div className="text-text-dim">
+                        Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
+                      </div>
+                      <div className="text-text-bright break-all">{evidence.funding.lockArgs}</div>
+                      <div className="text-text-dim">
+                        blake160 of the two parties’ aggregated public key
+                      </div>
+                      <Link
+                        href={`/script/${evidence.funding.lockCodeHash}?hashType=${evidence.funding.lockHashType}`}
+                        className="break-all text-[#6aa9c4]"
+                      >
+                        {evidence.funding.lockCodeHash}
+                      </Link>
                     </div>
-                    <Grid>
-                      <span className="text-text-dim">Current commitment</span>
-                      <Link
-                        href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
-                        className="min-w-0 break-all text-[#6aa9c4]"
-                      >
-                        {tracked.txHash}
-                        <OutpointIndex index={tracked.outputIndex} />
-                      </Link>
-                      <span className="text-text-dim">Pubkey hash · 20</span>
-                      <span className="text-text-bright break-all">{tracked.pubkeyHash}</span>
-                      <span className="text-text-dim">Delay · 8 bytes, LE</span>
-                      <span className="text-text-bright min-w-0">
-                        <span className="break-all">
-                          {delayBytes!.littleEndian} = {delayBytes!.value}
-                        </span>{' '}
-                        · {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
-                      </span>
-                      <span className="text-text-dim">Version · exact u64</span>
-                      <span className="text-text-bright break-all">{tracked.version}</span>
-                      {tracked.lockFormat === 'full57' && (
-                        <>
-                          <span className="text-text-dim">Settlement hash / flag</span>
-                          <span className="text-text-bright break-all">
-                            {tracked.settlementHash ?? 'none'} · {tracked.settlementFlag ?? 'none'}
+                    {tracked ? (
+                      <div>
+                        <div className="text-text-dim mb-1">
+                          Fiber Commitment Lock · args, {argsBytes(tracked.lockArgs)} bytes ·{' '}
+                          {tracked.lockFormat}
+                        </div>
+                        <Grid>
+                          <span className="text-text-dim">Current commitment</span>
+                          <Link
+                            href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
+                            className="min-w-0 break-all text-[#6aa9c4]"
+                          >
+                            {tracked.txHash}
+                            <OutpointIndex index={tracked.outputIndex} />
+                          </Link>
+                          <span className="text-text-dim">Pubkey hash · 20</span>
+                          <span className="text-text-bright break-all">{tracked.pubkeyHash}</span>
+                          <span className="text-text-dim">Delay · 8 bytes, LE</span>
+                          <span className="text-text-bright min-w-0">
+                            <span className="break-all">
+                              {delayBytes!.littleEndian} = {delayBytes!.value}
+                            </span>{' '}
+                            · {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
                           </span>
-                        </>
-                      )}
-                      <span className="text-text-dim">Commitment script</span>
-                      <Link
-                        href={`/script/${tracked.lockCodeHash}?hashType=${tracked.lockHashType}`}
-                        className="min-w-0 break-all text-[#6aa9c4]"
-                      >
-                        {tracked.lockCodeHash}
-                      </Link>
-                    </Grid>
+                          <span className="text-text-dim">Version · exact u64</span>
+                          <span className="text-text-bright break-all">{tracked.version}</span>
+                          {tracked.lockFormat === 'full57' && (
+                            <>
+                              <span className="text-text-dim">Settlement hash / flag</span>
+                              <span className="text-text-bright break-all">
+                                {tracked.settlementHash ?? 'none'} ·{' '}
+                                {tracked.settlementFlag ?? 'none'}
+                              </span>
+                            </>
+                          )}
+                          <span className="text-text-dim">Commitment script</span>
+                          <Link
+                            href={`/script/${tracked.lockCodeHash}?hashType=${tracked.lockHashType}`}
+                            className="min-w-0 break-all text-[#6aa9c4]"
+                          >
+                            {tracked.lockCodeHash}
+                          </Link>
+                        </Grid>
+                      </div>
+                    ) : (
+                      <p className="text-text-dim">No commitment cell has appeared on chain.</p>
+                    )}
                   </div>
-                ) : (
-                  <p className="text-text-dim">No commitment cell has appeared on chain.</p>
-                )}
-              </div>
-            </DetailSection>
-            <DetailSection title="Witnesses and timing">
-              <Grid>
-                {evidence.stages.map((stage) => (
-                  <span key={stage.txHash} className="contents">
-                    <span className="text-text-dim">
-                      {stage.stage === STAGE_KEYS.close &&
-                      (channel.state === 'forceClosed' || channel.state === 'settled')
-                        ? 'force close'
-                        : (STAGE_WORDS[stage.stage] ?? stage.stage)}
-                    </span>
-                    <StageWitnesses stage={stage} />
-                  </span>
-                ))}
-                {waitParts.length > 0 && (
-                  <>
-                    <span className="text-text-dim">the wait</span>
-                    <span className="text-text">{waitParts.join(' · ')}</span>
-                  </>
-                )}
-                {tracked && (
-                  <>
-                    <span className="text-text-dim">delay rule</span>
-                    <span className="text-text">
-                      {tracked.epochLock === 'firstSettlementDelay'
-                        ? `first settlement delay ${tracked.epochLockMetAtTip ? 'met' : 'waiting'}: ready at epoch ${tracked.readyEpoch}; indexed tip at ${tracked.tipEpoch}`
-                        : tracked.epochLock === 'subsequentSettlementNoReappliedDelay'
-                          ? 'Subsequent settlement cell: original delay is not reapplied; other transaction conditions remain.'
-                          : 'Legacy 36-byte form: the deployed delay rule is not asserted here.'}
-                    </span>
-                  </>
-                )}
-              </Grid>
-            </DetailSection>
-          </div>
-          {evidence.openingPartyFlows.length > 0 && (
-            <DetailSection title="Opening transaction, per party">
-              <p className="text-text-dim text-meta mb-2">
-                Non-Fiber locks on the opening transaction’s inputs or outputs. An output-only lock
-                did not necessarily sign it. Net input includes fees and any unrelated outputs in
-                the same transaction; it is not a proven channel balance or payment.
-              </p>
-              <Grid>
-                {evidence.openingPartyFlows.map((flow) => {
-                  const party = partyOf(flow.lockScriptHash);
-                  return (
-                    <span key={flow.lockScriptHash} className="contents">
-                      <span className="text-text-dim">
-                        {party ? (
-                          <PartyLink party={party} />
-                        ) : (
-                          `${flow.lockScriptHash.slice(0, 10)}…`
-                        )}
-                      </span>
-                      <span className="text-text">
-                        <span data-flow="in" className="whitespace-nowrap">
-                          in {ckb(flow.openingInputCapacity)}
-                        </span>{' '}
-                        ·{' '}
-                        <span data-flow="back" className="whitespace-nowrap">
-                          back {ckb(flow.openingOutputCapacity)}
-                        </span>{' '}
-                        ·{' '}
-                        <span data-flow="net" className="whitespace-nowrap">
-                          net {ckb(flow.observedNetInput, true)}
+                </DetailSection>
+                <DetailSection title="Witnesses and timing">
+                  <Grid>
+                    {evidence.stages.map((stage) => (
+                      <span key={stage.txHash} className="contents">
+                        <span className="text-text-dim">
+                          {stage.stage === STAGE_KEYS.close &&
+                          (channel.state === 'forceClosed' || channel.state === 'settled')
+                            ? 'force close'
+                            : (STAGE_WORDS[stage.stage] ?? stage.stage)}
                         </span>
+                        <StageWitnesses stage={stage} />
                       </span>
-                    </span>
-                  );
-                })}
-              </Grid>
-            </DetailSection>
-          )}
-          {evidence.settlementOutputs.length > 0 && (
-            <DetailSection title="Final transaction outputs">
-              <p className="text-text-dim text-meta mb-2">
-                All final transaction outputs are shown, the payouts and any change alike.
-              </p>
-              <Grid>
-                {evidence.settlementOutputs.map((output) => {
-                  const party = output.observedParty ? partyOf(output.ownerLockHash) : undefined;
-                  if (output.observedParty && !party)
-                    throw new Error(
-                      `Fiber settlement output ${output.txHash}:${output.outputIndex} names an unlisted party ${output.ownerLockHash}`
-                    );
-                  return (
-                    <span key={output.outputIndex} className="contents">
-                      <Link
-                        href={`/cell/${output.txHash}-${output.outputIndex}`}
-                        className="text-[#6aa9c4]"
-                      >
-                        out #{output.outputIndex}
-                      </Link>
-                      <span className="text-text">
-                        {party ? (
-                          <PartyLink party={party} />
-                        ) : (
-                          <span title={output.ownerLockHash}>
-                            Other lock · {output.ownerLockHash.slice(0, 10)}…
-                            {output.ownerLockHash.slice(-6)}
+                    ))}
+                    {waitParts.length > 0 && (
+                      <>
+                        <span className="text-text-dim">the wait</span>
+                        <span className="text-text">{waitParts.join(' · ')}</span>
+                      </>
+                    )}
+                    {tracked && (
+                      <>
+                        <span className="text-text-dim">delay rule</span>
+                        <span className="text-text">
+                          {tracked.epochLock === 'firstSettlementDelay'
+                            ? `first settlement delay ${tracked.epochLockMetAtTip ? 'met' : 'waiting'}: ready at epoch ${tracked.readyEpoch}; indexed tip at ${tracked.tipEpoch}`
+                            : tracked.epochLock === 'subsequentSettlementNoReappliedDelay'
+                              ? 'Subsequent settlement cell: original delay is not reapplied; other transaction conditions remain.'
+                              : 'Legacy 36-byte form: the deployed delay rule is not asserted here.'}
+                        </span>
+                      </>
+                    )}
+                  </Grid>
+                </DetailSection>
+              </div>
+              {evidence.openingPartyFlows.length > 0 && (
+                <DetailSection title="Opening transaction, per party">
+                  <p className="text-text-dim text-meta mb-2">
+                    Non-Fiber locks on the opening transaction’s inputs or outputs. An output-only
+                    lock did not necessarily sign it. Net input includes fees and any unrelated
+                    outputs in the same transaction; it is not a proven channel balance or payment.
+                  </p>
+                  <Grid>
+                    {evidence.openingPartyFlows.map((flow) => {
+                      const party = partyOf(flow.lockScriptHash);
+                      return (
+                        <span key={flow.lockScriptHash} className="contents">
+                          <span className="text-text-dim">
+                            {party ? (
+                              <PartyLink party={party} />
+                            ) : (
+                              `${flow.lockScriptHash.slice(0, 10)}…`
+                            )}
                           </span>
-                        )}{' '}
-                        · {ckb(output.capacity)}
-                      </span>
-                    </span>
-                  );
-                })}
-              </Grid>
-            </DetailSection>
+                          <span className="text-text">
+                            <span data-flow="in" className="whitespace-nowrap">
+                              in {ckb(flow.openingInputCapacity)}
+                            </span>{' '}
+                            ·{' '}
+                            <span data-flow="back" className="whitespace-nowrap">
+                              back {ckb(flow.openingOutputCapacity)}
+                            </span>{' '}
+                            ·{' '}
+                            <span data-flow="net" className="whitespace-nowrap">
+                              net {ckb(flow.observedNetInput, true)}
+                            </span>
+                          </span>
+                        </span>
+                      );
+                    })}
+                  </Grid>
+                </DetailSection>
+              )}
+              {evidence.settlementOutputs.length > 0 && (
+                <DetailSection title="Final transaction outputs">
+                  <p className="text-text-dim text-meta mb-2">
+                    All final transaction outputs are shown, the payouts and any change alike.
+                  </p>
+                  <Grid>
+                    {evidence.settlementOutputs.map((output) => {
+                      const party = output.observedParty
+                        ? partyOf(output.ownerLockHash)
+                        : undefined;
+                      if (output.observedParty && !party)
+                        throw new Error(
+                          `Fiber settlement output ${output.txHash}:${output.outputIndex} names an unlisted party ${output.ownerLockHash}`
+                        );
+                      return (
+                        <span key={output.outputIndex} className="contents">
+                          <Link
+                            href={`/cell/${output.txHash}-${output.outputIndex}`}
+                            className="text-[#6aa9c4]"
+                          >
+                            out #{output.outputIndex}
+                          </Link>
+                          <span className="text-text">
+                            {party ? (
+                              <PartyLink party={party} />
+                            ) : (
+                              <span title={output.ownerLockHash}>
+                                Other lock · {output.ownerLockHash.slice(0, 10)}…
+                                {output.ownerLockHash.slice(-6)}
+                              </span>
+                            )}{' '}
+                            · {ckb(output.capacity)}
+                          </span>
+                        </span>
+                      );
+                    })}
+                  </Grid>
+                </DetailSection>
+              )}
+            </>
           )}
         </DetailTier2>
-      )}
+      </div>
     </div>
   );
 }
