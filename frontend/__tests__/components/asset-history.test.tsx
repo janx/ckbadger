@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -80,7 +80,7 @@ describe('Asset history', () => {
       );
       // Lane P: the plot names its inks inside it (Main.dc.html); the readout keys them.
       expect(screen.getByRole('img', { name: 'CKB held in its cells, CKB' })).toHaveTextContent(
-        'CKB held in its cells · occupied in jade, free above it'
+        'CKB held in its cells · occupied, free above it'
       );
       const swatches = [
         ...screen.getByLabelText('History readout').querySelectorAll<HTMLElement>('[aria-hidden]'),
@@ -89,6 +89,44 @@ describe('Asset history', () => {
         'rgb(46, 219, 163)',
         'rgb(58, 66, 88)',
       ]);
+    } finally {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // Lane P (Main.dc.html "the readout row"): one row under the plots — the day, held, occupied
+  // with its share, free, then the week and the peak — and what occupied and free mean is their
+  // hover, not two sentences under the chart.
+  it('reads the day in one row under the plots, as the board words it', () => {
+    stubChartWidth(1248);
+    try {
+      const { container } = render(
+        <AssetHistory
+          weeklyNoun="transfers"
+          daily={daily}
+          weekly={[{ weekStart: '2024-01-01', count: 3 }]}
+          completeThrough="2024-01-08"
+        />
+      );
+      const readout = screen.getByLabelText('History readout');
+      const plots = [...container.querySelectorAll('svg[role="img"]')];
+      expect(
+        plots.at(-1)!.compareDocumentPosition(readout) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+      expect(readout).toHaveClass('border-t');
+      expect(readout).toHaveTextContent(
+        /^2024-01-08 · held 200\.00000001 CKB · occupied 61\.00000000 CKB 30\.50 % · free 139\.00000001 CKB · Latest complete week, from 2024-01-01: 3 transfers · peak 200\.00000001 CKB on 2024-01-08$/
+      );
+      expect(within(readout).getByText('occupied')).toHaveAttribute(
+        'title',
+        'Occupied pays for the state kept on CKB.'
+      );
+      expect(within(readout).getByText('free')).toHaveAttribute(
+        'title',
+        'Free is CKB held in the same cells beyond that byte cost.'
+      );
+      expect(screen.queryByText(/Occupied pays for the state/)).toBeNull();
     } finally {
       vi.restoreAllMocks();
       vi.unstubAllGlobals();
@@ -113,8 +151,12 @@ describe('Asset history', () => {
         const main = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
         expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
         expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
-          'CKB held in its cells · occupied in jade, free above it'
+          'CKB held in its cells · occupied, free above it'
         );
+        // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
+        expect(
+          8 + main.querySelector('[data-role="chart-name"]')!.textContent!.length * 6.6
+        ).toBeLessThanOrEqual(326);
         for (const plot of screen.getAllByRole('img')) {
           const ticks = [...plot.querySelectorAll('[data-role="y-tick"]')];
           expect(ticks.length).toBeGreaterThan(0);
@@ -151,8 +193,15 @@ describe('Asset history', () => {
     // F2 objects (OB-C6, visual pass): before any hover, today's week is incomplete, so the
     // reading names the latest complete week instead of "No completed weekly total".
     expect(readout).toHaveTextContent('Latest complete week, from 2024-01-01: 3 transfers');
-    expect(screen.getByText(/CKB held peaked/)).toHaveTextContent('on 2024-01-08');
-    expect(screen.getByText(/Complete UTC\+8 days through 2024-01-08/)).toBeInTheDocument();
+    // Lane P (Main.dc.html): the peak is the readout row's last item, not a sentence of its own.
+    expect(readout).toHaveTextContent(/· peak 200\.00000001 CKB on 2024-01-08$/);
+    expect(screen.queryByText(/CKB held peaked/)).toBeNull();
+    // Lane P (Main.dc.html): the scope is the hover of the reading's day, not a line of its own.
+    expect(screen.queryByText(/Complete UTC\+8 days through/)).toBeNull();
+    expect(within(readout).getByText('2024-01-08')).toHaveAttribute(
+      'title',
+      'complete UTC+8 days through 2024-01-08 · indexed chain time'
+    );
     fireEvent.click(screen.getByRole('button', { name: '1W' }));
     expect(readout).toHaveTextContent('2024-01-08');
   });

@@ -410,8 +410,12 @@ it('marks every collection activity row as an object row, as the board does', as
 it('explains occupied and free once in History, and keeps Newest rows compact at 390', async () => {
   await page();
   const history = screen.getByRole('region', { name: 'History' });
+  // Lane P (Main.dc.html readout row): said once, as the hover of the readout's "free".
+  expect(history.textContent).not.toMatch(/beyond that byte cost|parked in the same cells/);
   expect(
-    history.textContent!.match(/beyond that byte cost|parked in the same cells/g)
+    [...history.querySelectorAll('[title]')].filter((el) =>
+      /beyond that byte cost|parked in the same cells/.test(el.getAttribute('title')!)
+    )
   ).toHaveLength(1);
   const row = screen.getAllByRole('row')[1];
   expect(row).toHaveClass('grid-cols-[minmax(0,1fr)_auto]');

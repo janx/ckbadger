@@ -10,7 +10,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal, formatScaledInteger } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -243,6 +243,73 @@ export function AssetHistory({
       ),
     },
   ];
+  const peakItem = peak && (
+    <span title="the most CKB its cells held on any complete day">
+      peak <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
+      {peak.date}
+    </span>
+  );
+  const weekText =
+    weeklyUnavailable ??
+    (week
+      ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
+      : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
+        // complete yet; it names the latest complete week instead of nothing.
+        selectedDate === null && weekly.length > 0
+        ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
+        : 'No completed weekly total for this day');
+  const readoutItems: ReactNode[] = point
+    ? [
+        // Lane P (Main.dc.html): the scope is the hover of the day, not a line of its own.
+        <span
+          key="date"
+          className="text-text-bright"
+          title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
+        >
+          {point.date}
+        </span>,
+        <>
+          held <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
+        </>,
+        <>
+          <Swatch color={DATA_COLOR} />
+          <span title="Occupied pays for the state kept on CKB.">occupied</span>{' '}
+          <ExactCkb shannons={BigInt(point.occupiedCapacity)} signed={false} tone="plain" wrap />
+          {BigInt(point.capacity) > BigInt(0) && (
+            <span className="text-text-dim">
+              {' '}
+              {formatScaledInteger(
+                BigInt(point.occupiedCapacity) * BigInt(100),
+                BigInt(point.capacity),
+                2
+              )}{' '}
+              %
+            </span>
+          )}
+        </>,
+        <>
+          <Swatch color={CLASS_COLORS.ckb} />
+          <span title="Free is CKB held in the same cells beyond that byte cost.">free</span>{' '}
+          <ExactCkb
+            shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
+            signed={false}
+            tone="plain"
+            wrap
+          />
+        </>,
+        ...(token
+          ? [
+              <>
+                <Swatch color={CLASS_COLORS.tokens} />
+                Supply <AssetAmount amount={point.supply!} decimals={token.decimals} />{' '}
+                {token.symbol}
+              </>,
+            ]
+          : []),
+        weekText,
+        ...(peakItem ? [peakItem] : []),
+      ]
+    : [];
   return (
     <DetailSection
       title="History"
@@ -264,65 +331,15 @@ export function AssetHistory({
         </div>
       }
     >
-      <p className="text-text-dim text-meta mb-3">
-        Complete UTC+8 days through {completeThrough} · indexed chain time
-      </p>
       {point ? (
         <>
-          <div
-            aria-live="polite"
-            aria-label="History readout"
-            className="border-base-border text-small mb-2 flex flex-wrap gap-x-5 gap-y-2 border-b pb-3"
-          >
-            <span className="text-text-bright">{point.date}</span>
-            <span>
-              CKB held{' '}
-              <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
-            </span>
-            <span>
-              <Swatch color={DATA_COLOR} />
-              occupied{' '}
-              <ExactCkb
-                shannons={BigInt(point.occupiedCapacity)}
-                signed={false}
-                tone="plain"
-                wrap
-              />
-            </span>
-            <span>
-              <Swatch color={CLASS_COLORS.ckb} />
-              free{' '}
-              <ExactCkb
-                shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
-                signed={false}
-                tone="plain"
-                wrap
-              />
-            </span>
-            {token && (
-              <span>
-                <Swatch color={CLASS_COLORS.tokens} />
-                Supply <AssetAmount amount={point.supply!} decimals={token.decimals} />{' '}
-                {token.symbol}
-              </span>
-            )}
-            <span>
-              {weeklyUnavailable ??
-                (week
-                  ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
-                  : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
-                    // complete yet; it names the latest complete week instead of nothing.
-                    selectedDate === null && weekly.length > 0
-                    ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
-                    : 'No completed weekly total for this day')}
-            </span>
-          </div>
           <Chart
             {...capacityAxis}
             subtitle="Occupied and free"
             // The page's picture (R13): at least 280 px, its name inside it.
             height={HISTORY_PLOT_HEIGHT}
-            plotName="CKB held in its cells · occupied in jade, free above it"
+            // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
+            plotName="CKB held in its cells · occupied, free above it"
             // written over the stacked area, which would bury a label drawn under it
             insideYTicks="over"
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
@@ -362,22 +379,33 @@ export function AssetHistory({
               cursorX={selectedDate === null ? null : time(selectedDate)}
             />
           )}
+          {/* Lane P (Main.dc.html): the reading is one row under the plots — the day, held,
+              occupied with its share, free, the week, then the peak among complete days. */}
+          <div
+            aria-live="polite"
+            aria-label="History readout"
+            className="border-base-border-subtle text-small mt-2 flex flex-wrap gap-y-1 border-t pt-2"
+          >
+            {readoutItems.map((item, i) => (
+              <span key={i}>
+                {i > 0 && <span className="text-text-dim whitespace-pre"> · </span>}
+                {item}
+              </span>
+            ))}
+          </div>
         </>
       ) : (
-        <p className="text-text-dim text-small py-6">No complete daily history in this range.</p>
+        <>
+          <p
+            className="text-text-dim text-small py-6"
+            title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
+          >
+            No complete daily history in this range.
+          </p>
+          {peakItem && <p className="text-text-dim text-small">{peakItem}</p>}
+        </>
       )}
       {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
-      {peak && (
-        <p className="text-text-dim text-small mt-3">
-          CKB held peaked at{' '}
-          <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
-          {peak.date}, among complete days.
-        </p>
-      )}
-      <p className="text-text-dim text-small mt-3">
-        Occupied pays for the state kept on CKB. Free is CKB held in the same cells beyond that byte
-        cost.
-      </p>
       {supplyEvents && token && (
         <details className="border-base-border mt-4 border-t pt-3">
           <summary className="text-small cursor-pointer">
