@@ -253,7 +253,7 @@ describe('mini chart hover', () => {
     fireEvent.pointerLeave(svg, { pointerType: 'touch' });
     fireEvent.focus(svg);
     fireEvent.click(svg, { clientX: 100 });
-    expect(readout).toHaveTextContent(/^tapped 09:00 · 610/);
+    expect(readout).toHaveTextContent(/^selected 09:00 · 610/);
     expect(headline()).toHaveTextContent('610');
     expect(subtitle()).toHaveTextContent('09:00');
     // a tap elsewhere on the page keeps it
@@ -270,7 +270,7 @@ describe('mini chart hover', () => {
     fireEvent.pointerMove(svg, { clientX: 260 });
     expect(readout).toHaveTextContent(/^11:00 · in progress · 326/);
     fireEvent.pointerLeave(svg);
-    expect(readout).toHaveTextContent(/^tapped 10:00 · 731/);
+    expect(readout).toHaveTextContent(/^selected 10:00 · 731/);
     act(() => {
       fireEvent.keyDown(window, { key: 'Escape' });
     });

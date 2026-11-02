@@ -250,7 +250,7 @@ describe('Address v3', () => {
       '11 of 14 fully on-chain'
     );
     fireEvent.click(screen.getByRole('button', { name: 'Open 拯救民主' }));
-    expect(await screen.findByText(/Showing 1-2 of 6 objects/)).toBeInTheDocument();
+    expect(await screen.findByText('Showing 1–2 of 6 objects · 10 per page')).toBeInTheDocument();
     expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThan(0);
   });
   it('links object tiles and exact collection identity', async () => {
@@ -308,7 +308,7 @@ describe('Address v3', () => {
         : { ...pageFixture(addressTokensFixture), hasMore: true, nextCursor: 'next-token' }
     );
     render(<AddressDetailPage />);
-    await screen.findByText('Showing 1-9 of 101 token kinds');
+    await screen.findByText('Showing 1–9 of 101 token kinds · 50 per page');
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
     fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('Last token')).toBeInTheDocument();
@@ -347,10 +347,11 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByRole('link', { name: 'JoyID' })).toHaveAttribute(
-      'href',
-      expect.stringContaining('/scripts/JoyID')
-    );
+    // Lane P: the name heads the page's status line and the Lock metric, both to the script.
+    const links = screen.getAllByRole('link', { name: 'JoyID' });
+    expect(links).toHaveLength(2);
+    for (const link of links)
+      expect(link).toHaveAttribute('href', expect.stringContaining('/scripts/JoyID'));
     expect(screen.getByText('Deprecated')).toBeInTheDocument();
   });
   it('shows raw script identity when no registered name is present', async () => {
@@ -434,7 +435,7 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     const section = await screen.findByTestId('address-dotcell-names');
-    expect(within(section).getByText('Showing 1-1 names')).toBeInTheDocument();
+    expect(within(section).getByText('Showing 1–1 names · 50 per page')).toBeInTheDocument();
     fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('next.cell')).toBeInTheDocument();
     expect(api.getAddressDotCellNames).toHaveBeenLastCalledWith(addressHash, {
@@ -498,11 +499,13 @@ describe('Address v3', () => {
     const activitiesTab = () => screen.getByRole('button', { name: /^Activities/ });
     await waitFor(() => expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/));
     expect(activitiesTab()).not.toHaveTextContent('1,021');
-    expect(await screen.findByText('Showing 1-1 of 1,682 activities')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Showing 1–1 of 1,682 activities · 50 per page')
+    ).toBeInTheDocument();
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
     fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
-    expect(screen.getByText('Showing 0-0 activities')).toBeInTheDocument();
+    expect(screen.getByText('Showing 0–0 activities · 50 per page')).toBeInTheDocument();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
@@ -694,7 +697,42 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('Showing 1-1 activities')).toBeInTheDocument();
+    expect(await screen.findByText('Showing 1–1 activities · 50 per page')).toBeInTheDocument();
+  });
+  // C11: the address lists page through the one CursorPagination; its range follows the page size
+  // the list asked for (twenty below md), where the old pager counted fifty a page everywhere.
+  it('pages the address lists with the shared pager at the phone page size (C11)', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    onTestFinished(() => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+    });
+    const rows = (from: number) =>
+      Array.from({ length: 20 }, (_, i) => ({
+        ...addressActivitiesFixture[0],
+        txHash: fixtureHash(500 + from + i),
+      }));
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
+      p?.limit === 1
+        ? pageFixture([])
+        : p?.cursor
+          ? { ...pageFixture(rows(20), 45), hasMore: true, nextCursor: 'third' }
+          : { ...pageFixture(rows(0), 45), hasMore: true, nextCursor: 'second' }
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    const pages = await screen.findByRole('navigation', { name: 'activities pages' });
+    expect(within(pages).getByText('Showing 1–20 of 45 activities · 20 per page')).toBeVisible();
+    expect(within(pages).getByText('Page 1 of 3')).toBeVisible();
+    fireEvent.click(within(pages).getByRole('button', { name: 'Next' }));
+    expect(
+      await within(pages).findByText('Showing 21–40 of 45 activities · 20 per page')
+    ).toBeVisible();
+    expect(within(pages).getByText('Page 2 of 3')).toBeVisible();
+    expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
+      limit: 20,
+      cursor: 'second',
+      filter: 'all',
+    });
   });
   it.each([
     ['truncated', true, true, 'More unconfirmed transactions than shown.'],
@@ -910,13 +948,14 @@ describe('Address board · F2 blocks', () => {
   const section = async (name: RegExp) =>
     (await screen.findByRole('heading', { name })).closest('section') as HTMLElement;
 
-  it('keeps every non-zero balance part visible: 3 px minimum, 2 px gaps, 10 px bar (BA-31)', async () => {
+  // Lane P (Address.dc.html): the bar is the board's 18 px partition with the shares inside.
+  it('keeps every non-zero balance part visible: 3 px minimum, 2 px gaps, 18 px bar (BA-31)', async () => {
     render(<AddressDetailPage />);
     const balance = await screen.findByLabelText('Address capacity partition');
     const parts = Array.from(balance.querySelectorAll('[data-part]')) as HTMLElement[];
     expect(parts.map((p) => p.dataset.part)).toEqual(['occupied', 'free', 'DAO free']);
-    for (const part of parts) expect(part.style.minWidth).toBe('3px');
-    expect(parts[0].parentElement).toHaveClass('h-2.5', 'gap-0.5', 'rounded-[5px]');
+    for (const part of parts) expect(part).toHaveClass('min-w-[3px]');
+    expect(parts[0].parentElement).toHaveClass('h-[18px]', 'gap-0.5');
     expect(balance).toHaveTextContent('free part of 5 deposits');
   });
 
@@ -1274,7 +1313,34 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(screen.queryByRole('table', { name: '拯救民主 objects held here' })).toBeNull();
   });
 
-  it('counts every activity filter chip from one one-row page each; an empty filter is dimmed 0', async () => {
+  // Lane P (Address.dc.html): the balance hero, then the four metrics, then Holdings.
+  it('leads with the balance figure and its partition, then the four metrics, then Holdings', async () => {
+    const { container } = render(<AddressDetailPage />);
+    await loaded();
+    const tier1 = container.querySelector('[data-tier="1"]')!;
+    expect(tier1.querySelector('section')).toHaveAttribute('aria-label', 'Balance');
+    const balance = screen.getByRole('region', { name: 'Balance' });
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    const holdings = screen.getByRole('heading', { name: 'Holdings' });
+    expect(
+      balance.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      metrics.compareDocumentPosition(holdings) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(balance.querySelector('[data-role="balance-figure"]')).toHaveTextContent(
+      /^9,651,178\.35338057 CKB$/
+    );
+    expect([...metrics.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
+      'Holdings',
+      'Live cells',
+      'Transactions',
+      'Lock',
+    ]);
+  });
+  // Lane P (exact or none): a filter chip shows a count only when its one-row page proves it — 0
+  // or 1 — and no number otherwise; "All" keeps the address's total; an empty filter is dimmed.
+  it('counts a filter chip from its one-row page only when the count is exact; an empty filter is dimmed 0', async () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.limit === 1 && p.filter && p.filter !== 'all'
         ? p.filter === 'token'
@@ -1291,15 +1357,22 @@ describe('Address · consistency round (C13, C14)', () => {
     await waitFor(() =>
       expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveTextContent('DAO 0')
     );
-    for (const chip of within(chips).getAllByRole('button')) expect(chip).toHaveTextContent(/\d/);
-    expect(within(chips).getByRole('button', { name: /^Token/ })).toHaveTextContent('Token 1');
-    // More than the one row asked for: the API counts no filtered total, so the chip says "2+".
-    const ckb = within(chips).getByRole('button', { name: /^CKB/ });
-    expect(ckb).toHaveTextContent('CKB 2+');
-    expect(ckb.querySelector('[data-chip-count]')).toHaveAttribute(
-      'title',
-      'at least 2; the API does not count filtered activity'
+    expect(within(chips).getByRole('button', { name: /^All/ })).toHaveTextContent(
+      `All ${addressActivitiesFixture.length}`
     );
+    expect(within(chips).getByRole('button', { name: /^Token/ })).toHaveTextContent(/^Token 1$/);
+    // More than the one row asked for: the API counts no filtered total, so the chip shows no
+    // number (never "2+"); what the page proved stays in the chip's title.
+    const ckb = within(chips).getByRole('button', { name: /^CKB/ });
+    expect(ckb).toHaveTextContent(/^CKB$/);
+    expect(ckb.querySelector('[data-chip-count]')).toBeNull();
+    expect(ckb).toHaveAttribute(
+      'title',
+      'more than one; the API keeps no count of filtered activity'
+    );
+    expect(chips).not.toHaveTextContent('2+');
+    for (const chip of within(chips).getAllByRole('button'))
+      if (chip !== ckb) expect(chip).toHaveTextContent(/\d$/);
     expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveClass('text-text-ghost');
     expect(api.getAddressActivities).toHaveBeenCalledWith(addressHash, {
       limit: 1,

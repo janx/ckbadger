@@ -1,8 +1,9 @@
-import { onTestFinished, vi } from 'vitest';
+import { afterEach, onTestFinished, vi } from 'vitest';
 import { fireEvent } from '@testing-library/react';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { AddressBalance } from '@/components/address/address-holdings';
+import { AddressBalance, AddressMetrics } from '@/components/address/address-holdings';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   AddressActivity,
   AddressLiveCells,
@@ -33,7 +34,145 @@ describe('Address v3 components', () => {
     );
     expect(screen.getByLabelText('Balance')).toHaveTextContent('100.00000001');
     expect(screen.queryByText('CKB held')).not.toBeInTheDocument();
+    // Lane P (Address.dc.html): the exact parts are the quiet line under the bar.
     expect(screen.getByLabelText('Address capacity partition')).toHaveTextContent('39.00000001');
+  });
+
+  // Lane P, the Address board's balance hero: the 40 px figure (its fraction 22 px, dim), the
+  // live cells at its right, the 18 px partition with the shares inside, one quiet line of exact
+  // parts, and no DAO segment when nothing is in the Nervos DAO.
+  describe('the balance hero (Address.dc.html)', () => {
+    const board = {
+      ...holdingsFixture,
+      balance: '31974266879443',
+      occupiedCapacity: '29148600000000',
+      freeCapacity: '2825666879443',
+      daoFreeCapacity: '0',
+      depositCellsCount: 0,
+      withdrawalRequestCellsCount: 0,
+      liveCellsCount: 828,
+    };
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      vi.restoreAllMocks();
+    });
+
+    it('sets the balance as the display figure with its live cells beside it', () => {
+      stubChartWidth(1248);
+      render(<AddressBalance holdings={board} />);
+      const hero = screen.getByRole('region', { name: 'Balance' });
+      expect(within(hero).getByText('balance')).toHaveClass('text-meta', 'uppercase');
+      const figure = hero.querySelector('[data-role="balance-figure"]')!;
+      expect(figure).toHaveTextContent(/^319,742\.66879443 CKB$/);
+      // 40 px from sm (30 px, one step smaller, on a phone); the fraction 22 px (17 px), dim.
+      expect(within(figure as HTMLElement).getByText('319,742')).toHaveClass(
+        'sm:text-display',
+        'text-entity',
+        'text-text-bright'
+      );
+      expect(within(figure as HTMLElement).getByText('.66879443')).toHaveClass(
+        'sm:text-hero',
+        'text-section',
+        'text-text-dim'
+      );
+      expect(figure.querySelector('wbr')).not.toBeNull();
+      expect(hero).toHaveTextContent('in 828 live cells');
+    });
+
+    it('draws the 18 px partition with each share inside and the exact parts in one line', () => {
+      stubChartWidth(1248);
+      render(<AddressBalance holdings={board} />);
+      const bar = screen.getByRole('img', { name: /^Balance partition:/ });
+      expect(bar).toHaveAccessibleName(
+        'Balance partition: occupied 291,486.00000000 CKB (91.16 %), free 28,256.66879443 CKB (8.84 %), nothing in the Nervos DAO'
+      );
+      expect(bar).toHaveClass('h-[18px]');
+      const parts = [...bar.querySelectorAll('[data-part]')];
+      expect(parts.map((p) => p.getAttribute('data-part'))).toEqual(['occupied', 'free']);
+      expect(parts.map((p) => p.textContent)).toEqual(['occupied 91.16 %', 'free 8.84 %']);
+      expect(screen.getByTestId('balance-parts')).toHaveTextContent(
+        /^occupied 291,486\.00000000 pays for the bytes its cells keep · free 28,256\.66879443 · no CKB in the Nervos DAO$/
+      );
+    });
+
+    it('keeps a share that cannot fit inside its part in the part title, never cut', () => {
+      stubChartWidth(358);
+      render(<AddressBalance holdings={board} />);
+      const free = screen
+        .getByRole('img', { name: /^Balance partition:/ })
+        .querySelector('[data-part="free"]')!;
+      expect(free).toHaveTextContent(/^$/);
+      expect(free).toHaveAttribute('title', 'free 8.84 % · 28,256.66879443 CKB');
+    });
+
+    it('adds the DAO part only when the address has CKB in the Nervos DAO', () => {
+      stubChartWidth(1248);
+      render(<AddressBalance holdings={holdingsFixture} />);
+      const bar = screen.getByRole('img', { name: /^Balance partition:/ });
+      expect(
+        [...bar.querySelectorAll('[data-part]')].map((p) => p.getAttribute('data-part'))
+      ).toEqual(['occupied', 'free', 'DAO free']);
+      expect(screen.getByTestId('balance-parts')).toHaveTextContent(
+        /· DAO free 9,589,480\.00000000, free part of 5 deposits$/
+      );
+    });
+
+    it('states a zero balance as a ghost 0 CKB with no bar', () => {
+      render(
+        <AddressBalance
+          holdings={{
+            ...board,
+            balance: '0',
+            occupiedCapacity: '0',
+            freeCapacity: '0',
+            liveCellsCount: 0,
+          }}
+        />
+      );
+      const figure = document.querySelector('[data-role="balance-figure"]')!;
+      expect(figure).toHaveTextContent(/^0 CKB$/);
+      expect(within(figure as HTMLElement).getByText('0')).toHaveClass('text-text-ghost');
+      expect(screen.queryByRole('img', { name: /^Balance partition:/ })).toBeNull();
+    });
+  });
+
+  // Lane P: the four metrics under the balance — Holdings · Live cells · Transactions · Lock.
+  describe('the metrics row (Address.dc.html)', () => {
+    it('names the holdings, the live cells by class, the transactions and the lock', () => {
+      render(<AddressMetrics holdings={holdingsFixture} address={addressFixture} />);
+      const row = screen.getByRole('region', { name: 'Metrics' });
+      const items = [...row.querySelectorAll('dl > div')];
+      expect(items.map((i) => i.querySelector('dt')!.textContent)).toEqual([
+        'Holdings',
+        'Live cells',
+        'Transactions',
+        'Lock',
+      ]);
+      expect(items.map((i) => i.querySelector('dd')!.textContent)).toEqual([
+        '29 holdings · 5 DAO cells · 9 tokens · 14 objects · 1 identity',
+        '40 · 5 DAO cells + 15 token cells + 14 objects + 1 identity + 3 other-script cells + 2 plain CKB',
+        '1,021',
+        'JoyID · type · 22-byte args',
+      ]);
+      expect(within(items[3] as HTMLElement).getByRole('link', { name: 'JoyID' })).toHaveAttribute(
+        'href',
+        expect.stringContaining('/scripts/')
+      );
+    });
+
+    it('reads one held class as the board does: "827 objects · in 14 collections"', () => {
+      const objectsOnly = {
+        ...holdingsFixture,
+        holdings: { dao: 0, token: 0, object: 827, identity: 0 },
+        objectCollections: Array.from({ length: 14 }, (_, i) => ({
+          ...holdingsFixture.objectCollections[0],
+          id: `0x${String(i).padStart(2, '0').repeat(32)}`,
+        })),
+      };
+      render(<AddressMetrics holdings={objectsOnly} address={addressFixture} />);
+      const holdings = screen.getByRole('region', { name: 'Metrics' }).querySelector('dd')!;
+      expect(holdings).toHaveTextContent(/^827 objects · in 14 collections$/);
+    });
   });
   it('shows exact producer cell amounts and the data1 script reference', () => {
     render(<AddressLiveCells rows={addressProducerCells.data} />);

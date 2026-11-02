@@ -96,6 +96,11 @@ interface ChartFigureProps {
   body: ChartBody;
   className?: string;
   testId?: string;
+  /**
+   * Whether the figure's readout row carries "tap or hover" (consistency C10). Default true; a
+   * section of several figures says it once by its heading and passes false.
+   */
+  hint?: boolean;
 }
 
 export function ChartFigure({
@@ -107,6 +112,7 @@ export function ChartFigure({
   body,
   className,
   testId,
+  hint = true,
 }: ChartFigureProps) {
   const [readout, setReadout] = useState<FigureReadout | null>(null);
   const tid = (part: string) => (testId ? `${testId}-${part}` : undefined);
@@ -147,7 +153,11 @@ export function ChartFigure({
         <FigureBody body={body} />
       </ReadoutContext.Provider>
       {body.state === 'ready' && (
-        <ReadoutRow label={`${title} readout`} pinned={readout !== null && readout.pinned}>
+        <ReadoutRow
+          label={`${title} readout`}
+          pinned={readout !== null && readout.pinned}
+          hint={hint}
+        >
           {readout ? `${readout.label} · ${readout.text}` : null}
         </ReadoutRow>
       )}

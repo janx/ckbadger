@@ -6,6 +6,10 @@ import type { ChartBody } from '@/components/home/mini-chart';
 /** A homepage section heading: unframed, 15 px / 500, sentence case. */
 export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-section font-medium';
 
+/** A heading row that states the section's one hint at its right (consistency C10). */
+export const SECTION_HEAD_CLASS = 'flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1';
+export const SECTION_HINT_CLASS = 'text-text-dim text-meta whitespace-nowrap';
+
 /** The small-multiples grid: same-size charts, as many per row as fit at 220 px. */
 export const SMALL_MULTIPLES_CLASS =
   'grid grid-cols-[repeat(auto-fit,minmax(220px,1fr))] gap-x-10 gap-y-8';

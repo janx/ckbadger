@@ -200,7 +200,7 @@ describe('FiberNetworkGraph', () => {
     fireEvent.mouseEnter(node('ppedrr'));
     fireEvent.click(node('ppedrr'));
     fireEvent.mouseLeave(node('ppedrr'));
-    expect(readout()).toHaveTextContent(/^tapped ppedrr · 3 channels · pairs with 5eyy6y 3/);
+    expect(readout()).toHaveTextContent(/^selected ppedrr · 3 channels · pairs with 5eyy6y 3/);
     expect(node('ppedrr')).toHaveAttribute('aria-pressed', 'true');
     // the side panel shows the same party
     expect(within(panel()).getByRole('link', { name: /ppedrr$/ })).toBeInTheDocument();
@@ -214,7 +214,7 @@ describe('FiberNetworkGraph', () => {
   it('pins a pair, lists a hub’s partners by channels, and Escape clears the pin (R6)', () => {
     render(<Graph network={mainnet as FiberNetwork} />);
     fireEvent.click(node('kdeakp'));
-    expect(readout()).toHaveTextContent(/^tapped kdeakp · 165 channels · pairs with /);
+    expect(readout()).toHaveTextContent(/^selected kdeakp · 165 channels · pairs with /);
     const partners = readout().textContent!.split('pairs with ')[1].split(', ');
     const counts = partners.map((p) => Number(p.split(' ')[1]));
     expect(counts).toEqual([...counts].sort((a, b) => b - a));
@@ -225,7 +225,9 @@ describe('FiberNetworkGraph', () => {
         name: /^Pair …ppedrr and …5eyy6y|^Pair …5eyy6y and …ppedrr/,
       })[0]
     );
-    expect(readout()).toHaveTextContent(/^tapped …(ppedrr|5eyy6y) ↔ …(ppedrr|5eyy6y) · 3 channels/);
+    expect(readout()).toHaveTextContent(
+      /^selected …(ppedrr|5eyy6y) ↔ …(ppedrr|5eyy6y) · 3 channels/
+    );
   });
 
   it('writes one caption under the reading: one sentence within 640 px (R13, R14)', () => {

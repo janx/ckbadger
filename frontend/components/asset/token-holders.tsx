@@ -377,6 +377,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
               pageSize={limit}
               total={holders.data.total ?? undefined}
               totalLabel="holders"
+              currentCount={holders.data.data.length}
               hasMore={holders.data.hasMore}
               hasPrevious={pagination.hasPrevious}
               onNext={() => pagination.goToNext(holders.data.nextCursor)}

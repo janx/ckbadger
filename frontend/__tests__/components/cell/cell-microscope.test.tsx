@@ -4,6 +4,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
+import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 
 const cell = {
@@ -79,22 +80,35 @@ describe('cell microscope', () => {
     fireEvent.mouseOver(byte);
     fireEvent.click(byte);
     fireEvent.mouseLeave(box);
-    expect(readout).toHaveTextContent(/^tapped unclassified bytes · \[2\.\.4\) · 2 B/);
+    expect(readout).toHaveTextContent(/^selected unclassified bytes · \[2\.\.4\) · 2 B/);
     expect(detail).toHaveTextContent('unclassified bytes');
     expect(box).toHaveAttribute('data-active', 'data:unclassified-2');
     // a tap on a field pill or a map part moves the pin there
     fireEvent.click(screen.getByRole('button', { name: /^length word \[0\.\.2\)/ }));
-    expect(readout).toHaveTextContent(/^tapped length word · \[0\.\.2\) · 2 B · 16/);
+    expect(readout).toHaveTextContent(/^selected length word · \[0\.\.2\) · 2 B · 16/);
     const map = screen.getByRole('group', { name: 'Capacity map' });
     fireEvent.click(within(map).getByTitle('data · 4 bytes'));
     fireEvent.mouseLeave(map);
-    expect(readout).toHaveTextContent(/^tapped data · 4 B occupied/);
+    expect(readout).toHaveTextContent(/^selected data · 4 B occupied/);
     expect(within(map).getByTitle('data · 4 bytes')).toHaveAttribute('aria-pressed', 'true');
     // the second tap on it lets go, though the emulated hover is still on it
     fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));
     fireEvent.click(within(map).getByTitle('data · 4 bytes'));
     expect(readout).toHaveTextContent(/^tap or hover$/);
-    expect(detail).toHaveTextContent('Tap or hover a byte, a field or the map');
+    // C10: the readout row's "tap or hover" is the section's one hint; the detail box names
+    // what it holds by default.
+    expect(detail).toHaveTextContent(/^Where each byte belongs/);
+    expect(detail).not.toHaveTextContent(/tap|hover/i);
+  });
+
+  it('says "tap or hover" once in the microscope (C10)', () => {
+    const { container } = render(
+      <section aria-label="Cell byte microscope">
+        <CellMicroscope cell={cell} />
+      </section>
+    );
+    expect(sectionsWithManyHints(container)).toEqual([]);
+    expect(container.querySelectorAll('[data-hint="tap-or-hover"]')).toHaveLength(1);
   });
 
   it('rejects an overlapping or incomplete byte map', () => {

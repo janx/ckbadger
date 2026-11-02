@@ -42,12 +42,12 @@ describe('Chart tap to pin (R6)', () => {
     // a touch tap: the pointer leaves before the click arrives
     fireEvent.pointerLeave(plot(), { pointerType: 'touch' });
     fireEvent.click(plot(), { clientX: LAST });
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-30 · 3 PH\/s/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-30 · 3 PH\/s/);
     // the hover reading still shows over the pin, and the pin returns when it leaves
     fireEvent.pointerMove(plot(), { clientX: FIRST });
     expect(readout()).toHaveTextContent(/^2026-10-28 · 1\.5 PH\/s/);
     fireEvent.pointerLeave(plot());
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-30 · 3 PH\/s/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-30 · 3 PH\/s/);
     fireEvent.click(plot(), { clientX: LAST });
     expect(readout()).toHaveTextContent('Tap a day.');
   });
@@ -57,7 +57,7 @@ describe('Chart tap to pin (R6)', () => {
       <Chart {...base} pinnedReadout={{ label: 'Hash rate readout', idle: 'Tap a day.' }} />
     );
     fireEvent.click(plot(), { clientX: FIRST });
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-28 · 1\.5 PH\/s/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-28 · 1\.5 PH\/s/);
     act(() => {
       fireEvent.keyDown(window, { key: 'Escape' });
     });
@@ -85,11 +85,11 @@ describe('Chart tap to pin (R6)', () => {
     };
     const { unmount } = render(<Chart {...two} pinnedReadout={{ label: 'Hash rate readout' }} />);
     fireEvent.click(plot(), { clientX: LAST });
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-30 · Rate 3 PH\/s · Peak 9 PH\/s/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-30 · Rate 3 PH\/s · Peak 9 PH\/s/);
     unmount();
     render(<Chart {...two} seriesLegend pinnedReadout={{ label: 'Hash rate readout' }} />);
     fireEvent.click(plot(), { clientX: LAST });
-    expect(readout()).toHaveTextContent(/^tapped 2026-10-30 · values in the key below/);
+    expect(readout()).toHaveTextContent(/^selected 2026-10-30 · values in the key below/);
   });
 
   it('does not pin without a readout line: a click is only a hover there', () => {

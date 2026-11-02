@@ -17,11 +17,14 @@ import {
 } from '@/components/home/mini-chart';
 import {
   SECTION_HEADING_CLASS,
+  SECTION_HEAD_CLASS,
+  SECTION_HINT_CLASS,
   SMALL_MULTIPLES_CLASS,
   bodyOf,
   derive,
   viewOf,
 } from '@/components/home/section';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { api, type ChartResponse, type CkbytesAllocation, type DaoStatistics } from '@/lib/api';
 import { formatCompactSigned } from '@/lib/chart-ticks';
 import {
@@ -53,11 +56,15 @@ export function CkbytesSection() {
   });
   return (
     <section aria-labelledby="home-ckbytes-heading" className="flex flex-col gap-[18px]">
-      <h2 id="home-ckbytes-heading" className={SECTION_HEADING_CLASS}>
-        <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
-          CKBytes in circulation
-        </Link>
-      </h2>
+      {/* C10: one "tap or hover" for the two daily-change figures, by the heading. */}
+      <div className={SECTION_HEAD_CLASS}>
+        <h2 id="home-ckbytes-heading" className={SECTION_HEADING_CLASS}>
+          <Link href="/charts/total-supply" className="hover:text-jade transition-colors">
+            CKBytes in circulation
+          </Link>
+        </h2>
+        <TapOrHoverHint className={SECTION_HINT_CLASS} />
+      </div>
       <Allocation data={allocation.data} error={allocation.error} />
       <div className="mt-3.5 grid grid-cols-[repeat(auto-fit,minmax(min(100%,520px),1fr))] gap-x-10 gap-y-8">
         <div className={SMALL_MULTIPLES_CLASS}>
@@ -387,6 +394,7 @@ function ChangeFigure({
   const v = viewOf(d);
   return (
     <ChartFigure
+      hint={false}
       testId={testId}
       title={title}
       href={href}

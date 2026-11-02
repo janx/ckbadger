@@ -154,7 +154,8 @@ it('opens with one hero section — name, status, id and the composition sentenc
   const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
   const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
   const story = await within(tier2).findByText(
-    /^Minted .* to a secp256k1 lock, then moved/,
+    // Lane P: the path only; the dates are the metrics, the ages the sentence's hover.
+    /^Minted to a secp256k1 lock, then moved/,
     undefined,
     {
       timeout: 5000,
@@ -162,6 +163,10 @@ it('opens with one hero section — name, status, id and the composition sentenc
   );
   expect(story).toHaveTextContent(
     'then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
+  );
+  expect(story).toHaveAttribute(
+    'title',
+    expect.stringMatching(/^minted .+ ago · last moved .+ ago$/)
   );
   expect(tier2).toHaveTextContent('One of 90 in Nervape 3x, each held by a different address.');
   expect(tier1).not.toHaveTextContent(/^Minted \d/);

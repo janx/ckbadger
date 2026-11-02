@@ -6,6 +6,7 @@ import {
   ObjectTraits,
   cellLifeSentence,
   itemLifeSentence,
+  itemLifeAges,
   lockPhrase,
   spelledDuration,
 } from '@/components/asset/object-hero';
@@ -29,22 +30,37 @@ it('spells durations and lock phrases for prose', () => {
   expect(lockPhrase(null)).toBe('an unregistered lock');
 });
 
+// Lane P (after lane F's C3): the sentence tells the path; its dates are the page's Minted and Last
+// moved metrics (C7) and how long ago they were is its hover (itemLifeAges) — no "ago" in text.
 it('tells an item’s life from its cell versions', () => {
   const now = 10 * 86_400_000;
   const minted = v({ timestamp: '0', lockName: 'secp256k1', isLive: false });
   const moved = v({ timestamp: '30000', lockName: 'Nervape Shadow Lock', isLive: true });
   expect(itemLifeSentence([{ ...moved, timestamp: '0' }], now)).toBe(
-    'Minted 10 days ago to a Nervape Shadow Lock, where it sits now.'
+    'Minted to a Nervape Shadow Lock, where it sits now.'
   );
   expect(itemLifeSentence([minted, moved], now)).toBe(
-    'Minted 10 days ago to a secp256k1 lock, then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
+    'Minted to a secp256k1 lock, then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
   );
   expect(
     itemLifeSentence([minted, { ...moved, isLive: false, consumedAtBlock: 12 }], now, 'Issued', 'X')
-  ).toBe(
-    'Issued by X 10 days ago to a secp256k1 lock, moved 1 time; its last cell was consumed at block 12.'
+  ).toBe('Issued by X to a secp256k1 lock, moved 1 time; its last cell was consumed at block 12.');
+  const third = v({ timestamp: String(8 * 86_400_000), lockName: 'JoyID', isLive: true });
+  expect(itemLifeSentence([minted, { ...moved, isLive: false }, third], now)).toBe(
+    'Minted to a secp256k1 lock, then moved 2 times; the last move put it under a JoyID lock, where it sits now.'
   );
+  expect(itemLifeSentence([minted, moved], now)).not.toMatch(/ ago/);
   expect(() => itemLifeSentence([], now)).toThrow('at least one cell version');
+});
+
+it('keeps how long ago an item was minted and last moved for the sentence’s hover', () => {
+  const now = 10 * 86_400_000;
+  const minted = v({ timestamp: '0', lockName: 'secp256k1', isLive: false });
+  const third = v({ timestamp: String(8 * 86_400_000), lockName: 'JoyID', isLive: true });
+  expect(itemLifeAges([minted], now)).toBe('minted 10 days ago');
+  expect(itemLifeAges([minted, third], now, 'Issued')).toBe(
+    'issued 10 days ago · last moved 2 days ago'
+  );
 });
 
 it('explains what changed in the cell between minting and now', () => {

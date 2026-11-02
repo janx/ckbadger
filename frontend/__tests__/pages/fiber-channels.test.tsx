@@ -207,7 +207,7 @@ describe('FiberChannelsPage', () => {
     expect(Array.from(table.querySelectorAll('tbody .text-text-bright'))).toEqual([id]);
     expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
     expect(screen.getByText('sorted by capacity')).toHaveClass('text-meta');
-    expect(screen.getByText(/Showing 1-1 of 38 channels/)).toBeInTheDocument();
+    expect(screen.getByText('Showing 1–1 of 38 channels · 50 per page')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Closed together 1' }));
     await waitFor(() => expect(requested).toContain('cooperativelyClosed'));
     expect(

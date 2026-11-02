@@ -2,7 +2,7 @@
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
-import { alignedPlotLeft, Chart, type ChartValueAxisInput } from '@/components/ui/chart';
+import { Chart, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -10,11 +10,13 @@ import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
-import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatExactDecimal, formatScaledInteger } from '@/lib/exact-integer';
 import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 const DAY = 86400000;
+/** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
+export const HISTORY_PLOT_HEIGHT = 280;
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
   /** Completed weekly totals, or why this page has none to draw. */
@@ -166,9 +168,8 @@ export function AssetHistory({
           kind: 'bars',
         }
       : null;
-  const plotLeft = alignedPlotLeft(
-    [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
-  );
+  // Lane P (R13, Main.dc.html): every plot writes its round values inside itself from its left
+  // edge in ghost ink, so the three share the left edge 0 — no axis column, no shared gutter.
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
@@ -242,6 +243,73 @@ export function AssetHistory({
       ),
     },
   ];
+  const peakItem = peak && (
+    <span title="the most CKB its cells held on any complete day">
+      peak <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
+      {peak.date}
+    </span>
+  );
+  const weekText =
+    weeklyUnavailable ??
+    (week
+      ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
+      : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
+        // complete yet; it names the latest complete week instead of nothing.
+        selectedDate === null && weekly.length > 0
+        ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
+        : 'No completed weekly total for this day');
+  const readoutItems: ReactNode[] = point
+    ? [
+        // Lane P (Main.dc.html): the scope is the hover of the day, not a line of its own.
+        <span
+          key="date"
+          className="text-text-bright"
+          title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
+        >
+          {point.date}
+        </span>,
+        <>
+          held <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
+        </>,
+        <>
+          <Swatch color={DATA_COLOR} />
+          <span title="Occupied pays for the state kept on CKB.">occupied</span>{' '}
+          <ExactCkb shannons={BigInt(point.occupiedCapacity)} signed={false} tone="plain" wrap />
+          {BigInt(point.capacity) > BigInt(0) && (
+            <span className="text-text-dim">
+              {' '}
+              {formatScaledInteger(
+                BigInt(point.occupiedCapacity) * BigInt(100),
+                BigInt(point.capacity),
+                2
+              )}{' '}
+              %
+            </span>
+          )}
+        </>,
+        <>
+          <Swatch color={CLASS_COLORS.ckb} />
+          <span title="Free is CKB held in the same cells beyond that byte cost.">free</span>{' '}
+          <ExactCkb
+            shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
+            signed={false}
+            tone="plain"
+            wrap
+          />
+        </>,
+        ...(token
+          ? [
+              <>
+                <Swatch color={CLASS_COLORS.tokens} />
+                Supply <AssetAmount amount={point.supply!} decimals={token.decimals} />{' '}
+                {token.symbol}
+              </>,
+            ]
+          : []),
+        weekText,
+        ...(peakItem ? [peakItem] : []),
+      ]
+    : [];
   return (
     <DetailSection
       title="History"
@@ -263,65 +331,18 @@ export function AssetHistory({
         </div>
       }
     >
-      <p className="text-text-dim text-meta mb-3">
-        Complete UTC+8 days through {completeThrough} · indexed chain time
-      </p>
       {point ? (
         <>
-          <div
-            aria-live="polite"
-            aria-label="History readout"
-            className="border-base-border text-small mb-2 flex flex-wrap gap-x-5 gap-y-2 border-b pb-3"
-          >
-            <span className="text-text-bright">{point.date}</span>
-            <span>
-              CKB held{' '}
-              <ExactCkb shannons={BigInt(point.capacity)} signed={false} tone="plain" wrap />
-            </span>
-            <span>
-              <Swatch color={DATA_COLOR} />
-              occupied{' '}
-              <ExactCkb
-                shannons={BigInt(point.occupiedCapacity)}
-                signed={false}
-                tone="plain"
-                wrap
-              />
-            </span>
-            <span>
-              <Swatch color={CLASS_COLORS.ckb} />
-              free{' '}
-              <ExactCkb
-                shannons={BigInt(point.capacity) - BigInt(point.occupiedCapacity)}
-                signed={false}
-                tone="plain"
-                wrap
-              />
-            </span>
-            {token && (
-              <span>
-                <Swatch color={CLASS_COLORS.tokens} />
-                Supply <AssetAmount amount={point.supply!} decimals={token.decimals} />{' '}
-                {token.symbol}
-              </span>
-            )}
-            <span>
-              {weeklyUnavailable ??
-                (week
-                  ? `Week of ${week.weekStart}: ${week.count.toLocaleString('en-US')} ${weeklyNoun}`
-                  : // F2 objects (OB-C6): before any hover the reading is today, whose week is not
-                    // complete yet; it names the latest complete week instead of nothing.
-                    selectedDate === null && weekly.length > 0
-                    ? `Latest complete week, from ${weekly[weekly.length - 1].weekStart}: ${weekly[weekly.length - 1].count.toLocaleString('en-US')} ${weeklyNoun}`
-                    : 'No completed weekly total for this day')}
-            </span>
-          </div>
           <Chart
             {...capacityAxis}
             subtitle="Occupied and free"
-            height={token ? 150 : 200}
+            // The page's picture (R13): at least 280 px, its name inside it.
+            height={HISTORY_PLOT_HEIGHT}
+            // SVG text cannot wrap: the name fits the 326 px plot of a 360 px phone.
+            plotName="CKB held in its cells · occupied, free above it"
+            // written over the stacked area, which would bury a label drawn under it
+            insideYTicks="over"
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
-            plotLeft={plotLeft}
             xDomain={domain}
             activeIndex={active}
             onActiveIndexChange={onDaily}
@@ -335,7 +356,7 @@ export function AssetHistory({
               subtitle="Exact total supply"
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
-              plotLeft={plotLeft}
+              insideYTicks
               xDomain={domain}
               activeIndex={active}
               onActiveIndexChange={onDaily}
@@ -350,7 +371,7 @@ export function AssetHistory({
               subtitle="Completed UTC+8 weeks"
               formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
-              plotLeft={plotLeft}
+              insideYTicks="over"
               xDomain={domain}
               activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
               onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}
@@ -358,22 +379,33 @@ export function AssetHistory({
               cursorX={selectedDate === null ? null : time(selectedDate)}
             />
           )}
+          {/* Lane P (Main.dc.html): the reading is one row under the plots — the day, held,
+              occupied with its share, free, the week, then the peak among complete days. */}
+          <div
+            aria-live="polite"
+            aria-label="History readout"
+            className="border-base-border-subtle text-small mt-2 flex flex-wrap gap-y-1 border-t pt-2"
+          >
+            {readoutItems.map((item, i) => (
+              <span key={i}>
+                {i > 0 && <span className="text-text-dim whitespace-pre"> · </span>}
+                {item}
+              </span>
+            ))}
+          </div>
         </>
       ) : (
-        <p className="text-text-dim text-small py-6">No complete daily history in this range.</p>
+        <>
+          <p
+            className="text-text-dim text-small py-6"
+            title={`complete UTC+8 days through ${completeThrough} · indexed chain time`}
+          >
+            No complete daily history in this range.
+          </p>
+          {peakItem && <p className="text-text-dim text-small">{peakItem}</p>}
+        </>
       )}
       {footnote && <div className="text-text-dim text-small mt-3">{footnote}</div>}
-      {peak && (
-        <p className="text-text-dim text-small mt-3">
-          CKB held peaked at{' '}
-          <ExactCkb shannons={BigInt(peak.capacity)} signed={false} tone="plain" wrap /> on{' '}
-          {peak.date}, among complete days.
-        </p>
-      )}
-      <p className="text-text-dim text-small mt-3">
-        Occupied pays for the state kept on CKB. Free is CKB held in the same cells beyond that byte
-        cost.
-      </p>
       {supplyEvents && token && (
         <details className="border-base-border mt-4 border-t pt-3">
           <summary className="text-small cursor-pointer">

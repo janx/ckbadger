@@ -421,3 +421,46 @@ describe('Chart named inside its plot (hierarchy v3)', () => {
     expect(container.querySelectorAll('svg text[text-anchor="end"]').length).toBeGreaterThan(1);
   });
 });
+
+// Lane P (additive): `insideYTicks="over"` writes the ghost values over the plotted series, so a
+// stacked area (60 % opaque) cannot bury them; `true` keeps them under it (the DAO page's charts).
+describe('in-plot values over a filled chart', () => {
+  beforeEach(() => stubChartWidth(600));
+  afterEach(() => vi.restoreAllMocks());
+  const held = ['2024-01-01', '2024-01-02', '2024-01-03'].map((label, i) => ({
+    label,
+    values: { occupied: String(100 + i * 50), free: '20' },
+  }));
+  const stacked = [
+    { key: 'occupied', label: 'Occupied', color: '#2edba3' },
+    { key: 'free', label: 'Free', color: '#3a4258' },
+  ];
+  const order = (insideYTicks: boolean | 'over') => {
+    const { container, unmount } = render(
+      <Chart
+        title="CKB held"
+        subtitle="occupied and free"
+        data={held}
+        series={stacked}
+        unit="CKB"
+        kind="stacked"
+        height={280}
+        insideYTicks={insideYTicks}
+        formatValue={(v) => v}
+      />
+    );
+    const svg = container.querySelector('svg[role="img"]')!;
+    const nodes = [...svg.querySelectorAll('[data-role="y-tick"], path[fill-opacity]')];
+    const kinds = nodes.map((n) => (n.getAttribute('data-role') === 'y-tick' ? 'tick' : 'area'));
+    unmount();
+    return kinds;
+  };
+
+  it('draws the values after the areas with "over", before them with true', () => {
+    const over = order('over');
+    expect(over).toContain('tick');
+    expect(over.lastIndexOf('area')).toBeLessThan(over.indexOf('tick'));
+    const under = order(true);
+    expect(under.lastIndexOf('tick')).toBeLessThan(under.indexOf('area'));
+  });
+});

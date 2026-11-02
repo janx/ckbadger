@@ -211,14 +211,14 @@ describe('VmLaneTimeline', () => {
     expect(readout).toHaveTextContent(/^xUDT · xUDT · version 0xbbbbbbbb… · deployed 2024-01-08/);
     // a tap pins it; hovering another dot reads that one, leaving it shows the pin again
     fireEvent.click(xudt);
-    expect(readout).toHaveTextContent(/^tapped xUDT · xUDT/);
+    expect(readout).toHaveTextContent(/^selected xUDT · xUDT/);
     expect(xudt).toHaveAttribute('aria-pressed', 'true');
     const strip = screen.getByRole('list', { name: 'Known script-version deployment timeline' });
     const unregistered = within(strip).getByRole('button');
     fireEvent.mouseEnter(unregistered);
     expect(readout).toHaveTextContent(/^Unregistered · Unregistered/);
     fireEvent.mouseLeave(unregistered);
-    expect(readout).toHaveTextContent(/^tapped xUDT/);
+    expect(readout).toHaveTextContent(/^selected xUDT/);
     expect(evidence).toHaveTextContent('Earliest indexed code-cell creation');
     // the second tap on it lets go
     fireEvent.click(xudt);

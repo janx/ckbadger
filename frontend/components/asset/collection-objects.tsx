@@ -394,6 +394,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                 totalLabel="objects"
                 pageSize={NEWEST}
                 page={pages.page}
+                currentCount={items.length}
                 hasMore={gallery.data.hasMore}
                 hasPrevious={pages.hasPrevious}
                 onNext={() => pages.goToNext(gallery.data!.nextCursor)}

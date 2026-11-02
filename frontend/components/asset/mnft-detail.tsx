@@ -27,6 +27,7 @@ import {
   cellLifeSentence,
   ckbText,
   itemLifeSentence,
+  itemLifeAges,
   lockFootnote,
   lockPhrase,
 } from '@/components/asset/object-hero';
@@ -199,7 +200,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           )}
           {history && history.data.length > 0 ? (
             <p className="text-text text-body leading-relaxed">
-              <span>
+              <span title={itemLifeAges(history.data, now, 'Issued')}>
                 {itemLifeSentence(history.data, now, 'Issued', item.issuer.name ?? 'its issuer')}
               </span>
             </p>

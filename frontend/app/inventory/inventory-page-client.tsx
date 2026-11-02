@@ -309,6 +309,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
                 totalLabel="items"
                 pageSize={pageSize}
                 page={pagination.page}
+                currentCount={assets.data.data.length}
                 hasMore={assets.data.hasMore}
                 hasPrevious={pagination.hasPrevious}
                 onNext={() => pagination.goToNext(assets.data.nextCursor)}

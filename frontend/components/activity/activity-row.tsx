@@ -36,8 +36,9 @@ import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn, formatTimeAgo, formatUtc8Date, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { Utc8Date } from '@/components/ui/utc8-date';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-base-elevated py-2 transition-colors';
@@ -55,7 +56,7 @@ export function activityRowTitle(hash: string, timestamp: string | null): string
  * feed; "ago" drifts as the page is read). The age is the date's own hover.
  */
 function RowDate({ timestamp }: { timestamp: string }) {
-  return <time title={formatTimeAgo(timestamp)}>{formatUtc8Date(timestamp)}</time>;
+  return <Utc8Date timestamp={timestamp} />;
 }
 
 /**

@@ -48,7 +48,8 @@ describe('CursorPagination', () => {
       />
     );
 
-    expect(screen.getByText('Showing 21-40 of 105 Spores, 20 per page')).toBeInTheDocument();
+    // C11: one wording on every list — the range with an en dash, the page size after a dot.
+    expect(screen.getByText('Showing 21–40 of 105 Spores · 20 per page')).toBeInTheDocument();
     expect(screen.getByText('Page 2 of 6')).toBeInTheDocument();
   });
 
@@ -66,7 +67,9 @@ describe('CursorPagination', () => {
         onPrevious={() => {}}
       />
     );
-    expect(screen.getByText(/Showing 1-50/)).toHaveTextContent('Showing 1-50 activities');
+    expect(screen.getByText(/Showing 1–50/)).toHaveTextContent(
+      /^Showing 1–50 activities · 50 per page$/
+    );
     expect(screen.queryByText(/ of /)).toBeNull();
     expect(screen.getByRole('button', { name: 'Next' })).toBeEnabled();
   });
@@ -136,7 +139,7 @@ describe('CursorPagination across widths', () => {
     const root = container.firstElementChild as HTMLElement;
     expect(root).toHaveClass('flex-col', 'sm:flex-row', 'sm:items-center', 'sm:justify-between');
     const [count, controls] = [...root.children] as HTMLElement[];
-    expect(count).toHaveTextContent('250,043 items, 24 per page');
+    expect(count).toHaveTextContent(/^250,043 items · 24 per page$/);
     expect(controls).toHaveAttribute('data-role', 'pager-controls');
     expect([...controls.children].map((c) => c.textContent)).toEqual([
       'Previous',
@@ -144,6 +147,9 @@ describe('CursorPagination across widths', () => {
       'Next',
     ]);
     expect(controls).toHaveClass('flex', 'items-center', 'justify-between');
+    // Lane P: in a column narrower than both, the controls drop under the sentence as one unit.
+    expect(root).toHaveClass('sm:flex-wrap');
+    expect(controls).not.toHaveClass('flex-wrap');
   });
 
   it('never breaks "Page x of y" and keeps the buttons whole', () => {
@@ -151,5 +157,65 @@ describe('CursorPagination across widths', () => {
     expect(screen.getByText('Page 1 of 10,419')).toHaveClass('whitespace-nowrap');
     for (const name of ['Previous', 'Next'])
       expect(screen.getByRole('button', { name })).toHaveClass('shrink-0', 'whitespace-nowrap');
+  });
+});
+
+// Consistency round C11: one pager. Every list says "Showing a–b of N <noun> · S per page" and
+// "Page x of y"; the range is one text node, so it reads (and is found) as one phrase.
+describe('CursorPagination wording (C11)', () => {
+  it('reads one phrase for the range, the total, the noun and the page size', () => {
+    render(
+      <CursorPagination
+        total={1298}
+        totalLabel="objects"
+        pageSize={20}
+        page={1}
+        currentCount={20}
+        hasMore
+        hasPrevious={false}
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+      />
+    );
+    const line = screen.getByText('Showing 1–20 of 1,298 objects · 20 per page');
+    expect(line.childNodes).toHaveLength(1);
+    expect(screen.getByText('Page 1 of 65')).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/\d-\d|, \d+ per page/);
+  });
+
+  it('counts the last, short page from its rows', () => {
+    render(
+      <CursorPagination
+        total={45}
+        totalLabel="holders"
+        pageSize={20}
+        page={3}
+        currentCount={5}
+        hasMore={false}
+        hasPrevious
+        onNext={vi.fn()}
+        onPrevious={vi.fn()}
+      />
+    );
+    expect(screen.getByText('Showing 41–45 of 45 holders · 20 per page')).toBeInTheDocument();
+    expect(screen.getByText('Page 3 of 3')).toBeInTheDocument();
+  });
+
+  it('refuses a page that holds more rows than its page size', () => {
+    expect(() =>
+      render(
+        <CursorPagination
+          total={100}
+          totalLabel="rows"
+          pageSize={20}
+          page={1}
+          currentCount={21}
+          hasMore
+          hasPrevious={false}
+          onNext={vi.fn()}
+          onPrevious={vi.fn()}
+        />
+      )
+    ).toThrow(/21 rows on a page of 20/);
   });
 });

@@ -6,6 +6,7 @@ import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width
 import { server } from '@/__tests__/msw/server';
 import { averageBlockTimeChart, txStats, uncleRateChart } from '@/__tests__/msw/fixtures/home';
 import { NetworkSection } from '@/components/home/network-section';
+import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 
 const API = '/api/:network/v1';
 
@@ -41,6 +42,18 @@ describe('NetworkSection', () => {
     expect(screen.getByRole('link', { name: 'Block time' })).toHaveAttribute(
       'href',
       '/mainnet/charts/average-block-time'
+    );
+  });
+
+  // C10: four small multiples, one "tap or hover" — by the heading, not under each figure.
+  it('says "tap or hover" once for its four figures, by the heading', async () => {
+    const { container } = render(<NetworkSection />);
+    await waitFor(() => expect(screen.getAllByRole('status', { name: /readout$/ }).length).toBe(4));
+    expect(sectionsWithManyHints(container)).toEqual([]);
+    const hint = container.querySelector('[data-hint="tap-or-hover"]')!;
+    expect(hint).toHaveTextContent(/^tap or hover$/);
+    expect(hint.parentElement).toContainElement(
+      screen.getByRole('heading', { level: 2, name: 'Network' })
     );
   });
 

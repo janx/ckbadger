@@ -161,11 +161,11 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     fireEvent.pointerMove(main, { clientX: 600 });
     fireEvent.click(main, { clientX: 600 });
     fireEvent.pointerLeave(main);
-    expect(reading).toHaveTextContent(new RegExp(`^tapped ${date(77)} · deposited`));
-    // "tapped" opens the same row of items, so it shares their line.
+    expect(reading).toHaveTextContent(new RegExp(`^selected ${date(77)} · deposited`));
+    // "selected" opens the same row of items, so it shares their line.
     const row = within(reading).getByText(date(77)).parentElement!;
     expect(row).toHaveClass('flex', 'flex-wrap');
-    expect(row.firstElementChild).toHaveTextContent(/^tapped$/);
+    expect(row.firstElementChild).toHaveTextContent(/^selected$/);
     fireEvent.click(main, { clientX: 600 });
     expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
   });

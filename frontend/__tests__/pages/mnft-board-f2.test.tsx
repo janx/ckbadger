@@ -155,9 +155,14 @@ describe('Mnft board (F2 objects)', () => {
     const header = screen.getByRole('banner');
     expect(within(header).getByText('Centralized mix')).toBeInTheDocument();
     expect(header).toHaveTextContent('Partly off-chain: its content lives on a web server');
-    expect(
-      within(header).getByText(/^Issued by Issuer A .* ago to a UniPass lock/)
-    ).toHaveTextContent('then moved 2 times');
+    expect(within(header).getByText(/^Issued by Issuer A to a UniPass lock/)).toHaveTextContent(
+      'then moved 2 times'
+    );
+    // Lane P: the ages are the sentence's hover, never its text.
+    expect(within(header).getByText(/^Issued by Issuer A/)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^issued .+ ago · last moved .+ ago$/)
+    );
     const props = within(header).getByLabelText('Properties');
     expect([...props.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
       'Token',

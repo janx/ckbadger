@@ -182,6 +182,13 @@ it('appends every sub-name page and only reports the full child count after comp
   expect(screen.getByText('Sub-names · 3')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: 'Show more sub-names' })).not.toBeInTheDocument();
 });
+// C16: a name with no sub-names says so in a line, not under a heading of its own.
+it('states "Sub-names · none" as a line, not a heading', async () => {
+  render(<Page identityId="alice" />);
+  const line = await screen.findByText('Sub-names · none');
+  expect(line.tagName).toBe('P');
+  expect(screen.queryByRole('heading', { name: /^Sub-names/ })).toBeNull();
+});
 it('retains loaded child names when a later page fails and exposes the error', async () => {
   const item = dotcellItem();
   item.children = [{ identityId: '0x' + '81'.repeat(20), name: 'one.alice.cell', label: 'one' }];

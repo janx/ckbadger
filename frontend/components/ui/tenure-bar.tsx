@@ -78,7 +78,10 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
       : label.split(' ')[0].length * CHAR_11 <= room
         ? label.split(' ')[0]
         : null;
-  const nowText = expired ? `expired ${days} days ago` : `now · ${days} days left`;
+  // Lane P: the now mark is dated on the UTC+8 clock; how long ago the term ended (or how long
+  // is left) is its hover — "ago" drifts while the page is read.
+  const nowText = `now · ${formatUtc8Date(now)}`;
+  const nowAge = expired ? `expired ${days} days ago` : `${days} days left`;
   const nowX = x(now),
     nowHalf = (nowText.length * CHAR_11) / 2;
   const nowAnchor = nowX + nowHalf > W - 2 ? 'end' : nowX - nowHalf < 2 ? 'start' : 'middle';
@@ -197,7 +200,15 @@ export function TenureBar({ name, periods, graceEnd, now, note }: TenureBarProps
           className="stroke-text-bright"
           strokeWidth="1.2"
         />
-        <text x={nowX} y="80" textAnchor={nowAnchor} fontSize="11" className="fill-text-bright">
+        <text
+          data-role="tenure-now"
+          x={nowX}
+          y="80"
+          textAnchor={nowAnchor}
+          fontSize="11"
+          className="fill-text-bright"
+        >
+          <title>{nowAge}</title>
           {nowText}
         </text>
       </svg>

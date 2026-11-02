@@ -47,22 +47,25 @@ function DotCellChildren({ item }: { item: DotCellItem }) {
   return (
     <div className="min-w-0 space-y-2">
       {/* The endpoint declares no total, so a count is shown only once the whole list is here. */}
-      <h3 className="text-text-dim text-small font-normal">
-        {hasMore
-          ? 'Sub-names'
-          : children.length
-            ? `Sub-names · ${children.length.toLocaleString('en-US')}`
-            : 'Sub-names · none'}
-      </h3>
-      <ul className="text-small space-y-1">
-        {children.map((child) => (
-          <li key={child.identityId}>
-            <Link href={nameHref(child.identityId)} className="text-emphasis hover:underline">
-              {child.name}
-            </Link>
-          </li>
-        ))}
-      </ul>
+      {children.length === 0 && !hasMore ? (
+        // C16: nothing to list is a line, not a heading over an empty list.
+        <p className="text-text-dim text-small">Sub-names · none</p>
+      ) : (
+        <h3 className="text-text-dim text-small font-normal">
+          {hasMore ? 'Sub-names' : `Sub-names · ${children.length.toLocaleString('en-US')}`}
+        </h3>
+      )}
+      {children.length > 0 && (
+        <ul className="text-small space-y-1">
+          {children.map((child) => (
+            <li key={child.identityId}>
+              <Link href={nameHref(child.identityId)} className="text-emphasis hover:underline">
+                {child.name}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
       {more.isError && (
         <p className="text-negative text-small mt-2">Failed to load more sub-names</p>
       )}

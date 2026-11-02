@@ -228,3 +228,26 @@ it('puts a many-gene gel above the table at full width, a few-gene gel beside it
     'xl:grid-cols-[440px_minmax(0,1fr)]'
   );
 });
+
+// Consistency round C11: the objects table pages with the one pager wording — "Showing a–b of N
+// objects · 20 per page" and "Page x of y" — not its own "N objects, 20 per page" line.
+it('pages the objects with the shared pager wording (C11)', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  vi.mocked(api.getCollectionGallery).mockResolvedValue({
+    ...emptyPage(
+      Array.from({ length: 20 }, (_, i) => ({
+        ...base,
+        sporeId: `0x${(i + 16).toString(16).padStart(2, '0').repeat(32)}`,
+        number: String(i + 1),
+      }))
+    ),
+    total: 1298,
+    hasMore: true,
+    nextCursor: 'older',
+  });
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  await screen.findByRole('table', { name: 'Newest objects' });
+  expect(screen.getByText('Showing 1–20 of 1,298 objects · 20 per page')).toBeInTheDocument();
+  expect(screen.getByText('Page 1 of 65')).toBeInTheDocument();
+  expect(screen.queryByText(/objects, 20 per page/)).toBeNull();
+});

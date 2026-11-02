@@ -591,6 +591,7 @@ function FullAssetFeed({
             totalLabel="transactions"
             pageSize={pageSize}
             page={pages.page}
+            currentCount={current.data.data.length}
             hasMore={current.data.hasMore}
             hasPrevious={pages.hasPrevious}
             onNext={() => pages.goToNext(current.data!.nextCursor)}

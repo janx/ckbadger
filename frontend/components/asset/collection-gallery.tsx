@@ -161,6 +161,7 @@ export function CollectionItems({ id, kind }: CollectionItemsProps) {
             totalLabel="items"
             pageSize={pageSize}
             page={pages.page}
+            currentCount={query.data.data.length}
             hasMore={query.data.hasMore}
             hasPrevious={pages.hasPrevious}
             onNext={() => pages.goToNext(query.data!.nextCursor)}

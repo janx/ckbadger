@@ -9,6 +9,7 @@ import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/c
 import { formatTick, niceCeil, niceTicks } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
+import { usePinWord } from '@/hooks/usePinWord';
 
 /**
  * The DAO page's picture (hierarchy v3, R13; board V63, DAO-11): CKB deposited on every complete
@@ -580,6 +581,7 @@ export function DaoHistoryReading({
   pin: PinnedReadout<number>;
   peak: { date: string; value: string } | null;
 }) {
+  const pinWord = usePinWord();
   const { days, weeks } = series;
   const last = days.length - 1;
   if (last < 0) return null;
@@ -587,12 +589,12 @@ export function DaoHistoryReading({
   const day = days[index];
   const week = weeks.find((w) => w.start <= index && index <= w.end);
   return (
-    // ReadoutRow's own "tapped " prefix would stand on a line of its own before this row of items,
-    // so the row opens with it itself (same word, same ink).
+    // ReadoutRow's own "selected " prefix would stand on a line of its own before this row of
+    // items, so the row opens with it itself (same word, same ink: `usePinWord`, C11).
     <ReadoutRow label="History reading" pinned={false}>
       {/* One row of facts, each its own item: a narrower column wraps between them. */}
       <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
-        {pin.showingPin && <span>tapped </span>}
+        {pin.showingPin && <span>{pinWord} </span>}
         <span className="text-text-bright">{day.date}</span>
         <span>
           {' '}
