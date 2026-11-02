@@ -4,7 +4,12 @@ import Link from '@/components/ui/link';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
+import {
+  ScriptCustodyEvidence,
+  immutableHow,
+  isImmutableClass,
+} from '@/components/scripts/script-code-evidence';
+import { RowTag } from '@/components/ui/row-tag';
 import type {
   ScriptCustodyApi,
   ScriptFamilyDetail,
@@ -39,12 +44,34 @@ export function scriptCodeWord(family: ScriptFamilyDetail): string | null {
   return classes.every((row) => isImmutableClass(row.class)) ? 'immutable' : 'upgradable';
 }
 
+/**
+ * The hero line beside the name: "lock script · upgradable" in dim words; immutable code — the
+ * rarer, stronger fact — is the line's accent, a jade "immutable" row tag with how it is pinned in
+ * its title (lane F follow-up). The name stays the hero's one bright thing.
+ */
 export function ScriptHeading({ family }: { family: ScriptFamilyDetail }) {
   const code = scriptCodeWord(family);
   return (
     <span className="text-text-dim text-body">
       {roleNoun(family.scriptKind)}
-      {code ? ` · ${code}` : ''}
+      {code === 'immutable' ? (
+        <>
+          {' · '}
+          <RowTag
+            variant="accent"
+            title={[
+              'immutable',
+              ...immutableHow((family.codeClasses ?? []).map((row) => row.class)),
+            ].join(' · ')}
+          >
+            immutable
+          </RowTag>
+        </>
+      ) : code ? (
+        ` · ${code}`
+      ) : (
+        ''
+      )}
     </span>
   );
 }

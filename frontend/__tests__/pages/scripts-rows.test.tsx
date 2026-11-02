@@ -226,6 +226,15 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
       'title',
       'immutable · genesis · code cell unspendable · pinned by data hash'
     );
+    // Lane F follow-up: immutable code is the rarer, stronger fact — the cell's one accent, a jade
+    // row tag (was dim text like "upgradable"); upgradable stays dim text with no tag.
+    const immutable = within(code('Default Lock')).getByText('immutable');
+    expect(immutable).toHaveAttribute('data-row-tag', 'accent');
+    expect(immutable).toHaveClass('text-jade');
+    expect(code('JoyID').querySelector('[data-row-tag]')).toBeNull();
+    expect(code('.bit Lock').querySelector('[data-row-tag]')).toBeNull();
+    // T5 still holds: the name is the row's one bright thing; the tag is an accent, not bright.
+    expect(rowOf(t, 'Default Lock').querySelectorAll('.text-text-bright')).toHaveLength(1);
     expect(code('AlwaysSuccess')).toHaveTextContent(/^code evidence unavailable$/);
   });
 

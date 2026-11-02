@@ -175,7 +175,9 @@ describe('Scripts list against the Scripts board', () => {
     const mark = within(table).getByText('deprecated');
     expect(mark.className).not.toMatch(/negative|rouge/);
     expect(mark).toHaveAttribute('data-row-tag', 'ghost');
-    expect(mark).toHaveClass('text-[#4b5266]', 'border-dashed');
+    // Lane F follow-up: legible — the dashed border in the readable dim ink (was text-[#4b5266]).
+    expect(mark).toHaveClass('text-text-dim', 'border-dashed');
+    expect(mark.className).not.toMatch(/#4b5266/);
   });
 
   it('uses underline role tabs and one "sorted by" control in board words (SC-L8)', async () => {
@@ -455,11 +457,18 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     render(<ScriptsPage />);
     await screen.findByRole('table', { name: 'Scripts' });
     await screen.findByRole('list', { name: 'Who can change the code, in shares' });
-    const coloured = [...tier1().querySelectorAll('[class]')].filter((el) =>
-      el
-        .getAttribute('class')!
-        .split(/\s+/)
-        .some((c) => COLOURED_TEXT.test(c))
+    // Lane F follow-up: immutable code is the Code cell's accent row tag (jade), the class mark the
+    // script page already allows ("live · current"); every other text in tier 1 stays ink.
+    const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
+    expect(accents.length).toBeGreaterThan(0);
+    expect(new Set(accents.map((el) => el.textContent))).toEqual(new Set(['immutable']));
+    const coloured = [...tier1().querySelectorAll('[class]')].filter(
+      (el) =>
+        !el.matches('[data-row-tag="accent"]') &&
+        el
+          .getAttribute('class')!
+          .split(/\s+/)
+          .some((c) => COLOURED_TEXT.test(c))
     );
     expect(coloured.map((el) => el.outerHTML.slice(0, 80))).toEqual([]);
   });
@@ -504,7 +513,13 @@ describe('Scripts list phone row (board L6)', () => {
     ]);
     // Never clamped (C#12): the whole sentence, no line clamp anywhere in the row.
     expect(rows[0].querySelector('[class*="line-clamp"]')).toBeNull();
-    expect(phoneLines(rows[1])[1].left).toMatch(/^lock·Immutable· genesis · code cell unspendable/);
+    // Lane F follow-up: immutable is the line's accent tag, lower-case as in the table (was the
+    // dim word "Immutable"); upgradable is plain text, no longer the bright one beside the name.
+    expect(phoneLines(rows[1])[1].left).toMatch(/^lock·immutable· genesis · code cell unspendable/);
+    expect(within(rows[1]).getByText('immutable')).toHaveAttribute('data-row-tag', 'accent');
+    expect(within(rows[0]).getByText('Upgradable · 5 versions')).not.toHaveClass(
+      'text-text-bright'
+    );
     expect(rows[2]).toHaveTextContent('Godwoken Custodian Lockdeprecated');
   });
 

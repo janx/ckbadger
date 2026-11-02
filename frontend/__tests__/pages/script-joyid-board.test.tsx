@@ -77,6 +77,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
       'Scripts / Locks'
     );
     expect(screen.getByText('lock script · upgradable')).toBeInTheDocument();
+    // Lane F follow-up: upgradable code stays dim words; only immutable code carries the accent tag.
+    expect(screen.getByText('lock script · upgradable').querySelector('[data-row-tag]')).toBeNull();
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
     const summary = within(tier2).getByTestId('script-summary').textContent!;
     expect(summary).toContain(
