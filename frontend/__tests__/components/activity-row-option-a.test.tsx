@@ -249,7 +249,8 @@ describe('option A: every participant, one line each (D1)', () => {
     // A party with no registered lock has no tag, and its zero is still its fact.
     const zero = lines(container).find((l) => l.textContent?.includes('w8xxul')) as HTMLElement;
     expect(zero.querySelector('[data-role="lock-kind"]')).toBeNull();
-    expect(zero.querySelector('[data-ckb-amount]')).toHaveTextContent('0.00000000 CKB');
+    // Consistency plan C4: a ghost "0 CKB" (was "0.00000000 CKB").
+    expect(zero.querySelector('[data-ckb-amount]')).toHaveTextContent(/^0 CKB$/);
   });
 
   it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind as a tag', () => {

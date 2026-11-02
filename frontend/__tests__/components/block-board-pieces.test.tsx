@@ -203,7 +203,8 @@ describe('BlockTransactionsTable', () => {
     const [row] = screen.getAllByTestId('block-tx-row-mobile');
     expect(phoneLines(row).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '10x111111...111111', '0.00000100 CKB'],
-      ['figures', 'proposed in #5 +2 · fee 0.00000000 CKB', '1 → 1 cells · 300 B · 1,000 cycles'],
+      // Consistency plan C4: a zero fee is "0 CKB" (was "0.00000000 CKB").
+      ['figures', 'proposed in #5 +2 · fee 0 CKB', '1 → 1 cells · 300 B · 1,000 cycles'],
     ]);
   });
 });

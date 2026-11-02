@@ -106,7 +106,11 @@ it('shows consumed capacity as exact zero and retains its final historical cell'
     'title',
     'melted, in Spore’s words'
   );
-  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0.00000000');
+  // Consistency plan C4: the zero is "0 CKB" (was "0.00000000").
+  expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent('0 CKB');
+  expect(screen.getByLabelText(`Object ${id} capacity partition`)).not.toHaveTextContent(
+    '0.00000000'
+  );
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
 });
 it('fails with item context when capacity violates the occupied invariant', async () => {

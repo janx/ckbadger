@@ -849,7 +849,9 @@ export function activityHeadline(activity: ActivityBody): string {
 
 /**
  * Exact CKB, all 8 decimals: integer, the significant decimals, then the trailing zeros ghosted,
- * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign.
+ * so right-aligned amounts line up on the decimal point. `tone="sign"` colours by sign. Zero is
+ * "0 CKB" with the 0 ghosted and no fraction, for every caller (consistency plan C4): nothing
+ * moved, so there are no decimals to read.
  */
 export function ExactCkb({
   shannons,
@@ -866,6 +868,16 @@ export function ExactCkb({
   /** F2 blocks: false when a column header already names the unit ("Reward, CKB", BA-46). */
   unit?: boolean;
 }) {
+  const unitEl = unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>;
+  if (shannons === BigInt(0))
+    return (
+      <span data-ckb-amount className="whitespace-nowrap tabular-nums">
+        <span data-ghost className="text-text-ghost">
+          0
+        </span>
+        {unitEl}
+      </span>
+    );
   const parts = splitCkbAmount(shannons);
   const color =
     tone === 'plain'
@@ -895,7 +907,7 @@ export function ExactCkb({
           {parts.ghost}
         </span>
       </span>
-      {unit && <span className="text-text-dim text-meta whitespace-pre"> CKB</span>}
+      {unitEl}
     </span>
   );
 }

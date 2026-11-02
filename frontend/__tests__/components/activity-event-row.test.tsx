@@ -706,7 +706,7 @@ describe('ExactCkb', () => {
     expect(amount?.children[1]).toHaveClass('whitespace-nowrap');
     expect(amount?.children[1]).toHaveTextContent('.09551615');
   });
-  it('keeps all 8 decimals, ghosting the trailing zeros, coloured by sign', () => {
+  it('keeps all 8 decimals, ghosting the trailing zeros, coloured by sign; zero is a ghost 0', () => {
     const { container } = render(
       <>
         <ExactCkb shannons={BigInt(-30000)} />
@@ -721,8 +721,35 @@ describe('ExactCkb', () => {
     expect(whole).toHaveTextContent('+750.00000000 CKB');
     expect(whole).toHaveClass('text-positive');
     expect(whole.querySelector('[data-ghost]')).toHaveTextContent(/^\.00000000$/);
-    expect(zero).toHaveTextContent(/^0\.00000000 CKB$/);
-    expect(zero).toHaveClass('text-text');
+    // Consistency plan C4 (old: "0.00000000 CKB" in text-text): zero is "0 CKB", the 0 ghosted.
+    expect(zero).toHaveTextContent(/^0 CKB$/);
+    expect(zero.querySelector('[data-ghost]')).toHaveTextContent(/^0$/);
+    expect(zero.querySelector('[data-ghost]')).toHaveClass('text-text-ghost');
+  });
+
+  it('states zero as a ghost "0 CKB" with no fraction for every caller (C4)', () => {
+    const { container } = render(
+      <>
+        <ExactCkb shannons={BigInt(0)} />
+        <ExactCkb shannons={BigInt(0)} signed={false} tone="plain" wrap />
+        <ExactCkb shannons={BigInt(0)} unit={false} />
+      </>
+    );
+    const [feed, plain, bare] = [...container.querySelectorAll('[data-ckb-amount]')];
+    expect(feed).toHaveTextContent(/^0 CKB$/);
+    expect(plain).toHaveTextContent(/^0 CKB$/);
+    expect(bare).toHaveTextContent(/^0$/);
+    for (const amount of [feed, plain, bare]) {
+      expect(amount.textContent).not.toContain('.');
+      expect(amount.textContent).not.toMatch(/[+−]/);
+      const digits = amount.querySelector('[data-ghost]');
+      expect(digits).toHaveTextContent(/^0$/);
+      expect(digits).toHaveClass('text-text-ghost');
+    }
+    // The unit as today: dim, meta, after a space.
+    const unit = feed.lastElementChild;
+    expect(unit).toHaveTextContent(/^CKB$/);
+    expect(unit).toHaveClass('text-text-dim', 'text-meta');
   });
 });
 

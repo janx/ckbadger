@@ -252,7 +252,8 @@ describe('TransactionListTable phone row (board L2)', () => {
       {
         key: 'figures',
         tone: 'quiet',
-        left: '0.00000000 CKB · fee 0.00030000 CKB',
+        // Consistency plan C4: a zero value is "0 CKB" (was "0.00000000 CKB").
+        left: '0 CKB · fee 0.00030000 CKB',
         right: '3 → 3 cells · 903 B · 1,704,957 cycles',
       },
     ]);
@@ -261,7 +262,7 @@ describe('TransactionListTable phone row (board L2)', () => {
     expect(phoneLines(base).map((l) => [l.key, l.left, l.right])).toEqual([
       ['identity', '0xc89d2d25...9a2cd7', expect.stringMatching(/^#20,829,775 · /)],
       ['what', 'Cellbase pays #20,829,764 · reward 559.61739927 CKB', null],
-      ['figures', '0 → 1 cells · 360 B · fee 0.00000000 CKB', '0 cycles'],
+      ['figures', '0 → 1 cells · 360 B · fee 0 CKB', '0 cycles'],
     ]);
     expect(base.closest('[role="listitem"]')).toHaveClass('opacity-[.55]');
   });
@@ -274,7 +275,7 @@ describe('TransactionListTable phone row (board L2)', () => {
       ['identity', '0x00de304b...25cbbc', expect.stringMatching(/^#20,829,775 · /)],
       [
         'what',
-        'Script call · .bit Time Index State · .bit Time Info · 0.00000000 CKB · fee 0.00030000 CKB',
+        'Script call · .bit Time Index State · .bit Time Info · 0 CKB · fee 0.00030000 CKB',
         '3 → 3 cells · 903 B · 1,704,957 cycles',
       ],
     ]);
