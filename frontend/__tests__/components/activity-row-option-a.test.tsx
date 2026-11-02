@@ -311,3 +311,85 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(article).not.toHaveClass('py-3');
   });
 });
+
+// Lane F follow-up (2026-11-03): a dCKB batch withdraw carries ~50 DAO withdraw requests, one per
+// deposit; the head ran on for 20 lines ("DAO Withdraw Request · 5,000 CKB · deposited at #… · DAO
+// Withdraw Request · …"). Protocol lines fold as call runs do: over PARTICIPANT_LIMIT the first five
+// and "+N more" that opens the rest in place; when every line is the same action, the head names
+// it once with the count. Nothing is dropped: every line is reachable by the expand.
+describe('option A: a long run of protocol actions folds', () => {
+  const withdraw = (n: number) => ({
+    protocol: 'dao',
+    protocolName: 'Nervos DAO',
+    action: 'withdraw_request',
+    metadata: { capacity: `${(n + 1) * 100}00000000`, depositBlock: String(6_000_000 + n) },
+  });
+  const deposit = (n: number) => ({
+    protocol: 'dao',
+    protocolName: 'Nervos DAO',
+    action: 'deposit',
+    metadata: { capacity: `${(n + 1) * 1000}00000000` },
+  });
+  const batch = row([party('r43nr7', { ckbDelta: '-1000' })], {
+    protocolActions: Array.from({ length: 51 }, (_, n) => withdraw(n)),
+  });
+  const detailsText = (c: HTMLElement) =>
+    [...head(c).querySelectorAll('[data-role="detail"]')].map((d) => d.textContent).join(' | ');
+
+  it('names one repeated action once with its count, shows five, and folds the rest', () => {
+    const { container } = render(<ActivityRow activity={batch} />);
+    const line = head(container);
+    // The label once: the headline. No line repeats it.
+    expect(line.textContent!.match(/DAO Withdraw Request/g)).toHaveLength(1);
+    const details = [...line.querySelectorAll('[data-role="detail"]')];
+    expect(details[0]).toHaveTextContent(/^51 deposits$/);
+    expect(details).toHaveLength(1 + 5);
+    expect(details[1]).toHaveTextContent('100.00000000 CKB · deposited at #6,000,000');
+    expect(details[5]).toHaveTextContent('deposited at #6,000,004');
+    expect(line).not.toHaveTextContent('#6,000,005');
+    const more = within(line).getByRole('button', { name: '+46 more deposits' });
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(more);
+    // Every line is reachable: all 51 deposit blocks, still without the repeated label.
+    for (let n = 0; n < 51; n++)
+      expect(line).toHaveTextContent(`deposited at #${(6_000_000 + n).toLocaleString('en-US')}`);
+    expect(line.textContent!.match(/DAO Withdraw Request/g)).toHaveLength(1);
+    expect(within(line).queryByRole('button')).toBeNull();
+    expect(detailsText(container)).toMatch(/^51 deposits \| /);
+  });
+
+  it('folds a mixed run over the limit after five lines, each still naming its action', () => {
+    const mixed = row([party('r43nr7')], {
+      protocolActions: [
+        withdraw(0),
+        withdraw(1),
+        withdraw(2),
+        deposit(0),
+        deposit(1),
+        deposit(2),
+        deposit(3),
+      ],
+    });
+    const { container } = render(<ActivityRow activity={mixed} />);
+    const line = head(container);
+    const details = [...line.querySelectorAll('[data-role="detail"]')].map((d) => d.textContent);
+    expect(details).toHaveLength(5);
+    expect(details[0]).toBe('100.00000000 CKB · deposited at #6,000,000');
+    expect(details[1]).toBe('DAO Withdraw Request · 200.00000000 CKB · deposited at #6,000,001');
+    expect(details[3]).toBe('DAO Deposit · 1,000.00000000 CKB locked');
+    fireEvent.click(within(line).getByRole('button', { name: '+2 more actions' }));
+    expect(line.querySelectorAll('[data-role="detail"]')).toHaveLength(7);
+    expect(line).toHaveTextContent('DAO Deposit · 4,000.00000000 CKB locked');
+  });
+
+  it('reads as before for one to three actions: no count, no fold', () => {
+    const three = row([party('r43nr7')], {
+      protocolActions: [withdraw(0), withdraw(1), withdraw(2)],
+    });
+    const { container } = render(<ActivityRow activity={three} />);
+    expect(detailsText(container)).toBe(
+      '100.00000000 CKB · deposited at #6,000,000 | DAO Withdraw Request · 200.00000000 CKB · deposited at #6,000,001 | DAO Withdraw Request · 300.00000000 CKB · deposited at #6,000,002'
+    );
+    expect(within(head(container)).queryByRole('button')).toBeNull();
+  });
+});
