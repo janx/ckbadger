@@ -738,12 +738,15 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
-      ).toHaveTextContent('+200.00000000 CKB compensation')
+      ).toHaveTextContent(/^\+200\.00000000 CKB$/)
     );
-    // R2b-a 43: the calculator says which free capacity it assumed (board: "its 9,898 free CKB").
+    // Board v3: one line, the owed amount white (R11: the figure is the page's one gold text).
     expect(reading).toHaveTextContent(
-      '10,000 CKB deposited on 2019-11-16 is owed +200.00000000 CKB compensation · 2.0000% on its 9,898 free CKB, by #5'
+      '10,000 CKB deposited 2019-11-16 → +200.00000000 CKB compensation by #5tap or hover'
     );
+    expect(
+      within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
+    ).toHaveClass('text-text-bright');
     // One compensation path: the API's calculator, the day's closing block → the evidence tip.
     expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 1, 5);
     expect(grows()).not.toHaveTextContent(/interest|earned/i);
@@ -759,42 +762,65 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     expect(chart).toHaveTextContent('2019-11-19');
     fireEvent.keyDown(chart, { key: 'ArrowLeft' });
     const reading = within(grows()).getByLabelText('Deposit reading');
-    expect(reading).toHaveTextContent('10,000 CKB deposited on 2019-11-18');
-    expect(reading).toHaveTextContent('0.9901% on its');
+    expect(reading).toHaveTextContent('10,000 CKB deposited 2019-11-18 →');
     await waitFor(() =>
       expect(
         within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
-      ).toHaveTextContent('+98.01980198 CKB compensation')
+      ).toHaveTextContent(/^\+98\.01980198 CKB$/)
     );
     expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 3, 5);
     const years = within(grows()).getByRole('img', {
       name: 'Compensation on free capacity in each year since launch',
     });
     // Anniversary to anniversary only: the year in progress (to the tip) is not a bar.
-    expect(years.querySelectorAll('[data-year]')).toHaveLength(1);
-    expect(years).toHaveTextContent('1.00%from 1970-01');
-    // Evidence first (D4): the chart, its reading and the year bars, then ONE caption at the bottom.
+    const bars = years.querySelectorAll('[data-year]');
+    expect(bars).toHaveLength(1);
+    // Each bar carries its share above it (small) in 72 px; one axis line names the years under it.
+    expect(years).toHaveClass('h-[72px]');
+    expect(bars[0]).toHaveTextContent(/^1\.00%$/);
+    expect(bars[0].querySelector('span')).toHaveClass('text-small');
+    expect(bars[0]).toHaveAttribute('title', 'from 1970-01-01: 1.00%');
+    const axis = years.nextElementSibling!;
+    expect(axis).toHaveTextContent('compensation in each year since launch · 1970-01 →→ 1970-01');
+    expect(axis).toHaveClass('text-meta');
+    // Evidence first (D4): the chart, its reading and the year bars, then ONE caption at the bottom,
+    // one line inside 640 px.
     const caption = within(grows()).getByText(
-      'A deposit grows by AR at its withdrawal request ÷ AR at its deposit, on the capacity it does not occupy. The curve flattens as more CKB exists.'
+      'A deposit grows by AR at its withdrawal request ÷ AR at its deposit.'
     );
     expect(chart.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(years.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(caption).toHaveClass('text-body');
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
     expect(grows().lastElementChild).toBe(caption);
   });
 
-  it('notes AR at the tip and its growth since genesis beside the heading (D4)', () => {
+  it("names AR inside its 200 px plot and writes the tip AR at the line's end, no note beside the heading (V3)", async () => {
+    stubChartWidth(600);
     stubCalculator();
     const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const chart = await within(grows()).findByRole('img', { name: /^AR by date/ });
+    expect(chart).toHaveAttribute('height', '200');
+    expect(chart.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      'AR, the accumulated rate · 1.0 at genesis'
+    );
+    // the tip AR cut (not rounded) to four places
+    expect(chart.querySelector('[data-role="end-label"]')).toHaveTextContent(/^1\.0150$/);
+    expect(grows().querySelector('figcaption')).toBeNull();
     const heading = within(grows()).getByRole('heading', { level: 2 });
     expect(heading).toHaveTextContent('How a deposit grows');
-    expect(heading.parentElement).toHaveTextContent(
-      'How a deposit growsAR 1.0200 at the tip · +2.0000% since genesis'
+    // The heading stands alone: no note beside it.
+    expect(heading.parentElement).toBe(grows());
+    expect(grows()).not.toHaveTextContent(/at the tip/);
+    // The opening paragraph and the rest of the caption read in the evidence.
+    expect(grows()).not.toHaveTextContent(/growth index|since genesis/);
+    const tier2 = container.querySelector('[data-tier="2"]');
+    expect(tier2).toHaveTextContent("AR, in every block header, is the DAO's growth index.");
+    expect(tier2).toHaveTextContent(
+      'A deposit grows on the capacity it does not occupy; the curve flattens as more CKB exists.'
     );
-    // The opening paragraph left tier 1: what AR is now reads in the evidence.
-    expect(grows()).not.toHaveTextContent(/growth index/);
-    expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
-      "AR, in every block header, is the DAO's growth index."
+    expect(tier2).toHaveTextContent(
+      "The deposit reading under “How a deposit grows” is the API calculator's for 10,000 CKB in a standard deposit cell: compensation accrues on its free capacity, the CKB the cell does not occupy."
     );
   });
 
@@ -810,14 +836,14 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // a touch tap on the last day (the plot ends at 590 of 600 px): the pointer leaves first
     fireEvent.pointerLeave(chart);
     fireEvent.click(chart, { clientX: 590 });
-    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited on 2019-11-19 is owed/);
+    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited 2019-11-19 →/);
     await waitFor(() =>
       expect(api.calculateDaoCompensation).toHaveBeenCalledWith('1000000000000', 4, 5)
     );
     fireEvent.pointerLeave(chart);
-    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited on 2019-11-19/);
+    expect(reading).toHaveTextContent(/^tapped 10,000 CKB deposited 2019-11-19/);
     fireEvent.click(chart, { clientX: 590 });
-    expect(reading).toHaveTextContent(/^10,000 CKB deposited on 2019-11-16 is owed/);
+    expect(reading).toHaveTextContent(/^10,000 CKB deposited 2019-11-16 →/);
   });
 
   it('refuses a daily AR series with a missing day', async () => {
@@ -1081,7 +1107,8 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
     const chart = await within(
       screen.getByRole('region', { name: 'How a deposit grows' })
     ).findByRole('img', { name: /^AR by date/ });
-    const ticks = Array.from(chart.querySelectorAll('text[text-anchor="end"]')).map((t) =>
+    // Round values inside the plot (hierarchy v3), not in a gutter.
+    const ticks = Array.from(chart.querySelectorAll('[data-role="y-tick"]')).map((t) =>
       t.textContent!.trim()
     );
     expect(ticks[0]).not.toBe('0');

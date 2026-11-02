@@ -359,3 +359,65 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(container.querySelector('[data-hover-reading]')).toHaveTextContent('3 CKB');
   });
 });
+
+// Hierarchy v3 (DAO page, R13): a chart named inside its plot, with its round values inside the
+// plot and its latest value at the line's end — no caption, no axis column. All opt-in.
+describe('Chart named inside its plot (hierarchy v3)', () => {
+  beforeEach(() => stubChartWidth(600));
+  afterEach(() => vi.restoreAllMocks());
+  const ar = ['1.0000', '1.0050', '1.0100', '1.0150'].map((v, i) => ({
+    label: `2019-11-1${6 + i}`,
+    values: { ar: v },
+  }));
+  const props = {
+    title: 'AR by date',
+    subtitle: 'AR at the close of every complete day',
+    data: ar,
+    series: [{ key: 'ar', label: 'AR', assetClass: 'dao' as const }],
+    unit: '',
+    kind: 'line' as const,
+    height: 200,
+    formatValue: (v: string) => v,
+  };
+
+  it('writes the name inside the plot instead of a caption', () => {
+    const { container } = render(<Chart {...props} plotName="AR, the accumulated rate" />);
+    expect(container.querySelector('figcaption')).toBeNull();
+    const name = container.querySelector('svg [data-role="chart-name"]')!;
+    expect(name).toHaveTextContent('AR, the accumulated rate');
+    expect(name).toHaveAttribute('font-size', '11');
+    // The accessible name still carries the title.
+    expect(screen.getByRole('img', { name: /^AR by date/ })).toBeInTheDocument();
+  });
+
+  it('draws the round values inside the plot from its left edge, not in a gutter', () => {
+    const { container } = render(<Chart {...props} plotName="AR" insideYTicks />);
+    const ticks = Array.from(container.querySelectorAll('svg [data-role="y-tick"]'));
+    // 1.000 … 1.015 in steps of 0.005: the lowest is the baseline and 1.015 the name's band.
+    expect(ticks.map((t) => t.textContent!.trim())).toEqual(['1.005', '1.010']);
+    for (const t of ticks) {
+      expect(t).toHaveAttribute('x', '8');
+      expect(t).not.toHaveAttribute('text-anchor', 'end');
+    }
+    // the line starts at the plot's left edge (no gutter)
+    const line = container.querySelector('svg path[fill="none"]')!.getAttribute('d')!;
+    expect(line.startsWith('M0,')).toBe(true);
+  });
+
+  it("writes the latest value at the line's end", () => {
+    const { container } = render(
+      <Chart {...props} plotName="AR" endLabel={(v) => v.slice(0, 5)} />
+    );
+    const end = container.querySelector('svg [data-role="end-label"]')!;
+    expect(end).toHaveTextContent('1.015');
+    expect(end).toHaveAttribute('text-anchor', 'end');
+  });
+
+  it('keeps the caption and the gutter when none of these is asked for', () => {
+    const { container } = render(<Chart {...props} />);
+    expect(container.querySelector('figcaption')).not.toBeNull();
+    expect(container.querySelector('svg [data-role="chart-name"]')).toBeNull();
+    expect(container.querySelector('svg [data-role="end-label"]')).toBeNull();
+    expect(container.querySelectorAll('svg text[text-anchor="end"]').length).toBeGreaterThan(1);
+  });
+});
