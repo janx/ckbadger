@@ -176,3 +176,82 @@ describe('ListTable measures its container (R1, R7)', () => {
     >();
   });
 });
+
+describe('ListTable row density and row title (table-rows plan T2, lane R1)', () => {
+  const cellsOf = (t: HTMLElement) => Array.from(t.querySelectorAll('tbody td')) as HTMLElement[];
+  const headsOf = (t: HTMLElement) => Array.from(t.querySelectorAll('thead th')) as HTMLElement[];
+
+  it('keeps the default cells: 12 px padding, top-aligned (the old contract, unchanged)', () => {
+    stubChartWidth(608);
+    render(table());
+    const t = screen.getByRole('table', { name: 'Holdings' });
+    for (const td of cellsOf(t)) {
+      expect(td).toHaveClass('min-w-0', 'py-3', 'pr-4', 'align-top', 'last:pr-0');
+      expect(td).not.toHaveClass('py-[11px]', 'align-middle');
+    }
+  });
+
+  it('draws one-line rows with density="row": 11 px padding, middle-aligned, heads unchanged', () => {
+    stubChartWidth(608);
+    render(table({ density: 'row' }));
+    const t = screen.getByRole('table', { name: 'Holdings' });
+    // 11 + one 18 px line + 11 = a 40 px row (T2).
+    for (const td of cellsOf(t)) {
+      expect(td).toHaveClass('min-w-0', 'py-[11px]', 'pr-4', 'align-middle', 'last:pr-0');
+      expect(td).not.toHaveClass('py-3', 'align-top');
+    }
+    // Column kinds keep their own classes.
+    expect(within(t).getByRole('cell', { name: '12.5' })).toHaveClass('text-right', 'tabular-nums');
+    // th is the same in both densities.
+    const plain = headsOf(t).map((th) => th.className);
+    expect(plain.every((c) => c.includes('py-3'))).toBe(true);
+  });
+
+  it('gives the narrower table the same density', () => {
+    stubChartWidth(300);
+    render(table({ narrowColumns: NARROW, density: 'row' }));
+    const t = screen.getByRole('table', { name: 'Holdings' });
+    for (const td of cellsOf(t)) expect(td).toHaveClass('py-[11px]', 'align-middle');
+  });
+
+  it('writes rowTitle to each <tr>, so fields that left the row stay on its hover', () => {
+    stubChartWidth(608);
+    render(table({ rowTitle: (r) => `${r.name} · ${r.amount} exact` }));
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(rows.map((r) => r.getAttribute('title'))).toEqual([
+      'Token · 12.5 exact',
+      'Coin · 7 exact',
+    ]);
+  });
+
+  it('writes rowTitle to each phone listitem too', () => {
+    stubChartWidth(358);
+    render(table({ rowTitle: (r) => `${r.name} · ${r.amount} exact` }));
+    const items = within(screen.getByRole('list', { name: 'Holdings, compact' })).getAllByRole(
+      'listitem'
+    );
+    expect(items.map((i) => i.getAttribute('title'))).toEqual([
+      'Token · 12.5 exact',
+      'Coin · 7 exact',
+    ]);
+  });
+
+  it('writes no title without rowTitle', () => {
+    stubChartWidth(608);
+    const { unmount } = render(table());
+    for (const r of within(screen.getByRole('table')).getAllByRole('row'))
+      expect(r).not.toHaveAttribute('title');
+    unmount();
+    vi.restoreAllMocks();
+    stubChartWidth(358);
+    render(table());
+    for (const i of screen.getAllByRole('listitem')) expect(i).not.toHaveAttribute('title');
+  });
+
+  it('refuses an empty row title: a field moved to the hover must not vanish', () => {
+    stubChartWidth(608);
+    expect(() => render(table({ rowTitle: (r) => (r.name === 'Coin' ? ' ' : r.name) }))).toThrow(
+      'Holdings: row Coin has an empty title'
+    );
+  });
+});
