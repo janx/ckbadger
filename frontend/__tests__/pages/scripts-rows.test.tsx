@@ -162,6 +162,13 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     expect(heads).toEqual(['Script', 'Code', 'Live cells', 'CKB in its cells', 'Occupied']);
   });
 
+  it('heads its columns at 11 px (T5)', async () => {
+    render(<ScriptsPage />);
+    const t = await table();
+    for (const [i, h] of within(t).getAllByRole('columnheader').entries())
+      if (i !== 3) expect(h.firstElementChild).toHaveClass('text-meta');
+  });
+
   it('is one 40 px line a row: row density, every cell centred (T1, T2)', async () => {
     render(<ScriptsPage />);
     const t = await table();

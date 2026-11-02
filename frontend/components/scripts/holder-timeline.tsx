@@ -247,7 +247,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
                 backgroundColor: current ? CURRENT_FILL : PAST_FILL[i % 2],
               }}
             >
-              {segmentLabel(holder, current, px)}
+              <span className="truncate">{segmentLabel(holder, current, px)}</span>
             </button>
           );
         })}

@@ -77,6 +77,9 @@ describe('HolderTimeline (table-rows L1-3)', () => {
     // 7 % of the bar: the lock args only, or nothing; never the long name cut off.
     expect(['0x07a2…68ca', '']).toContain(second.textContent);
     expect(current).toHaveTextContent(/^multisig 0x6598…d696 · holds the code now$/);
+    // The words are their own box inside the segment, cut with an ellipsis if they ever overrun.
+    expect(first.firstElementChild).toHaveClass('truncate');
+    expect(first.firstElementChild).toHaveTextContent(/^multisig 0xd1db…b95c · 3 of 5 signatures$/);
   });
 
   it('gives way to shorter names on a phone, the title keeping the whole', () => {

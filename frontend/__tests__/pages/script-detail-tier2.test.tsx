@@ -77,6 +77,9 @@ describe('Script page · Its cells and tier 2 (table-rows L1-5)', () => {
     expect(key).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
     expect(row).toHaveClass('text-text');
     expect(row.querySelectorAll('.text-text-bright')).toHaveLength(1);
+    // T5: column heads at 11 px.
+    for (const h of within(table).getAllByRole('columnheader'))
+      expect(h.firstElementChild).toHaveClass('text-meta');
   });
 
   it('keeps tier 2 to the two board blocks: one paragraph and the script facts', async () => {

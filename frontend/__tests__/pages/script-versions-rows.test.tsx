@@ -78,6 +78,9 @@ describe('Code versions rows (table-rows L1-4)', () => {
         .map((h) => h.textContent)
     ).toEqual(['Version', 'Deployed', 'Block', 'Code cell', 'Held by', 'Status', 'Live cells']);
     expect(rows.map((row) => cells(row)[0].textContent)).toEqual(['v5', 'v4', 'v3', 'v2', 'v1']);
+    // T5: column heads at 11 px.
+    for (const h of within(table).getAllByRole('columnheader'))
+      expect(h.firstElementChild).toHaveClass('text-meta');
     for (const td of cells(rows[0])) {
       expect(td).toHaveClass('py-[9px]', 'align-middle');
       expect(td.querySelector('.block, br')).toBeNull();

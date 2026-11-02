@@ -274,6 +274,11 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
   );
 }
 
+/** A column head at 11 px (T5). */
+function Head({ label }: { label: string }) {
+  return <span className="text-meta">{label}</span>;
+}
+
 /** A tier-1 section (hierarchy R6): h2 at section size, 18 px above its evidence. */
 function Section({
   title,
@@ -462,6 +467,7 @@ export function ScriptFamilyPage({
     {
       key: 'version',
       label: 'Version',
+      header: <Head label="Version" />,
       minWidth: 64,
       className: ROW,
       render: (row) => {
@@ -482,6 +488,7 @@ export function ScriptFamilyPage({
     {
       key: 'deployed',
       label: 'Deployed',
+      header: <Head label="Deployed" />,
       minWidth: 110,
       className: ROW,
       render: (row) => {
@@ -496,6 +503,7 @@ export function ScriptFamilyPage({
     {
       key: 'block',
       label: 'Block',
+      header: <Head label="Block" />,
       minWidth: 120,
       numeric: true,
       className: ROW,
@@ -513,6 +521,7 @@ export function ScriptFamilyPage({
     {
       key: 'cell',
       label: 'Code cell',
+      header: <Head label="Code cell" />,
       minWidth: 160,
       width: '22%',
       className: ROW,
@@ -535,6 +544,7 @@ export function ScriptFamilyPage({
     {
       key: 'held',
       label: 'Held by',
+      header: <Head label="Held by" />,
       minWidth: 190,
       // The column that takes the free width.
       width: 'auto',
@@ -551,6 +561,7 @@ export function ScriptFamilyPage({
     {
       key: 'status',
       label: 'Status',
+      header: <Head label="Status" />,
       minWidth: 200,
       width: '18%',
       className: `${ROW} truncate`,
@@ -564,6 +575,7 @@ export function ScriptFamilyPage({
     {
       key: 'usage',
       label: 'Live cells',
+      header: <Head label="Live cells" />,
       minWidth: 100,
       numeric: true,
       className: ROW,
@@ -875,6 +887,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'cell',
                       label: 'Cell',
+                      header: <Head label="Cell" />,
                       minWidth: 160,
                       width: '15%',
                       render: (cell) => (
@@ -889,6 +902,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'owner',
                       label: 'Owner',
+                      header: <Head label="Owner" />,
                       minWidth: 170,
                       width: '16%',
                       render: (cell) => <CellOwner cell={cell} />,
@@ -896,6 +910,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'type',
                       label: 'Also guarded by',
+                      header: <Head label="Also guarded by" />,
                       minWidth: 140,
                       width: '13%',
                       render: (cell) => <AlsoGuardedBy cell={cell} />,
@@ -903,6 +918,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'anatomy',
                       label: 'What it holds',
+                      header: <Head label="What it holds" />,
                       minWidth: 150,
                       width: '14%',
                       render: (cell) => <CellAnatomy cell={cell} />,
@@ -910,6 +926,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'capacity',
                       label: 'Capacity',
+                      header: <Head label="Capacity" />,
                       minWidth: 180,
                       width: '17%',
                       numeric: true,
@@ -920,6 +937,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'occupied',
                       label: 'Occupied',
+                      header: <Head label="Occupied" />,
                       minWidth: 90,
                       width: '9%',
                       numeric: true,
@@ -928,6 +946,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'created',
                       label: 'Created',
+                      header: <Head label="Created" />,
                       minWidth: 170,
                       width: '16%',
                       numeric: true,

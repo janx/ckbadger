@@ -277,6 +277,11 @@ function CkbTwoDp({ shannons }: { shannons: bigint }) {
   );
 }
 
+/** A column head at 11 px (T5). */
+function Head({ label }: { label: string }) {
+  return <span className="text-meta">{label}</span>;
+}
+
 /** The bar column's track (px): every row and the header ticks share it. */
 const CKB_TRACK = 240;
 /**
@@ -446,6 +451,7 @@ export default function ScriptsPage() {
     {
       key: 'script',
       label: 'Script',
+      header: <Head label="Script" />,
       minWidth: 220,
       width: 'auto',
       render: (s) => <ScriptName script={s} />,
@@ -453,12 +459,14 @@ export default function ScriptsPage() {
     {
       key: 'code',
       label: 'Code',
+      header: <Head label="Code" />,
       minWidth: 220,
       render: (s) => <ScriptCodeClass script={s} />,
     },
     {
       key: 'cells',
       label: 'Live cells',
+      header: <Head label="Live cells" />,
       minWidth: 110,
       numeric: true,
       render: (s) => (
@@ -505,6 +513,7 @@ export default function ScriptsPage() {
     {
       key: 'occupied',
       label: 'Occupied',
+      header: <Head label="Occupied" />,
       minWidth: 90,
       numeric: true,
       render: (s) => <span className="text-text-dim">{occupiedShare(s).share}</span>,
