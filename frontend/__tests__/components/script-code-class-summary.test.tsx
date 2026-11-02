@@ -1,12 +1,15 @@
 import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ScriptCodeClassTotalApi } from '@/lib/api';
 import {
+  ScriptCodeClassBar,
+  ScriptCodeClassLegend,
   ScriptCodeClassSummary,
   scriptClassLabel,
   scriptShare,
 } from '@/components/scripts/script-code-evidence';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
 
 // Scripts board (Version 50): of 49.77B CKB under the lock scripts, 96.5% immutable, 3.47% a
 // multisig can replace, 0.075% one key can. Numbers below are shaped like /scripts classSummary.
@@ -45,7 +48,8 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
   });
 
   it('colours each class by a fixed palette, not by position (SC-L3)', () => {
-    const { container } = render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
+    // Hierarchy v3: the bar is the index hero's picture (ScriptCodeClassBar), not the summary's.
+    const { container } = render(<ScriptCodeClassBar classes={classes} />);
     const segment = (cls: string) =>
       container.querySelector<HTMLElement>(`[data-code-class-segment="${cls}"]`)!;
     expect(segment('fixed').style.backgroundColor).toBe(hexToRgb(CODE_CLASS_COLORS.fixed.fill));
@@ -59,7 +63,9 @@ describe('ScriptCodeClassSummary (Scripts board "Who can change the code")', () 
   });
 
   it('states the split in one sentence and keeps a legend with exact CKB (SC-L3)', () => {
-    render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
+    const { container } = render(<ScriptCodeClassSummary classes={classes} lockScriptCount={36} />);
+    // Hierarchy v3: the summary is tier-2 evidence; the bar is the hero's (ScriptCodeClassBar).
+    expect(container.querySelector('[data-code-class-segment]')).toBeNull();
     const sentence = screen.getByTestId('code-class-sentence');
     expect(sentence.textContent).toMatch(
       /^Of the 49,794,300,000(\.0+)? CKB under these 36 lock scripts, /
@@ -147,5 +153,100 @@ describe('ScriptCodeClassSummary · visual pass (R2b-b familyCount, D6, 390 px)'
       'listitem'
     ))
       expect(item).toHaveClass('flex-wrap');
+  });
+});
+
+// Hierarchy v3 (C1, R12, R15): the bar is 28 px with each class's name and share inside the
+// segments that can hold them; one quiet row keys every segment; exact amounts stay in tier 2.
+describe('ScriptCodeClassBar and its legend row (hierarchy v3, C1)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('writes the name and share inside a segment that fits, dark on the light fill, and pads only a labelled segment', () => {
+    stubChartWidth(1376);
+    const { container } = render(<ScriptCodeClassBar classes={classes} />);
+    const bar = screen.getByRole('img', {
+      name: 'CKB under lock scripts by who can change their code',
+    });
+    expect(bar).toHaveClass('h-[28px]', 'text-small');
+    const segments = [...container.querySelectorAll<HTMLElement>('[data-code-class-segment]')];
+    expect(segments.map((s) => s.textContent)).toEqual([
+      'Immutable · pinned by data hash 96.5%',
+      '',
+      '',
+    ]);
+    expect(segments[0]).toHaveClass('text-base-bg', 'px-2.5');
+    // An unlabelled sliver is not widened by padding: 0.075 % stays a sliver.
+    expect(segments[2]).not.toHaveClass('px-2.5');
+    expect(segments[2]).toHaveClass('min-w-[3px]');
+    expect(segments[1].title).toBe('A multisig can replace: 3.47%');
+  });
+
+  it('writes light words on the dark outlined segments where they fit', () => {
+    stubChartWidth(1376);
+    const { container } = render(
+      <ScriptCodeClassBar
+        classes={[
+          { ...classes[0], lockOwnedCapacitySum: '600' },
+          { ...classes[1], class: 'unspendable', lockOwnedCapacitySum: '400' },
+        ]}
+      />
+    );
+    const segments = [...container.querySelectorAll<HTMLElement>('[data-code-class-segment]')];
+    expect(segments.map((s) => s.dataset.codeClassSegment)).toEqual(['unspendable', 'multisig']);
+    expect(segments.map((s) => s.textContent)).toEqual([
+      'Immutable · code cell unspendable 40.0%',
+      'A multisig can replace 60.0%',
+    ]);
+    for (const s of segments) expect(s).toHaveClass('text-text-bright');
+  });
+
+  it('keeps the words of the wide segment at 358 px and holds none at 240 px', () => {
+    stubChartWidth(358);
+    const { container: phone, unmount } = render(<ScriptCodeClassBar classes={classes} />);
+    expect(
+      [...phone.querySelectorAll('[data-code-class-segment]')].map((s) => s.textContent)
+    ).toEqual(['Immutable · pinned by data hash 96.5%', '', '']);
+    unmount();
+    vi.restoreAllMocks();
+    stubChartWidth(240);
+    const { container } = render(<ScriptCodeClassBar classes={classes} />);
+    for (const s of container.querySelectorAll('[data-code-class-segment]'))
+      expect(s.textContent).toBe('');
+  });
+
+  it('draws nothing when no lock script holds CKB', () => {
+    const { container } = render(
+      <ScriptCodeClassBar classes={[{ ...classes[0], lockOwnedCapacitySum: '0' }]} />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('keys every drawn segment with its swatch, name and share in one quiet row, no exact amounts', () => {
+    render(<ScriptCodeClassLegend classes={classes} />);
+    const legend = screen.getByRole('list', { name: 'Who can change the code, in shares' });
+    expect(legend).toHaveClass('text-small', 'text-text-dim', 'flex', 'flex-wrap');
+    expect(
+      within(legend)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+    ).toEqual([
+      'Immutable · pinned by data hash 96.5%',
+      'A multisig can replace 3.47%',
+      'One key can replace 0.075%',
+    ]);
+    expect(legend.textContent).not.toMatch(/\d\.\d{8}|scripts/);
+  });
+
+  it('fails loudly on an unknown class, as the summary does', () => {
+    expect(() =>
+      render(
+        <ScriptCodeClassBar
+          classes={[{ ...classes[0], class: 'nonsense' as never, lockOwnedCapacitySum: '1' }]}
+        />
+      )
+    ).toThrow(/Unknown script code class nonsense/);
   });
 });
