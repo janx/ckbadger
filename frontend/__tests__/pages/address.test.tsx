@@ -1381,3 +1381,62 @@ describe('Address · consistency round (C13, C14)', () => {
     });
   });
 });
+
+// Lane A follow-up 2 (C14): under "On-chain space they take" the legend lists only the classes this
+// address holds; the rest is one quiet line, their zero counts kept in its title.
+describe('Address · space legend (lane A follow-up)', () => {
+  const objectsAndPlain: AddressHoldings = {
+    ...holdingsFixture,
+    balance: '3844275078856',
+    occupiedCapacity: '388700000000',
+    freeCapacity: '3455575078856',
+    daoFreeCapacity: '0',
+    liveCellsCount: 16,
+    depositCellsCount: 0,
+    withdrawalRequestCellsCount: 0,
+    daoUnclaimedCompensation: '0',
+    estimatedApc: null,
+    holdings: { dao: 0, token: 0, object: 14, identity: 0 },
+    classes: {
+      dao: { cellCount: 0, capacity: '0', occupiedCapacity: '0' },
+      token: { cellCount: 0, capacity: '0', occupiedCapacity: '0' },
+      object: holdingsFixture.classes.object,
+      identity: { cellCount: 0, capacity: '0', occupiedCapacity: '0' },
+      script: { cellCount: 0, capacity: '0', occupiedCapacity: '0' },
+      plain: holdingsFixture.classes.plain,
+    },
+  };
+  it('keeps only the classes it holds, and says the rest in one line', async () => {
+    vi.mocked(api.getAddressHoldings).mockResolvedValue(objectsAndPlain);
+    render(<AddressDetailPage />);
+    await loaded();
+    const legend = document.querySelector<HTMLElement>('[data-space-legend]')!;
+    expect(
+      within(legend)
+        .getAllByRole('button')
+        .map((b) => b.textContent)
+    ).toEqual(['Objects3,76196.76%', 'Plain CKB1263.24%']);
+    const rest = within(legend).getByText('nothing in DAO, tokens, identities or other scripts');
+    expect(rest).toHaveClass('text-text-dim');
+    expect(rest).toHaveAttribute(
+      'title',
+      'Nervos DAO 0 CKB · Tokens 0 CKB · Identities 0 CKB · Other scripts 0 CKB'
+    );
+    expect(
+      [...document.querySelectorAll<HTMLElement>('[data-space-class]')].map(
+        (b) => b.dataset.spaceClass
+      )
+    ).toEqual(['object', 'plain']);
+    // The composition legend keeps its five tiers, zeros included.
+    expect(
+      screen.getByRole('group', { name: 'Object composition' }).querySelectorAll('li')
+    ).toHaveLength(5);
+  });
+  it('writes no line when it holds every class', async () => {
+    render(<AddressDetailPage />);
+    await loaded();
+    const legend = document.querySelector<HTMLElement>('[data-space-legend]')!;
+    expect(within(legend).getAllByRole('button')).toHaveLength(6);
+    expect(within(legend).queryByText(/^nothing in/)).toBeNull();
+  });
+});

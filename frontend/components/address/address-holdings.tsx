@@ -565,52 +565,79 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
           aria-label="Occupied capacity by class"
           className="flex h-2.5 gap-0.5 overflow-hidden rounded"
         >
-          {spaceOrder(holdings).map((c) => (
-            <span
-              key={c.key}
-              data-space-class={c.key}
-              data-highlighted={active === c.key || undefined}
-              style={{
-                width:
-                  occupied === BigInt(0)
-                    ? '0%'
-                    : `${(Number(BigInt(holdings.classes[c.key].occupiedCapacity)) / Number(occupied)) * 100}%`,
-                background: CLASS_COLORS[c.mark],
-                opacity: active && active !== c.key ? 0.25 : 1,
-              }}
-            />
-          ))}
+          {spaceOrder(holdings)
+            .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) > BigInt(0))
+            .map((c) => (
+              <span
+                key={c.key}
+                data-space-class={c.key}
+                data-highlighted={active === c.key || undefined}
+                style={{
+                  width:
+                    occupied === BigInt(0)
+                      ? '0%'
+                      : `${(Number(BigInt(holdings.classes[c.key].occupiedCapacity)) / Number(occupied)) * 100}%`,
+                  background: CLASS_COLORS[c.mark],
+                  opacity: active && active !== c.key ? 0.25 : 1,
+                }}
+              />
+            ))}
         </div>
-        <div className="text-small grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
-          {spaceOrder(holdings).map((c) => (
-            <button
-              key={c.key}
-              className="flex flex-wrap items-center gap-x-1.5 text-left"
-              onMouseEnter={() => setActive(c.key)}
-              onMouseLeave={() => setActive(null)}
-              onFocus={() => setActive(c.key)}
-              onBlur={() => setActive(null)}
-            >
-              <ClassMark kind={c.mark} size={12} />
-              {c.label}
-              <span className="text-text-bright">
-                {formatCkbAmount(holdings.classes[c.key].occupiedCapacity).full.replace(
-                  /\.0{8}$/,
-                  ''
-                )}
-              </span>
-              {occupied > BigInt(0) && (
-                <span className="text-text-dim">
-                  {formatScaledInteger(
-                    BigInt(holdings.classes[c.key].occupiedCapacity) * BigInt(100),
-                    occupied,
-                    2
+        <div
+          data-space-legend
+          className="text-small grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2"
+        >
+          {spaceOrder(holdings)
+            .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) > BigInt(0))
+            .map((c) => (
+              <button
+                key={c.key}
+                className="flex flex-wrap items-center gap-x-1.5 text-left"
+                onMouseEnter={() => setActive(c.key)}
+                onMouseLeave={() => setActive(null)}
+                onFocus={() => setActive(c.key)}
+                onBlur={() => setActive(null)}
+              >
+                <ClassMark kind={c.mark} size={12} />
+                {c.label}
+                <span className="text-text-bright">
+                  {formatCkbAmount(holdings.classes[c.key].occupiedCapacity).full.replace(
+                    /\.0{8}$/,
+                    ''
                   )}
-                  %
                 </span>
+                {occupied > BigInt(0) && (
+                  <span className="text-text-dim">
+                    {formatScaledInteger(
+                      BigInt(holdings.classes[c.key].occupiedCapacity) * BigInt(100),
+                      occupied,
+                      2
+                    )}
+                    %
+                  </span>
+                )}
+              </button>
+            ))}
+          {/* Lane A follow-up (C14): the classes it does not hold are one quiet line, their zero
+              figures in its title. */}
+          {spaceOrder(holdings).some(
+            (c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0)
+          ) && (
+            <span
+              className="text-text-dim sm:col-span-2"
+              title={spaceOrder(holdings)
+                .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0))
+                .map((c) => `${c.label} 0 CKB`)
+                .join(' · ')}
+            >
+              nothing in{' '}
+              {andList(
+                spaceOrder(holdings)
+                  .filter((c) => BigInt(holdings.classes[c.key].occupiedCapacity) === BigInt(0))
+                  .map((c) => SPACE_WORDS[c.key])
               )}
-            </button>
-          ))}
+            </span>
+          )}
         </div>
       </div>
       {holdings.holdings.object > 0 && (
@@ -883,6 +910,20 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
       </div>
     </section>
   );
+}
+
+/** A class in the "nothing in …" line under the space bar (lane A follow-up, C14). */
+const SPACE_WORDS: Record<AddressCellClass, string> = {
+  dao: 'DAO',
+  token: 'tokens',
+  object: 'objects',
+  identity: 'identities',
+  script: 'other scripts',
+  plain: 'plain CKB',
+};
+/** "a, b or c". */
+function andList(items: readonly string[]): string {
+  return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items.at(-1)}`;
 }
 
 /** The four asset classes as the Holdings line words them (C14). */
