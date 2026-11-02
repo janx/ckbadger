@@ -281,6 +281,13 @@ describe('Per-version raw protocol and item context', () => {
       `/mainnet/cell/${old.cell.txHash}-0`
     );
     expect(screen.getByText(/18446744073709551615/)).toBeInTheDocument();
+    // Lane E (C6): each folded script is its occupied bytes, one row per part (was a code hash /
+    // args definition list).
+    const lock = screen.getByText(/^lock script ·/).closest('details')!;
+    expect(within(lock).getByRole('group', { name: 'lock script byte map' })).toBeInTheDocument();
+    expect(within(lock).getByLabelText('lock script parts')).toHaveTextContent(
+      protocol.versions[1].cell.lock.codeHash
+    );
   });
   it('uses the exact resulting cell and represents burn without a resulting cell', () => {
     const tx = itemTransactionsProducer.data[0];
