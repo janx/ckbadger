@@ -370,11 +370,12 @@ export default function FiberChannelsPage() {
                       className: ROW,
                       label: 'Channel',
                       minWidth: 200,
+                      // Table-rows T5: the channel id is the row's one bright thing.
                       render: (channel) => (
                         <>
                           <Link
                             href={`/fiber/channels/${channel.channelId}`}
-                            className="text-[#6aa9c4] hover:underline"
+                            className="text-text-bright hover:underline"
                             title={channel.channelId}
                           >
                             {shortId(channel.channelId)}

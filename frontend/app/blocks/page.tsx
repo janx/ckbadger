@@ -61,12 +61,16 @@ export default function BlocksPage() {
       key: 'contents',
       label: 'Contents',
       minWidth: 170,
+      // T2: a flex box, so the glyph's 18 px inline box does not sit on the text baseline and
+      // stretch the line to 23 px (a 48 px row); the row stays one 18 px line.
       render: (block) => (
-        <BlockContents
-          transactionSizes={block.transactionSizes}
-          proposalsCount={block.proposalsCount}
-          unclesCount={block.unclesCount}
-        />
+        <div className="flex">
+          <BlockContents
+            transactionSizes={block.transactionSizes}
+            proposalsCount={block.proposalsCount}
+            unclesCount={block.unclesCount}
+          />
+        </div>
       ),
     },
     {
@@ -240,12 +244,15 @@ function BlocksLegend() {
   );
 }
 
-/** "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. */
+/**
+ * "#20,879,198 0xd161…8fef" on one line; a hardfork activation below it. The number is the row's
+ * one bright thing at body (table-rows T5), on an 18 px line so the row keeps its height.
+ */
 function BlockIdentity({ block }: { block: Block }) {
   return (
     <div className="space-y-1">
       <div className="whitespace-nowrap">
-        <Link href={`/blocks/${block.number}`} className="text-text-bright hover:text-jade">
+        <Link href={`/blocks/${block.number}`} className={KEY}>
           {formatBlockNumber(block.number)}
         </Link>{' '}
         <Hash
@@ -265,11 +272,16 @@ function BlockIdentity({ block }: { block: Block }) {
   );
 }
 
+/** The key cell of a block row (table-rows T5): 13 px, bright, on the row's 18 px line. */
+const KEY = 'text-body text-text-bright leading-[18px] hover:text-jade';
+
 function miner(block: Block) {
   return block.minerAddress ? (
     <MinerLink
       address={block.minerAddress}
       pool={block.minerPool}
+      // T5: the block number is the row's one bright thing; a named pool reads in body ink.
+      className="text-text"
       unnamed={
         <Address address={block.minerAddress} startChars={10} endChars={6} className="text-small" />
       }
@@ -409,7 +421,7 @@ const NARROW_COLUMNS: ListColumn<Block>[] = [
     minWidth: 112,
     render: (block) => (
       <>
-        <Link href={`/blocks/${block.number}`} className="text-text-bright hover:text-jade">
+        <Link href={`/blocks/${block.number}`} className={KEY}>
           {formatBlockNumber(block.number)}
         </Link>
         <Hash

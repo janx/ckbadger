@@ -264,16 +264,18 @@ export default function TransactionsPage() {
     {
       key: 'tx',
       label: 'Transaction',
-      minWidth: 176,
+      // 21 characters at 13 px (163.8 px) and the 16 px gap.
+      minWidth: 184,
       render: (tx) => (
         <div className="space-y-1">
+          {/* Table-rows T5: the pool row's key, 13 px bright on an 18 px line. */}
           <Link href={`/tx/${tx.hash}`}>
             <Hash
               hash={tx.hash}
               startChars={12}
               endChars={6}
               copyable={false}
-              className="text-small"
+              className="text-body text-text-bright leading-[18px]"
             />
           </Link>
           <PoolInterpretationNotice interpretation={tx.interpretation} />

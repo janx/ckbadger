@@ -226,7 +226,10 @@ export function TransactionListTable({
     {
       key: 'transaction',
       label: 'Transaction',
-      minWidth: 160,
+      // 19 characters at 13 px (148.2 px) and the 16 px gap.
+      minWidth: 166,
+      // Table-rows T5: the hash is the row's key, 13 px bright on the row's 18 px line (a cellbase
+      // row keeps its dim row class).
       render: (tx) => (
         <Link href={`/tx/${tx.hash}`} className="hover:underline">
           <Hash
@@ -234,7 +237,7 @@ export function TransactionListTable({
             startChars={10}
             endChars={6}
             copyable={false}
-            className="text-small"
+            className="text-body text-text-bright leading-[18px]"
           />
         </Link>
       ),

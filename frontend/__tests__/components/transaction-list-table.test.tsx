@@ -188,6 +188,24 @@ describe('TransactionListTable fit (visual pass, 2026-10-30)', () => {
     const row = within(screen.getByRole('table')).getAllByRole('row')[1];
     expect(row.querySelector('td:nth-child(4) [data-zero]')).toBeInTheDocument();
   });
+
+  // Table-rows T5: one bright thing per row, the key cell at body. The 18 px line keeps the row
+  // at its one-line height (a 13 px line is 20.8 px and would make it 45.8).
+  it('leads each row with its hash at 13 px bright on an 18 px line; a cellbase keeps its dim row (T5)', () => {
+    render(<TransactionListTable transactions={[scriptCall, cellbase]} />);
+    const [, call, base] = within(screen.getByRole('table')).getAllByRole('row');
+    for (const [row, tx] of [
+      [call, scriptCall],
+      [base, cellbase],
+    ] as const) {
+      const hash = within(row).getByTitle(tx.hash);
+      expect(hash).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+      expect(hash).not.toHaveClass('text-small');
+      expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/${tx.hash}`);
+    }
+    expect(base).toHaveClass('opacity-[.55]');
+    expect(call).not.toHaveClass('opacity-[.55]');
+  });
 });
 
 describe('TransactionListTable phone row (board L2)', () => {

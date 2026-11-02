@@ -242,6 +242,9 @@ describe('BlocksPage · Blocks v3 board', () => {
     const pool = within(table).getByRole('link', { name: 'Example Pool' });
     expect(pool).toHaveAttribute('href', `/mainnet/address/${miner}`);
     expect(pool).toHaveAttribute('title', miner);
+    // T5: the block number is the row's one bright thing; a named pool reads in body ink.
+    expect(pool).toHaveClass('text-text');
+    expect(pool).not.toHaveClass('text-text-bright');
     // The unnamed miner keeps its address tail; nothing is guessed for it.
     expect(within(table).getAllByRole('link', { name: 'ckb1qzda0c...93hhsj' })).toHaveLength(1);
   });
@@ -263,6 +266,24 @@ describe('BlocksPage · Blocks v3 board', () => {
     expect(blockCell.firstElementChild!.firstElementChild).toHaveClass('whitespace-nowrap');
     expect(blockCell).toHaveTextContent(/^#20,828,894 0x/);
     expect(contentsCell.querySelector('[data-contents-line]')).toHaveClass('whitespace-nowrap');
+  });
+
+  // Table-rows T5: one bright thing per row, the key cell at body; the hash stays an 11 px dim id.
+  // T2: the 18 px line keeps the row at one line (13 px at its own 20.8 px line would add 2.8),
+  // and the contents glyph sits in a flex box instead of on the text baseline, where its 18 px
+  // inline box stretched the line to 23 px and the row to 48.
+  it('leads each row with the block number at 13 px bright, the hash 11 px dim (T5, T2)', async () => {
+    render(<BlocksPage />);
+    const table = await screen.findByRole('table', { name: 'Latest blocks' });
+    const [first] = Array.from(table.querySelectorAll('tbody tr'));
+    const [blockCell, , contentsCell] = Array.from(first.querySelectorAll('td'));
+    const number = within(blockCell).getByRole('link', { name: '#20,828,894' });
+    expect(number).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    const hash = within(blockCell).getByTitle(page.data[0].hash);
+    expect(hash).toHaveClass('text-meta', 'text-text-dim');
+    expect(hash).not.toHaveClass('text-body');
+    expect(contentsCell.firstElementChild).toHaveClass('flex');
+    expect(contentsCell.querySelector('[data-contents-line]')).toBeInTheDocument();
   });
 
   it('reads the footnote figures in bright ink', async () => {
@@ -314,6 +335,12 @@ describe('BlocksPage · Blocks v3 board', () => {
       expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(608);
       const [first] = Array.from(table.querySelectorAll('tbody tr'));
       expect(first.querySelector('td')).toHaveTextContent(/^#20,828,8940x0000\.\.\.d2de$/);
+      // T5 in the 640 table too: the height leads at 13 px bright.
+      expect(within(first as HTMLElement).getByRole('link', { name: '#20,828,894' })).toHaveClass(
+        'text-body',
+        'text-text-bright',
+        'leading-[18px]'
+      );
       expect(first).toHaveTextContent('0.05060000');
       expect(first).toHaveTextContent('3,917 B6,831,940');
       expect(screen.queryByTestId('block-row-mobile')).toBeNull();

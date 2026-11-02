@@ -135,20 +135,31 @@ function competingLine(record: ForkNodeRecord): string | null {
     .join(' · ');
 }
 
-function Seen({ event }: { event: ReorgEvent }) {
+const seenWhen = (event: ReorgEvent) => formatUtc8DateTime(event.detectedAt).slice(0, 19);
+
+/**
+ * When this node saw the switch, in body ink: the fork point is the row's one bright thing
+ * (table-rows T5). `compact` (the table row, T1): the time alone, its age and any missing-address
+ * words in the row's title (`switchTitle`); the phone row keeps them as lines.
+ */
+function Seen({ event, compact = false }: { event: ReorgEvent; compact?: boolean }) {
   const href = forkEventHref(event);
-  const when = formatUtc8DateTime(event.detectedAt).slice(0, 19);
+  const when = seenWhen(event);
   return (
     <span>
       {href ? (
-        <Link href={href} className="text-text-bright hover:text-jade">
+        <Link href={href} className="text-text hover:text-jade">
           {when}
         </Link>
       ) : (
-        <span className="text-text-bright">{when}</span>
+        <span className="text-text">{when}</span>
       )}
-      <span className="text-text-dim text-meta block w-fit">{formatTimeAgo(event.detectedAt)}</span>
-      {!href && (
+      {!compact && (
+        <span className="text-text-dim text-meta block w-fit">
+          {formatTimeAgo(event.detectedAt)}
+        </span>
+      )}
+      {!compact && !href && (
         <span className="text-text-dim text-meta block w-fit">
           {missingAddressWords(event.firstOrphanStatus)}
         </span>
@@ -157,6 +168,16 @@ function Seen({ event }: { event: ReorgEvent }) {
   );
 }
 
+/** A switch row's title: what left its one-line "Seen" cell (T1), then its key. */
+function switchTitle(event: ReorgEvent): string {
+  return [
+    `seen ${seenWhen(event)} UTC+8, ${formatTimeAgo(event.detectedAt)}`,
+    ...(forkEventHref(event) ? [] : [missingAddressWords(event.firstOrphanStatus)]),
+    `fork point ${formatBlockNumber(event.forkPointNumber)}, depth ${event.depth}`,
+  ].join(' · ');
+}
+
+/** The row's key (table-rows T5): the fork point, bright at the row's body size. */
 function ForkPoint({ event }: { event: ReorgEvent }) {
   return (
     <span>
@@ -204,7 +225,8 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
         `Fork ${formatBlockNumber(event.forkPointNumber)}: miner lock ${hash} and address ${address} disagree`
       );
     return address ? (
-      <MinerLink address={address} pool={pool} />
+      // T5: the fork point is the row's one bright thing; the miners read in body ink.
+      <MinerLink address={address} pool={pool} className="text-text" />
     ) : (
       <span className="text-text-dim">{fallback}</span>
     );
@@ -229,14 +251,23 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
 function FoundApart({ event }: { event: ReorgEvent }) {
   const gap = event.preview?.timestampGapMs;
   if (gap == null) return <span className="text-text-dim">—</span>;
-  return <span className="text-text">{Math.abs(gap).toLocaleString('en-US')} ms</span>;
+  // T5: a number at 12 px, tabular.
+  return (
+    <span className="text-text text-small tabular-nums">
+      {Math.abs(gap).toLocaleString('en-US')} ms
+    </span>
+  );
 }
 
+/**
+ * What became of the dropped block: the one cell kept on two lines (table-rows T1's exception, it
+ * is the row's outcome), in body ink since the fork point is the row's one bright thing (T5).
+ */
 function Fate({ event }: { event: ReorgEvent }) {
   if (event.eventType === 'deep')
     return (
       <span>
-        <span className="text-text-bright">No rollback at detection</span>
+        <span className="text-text">No rollback at detection</span>
         <span className="text-text-dim text-meta block w-fit">
           indexed {formatBlockNumber(event.oldTipNumber)} → node{' '}
           {formatBlockNumber(event.newTipNumber)}
@@ -250,12 +281,12 @@ function Fate({ event }: { event: ReorgEvent }) {
   return (
     <span>
       {uncleInBlock !== null ? (
-        // R11: the words in bright ink; the glyph's arrow keeps the jade
-        <Link href={`/blocks/${uncleInBlock}`} className="text-text-bright hover:underline">
+        // R11: neutral words; the glyph's arrow keeps the jade
+        <Link href={`/blocks/${uncleInBlock}`} className="text-text hover:underline">
           {`${words} in ${formatBlockNumber(uncleInBlock)} (+${uncleInBlock - event.forkPointNumber - 1})`}
         </Link>
       ) : (
-        <span className="text-text-bright">{words}</span>
+        <span className="text-text">{words}</span>
       )}
       <span className="text-text-dim text-meta block w-fit">
         {noncellbaseTransactions === 0
@@ -392,6 +423,7 @@ export default function ForksPage() {
                   label="Branch switches on this node"
                   rows={collapsed ? events.data.data.slice(0, PREVIEW_ROWS) : events.data.data}
                   rowKey={(event) => String(event.id)}
+                  rowTitle={switchTitle}
                   empty="No branch switches observed by this node. Chain uncles above can still exist."
                   columns={spanHeads<ReorgEvent>([
                     {
@@ -399,7 +431,7 @@ export default function ForksPage() {
                       className: ROW,
                       label: 'Seen (UTC+8)',
                       minWidth: 160,
-                      render: (e) => <Seen event={e} />,
+                      render: (e) => <Seen event={e} compact />,
                     },
                     {
                       key: 'fork',
