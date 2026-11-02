@@ -133,6 +133,20 @@ describe('api', () => {
       await api.getAddressCells('ckb1owner', { class: 'identity', limit: 50, cursor: '20:0xab:1' });
     });
 
+    // Consistency round C14 (A6): one collection's objects, filtered by the API before paging.
+    it('asks for one collection of an address by its id', async () => {
+      server.use(
+        http.get('/api/:network/v1/addresses/ckb1owner/cells', ({ request }) => {
+          const query = new URL(request.url).searchParams;
+          expect(query.get('class')).toBe('object');
+          expect(query.get('collection')).toBe('0x40');
+          expect(query.get('limit')).toBe('10');
+          return HttpResponse.json({ data: [], hasMore: false, nextCursor: null, limit: 10 });
+        })
+      );
+      await api.getAddressCells('ckb1owner', { class: 'object', collection: '0x40', limit: 10 });
+    });
+
     it('passes block activity and pool pagination to their canonical endpoints', async () => {
       server.use(
         http.get('/api/:network/v1/activities', ({ request }) => {

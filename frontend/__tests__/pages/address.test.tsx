@@ -127,14 +127,20 @@ beforeEach(() => {
   vi.mocked(api.getAddressDaoSummary).mockResolvedValue(daoSummary);
   vi.mocked(api.getDaoDepositsByAddress).mockResolvedValue(pageFixture(addressDaoFixture, 5));
   vi.mocked(api.getAddressCells).mockImplementation(async (_addr, p) =>
-    pageFixture(
-      p?.class === 'identity'
-        ? addressIdentitiesFixture
-        : p?.class === 'dao'
-          ? addressDaoCellsFixture
-          : addressObjectsFixture,
-      p?.class === 'identity' ? 1 : 14
-    )
+    // C14 (A6): a collection page holds that collection's objects only, as the API filters.
+    p?.collection
+      ? pageFixture(
+          addressObjectsFixture.filter((c) => c.display!.collectionId === p.collection),
+          holdingsFixture.objectCollections.find((g) => g.id === p.collection)!.itemCount
+        )
+      : pageFixture(
+          p?.class === 'identity'
+            ? addressIdentitiesFixture
+            : p?.class === 'dao'
+              ? addressDaoCellsFixture
+              : addressObjectsFixture,
+          p?.class === 'identity' ? 1 : 14
+        )
   );
   vi.mocked(api.getAddressActivities).mockResolvedValue(pageFixture(addressActivitiesFixture));
   vi.mocked(api.getAddressTransactions).mockResolvedValue(
@@ -211,10 +217,14 @@ describe('Address v3', () => {
   it('shows all four holdings classes with exact distinct counts', async () => {
     render(<AddressDetailPage />);
     await loaded();
+    // C14: the classes it holds are one line of links by the heading (the 29-mark grid is gone).
     const nav = screen.getByRole('navigation', { name: 'Holdings' });
-    for (const name of ['Nervos DAO 5', 'Tokens 9', 'Objects 14', 'Identities 1'])
-      expect(within(nav).getByRole('link', { name: new RegExp(name) })).toBeInTheDocument();
-    expect(screen.getByText('29 holdings, one mark each')).toBeInTheDocument();
+    expect(
+      within(nav)
+        .getAllByRole('link')
+        .map((l) => l.textContent)
+    ).toEqual(['5 DAO cells', '9 tokens', '14 objects', '1 identity']);
+    expect(screen.queryByText(/holdings, one mark each/)).toBeNull();
     expect(await screen.findByRole('link', { name: 'valar.bit' })).toHaveAttribute(
       'href',
       expect.stringContaining('/identities/bit-cell/')
@@ -234,13 +244,18 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByText('11 of 14')).toBeInTheDocument();
-    expect(await screen.findByText('Showing 1-2 of 14 objects')).toBeInTheDocument();
+    // C8: the composition block counts every object; an opened collection pages its own.
+    expect(screen.getByRole('group', { name: 'Object composition' })).toHaveTextContent(
+      '11 of 14 fully on-chain'
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Open 拯救民主' }));
+    expect(await screen.findByText(/Showing 1-2 of 6 objects/)).toBeInTheDocument();
     expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThan(0);
   });
   it('links object tiles and exact collection identity', async () => {
     render(<AddressDetailPage />);
     await loaded();
+    fireEvent.click(screen.getByRole('button', { name: 'Open 拯救民主' }));
     expect(
       await screen.findByRole('link', { name: `Object ${addressObjectsFixture[0].display!.id}` })
     ).toHaveAttribute(
@@ -345,7 +360,13 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByRole('heading', { name: 'Address' })).toBeInTheDocument();
+    // C13: without an address the page is named by its short lock hash.
+    expect(
+      screen.getByRole('heading', {
+        level: 1,
+        name: `${addressHash.slice(0, 12)}…${addressHash.slice(-8)}`,
+      })
+    ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Lock script' })).toBeInTheDocument();
     expect(screen.queryByText('Active')).not.toBeInTheDocument();
   });
@@ -374,7 +395,11 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     await loaded();
-    expect(screen.getByText('0 holdings, one mark each')).toBeInTheDocument();
+    // C14: classes it does not hold are one line by the heading, not four empty sections.
+    expect(
+      screen.getByText('no DAO deposits · no tokens · no objects · no identities')
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 3 })).toBeNull();
     expect(await screen.findByRole('link', { name: 'support.cell' })).toHaveAttribute(
       'href',
       expect.stringContaining('/identities/dotcell/')
@@ -458,7 +483,7 @@ describe('Address v3', () => {
     expect(activitiesTab()).not.toHaveTextContent('1,021');
     expect(await screen.findByText('Showing 1-1 of 1,682 activities')).toBeInTheDocument();
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
-    fireEvent.click(screen.getByRole('button', { name: 'DAO' }));
+    fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
     expect(screen.getByText('Showing 0-0 activities')).toBeInTheDocument();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
@@ -483,11 +508,12 @@ describe('Address v3', () => {
         filter: 'all',
       })
     );
+    // C14: each chip carries its count after its label.
     const chips = within(screen.getByRole('group', { name: 'Filter activity' }))
       .getAllByRole('button')
-      .map((b) => b.textContent);
+      .map((b) => b.textContent!.replace(/ [\d,]+\+?$/, ''));
     expect(chips).toEqual(['All', 'CKB', 'Token', 'Object', 'Identity', 'DAO', 'Script', 'RGB++']);
-    fireEvent.click(screen.getByRole('button', { name: 'Script' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Script/ }));
     expect(await screen.findByText('No Script activities on this page.')).toBeInTheDocument();
     expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
       limit: 50,
@@ -498,7 +524,7 @@ describe('Address v3', () => {
   it('resets filters, tab and cursors when the route changes', async () => {
     const { rerender } = render(<AddressDetailPage />);
     await loaded();
-    fireEvent.click(screen.getByRole('button', { name: 'Token' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Token/ }));
     await tab('Transactions');
     route = 'ckb1other';
     vi.mocked(api.getAddress).mockResolvedValue({
@@ -685,7 +711,7 @@ describe('Address v3', () => {
       })
     );
     expect(screen.getByLabelText('Unconfirmed')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'DAO' }));
+    fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(screen.getByLabelText('Unconfirmed')).toBeInTheDocument();
   });
   it('gives compact and desktop transactions the same pool and partial evidence', async () => {
@@ -890,7 +916,7 @@ describe('Address board · F2 blocks', () => {
     ]);
   });
 
-  it('marks object compositions with the crystal badges and frames on-chain tiles (BA-33)', async () => {
+  it('marks object compositions with the crystal badges on each collection row (BA-33, C14)', async () => {
     render(<AddressDetailPage />);
     const objects = await section(/Objects$/);
     await within(objects).findAllByRole('link', { name: /Object|拯救民主/ });
@@ -1055,5 +1081,151 @@ describe('Address board · F2 blocks', () => {
       /9 kinds in 15 cells · 21,507\.60266154 CKB held/
     );
     expect(await section(/Objects$/)).toHaveTextContent(/14 in 7 collections · 4,093\.0+ CKB held/);
+  });
+});
+
+// Consistency round (Address.dc.html): the h1 is the short address (C13); Holdings collapses the
+// classes it does not hold into one line, leads with the composition block and lists one row per
+// collection that opens in place to its first ten objects (C14); every filter chip has a count.
+describe('Address · consistency round (C13, C14)', () => {
+  it('names the page by its short address, the full address and its copy button beneath (C13)', async () => {
+    render(<AddressDetailPage />);
+    await loaded();
+    const h1 = screen.getByRole('heading', {
+      level: 1,
+      name: `${addressText.slice(0, 12)}…${addressText.slice(-8)}`,
+    });
+    expect(h1).toHaveClass('text-entity');
+    const header = h1.closest('header')!;
+    expect(header).toHaveTextContent(addressText);
+    expect(within(header).getByRole('button', { name: 'Copy address' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 1, name: 'Address' })).toBeNull();
+  });
+
+  it('collapses only the classes it does not hold into the line by the heading', async () => {
+    vi.mocked(api.getAddressHoldings).mockResolvedValue({
+      ...holdingsFixture,
+      holdings: { ...holdingsFixture.holdings, token: 0 },
+    });
+    vi.mocked(api.getAddressTokens).mockResolvedValue(pageFixture([]));
+    render(<AddressDetailPage />);
+    await loaded();
+    const holdings = screen.getByRole('heading', { name: 'Holdings' }).closest('section')!;
+    expect(within(holdings).getByText('no tokens')).toBeInTheDocument();
+    expect(within(holdings).queryByRole('heading', { name: /Tokens$/ })).toBeNull();
+    expect(within(holdings).getByRole('heading', { name: /Objects$/ })).toBeInTheDocument();
+    expect(api.getAddressTokens).not.toHaveBeenCalled();
+  });
+
+  it('leads Holdings with the composition block, every tier counted', async () => {
+    render(<AddressDetailPage />);
+    await loaded();
+    const holdings = screen.getByRole('heading', { name: 'Holdings' }).closest('section')!;
+    const comp = within(holdings).getByRole('group', { name: 'Object composition' });
+    expect(comp).toHaveTextContent('11 of 14 fully on-chain');
+    expect(
+      [...comp.querySelectorAll('li')].map((li) => [
+        li.dataset.tier,
+        li.querySelector('[data-count]')!.textContent,
+      ])
+    ).toEqual([
+      ['pure_ckb', '1'],
+      ['btc_ckb', '10'],
+      ['decentralized_mixture', '0'],
+      ['centralized_mixture', '3'],
+      ['unknown', '0'],
+    ]);
+  });
+
+  it('lists one row per collection and opens one in place to its first ten objects', async () => {
+    vi.mocked(api.getAddressCells).mockImplementation(async (_a, p) =>
+      p?.collection
+        ? {
+            ...pageFixture(
+              addressObjectsFixture.filter((c) => c.display!.collectionId === p.collection)
+            ),
+            limit: 10,
+          }
+        : pageFixture(p?.class === 'identity' ? addressIdentitiesFixture : addressDaoCellsFixture)
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    const objects = (await screen.findByRole('heading', { name: /Objects$/ })).closest('section')!;
+    const rows = [...objects.querySelectorAll<HTMLElement>('[data-collection-row]')];
+    expect(rows.map((r) => r.dataset.collectionRow)).toEqual([
+      '拯救民主',
+      'Nervape',
+      'Nervape Mouth',
+      'Unicorn',
+      'Lightning Explorer Badge',
+      'Lightning Pioneer Badge',
+      'SOUL Dragon Eggs',
+    ]);
+    expect(rows[0]).toHaveTextContent('6');
+    // Nothing is listed (or asked for) until a collection is opened.
+    expect(api.getAddressCells).not.toHaveBeenCalledWith(
+      addressHash,
+      expect.objectContaining({ class: 'object' })
+    );
+    const open = within(rows[0]).getByRole('button', { name: 'Open 拯救民主' });
+    expect(open).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(open);
+    await waitFor(() =>
+      expect(api.getAddressCells).toHaveBeenCalledWith(addressHash, {
+        class: 'object',
+        collection: fixtureHash(200),
+        limit: 10,
+        cursor: undefined,
+      })
+    );
+    const list = await screen.findByRole('table', { name: '拯救民主 objects held here' });
+    expect(within(list).getAllByRole('row')).toHaveLength(7);
+    expect(
+      within(list).getByRole('link', { name: `Object ${addressObjectsFixture[0].display!.id}` })
+    ).toHaveAttribute(
+      'href',
+      expect.stringContaining(`/objects/${addressObjectsFixture[0].display!.id}`)
+    );
+    expect(screen.getByRole('link', { name: 'All 6 in the collection →' })).toHaveAttribute(
+      'href',
+      expect.stringContaining(`/clusters/${fixtureHash(200)}`)
+    );
+    expect(objects).not.toHaveTextContent('Items are on another page');
+    fireEvent.click(within(rows[0]).getByRole('button', { name: 'Close 拯救民主' }));
+    expect(screen.queryByRole('table', { name: '拯救民主 objects held here' })).toBeNull();
+  });
+
+  it('counts every activity filter chip from one one-row page each; an empty filter is dimmed 0', async () => {
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
+      p?.limit === 1 && p.filter && p.filter !== 'all'
+        ? p.filter === 'token'
+          ? { ...pageFixture([addressActivitiesFixture[0]]), hasMore: false, total: undefined }
+          : p.filter === 'ckb'
+            ? { ...pageFixture([addressActivitiesFixture[0]]), hasMore: true, total: undefined }
+            : { ...pageFixture([]), hasMore: false, total: undefined }
+        : // the unfiltered page states the address's activity count (contracts W5-1)
+          pageFixture(addressActivitiesFixture, addressActivitiesFixture.length)
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    const chips = screen.getByRole('group', { name: 'Filter activity' });
+    await waitFor(() =>
+      expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveTextContent('DAO 0')
+    );
+    for (const chip of within(chips).getAllByRole('button')) expect(chip).toHaveTextContent(/\d/);
+    expect(within(chips).getByRole('button', { name: /^Token/ })).toHaveTextContent('Token 1');
+    // More than the one row asked for: the API counts no filtered total, so the chip says "2+".
+    const ckb = within(chips).getByRole('button', { name: /^CKB/ });
+    expect(ckb).toHaveTextContent('CKB 2+');
+    expect(ckb.querySelector('[data-chip-count]')).toHaveAttribute(
+      'title',
+      'at least 2; the API does not count filtered activity'
+    );
+    expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveClass('text-text-ghost');
+    expect(api.getAddressActivities).toHaveBeenCalledWith(addressHash, {
+      limit: 1,
+      cursor: undefined,
+      filter: 'dao',
+    });
   });
 });
