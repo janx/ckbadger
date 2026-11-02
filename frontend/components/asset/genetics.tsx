@@ -261,37 +261,16 @@ export function ObjectGeneticsEvidence({
         {cached.decodedAt !== null ? `, decoded ${formatUnixSecondsUtc8(cached.decodedAt)}` : ''};
         the original decoder binary hash was not recorded. These are separate pieces of evidence.
       </p>
-      {dnaHex !== null && <p className="text-meta break-all">DNA {dnaHex}</p>}
-      {layout && (
-        <dl className="divide-base-elevated text-meta divide-y">
-          {layout.genes.map((g) => (
-            <div key={g.key} className="py-2">
-              <dt>
-                {g.name}{' '}
-                <span className="text-text-dim">
-                  {g.length === 1
-                    ? `byte ${g.offset}`
-                    : `bytes ${g.offset}–${g.offset + g.length - 1}`}
-                </span>
-              </dt>
-              <dd className="text-text-dim break-words">
-                Declared bytes {g.declared.offset} + {g.declared.length}.{' '}
-                {g.truncated ? 'Clipped to the actual DNA shown. ' : ''}
-                {g.ruleName}
-                {g.ruleArguments !== null && g.ruleArguments !== undefined
-                  ? ` ${JSON.stringify(g.ruleArguments)}`
-                  : ''}
-                ; raw 0x{g.raw}.
-              </dd>
-            </div>
-          ))}
-          {layout.unmapped.map((u) => (
-            <div key={u.name} className="text-text-dim py-2">
-              {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this
-              DNA fall in the declared range.
-            </div>
-          ))}
-        </dl>
+      {layout && <ObjectDnaReading layout={layout} />}
+      {dnaHex !== null && (
+        <details className="min-w-0">
+          <summary className="text-text-dim text-small cursor-pointer">
+            All {layout ? count(layout.bytes.length) : ''} bytes of DNA as hex
+          </summary>
+          <pre className="text-text text-small mt-2 max-w-full whitespace-pre-wrap break-all">
+            {dnaHex}
+          </pre>
+        </details>
       )}
       {decoded && decoded.media.length > 0 && (
         <ul aria-label="Decoder output" className="text-meta space-y-1">
@@ -328,6 +307,121 @@ export function ObjectGeneticsEvidence({
     </section>
   );
 }
+/**
+ * One object's DNA in tier 2 (lane E, C5): its bytes drawn to scale, one part per gene that owns
+ * them (the sequencing gel's rule and inks), then one row per gene — the bytes it reads here, its
+ * rule, its raw bytes and value; the declared range in words is the row's title. Genes clipped to
+ * this DNA, and genes it has no bytes for, are named under the rows.
+ */
+function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGenes> }) {
+  const readout = usePinnedReadout<string>();
+  const byKey = new Map(layout.genes.map((g) => [g.key, g]));
+  const span = (offset: number, length: number) =>
+    length === 1 ? `byte ${offset}` : `bytes ${offset}–${offset + length - 1}`;
+  const parts: { key: string | null; start: number; end: number }[] = [];
+  layout.owners.forEach((key, b) => {
+    const last = parts.at(-1);
+    if (last && last.key === key) last.end = b + 1;
+    else parts.push({ key, start: b, end: b + 1 });
+  });
+  const inside = layout.genes
+    .filter((g) => !g.owns)
+    .map((g) => ({ name: g.name, start: g.offset, end: g.offset + g.length }));
+  const clipped = layout.genes.filter((g) => g.truncated);
+  const title = (g: (typeof layout.genes)[number]) =>
+    `${g.name} · ${span(g.offset, g.length)} · Declared bytes ${g.declared.offset} + ${g.declared.length}.${g.truncated ? ' Clipped to the actual DNA shown.' : ''} ${g.ruleName}${g.ruleArguments !== null && g.ruleArguments !== undefined ? ` ${JSON.stringify(g.ruleArguments)}` : ''}; raw 0x${g.raw}.`;
+  return (
+    <div className="min-w-0 space-y-3">
+      {layout.bytes.length > 0 && (
+        <ByteScaleMap
+          label="Object DNA"
+          total={layout.bytes.length}
+          segments={parts.map((part) => {
+            const n = part.end - part.start;
+            if (part.key === null)
+              return {
+                key: `none@${part.start}`,
+                start: part.start,
+                end: part.end,
+                label: count(n),
+                short: count(n),
+                color: '#4b5266',
+                quiet: true,
+                title: `${span(part.start, n)} · no gene reads ${n === 1 ? 'it' : 'them'}`,
+              };
+            const g = byKey.get(part.key)!;
+            return {
+              key: `${part.key}@${part.start}`,
+              target: part.key,
+              start: part.start,
+              end: part.end,
+              label: `${g.name} ${count(n)}`,
+              color: g.color,
+              title: `${g.name} · ${span(part.start, n)}`,
+            };
+          })}
+          active={readout.active}
+          onHover={readout.hover}
+          onSelect={readout.toggle}
+          note={inside.length > 0 ? insideNote(inside) : undefined}
+        />
+      )}
+      {layout.genes.length > 0 && (
+        <div role="table" aria-label="DNA genes" className="text-small min-w-0">
+          <div
+            role="row"
+            className="text-meta text-text-dim grid h-6 grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-x-3.5"
+          >
+            <span role="columnheader">gene</span>
+            <span role="columnheader">bytes</span>
+            <span role="columnheader">rule</span>
+            <span role="columnheader">this object</span>
+          </div>
+          {layout.genes.map((g) => (
+            <div
+              key={g.key}
+              role="row"
+              title={title(g)}
+              data-active={readout.active === g.key}
+              className="text-text-dim grid h-8 grid-cols-[minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.8fr)_minmax(0,1.4fr)] items-center gap-x-3.5 border-t border-[#1a1f30] data-[active=true]:bg-[#10131c]"
+            >
+              <span
+                role="cell"
+                className="truncate"
+                style={{ color: g.owns ? g.color : undefined }}
+              >
+                {g.name}
+              </span>
+              <span role="cell" className="truncate tabular-nums">
+                {span(g.offset, g.length)}
+                {g.truncated ? ' · clipped' : ''}
+              </span>
+              <span role="cell" className="truncate">
+                {g.rule}
+              </span>
+              <span role="cell" className="truncate text-[#a0a8be]">
+                {g.value ?? `0x${g.raw}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      {clipped.length > 0 && (
+        <p className="text-text-dim text-meta">
+          Clipped to the actual DNA shown: {clipped.map((g) => g.name).join(', ')} declare
+          {clipped.length === 1 ? 's' : ''} bytes past its {count(layout.bytes.length)}.
+        </p>
+      )}
+      {layout.unmapped.map((u) => (
+        <p key={u.name} className="text-text-dim text-meta">
+          {u.name}: Declared bytes {u.declared.offset} + {u.declared.length}; no bytes of this DNA
+          fall in the declared range.
+        </p>
+      ))}
+    </div>
+  );
+}
+
 // F2 objects (round 2, OB-C1/C2): the per-variant button lists were replaced by the allele gel
 // (`ui/allele-gel.tsx`, `collection-objects.tsx`); a band click is the filter.
 

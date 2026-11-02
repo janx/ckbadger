@@ -3,7 +3,7 @@
 // (OB-C6), a gel caption clipped at 16 lanes, tier-2 headings in tier-1 style, "bytes 32–32",
 // an m-NFT lock footnote saying "at minting", occupied changes wrapping in the lock-column grid,
 // and Newest rows five lines tall at 390.
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AlleleGel } from '@/components/ui/allele-gel';
 import { ObjectGeneticsEvidence } from '@/components/asset/genetics';
@@ -65,8 +65,14 @@ it('styles tier-2 evidence headings as tier 2 and names one byte as "byte N"', (
     'text-body'
   );
   const evidence = screen.getByLabelText('DNA evidence');
-  expect(evidence).toHaveTextContent('Color byte 32');
+  // Lane E (C5): the gene's row (was a definition list) says "byte 32", never "bytes 32–32".
+  expect(within(evidence).getByRole('row', { name: /^Color/ })).toHaveTextContent('byte 32');
   expect(evidence).not.toHaveTextContent('bytes 32–32');
+  // the DNA drawn to scale, one part per gene that owns bytes
+  expect(within(evidence).getByRole('group', { name: 'Object DNA byte map' })).toBeInTheDocument();
+  expect(
+    within(evidence).getByText('All 53 bytes of DNA as hex').closest('details')
+  ).not.toHaveAttribute('open');
 });
 
 it('says "at issue" for an m-NFT token’s lock footnote', () => {
