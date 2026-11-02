@@ -430,12 +430,12 @@ export default function ScriptsPage() {
                 {searchForm}
               </div>
               <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
-                A lock decides who can spend a cell; a type, what it is.{' '}
+                Locks decide who can spend a cell; types, what it is.{' '}
                 <a
                   href="#evidence"
                   className="hover:text-text-bright whitespace-nowrap hover:underline"
                 >
-                  How scripts work ↓
+                  How it works ↓
                 </a>
               </p>
               {summary.isError ? (
