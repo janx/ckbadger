@@ -6,7 +6,12 @@ import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shel
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CellVersions } from '@/components/asset/cell-versions';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
-import { ObjectGeneticsEvidence, ObjectGeneticsView } from '@/components/asset/genetics';
+import {
+  DnaParagraph,
+  ObjectGeneticsEvidence,
+  ObjectGeneticsView,
+} from '@/components/asset/genetics';
+import { DetailSection } from '@/components/ui/detail-layout';
 import { ObjectMedia } from '@/components/asset/object-media';
 import {
   CompositionLine,
@@ -189,8 +194,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       value: (
         <>
           <ExactCkb shannons={held} signed={false} tone="plain" wrap />
+          {/* R11: tier 1's words stay uncoloured; the bars keep the occupied colour. */}
           <span className="text-text-dim text-small mt-1 block">
-            <span className="text-jade">{ckbText(occupied)}</span> occupied ·{' '}
+            <span className="text-text">{ckbText(occupied)}</span> occupied ·{' '}
             {ckbText(held - occupied)} free
           </span>
         </>
@@ -220,33 +226,28 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       ]}
       status={<LiveBadge live={object.isLive} gone="Melted" />}
       identity={<Hash hash={id} truncate={false} className="text-meta" />}
-      intro={
-        <div className="space-y-4 pt-1">
+      // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
+      // moved to tier 2 ("This object, in words").
+      lede={
+        <div className="pt-1">
           {tier ? (
-            <CompositionLine tier={tier} />
+            <CompositionLine tier={tier} lede />
           ) : (
             <span className="text-text-dim text-meta">Composition not recorded</span>
           )}
-          {(history || coll) && (
-            <p className="text-text text-body leading-relaxed">
-              {history && history.length > 0 && <span>{itemLifeSentence(history, now)}</span>}
-              {coll && collectionName && (
-                <span>
-                  {' '}
-                  {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${coll.holdersCount.toLocaleString('en-US')} addresses`}.`}
-                </span>
-              )}
-            </p>
-          )}
-          {genetics.data && (
+        </div>
+      }
+      intro={
+        genetics.data && (
+          <div className="pt-1">
             <ObjectTraits
               traits={genetics.data.cachedVmTraits.traits}
               colors={geneColors}
               active={activeGene}
               onActive={setActiveGene}
             />
-          )}
-        </div>
+          </div>
+        )
       }
       facts={facts}
       feed={
@@ -274,44 +275,70 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
         />
       }
       tier2={
-        // OB-14 (Object.dc.html tier 2): the DNA evidence and the cell's raw record side by side.
-        <div
-          data-tier2-columns
-          className="grid min-w-0 items-start gap-x-14 gap-y-10 md:grid-cols-2"
-        >
-          {/* Only a DOB object has DNA evidence; otherwise the raw record spans both columns. */}
-          {isDob && (
-            <div className="min-w-0 space-y-10">
-              {genetics.data ? (
-                <ObjectGeneticsEvidence
-                  evidence={genetics.data}
-                  subject={title}
-                  decoded={decoded.data}
-                />
+        <>
+          {/* Hierarchy v3 (F4): every sentence that left tier 1, in full. */}
+          {(history || coll || genetics.data) && (
+            <DetailSection title="This object, in words">
+              <div className="flex flex-col gap-3">
+                {(history || coll) && (
+                  <p className="text-text-dim text-body">
+                    {history && history.length > 0 && <span>{itemLifeSentence(history, now)}</span>}
+                    {coll && collectionName && (
+                      <span>
+                        {' '}
+                        {`One of ${coll.liveCount.toLocaleString('en-US')} in ${collectionName}, ${coll.holdersCount === coll.liveCount ? 'each held by a different address' : `held by ${coll.holdersCount.toLocaleString('en-US')} addresses`}.`}
+                      </span>
+                    )}
+                  </p>
+                )}
+                {genetics.data && (
+                  <DnaParagraph evidence={genetics.data} subject={title} tier={tier} />
+                )}
+                {history && lockFootnote(history, 'object') && (
+                  <p className="text-text-dim text-body">{lockFootnote(history, 'object')}</p>
+                )}
+              </div>
+            </DetailSection>
+          )}
+          {/* OB-14 (Object.dc.html tier 2): the DNA evidence and the cell's raw record side by side. */}
+          <div
+            data-tier2-columns
+            className="grid min-w-0 items-start gap-x-14 gap-y-10 md:grid-cols-2"
+          >
+            {/* Only a DOB object has DNA evidence; otherwise the raw record spans both columns. */}
+            {isDob && (
+              <div className="min-w-0 space-y-10">
+                {genetics.data ? (
+                  <ObjectGeneticsEvidence
+                    evidence={genetics.data}
+                    subject={title}
+                    decoded={decoded.data}
+                  />
+                ) : (
+                  <AssetReadState
+                    label="DNA evidence"
+                    error={genetics.error}
+                    loading={genetics.isLoading}
+                  />
+                )}
+              </div>
+            )}
+            <div className={isDob ? 'min-w-0 space-y-10' : 'min-w-0 space-y-10 md:col-span-2'}>
+              {data ? (
+                <>
+                  <AssetReadState label="raw object data" error={protocol.error} retained />
+                  <ItemEvidence protocol={data} />
+                </>
               ) : (
                 <AssetReadState
-                  label="DNA evidence"
-                  error={genetics.error}
-                  loading={genetics.isLoading}
+                  label="raw object data"
+                  error={protocol.error}
+                  loading={protocol.isLoading}
                 />
               )}
             </div>
-          )}
-          <div className={isDob ? 'min-w-0 space-y-10' : 'min-w-0 space-y-10 md:col-span-2'}>
-            {data ? (
-              <>
-                <AssetReadState label="raw object data" error={protocol.error} retained />
-                <ItemEvidence protocol={data} />
-              </>
-            ) : (
-              <AssetReadState
-                label="raw object data"
-                error={protocol.error}
-                loading={protocol.isLoading}
-              />
-            )}
           </div>
-        </div>
+        </>
       }
     >
       <AssetReadState label="object" error={error} retained />
@@ -373,29 +400,17 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   1 CKB per byte ·{' '}
                   {held === occupied ? (
                     <>
-                      <span className="text-jade">all occupied</span>, none free
+                      <span className="text-text">all occupied</span>, none free
                     </>
                   ) : (
                     <>
-                      <span className="text-jade">{ckbText(occupied)} occupied</span>,{' '}
+                      <span className="text-text">{ckbText(occupied)} occupied</span>,{' '}
                       {ckbText(held - occupied)} free
                     </>
                   )}
                 </span>
               }
-              intro={
-                versions.data.data.length > 0 && (
-                  <p className="text-body mb-4 leading-relaxed">
-                    {cellLifeSentence(versions.data.data, 'object')}
-                  </p>
-                )
-              }
             />
-            {lockFootnote(versions.data.data, 'object') && (
-              <p className="text-text-dim text-small">
-                {lockFootnote(versions.data.data, 'object')}
-              </p>
-            )}
           </>
         ) : (
           <AssetReadState
@@ -410,6 +425,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           occupied={object.ownedKnowledge}
           free={(held - occupied).toString()}
         />
+        {/* Hierarchy v3 (F4): the cell's story is the caption under its evidence. */}
+        {versions.data && versions.data.data.length > 0 && (
+          <p data-role="caption" className="text-text text-body max-w-[640px]">
+            {cellLifeSentence(versions.data.data, 'object')}
+          </p>
+        )}
       </div>
       {object.clusterId && (
         <section aria-label={`In ${collectionName ?? 'this collection'}`} className="space-y-3">

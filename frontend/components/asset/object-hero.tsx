@@ -36,11 +36,20 @@ export const COMPOSITION_SENTENCES: Record<CompositionTier, string> = {
   decode_pending: 'Its DOB has not been decoded yet, so its composition is not classified.',
 };
 
-export function CompositionLine({ tier }: { tier: CompositionTier }) {
+export function CompositionLine({
+  tier,
+  lede = false,
+}: {
+  tier: CompositionTier;
+  /** Hierarchy v3 (R13): set as the page's lede — dim, at most 560 px. */
+  lede?: boolean;
+}) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <CompositionBadge tier={tier} />
-      <span className="text-text text-body">{COMPOSITION_SENTENCES[tier]}</span>
+      <span className={cn('text-body', lede ? 'text-text-dim max-w-[560px]' : 'text-text')}>
+        {COMPOSITION_SENTENCES[tier]}
+      </span>
     </div>
   );
 }

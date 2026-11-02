@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useId, type ReactNode } from 'react';
 import { Header } from '@/components/layout/header';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
@@ -13,6 +13,12 @@ export interface AssetDetailShellProps {
   breadcrumb: readonly { label: string; href: string }[];
   status?: ReactNode;
   identity?: ReactNode;
+  /**
+   * Hierarchy v3 (R13): the page's one-sentence lede. Given, the title row, the identity and the
+   * lede form the page's hero `<section>` (named by the title) and `intro` follows it; omitted, the
+   * title block is laid out as before.
+   */
+  lede?: ReactNode;
   intro?: ReactNode;
   facts?: readonly { label: string; value: ReactNode }[];
   children: ReactNode;
@@ -38,6 +44,7 @@ export function AssetDetailShell({
   breadcrumb,
   status,
   identity,
+  lede,
   intro,
   facts,
   children,
@@ -46,14 +53,33 @@ export function AssetDetailShell({
   media,
   railAfterHeader = false,
 }: AssetDetailShellProps) {
-  const titleBlock = (
+  const titleId = useId();
+  const named = (
     <>
       <div className="flex min-w-0 flex-wrap items-center gap-3">
         <ClassMark kind={kind} size={24} />
-        <h1 className="text-text-bright text-entity min-w-0 break-words font-medium">{title}</h1>
+        <h1
+          id={lede ? titleId : undefined}
+          className="text-text-bright text-entity min-w-0 break-words font-medium"
+        >
+          {title}
+        </h1>
         {status}
       </div>
       {identity && <div className="text-text-dim text-meta min-w-0 break-words">{identity}</div>}
+    </>
+  );
+  const titleBlock = lede ? (
+    <>
+      <section aria-labelledby={titleId} className="min-w-0 space-y-3">
+        {named}
+        {lede}
+      </section>
+      {intro}
+    </>
+  ) : (
+    <>
+      {named}
       {intro}
     </>
   );

@@ -7,6 +7,7 @@ import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import {
   clusterDetailProducer,
   objectCollectionDetailProducer,
@@ -127,20 +128,19 @@ async function page() {
   return view;
 }
 
-it('opens with the composition sentence, a summary of its life and its readable traits (OB-6, OB-16)', async () => {
-  await page();
+it('opens with one hero section — name, status, id and the composition sentence as its lede — then its readable traits; its life story is in tier 2 (OB-6, OB-16, F4, R13)', async () => {
+  const { container } = await page();
   const header = screen.getByRole('banner');
-  expect(within(header).getByText('BTC+CKB')).toBeInTheDocument();
-  expect(header).toHaveTextContent(
+  const hero = within(header).getByRole('region', { name: 'Nervape 3x' });
+  expect(within(hero).getByText('BTC+CKB')).toBeInTheDocument();
+  expect(within(hero).getByText('Live')).toBeInTheDocument();
+  const lede = within(hero).getByText(
     'Fully on-chain: its record lives in a CKB cell, its image in a Bitcoin inscription.'
   );
-  expect(
-    await within(header).findByText(/^Minted .* to a secp256k1 lock, then moved/, undefined, {
-      timeout: 5000,
-    })
-  ).toHaveTextContent('then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.');
-  expect(header).toHaveTextContent('One of 90 in Nervape 3x, each held by a different address.');
+  expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+  expect(lede.textContent!.length).toBeLessThanOrEqual(90);
   const traits = screen.getByLabelText('Traits');
+  expect(hero.contains(traits)).toBe(false);
   expect([...traits.querySelectorAll('dt')].map((d) => d.textContent)).toEqual([
     'relief',
     'Color',
@@ -149,6 +149,29 @@ it('opens with the composition sentence, a summary of its life and its readable 
   ]);
   expect(within(traits).getByText('Nature Green')).toBeInTheDocument();
   expect(within(traits).getByText('empty')).toHaveClass('text-text-dim');
+  // the life summary and the collection sentence: tier 2, every word kept
+  const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+  const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+  const story = await within(tier2).findByText(
+    /^Minted .* to a secp256k1 lock, then moved/,
+    undefined,
+    {
+      timeout: 5000,
+    }
+  );
+  expect(story).toHaveTextContent(
+    'then moved 30 seconds later to a Nervape Shadow Lock, where it sits now.'
+  );
+  expect(tier2).toHaveTextContent('One of 90 in Nervape 3x, each held by a different address.');
+  expect(tier1).not.toHaveTextContent(/^Minted \d/);
+  expect(tier1).not.toHaveTextContent('each held by a different address');
+});
+
+it('keeps tier 1 within the prose budget: one lede and captions under the evidence (F4, §0)', async () => {
+  const { container } = await page();
+  await screen.findByRole('region', { name: 'CKB held in its cell' }, { timeout: 5000 });
+  await screen.findByRole('region', { name: 'In Nervape 3x' }, { timeout: 5000 });
+  expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
 });
 
 it('draws the sequencing gel and the collection allele gel with "this one" (OB-4, OB-7)', async () => {
@@ -160,8 +183,18 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
   expect(within(dna).getByRole('status', { name: 'Gene readout' })).toHaveTextContent(
     'tap or hover'
   );
-  expect(dna).toHaveTextContent(
-    'Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
+  // evidence first: one caption under the plate, the full paragraph in tier 2 (F4, R13)
+  const caption = dna.querySelector('p[data-role="caption"]')!;
+  expect(caption).toHaveTextContent(
+    'Its traits are read from 53 bytes of DNA; its prev.bg gene points to a Bitcoin inscription, which makes it BTC+CKB.'
+  );
+  expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+  expect(caption.textContent!.length).toBeLessThanOrEqual(160);
+  const plate = container.querySelector('[data-nibble]')!;
+  expect(plate.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(dna).not.toHaveTextContent('The object’s traits are not stored as text.');
+  expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(
+    'The object’s traits are not stored as text. It carries 53 bytes of DNA, and the collection’s decoder reads each gene to express a trait. Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
   );
   expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
   expect(dna).toHaveTextContent(
@@ -206,8 +239,18 @@ it('shows its cell at minting and now, to scale, with what changed (OB-9)', asyn
     { timeout: 5000 }
   );
   expect(cell).toHaveTextContent('1 CKB per byte · all occupied, none free');
-  expect(cell).toHaveTextContent(
+  // R11: no coloured words in tier 1; the bars keep the occupied colour
+  expect(within(cell).getByText('all occupied')).not.toHaveClass('text-jade');
+  // the cell sentence is the caption under the evidence (F4); the lock note is tier 2
+  const caption = cell.querySelector('p[data-role="caption"]')!;
+  expect(caption).toHaveTextContent(
     'The object’s cell holds 320 CKB. It held 307 at minting; the lock grew by 13 bytes, so the cell grew by 13 CKB when it moved.'
+  );
+  expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+  expect(caption).toBe(cell.lastElementChild);
+  expect(cell.textContent).not.toMatch(/Lock: secp256k1/);
+  expect(document.querySelector('[data-tier="2"]')).toHaveTextContent(
+    'Lock: secp256k1 throughout. Type and data never changed.'
   );
   const rows = within(cell).getAllByRole('article');
   expect(rows.map((r) => r.querySelector('a')!.textContent)).toEqual(['At minting', 'Now']);
@@ -287,7 +330,7 @@ it('reads the name, status, composition and summary before the media, in DOM ord
     screen.getByRole('heading', { level: 1, name: 'Nervape 3x' }),
     within(header).getByText('Live'),
     within(header).getByText('BTC+CKB'),
-    within(header).getByText(/^Minted /),
+    within(header).getByText(/^Fully on-chain: /),
   ])
     expect(before(first, media), first.textContent ?? '').toBe(true);
   // From md up the media still takes the left column beside the title.

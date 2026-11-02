@@ -51,6 +51,46 @@ function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefine
   };
 }
 /**
+ * What the DNA section says in words, from its sequencing layout: how many bytes of DNA, and the
+ * gene that points to a Bitcoin inscription when that is what makes the object BTC+CKB.
+ */
+function dnaWords(
+  evidence: ObjectGenetics,
+  subject: string,
+  tier: CompositionTier | undefined
+): { bytes: number; pointer: string | null } {
+  const layout = sequencingGenes(evidence, subject);
+  const pointer = layout.genes.find((g) => g.owns && /^btcfs/i.test(g.ruleName));
+  return {
+    bytes: layout.bytes.length,
+    pointer: pointer && tier === 'btc_ckb' ? pointer.name : null,
+  };
+}
+
+/** Tier 2 (hierarchy v3, F4): the DNA section's full explanation, which tier 1 keeps as a caption. */
+export function DnaParagraph({
+  evidence,
+  subject,
+  tier,
+}: {
+  evidence: ObjectGenetics;
+  subject: string;
+  tier?: CompositionTier;
+}) {
+  if (evidence.dnaHex === null) return null;
+  const { bytes, pointer } = dnaWords(evidence, subject, tier);
+  return (
+    <p className="text-text-dim text-body">
+      The object’s traits are not stored as text. It carries {bytes} bytes of DNA, and the
+      collection’s decoder reads each gene to express a trait.
+      {pointer
+        ? ` Its ${pointer} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
+        : ''}
+    </p>
+  );
+}
+
+/**
  * The object's DNA: a sequencing gel of its own bytes (gene by gene), then, on the same plate, the
  * allele gel of its collection with this object's genotype drawn across it ("this one").
  */
@@ -75,7 +115,7 @@ export function ObjectGeneticsView({
     return <p className="text-text-dim text-meta">This object has no DOB DNA.</p>;
   const layout = sequencingGenes(evidence, subject);
   const geneNames = [...new Set(layout.genes.map((g) => g.name))];
-  const pointer = layout.genes.find((g) => g.owns && /^btcfs/i.test(g.ruleName));
+  const words = dnaWords(evidence, subject, tier);
   const bridge = collection?.genetics.complete
     ? alleleLanes(
         collection.genetics,
@@ -95,13 +135,6 @@ export function ObjectGeneticsView({
           {evidence.number !== null ? ` · number ${evidence.number}` : ''}
         </span>
       </div>
-      <p className="text-body leading-relaxed">
-        The object’s traits are not stored as text. It carries {layout.bytes.length} bytes of DNA,
-        and the collection’s decoder reads each gene to express a trait.
-        {pointer && tier === 'btc_ckb'
-          ? ` Its ${pointer.name} gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.`
-          : ''}
-      </p>
       {cached.status === 'pending' && (
         <p role="status" className="text-text-dim">
           Decode pending · awaiting DOB execution.
@@ -174,6 +207,14 @@ export function ObjectGeneticsView({
           )}
         </div>
       </div>
+      {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
+      <p data-role="caption" className="text-text text-body max-w-[640px]">
+        Its traits are read from {words.bytes} bytes of DNA
+        {words.pointer
+          ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
+          : ''}
+        .
+      </p>
     </section>
   );
 }

@@ -46,6 +46,38 @@ describe('Asset domain layout', () => {
     );
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent('Inventory');
   });
+  it('wraps title, status, identity and a given lede in one hero section; the intro follows it (hierarchy v3, R13)', () => {
+    render(
+      <AssetDetailShell
+        title="Nervape 3x"
+        kind="objects"
+        breadcrumb={[{ label: 'Inventory', href: '/inventory/objects' }]}
+        status={<span>Live</span>}
+        identity={<span>0x51c7</span>}
+        lede={<p>Fully on-chain.</p>}
+        intro={<dl aria-label="Traits" />}
+      >
+        <p>Capacity history</p>
+      </AssetDetailShell>
+    );
+    const hero = screen.getByRole('region', { name: 'Nervape 3x' });
+    expect(hero.tagName).toBe('SECTION');
+    for (const text of ['Live', '0x51c7', 'Fully on-chain.']) expect(hero).toHaveTextContent(text);
+    expect(hero).toContainElement(screen.getByRole('heading', { level: 1, name: 'Nervape 3x' }));
+    const traits = screen.getByLabelText('Traits');
+    expect(hero.contains(traits)).toBe(false);
+    expect(hero.compareDocumentPosition(traits) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByRole('banner')).toContainElement(traits);
+  });
+  it('keeps the title block without a hero section when no lede is given (old default)', () => {
+    const { container } = render(
+      <AssetDetailShell title="Token" kind="tokens" breadcrumb={[]} intro={<p>Intro</p>}>
+        <p>Body</p>
+      </AssetDetailShell>
+    );
+    expect(container.querySelector('section')).toBeNull();
+    expect(screen.getByRole('banner')).toHaveTextContent('Intro');
+  });
   it('retains an explicit error when previously loaded data remains', () => {
     render(<AssetReadState error={new Error('read failed')} label="history" retained />);
     expect(screen.getByRole('alert')).toHaveTextContent(
