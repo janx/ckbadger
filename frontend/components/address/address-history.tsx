@@ -18,7 +18,7 @@ import type {
   AddressCell,
   ParticipantInfo,
 } from '@/lib/api';
-import { formatUtc8Date, truncateHash } from '@/lib/utils';
+import { formatUtc8Date } from '@/lib/utils';
 import type { AssetClass } from '@/lib/design-tokens';
 import { classifyActivity } from '@/lib/activity-classify';
 import { getScriptDetailHref } from '@/lib/detail-routes';
