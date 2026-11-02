@@ -10,6 +10,7 @@ import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { createTestQueryClient } from '@/__tests__/utils/test-utils';
 import { QueryClientProvider } from '@tanstack/react-query';
 import type { GlobalActivity, Transaction } from '@/lib/api';
+import { formatUtc8Date } from '@/lib/utils';
 
 const API = '/api/:network/v1';
 
@@ -84,15 +85,22 @@ describe('ActivityFeed', () => {
       'href',
       '/mainnet/blocks/20819142'
     );
-    // T7 (option A): block · age on the right; the headline links to the tx, the hash is the
-    // row's hover.
+    // T7 (option A): the headline links to the tx, the hash is the row's hover. Consistency C3:
+    // block · the absolute UTC+8 date on the right (was block · age); the age joins the hash in
+    // the row's hover.
     expect(within(first).getByRole('link', { name: 'Script call' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${a.txHash}`
     );
-    expect(first).toHaveAttribute('title', a.txHash);
+    expect(first).toHaveAttribute(
+      'title',
+      expect.stringMatching(new RegExp(`^${a.txHash} · \\d+s ago$`))
+    );
     expect(evidence).not.toHaveTextContent('0x01ababab');
-    expect(evidence).toHaveTextContent(/^#20,819,142 · \d+s ago$/);
+    expect(evidence).toHaveTextContent(
+      new RegExp(`^#20,819,142 · ${formatUtc8Date(a.timestamp)}$`)
+    );
+    expect(evidence).not.toHaveTextContent('ago');
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
@@ -332,9 +340,20 @@ describe('ActivityFeed', () => {
       '/mainnet/blocks/8775638'
     );
     expect(first.querySelector('[data-role="headline"]')).toHaveTextContent('2 inputs → 3 outputs');
-    // The same row grammar: primary info left, the evidence quiet on the right.
-    expect(first.querySelector('[data-role="evidence"]')).toHaveTextContent(
-      /#8,775,638 · 0x0000efef\.\.\.efefef · /
+    // The same row grammar: primary info left, the evidence quiet on the right. Consistency C3:
+    // the date closes it (was the age), the age is the date's hover.
+    const evidence = first.querySelector('[data-role="evidence"]') as HTMLElement;
+    expect(evidence).toHaveTextContent(
+      new RegExp(`^#8,775,638 · 0x0000efef\\.\\.\\.efefef · ${formatUtc8Date(tx(0).timestamp)}$`)
+    );
+    expect(within(evidence).getByText(formatUtc8Date(tx(0).timestamp))).toHaveAttribute(
+      'title',
+      expect.stringMatching(/ago$/)
+    );
+    // The row's hover is the activity row's: the hash and the age (was no title).
+    expect(first).toHaveAttribute(
+      'title',
+      expect.stringMatching(new RegExp(`^${tx(0).hash} · \\d+s ago$`))
     );
   });
 

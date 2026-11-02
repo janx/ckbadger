@@ -917,15 +917,19 @@ export function ExactCkb({
  * `tone="sign"` colours a token amount by its sign (the Address board, and the T7 activity rows);
  * the default draws it bright. `symbol="dim"` (T7) draws the symbol dim beside the amount, as the
  * unit beside an exact CKB amount; the default keeps it in the amount's ink.
+ * `showComposition={false}` (consistency C3) leaves an object's composition badge to its caller,
+ * which says a tier shared by a whole participant line once; the default draws it per object.
  */
 export function ItemDeltaFact({
   item,
   tone = 'plain',
   symbol = 'same',
+  showComposition = true,
 }: {
   item: ItemDelta;
   tone?: 'plain' | 'sign';
   symbol?: 'same' | 'dim';
+  showComposition?: boolean;
 }) {
   switch (item.kind) {
     case 'token': {
@@ -973,7 +977,7 @@ export function ItemDeltaFact({
             </Link>
           </span>{' '}
           <span className="text-text-dim">{item.delta > 0 ? 'arrived' : 'departed'}</span>
-          {item.composition && (
+          {showComposition && item.composition && (
             <CompositionBadge tier={item.composition} size="sm" className="ml-1.5 align-middle" />
           )}
         </span>

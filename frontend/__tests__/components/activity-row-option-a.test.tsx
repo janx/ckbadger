@@ -1,12 +1,14 @@
 // Tables round 2026-11-02, lane F2 (T7, ruling D1 · option A, Feed.dc.html column A): every
 // participant stays in the row, one 18 px line each — address · lock-kind tag · signed CKB · each
 // asset delta · occupied — under one headline line that links to the transaction and carries the
-// tx-level facts inline; block · age on the right, the tx hash in the row's hover. jsdom does not
-// lay out, so these assert the structure and classes; the survey gate measures the heights.
+// tx-level facts inline; block · date on the right (consistency C3: the absolute UTC+8 date, was the
+// age), the tx hash and the age in the row's hover. jsdom does not lay out, so these assert the
+// structure and classes; the survey gate measures the heights.
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { ItemDelta, ParticipantInfo } from '@/lib/api';
+import { formatUtc8Date } from '@/lib/utils';
 
 const MINUS = '−';
 const TX = '0x8a39e8e3' + 'ab'.repeat(26) + 'd67305';
@@ -116,10 +118,14 @@ const lines = (c: HTMLElement) => [...c.querySelectorAll<HTMLElement>('[data-rol
 const head = (c: HTMLElement) => c.querySelector('[data-role="row-head"]') as HTMLElement;
 
 describe('option A: the headline line', () => {
-  it('links the headline to the transaction and puts block · age on the right, the hash in hover', () => {
+  it('links the headline to the transaction and puts block · date on the right, the hash and age in hover', () => {
     const { container } = render(<ActivityRow activity={scriptCall} />);
     const article = container.querySelector('article') as HTMLElement;
-    expect(article).toHaveAttribute('title', TX);
+    // Consistency C3: the age left the visible row for its hover, beside the hash (was: TX alone).
+    expect(article).toHaveAttribute(
+      'title',
+      expect.stringMatching(new RegExp(`^${TX} · \\d+s ago$`))
+    );
     const headline = within(article).getByRole('link', { name: 'Script call' });
     expect(headline).toHaveAttribute('href', `/mainnet/tx/${TX}`);
     expect(headline).toHaveAttribute('data-role', 'headline');
@@ -130,7 +136,14 @@ describe('option A: the headline line', () => {
       'href',
       '/mainnet/blocks/20904081'
     );
-    expect(evidence).toHaveTextContent(/^#20,904,081 · \d+s ago$/);
+    // Consistency C3: the absolute UTC+8 date (was "13s ago"); the age is the date's own hover.
+    const date = formatUtc8Date(scriptCall.timestamp!);
+    expect(evidence).toHaveTextContent(new RegExp(`^#20,904,081 · ${date}$`));
+    expect(evidence).not.toHaveTextContent('ago');
+    expect(within(evidence).getByText(date)).toHaveAttribute(
+      'title',
+      expect.stringMatching(/^\d+s ago$/)
+    );
     // The hash is in no visible text of the row.
     expect(article).not.toHaveTextContent(/0x8a39e8e3/);
     expect(head(container)).toHaveClass('leading-[18px]');

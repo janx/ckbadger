@@ -32,21 +32,41 @@ import type {
 } from '@/lib/api';
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
+import { CompositionBadge } from '@/components/ui/composition-mark';
 import type { ActivityBody } from '@/lib/activity-classify';
+import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatTimeAgo, formatUtc8Date, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
 // T7: 8 px padding, 2 px between the headline line and the participant lines.
 const ROW_CLASS = 'flex flex-col gap-0.5 border-b border-base-elevated py-2 transition-colors';
+
+/**
+ * A row's hover (consistency C3, T7): the tx hash, and the block's age beside it — the age left
+ * the visible row for the absolute date. A pool row has no block time, so its hover is the hash.
+ */
+export function activityRowTitle(hash: string, timestamp: string | null): string {
+  return timestamp === null ? hash : `${hash} · ${formatTimeAgo(timestamp)}`;
+}
+
+/**
+ * The block's date on the UTC+8 clock every dated row uses (consistency C3: one date form on every
+ * feed; "ago" drifts as the page is read). The age is the date's own hover.
+ */
+function RowDate({ timestamp }: { timestamp: string }) {
+  return <time title={formatTimeAgo(timestamp)}>{formatUtc8Date(timestamp)}</time>;
+}
+
 /**
  * Line 1 of a row: the primary fact on the left (the Layer-3 narrative for an activity), the raw
- * evidence quiet on the right — block, tx hash, age — always there to verify it against.
+ * evidence quiet on the right — block, tx hash, date — always there to verify it against.
  *
  * `layout="line"` (tables round 2026-11-02, T7 · option A) is the activity row's one 18 px line:
  * the title, then `details` inline (the tx-level facts, dim), the evidence on the right. With
- * `href` the title is the link to the transaction and the default evidence is block · age — the
- * hash is the row's hover (`title`), not text. The default `layout="wrap"` is unchanged (TxRow).
+ * `href` the title is the link to the transaction and the default evidence is block · date — the
+ * hash is the row's hover (`title`), not text. The default `layout="wrap"` keeps the hash link
+ * (TxRow). Consistency C3: both end with the absolute UTC+8 date, the age in its hover (was the age).
  */
 export function ActivityRowHead({
   title,
@@ -148,7 +168,7 @@ export function ActivityRowHead({
             </>
           )}
           {timestamp !== null ? (
-            formatTimeAgo(timestamp)
+            <RowDate timestamp={timestamp} />
           ) : timeAddedToPool ? (
             <TimeInPool since={timeAddedToPool} />
           ) : (
@@ -373,17 +393,32 @@ const LINE_BUTTON =
 function ItemOnLine({
   item,
   tone,
+  showComposition,
   className,
 }: {
   item: ItemDelta;
   tone: 'plain' | 'sign';
+  /** False when the line says its objects' one shared tier once (`lineCompositionTier`). */
+  showComposition: boolean;
   className?: string;
 }) {
   return (
     <span data-role="item" className={cn('min-w-0 max-w-full', className)}>
-      <ItemDeltaFact item={item} tone={tone} symbol="dim" />
+      <ItemDeltaFact item={item} tone={tone} symbol="dim" showComposition={showComposition} />
     </span>
   );
+}
+
+/**
+ * Consistency C3: the one composition tier every object of a participant line shares, said once
+ * at the end of its items; null when there is no object, when an object carries no tier, or when
+ * the tiers differ — then each object keeps its own badge. Tokens and identities carry no tier.
+ */
+export function lineCompositionTier(items: ItemDelta[]): CompositionTier | null {
+  const tiers = items.flatMap((i) => (i.kind === 'object' ? [i.composition ?? null] : []));
+  const first = tiers[0];
+  if (first === undefined || first === null) return null;
+  return tiers.every((t) => t === first) ? first : null;
 }
 
 /**
@@ -397,12 +432,14 @@ function ItemsOnLine({
   foldObjects,
   focusItemId,
   itemTone,
+  showComposition,
   className,
 }: {
   items: ItemDelta[];
   foldObjects: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
+  showComposition: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -415,7 +452,13 @@ function ItemsOnLine({
   return (
     <>
       {shown.map((item, i) => (
-        <ItemOnLine key={i} item={item} tone={itemTone} className={className} />
+        <ItemOnLine
+          key={i}
+          item={item}
+          tone={itemTone}
+          showComposition={showComposition}
+          className={className}
+        />
       ))}
       {folded && (
         <button
@@ -448,17 +491,24 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
  * ghost tone (≈ #4a5268). The line wraps between those items, in that order, when it cannot hold
  * them — never inside one.
  *
+ * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
+ * to the page it is on, and carries a "this address" tag after its lock tag (Address.dc.html →
+ * History). When all its objects share one composition tier, the line says it once after its
+ * items (`lineCompositionTier`); mixed tiers keep one badge per object.
+ *
  * The asset boards' phone form (`foldObjects`, B#12) stays: below md the objects are one count
  * chip ("+2 objects") that opens them in place; tokens and identities stay as facts.
  */
 function ParticipantLine({
   p,
+  focus,
   foldObjects,
   focusItemId,
   itemTone,
   notes,
 }: {
   p: ActivityParticipant & { key: string };
+  focus: boolean;
   foldObjects: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -467,6 +517,8 @@ function ParticipantLine({
   const [objectsOpen, setObjectsOpen] = useState(false);
   const phoneObjects = foldObjects && p.itemDeltas.some((i) => i.kind === 'object');
   const otherItems = p.itemDeltas.filter((i) => i.kind !== 'object');
+  const lineTier = lineCompositionTier(p.itemDeltas);
+  const showComposition = lineTier === null;
   return (
     <div
       data-role="participant"
@@ -475,11 +527,17 @@ function ParticipantLine({
       className="text-small flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px] leading-[18px]"
     >
       <span data-role="party" data-party={p.key} className="-ml-3 max-w-full">
-        <ParticipantRefView participant={p} compact quiet />
+        <ParticipantRefView participant={p} compact quiet linked={!focus} />
       </span>
       {p.lockKind && (
         <span data-role="lock-kind" className={LOCK_TAG}>
           {p.lockKind}
+        </span>
+      )}
+      {focus && (
+        // The board's ghost tag (#343c50), drawn in the readable ghost tone occupied uses.
+        <span data-role="this-address" className={cn(LOCK_TAG, 'text-text-dim/60')}>
+          this address
         </span>
       )}
       {p.lockHash !== null && notes?.has(p.lockHash) && (
@@ -496,7 +554,7 @@ function ParticipantLine({
           className="inline-flex flex-wrap items-center gap-x-2.5 md:hidden"
         >
           {otherItems.map((item, i) => (
-            <ItemOnLine key={i} item={item} tone={itemTone} />
+            <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
           ))}
           <button
             type="button"
@@ -514,8 +572,14 @@ function ParticipantLine({
         foldObjects={foldObjects}
         focusItemId={focusItemId}
         itemTone={itemTone}
+        showComposition={showComposition}
         className={phoneObjects ? 'hidden md:inline-flex' : undefined}
       />
+      {lineTier !== null && (
+        <span data-role="composition" className="inline-flex">
+          <CompositionBadge tier={lineTier} size="sm" />
+        </span>
+      )}
       {p.usedDelta !== '0' && (
         <span
           data-role="occupied"
@@ -532,7 +596,7 @@ function ParticipantLine({
           {p.itemDeltas
             .filter((i) => i.kind === 'object')
             .map((item, i) => (
-              <ItemOnLine key={i} item={item} tone={itemTone} />
+              <ItemOnLine key={i} item={item} tone={itemTone} showComposition={showComposition} />
             ))}
         </div>
       )}
@@ -541,18 +605,41 @@ function ParticipantLine({
 }
 
 /**
+ * The focused participant (consistency C3) and the others. The focus is matched by its full lock
+ * hash; a focus that is not a participant of the transaction is a caller's contract violation.
+ */
+function splitFocus<T extends ActivityParticipant>(
+  participants: T[],
+  focusLockHash: string | undefined,
+  txHash: string
+): { focus: T | null; others: T[] } {
+  if (focusLockHash === undefined) return { focus: null, others: participants };
+  const at = participants.findIndex((p) => p.lockHash === focusLockHash);
+  if (at < 0)
+    throw new Error(
+      `transaction ${txHash}: focus lock hash ${focusLockHash} is not one of its ${participants.length} participants`
+    );
+  return { focus: participants[at], others: participants.filter((_, i) => i !== at) };
+}
+
+/**
  * Every participant, Layer 1 and Layer 2, one line each (D1: none is dropped). Named parties with
  * no change are listed — their zero is the fact. Over six, the five largest and an explicit "+N"
- * to expand (the homepage rule, unchanged).
+ * to expand (the homepage rule, unchanged). Consistency C3: with `focusLockHash` that participant
+ * comes first, always shown; the others keep their order and that rule among themselves.
  */
 function Participants({
   participants,
+  txHash,
+  focusLockHash,
   foldObjects = false,
   focusItemId,
   itemTone,
   notes,
 }: {
   participants: ActivityParticipant[];
+  txHash: string;
+  focusLockHash?: string;
   foldObjects?: boolean;
   focusItemId?: string;
   itemTone: 'plain' | 'sign';
@@ -561,8 +648,10 @@ function Participants({
 }) {
   const [expanded, setExpanded] = useState(false);
   const indexed = participants.map((p, i) => ({ ...p, key: partyKey(p, i) }));
-  const { shown, hidden } = participantsToShow(indexed, expanded);
-  const foldable = participants.length > PARTICIPANT_LIMIT;
+  const { focus, others } = splitFocus(indexed, focusLockHash, txHash);
+  const { shown: shownOthers, hidden } = participantsToShow(others, expanded);
+  const shown = focus === null ? shownOthers : [focus, ...shownOthers];
+  const foldable = others.length > PARTICIPANT_LIMIT;
   if (participants.length === 0) return null;
   return (
     <div data-role="participants" className="flex min-w-0 flex-col">
@@ -570,6 +659,7 @@ function Participants({
         <ParticipantLine
           key={p.key}
           p={p}
+          focus={p === focus}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
           itemTone={itemTone}
@@ -627,6 +717,11 @@ export type ActivityRowProps = {
   itemTone?: 'plain' | 'sign';
   /** Round 3 (R-4): a note the API attaches to one participant, keyed by its lock hash. */
   participantNotes?: ReadonlyMap<string, string>;
+  /**
+   * Consistency C3 (the address page): the participant with this full lock hash leads, its
+   * address as text with a "this address" tag; it must be a participant of the transaction.
+   */
+  focusLockHash?: string;
 } & (
   | { mode?: 'cross-user'; participant?: never }
   | { mode: 'participant'; participant: ParticipantInfo }
@@ -648,6 +743,7 @@ export function ActivityRow({
   focusItemId,
   itemTone = 'sign',
   participantNotes,
+  focusLockHash,
 }: ActivityRowProps) {
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
@@ -657,7 +753,8 @@ export function ActivityRow({
     <article
       data-feed-row={activity.txHash}
       // T7: the hash leaves the visible row; it is the row's hover (and the headline's link).
-      title={activity.txHash}
+      // Consistency C3: so is the age, beside it; the row shows the date.
+      title={activityRowTitle(activity.txHash, activity.timestamp)}
       className={cn(ROW_CLASS, fresh && 'bg-jade/5', className)}
     >
       <ActivityRowHead
@@ -685,6 +782,8 @@ export function ActivityRow({
       {showParticipants && (
         <Participants
           participants={shown.participants}
+          txHash={activity.txHash}
+          focusLockHash={focusLockHash}
           foldObjects={foldObjects}
           focusItemId={focusItemId}
           itemTone={itemTone}

@@ -27,6 +27,9 @@ function compactLabel(value: string): string {
  * `compact` is the per-participant line inside an activity row; the default is
  * the standalone form. `quiet` draws a compact address in the plain ink instead
  * of jade, for rows where colour is kept for the amounts (the homepage feed).
+ * `linked={false}` (consistency C3, compact only) writes the address or lock hash
+ * as dim text with the whole value in its hover: the party a page is about is
+ * never a link to that same page.
  * In a column too narrow for the address and its roles, the roles wrap under the
  * address rather than being clipped ("ow" for owner_from in a 136 px track).
  */
@@ -34,13 +37,18 @@ export function ParticipantRefView({
   participant,
   compact = false,
   quiet = false,
+  linked = true,
   className,
 }: {
   participant: ParticipantRef;
   compact?: boolean;
   quiet?: boolean;
+  /** Consistency C3: false writes a compact party as text (the page's own party). */
+  linked?: boolean;
   className?: string;
 }) {
+  if (!linked && !compact)
+    throw new Error('ParticipantRefView: linked={false} is the compact activity-row form only');
   const roles = participant.roles.length > 0 ? participant.roles.join(', ') : null;
   const address = participant.address;
 
@@ -48,7 +56,11 @@ export function ParticipantRefView({
     const isCkbAddr = address.startsWith('ckb1') || address.startsWith('ckt1');
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
-        {compact ? (
+        {!linked ? (
+          <span className="text-text-dim text-small shrink-0 font-mono" title={address}>
+            {compactLabel(address)}
+          </span>
+        ) : compact ? (
           <Link
             href={`/address/${address}`}
             className={cn(
@@ -74,6 +86,15 @@ export function ParticipantRefView({
 
   const lockHash = participant.lockHash;
   if (lockHash !== null) {
+    if (!linked)
+      return (
+        <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
+          <span className="text-text-dim text-small shrink-0 font-mono" title={lockHash}>
+            {compactLabel(lockHash)}
+          </span>
+          {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}
+        </span>
+      );
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
         <Link
