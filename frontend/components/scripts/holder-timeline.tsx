@@ -102,10 +102,15 @@ function segmentLabel(holder: CodeHolder, current: boolean, px: number | null): 
   if (px === null) return '';
   const name = holderName(holder.custody);
   const signing = signingText(holder);
+  // A keyed holder (multisig, one key) shortens to its lock args; any other is its name or nothing.
+  const keyed =
+    (holder.custody.class === 'multisig' || holder.custody.class === 'one_key') &&
+    holder.custody.lockArgs !== null &&
+    holder.custody.lockArgs.length > 2;
   const candidates = [
     current ? `${name} · holds the code now` : signing ? `${name} · ${signing}` : name,
     name,
-    holder.custody.lockArgs ? shortHex(holder.custody.lockArgs) : '',
+    keyed ? shortHex(holder.custody.lockArgs!) : '',
   ];
   return (
     candidates.find((text) => text && text.length * advance(LABEL_PX) + 2 * LABEL_PAD <= px) ?? ''

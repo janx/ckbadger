@@ -9,7 +9,7 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ScriptCustodyEvidence } from '@/components/scripts/script-code-evidence';
+import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
 import { HolderTimeline } from '@/components/scripts/holder-timeline';
 import {
   ScriptCellsSummary,
@@ -250,6 +250,11 @@ export function ScriptFamilyPage({
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];
+  // Code no one can replace (pinned by data hash, or in a code cell no one can spend) is said in
+  // words, never drawn as a line of holders.
+  const immutable =
+    (family.codeClasses ?? []).length > 0 &&
+    (family.codeClasses ?? []).every((row) => isImmutableClass(row.class));
   const deploymentOf = new Map(
     orderedVersions(family).flatMap((version) =>
       version.deployments.map(
@@ -740,7 +745,7 @@ export function ScriptFamilyPage({
             ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
             <Section title="Who can change its code" className="mt-16">
-              {lineage && holders.length ? (
+              {lineage && holders.length && !immutable ? (
                 // T8: one Type ID lineage is a holder timeline.
                 <HolderTimeline
                   family={family}

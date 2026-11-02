@@ -146,3 +146,45 @@ describe('HolderTimeline (table-rows L1-3)', () => {
     expect(screen.getByTestId('holder-axis')).toHaveTextContent(/^2023-10-07\s*today$/);
   });
 });
+
+// Regression (2026-11-02, Default Lock): an unspendable holder's lock args are "0x"; its segment
+// must not hand them to shortHex ("Not a hex value: 0x").
+describe('HolderTimeline · an unspendable holder', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('names it "an unspendable lock" and never shortens its empty lock args', () => {
+    const marker = {
+      ...lineage[0],
+      custody: {
+        class: 'unspendable' as const,
+        lockCodeHash: `0x${'00'.repeat(32)}`,
+        lockHashType: 'data',
+        lockArgs: '0x',
+        threshold: null,
+        keyCount: null,
+        requireFirstN: null,
+        keyHashes: [],
+        verifiedByTx: null,
+        witnessState: 'not_applicable' as const,
+        owners: [],
+      },
+    };
+    const only = codeHolders([marker], [marker], numbers);
+    stubChartWidth(1248);
+    render(
+      <HolderTimeline
+        family={family}
+        lineage={[marker]}
+        holders={only}
+        numbers={numbers}
+        now={NOW}
+      />
+    );
+    const [segment] = segments();
+    expect(segment).toHaveTextContent(/^an unspendable lock · holds the code now$/);
+    expect(segment.title).toContain('an unspendable lock · no upgrade signed · since 2023-10-07');
+  });
+});
