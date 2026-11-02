@@ -30,7 +30,6 @@ import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { exactSignedDecimalRatio } from '@/lib/exact-integer';
 import { apiBaseFor } from '@/lib/active-network';
-import { TapOrHoverHint, tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 export type ChartRange = '30d' | '90d' | '1y' | 'all';
 
@@ -197,12 +196,11 @@ function DetailBody({
     seriesLabels: model.series.map((series) => series.label),
   });
   if (!description) throw new Error(`${definition.slug}: no calculation description`);
-  // Every chart here pins a tapped point in a readout line under it (R6).
+  // Every chart here pins a tapped point in a readout line under it (R6). The row's own "tap or
+  // hover" is the section's one hint (C10), so its idle words say what it will read, not how.
   const readout = (title: string) => ({
     label: `${title} readout`,
-    idle: tapOrHover(`the chart for the value of one ${style === 'date' ? 'day' : 'point'}.`, {
-      capital: true,
-    }),
+    idle: `A ${style === 'date' ? 'day' : 'point'} on the chart reads its value here.`,
   });
   const pointLabel = (label: string) =>
     style === 'epoch' ? `#${formatEpochLabel(label, definition.slug)}` : label;
@@ -385,10 +383,10 @@ function DetailBody({
           </div>
           {helpOpen && (
             <p className="text-text-dim text-small mb-4 max-w-[62ch] leading-5">
-              <TapOrHoverHint capital what="the chart" /> for the value of one{' '}
-              {style === 'date' ? 'day' : 'point'}: a tap pins it under the chart and a second tap
-              lets it go. Or focus the chart and use ← and → to step through; Esc returns to the
-              latest reading.
+              {/* C10: the readout row under the chart already says "tap or hover". */}
+              The line under the chart reads one {style === 'date' ? 'day' : 'point'}: select it to
+              keep it there, select it again to let it go. Or focus the chart and use ← and → to
+              step through; Esc returns to the latest reading.
               {hasDatedHistory && ' 30 d, 90 d and 1 y zoom to the most recent days.'}
               {supportsLog && ' Log scale spreads a series that grew by orders of magnitude.'}
             </p>

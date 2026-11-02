@@ -5,6 +5,7 @@ import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width
 import { server } from '@/__tests__/msw/server';
 import { ckbytesAllocation, daoStatistics } from '@/__tests__/msw/fixtures/home';
 import { CkbytesSection } from '@/components/home/ckbytes-section';
+import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { MINUS } from '@/lib/chart-ticks';
 import type { CkbytesAllocation } from '@/lib/api';
 
@@ -22,6 +23,17 @@ describe('CkbytesSection', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  // C10: the two daily-change figures share the section's one "tap or hover", by the heading.
+  it('says "tap or hover" once for the section, by the heading', async () => {
+    const { container } = render(<CkbytesSection />);
+    await waitFor(() =>
+      expect(screen.getAllByRole('status', { name: /readout$/ }).length).toBeGreaterThanOrEqual(2)
+    );
+    expect(sectionsWithManyHints(container)).toEqual([]);
+    const hint = container.querySelector('[data-hint="tap-or-hover"]')!;
+    expect(hint.parentElement).toContainElement(screen.getByRole('heading', { level: 2 }));
   });
 
   it("prints the allocation's circulation exactly, decimals and unit dim, at its block", async () => {

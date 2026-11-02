@@ -4,6 +4,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
+import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 
 const cell = {
@@ -94,7 +95,20 @@ describe('cell microscope', () => {
     fireEvent.mouseEnter(within(map).getByTitle('data · 4 bytes'));
     fireEvent.click(within(map).getByTitle('data · 4 bytes'));
     expect(readout).toHaveTextContent(/^tap or hover$/);
-    expect(detail).toHaveTextContent('Tap or hover a byte, a field or the map');
+    // C10: the readout row's "tap or hover" is the section's one hint; the detail box names
+    // what it holds by default.
+    expect(detail).toHaveTextContent(/^Where each byte belongs/);
+    expect(detail).not.toHaveTextContent(/tap|hover/i);
+  });
+
+  it('says "tap or hover" once in the microscope (C10)', () => {
+    const { container } = render(
+      <section aria-label="Cell byte microscope">
+        <CellMicroscope cell={cell} />
+      </section>
+    );
+    expect(sectionsWithManyHints(container)).toEqual([]);
+    expect(container.querySelectorAll('[data-hint="tap-or-hover"]')).toHaveLength(1);
   });
 
   it('rejects an overlapping or incomplete byte map', () => {

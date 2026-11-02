@@ -11,11 +11,14 @@ import {
 } from '@/components/home/mini-chart';
 import {
   SECTION_HEADING_CLASS,
+  SECTION_HEAD_CLASS,
+  SECTION_HINT_CLASS,
   SMALL_MULTIPLES_CLASS,
   bodyOf,
   derive,
   viewOf,
 } from '@/components/home/section';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { api, type ChartResponse, type TxStatsDataPoint } from '@/lib/api';
 import { chartNumber, dayLabel, splitByCompleteness } from '@/lib/daily-series';
 import {
@@ -38,9 +41,13 @@ const DAYS = 14;
 export function NetworkSection() {
   return (
     <section aria-labelledby="home-network-heading" className="flex flex-col gap-[18px]">
-      <h2 id="home-network-heading" className={SECTION_HEADING_CLASS}>
-        Network
-      </h2>
+      {/* C10: one "tap or hover" for the four figures, by the heading. */}
+      <div className={SECTION_HEAD_CLASS}>
+        <h2 id="home-network-heading" className={SECTION_HEADING_CLASS}>
+          Network
+        </h2>
+        <TapOrHoverHint className={SECTION_HINT_CLASS} />
+      </div>
       <div className={SMALL_MULTIPLES_CLASS}>
         <BlockTimeFigure />
         <HashRateFigure />
@@ -128,6 +135,7 @@ function BlockTimeFigure() {
   const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
+      hint={false}
       testId="home-block-time"
       title="Block time"
       href="/charts/average-block-time"
@@ -195,6 +203,7 @@ function HashRateFigure() {
   const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
+      hint={false}
       testId="home-hash-rate"
       title="Hash rate"
       href="/charts/hash-rate"
@@ -238,6 +247,7 @@ function UncleRateFigure() {
   const s = (n: number) => n.toFixed(2);
   return (
     <ChartFigure
+      hint={false}
       testId="home-uncle-rate"
       title="Uncle rate"
       href="/charts/uncle-rate"
@@ -332,6 +342,7 @@ function TransactionsFigure() {
   };
   return (
     <ChartFigure
+      hint={false}
       testId="home-transactions"
       title="Transactions"
       href="/charts/transaction-count"

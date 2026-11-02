@@ -20,7 +20,6 @@ import {
   mapSegmentMinWidth,
   type HexRowBytes,
 } from '@/lib/cell-byte-layout';
-import { TapOrHoverHint, tapOrHover } from '@/components/ui/tap-or-hover-hint';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 
 export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
@@ -501,9 +500,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
     detail = (
       <div data-detail="default">
         <div className="flex items-baseline justify-between gap-2">
-          <span className="text-text-bright text-body">
-            {tapOrHover('a byte, a field or the map', { capital: true })}
-          </span>
+          {/* C10: the readout row under the bytes is the section's one "tap or hover". */}
+          <span className="text-text-bright text-body">Where each byte belongs</span>
           <span className="text-text-dim text-meta whitespace-nowrap">
             {fmt(outBytes.length)} + {fmt(dataBytes.length)} bytes
           </span>
@@ -594,7 +592,6 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         <div className="space-y-1.5" onMouseLeave={() => setActive(null)}>
           <div className="text-text-dim text-meta flex justify-between">
             <span>the data, to scale: an ELF file</span>
-            <TapOrHoverHint what="a region" />
           </div>
           <div role="group" aria-label="ELF binary map" className="flex h-4 gap-px">
             {regions.map((region) => (
@@ -680,8 +677,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             ))}
             {hidden > 0 && (
               <div className="text-text-dim text-meta sm:pl-20">
-                + {hidden} more ELF header fields and program headers:{' '}
-                <TapOrHoverHint what="their bytes" />
+                + {hidden} more ELF header fields and program headers, named in the line under their
+                bytes
               </div>
             )}
           </div>

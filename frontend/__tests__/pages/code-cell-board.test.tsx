@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
 import { elfParts } from '@/lib/cell-parts';
+import { sectionsWithManyHints } from '@/__tests__/utils/hints';
 import codeCellFixture from '@/__tests__/fixtures/d5/cell-code-board.json';
 
 // The CellCode board's cell: JoyID v5, 0x673e1843…55f9:0 — 100,438 CKB, a 100,312-byte RISC-V
@@ -112,9 +113,12 @@ describe('code cell page against the CellCode board', () => {
           name: new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} \\[`),
         })
       ).toBeInTheDocument();
+    // C10: the readout row is the section's one "tap or hover"; the index and the ELF map do not
+    // say it again.
     expect(index).toHaveTextContent(
-      '+ 19 more ELF header fields and program headers: tap or hover their bytes'
+      '+ 19 more ELF header fields and program headers, named in the line under their bytes'
     );
+    expect(sectionsWithManyHints(document.body)).toEqual([]);
     const data = screen.getByLabelText('CellData byte map');
     expect(data).toHaveTextContent('⋯ 98,904 bytes [408..99,312)');
     expect(data).toHaveTextContent('⋯ 760 bytes [99,552..100,312): section header table');

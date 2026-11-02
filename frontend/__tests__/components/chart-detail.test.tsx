@@ -418,15 +418,15 @@ describe('shared chart detail', () => {
     await screen.findByRole('group', { name: 'Epoch length readings' });
     expect(lastChart('Epoch length').pinnedReadout).toEqual({
       label: 'Epoch length readout',
-      idle: 'Tap or hover the chart for the value of one point.',
+      idle: 'A point on the chart reads its value here.',
     });
     expect(lastChart('Epoch blocks').pinnedReadout).toEqual({
       label: 'Epoch blocks readout',
-      idle: 'Tap or hover the chart for the value of one point.',
+      idle: 'A point on the chart reads its value here.',
     });
     fireEvent.click(screen.getByRole('button', { name: 'How to read and zoom this chart' }));
     expect(
-      screen.getByText(/a tap pins it under the chart and a second tap lets it go/)
+      screen.getByText(/select it to keep it there, select it again to let it go/)
     ).toBeInTheDocument();
   });
 });
