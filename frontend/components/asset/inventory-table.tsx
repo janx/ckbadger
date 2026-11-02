@@ -22,7 +22,7 @@ import {
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { formatCompositionTier } from '@/lib/asset-utils';
 import type { CSSProperties } from 'react';
-import { CLASS_COLORS, COMPOSITION_BADGES } from '@/lib/design-tokens';
+import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 
 export interface AssetAmountProps {
@@ -70,17 +70,15 @@ export interface InventoryRowsProps {
   assetType: Asset['assetType'];
 }
 // ── F2 objects (round 2): the Inventory board's rows ──
-/** Width of a value as a share of the largest, rounded to 1/1000 %, from exact integers. */
-function shareOfLargest(value: bigint, largest: bigint): string {
-  if (largest === BigInt(0)) return '0%';
-  return `${Number(((value * BigInt(200000)) / largest + BigInt(1)) / BigInt(2)) / 1000}%`;
-}
 const SHANNONS = BigInt(100000000);
-/** Occupied capacity is bytes, so whole CKB; an amount with a fraction is shown exactly (IV-06). */
-function OccupiedCkb({ shannons }: { shannons: bigint }) {
+/**
+ * Occupied capacity is bytes, so whole CKB; an amount with a fraction is shown exactly (IV-06).
+ * `wrap` lets a phone line break it before the decimals; a table row keeps it on one line.
+ */
+function OccupiedCkb({ shannons, wrap = true }: { shannons: bigint; wrap?: boolean }) {
   if (shannons % SHANNONS === BigInt(0))
     return <>{(shannons / SHANNONS).toLocaleString('en-US')}</>;
-  return <ExactCkb shannons={shannons} signed={false} tone="plain" wrap />;
+  return <ExactCkb shannons={shannons} signed={false} tone="plain" wrap={wrap} />;
 }
 /** The thumbnail frame of a collection row: crystal / copper for the fully on-chain tiers (IV-10). */
 function thumbFrame(tier: Asset['compositionTier']): CSSProperties | undefined {
@@ -676,6 +674,66 @@ function objectColumns(rows: readonly Asset[]): ListColumn<Asset>[] {
   ];
 }
 
+/** An identity system's name, bright, with its standard as a tag when the name is not it. */
+function SystemName({ asset: a }: { asset: Asset }) {
+  const standard = formatStandard(a.standard);
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <ClassMark kind="identities" size={16} />
+      <AppLink
+        href={assetHref(a)}
+        className="text-body text-text-bright min-w-0 truncate leading-[18px]"
+      >
+        {a.name || <Hash hash={a.id} copyable={false} className="text-small" />}
+      </AppLink>
+      {a.name !== standard && <RowTag>{standard}</RowTag>}
+    </span>
+  );
+}
+
+function identityTitle(a: Asset): string {
+  const standard = formatStandard(a.standard);
+  return [
+    a.name || a.id,
+    ...(a.name === standard ? [] : [standard]),
+    countText(a.liveCount, 'live', 'live'),
+    `${countText(a.totalSupply, 'ever registered', 'ever registered')}`,
+    countText(a.holdersCount, 'holder', 'holders'),
+    heldTitle(a),
+  ].join(' · ');
+}
+
+function identityColumns(rows: readonly Asset[]): ListColumn<Asset>[] {
+  return [
+    {
+      key: 'identity',
+      label: 'System',
+      minWidth: 200,
+      width: 'auto',
+      render: (a) => <SystemName asset={a} />,
+    },
+    countColumn('live', 'Live now', 100, (a) => a.liveCount),
+    countColumn('minted', 'Ever registered', 130, (a) => a.totalSupply),
+    countColumn('holders', 'Holders', 90, (a) => a.holdersCount),
+    heldColumn(rows, 'identities'),
+    {
+      key: 'occupied',
+      label: 'Occupied',
+      minWidth: 130,
+      numeric: true,
+      className: 'text-text-dim',
+      render: (a) => {
+        const { occupied } = heldAndOccupied(a);
+        return (
+          <span>
+            {occupied === null ? 'Unavailable' : <OccupiedCkb shannons={occupied} wrap={false} />}
+          </span>
+        );
+      },
+    },
+  ];
+}
+
 export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
   if (assetType === 'token')
     return (
@@ -703,232 +761,15 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
         mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
       />
     );
-  return <CollectionRows rows={rows} assetType={assetType} />;
-}
-
-function CollectionRows({ rows, assetType }: InventoryRowsProps) {
-  const mark = assetType === 'token' ? 'tokens' : assetType === 'object' ? 'objects' : 'identities';
-  const largestHeld = rows.reduce((max, a) => {
-    if (a.ownedCapacity === null) return max;
-    const held = exactUnsignedInteger(a.ownedCapacity, `${a.id} capacity`);
-    return held > max ? held : max;
-  }, BigInt(0));
-  const columns: ListColumn<Asset>[] = [
-    {
-      key: 'identity',
-      label: assetType === 'token' ? 'Token' : assetType === 'object' ? 'Collection' : 'System',
-      minWidth: 220,
-      width: '22%',
-      render: (a) => {
-        const standard = formatStandard(a.standard);
-        const title = assetType === 'token' ? (a.name ?? a.symbol) : a.name;
-        const sub =
-          assetType === 'token'
-            ? a.name && a.symbol
-              ? `${a.symbol} · ${standard}`
-              : standard
-            : assetType === 'identity'
-              ? title === standard
-                ? null
-                : standard
-              : null;
-        return (
-          <div className="flex min-w-0 items-center gap-3">
-            <span
-              data-thumb-frame={
-                assetType === 'object' && thumbFrame(a.compositionTier)
-                  ? (a.compositionTier ?? undefined)
-                  : undefined
-              }
-              className={
-                assetType === 'object'
-                  ? cn(
-                      'flex h-11 w-11 shrink-0 items-center justify-center rounded',
-                      !thumbFrame(a.compositionTier) && 'border-base-border border'
-                    )
-                  : ''
-              }
-              style={assetType === 'object' ? thumbFrame(a.compositionTier) : undefined}
-            >
-              <ClassMark kind={mark} size={16} />
-            </span>
-            <div className="min-w-0">
-              <AppLink
-                href={assetHref(a)}
-                className={cn(
-                  'text-text-bright block break-words',
-                  assetType === 'identity' && 'text-body'
-                )}
-              >
-                {title || <Hash hash={a.id} copyable={false} className="text-small" />}
-              </AppLink>
-              {sub && <span className="text-text-dim text-meta">{sub}</span>}
-              {a.assetType === 'object' && (
-                <span className="text-text-dim text-meta">
-                  {standard} ·{' '}
-                  <Hash
-                    hash={a.id}
-                    startChars={6}
-                    endChars={4}
-                    copyable={false}
-                    className="text-meta"
-                  />
-                </span>
-              )}
-            </div>
-          </div>
-        );
-      },
-    },
-  ];
-  if (assetType === 'object')
-    columns.push({
-      key: 'composition',
-      label: 'Composition',
-      minWidth: 160,
-      render: (a) =>
-        a.compositionTier ? (
-          <CompositionBadge tier={a.compositionTier} />
-        ) : (
-          <span className="text-text-dim text-meta">Composition unavailable</span>
-        ),
-    });
-  if (assetType !== 'token')
-    columns.push({
-      key: 'live',
-      label: assetType === 'identity' ? 'Live now' : 'Live items',
-      minWidth: 110,
-      numeric: true,
-      render: (a) => (
-        <>
-          <AssetCount value={a.liveCount} />
-          {assetType === 'object' && (
-            <span className="text-text-dim text-meta block">
-              of <AssetCount value={a.totalSupply} /> minted
-            </span>
-          )}
-        </>
-      ),
-    });
-  if (assetType === 'identity')
-    columns.push({
-      key: 'minted',
-      label: 'Ever registered',
-      minWidth: 130,
-      numeric: true,
-      render: (a) => <AssetCount value={a.totalSupply} />,
-    });
-  columns.push({
-    key: 'holders',
-    label: 'Holders',
-    minWidth: 86,
-    numeric: true,
-    render: (a) => <AssetCount value={a.holdersCount} />,
-  });
-  if (assetType !== 'identity')
-    columns.push({
-      key: 'activity',
-      label: assetType === 'token' ? 'Transfers' : 'Activity',
-      minWidth: 100,
-      numeric: true,
-      render: (a) =>
-        // Round 3 (contracts L2): a collection's count is null (unknown) on the cached list until
-        // the indexer has derived it — say nothing rather than a stand-in.
-        assetType !== 'token' && a.activitiesCount === null ? null : (
-          <>
-            <AssetCount value={assetType === 'token' ? a.transfersCount : a.activitiesCount} />
-            {assetType === 'token' && (
-              <span className="text-text-dim text-meta block">
-                <AssetCount value={a.transfers24h} /> in 24 h
-              </span>
-            )}
-          </>
-        ),
-    });
-  if (assetType === 'token')
-    columns.push({
-      key: 'supply',
-      label: 'Supply',
-      minWidth: 210,
-      numeric: true,
-      className: '!whitespace-normal',
-      render: (a) =>
-        a.totalSupply === null ? (
-          'Unavailable'
-        ) : (
-          <AssetAmount amount={a.totalSupply} decimals={a.decimals} />
-        ),
-    });
-  columns.push(
-    {
-      key: 'capacity',
-      label: 'CKB held in its cells',
-      minWidth: 200,
-      numeric: true,
-      className: '!whitespace-normal',
-      render: (a) => {
-        if (a.ownedCapacity === null) return <span className="text-text-dim">Unavailable</span>;
-        const held = exactUnsignedInteger(a.ownedCapacity, `${a.id} capacity`);
-        const occupied =
-          a.ownedKnowledge === null
-            ? null
-            : exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`);
-        if (occupied !== null && occupied > held)
-          throw new Error(`${a.id}: occupied capacity exceeds held capacity`);
-        return (
-          <div className="space-y-1">
-            <ExactCkb shannons={held} signed={false} tone="plain" wrap />
-            {/* F2 objects (IV-02): CKB held as a bar in the class colour, against the largest
-                on this page, so rows compare at a glance. */}
-            <div className="bg-base-elevated flex h-1 overflow-hidden rounded">
-              <span
-                data-held-bar
-                style={{
-                  width: shareOfLargest(held, largestHeld),
-                  backgroundColor: CLASS_COLORS[mark],
-                }}
-              />
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      key: 'occupied',
-      label: 'Occupied',
-      minWidth: 110,
-      numeric: true,
-      className: '!whitespace-normal text-text-dim',
-      render: (a) =>
-        a.ownedKnowledge === null ? (
-          'Unavailable'
-        ) : (
-          <OccupiedCkb shannons={exactUnsignedInteger(a.ownedKnowledge, `${a.id} occupied`)} />
-        ),
-    }
-  );
-  if (assetType !== 'identity')
-    columns.push({
-      key: 'hm',
-      label: 'H-mult.',
-      minWidth: 110,
-      className: '!whitespace-normal break-all',
-      numeric: true,
-      render: (a) => (a.hMultiplier === null ? 'Unavailable' : `×${a.hMultiplier}`),
-    });
   return (
     <ListTable
-      label={
-        assetType === 'token'
-          ? 'Tokens'
-          : assetType === 'object'
-            ? 'Object collections'
-            : 'Identity systems'
-      }
-      columns={columns}
+      label="Identity systems"
+      columns={identityColumns(rows)}
       rows={rows}
       rowKey={(a) => a.id}
-      empty={`No ${mark} found`}
+      empty="No identities found"
+      density="row"
+      rowTitle={identityTitle}
       mobileRow={(a, wide) => <InventoryPhoneRow asset={a} wide={wide} />}
     />
   );

@@ -329,7 +329,8 @@ describe('Identities view (IV-12, IV-02)', () => {
     expect(
       screen.getByText('4 naming systems · every identity’s record lives in its cell on CKB')
     ).toBeInTheDocument();
-    expect(table.querySelector('[data-held-bar]')).toHaveStyle({
+    // Table-rows L2-3: the 8 px AlignedBar segment carries the rose class colour.
+    expect(table.querySelector('[data-segment]')).toHaveStyle({
       backgroundColor: CLASS_COLORS.identities,
     });
   });

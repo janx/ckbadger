@@ -341,6 +341,84 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
   });
 });
 
+// Table-rows round, lane L2-3: the identity systems on the same rules — the name bright on one
+// line (the standard a tag when the name differs), counts, CKB held as a rose 8 px bar with its 2-dp
+// amount, occupied in whole CKB; every digit in the row title.
+describe('Identity systems table on the row rules (table-rows L2-3)', () => {
+  const dotbit: Asset = {
+    ...asset,
+    id: 'dotbit',
+    assetType: 'identity',
+    standard: 'dotbit',
+    name: '.bit',
+    symbol: null,
+    liveCount: 6082,
+    totalSupply: '250043',
+    holdersCount: 4269,
+  };
+  const bitCell: Asset = {
+    ...dotbit,
+    id: 'bit_cell',
+    standard: 'bit_cell',
+    name: 'Cellula .bit',
+    liveCount: 541,
+    totalSupply: '656',
+    holdersCount: 366,
+    ownedCapacity: '40000000000',
+    ownedKnowledge: '13300000050',
+  };
+  const mount = () => {
+    render(<InventoryRows assetType="identity" rows={[dotbit, bitCell]} />);
+    return screen.getByRole('table', { name: 'Identity systems' });
+  };
+
+  it('draws one-line rows at the row density, the name bright and the standard a tag', () => {
+    const table = mount();
+    expect(within(table).getAllByRole('columnheader').map(headText)).toEqual([
+      'System',
+      'Live now',
+      'Ever registered',
+      'Holders',
+      'CKB held in its cells',
+      'Occupied',
+    ]);
+    for (const td of table.querySelectorAll('tbody td'))
+      expect(td).toHaveClass('py-[11px]', 'align-middle');
+    const [, first, second] = within(table).getAllByRole('row');
+    expect(within(first).getByRole('link', { name: '.bit' })).toHaveClass(
+      'text-body',
+      'text-text-bright',
+      'leading-[18px]',
+      'truncate'
+    );
+    expect(first.querySelector('[data-row-tag]')).toBeNull();
+    expect(within(second).getByText('.bit Cell')).toHaveAttribute('data-row-tag', 'default');
+    expect(first.querySelector('svg[data-class="identities"]')).not.toBeNull();
+  });
+
+  it('draws CKB held as a rose bar with a 2-dp amount and keeps occupied on one line', () => {
+    const table = mount();
+    const scale = resourceScale([100, 400]);
+    expect(
+      cellUnder(table, 2, 'CKB held in its cells').querySelector('[data-segment]')
+    ).toHaveStyle({ width: barWidth(400, scale), backgroundColor: CLASS_COLORS.identities });
+    expect(cellUnder(table, 1, 'CKB held in its cells')).toHaveTextContent('100.00');
+    expect(cellUnder(table, 1, 'Occupied')).toHaveTextContent(/^61$/);
+    const occupied = cellUnder(table, 2, 'Occupied');
+    expect(occupied).toHaveTextContent('133.0000005');
+    expect(occupied.querySelector('[data-ckb-amount]')).toHaveClass('whitespace-nowrap');
+    expect(cellUnder(table, 2, 'Ever registered')).toHaveTextContent('656');
+  });
+
+  it('keeps every digit in the row title', () => {
+    const table = mount();
+    expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
+      'title',
+      'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.3%)'
+    );
+  });
+});
+
 describe('Inventory phone rows (boards L3, L4)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
