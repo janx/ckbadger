@@ -263,7 +263,7 @@ it('reads like the .cell board: records named, roles, a held-until bar with grac
   expect(screen.getByText(/then 30 days of grace/)).toBeInTheDocument();
   expect(document.querySelector('[data-grace]')).not.toBeNull();
   expect(screen.getByRole('region', { name: 'What alice.cell points to' })).toBeInTheDocument();
-  const facts = screen.getByRole('complementary', { name: 'Facts' });
+  const facts = screen.getByRole('region', { name: 'Metrics' });
   expect(
     Array.from(facts.querySelectorAll(':scope > dl > div > dt')).map((d) => d.textContent)
   ).toEqual([

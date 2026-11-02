@@ -122,7 +122,7 @@ it('separates physical cell ownership from protocol-named .cell parties', async 
       dotcell={dotcellItem()}
     />
   );
-  const facts = await screen.findByRole('complementary', { name: 'Facts' });
+  const facts = await screen.findByRole('region', { name: 'Metrics' });
   await screen.findByRole('heading', { name: 'Cell versions' });
   // F2 identities (round 2, ID-DC4 / ID-DC7): the rail names the protocol owner and manager;
   // the physical lock every name shares is tier-2 evidence, explained there.

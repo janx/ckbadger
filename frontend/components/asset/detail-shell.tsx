@@ -230,7 +230,7 @@ export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
               {m.note && (
                 <span data-role="metric-note" className="text-text-dim text-small">
                   {' · '}
-                  {m.note}
+                  <span>{m.note}</span>
                 </span>
               )}
             </dd>

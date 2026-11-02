@@ -1,4 +1,5 @@
 import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import Page from '@/app/identities/dotbit/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
@@ -175,8 +176,8 @@ it('keeps a failed identity source distinct from an absent identity', async () =
 
 // ── F2 identities (round 2): the IdentityBit board's tier 1 (ID-C5/C6/C7/C10, ID-B1/B2/B4) ──
 it('reads like the .bit board: badge, summary, held-until bar, domain facts, internals in tier 2', async () => {
-  render(<Page identityId={evidence.itemId} />);
-  const facts = await screen.findByRole('complementary', { name: 'Facts' }, { timeout: 4000 });
+  const { container } = render(<Page identityId={evidence.itemId} />);
+  const facts = await screen.findByRole('region', { name: 'Metrics' }, { timeout: 4000 });
   expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.bit');
   // Consistency plan C1: the tab names the page.
   expect(document.title).toBe('alice.bit · identity · CKBadger');
@@ -188,9 +189,14 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
   );
   expect(screen.getByText('Live')).toHaveAttribute('data-identity-state', 'live');
   expect(screen.getByText('Pure CKB')).toBeInTheDocument();
-  expect(screen.getByTestId('identity-summary')).toHaveTextContent(
-    'Its owner has never changed. 1 record is set.'
-  );
+  // C7: the summary restated the metrics row; it is tier 2's "in words" now, and the lede (the
+  // standard's sentence) restates none of the row.
+  const summary = screen.getByTestId('identity-summary');
+  expect(summary).toHaveTextContent('Its owner has never changed. 1 record is set.');
+  expect(summary.closest('[data-tier]')).toHaveAttribute('data-tier', '2');
+  expect(screen.getByRole('heading', { name: 'This identity, in words' })).toBeInTheDocument();
+  expect(ledeRestatements(container)).toEqual([]);
+  expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
   expect(screen.getByRole('heading', { name: 'Held until 2030-03-18' })).toBeInTheDocument();
   expect(Array.from(facts.querySelectorAll('dt')).map((dt) => dt.textContent)).toEqual([
     'Owner',
@@ -217,9 +223,9 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
   expect(tier1).not.toHaveTextContent(/Unix|1900000000/);
 });
 
-it('puts the facts rail right after the header in reading order (ID-C11)', async () => {
+it('puts the metrics row right after the header in reading order (ID-C11, C7)', async () => {
   render(<Page identityId={evidence.itemId} />);
-  const facts = await screen.findByRole('complementary', { name: 'Facts' }, { timeout: 4000 });
+  const facts = await screen.findByRole('region', { name: 'Metrics' }, { timeout: 4000 });
   const term = screen.getByRole('heading', { name: /^Held until/ });
   expect(facts.compareDocumentPosition(term) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });

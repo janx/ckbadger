@@ -1,3 +1,4 @@
+import { AssetMetrics } from '@/components/asset/detail-shell';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import {
   identityFacts,
@@ -42,19 +43,15 @@ function valar(): Extract<ItemProtocol, { kind: 'dotbit' }> {
   return p;
 }
 
+// Consistency round C7: the facts are the metrics row; rendered through it, each fact is the
+// row's item (its value, then its inline note).
 function Facts(props: Parameters<typeof identityFacts>[0]) {
-  return (
-    <dl>
-      {identityFacts(props).map((f) => (
-        <div key={f.label} data-fact={f.label}>
-          <dt>{f.label}</dt>
-          <dd>{f.value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
+  return <AssetMetrics items={identityFacts(props)} />;
 }
-const fact = (label: string) => document.querySelector(`[data-fact="${label}"]`);
+const facts = () => Array.from(document.querySelectorAll('[data-role="metrics"] dl > div'));
+const fact = (label: string) =>
+  facts().find((f) => f.querySelector('dt')?.textContent === label) ?? null;
+const factLabels = () => facts().map((f) => f.querySelector('dt')!.textContent);
 
 describe('identity facts rail (ID-C6)', () => {
   it('gives .bit its domain facts: owner, expiry with the last renewal, registration, records', () => {
@@ -68,13 +65,18 @@ describe('identity facts rail (ID-C6)', () => {
         createdAtBlock={12260151}
       />
     );
-    expect(
-      Array.from(document.querySelectorAll('[data-fact]')).map((f) => f.getAttribute('data-fact'))
-    ).toEqual(['Owner', 'Expires', 'Registered', 'Records', 'CKB held in its cell']);
+    expect(factLabels()).toEqual([
+      'Owner',
+      'Expires',
+      'Registered',
+      'Records',
+      'CKB held in its cell',
+    ]);
     expect(fact('Owner')).toHaveTextContent('.bit Lock · owner and manager are the same key');
     expect(fact('Expires')).toHaveTextContent('2027-02-19');
     expect(fact('Expires')).toHaveTextContent('in 116 days · renewed 2025-02-18');
-    expect(fact('Registered')).toHaveTextContent('2024-02-20 08:56:57 UTC+8');
+    expect(fact('Registered')).toHaveTextContent('2024-02-20');
+    expect(fact('Registered')).toHaveAttribute('title', 'registered 2024-02-20 08:56:57 UTC+8');
     expect(fact('Registered')).toHaveTextContent('#12,260,151');
     expect(fact('Records')).toHaveTextContent('none set');
     // Raw protocol internals are tier 2, not the rail (ID-B1, ID-DC7).
@@ -207,9 +209,7 @@ describe('.bit witness facts (ID-B1, ID-C6)', () => {
         createdAtBlock={1}
       />
     );
-    expect(
-      Array.from(document.querySelectorAll('[data-fact]')).map((f) => f.getAttribute('data-fact'))
-    ).toEqual([
+    expect(factLabels()).toEqual([
       'Owner',
       'Expires',
       'Registered',

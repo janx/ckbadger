@@ -187,6 +187,6 @@ it('titles a did:ckb by its handle, reads its document and places it among did:c
   expect(doc).not.toHaveTextContent('Document version 1');
   const among = await screen.findByRole('region', { name: 'Among did:ckb' });
   expect(among).toHaveTextContent('this one');
-  expect(screen.getByLabelText('Facts')).toHaveTextContent('Expiry');
-  expect(screen.getByLabelText('Facts')).toHaveTextContent('none');
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('Expiry');
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('none');
 });

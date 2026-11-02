@@ -4,7 +4,8 @@ import { useSearchParams, usePathname, useRouter } from '@/src/navigation';
 import { parseActivityCursor } from '@/lib/asset-utils';
 import { useQuery } from '@tanstack/react-query';
 import { api, type DotbitBitCellRef, type DotCellItem, type ItemKind } from '@/lib/api';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
+import { DetailSection } from '@/components/ui/detail-layout';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
 import { CellVersions } from '@/components/asset/cell-versions';
@@ -245,18 +246,23 @@ export function CanonicalIdentityDetail({
           <Hash hash={didDecoded.did} truncate={false} className="text-text text-body" />
         ) : undefined
       }
-      intro={
-        <>
-          <IdentityPositioning standard={standard} />
-          {p && term && (
-            <IdentitySummary protocol={p} term={term} now={now} isLive={isLive} subject={subject} />
-          )}
-        </>
-      }
-      facts={
-        p && term
-          ? identityFacts({ protocol: p, term, now, isLive, createdAtBlock, dotcell, bitCells })
-          : undefined
+      // Consistency round C7: the standard's sentence is the lede; the facts are the metrics row,
+      // and the summary paragraph that restated them is tier 2's "in words" (as the Spore page's).
+      intro={<IdentityPositioning standard={standard} />}
+      metrics={
+        p && term ? (
+          <AssetMetrics
+            items={identityFacts({
+              protocol: p,
+              term,
+              now,
+              isLive,
+              createdAtBlock,
+              dotcell,
+              bitCells,
+            })}
+          />
+        ) : undefined
       }
       feed={
         <AssetFeed
@@ -285,6 +291,17 @@ export function CanonicalIdentityDetail({
       tier2={
         p ? (
           <>
+            {term && (
+              <DetailSection title="This identity, in words">
+                <IdentitySummary
+                  protocol={p}
+                  term={term}
+                  now={now}
+                  isLive={isLive}
+                  subject={subject}
+                />
+              </DetailSection>
+            )}
             <AssetReadState label="raw identity evidence" error={protocol.error} retained />
             <ItemEvidence protocol={p} title={identityDataTitle(standard)} />
             <div
