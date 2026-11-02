@@ -198,14 +198,32 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
     'The object’s traits are not stored as text. It carries 53 bytes of DNA, and the collection’s decoder reads each gene to express a trait. Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
   );
   expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
-  expect(dna).toHaveTextContent(
+  // C10: the collection's gel is its own section beside the DNA, so each has one hint.
+  const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+  expect(dna.contains(among)).toBe(false);
+  expect(among).toHaveTextContent(
     'Among Nervape 3x · its variant in each gene, and how common it is among the 90'
   );
   expect(container.querySelector('[data-overlay="me"]')!.textContent).toContain('this one');
-  expect(within(dna).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
+  expect(within(among).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
     'href',
     expect.stringContaining(`/clusters/${NERVAPE3X_CLUSTER}`)
   );
+  // C9: only the genes that vary among the 90 get a lane; the rest are named once.
+  expect(
+    [...among.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'))
+  ).toEqual(['prev.bg', 'Color', 'Serial']);
+  expect(among.querySelector('[data-role="caption"]')).toHaveTextContent(
+    'Type is image, relief is NERVAPE 3X and Note is empty for every object, so none of them gets a lane.'
+  );
+  for (const section of [dna, among]) {
+    const hints = [...section.querySelectorAll('*')].filter((el) =>
+      [...el.childNodes].some(
+        (n) => n.nodeType === Node.TEXT_NODE && /\b(tap|hover)\b/i.test(n.textContent ?? '')
+      )
+    );
+    expect(hints).toHaveLength(1);
+  }
 });
 
 it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async () => {

@@ -20,8 +20,11 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import {
   alleleLanes,
+  droppedGenesCaption,
+  geneLabel,
   geneOrder,
   genotypePoints,
+  laneRule,
   sequencingGenes,
   traitDisplay,
   traitsOutsidePattern,
@@ -117,54 +120,90 @@ export function ObjectGeneticsView({
   const layout = sequencingGenes(evidence, subject);
   const geneNames = [...new Set(layout.genes.map((g) => g.name))];
   const words = dnaWords(evidence, subject, tier);
-  const bridge = collection?.genetics.complete
-    ? alleleLanes(
-        collection.genetics,
-        geneOrder(collection.currentPattern),
-        collectionName ?? subject
-      )
-    : null;
+  // C9: on the object page too, only the genes that vary among the collection get a lane.
+  const ruled =
+    collection?.genetics.complete && collection.genetics.traits.length
+      ? laneRule(
+          alleleLanes(
+            collection.genetics,
+            geneOrder(collection.currentPattern),
+            collectionName ?? subject
+          ),
+          collection.currentPattern,
+          collection.genetics.eligibleItems
+        )
+      : null;
+  const bridge = ruled && ruled.lanes.length ? ruled.lanes : null;
   const own3 = bridge ? genotypePoints(bridge, cached.traits) : null;
+  const among = collectionName ?? 'its collection';
   return (
-    <section aria-labelledby="h-dna" className="min-w-0 space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-4">
-        <h2 id="h-dna" className="text-text-bright text-section">
-          DNA
-        </h2>
-        <span className="text-text-dim text-small">
-          {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
-          {evidence.number !== null ? ` · number ${evidence.number}` : ''}
-        </span>
-      </div>
-      {cached.status === 'pending' && (
-        <p role="status" className="text-text-dim">
-          Decode pending · awaiting DOB execution.
+    <>
+      <section aria-labelledby="h-dna" className="min-w-0 space-y-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-4">
+          <h2 id="h-dna" className="text-text-bright text-section">
+            DNA
+          </h2>
+          <span className="text-text-dim text-small">
+            {layout.bytes.length} bytes · {geneNames.length} gene{geneNames.length === 1 ? '' : 's'}
+            {evidence.number !== null ? ` · number ${evidence.number}` : ''}
+          </span>
+        </div>
+        {cached.status === 'pending' && (
+          <p role="status" className="text-text-dim">
+            Decode pending · awaiting DOB execution.
+          </p>
+        )}
+        {cached.status === 'failed' && (
+          <p role="alert">DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}</p>
+        )}
+        <div
+          className={cn('rounded-[10px] p-[5px]', !plateStyle(tier) && 'border-base-border border')}
+          style={plateStyle(tier)}
+        >
+          <div className="space-y-4 rounded-md px-4 py-4 sm:px-5">
+            {layout.genes.length ? (
+              <SequencingGel
+                layout={layout}
+                subject={subject}
+                active={active}
+                onActive={setActive}
+                // C10: the readout row's own "tap or hover" is the section's one hint.
+                idle="A gene's bytes, its rule and the trait they express."
+              />
+            ) : (
+              <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
+            )}
+            {layout.unsupported.map((u) => (
+              <p key={u.step} role="status" className="text-text-dim text-meta">
+                Decoder {u.step + 1}: byte mapping unavailable — {u.reason}
+              </p>
+            ))}
+          </div>
+        </div>
+        {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
+        <p data-role="caption" className="text-text text-body max-w-[640px]">
+          Its traits are read from {words.bytes} bytes of DNA
+          {words.pointer
+            ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
+            : ''}
+          .
         </p>
-      )}
-      {cached.status === 'failed' && (
-        <p role="alert">DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}</p>
-      )}
-      <div
-        className={cn('rounded-[10px] p-[5px]', !plateStyle(tier) && 'border-base-border border')}
-        style={plateStyle(tier)}
-      >
-        <div className="space-y-4 rounded-md px-4 py-4 sm:px-5">
-          {layout.genes.length ? (
-            <SequencingGel layout={layout} subject={subject} active={active} onActive={setActive} />
-          ) : (
-            <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
-          )}
-          {layout.unsupported.map((u) => (
-            <p key={u.step} role="status" className="text-text-dim text-meta">
-              Decoder {u.step + 1}: byte mapping unavailable — {u.reason}
-            </p>
-          ))}
-          {collection && (
-            <div className="border-base-border space-y-2 border-t pt-3">
+      </section>
+      {/* C10: the collection's gel is its own section (and plate), so each section keeps one hint. */}
+      {collection && (
+        <section aria-label={`Among ${among}`} className="min-w-0 space-y-3">
+          <div
+            className={cn(
+              'rounded-[10px] p-[5px]',
+              !plateStyle(tier) && 'border-base-border border'
+            )}
+            style={plateStyle(tier)}
+          >
+            <div className="space-y-2 rounded-md px-4 py-4 sm:px-5">
               <div className="flex flex-wrap items-baseline justify-between gap-4">
                 <span className="text-text text-body">
-                  Among {collectionName ?? 'its collection'} · its variant in each gene, and how
-                  common it is among the {collection.genetics.eligibleItems.toLocaleString('en-US')}
+                  Among {among} · its variant in each gene, and how common it is among the{' '}
+                  {collection.genetics.eligibleItems.toLocaleString('en-US')}
                 </span>
                 {collectionHref && (
                   <AppLink href={collectionHref} className="text-small">
@@ -185,6 +224,8 @@ export function ObjectGeneticsView({
                     ]}
                     activeGene={active}
                     onGeneHover={setActive}
+                    labelOf={geneLabel}
+                    idle="Its own band is outlined in every lane; a band reads how many share it."
                   />
                   <NotGenesNote
                     traits={traitsOutsidePattern(
@@ -199,24 +240,21 @@ export function ObjectGeneticsView({
                     </p>
                   )}
                 </>
-              ) : (
+              ) : ruled ? null : (
                 <p role="status" className="text-text-dim text-meta">
                   Collection variant frequencies await complete decoding.
                 </p>
               )}
+              {ruled && ruled.dropped.length > 0 && (
+                <p data-role="caption" className="text-text-dim text-small max-w-[640px]">
+                  {droppedGenesCaption(ruled.dropped, collection.genetics.eligibleItems)}
+                </p>
+              )}
             </div>
-          )}
-        </div>
-      </div>
-      {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
-      <p data-role="caption" className="text-text text-body max-w-[640px]">
-        Its traits are read from {words.bytes} bytes of DNA
-        {words.pointer
-          ? `; its ${words.pointer} gene points to a Bitcoin inscription, which makes it BTC+CKB`
-          : ''}
-        .
-      </p>
-    </section>
+          </div>
+        </section>
+      )}
+    </>
   );
 }
 /**
