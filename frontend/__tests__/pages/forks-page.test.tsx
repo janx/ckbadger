@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import ForksPage from '@/app/forks/page';
 import { api } from '@/lib/api';
 import listFixture from '@/__tests__/fixtures/fork-api-producer/fork-list.json';
@@ -25,30 +26,64 @@ const table = () => screen.getByRole('table', { name: 'Branch switches on this n
 describe('ForksPage', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('leads with the chain’s own record: uncle rate against the 2.5% target (FF-L1)', async () => {
+  it('leads with the uncle rate as the one display figure, the days under it, the node’s record in one quiet row (FF-L1, R11, R13)', async () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
-    render(<ForksPage />);
-    expect(await screen.findByRole('heading', { level: 1, name: 'Forks' })).toHaveClass(
+    const { container } = render(<ForksPage />);
+    const hero = screen.getByRole('region', { name: 'Forks' });
+    expect(within(hero).getByRole('heading', { level: 1, name: 'Forks' })).toHaveClass(
       'text-index'
     );
-    expect(screen.getByText(/aiming at one in 40 blocks/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(4));
+    // R13: one short lede, dim, ≤ 90 characters, with the way down to tier 2
+    const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    expect(lede.textContent!.length).toBeLessThanOrEqual(67);
+    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+      'href',
+      '#evidence'
+    );
+    // the figure: the window's uncle rate, bright (Forks has no class colour, R11), against the target
+    const rate = await within(hero).findByText('250.00');
+    expect(rate).toHaveClass('sm:text-display', 'text-text-bright');
+    expect(within(rate).getByText('%')).toHaveClass('text-hero');
+    expect(within(hero).getByText('uncle rate · 3 days through 2026-10-22')).toBeInTheDocument();
+    expect(within(hero).getByText('5 uncles in 2 blocks · target 2.50%')).toHaveClass('text-body');
+    // the days are the picture, inside the hero section
+    expect(hero.querySelectorAll('[data-uncles]')).toHaveLength(3);
+    // the node's own record (R2b-b): one quiet row under the reading, outside the hero
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(3));
     expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
-      'Uncle rate · 3 days through 2026-10-22',
       'This node switched branch',
       'Its orphans',
       'Orphaned transactions',
     ]);
-    expect(screen.getByText('250.00%')).toBeInTheDocument();
-    expect(screen.getByText('5 uncles in 2 blocks · target 2.50%')).toBeInTheDocument();
-    expect(screen.getByText('1 time')).toBeInTheDocument();
-    // the node's own record from /forks/overview.nodeRecord (R2b-b)
-    expect(screen.getByText('since 2025-08-01')).toBeInTheDocument();
-    expect(screen.getByText('1 uncle')).toHaveClass('text-jade');
-    expect(screen.getByText('1 one block later')).toBeInTheDocument();
-    expect(screen.getByText('1 of 1')).toBeInTheDocument();
-    expect(screen.getByText('committed in a later block')).toBeInTheDocument();
+    const row = screen.getAllByRole('term')[0].closest('dl')!;
+    expect(hero.contains(row)).toBe(false);
+    expect(
+      within(row)
+        .getAllByRole('definition')
+        .map((dd) => dd.textContent)
+    ).toEqual([
+      '1 time · since 2025-08-01',
+      '1 uncle · 1 one block later',
+      '1 of 1 · committed in a later block',
+    ]);
+    // R11: no coloured text in tier 1 (the glyphs and bars keep their colours)
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const coloured = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => /^text-(jade|gold|rouge)(\/\d+)?$/.test(c))
+    );
+    expect(coloured).toEqual([]);
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
+    // the full concept sentence lives in tier 2
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(tier2).toHaveTextContent(/aiming at one in 40 blocks\./);
+    expect(tier1).not.toHaveTextContent(/aiming at one in 40 blocks/);
     expect(api.getForkOverview).toHaveBeenCalledWith(30);
   });
 
@@ -81,7 +116,7 @@ describe('ForksPage', () => {
       },
     });
     render(<ForksPage />);
-    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(2));
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(1));
     expect(screen.queryByText('Its orphans')).toBeNull();
     expect(screen.queryByText(/held only cellbases/)).toBeNull();
     expect(screen.queryByText(/0 of 0 were one miner/)).toBeNull();
@@ -99,32 +134,51 @@ describe('ForksPage', () => {
       },
     });
     render(<ForksPage />);
-    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(2));
-    expect(
-      screen.getByText('since 2025-08-01, 2 of them more than one block deep')
-    ).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(1));
+    expect(screen.getByRole('definition')).toHaveTextContent(
+      /^1 time · since 2025-08-01, 2 of them more than one block deep$/
+    );
     expect(
       screen.getByText(/what became of the dropped blocks needs the node reader/)
     ).toBeInTheDocument();
   });
 
-  it('draws the days as grey uncle bars with jade switches and says what they mean (FF-L2)', async () => {
+  it('draws the days as grey uncle bars with jade switches; one reading and one caption under them, the rest in tier 2 (FF-L2, F3)', async () => {
     vi.mocked(api.getForks).mockResolvedValue(list());
     vi.mocked(api.getForkOverview).mockResolvedValue(overview());
     const { container } = render(<ForksPage />);
-    expect(
-      await screen.findByRole('heading', { name: 'The chain’s record and this node’s view' })
-    ).toBeInTheDocument();
     await waitFor(() => expect(container.querySelectorAll('[data-uncles]')).toHaveLength(3));
     expect(container.querySelectorAll('[data-switches]')).toHaveLength(1);
+    // hierarchy v3: the picture has no separate heading
     expect(
-      screen.getByText(
-        /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\./
+      screen.queryByRole('heading', { name: 'The chain’s record and this node’s view' })
+    ).toBeNull();
+    // under the days: the reading row, then one caption (≤ 2 lines of text, F3)
+    const reading = screen.getByRole('status', { name: 'Day readout' });
+    const under = reading.closest('[data-role="reading"]') as HTMLElement;
+    expect(Array.from(under.children).map((el) => el.tagName)).toEqual(['DIV', 'P']);
+    const caption = under.querySelector('p')!;
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    // the paragraph and the scope note moved to tier 2, every sentence kept
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(
+      within(tier2).getByText(
+        /The chain recorded 5 uncles in these 3 days; this node switched branches 1 time in the same days\. It only notices a fork when the losing block reached it first and it had to switch\. The uncles are the complete record, and they are on chain for anyone to recount\./
       )
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/indexed chain time, node switches use this indexer's detection wall time/)
+      within(tier2).getByText(
+        /indexed chain time, node switches use this indexer's detection wall time/
+      )
     ).toBeInTheDocument();
+    expect(within(tier2).getByText(/focus the chart and use ← →/)).toBeInTheDocument();
+    // two balanced columns: the concept and the window's record | how the chart is drawn
+    const columns = tier2.querySelector('[data-tier="2"] > div')!.children;
+    expect(columns).toHaveLength(2);
+    expect(columns[0]).toHaveTextContent(/aiming at one in 40 blocks/);
+    expect(columns[1]).toHaveTextContent(/focus the chart and use ← →/);
+    expect(columns[1]).toHaveTextContent(/indexer's detection wall time/);
   });
 
   it('gives every switch a fork glyph, the miners, the gap and its fate, linked by D7 (FF-L3, FF-L4)', async () => {
@@ -146,16 +200,70 @@ describe('ForksPage', () => {
     ]);
     const seen = within(table()).getByRole('link', { name: '2025-08-01 06:13:20' });
     expect(seen).toHaveAttribute('href', '/mainnet/forks/10/17404795');
+    // R14: the list's record note left the h2 row for tier 2; its key stays, in neutral words
     expect(
-      screen.getByText('0 of 1 were one miner against itself · median gap 50 ms')
+      within(document.querySelector('[data-tier="2"]') as HTMLElement).getByText(
+        '0 of 1 were one miner against itself · median gap 50 ms'
+      )
     ).toBeInTheDocument();
+    const key = screen.getByRole('list', { name: 'Shape key' });
+    expect(key).toHaveTextContent(
+      'dashed: the block it dropped→ the block that took it as an uncle'
+    );
+    expect(key.querySelector('.text-jade')).toBeNull();
     expect(within(table()).getByText('depth 1')).toBeInTheDocument();
+    // R15 (toward 32–34 px rows): 6 px above and below the 44 px glyph
+    for (const cell of within(table()).getAllByRole('cell'))
+      expect(cell).toHaveClass('text-body', 'py-1.5');
+    // the heads hold their words in an inline element, and a cell's second line is as wide as
+    // its words (R16: a text box is its words)
+    for (const head of within(table()).getAllByRole('columnheader'))
+      expect(head.firstElementChild?.tagName).toBe('SPAN');
+    expect(within(table()).getByText('depth 1')).toHaveClass('block', 'w-fit');
+    expect(within(table()).getByText('1 of 1 tx committed later')).toHaveClass('block', 'w-fit');
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
-    expect(within(table()).getByText('uncle in #12 (+1)')).toBeInTheDocument();
+    // R11: the fate reads in bright ink; the glyph's arrow keeps the jade
+    const fate = within(table()).getByText('uncle in #12 (+1)');
+    expect(fate).toHaveClass('text-text-bright');
+    expect(fate).not.toHaveClass('text-jade');
     expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
+
+  it('shows the first 5 branch switches, then every one in place under “Show all 18 branch switches ↓” (R15)', async () => {
+    const event = list().data[0];
+    const rows = Array.from({ length: 18 }, (_, i) => ({ ...event, id: i + 1 }));
+    vi.mocked(api.getForks).mockResolvedValue({ ...list(), data: rows, total: 18 });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const bodyRows = () => table().querySelectorAll('tbody tr');
+    // collapsed by default: the first five rows, the expander, no pager yet
+    expect(bodyRows()).toHaveLength(5);
+    const more = screen.getByRole('button', { name: 'Show all 18 branch switches ↓' });
+    expect(more).toHaveClass('text-small');
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/18 switches/)).toBeNull();
+    // expanding is the link: every row, every column, in place, then the pager
+    fireEvent.click(more);
+    expect(bodyRows()).toHaveLength(18);
+    expect(within(table()).getAllByRole('columnheader')).toHaveLength(6);
+    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(screen.getByText(/18 switches/)).toBeInTheDocument();
+  });
+
+  it('needs no expander for five switches or fewer', async () => {
+    const event = list().data[0];
+    const rows = Array.from({ length: 5 }, (_, i) => ({ ...event, id: i + 1 }));
+    vi.mocked(api.getForks).mockResolvedValue({ ...list(), data: rows, total: 5 });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(table().querySelectorAll('tbody tr')).toHaveLength(5);
+    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(screen.getByText(/5 switches/)).toBeInTheDocument();
   });
 
   it('names both miners by address tail and marks a fork one miner had against itself (FF-L3)', async () => {

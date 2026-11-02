@@ -116,7 +116,7 @@ export const UNCLE_RATE_TARGET = '2.50%';
 /** The window's uncle rate from the API's exact per-day counts; null for an empty window. */
 export function uncleRateFigure(
   overview: Pick<ForkOverview, 'days' | 'unclesInWindow'>
-): { rate: string; uncles: number; blocks: number } | null {
+): { rate: string; percent: string; uncles: number; blocks: number } | null {
   const uncles = overview.days.reduce((sum, day) => sum + day.uncles, 0);
   const blocks = overview.days.reduce((sum, day) => sum + day.canonicalBlocks, 0);
   if (uncles !== overview.unclesInWindow)
@@ -127,7 +127,8 @@ export function uncleRateFigure(
     if (uncles > 0) throw new Error(`Fork overview: ${uncles} uncles in a window with no blocks`);
     return null;
   }
-  return { rate: `${formatPercent(BigInt(uncles), BigInt(blocks))}%`, uncles, blocks };
+  const percent = formatPercent(BigInt(uncles), BigInt(blocks));
+  return { rate: `${percent}%`, percent, uncles, blocks };
 }
 
 /** A block header time on the site's UTC+8 clock with its milliseconds: `09:12:32.761`. */

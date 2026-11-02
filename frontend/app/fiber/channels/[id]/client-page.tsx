@@ -5,7 +5,6 @@ import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { FiberChannelBoard } from '@/components/fiber/fiber-channel-board';
 import { api, isNotFoundApiError } from '@/lib/api';
-import { FIBER_STATE_WORDS } from '@/lib/fiber-format';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
 
@@ -48,13 +47,13 @@ export default function FiberChannelDetailPage() {
           </Link>{' '}
           <span className="text-text-ghost">/</span> channels
         </nav>
-        <div className="mt-2.5 flex flex-wrap items-baseline gap-3">
-          <h1 className="text-text-bright text-entity font-medium">Fiber channel</h1>
-          {channel.data && (
-            <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.data.state]}</span>
-          )}
-        </div>
-        <p className="text-text text-body mt-2.5 break-all">{channelId}</p>
+        {/* Hierarchy v3: once loaded, the board's hero section holds the title, state and id. */}
+        {!channel.data && (
+          <>
+            <h1 className="text-text-bright text-entity mt-2.5 font-medium">Fiber channel</h1>
+            <p className="text-text-dim text-small mt-1.5 break-all">{channelId}</p>
+          </>
+        )}
         {channel.isPending && (
           <p className="text-text-dim text-body py-8">Loading channel evidence…</p>
         )}

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, waitFor, fireEvent, within } from '../utils/test-utils';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import FiberChannelsPage from '@/app/fiber/channels/client-page';
 import { server } from '../msw/server';
 import { http, HttpResponse } from 'msw';
@@ -43,7 +44,7 @@ describe('FiberChannelsPage', () => {
     expect(await screen.findByTitle(closedChannel.channelId)).toBeInTheDocument();
   });
 
-  it('leads with the board hero: open now, channels ever, parties, typical lifetime (FF-F5, FF-F9)', async () => {
+  it('leads with open now as the one jade figure, the picture under it, and the other figures in one quiet row (FF-F5, FF-F9, R11, R13)', async () => {
     server.use(
       http.get('/api/:network/v1/fiber/network', () =>
         HttpResponse.json({
@@ -58,31 +59,92 @@ describe('FiberChannelsPage', () => {
       ),
       http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
     );
-    render(<FiberChannelsPage />);
-    expect(screen.getByRole('heading', { level: 1, name: 'Fiber channels' })).toHaveClass(
+    const { container } = render(<FiberChannelsPage />);
+    const hero = screen.getByRole('region', { name: 'Fiber channels' });
+    expect(within(hero).getByRole('heading', { level: 1, name: 'Fiber channels' })).toHaveClass(
       'text-index'
     );
-    expect(
-      screen.getByText(/Only opening and closing a channel touch the chain/)
-    ).toBeInTheDocument();
+    // R13: one short lede (dim, ≤ 90 characters) and the way down to the explanation in tier 2
+    const lede = within(hero).getByText(/^Channels touch the chain only to open and to close\./);
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    expect(lede.textContent!.length).toBeLessThanOrEqual(67);
+    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+      'href',
+      '#evidence'
+    );
     // no jade uppercase eyebrow in tier 1 (FF-F6)
     expect(screen.queryByText(/Payment channels · on-chain view/)).toBeNull();
-    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(4));
+    // the display figure: open now, in Fiber's jade, its unit quieter, its locked CKB beside it
+    const figure = await within(hero).findByText('1');
+    expect(figure).toHaveClass('sm:text-display', 'text-jade');
+    expect(within(figure).getByText('channel')).toHaveClass('text-hero', 'text-text-dim');
+    expect(within(hero).getByText('open now')).toBeInTheDocument();
+    const companion = within(hero).getByText(/^locking/);
+    expect(
+      Array.from(companion.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
+    ).toEqual(['3,000.00000000 CKB']);
+    // the other three figures: one quiet row under the reading, outside the hero section
+    await waitFor(() => expect(screen.getAllByRole('term')).toHaveLength(3));
     expect(screen.getAllByRole('term').map((t) => t.textContent)).toEqual([
-      'Open now',
       'Channels ever',
       'Parties',
       'Typical lifetime',
     ]);
-    const hero = screen.getAllByRole('term')[0].closest('dl')!;
-    expect(within(hero).getByText('since 2023-11-15 · 1 in USDI')).toBeInTheDocument();
-    expect(within(hero).getByText('in 1 pair')).toBeInTheDocument();
-    expect(within(hero).getByText('1 m 40 s')).toBeInTheDocument();
-    expect(within(hero).getByText('2 of 2 closed within an hour')).toBeInTheDocument();
+    const row = screen.getAllByRole('term')[0].closest('dl')!;
+    expect(hero.contains(row)).toBe(false);
     expect(
-      Array.from(hero.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
-    ).toEqual(['3,000.00000000 CKB']);
+      within(row)
+        .getAllByRole('definition')
+        .map((dd) => dd.textContent)
+    ).toEqual([
+      '3 · since 2023-11-15 · 1 in USDI',
+      '2 · in 1 pair',
+      '1 m 40 s · 2 of 2 closed within an hour',
+    ]);
     expect(screen.queryByText(/0 d 0 h/)).toBeNull();
+    // R11: the figure is tier 1's only jade text
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const jade = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => /^text-jade(\/\d+)?$/.test(c))
+    );
+    expect(jade).toEqual([figure]);
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
+  });
+
+  it('moves the concept and the graph explainer to tier 2, every sentence kept (F1)', async () => {
+    server.use(
+      http.get('/api/:network/v1/fiber/network', () => HttpResponse.json(network)),
+      http.get('/api/:network/v1/fiber/channels', () => HttpResponse.json(page([channel])))
+    );
+    const { container } = render(<FiberChannelsPage />);
+    const tier2 = await waitFor(() => {
+      const el = container.querySelector('[data-tier="2"]');
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(container.querySelector('#evidence')!.contains(tier2)).toBe(true);
+    expect(tier2).toHaveTextContent(
+      'Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in one shared cell and pay each other off chain as often as they like. Only opening and closing a channel touch the chain, so that is what CKBadger sees.'
+    );
+    expect(
+      await within(tier2).findByRole('heading', { name: 'How to read the graph' })
+    ).toBeInTheDocument();
+    expect(tier2).toHaveTextContent(/Each circle is a party: the address that funded/);
+    expect(tier2).toHaveTextContent(/Parties are on-chain addresses, not Fiber node ids/);
+    // two balanced columns: what the chain sees (with what a party is) | how to read the graph
+    const columns = tier2.querySelector(':scope > div')!.children;
+    expect(columns).toHaveLength(2);
+    expect(columns[0]).toHaveTextContent(/Fiber is a payment-channel network/);
+    expect(columns[0]).toHaveTextContent(/Parties are on-chain addresses/);
+    expect(columns[1]).toHaveTextContent(/Each circle is a party: the address/);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1).not.toHaveTextContent(/Fiber is a payment-channel network/);
+    expect(tier1).not.toHaveTextContent(/Parties are on-chain addresses/);
+    expect(tier1).not.toHaveTextContent(/Each circle is a party: the address/);
   });
 
   it('defaults the table to Open, sorted by capacity, with state counts and the board columns (FF-F4, FF-F6, N5)', async () => {
@@ -122,9 +184,23 @@ describe('FiberChannelsPage', () => {
     ).toEqual(['Channel', 'Parties', 'Capacity', 'Opened', 'Open for']);
     expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
     expect(within(table).getByText('3 m 20 s')).toBeInTheDocument();
-    expect(within(table).getByText('0xaaaaaaaa…aaaaaa')).toBeInTheDocument();
+    // a party reads by its last six characters, as the graph names it (board L8, R16); the whole
+    // lock hash (or address) stays its title and link
+    expect(within(table).getByText('…aaaaaa')).toHaveAttribute('title', `0x${'aa'.repeat(32)}`);
+    expect(within(table).queryByText('0xaaaaaaaa…aaaaaa')).toBeNull();
+    // R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), a 20.8 px line
+    // with 6 px above and below
+    for (const cell of within(table).getAllByRole('cell'))
+      expect(cell).toHaveClass('text-body', 'py-1.5');
+    // every head and cell holds its words in an inline element (R16: a text box is its words)
+    for (const cell of [
+      ...within(table).getAllByRole('columnheader'),
+      ...within(table).getAllByRole('cell'),
+    ])
+      for (const node of Array.from(cell.childNodes))
+        expect(node.nodeType === Node.TEXT_NODE && node.textContent!.trim() !== '').toBe(false);
     expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
-    expect(screen.getByText('sorted by capacity')).toBeInTheDocument();
+    expect(screen.getByText('sorted by capacity')).toHaveClass('text-meta');
     expect(screen.getByText(/Showing 1-1 of 38 channels/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Closed together 1' }));
     await waitFor(() => expect(requested).toContain('cooperativelyClosed'));
@@ -179,6 +255,10 @@ describe('Fiber channel phone row (board L8)', () => {
         null,
       ],
     ]);
+    // R11: the state word stays neutral; only its dot keeps Fiber's jade
+    const state = within(row).getByText('open');
+    expect(state.className).not.toMatch(/(^|\s)text-jade(\s|$)/);
+    expect(state.querySelector('.bg-jade')).not.toBeNull();
     expect(within(row).getByTitle(channel.channelId)).toHaveAttribute(
       'href',
       `/mainnet/fiber/channels/${channel.channelId}`

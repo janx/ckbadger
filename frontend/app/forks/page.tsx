@@ -1,14 +1,14 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
-import { DetailSection } from '@/components/ui/detail-layout';
-import { ListTable } from '@/components/ui/list-table';
-import { TopicHero, type TopicFigure } from '@/components/ui/topic-hero';
+import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { ForkDaysChart } from '@/components/forks/fork-days-chart';
+import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
 import { ForkGlyph } from '@/components/forks/fork-glyph';
 import { MinerLink } from '@/components/forks/miner-link';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -31,6 +31,21 @@ import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
 type Overview = Awaited<ReturnType<typeof api.getForkOverview>>;
 
+/** Each column head holds its words in a span, so its text box is its words (R16), not the cell. */
+function spanHeads<T>(columns: ListColumn<T>[]): ListColumn<T>[] {
+  return columns.map((column) => ({
+    ...column,
+    header: column.header ?? <span>{column.label}</span>,
+  }));
+}
+
+/** R15: a topic page shows a list's first rows; the rest expand in place (there is no list page). */
+const PREVIEW_ROWS = 5;
+
+/** R15, toward 32–34 px rows: rows at body (as the DAO page's depositor rows), 6 px above and
+ * below the 44 px fork glyph. */
+const ROW = 'text-body py-1.5';
+
 const PREVIEW_STATUS_WORDS: Record<ReorgEvent['previewStatus'], string> = {
   available: 'available',
   no_old_branch: 'no old branch recorded',
@@ -39,19 +54,22 @@ const PREVIEW_STATUS_WORDS: Record<ReorgEvent['previewStatus'], string> = {
   not_loaded: 'fate not loaded',
 };
 
-function heroFigures(overview: Overview): TopicFigure[] {
+/** The page's one display figure (hierarchy v3, R11, R13): the window's uncle rate, bright. */
+function uncleRate(overview: Overview): TopicDisplayFigure | undefined {
   const rate = uncleRateFigure(overview);
+  if (!rate) return undefined;
   const window = `${formatCount(overview.days.length, 'day')}${overview.throughDate ? ` through ${overview.throughDate}` : ''}`;
+  return {
+    label: `uncle rate · ${window}`,
+    value: rate.percent,
+    unit: '%',
+    companion: `${formatCount(rate.uncles, 'uncle')} in ${formatCount(rate.blocks, 'block')} · target ${UNCLE_RATE_TARGET}`,
+  };
+}
+
+/** This node's own record, one quiet row under the days' reading (R13). */
+function nodeFigures(overview: Overview): TopicFigure[] {
   return [
-    ...(rate
-      ? [
-          {
-            label: `Uncle rate · ${window}`,
-            value: rate.rate,
-            sub: `${formatCount(rate.uncles, 'uncle')} in ${formatCount(rate.blocks, 'block')} · target ${UNCLE_RATE_TARGET}`,
-          },
-        ]
-      : []),
     {
       label: 'This node switched branch',
       value: formatCount(overview.nodeSwitchesAllTime, 'time'),
@@ -92,7 +110,6 @@ function orphanFigures(record: ForkNodeRecord): TopicFigure[] {
     {
       label: 'Its orphans',
       value: formatCount(blocks.includedAsUncle, 'uncle'),
-      tone: 'jade',
       sub: [uncleDistanceWords(blocks.uncleDistances), ...rest].filter(Boolean).join(' · '),
     },
     {
@@ -130,9 +147,9 @@ function Seen({ event }: { event: ReorgEvent }) {
       ) : (
         <span className="text-text-bright">{when}</span>
       )}
-      <span className="text-text-dim text-meta block">{formatTimeAgo(event.detectedAt)}</span>
+      <span className="text-text-dim text-meta block w-fit">{formatTimeAgo(event.detectedAt)}</span>
       {!href && (
-        <span className="text-text-dim text-meta block">
+        <span className="text-text-dim text-meta block w-fit">
           {missingAddressWords(event.firstOrphanStatus)}
         </span>
       )}
@@ -146,7 +163,7 @@ function ForkPoint({ event }: { event: ReorgEvent }) {
       <Link href={`/blocks/${event.forkPointNumber}`} className="text-text-bright hover:text-jade">
         {formatBlockNumber(event.forkPointNumber)}
       </Link>
-      <span className="text-text-dim text-meta block">depth {event.depth}</span>
+      <span className="text-text-dim text-meta block w-fit">depth {event.depth}</span>
     </span>
   );
 }
@@ -220,7 +237,7 @@ function Fate({ event }: { event: ReorgEvent }) {
     return (
       <span>
         <span className="text-text-bright">No rollback at detection</span>
-        <span className="text-text-dim text-meta block">
+        <span className="text-text-dim text-meta block w-fit">
           indexed {formatBlockNumber(event.oldTipNumber)} → node{' '}
           {formatBlockNumber(event.newTipNumber)}
         </span>
@@ -233,13 +250,14 @@ function Fate({ event }: { event: ReorgEvent }) {
   return (
     <span>
       {uncleInBlock !== null ? (
-        <Link href={`/blocks/${uncleInBlock}`} className="text-jade hover:underline">
+        // R11: the words in bright ink; the glyph's arrow keeps the jade
+        <Link href={`/blocks/${uncleInBlock}`} className="text-text-bright hover:underline">
           {`${words} in ${formatBlockNumber(uncleInBlock)} (+${uncleInBlock - event.forkPointNumber - 1})`}
         </Link>
       ) : (
         <span className="text-text-bright">{words}</span>
       )}
-      <span className="text-text-dim text-meta block">
+      <span className="text-text-dim text-meta block w-fit">
         {noncellbaseTransactions === 0
           ? 'cellbase only'
           : `${committedLaterTransactions.toLocaleString('en-US')} of ${noncellbaseTransactions.toLocaleString('en-US')} tx committed later`}
@@ -248,9 +266,40 @@ function Fate({ event }: { event: ReorgEvent }) {
   );
 }
 
+/** The list's key to its glyphs (Forks V67): drawn swatches, neutral words (R11). */
+function ShapeKey() {
+  return (
+    <ul aria-label="Shape key" className="text-meta text-text-dim flex flex-wrap gap-x-4 gap-y-1">
+      <li className="inline-flex items-center gap-1.5">
+        <svg width="14" height="10" aria-hidden="true">
+          <rect
+            x="1"
+            y="1"
+            width="12"
+            height="8"
+            rx="2"
+            fill="none"
+            stroke={FORK_COLORS.dropped}
+            strokeDasharray="2 2"
+          />
+        </svg>
+        dashed: the block it dropped
+      </li>
+      <li className="inline-flex items-center gap-1.5">
+        <svg width="16" height="10" aria-hidden="true">
+          <line x1="0" y1="5" x2="15" y2="5" stroke={FORK_COLORS.uncleLink} strokeWidth="1.5" />
+        </svg>
+        → the block that took it as an uncle
+      </li>
+    </ul>
+  );
+}
+
 export default function ForksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
+  const pin = useForkDaysPin();
+  const [expanded, setExpanded] = useState(false);
   const overview = useQuery({
     queryKey: ['forks-overview', 30],
     queryFn: () => api.getForkOverview(30),
@@ -266,152 +315,215 @@ export default function ForksPage() {
     throw new Error(
       `Fork overview: days hold ${switches} switches but the window says ${data.nodeSwitchesInWindow}`
     );
+  const competing = data ? competingLine(data.nodeRecord) : null;
+  // Collapsed to the first rows until "Show all" (R15); a later page is always shown whole.
+  const collapsed =
+    !expanded &&
+    !hasPrevious &&
+    events.data !== undefined &&
+    events.data.data.length > PREVIEW_ROWS;
+  const total = events.data?.total;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto flex min-w-0 max-w-[1280px] flex-col gap-11 px-4 pb-[72px] pt-7">
-        <TopicHero
-          title="Forks"
-          lede="Two miners sometimes find a block at the same height, a fraction of a second apart. The chain keeps one. The other is not lost: a later block includes it as an uncle, and CKB counts uncles to measure how often this happens and set the difficulty, aiming at one in 40 blocks."
-          figures={data ? heroFigures(data) : undefined}
-        />
-        <DetailSection
-          title="The chain’s record and this node’s view"
-          actions={
-            <span className="text-text-dim text-meta flex flex-wrap gap-x-[18px] gap-y-1">
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-sm opacity-50"
-                  style={{ background: FORK_COLORS.uncles }}
-                />
-                uncles on chain, per day
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span
-                  className="h-2.5 w-2.5 rounded-sm"
-                  style={{ background: FORK_COLORS.nodeSwitches }}
-                />
-                this node’s branch switches
-              </span>
-            </span>
-          }
-        >
-          {overview.isLoading && <p role="status">Loading fork history…</p>}
-          {overview.error && (
-            <p role="alert" className="text-rouge text-small">
-              Fork history unavailable: {(overview.error as Error).message}
-            </p>
-          )}
-          {data &&
-            (data.days.length ? (
+      <main className="container mx-auto min-w-0 max-w-[1280px] px-4 pb-[72px] pt-7">
+        {/* Hierarchy v3 (R13): the uncle rate and the days under it are the hero; the concept,
+            the chart's long caption and the list's record note are tier 2. */}
+        <div data-tier="1" className="min-w-0">
+          <TopicHero
+            layout="figure"
+            title="Forks"
+            lede={
               <>
-                <ForkDaysChart days={data.days} />
-                <p className="text-text text-body mt-3 max-w-[940px] leading-relaxed">
-                  The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
-                  {formatCount(data.days.length, 'day')}; this node switched branches{' '}
-                  {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only notices
-                  a fork when the losing block reached it first and it had to switch. The uncles are
-                  the complete record, and they are on chain for anyone to recount.
-                </p>
-                <p className="text-text-dim text-meta mt-1">{data.scope}</p>
+                Two blocks, one height: one stays, one is an uncle.{' '}
+                <a
+                  href="#evidence"
+                  className="hover:text-text-bright whitespace-nowrap hover:underline"
+                >
+                  How it works ↓
+                </a>
               </>
-            ) : (
-              <p className="text-text-dim text-small">No completed fork days are indexed.</p>
-            ))}
-        </DetailSection>
-        <DetailSection
-          title="Branch switches on this node"
-          actions={
-            <span className="text-text-dim text-meta flex flex-wrap gap-x-4 gap-y-1">
-              <span>dashed: the block it dropped</span>
-              <span className="text-jade">→ the block that took it as an uncle</span>
-              {data && competingLine(data.nodeRecord) && (
-                <span>{competingLine(data.nodeRecord)}</span>
-              )}
-            </span>
-          }
-        >
-          {events.isLoading && <p role="status">Loading branch switches…</p>}
-          {events.error && (
-            <p role="alert" className="text-rouge text-small">
-              Branch switches unavailable: {(events.error as Error).message}
-            </p>
-          )}
-          {events.data && (
-            <>
-              <ListTable
-                label="Branch switches on this node"
-                rows={events.data.data}
-                rowKey={(event) => String(event.id)}
-                empty="No branch switches observed by this node. Chain uncles above can still exist."
-                columns={[
-                  {
-                    key: 'seen',
-                    label: 'Seen (UTC+8)',
-                    minWidth: 160,
-                    render: (e) => <Seen event={e} />,
-                  },
-                  {
-                    key: 'fork',
-                    label: 'Fork point',
-                    minWidth: 120,
-                    render: (e) => <ForkPoint event={e} />,
-                  },
-                  {
-                    key: 'shape',
-                    label: 'Shape',
-                    minWidth: 226,
-                    render: (e) => <Shape event={e} />,
-                  },
-                  {
-                    key: 'miners',
-                    label: 'Dropped block’s miner vs winner’s',
-                    minWidth: 260,
-                    render: (e) => <Miners event={e} />,
-                  },
-                  {
-                    key: 'apart',
-                    label: 'Found apart',
-                    minWidth: 100,
-                    numeric: true,
-                    render: (e) => <FoundApart event={e} />,
-                  },
-                  {
-                    key: 'fate',
-                    label: 'What became of it',
-                    minWidth: 210,
-                    render: (e) => <Fate event={e} />,
-                  },
-                ]}
-                mobileRow={(event) => (
-                  <div className="text-small min-w-0 space-y-2">
-                    <div className="flex flex-wrap justify-between gap-2">
-                      <Seen event={event} />
-                      <ForkPoint event={event} />
+            }
+            figure={data ? uncleRate(data) : undefined}
+            picture={
+              overview.isLoading ? (
+                <p role="status" className="text-text-dim text-small">
+                  Loading fork history…
+                </p>
+              ) : overview.error ? (
+                <p role="alert" className="text-rouge text-small">
+                  Fork history unavailable: {(overview.error as Error).message}
+                </p>
+              ) : data && data.days.length ? (
+                <ForkDaysPlot days={data.days} pin={pin} />
+              ) : (
+                <p className="text-text-dim text-small">No completed fork days are indexed.</p>
+              )
+            }
+            reading={
+              data &&
+              data.days.length > 0 && (
+                <div data-role="reading">
+                  <ForkDaysReading days={data.days} pin={pin} />
+                  <p className="text-text text-body mt-3.5 max-w-[640px]">
+                    Uncles are the complete record; this node sees only the forks it had to switch.
+                  </p>
+                </div>
+              )
+            }
+            figures={data ? nodeFigures(data) : undefined}
+          />
+          <section aria-labelledby="fork-switches-heading" className="mt-16 min-w-0">
+            <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+              <h2 id="fork-switches-heading" className="text-text-bright text-section font-medium">
+                Branch switches on this node
+              </h2>
+              <ShapeKey />
+            </div>
+            {events.isLoading && <p role="status">Loading branch switches…</p>}
+            {events.error && (
+              <p role="alert" className="text-rouge text-small">
+                Branch switches unavailable: {(events.error as Error).message}
+              </p>
+            )}
+            {events.data && (
+              <>
+                <ListTable
+                  label="Branch switches on this node"
+                  rows={collapsed ? events.data.data.slice(0, PREVIEW_ROWS) : events.data.data}
+                  rowKey={(event) => String(event.id)}
+                  empty="No branch switches observed by this node. Chain uncles above can still exist."
+                  columns={spanHeads<ReorgEvent>([
+                    {
+                      key: 'seen',
+                      className: ROW,
+                      label: 'Seen (UTC+8)',
+                      minWidth: 160,
+                      render: (e) => <Seen event={e} />,
+                    },
+                    {
+                      key: 'fork',
+                      className: ROW,
+                      label: 'Fork point',
+                      minWidth: 120,
+                      render: (e) => <ForkPoint event={e} />,
+                    },
+                    {
+                      key: 'shape',
+                      className: ROW,
+                      label: 'Shape',
+                      minWidth: 226,
+                      render: (e) => <Shape event={e} />,
+                    },
+                    {
+                      key: 'miners',
+                      className: ROW,
+                      label: 'Dropped block’s miner vs winner’s',
+                      minWidth: 260,
+                      render: (e) => <Miners event={e} />,
+                    },
+                    {
+                      key: 'apart',
+                      className: ROW,
+                      label: 'Found apart',
+                      minWidth: 100,
+                      numeric: true,
+                      render: (e) => <FoundApart event={e} />,
+                    },
+                    {
+                      key: 'fate',
+                      className: ROW,
+                      label: 'What became of it',
+                      minWidth: 210,
+                      render: (e) => <Fate event={e} />,
+                    },
+                  ])}
+                  mobileRow={(event) => (
+                    <div className="text-small min-w-0 space-y-2">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <Seen event={event} />
+                        <ForkPoint event={event} />
+                      </div>
+                      <Shape event={event} />
+                      <div>
+                        <Miners event={event} /> · <FoundApart event={event} />
+                      </div>
+                      <Fate event={event} />
                     </div>
-                    <Shape event={event} />
-                    <div>
-                      <Miners event={event} /> · <FoundApart event={event} />
-                    </div>
-                    <Fate event={event} />
+                  )}
+                />
+                {collapsed ? (
+                  <button
+                    type="button"
+                    aria-expanded={false}
+                    onClick={() => setExpanded(true)}
+                    className="text-text hover:text-text-bright text-small mt-3 hover:underline"
+                  >
+                    {total === undefined
+                      ? 'Show all branch switches ↓'
+                      : `Show all ${total.toLocaleString('en-US')} branch switches ↓`}
+                  </button>
+                ) : (
+                  <div className="mt-5">
+                    <CursorPagination
+                      total={events.data.total}
+                      totalLabel="switches"
+                      pageSize={limit}
+                      page={page}
+                      hasMore={events.data.hasMore}
+                      hasPrevious={hasPrevious}
+                      onNext={() => goToNext(events.data!.nextCursor)}
+                      onPrevious={goToPrevious}
+                    />
                   </div>
                 )}
-              />
-              <div className="mt-5">
-                <CursorPagination
-                  total={events.data.total}
-                  totalLabel="switches"
-                  pageSize={limit}
-                  page={page}
-                  hasMore={events.data.hasMore}
-                  hasPrevious={hasPrevious}
-                  onNext={() => goToNext(events.data!.nextCursor)}
-                  onPrevious={goToPrevious}
-                />
-              </div>
-            </>
-          )}
-        </DetailSection>
+              </>
+            )}
+          </section>
+        </div>
+        <div id="evidence" className="scroll-mt-4">
+          <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+            <div className="min-w-0">
+              <DetailSection title="How forks are counted">
+                <div className="flex flex-col gap-3">
+                  <p className="text-text-dim text-body">
+                    Two miners sometimes find a block at the same height, a fraction of a second
+                    apart. The chain keeps one. The other is not lost: a later block includes it as
+                    an uncle, and CKB counts uncles to measure how often this happens and set the
+                    difficulty, aiming at one in 40 blocks.
+                  </p>
+                  {data && data.days.length > 0 && (
+                    <p className="text-text-dim text-body">
+                      The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
+                      {formatCount(data.days.length, 'day')}; this node switched branches{' '}
+                      {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only
+                      notices a fork when the losing block reached it first and it had to switch.
+                      The uncles are the complete record, and they are on chain for anyone to
+                      recount.
+                    </p>
+                  )}
+                </div>
+              </DetailSection>
+            </div>
+            <div className="min-w-0 space-y-8">
+              <DetailSection title="How the chart is drawn">
+                <div className="flex flex-col gap-3">
+                  <p className="text-text-dim text-body">
+                    In the chart each grey bar is a day&apos;s uncles on chain and the jade inside
+                    it this node&apos;s branch switches that day; point at a day, or focus the chart
+                    and use ← → to step through the days.
+                  </p>
+                  {data && <p className="text-text-dim text-body">Days: {data.scope}.</p>}
+                </div>
+              </DetailSection>
+              {competing && (
+                <DetailSection title="This node’s branch switches, compared">
+                  <p className="text-text-dim text-body">{competing}</p>
+                </DetailSection>
+              )}
+            </div>
+          </DetailTier2>
+        </div>
       </main>
     </div>
   );

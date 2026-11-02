@@ -104,24 +104,74 @@ describe('FiberChannelBoard', () => {
     );
   });
 
-  it('opens with the pair, the capacity and one summary sentence from API facts (FF-C3, FF-C6)', () => {
+  it('opens with a hero: title and state, the id, one short lede, the capacity as its display figure with the pair beside it (F2, R13)', () => {
     render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    const hero = screen.getByRole('region', { name: 'Fiber channel' });
+    expect(within(hero).getByRole('heading', { level: 1, name: 'Fiber channel' })).toHaveClass(
+      'text-entity'
+    );
+    expect(within(hero).getByText('force-closed · settled')).toBeInTheDocument();
+    expect(within(hero).getByText(channel.channelId)).toHaveClass('w-fit', 'max-w-full');
+    expect(within(hero).getByText('capacity')).toHaveClass('w-fit');
+    // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
+    const lede = within(hero).getByText(
+      'Force-closed 8 d 3 h after it opened; settled after 6 epochs.'
+    );
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    expect(lede.textContent!.length).toBeLessThanOrEqual(67);
+    // the display figure: the channel's capacity, exact, bright (R4, R11)
+    const capacity = within(hero).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'capacity'
+    );
+    expect(capacity).toHaveTextContent(/^1,062\.00000000 CKB$/);
+    expect(capacity).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
+    expect(capacity.querySelector('.text-hero')).toHaveTextContent('.00000000');
+    // the pair on the figure's baseline row
     const pair = screen.getByTestId('channel-pair');
+    expect(pair.parentElement).toHaveClass('flex', 'items-baseline', 'justify-between');
+    expect(pair.parentElement!.contains(capacity)).toBe(true);
     expect(within(pair).getByRole('link', { name: 'ckb1qzda0c…ppedrr' })).toBeInTheDocument();
     expect(within(pair).getByRole('link', { name: 'ckb1qzda0c…5eyy6y' })).toBeInTheDocument();
-    expect(
-      Array.from(pair.querySelectorAll('[data-ckb-amount]')).map((el) => el.textContent)
-    ).toEqual(['1,062.00000000 CKB']);
-    const summary = screen.getByTestId('channel-summary');
+    // no raw four-cell developer strip in tier 1 and no "0 d" durations
+    expect(screen.queryByText('Funding cell capacity')).toBeNull();
+    expect(screen.queryByText(/\b0 d\b/)).toBeNull();
+  });
+
+  it('moves the full story and the fee caveat to tier 2, every sentence kept (F2)', () => {
+    const { container } = render(<FiberChannelBoard channel={channel} evidence={evidence} />);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(container.querySelector('#evidence')!.contains(tier2)).toBe(true);
+    const summary = within(tier2).getByTestId('channel-summary');
+    expect(summary).toHaveClass('text-body');
     expect(summary).toHaveTextContent(
       'ckb1qzda0c…ppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1qzda0c…5eyy6y 62.00000351 CKB.'
     );
     expect(summary).toHaveTextContent(
       '8 d 3 h later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of 6 epochs the settlement paid it out.'
     );
-    // no raw four-cell developer strip in tier 1 and no "0 d" durations
-    expect(screen.queryByText('Funding cell capacity')).toBeNull();
-    expect(screen.queryByText(/\b0 d\b/)).toBeNull();
+    expect(tier2).toHaveTextContent(
+      'The chain never sees a Fiber payment, only the split when the channel opens and the split when it closes. Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'
+    );
+    expect(tier1).not.toHaveTextContent(/net into the opening transaction/);
+    expect(tier1).not.toHaveTextContent(/the chain does not say which side paid them/);
+    // the words share the right column with the witnesses, beside the locks (page height)
+    const words = within(tier2).getByRole('heading', { name: 'The channel, in words' });
+    const witnesses = within(tier2).getByRole('heading', { name: 'Witnesses and timing' });
+    const locks = within(tier2).getByRole('heading', { name: 'The two locks' });
+    const column = (h: HTMLElement) => h.closest('[data-column]');
+    expect(column(words)).toBe(column(witnesses));
+    expect(column(words)).not.toBe(column(locks));
+    // (the tier-1 prose budget is checked on the page with the real step diagrams)
+  });
+
+  it('keeps the story in tier 2 while the evidence is still loading', () => {
+    const { container } = render(<FiberChannelBoard channel={channel} />);
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(within(tier2).getByTestId('channel-summary')).toHaveTextContent(
+      /^8 d 3 h later the channel was closed without a joint signature/
+    );
   });
 
   it('draws what each side put in at open as one split bar (FF-C3)', () => {
@@ -147,11 +197,16 @@ describe('FiberChannelBoard', () => {
     expect(close).toHaveTextContent(
       'at the close, 2025-03-15 · net received in the settlement transaction, payout and change alike'
     );
-    expect(
-      screen.getByText(
-        /the chain does not say which side paid them, so the amount that changed sides is not shown/
-      )
-    ).toBeInTheDocument();
+    // evidence first: the bars, then one caption under them (R13, R14)
+    const section = screen.getByRole('heading', { name: 'What moved inside the channel' })
+      .parentElement!.parentElement!;
+    const caption = section.querySelector('p[data-role="caption"]')!;
+    expect(caption).toHaveTextContent(
+      'The chain sees no Fiber payment, only the split at the open and at the close.'
+    );
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    expect(close.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('dates every step by its epoch and says what each side received at the end (FF-C4)', () => {

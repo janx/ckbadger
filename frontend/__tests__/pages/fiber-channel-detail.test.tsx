@@ -3,6 +3,7 @@ import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
 import FiberChannelDetailPage from '@/app/fiber/channels/[id]/client-page';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import fixture from '@/__tests__/fixtures/fiber-channel-c07e.json';
 
 const id = fixture.channel.channelId;
@@ -37,7 +38,7 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
         );
       })
     );
-    render(<FiberChannelDetailPage />);
+    const { container } = render(<FiberChannelDetailPage />);
     const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
     expect(within(nav).getByRole('link', { name: 'Fiber' })).toHaveAttribute(
       'href',
@@ -63,6 +64,19 @@ describe('Fiber channel page (FiberChannel board V66)', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /^2 · Force close/ })).toHaveTextContent(
       'epoch 11,639 · 836 / 1,434'
+    );
+    // hierarchy v3 (F2): one hero section, tier 1 within the prose budget, the story in tier 2
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole('region', { name: 'Fiber channel' })).toBeInTheDocument();
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    expect(within(tier2).getByTestId('channel-summary')).toBeInTheDocument();
+    // the force close's step keeps one caption; what its wait is for is said in tier 2
+    expect(
+      screen.getByText('One side posted the commitment: the last state both had signed.')
+    ).toBeInTheDocument();
+    expect(tier2).toHaveTextContent(
+      'A force close moves the funding cell to a commitment lock with a wait of 6 epochs, so the other side can answer with a newer state.'
     );
   });
 });
