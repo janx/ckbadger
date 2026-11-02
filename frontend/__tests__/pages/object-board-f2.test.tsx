@@ -6,6 +6,7 @@ import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils'
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import {
@@ -269,9 +270,10 @@ it('places it in its collection with the composition count and cluster cell (OB-
   expect(coll).toHaveTextContent('created at #17,222,190');
 });
 
-it('lists the board facts and one Live style (OB-11, OB-15)', async () => {
-  await page();
-  const rail = screen.getByRole('complementary', { name: 'Facts' });
+it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C7)', async () => {
+  const { container } = await page();
+  expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
+  const rail = screen.getByRole('region', { name: 'Metrics' });
   for (const label of [
     'Owner',
     'Collection',
@@ -285,8 +287,14 @@ it('lists the board facts and one Live style (OB-11, OB-15)', async () => {
   expect(
     await within(rail).findByText('1 transfer since minting', undefined, { timeout: 5000 })
   ).toBeInTheDocument();
-  expect(rail).toHaveTextContent('2026-10-22 14:43:00 UTC+8');
+  // C7: the metric shows the date; the time of day stays in the metric's title.
+  expect(rail).toHaveTextContent('2026-10-22');
+  expect(within(rail).getByText('Minted').parentElement).toHaveAttribute(
+    'title',
+    expect.stringContaining('2026-10-22 14:43:00 UTC+8')
+  );
   expect(within(rail).getByText('Nervape 3x')).toBeInTheDocument();
+  expect(ledeRestatements(container)).toEqual([]);
   expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
 });
 
