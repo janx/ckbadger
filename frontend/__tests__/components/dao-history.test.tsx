@@ -236,6 +236,11 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(last).toHaveAttribute('text-anchor', 'end');
     expect(Number(last.getAttribute('x'))).toBeLessThanOrEqual(1200);
     expect(ticks[0]).not.toHaveAttribute('text-anchor', 'end');
+    // Each week's bar spans its first to its last day, so the newest ends inside the plot.
+    for (const bar of Array.from(container.querySelectorAll('[data-week]')))
+      expect(Number(bar.getAttribute('x')) + Number(bar.getAttribute('width'))).toBeLessThanOrEqual(
+        1200
+      );
   });
 
   it('draws only the days of the chosen range', () => {

@@ -474,7 +474,8 @@ function WeeklyPanel({ series, pin }: { series: HistorySeries; pin: PinnedReadou
           const x = (i: number) => (i / last) * width;
           const mid = band + (MULTIPLE_H - band) / 2;
           const half = (MULTIPLE_H - band) / 2 - 1;
-          const bw = Math.max(1.2, (7 / last) * width - 1);
+          // A week's bar spans its first to its last day (six day steps), 1 px apart.
+          const bw = Math.max(1.2, (6 / last) * width - 1);
           return (
             <svg
               role="img"
