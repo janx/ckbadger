@@ -10,6 +10,7 @@ import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScriptCustodyEvidence } from '@/components/scripts/script-code-evidence';
+import { HolderTimeline } from '@/components/scripts/holder-timeline';
 import {
   ScriptCellsSummary,
   ScriptCodeTrack,
@@ -565,7 +566,19 @@ export function ScriptFamilyPage({
             ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
             <Section title="Who can change its code" className="mt-16">
-              <ScriptCustodyFigure family={family} lineage={lineage} holders={holders} />
+              {lineage && holders.length ? (
+                // T8: one Type ID lineage is a holder timeline.
+                <HolderTimeline
+                  family={family}
+                  lineage={lineage}
+                  holders={holders}
+                  numbers={numbers}
+                  now={Date.now()}
+                />
+              ) : (
+                // Immutable code, or several references with no single lineage: said in words.
+                <ScriptCustodyFigure family={family} lineage={null} holders={[]} />
+              )}
             </Section>
             <Section title="Code versions" className="mt-[72px]">
               <ListTable

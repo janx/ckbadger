@@ -122,30 +122,30 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(document.body.textContent).not.toMatch(/common knowledge/i);
   });
 
-  it('shows who can change the code as three multisigs, key by key (SC-S4)', async () => {
+  // Table-rows L1-3 (T8): the three columns of sentences became one holder timeline; the keys, what
+  // each signed and the keys kept across a handover are each segment's title.
+  it('shows who can change the code as three multisigs on one timeline, keys in the titles (SC-S4, L1-3)', async () => {
     await renderJoyid();
-    const holders = screen.getByRole('list', { name: 'Code cell holders' });
-    // one column at 390 px, one per holder from md up (no horizontal overflow on phones)
-    expect(holders).toHaveClass('grid-cols-1');
-    expect(holders.style.getPropertyValue('--holders')).toBe('3');
-    const columns = within(holders)
-      .getAllByRole('listitem')
-      .filter((li) => li.dataset.holder);
-    expect(columns).toHaveLength(3);
-    expect(columns[0]).toHaveTextContent('2023-10-07 → 2025-08-28');
-    expect(columns[0]).toHaveTextContent('3 of 5 signatures');
-    expect(columns[0]).toHaveTextContent('signed v2 and v3');
-    expect(columns[1]).toHaveTextContent('signed v4 and v5');
-    expect(columns[2]).toHaveTextContent('has never signed');
-    expect(columns[2]).toHaveTextContent(
-      'Its keys and threshold appear on chain the first time it signs.'
+    const section = screen.getByRole('region', { name: 'Who can change its code' });
+    expect(within(section).queryByRole('list', { name: 'Code cell holders' })).toBeNull();
+    const bar = within(section).getByRole('group', { name: /^Who held JoyID's code cell/ });
+    const segments = [...bar.querySelectorAll<HTMLElement>('[data-holder]')];
+    expect(segments).toHaveLength(3);
+    expect(segments[0].title).toContain('2023-10-07 → 2025-08-28');
+    expect(segments[0].title).toContain('3 of 5 signatures');
+    expect(segments[0].title).toContain('signed v2 and v3');
+    expect(segments[1].title).toContain('signed v4 and v5');
+    expect(segments[2].title).toContain('has never signed');
+    expect(segments[2].title).toContain(
+      'its keys and threshold appear on chain the first time it signs'
     );
-    expect(columns[0].querySelectorAll('[data-kept="true"]')).toHaveLength(2);
-    expect(columns[1].querySelectorAll('[data-kept="true"]')).toHaveLength(2);
-    expect(
-      screen.getByText(/kept across the handover on 2025-08-28: 2 of 5 keys/)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Three multisigs have held it\./)).toBeInTheDocument();
+    expect(segments[0].title.match(/0x[0-9a-f]{40}/g)).toHaveLength(6);
+    expect(segments[1].title).toContain(
+      'kept 2 of 5 keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+    );
+    expect(screen.getByRole('status', { name: 'Code cell holder reading' })).toHaveTextContent(
+      '3 holders · 5 versions · 2 handovers'
+    );
   });
 
   it('merges the versions into one full-width table (SC-S5)', async () => {
@@ -432,19 +432,18 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
   });
 
-  it('says who can change its code in two sentences under the holders; the mechanism in tier 2 (C2)', async () => {
+  it('says who can change its code in one caption under the holder timeline; the mechanism in tier 2 (C2, L1-3)', async () => {
     await renderJoyid();
     const section = screen.getByRole('region', { name: 'Who can change its code' });
     expect(within(section).getByRole('heading', { level: 2 })).toHaveClass('text-section');
-    const holders = within(section).getByRole('list', { name: 'Code cell holders' });
+    const timeline = within(section).getByTestId('holder-timeline');
     const caption = section.querySelector('[data-role="caption"]') as HTMLElement;
     expect(caption).toHaveTextContent(
-      /^Whoever can spend its code cell can put new code in it, and every JoyID cell runs it from the next block\. Three multisigs have held it\.$/
+      /^Whoever can spend the code cell can put new code in it; every JoyID cell runs the new code from the next block\.$/
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
     expect(caption).toHaveClass('text-body', 'max-w-[640px]');
-    expect(follows(holders, caption)).toBe(true);
-    expect(section.lastElementChild).toBe(caption);
+    expect(timeline.lastElementChild).toBe(caption);
     expect(tier1()).not.toHaveTextContent('point at their code through one code cell');
     expect(tier2()).toHaveTextContent(
       "JoyID cells point at their code through one code cell's type id, not at a fixed binary. Whoever can spend that cell can put new code in it, and every JoyID cell runs the new code from the next block."
