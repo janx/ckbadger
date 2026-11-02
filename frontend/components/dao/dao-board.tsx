@@ -277,8 +277,10 @@ function SvgCkb({ shannons }: { shannons: bigint }) {
 }
 
 const ICICLE_LABEL_MIN_PX = 1000;
-const BURNT_FOR_GOOD =
-  'No cell can ever claim it. A hardfork could only put future secondary issuance to use; what is burnt stays burnt.';
+/** JetBrains Mono advances 0.6 em; an in-bar share label is 11 px (meta). */
+const BAR_LABEL_CHAR_PX = 0.6 * 11;
+/** The capacity-use bar's segments sit 3 px apart. */
+const BAR_GAP_PX = 3;
 
 function Issuance({ statistics }: Pick<Props, 'statistics'>) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
@@ -375,7 +377,6 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             ink: 'bright',
             align: 'inside',
             note: `${share(burnt)} · gone for good`,
-            placeholder: BURNT_FOR_GOOD,
           },
         ],
       };
@@ -445,71 +446,72 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
           </li>
           <li>
             <Swatch color={DAO_ISSUANCE_COLORS.burnt} /> burnt <Amount value={burnt.toString()} /> ·{' '}
-            {share(burnt)} · <span className="text-text-dim">gone for good. {BURNT_FOR_GOOD}</span>
+            {share(burnt)} · <span className="text-text-dim">gone for good</span>
           </li>
         </ul>
       )}
-      <div className="mt-6 grid gap-7 md:grid-cols-[300px_minmax(0,1fr)] md:items-start">
-        <p className="text-text text-body leading-relaxed">
-          Every block splits its share the same way. The proportions are simply how all{' '}
-          <Amount value={issued.toString()} /> CKB issued by block{' '}
-          {formatBlockNumber(statistics.tipBlockNumber)} is used right now.
-        </p>
-        <div className="flex min-w-0 flex-col gap-2">
-          <div className="text-text-dim text-small">
-            Current capacity use at statistics block {formatBlockNumber(statistics.tipBlockNumber)}
-          </div>
-          <div
-            className="flex h-2.5 w-full gap-0.5 overflow-hidden rounded"
-            aria-label="Current capacity use partition"
-          >
-            {use.map((part) => (
+      <div className="mt-8 flex min-w-0 flex-col">
+        <div className="text-text-dim text-meta">
+          How all{' '}
+          <span className="text-text">
+            <Amount value={issued.toString()} />
+          </span>{' '}
+          CKB issued so far is used at block {formatBlockNumber(statistics.tipBlockNumber)} · every
+          block splits its issuance in these proportions
+        </div>
+        <div
+          className="text-meta mt-2 flex h-[22px] w-full gap-[3px] overflow-hidden"
+          aria-label="Current capacity use partition"
+        >
+          {use.map((part) => {
+            const percent = formatPercent(part.value, issued, 4);
+            const label =
+              part.key === 'other'
+                ? `everything else ${formatPercent(part.value, issued, 2)}% → burnt`
+                : `${formatPercent(part.value, issued, 2)}%`;
+            // R9: a share is written inside its segment only where it fits (padding included).
+            const segmentPx =
+              width === null
+                ? 0
+                : ((width - BAR_GAP_PX * (use.length - 1)) * Number(percent)) / 100;
+            const fits = segmentPx >= label.length * BAR_LABEL_CHAR_PX + 16;
+            return (
               <div
                 key={part.key}
                 title={`${part.title}: ${formatCapacity(part.value)}`}
+                className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap rounded-[3px] ${part.key === 'other' ? 'text-text-bright flex-1 px-3' : 'text-base-bg shrink-0 justify-center font-medium'}`}
                 style={{
-                  width: `${formatPercent(part.value, issued, 4)}%`,
+                  width: part.key === 'other' ? undefined : `${percent}%`,
                   background: part.color,
                 }}
-              />
-            ))}
-          </div>
-          <div className="text-text-dim text-small flex flex-wrap gap-x-7 gap-y-1.5">
-            <span>
-              <Swatch color={DAO_ISSUANCE_COLORS.miners} />
-              occupied by cells{' '}
-              <span className="text-text-bright">{formatPercent(occupied, issued, 2)}%</span> →
-              miners
-            </span>
-            <span>
-              <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
-              phase-0 free capacity + compensation already accrued{' '}
-              <span className="text-text-bright">
-                {formatPercent(depositorWeight, issued, 2)}%
-              </span>{' '}
-              → depositors · withdrawal requests take no share
-            </span>
-            <span>
-              <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
-              everything else{' '}
-              <span className="text-text-bright">{formatPercent(other, issued, 2)}%</span> → burnt
-            </span>
-          </div>
-          <span className="text-text-dim text-meta">
-            So a deposit keeps its share of all CKB through secondary issuance. Free CKB outside the
-            DAO receives nothing: its share of each block&apos;s issuance is burnt.
-          </span>
-          <span className="text-text-dim text-meta">
-            Protocol occupied includes the genesis virtual occupied baseline; it is not the real
-            occupied size of live cells.
-          </span>
-          <Link
-            href={`/blocks/${statistics.tipBlockNumber}`}
-            className="text-text hover:text-text-bright text-meta hover:underline"
-          >
-            Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
-          </Link>
+              >
+                {fits ? label : ''}
+              </div>
+            );
+          })}
         </div>
+        <div className="text-text-dim text-small mt-2 flex flex-wrap gap-x-7 gap-y-1.5">
+          <span>
+            <Swatch color={DAO_ISSUANCE_COLORS.miners} />
+            occupied by cells{' '}
+            <span className="text-text-bright">{formatPercent(occupied, issued, 2)}%</span> → miners
+          </span>
+          <span>
+            <Swatch color={DAO_ISSUANCE_COLORS.compensation} />
+            DAO deposits, free capacity + compensation accrued{' '}
+            <span className="text-text-bright">{formatPercent(depositorWeight, issued, 2)}%</span> →
+            depositors
+          </span>
+          <span>
+            <Swatch color={DAO_ISSUANCE_COLORS.burnt} />
+            everything else{' '}
+            <span className="text-text-bright">{formatPercent(other, issued, 2)}%</span> → burnt
+          </span>
+        </div>
+        <p className="text-text text-body mt-3.5 max-w-[900px]">
+          A deposit keeps its share of all CKB. Free CKB outside the DAO receives nothing: its share
+          of every block&apos;s issuance is burnt.
+        </p>
       </div>
     </Section>
   );
@@ -875,94 +877,143 @@ function RawEvidence({
       ),
     },
   ];
-  return (
-    <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
-      <DetailSection
-        title={`The DAO field in every block header · ${formatBlockNumber(header.blockNumber)}`}
-      >
-        <div className="text-small">
-          {fields.map((field) => (
-            <div
-              key={field.key}
-              className="border-base-elevated grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
-            >
-              <span className="text-text-bright">{field.key}</span>
-              <span className="text-text-dim">bytes {field.bytes}</span>
-              <span className="min-w-0">{field.value}</span>
-            </div>
-          ))}
+  const headerField = (
+    <DetailSection
+      title={`The DAO field in every block header · ${formatBlockNumber(header.blockNumber)}`}
+    >
+      <div className="text-small">
+        {fields.map((field) => (
+          <div
+            key={field.key}
+            className="border-base-elevated grid grid-cols-[44px_96px_minmax(0,1fr)] gap-3 border-t py-1.5"
+          >
+            <span className="text-text-bright">{field.key}</span>
+            <span className="text-text-dim">bytes {field.bytes}</span>
+            <span className="min-w-0">{field.value}</span>
+          </div>
+        ))}
+      </div>
+      <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
+      <p className="text-text-dim text-small mt-3 leading-relaxed">
+        Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
+        {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
+        capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
+        %. Compensation freezes at the withdrawal request AR. At block{' '}
+        <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
+          {formatBlockNumber(anchor.blockNumber)}
+        </Link>{' '}
+        (<span title={anchor.blockHash}>{truncateHash(anchor.blockHash)}</span>), S (
+        <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
+        <Amount value={owed.toString()} />) plus the burnt share (
+        <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it does
+        not hold it for anyone. Compensation paid + still owed equals the depositors’ share.
+      </p>
+      {evidence.ar.year365 && (
+        <div className="text-text-dim text-meta mt-2 font-mono">
+          365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} · chain
+          time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
+          {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
+          {formatDurationMs(
+            exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
+          )}{' '}
+          · the last canonical block at or before the 365-day chain-time cutoff, behind
+          &ldquo;Compensation, last 365 days&rdquo;
         </div>
-        <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
-        <p className="text-text-dim text-small mt-3 leading-relaxed">
-          Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
-          {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
-          capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
-          %. Compensation freezes at the withdrawal request AR. At block{' '}
-          <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
-            {formatBlockNumber(anchor.blockNumber)}
-          </Link>{' '}
-          (<span title={anchor.blockHash}>{truncateHash(anchor.blockHash)}</span>), S (
-          <Amount value={statsS.toString()} /> CKB) equals the compensation still owed (
-          <Amount value={owed.toString()} />) plus the burnt share (
-          <Amount value={burnt.toString()} />) to the shannon: S only counts the burnt share, it
-          does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.
+      )}
+      <Link
+        href={`/blocks/${header.blockNumber}`}
+        className="text-text hover:text-text-bright text-small mt-2 inline-block hover:underline"
+      >
+        Open source block →
+      </Link>
+    </DetailSection>
+  );
+  return (
+    // "How it works ↓" in the hero lands on the evidence boundary (hierarchy D1, D8).
+    <div id="evidence" className="scroll-mt-4">
+      <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-8">
+          <HowItWorks statistics={statistics} />
+          <DetailSection title="The DAO script">
+            <dl className="text-small flex flex-col gap-2.5">
+              <div>
+                <dt className="text-text-dim">Type script · type</dt>
+                <dd className="mt-0.5">
+                  <Link
+                    href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
+                    className="text-text-bright break-all font-mono hover:underline"
+                  >
+                    0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e
+                  </Link>
+                </dd>
+                <dd className="text-text-dim mt-0.5">
+                  deployed in the genesis block; its code cell can never be spent
+                </dd>
+              </div>
+              <div>
+                <dt className="text-text-dim">Cell data, 8 bytes</dt>
+                <dd className="mt-0.5">
+                  0 for a deposit · the deposit&apos;s block number (u64 LE) for a withdrawal
+                  request
+                </dd>
+              </div>
+              <div>
+                <dt className="text-text-dim">Withdrawing</dt>
+                <dd className="mt-0.5 leading-relaxed">
+                  header deps: the deposit block and the request block · input since: the epoch
+                  where the cycle ends · paid out: (capacity − occupied) × AR(request) ÷ AR(deposit)
+                  + occupied
+                </dd>
+              </div>
+              <div>
+                <dt className="text-text-dim">A standard deposit cell</dt>
+                <dd className="mt-0.5">
+                  102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8
+                </dd>
+              </div>
+            </dl>
+          </DetailSection>
+        </div>
+        {headerField}
+      </DetailTier2>
+    </div>
+  );
+}
+
+/**
+ * Tier 2, left column (hierarchy D8): what tier 1 states as figures, in words — the concept the
+ * hero used to open with, how each block splits its issuance, how to read the sections' charts, and
+ * every protocol caveat, then the statistics anchor block to verify against.
+ */
+function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
+  return (
+    <DetailSection title="How the Nervos DAO works">
+      <div className="text-text-dim text-small flex flex-col gap-2.5 leading-relaxed">
+        <p>
+          CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
+          billion CKB a year, is split by how CKB is used: depositors are compensated with the share
+          their deposits make up, miners get the share that is occupied, and the rest is burnt.
+          Every block splits its share the same way: the proportions are simply how all CKB issued
+          by that block is used right then. So a deposit keeps its share of all CKB through
+          secondary issuance, while free CKB outside the DAO receives nothing.
         </p>
-        {evidence.ar.year365 && (
-          <div className="text-text-dim text-meta mt-2 font-mono">
-            365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} · chain
-            time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
-            {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
-            {formatDurationMs(
-              exactSafeMs(evidence.ar.year365.elapsedChainTimeMs, 'DAO 365-day observed span')
-            )}{' '}
-            · the last canonical block at or before the 365-day chain-time cutoff, behind
-            &ldquo;Compensation, last 365 days&rdquo;
-          </div>
-        )}
-        <Link
-          href={`/blocks/${header.blockNumber}`}
-          className="text-text hover:text-text-bright text-small mt-2 inline-block hover:underline"
-        >
-          Open source block →
-        </Link>
-      </DetailSection>
-      <DetailSection title="The DAO script">
-        <dl className="text-small flex flex-col gap-2.5">
-          <div>
-            <dt className="text-text-dim">Type script · type</dt>
-            <dd className="mt-0.5">
-              <Link
-                href="/script/0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e?hashType=type&kind=type"
-                className="text-text-bright break-all font-mono hover:underline"
-              >
-                0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e
-              </Link>
-            </dd>
-            <dd className="text-text-dim mt-0.5">
-              deployed in the genesis block; its code cell can never be spent
-            </dd>
-          </div>
-          <div>
-            <dt className="text-text-dim">Cell data, 8 bytes</dt>
-            <dd className="mt-0.5">
-              0 for a deposit · the deposit&apos;s block number (u64 LE) for a withdrawal request
-            </dd>
-          </div>
-          <div>
-            <dt className="text-text-dim">Withdrawing</dt>
-            <dd className="mt-0.5 leading-relaxed">
-              header deps: the deposit block and the request block · input since: the epoch where
-              the cycle ends · paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) +
-              occupied
-            </dd>
-          </div>
-          <div>
-            <dt className="text-text-dim">A standard deposit cell</dt>
-            <dd className="mt-0.5">102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8</dd>
-          </div>
-        </dl>
-      </DetailSection>
-    </DetailTier2>
+        <p>
+          The depositors&apos; share counts phase-0 deposits, free capacity + compensation already
+          accrued; withdrawal requests take no share.
+        </p>
+        <p>
+          Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
+          occupied size of live cells. No cell can ever claim the burnt share. A hardfork could only
+          put future secondary issuance to use; what is burnt stays burnt.
+        </p>
+      </div>
+      <Link
+        href={`/blocks/${statistics.tipBlockNumber}`}
+        className="text-text hover:text-text-bright text-small mt-2.5 inline-block hover:underline"
+      >
+        Verify statistics anchor block {formatBlockNumber(statistics.tipBlockNumber)} →
+      </Link>
+    </DetailSection>
   );
 }
 

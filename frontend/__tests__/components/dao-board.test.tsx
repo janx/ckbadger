@@ -182,9 +182,9 @@ describe('DaoBoard', () => {
 
   it("draws the depositors' share from their allocation weight, not DAO free capacity (DAO-2)", () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    // The board legend (D3 wording): the weight's 4.50%, not DAO free capacity's 4.00%.
+    // The board legend (hierarchy D3 wording): the weight's 4.50%, not DAO free capacity's 4.00%.
     expect(screen.getByRole('region', { name: 'Where secondary issuance goes' })).toHaveTextContent(
-      'phase-0 free capacity + compensation already accrued 4.50% → depositors'
+      'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
     expect(screen.getByTitle('DAO depositors: 450.00000000 CKB')).toBeInTheDocument();
     expect(screen.queryByText(/free capacity in DAO/)).not.toBeInTheDocument();
@@ -195,10 +195,10 @@ describe('DaoBoard', () => {
     expect(
       screen.getByText(/AR grew from 1\.0000000000000000 at genesis to 1\.0200000000000000/)
     ).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /Verify statistics anchor block #5/ })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks/5'
-    );
+    const verify = screen.getByRole('link', { name: /Verify statistics anchor block #5/ });
+    expect(verify).toHaveAttribute('href', '/mainnet/blocks/5');
+    // Hierarchy D3/D8: the anchor link is developer evidence, under "How the Nervos DAO works".
+    expect(verify.closest('[data-tier="2"]')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
       'href',
       `/mainnet/blocks/${evidence.header.blockNumber}`
@@ -265,7 +265,7 @@ describe('DaoBoard', () => {
     ).toThrow('2024-01-15 has no current depositor count');
   });
 
-  it('keeps the 96 px tier-2 boundary and quiet 13 px tier-2 headings (DAO-20, R6)', () => {
+  it('opens tier 2 at 96 px with a hairline and the eyebrow, quiet 13 px headings in two columns (DAO-20, R6, D8)', () => {
     const { container } = render(
       <DaoBoard
         statistics={stats}
@@ -279,12 +279,38 @@ describe('DaoBoard', () => {
     expect(tier2).toHaveClass('mt-24', 'border-t', 'border-base-border');
     // A space-y-* parent's sibling selector overrides the 96 px margin (measured 32 px).
     expect(tier2.parentElement!.className).not.toMatch(/space-y-/);
+    // "How it works ↓" in the hero lands here.
+    expect(container.querySelector('#evidence')).toContainElement(tier2);
+    expect(tier2.firstElementChild).toHaveTextContent(/^Evidence · for developers$/);
     const headings = Array.from(tier2.querySelectorAll('h2'));
     expect(headings.map((h) => h.textContent)).toEqual([
-      'The DAO field in every block header · #5',
+      'How the Nervos DAO works',
       'The DAO script',
+      'The DAO field in every block header · #5',
     ]);
     for (const h of headings) expect(h).toHaveClass('text-body', 'text-[#a0a8be]');
+    // Left column: the concept and the script; right column: the header field (board D8).
+    const [works, script, header] = headings.map((h) => h.closest('section')!);
+    expect(works.parentElement).toBe(script.parentElement);
+    expect(header.parentElement).not.toBe(works.parentElement);
+    expect(works.parentElement!.parentElement).toHaveClass('grid', 'lg:grid-cols-2');
+  });
+
+  it('explains the DAO in tier 2: the former hero paragraph and the issuance explanation (D8)', () => {
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const works = within(container.querySelector('[data-tier="2"]') as HTMLElement)
+      .getByRole('heading', { name: 'How the Nervos DAO works' })
+      .closest('section')!;
+    expect(works).toHaveTextContent(
+      'CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344 billion CKB a year, is split by how CKB is used: depositors are compensated with the share their deposits make up, miners get the share that is occupied, and the rest is burnt.'
+    );
+    expect(works).toHaveTextContent(
+      'Every block splits its share the same way: the proportions are simply how all CKB issued by that block is used right then.'
+    );
+    expect(works).toHaveTextContent(
+      'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
+    );
+    expect(works).not.toHaveTextContent(/interest|earned/i);
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {
@@ -403,23 +429,76 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     expect(svg.querySelector('[data-label="compensation"]')).toHaveTextContent(
       'compensation for depositors'
     );
-    expect(svg.querySelector('[data-placeholder="burnt"]')).toHaveTextContent(
-      'No cell can ever claim it.'
-    );
+    // Hierarchy D3: the burnt-for-good caveat is tier-2 evidence, not a box under the icicle.
+    expect(svg.querySelector('[data-placeholder="burnt"]')).toBeNull();
     expect(svg.querySelector('[data-placeholder="miners"]')).toHaveTextContent('paid in cellbases');
     expect(issuance()).toHaveTextContent('still owed');
     expect(issuance()).not.toHaveTextContent(/interest|earned/i);
   });
 
-  it('says where each share of capacity use goes, and why a deposit keeps its share', () => {
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
+  it('says where each share of capacity use goes, and why a deposit keeps its share, in one caption', () => {
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    expect(issuance()).toHaveTextContent(
+      'How all 10,000.00000000 CKB issued so far is used at block #5 · every block splits its issuance in these proportions'
+    );
     expect(issuance()).toHaveTextContent('occupied by cells 0.01% → miners');
     expect(issuance()).toHaveTextContent(
-      'phase-0 free capacity + compensation already accrued 4.50% → depositors · withdrawal requests take no share'
+      'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
     );
     expect(issuance()).toHaveTextContent('everything else 95.49% → burnt');
+    // One caption under the bar (D3), after the bar and its legend in reading order.
+    const caption = within(issuance()).getByText(
+      "A deposit keeps its share of all CKB. Free CKB outside the DAO receives nothing: its share of every block's issuance is burnt."
+    );
+    const bar = within(issuance()).getByLabelText('Current capacity use partition');
+    expect(bar.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The protocol caveats and the anchor link left tier 1 for the evidence (D3, D8).
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    const caveats = [
+      /Protocol occupied \(U\) includes the genesis virtual occupied baseline; it is not the real occupied size of live cells\./,
+      /No cell can ever claim the burnt share\. A hardfork could only put future secondary issuance to use; what is burnt stays burnt\./,
+      /withdrawal requests take no share/,
+    ];
+    for (const caveat of caveats) {
+      expect(issuance()).not.toHaveTextContent(caveat);
+      expect(tier2).toHaveTextContent(caveat);
+    }
+    expect(
+      within(issuance()).queryByRole('link', { name: /Verify statistics anchor block/ })
+    ).toBeNull();
+  });
+
+  it('draws capacity use as a 22 px bar with each share written inside the segments that fit (R9)', () => {
+    stubChartWidth(1400);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(issuance()).getByLabelText('Current capacity use partition');
+    expect(bar).toHaveClass('h-[22px]');
+    const segments = Array.from(bar.children) as HTMLElement[];
+    expect(segments.map((s) => s.title)).toEqual([
+      'Occupied: 1.00000000 CKB',
+      'DAO depositors: 450.00000000 CKB',
+      'Everything else: 9,549.00000000 CKB',
+    ]);
+    // 0.01 % of 1,400 px holds no label; 4.50 % (63 px) holds "4.50%"; the rest says where it goes.
+    expect(segments.map((s) => s.textContent)).toEqual([
+      '',
+      '4.50%',
+      'everything else 95.49% → burnt',
+    ]);
+  });
+
+  it('writes no share inside the bar before its width is known or where a segment is too narrow', () => {
+    stubChartWidth(358);
+    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const bar = within(issuance()).getByLabelText('Current capacity use partition');
+    // 4.50 % of 358 px is 16 px, too narrow for "4.50%"; the legend still states every share.
+    expect(Array.from(bar.children).map((s) => s.textContent)).toEqual([
+      '',
+      '',
+      'everything else 95.49% → burnt',
+    ]);
     expect(issuance()).toHaveTextContent(
-      'So a deposit keeps its share of all CKB through secondary issuance.'
+      'DAO deposits, free capacity + compensation accrued 4.50%'
     );
   });
 
@@ -433,7 +512,10 @@ describe('DaoBoard secondary issuance (DAO-7)', () => {
     const legend = within(issuance()).getByRole('list', { name: 'Secondary issuance parts' });
     expect(legend).toHaveTextContent('to miners');
     expect(legend).toHaveTextContent('paid out');
-    expect(legend).toHaveTextContent('No cell can ever claim it.');
+    expect(legend).toHaveTextContent('burnt');
+    // Hierarchy D3: "gone for good" stays; the caveat behind it is tier-2 evidence.
+    expect(legend).toHaveTextContent('gone for good');
+    expect(legend).not.toHaveTextContent(/No cell can ever claim/);
   });
 });
 

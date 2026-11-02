@@ -170,10 +170,10 @@ describe('DaoPage', () => {
     });
     render(<DaoPage />);
     expect(
-      await screen.findByText('Current capacity use at statistics block #4')
+      await screen.findByText(/is used at block #4 · every block splits its issuance/)
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/Protocol occupied includes the genesis virtual occupied baseline/)
+      screen.getByText(/Protocol occupied \(U\) includes the genesis virtual occupied baseline/)
     ).toBeInTheDocument();
     expect(
       screen.getByRole('link', { name: 'Verify statistics anchor block #4 →' })
