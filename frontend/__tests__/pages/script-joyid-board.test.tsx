@@ -148,28 +148,30 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
   });
 
-  it('merges the versions into one full-width table (SC-S5)', async () => {
+  // Table-rows L1-4: one line per version, newest first (board ScriptDetail); the exact time, the
+  // binary, the code cell's CKB, the signer and the fate are each row's title.
+  it('merges the versions into one full-width table, newest first (SC-S5, L1-4)', async () => {
     await renderJoyid();
     expect(screen.queryByRole('table', { name: 'Code cell deployments' })).toBeNull();
     const table = screen.getByRole('table', { name: 'Code versions' });
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows.map((row) => row.textContent!.match(/^v\d/)![0])).toEqual([
-      'v1',
-      'v2',
-      'v3',
-      'v4',
       'v5',
+      'v4',
+      'v3',
+      'v2',
+      'v1',
     ]);
-    await waitFor(() => expect(rows[0]).toHaveTextContent('96,760 B'));
-    expect(rows[0]).toHaveTextContent('2023-10-07 15:39');
-    expect(rows[0]).toHaveTextContent('#11,132,140');
-    expect(rows[0]).toHaveTextContent('consumed by v2');
-    expect(rows[0]).toHaveTextContent('first deployed');
-    expect(rows[0]).toHaveTextContent('into multisig 0xd1db…b95c');
-    expect(rows[2]).toHaveTextContent('hands it to 0x07a2…68ca');
-    expect(rows[4]).toHaveTextContent('current');
-    expect(rows[4]).toHaveTextContent('100,438.00000000');
-    expect(rows[4]).toHaveTextContent('live');
+    const title = (row: HTMLElement) => row.getAttribute('title')!;
+    await waitFor(() => expect(title(rows[4])).toContain('96,760 B'));
+    expect(title(rows[4])).toContain('2023-10-07 15:39');
+    expect(rows[4]).toHaveTextContent('#11,132,140');
+    expect(title(rows[4])).toContain('consumed by v2');
+    expect(title(rows[4])).toContain('first deployed');
+    expect(title(rows[4])).toContain('into multisig 0xd1db…b95c');
+    expect(title(rows[2])).toContain('hands it to 0x07a2…68ca');
+    expect(rows[0]).toHaveTextContent('live · current');
+    expect(title(rows[0])).toContain('100,438.00000000');
     expect(screen.getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)).toBeInTheDocument();
   });
 
@@ -456,7 +458,9 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(tier1()).toContainElement(versions);
     const h2 = within(tier1()).getByRole('heading', { name: 'Code versions', level: 2 });
     expect(h2).toHaveClass('text-section');
-    expect(h2.parentElement!.children).toHaveLength(1);
+    // The heading row holds the h2 and the board's quiet order note only (L1-4).
+    expect(h2.parentElement!.children).toHaveLength(2);
+    expect(h2.nextElementSibling).toHaveTextContent(/^newest first$/);
     expect(
       within(tier2()).getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)
     ).toBeInTheDocument();
@@ -491,16 +495,26 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
   });
 
-  it('writes no coloured text in tier 1: the figure is bright, the graphics keep their colours (R11)', async () => {
+  // Table-rows L1-4: the board's one accent, the "live · current" class-mark tag of the version the
+  // cells run now, is the only coloured text tier 1 keeps (RowTag accent, as the boards draw it).
+  it('writes no coloured text in tier 1 but the live · current tag: the figure is bright, the graphics keep their colours (R11)', async () => {
     await renderJoyid();
     await waitFor(() =>
-      expect(screen.getByRole('table', { name: 'Code versions' })).toHaveTextContent('96,760 B')
+      expect(
+        within(screen.getByRole('table', { name: 'Code versions' }))
+          .getAllByRole('row')[5]
+          .getAttribute('title')
+      ).toContain('96,760 B')
     );
-    const coloured = [...tier1().querySelectorAll('[class]')].filter((el) =>
-      el
-        .getAttribute('class')!
-        .split(/\s+/)
-        .some((c) => COLOURED_TEXT.test(c))
+    const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
+    expect(accents.map((el) => el.textContent)).toEqual(['live · current']);
+    const coloured = [...tier1().querySelectorAll('[class]')].filter(
+      (el) =>
+        !el.matches('[data-row-tag="accent"]') &&
+        el
+          .getAttribute('class')!
+          .split(/\s+/)
+          .some((c) => COLOURED_TEXT.test(c))
     );
     expect(coloured.map((el) => el.outerHTML.slice(0, 90))).toEqual([]);
     const inked = [...tier1().querySelectorAll<HTMLElement>('[style]')].filter(
@@ -537,8 +551,9 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
     const rows = await screen.findAllByTestId('code-version-row-mobile');
     expect(screen.queryByRole('table', { name: 'Code versions' })).toBeNull();
     expect(rows).toHaveLength(5);
-    await waitFor(() => expect(rows[0]).toHaveTextContent('96,760 B'));
-    const first = phoneLines(rows[0]);
+    // Newest first since table-rows L1-4: v1 is the last row.
+    await waitFor(() => expect(rows[4]).toHaveTextContent('96,760 B'));
+    const first = phoneLines(rows[4]);
     expect(first.map((l) => [l.key, l.tone])).toEqual([
       ['version', 'body'],
       ['hash', 'quiet'],
@@ -552,7 +567,7 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
       /^#11,132,140 · 96,760 B · .+ CKB · first deployed into multisig 0xd1db…b95c$/
     );
     expect(first[2].right).toMatch(/^live cells using it: /);
-    const last = phoneLines(rows[4]);
+    const last = phoneLines(rows[0]);
     expect(last[0].left).toMatch(/^v5 current /);
     expect(last[0].right).toBe('live');
   });
@@ -566,7 +581,8 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
         .map((h) => h.textContent)
     ).toEqual(['v', 'Deployed', 'Code cell · version hash', 'Status', 'Live cells']);
     expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(608);
-    const [first] = within(table).getAllByRole('row').slice(1);
+    // Newest first since table-rows L1-4: v1 is the last row.
+    const first = within(table).getAllByRole('row').slice(1).at(-1)!;
     const cell = first.querySelectorAll('td')[2];
     await waitFor(() => expect(cell).toHaveTextContent('96,760 B · first deployed into multisig'));
     expect(cell.lastElementChild!.textContent).toMatch(/^0x[0-9a-f]{64}$/);

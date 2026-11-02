@@ -28,7 +28,9 @@ import {
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
 import type { CapacityRangeKey } from '@/lib/capacity-range';
-import { formatCapacity, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+import { RowTag } from '@/components/ui/row-tag';
 import {
   codeHolders,
   holderName,
@@ -207,10 +209,13 @@ const REFERENCE_COLUMNS: ListColumn<ReferenceRow>[] = [
 /** A tier-1 section (hierarchy R6): h2 at section size, 18 px above its evidence. */
 function Section({
   title,
+  note,
   className,
   children,
 }: {
   title: string;
+  /** A quiet word on the heading's row, right (the board's "newest first"). */
+  note?: string;
   className: string;
   children: ReactNode;
 }) {
@@ -218,6 +223,7 @@ function Section({
     <section aria-label={title} className={`min-w-0 ${className}`}>
       <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-text-bright text-section font-medium">{title}</h2>
+        {note && <span className="text-text-dim text-small">{note}</span>}
       </div>
       {children}
     </section>
@@ -252,7 +258,8 @@ export function ScriptFamilyPage({
       )
     )
   );
-  const rows = orderedVersions(family).map((version) => ({
+  // Newest first (board ScriptDetail): the version cells run now leads.
+  const rows = [...orderedVersions(family)].reverse().map((version) => ({
     version,
     number: numbers.get(version.versionHash)!,
     current: version.deployments.some((deployment) => deployment.status === 'live'),
@@ -328,13 +335,178 @@ export function ScriptFamilyPage({
       {row.current && <span className="text-text text-meta block">current</span>}
     </span>
   );
+  /** The deployment a one-line version row writes: its first; the others are its title's. */
+  const leadOf = (row: Row): Deployment | undefined =>
+    [...row.version.deployments].sort((a, b) => a.deployedAt - b.deployedAt)[0];
+  /** "replaced at #17,894,900": what became of a version no live code cell holds. */
+  const replacedText = (d: Deployment | undefined): string =>
+    !d
+      ? 'no code cell observed'
+      : d.consumedAtBlock !== undefined && d.consumedAtBlock !== null
+        ? `replaced at ${formatBlockNumber(d.consumedAtBlock)}`
+        : d.status === 'consumed'
+          ? deploymentStatus(d)
+          : 'status unavailable';
+  /** Who signed a deployment, for the title: "signed by X, hands it to Y" or "first deployed into Y". */
+  const signerTitle = (d: Deployment): string => {
+    const { who, note, marked } = signer(d);
+    if (!marked) return who;
+    if (who === 'first deployed') return `${who} ${note}`;
+    return note ? `signed by ${who}, ${note}` : `signed by ${who}`;
+  };
+  /**
+   * A version row's hover (L1-4): every field that left the line — the exact time, each code cell
+   * with its binary and CKB, who held and who signed it, its fate, and the data hash.
+   */
+  const versionTitle = (row: Row): string => {
+    const deployments = [...row.version.deployments].sort((a, b) => a.deployedAt - b.deployedAt);
+    return [
+      `v${row.number}`,
+      row.current ? 'live · current' : replacedText(leadOf(row)),
+      ...(deployments.length ? [] : ['no deployment observed']),
+      ...deployments.flatMap((d) => {
+        const state = codeCells.get(outpointKey(d));
+        return [
+          `deployed ${formatUtc8DateTime(d.deployedAt).slice(0, 16)} (UTC+8)${d.createdAtBlock !== undefined ? ` at ${formatBlockNumber(d.createdAtBlock)}` : ''}`,
+          `code cell ${outpointKey(d)}`,
+          state?.cell
+            ? `${state.cell.dataSize.toLocaleString('en-US')} B binary`
+            : state?.error
+              ? `binary unavailable: ${state.error.message}`
+              : 'binary loading',
+          ...(state?.cell ? [`${formatCkbAmount(state.cell.capacity).full} CKB`] : []),
+          d.custody ? `held by ${holderName(d.custody)}` : 'custody unavailable',
+          signerTitle(d),
+          deploymentStatus(d),
+        ];
+      }),
+      `data hash ${row.version.versionHash}`,
+    ].join(' · ');
+  };
+  /** One 36 px line (board: 36): the row density's 11 px padding, 2 px less. */
+  const ROW = 'py-[9px]';
+  const columns: ListColumn<Row>[] = [
+    {
+      key: 'version',
+      label: 'Version',
+      minWidth: 64,
+      className: ROW,
+      render: (row) => {
+        const lead = leadOf(row);
+        const label = `v${row.number}`;
+        return lead ? (
+          <Link
+            href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
+            className="text-body text-text-bright leading-[18px] hover:underline"
+          >
+            {label}
+          </Link>
+        ) : (
+          <span className="text-body text-text-bright leading-[18px]">{label}</span>
+        );
+      },
+    },
+    {
+      key: 'deployed',
+      label: 'Deployed',
+      minWidth: 110,
+      className: ROW,
+      render: (row) => {
+        const lead = leadOf(row);
+        return lead ? (
+          <span className="tabular-nums">{formatUtc8Date(lead.deployedAt)}</span>
+        ) : (
+          <span className="text-text-dim">—</span>
+        );
+      },
+    },
+    {
+      key: 'block',
+      label: 'Block',
+      minWidth: 120,
+      numeric: true,
+      className: ROW,
+      render: (row) => {
+        const block = leadOf(row)?.createdAtBlock;
+        return block !== undefined ? (
+          <Link href={`/blocks/${block}`} className="text-text-dim hover:text-jade">
+            {formatBlockNumber(block)}
+          </Link>
+        ) : (
+          <span className="text-text-dim">—</span>
+        );
+      },
+    },
+    {
+      key: 'cell',
+      label: 'Code cell',
+      minWidth: 160,
+      width: '22%',
+      className: ROW,
+      render: (row) => {
+        const lead = leadOf(row);
+        if (!lead) return <span className="text-text-dim">No deployment observed</span>;
+        const more = row.version.deployments.filter((d) => d !== lead);
+        return (
+          <span title={outpointKey(lead)} className="flex min-w-0 items-center gap-2">
+            <span className="text-text-dim truncate">
+              {shortHex(lead.codeCellTxHash, 6, 4)}:{lead.codeCellOutputIndex}
+            </span>
+            {more.length > 0 && (
+              <RowTag title={more.map(outpointKey).join(', ')}>+{more.length}</RowTag>
+            )}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'held',
+      label: 'Held by',
+      minWidth: 190,
+      // The column that takes the free width.
+      width: 'auto',
+      className: `${ROW} truncate`,
+      render: (row) => {
+        const custody = leadOf(row)?.custody;
+        return custody ? (
+          <span>{holderName(custody)}</span>
+        ) : (
+          <span className="text-text-dim">custody unavailable</span>
+        );
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      minWidth: 200,
+      width: '18%',
+      className: `${ROW} truncate`,
+      render: (row) =>
+        row.current ? (
+          <RowTag variant="accent">live · current</RowTag>
+        ) : (
+          <span className="text-text-dim">{replacedText(leadOf(row))}</span>
+        ),
+    },
+    {
+      key: 'usage',
+      label: 'Live cells',
+      minWidth: 100,
+      numeric: true,
+      className: ROW,
+      render: (row) => versionUsage(row.version.versionHash),
+    },
+  ];
+  /** The narrow table keeps its stacked cells: the default density's padding, top-aligned. */
+  const NARROW = 'py-3 align-top';
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
   const narrowColumns: ListColumn<Row>[] = [
-    { key: 'version', label: 'v', minWidth: 64, render: versionCell },
+    { key: 'version', label: 'v', minWidth: 64, className: NARROW, render: versionCell },
     {
       key: 'deployed',
       label: 'Deployed',
       minWidth: 96,
+      className: NARROW,
       render: (row) =>
         row.version.deployments.length ? (
           row.version.deployments.map((d) => (
@@ -353,6 +525,7 @@ export function ScriptFamilyPage({
       key: 'cell',
       label: 'Code cell · version hash',
       minWidth: 228,
+      className: NARROW,
       // The column that takes the free width (the board's 1fr).
       width: 'auto',
       render: (row) => (
@@ -375,7 +548,7 @@ export function ScriptFamilyPage({
       key: 'status',
       label: 'Status',
       minWidth: 112,
-      className: 'text-text-dim',
+      className: `text-text-dim ${NARROW}`,
       render: (row) =>
         row.version.deployments.map((d) => (
           <span key={outpointKey(d)} className="block">
@@ -387,6 +560,7 @@ export function ScriptFamilyPage({
       key: 'usage',
       label: 'Live cells',
       minWidth: 80,
+      className: NARROW,
       numeric: true,
       render: (row) => versionUsage(row.version.versionHash),
     },
@@ -580,125 +754,16 @@ export function ScriptFamilyPage({
                 <ScriptCustodyFigure family={family} lineage={null} holders={[]} />
               )}
             </Section>
-            <Section title="Code versions" className="mt-[72px]">
+            <Section title="Code versions" note="newest first" className="mt-[72px]">
               <ListTable
                 label="Code versions"
                 rows={rows}
                 rowKey={(row) => row.version.versionHash}
-                columns={[
-                  {
-                    key: 'version',
-                    label: 'Version',
-                    minWidth: 70,
-                    width: '6%',
-                    render: versionCell,
-                  },
-                  {
-                    key: 'deployed',
-                    label: 'Deployed (UTC+8)',
-                    minWidth: 150,
-                    width: '15%',
-                    render: (row) =>
-                      row.version.deployments.length ? (
-                        row.version.deployments.map((deployment) => (
-                          <span key={outpointKey(deployment)} className="block">
-                            {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
-                            {deployment.createdAtBlock !== undefined && (
-                              <span className="text-meta block">
-                                {blockLink(deployment.createdAtBlock)}
-                              </span>
-                            )}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-text-dim">No deployment observed</span>
-                      ),
-                  },
-                  {
-                    key: 'binary',
-                    label: 'Binary',
-                    minWidth: 90,
-                    width: '8%',
-                    numeric: true,
-                    render: (row) =>
-                      row.version.deployments.map((deployment) => (
-                        <span
-                          key={outpointKey(deployment)}
-                          data-testid="code-binary-size"
-                          className="block"
-                        >
-                          {binarySize(deployment)}
-                        </span>
-                      )),
-                  },
-                  {
-                    key: 'hash',
-                    label: 'Data hash',
-                    minWidth: 220,
-                    width: '24%',
-                    render: (row) => (
-                      <span className="text-text-dim text-meta [overflow-wrap:anywhere]">
-                        {row.version.versionHash}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'cell',
-                    label: 'Code cell',
-                    minWidth: 190,
-                    width: '17%',
-                    render: (row) =>
-                      row.version.deployments.map((deployment) => {
-                        const state = codeCells.get(outpointKey(deployment));
-                        return (
-                          <span key={outpointKey(deployment)} className="block">
-                            {outpointLink(deployment)}
-                            <span className="text-text-dim text-meta block">
-                              {state?.cell && (
-                                <>
-                                  <ExactCkb
-                                    shannons={BigInt(state.cell.capacity)}
-                                    signed={false}
-                                    tone="plain"
-                                  />{' '}
-                                  ·{' '}
-                                </>
-                              )}
-                              {deploymentStatus(deployment)}
-                            </span>
-                          </span>
-                        );
-                      }),
-                  },
-                  {
-                    key: 'signed',
-                    label: 'Signed by',
-                    minWidth: 190,
-                    width: '18%',
-                    render: (row) =>
-                      row.version.deployments.map((deployment) => {
-                        const { who, note, marked } = signer(deployment);
-                        return marked ? (
-                          <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
-                            {who}
-                            <span className="text-text-dim text-meta block">{note}</span>
-                          </span>
-                        ) : (
-                          <span key={outpointKey(deployment)} className="text-text-dim block">
-                            {who}
-                          </span>
-                        );
-                      }),
-                  },
-                  {
-                    key: 'usage',
-                    label: 'Live cells using it',
-                    minWidth: 110,
-                    width: '12%',
-                    numeric: true,
-                    render: (row) => versionUsage(row.version.versionHash),
-                  },
-                ]}
+                density="row"
+                rowTitle={versionTitle}
+                // T5: body ink for the row, the version alone bright.
+                rowClassName={() => 'text-text'}
+                columns={columns}
                 narrowColumns={narrowColumns}
                 mobileRow={versionPhoneRow}
               />

@@ -612,7 +612,8 @@ describe('ScriptDetailPage', () => {
     const table = await screen.findByRole('table', { name: 'Code versions' });
     const row = within(table).getAllByRole('row')[1];
     expect(row).toHaveTextContent('v1');
-    expect(row).toHaveTextContent(sharedVersionCodeHash);
+    // Table-rows L1-4: the version hash is the one-line row's title.
+    expect(row.getAttribute('title')).toContain(sharedVersionCodeHash);
     expect(row).toHaveTextContent('No deployment observed');
   });
 
