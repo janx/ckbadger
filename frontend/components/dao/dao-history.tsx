@@ -141,31 +141,36 @@ export function DaoHistory({
   const day = days[index];
   const week = weeks.find((w) => w.start <= index && index <= w.end);
 
+  // Board v2 (hierarchy D2): the one reading is the line under the figure, a hairline above it.
   const reading = day ? (
     <div
       aria-live="polite"
       aria-label="History reading"
-      className="border-base-border-subtle text-small flex min-h-10 flex-wrap items-baseline gap-x-[26px] gap-y-1.5 border-b pb-2.5 pt-2"
+      className="border-base-border-subtle text-small text-text-dim mt-2.5 flex min-h-10 flex-wrap items-baseline gap-x-[26px] gap-y-1.5 border-t pt-2.5"
     >
-      <span className="text-text-bright text-body">
+      <span className="text-text-bright">
         {day.date}
-        {index === last && <span className="text-text-dim text-small"> · last full day</span>}
+        {index === last && <span className="text-text-dim"> · last full day</span>}
       </span>
       <span className="flex items-baseline gap-1.5">
         <span aria-hidden="true" className="bg-gold inline-block h-2 w-2 rounded-sm" />
-        <span className="text-text-dim">deposited</span>
-        <span className="text-text-bright text-body">
+        <span>deposited</span>
+        <span className="text-text-bright">
           <ExactCkbText shannons={day.shannons} />
         </span>
       </span>
       <span className="flex items-baseline gap-1.5">
-        <span className="text-text-dim">share of circulation</span>
-        <span className="text-text-bright">{day.ratio}%</span>
+        <span>share</span>
+        <span className="text-gold">{day.ratio}%</span>
+      </span>
+      <span className="flex items-baseline gap-1.5">
+        <span>depositors</span>
+        <span className="text-text-bright">{day.depositors}</span>
       </span>
       {week && (
         <span className="flex items-baseline gap-1.5">
-          <span className="text-text-dim">
-            net change, week from <span className="whitespace-nowrap">{days[week.start].date}</span>
+          <span>
+            week from <span className="whitespace-nowrap">{days[week.start].date}</span>
           </span>
           <span
             className={
@@ -183,13 +188,9 @@ export function DaoHistory({
           </span>
         </span>
       )}
-      <span className="flex items-baseline gap-1.5">
-        <span className="text-text-dim">depositors</span>
-        <span className="text-text">{day.depositors}</span>
-      </span>
     </div>
   ) : (
-    <p className="text-text-dim text-small">No complete daily history yet.</p>
+    <p className="text-text-dim text-small mt-2.5">No complete daily history yet.</p>
   );
 
   let figure: ReactNode = null;
@@ -428,7 +429,7 @@ export function DaoHistory({
 
   return (
     <div>
-      <div className="mb-1 flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h2 className="text-text-bright text-section font-medium">History</h2>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
           {actions}
@@ -450,10 +451,10 @@ export function DaoHistory({
           </div>
         </div>
       </div>
-      {reading}
-      <div ref={ref} className="mt-2 min-w-0">
+      <div ref={ref} className="mt-[18px] min-w-0">
         {figure}
       </div>
+      {reading}
     </div>
   );
 }

@@ -138,7 +138,7 @@ describe('DaoBoard', () => {
     // One History reading (DAO-11) carries the exact amounts of the last complete day.
     const reading = screen.getByLabelText('History reading');
     expect(reading).toHaveTextContent('deposited500.00000000');
-    expect(reading).toHaveTextContent('share of circulation1.25%');
+    expect(reading).toHaveTextContent('share1.25%');
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -422,7 +422,7 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
 
 describe('DaoBoard History (DAO-11)', () => {
   afterEach(() => vi.restoreAllMocks());
-  it('draws History as one figure with one reading, not three charts', () => {
+  it('draws History as one figure with one reading under it, not three charts (D2)', () => {
     stubChartWidth(1200);
     render(
       <DaoBoard
@@ -433,8 +433,17 @@ describe('DaoBoard History (DAO-11)', () => {
       />
     );
     const region = screen.getByRole('region', { name: 'History' });
-    expect(region.querySelectorAll('svg')).toHaveLength(1);
-    expect(within(region).getAllByLabelText('History reading')).toHaveLength(1);
+    expect(within(region).getByRole('heading', { level: 2 })).toHaveClass('text-section');
+    const svgs = region.querySelectorAll('svg');
+    expect(svgs).toHaveLength(1);
+    const readings = within(region).getAllByLabelText('History reading');
+    expect(readings).toHaveLength(1);
+    // Evidence first: the reading is the line under the charts, a hairline above it.
+    expect(
+      svgs[0].compareDocumentPosition(readings[0]) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(readings[0]).toHaveClass('border-t', 'text-small');
+    expect(readings[0]).not.toHaveClass('border-b');
   });
 });
 
