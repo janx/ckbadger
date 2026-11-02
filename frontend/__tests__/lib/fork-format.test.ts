@@ -102,7 +102,7 @@ describe('uncleRateFigure', () => {
         days: [{ date: '2026-10-20', canonicalBlocks: 279_561, uncles: 7_178, nodeSwitches: 0 }],
         unclesInWindow: 7_178,
       })
-    ).toEqual({ rate: '2.57%', uncles: 7_178, blocks: 279_561 });
+    ).toEqual({ rate: '2.57%', percent: '2.57', uncles: 7_178, blocks: 279_561 });
     expect(() =>
       uncleRateFigure({
         days: [{ date: '2026-10-20', canonicalBlocks: 10, uncles: 1, nodeSwitches: 0 }],
