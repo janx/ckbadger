@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -68,26 +69,31 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     vi.restoreAllMocks();
   });
 
-  it('opens with breadcrumb, role, a summary sentence and a facts rail (SC-S1)', async () => {
+  it('opens with breadcrumb, role, the figure and one row of figures; the summary sentence in tier 2 (SC-S1, hierarchy v3)', async () => {
     await renderJoyid();
     expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
       'Scripts / Locks'
     );
     expect(screen.getByText('lock script · upgradable')).toBeInTheDocument();
-    const summary = screen.getByTestId('script-summary').textContent!;
+    const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
+    const summary = within(tier2).getByTestId('script-summary').textContent!;
     expect(summary).toContain(
       'JoyID decides who can spend 161,049 live cells holding 456,002,179.57'
     );
     expect(summary).toContain('2,707,778 cells have used it since 2023-10-07');
     expect(summary).toContain('it has been replaced 4 times, last on 2025-11-21');
     expect(summary).toContain('now sits under a multisig that has never signed');
-    const rail = screen.getByRole('complementary', { name: 'Script facts' });
-    expect(rail).toHaveTextContent('of 2,707,778 that ever used it');
-    expect(rail).toHaveTextContent('Upgradable · 5 versions');
-    expect(rail).toHaveTextContent('last replaced 2025-11-21');
-    expect(rail).toHaveTextContent('multisig 0x6598…d696');
-    expect(rail).toHaveTextContent('has never signed');
-    expect(rail).toHaveTextContent('In use since2023-10-07');
+    // The former facts rail: its figures are the hero's figure, companion and metric row.
+    expect(screen.queryByRole('complementary', { name: 'Script facts' })).toBeNull();
+    const hero = screen.getByRole('region', { name: 'JoyID' });
+    expect(hero.querySelector('[data-role="figure"]')).toHaveTextContent(
+      /in 161,049 live cells · 4\.19% occupied$/
+    );
+    const metrics = within(hero.parentElement!).getByLabelText('Script figures');
+    expect(metrics).toHaveTextContent('2,707,778 cells');
+    expect(metrics).toHaveTextContent('Upgradable · 5 versions · last replaced 2025-11-21');
+    expect(metrics).toHaveTextContent('multisig 0x6598…d696 · has never signed');
+    expect(metrics).toHaveTextContent('In use since2023-10-07');
   });
 
   it('draws History with occupied in jade, a separate occupied panel and the code track (SC-S2, SC-S3)', async () => {
@@ -99,9 +105,10 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(fills).toContain(DATA_COLOR);
     expect(fills).toContain(HELD_CAPACITY_COLOR);
     expect(fills).not.toContain('#58a5b5');
+    // Hierarchy v3: each panel's name is written inside its plot (R13).
     expect(
-      screen.getByText("Occupied by those cells' own bytes", { selector: 'p' })
-    ).toBeInTheDocument();
+      [...document.querySelectorAll('[data-role="chart-name"]')].map((t) => t.textContent)
+    ).toEqual(['CKB in JoyID cells · occupied and free', "occupied by those cells' own bytes"]);
     const reading = screen.getByTestId('script-history-reading');
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
@@ -266,10 +273,246 @@ describe('JoyID script page · visual pass', () => {
     );
   });
 
-  it('pages its cells 12 at a time, oldest first, as the board does', async () => {
+  // Hierarchy plan rule (topic-page lists 5 rows; was the board's 12): the pagination under the
+  // table stays the way to every cell, as no page lists a script's cells on its own.
+  it('pages its cells 5 at a time, oldest first', async () => {
     await renderJoyid();
-    expect(api.getCellsByScriptRef).toHaveBeenCalledWith(expect.objectContaining({ limit: 12 }));
+    expect(api.getCellsByScriptRef).toHaveBeenCalledWith(expect.objectContaining({ limit: 5 }));
     expect(screen.getByText(/Oldest first, as the cell index keeps them/)).toBeInTheDocument();
+  });
+});
+
+/** Hue text classes (R11): DAO gold, jade / rouge, the link blues; greys are ink, not colour. */
+const COLOURED_TEXT =
+  /^text-(jade|gold|positive|negative|rouge|warning|emphasis|aqua|info)(-|$)|^text-\[#(2edba3|6aa9c4|68ccf0|f2c55c)\]$/;
+
+// Hierarchy v3 (plan §1b R11–R16; lane C tasks C0′, C2, C3): the page opens like the DAO page —
+// the title row with the range, the description as the lede, CKB in its cells as the one figure
+// and its history right under it; the reading and one row of figures follow; prose in tier 2.
+describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
+  beforeEach(() => {
+    stubLayoutWidths({ chart: 900, list: 1248 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+  const hero = () => screen.getByRole('region', { name: 'JoyID' });
+  const tier1 = () => document.querySelector('[data-tier="1"]') as HTMLElement;
+  const tier2 = () => document.querySelector('[data-tier="2"]') as HTMLElement;
+  const follows = (a: Element, b: Element) =>
+    Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+
+  it('opens with the title row — h1, its role and the range buttons — and the description as the lede (R13)', async () => {
+    await renderJoyid();
+    const nav = screen.getByRole('navigation', { name: 'Breadcrumb' });
+    expect(tier1()).toContainElement(nav);
+    expect(follows(nav, hero())).toBe(true);
+    const h1 = within(hero()).getByRole('heading', { level: 1, name: 'JoyID' });
+    expect(h1).toHaveClass('text-entity', 'text-text-bright');
+    const row = h1.parentElement!.parentElement!;
+    expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
+    expect(within(row).getByText('lock script · upgradable')).toBeInTheDocument();
+    const range = within(row).getByRole('group', { name: 'Range' });
+    const all = within(range).getByRole('button', { name: 'ALL' });
+    expect(all).toHaveAttribute('aria-pressed', 'true');
+    // A pressed range stays neutral (R11; D3 call 8): no jade text in tier 1.
+    expect(all).toHaveClass('text-text-bright');
+    expect(all.className).not.toMatch(/jade/);
+    const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
+    expect(lede).toHaveTextContent(
+      /^An universal Account Protocol for Web3 Mass-adoption · joy\.id ↗$/
+    );
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    expect(within(lede).getByRole('link', { name: 'joy.id ↗' })).toHaveAttribute(
+      'href',
+      'https://joy.id'
+    );
+  });
+
+  it('leads with CKB in its cells as the one figure, bright, its live cells on the baseline row (R4, R11, R13)', async () => {
+    await renderJoyid();
+    const figure = hero().querySelector('[data-role="figure"]') as HTMLElement;
+    expect(figure).toHaveTextContent(/^CKB in its cells/);
+    const amount = figure.querySelector('[data-role="figure-amount"]') as HTMLElement;
+    expect(amount).toHaveTextContent(/^456,002,179\.570* CKB$/);
+    expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
+    const row = amount.parentElement!;
+    expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
+    expect(row.lastElementChild).toHaveTextContent(/^in 161,049 live cells · 4\.19% occupied$/);
+    expect(within(row.lastElementChild as HTMLElement).getByRole('link')).toHaveAttribute(
+      'href',
+      '#its-cells'
+    );
+  });
+
+  it('draws its capacity history right under the figure: ≥ 280 px, named inside, no History heading (R13, tier 1 always)', async () => {
+    await renderJoyid();
+    expect(within(tier1()).queryByRole('heading', { name: 'History' })).toBeNull();
+    expect(tier1().querySelector('figcaption')).toBeNull();
+    const history = within(hero()).getByTestId('script-history');
+    expect(follows(hero().querySelector('[data-role="figure"]')!, history)).toBe(true);
+    const [main, occupied] = [...history.querySelectorAll('svg[role="img"]')];
+    expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      'CKB in JoyID cells · occupied and free'
+    );
+    expect(Number(occupied.getAttribute('height'))).toBeLessThan(
+      Number(main.getAttribute('height'))
+    );
+    // Values inside the plot from its left edge, no axis column (R13).
+    const ticks = [...main.querySelectorAll('[data-role="y-tick"]')];
+    expect(ticks.length).toBeGreaterThan(0);
+    for (const t of ticks) expect(t.getAttribute('text-anchor')).not.toBe('end');
+  });
+
+  it('reads the last full day in one row under the code track, then the remaining figures in one quiet row (R13)', async () => {
+    await renderJoyid();
+    const track = screen.getByLabelText('Code track');
+    const reading = screen.getByTestId('script-history-reading');
+    const metrics = screen.getByLabelText('Script figures');
+    expect(follows(hero(), track)).toBe(true);
+    expect(follows(track, reading)).toBe(true);
+    expect(follows(reading, metrics)).toBe(true);
+    expect(reading).toHaveClass('text-small', 'border-t');
+    expect(reading).toHaveTextContent('2026-10-29');
+    expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
+    // The swatches keep the series colours; the values are ink (R11).
+    for (const el of reading.querySelectorAll<HTMLElement>('[style]'))
+      if (el.textContent!.trim()) expect(el.style.color).toBe('');
+    const terms = within(metrics).getAllByRole('term');
+    expect(terms.map((t) => t.textContent)).toEqual([
+      'Code',
+      'Code cell held by',
+      'In use since',
+      'Ever used',
+    ]);
+    for (const t of terms) {
+      expect(t).toHaveClass('text-meta', 'text-text-dim');
+      expect(t.nextElementSibling).toHaveClass('text-section', 'text-text-bright');
+      expect(t.parentElement!.children).toHaveLength(2);
+    }
+    expect(metrics).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
+  });
+
+  it('reads the hovered day across the picture, and lets it go when the range changes', async () => {
+    await renderJoyid();
+    const reading = screen.getByTestId('script-history-reading');
+    expect(reading).toHaveTextContent('2026-10-29 · last full day');
+    const [main] = [
+      ...within(hero()).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
+    ];
+    fireEvent.keyDown(main, { key: 'ArrowLeft' });
+    expect(reading).not.toHaveTextContent('last full day');
+    expect(reading).not.toHaveTextContent('2026-10-29');
+    fireEvent.click(within(hero()).getByRole('button', { name: '90D' }));
+    // The picture and its reading are drawn again for the new range.
+    await waitFor(() =>
+      expect(screen.getByTestId('script-history-reading')).toHaveTextContent(
+        '2026-10-29 · last full day'
+      )
+    );
+  });
+
+  it('moves the summary sentence, the chart notes and the peak to tier 2 (C2)', async () => {
+    await renderJoyid();
+    for (const id of ['script-summary', 'script-history-peak']) {
+      expect(within(tier1()).queryByTestId(id)).toBeNull();
+      expect(within(tier2()).getByTestId(id)).toBeInTheDocument();
+    }
+    expect(tier1()).not.toHaveTextContent('A cell must hold enough CKB');
+    expect(tier2()).toHaveTextContent(
+      'A cell must hold enough CKB to pay for its own bytes. Occupied is that cost for every cell JoyID guards; free is CKB its owners keep there. Dashed lines mark the days its code was replaced.'
+    );
+  });
+
+  it('says who can change its code in two sentences under the holders; the mechanism in tier 2 (C2)', async () => {
+    await renderJoyid();
+    const section = screen.getByRole('region', { name: 'Who can change its code' });
+    expect(within(section).getByRole('heading', { level: 2 })).toHaveClass('text-section');
+    const holders = within(section).getByRole('list', { name: 'Code cell holders' });
+    const caption = section.querySelector('[data-role="caption"]') as HTMLElement;
+    expect(caption).toHaveTextContent(
+      /^Whoever can spend its code cell can put new code in it, and every JoyID cell runs it from the next block\. Three multisigs have held it\.$/
+    );
+    expect(caption.textContent!.length).toBeLessThanOrEqual(160);
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(follows(holders, caption)).toBe(true);
+    expect(section.lastElementChild).toBe(caption);
+    expect(tier1()).not.toHaveTextContent('point at their code through one code cell');
+    expect(tier2()).toHaveTextContent(
+      "JoyID cells point at their code through one code cell's type id, not at a fixed binary. Whoever can spend that cell can put new code in it, and every JoyID cell runs the new code from the next block."
+    );
+  });
+
+  it('keeps the code versions table in tier 1 and its heading note and the transaction recipe in tier 2 (C3, R14)', async () => {
+    await renderJoyid();
+    const versions = screen.getByRole('table', { name: 'Code versions' });
+    expect(tier1()).toContainElement(versions);
+    const h2 = within(tier1()).getByRole('heading', { name: 'Code versions', level: 2 });
+    expect(h2).toHaveClass('text-section');
+    expect(h2.parentElement!.children).toHaveLength(1);
+    expect(
+      within(tier2()).getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)
+    ).toBeInTheDocument();
+    expect(
+      within(tier2()).getByRole('heading', { name: 'Use it in a transaction' })
+    ).toBeInTheDocument();
+    expect(within(tier1()).queryByRole('heading', { name: 'Use it in a transaction' })).toBeNull();
+    // The cells' summary line, with its exact totals, is tier 2's too (R14).
+    expect(within(tier2()).getByTestId('script-cells-summary')).toBeInTheDocument();
+    // Tier 2: the two prose sections side by side from lg, the recipe and references full width.
+    const read = within(tier2()).getByRole('heading', { name: 'How to read this page' });
+    expect(read.closest('section')!.parentElement).toHaveClass('grid', 'lg:grid-cols-2');
+    for (const name of ['Use it in a transaction', 'Registered references'])
+      expect(within(tier2()).getByRole('heading', { name }).closest('section')).toHaveClass(
+        'lg:col-span-2'
+      );
+  });
+
+  it('spaces tier 1 like the DAO page: 64 px under the hero, then 72 px, h2 18 px above its evidence (R6)', async () => {
+    await renderJoyid();
+    const custody = screen.getByRole('region', { name: 'Who can change its code' });
+    expect(custody).toHaveClass('mt-16');
+    for (const name of ['Code versions', 'Its cells']) {
+      const h2 = within(tier1()).getByRole('heading', { name, level: 2 });
+      expect(h2.closest('section')).toHaveClass('mt-[72px]');
+      // The heading row is a flex row, as the DAO page's: the h2 is as wide as its words.
+      expect(h2.parentElement).toHaveClass('mb-[18px]', 'flex', 'items-baseline');
+    }
+    expect(within(custody).getByRole('heading', { level: 2 }).parentElement).toHaveClass(
+      'mb-[18px]',
+      'flex'
+    );
+  });
+
+  it('writes no coloured text in tier 1: the figure is bright, the graphics keep their colours (R11)', async () => {
+    await renderJoyid();
+    await waitFor(() =>
+      expect(screen.getByRole('table', { name: 'Code versions' })).toHaveTextContent('96,760 B')
+    );
+    const coloured = [...tier1().querySelectorAll('[class]')].filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => COLOURED_TEXT.test(c))
+    );
+    expect(coloured.map((el) => el.outerHTML.slice(0, 90))).toEqual([]);
+    const inked = [...tier1().querySelectorAll<HTMLElement>('[style]')].filter(
+      (el) => el.style.color && el.textContent!.trim()
+    );
+    expect(inked.map((el) => el.outerHTML.slice(0, 90))).toEqual([]);
+  });
+
+  it('keeps tier 1 within the prose budget (§0, §4)', async () => {
+    await renderJoyid();
+    expectTier1Budget(document.body, { maxProseBlocks: 3, maxChars: 160 });
   });
 });
 

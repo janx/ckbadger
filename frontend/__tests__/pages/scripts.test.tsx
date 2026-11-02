@@ -281,7 +281,14 @@ describe('ScriptsPage', () => {
       expect(screen.getByText('Failed to load scripts')).toBeInTheDocument();
     });
 
-    expect(screen.getByText(/negative live capacity in list scripts/i)).toBeInTheDocument();
+    // Since hierarchy v3 the hero's summary is its own request and states its own failure.
+    const list = screen.getByRole('region', { name: 'Script list' });
+    expect(within(list).getByText(/negative live capacity in list scripts/i)).toBeInTheDocument();
+    expect(
+      within(screen.getByRole('region', { name: 'Scripts' })).getByText(
+        'Failed to load the script summary'
+      )
+    ).toBeInTheDocument();
     expect(screen.queryByText('No scripts found')).toBeNull();
   });
 
@@ -295,9 +302,10 @@ describe('ScriptsPage', () => {
       }
     );
 
+    // The first request (the table's) meets the warmup; every later one, the hero's included, the data.
     vi.mocked(api.getScripts)
-      .mockRejectedValueOnce(warmupError)
-      .mockResolvedValueOnce(mockScriptsResponse);
+      .mockResolvedValue(mockScriptsResponse)
+      .mockRejectedValueOnce(warmupError);
 
     render(<ScriptsPage />);
 
@@ -305,8 +313,12 @@ describe('ScriptsPage', () => {
       expect(screen.getByText(/data is being prepared/i)).toBeInTheDocument();
     });
 
+    // Two requests per page since hierarchy v3: the table's page and the hero's summary (limit 1,
+    // no role). The table's request is retried once after the warmup error.
     await waitFor(() => {
-      expect(api.getScripts).toHaveBeenCalledTimes(2);
+      expect(
+        vi.mocked(api.getScripts).mock.calls.filter(([params]) => params?.limit === 50)
+      ).toHaveLength(2);
     });
 
     await waitFor(() => {

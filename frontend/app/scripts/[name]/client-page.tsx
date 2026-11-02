@@ -186,7 +186,8 @@ function VersionUsageCell({ usage, field }: { usage: VersionUsage; field: 'cells
 }
 
 const UNKNOWN_SCRIPT_NAME = 'unknown';
-const FAMILY_CELLS_PAGE_SIZE = 12;
+/** A script page is a topic page: its cells list shows 5 rows, paged (hierarchy plan R8). */
+const FAMILY_CELLS_PAGE_SIZE = 5;
 
 function compareDeploymentsByDeployedAt(a: KnownScript, b: KnownScript): number {
   const aTs = a.deployedAt ?? null;

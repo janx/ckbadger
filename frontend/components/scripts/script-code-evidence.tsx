@@ -15,6 +15,9 @@ import { formatCount } from '@/lib/format-count';
 import { CODE_CLASS_COLORS } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
+import { partitionSpans } from '@/lib/partition-geometry';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { cn } from '@/lib/utils';
 
 const CLASS_LABELS: Record<ScriptCodeClassTotalApi['class'], string> = {
   fixed: 'Immutable · pinned by data hash',
@@ -92,16 +95,16 @@ function joinClauses(clauses: readonly string[]): string {
   return `${clauses.slice(0, -1).join(', ')} and ${clauses[clauses.length - 1]}`;
 }
 
-export function ScriptCodeClassSummary({
-  classes,
-  lockScriptCount,
-  title = 'Who can change the code',
-}: {
-  classes: ScriptCodeClassTotalApi[];
-  /** Lock scripts the totals cover (the list's role count). */
-  lockScriptCount: number;
-  title?: string;
-}) {
+/**
+ * The list summary's classes, checked and in display order, with the exact CKB under them: one
+ * path for the hero's bar, its legend row and the tier-2 sentence. `held` are the classes whose
+ * lock scripts hold CKB (the bar's segments).
+ */
+export function codeClassTotals(classes: readonly ScriptCodeClassTotalApi[]): {
+  ordered: ScriptCodeClassTotalApi[];
+  held: ScriptCodeClassTotalApi[];
+  total: bigint;
+} {
   const seen = new Set<string>();
   for (const row of classes) {
     if (!(row.class in CLASS_LABELS)) throw new Error(`Unknown script code class ${row.class}`);
@@ -113,6 +116,119 @@ export function ScriptCodeClassSummary({
   const ordered = CLASS_ORDER.flatMap((value) => classes.filter((row) => row.class === value));
   const total = ordered.reduce((sum, row) => sum + BigInt(row.lockOwnedCapacitySum), BigInt(0));
   const held = ordered.filter((row) => BigInt(row.lockOwnedCapacitySum) > BigInt(0));
+  return { ordered, held, total };
+}
+
+/** The in-segment words: 12 px with 10 px padding each side (the DAO concentration bar's). */
+const SEGMENT_LABEL_PX = 12;
+const SEGMENT_LABEL_PAD = 10;
+/** A monospace advance: whole pixels where the browser snaps them (Chromium), else 0.6 em. */
+const advance = (px: number) => Math.max(Math.round(0.6 * px), 0.6 * px);
+/** Words inside a segment: dark on the light grey fill, light on the darker ones. */
+const SEGMENT_INK: Partial<Record<ScriptCodeClassTotalApi['class'], string>> = {
+  fixed: 'text-base-bg',
+};
+
+/**
+ * "Who can change the code" as the Scripts index's picture (hierarchy v3, C1, R12, R15): a 28 px
+ * bar of the CKB under lock scripts by code class, each segment's name and share written inside it
+ * where they fit (never an exact amount). Nothing is drawn while no lock script holds CKB.
+ */
+export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeClassTotalApi[] }) {
+  const [ref, width] = useElementWidth<HTMLDivElement>();
+  const { held, total } = codeClassTotals(classes);
+  if (total === BigInt(0)) return null;
+  const spans = partitionSpans(
+    held.map((row) => BigInt(row.lockOwnedCapacitySum)),
+    total,
+    0,
+    100,
+    'Who can change the code'
+  );
+  const words = (row: ScriptCodeClassTotalApi) =>
+    `${scriptClassLabel(row.class)} ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`;
+  const fits = (text: string, i: number) =>
+    width !== null &&
+    (width * spans[i].width) / 100 >=
+      text.length * advance(SEGMENT_LABEL_PX) + 2 * SEGMENT_LABEL_PAD;
+  return (
+    <div
+      ref={ref}
+      role="img"
+      aria-label="CKB under lock scripts by who can change their code"
+      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden rounded-[3px] tabular-nums"
+    >
+      {held.map((row, i) => {
+        const inside = fits(words(row), i) ? words(row) : '';
+        return (
+          <span
+            key={row.class}
+            data-code-class-segment={row.class}
+            title={`${scriptClassLabel(row.class)}: ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`}
+            className={cn(
+              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-[3px]',
+              inside && 'px-2.5',
+              SEGMENT_INK[row.class] ?? 'text-text-bright'
+            )}
+            style={{
+              width: `${spans[i].width}%`,
+              backgroundColor: CODE_CLASS_COLORS[row.class].fill,
+              boxShadow: `inset 0 0 0 1px ${CODE_CLASS_COLORS[row.class].edge}`,
+            }}
+          >
+            {inside && <span>{inside}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The bar's key in one quiet row (R12, R15): every drawn segment's swatch, name and share, since
+ * the narrow segments cannot hold their words. The exact amounts are tier 2's (the summary).
+ */
+export function ScriptCodeClassLegend({
+  classes,
+}: {
+  classes: readonly ScriptCodeClassTotalApi[];
+}) {
+  const { held, total } = codeClassTotals(classes);
+  if (total === BigInt(0)) return null;
+  return (
+    <ul
+      aria-label="Who can change the code, in shares"
+      className="text-text-dim text-small flex flex-wrap gap-x-6 gap-y-1"
+    >
+      {held.map((row) => (
+        <li key={row.class} className="inline-flex items-center gap-2 whitespace-nowrap">
+          <CodeClassSwatch value={row.class} />
+          <span>{scriptClassLabel(row.class)}</span>{' '}
+          <span className="text-text tabular-nums">
+            {scriptShare(BigInt(row.lockOwnedCapacitySum), total)}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * "Who can change the code" in words and exact amounts — the Scripts index's tier-2 evidence since
+ * hierarchy v3 (the bar is the hero's picture): the sentence with the shares, every class's exact
+ * CKB and script count, and what "unspendable" means.
+ */
+export function ScriptCodeClassSummary({
+  classes,
+  lockScriptCount,
+  title = 'Who can change the code',
+}: {
+  classes: ScriptCodeClassTotalApi[];
+  /** Lock scripts the totals cover (the list's role count). */
+  lockScriptCount: number;
+  title?: string;
+}) {
+  const { ordered, held, total } = codeClassTotals(classes);
   // Immutable classes share one clause; every other class keeps its own.
   // A family can hold references of two immutable classes, so their family counts do not add:
   // the immutable clause states no count; every other clause is one class and states its own.
@@ -133,38 +249,17 @@ export function ScriptCodeClassSummary({
   return (
     <DetailSection title={title}>
       {total > BigInt(0) && (
-        <>
-          <p data-testid="code-class-sentence" className="text-body mb-3 leading-relaxed">
-            Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
-            {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
-            {joinClauses(
-              groups.map(
-                (group) =>
-                  `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
-              )
-            )}
-            .
-          </p>
-          <div
-            role="img"
-            aria-label="CKB under lock scripts by who can change their code"
-            className="mb-3 flex h-2 w-full gap-[2px] overflow-hidden rounded bg-[#10131c]"
-          >
-            {held.map((row) => (
-              <span
-                key={row.class}
-                data-code-class-segment={row.class}
-                title={`${scriptClassLabel(row.class)}: ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`}
-                className="min-w-[3px]"
-                style={{
-                  width: `${Number((BigInt(row.lockOwnedCapacitySum) * BigInt(1000000)) / total) / 10000}%`,
-                  backgroundColor: CODE_CLASS_COLORS[row.class].fill,
-                  boxShadow: `inset 0 0 0 1px ${CODE_CLASS_COLORS[row.class].edge}`,
-                }}
-              />
-            ))}
-          </div>
-        </>
+        <p data-testid="code-class-sentence" className="text-body mb-3 max-w-[640px]">
+          Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
+          {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
+          {joinClauses(
+            groups.map(
+              (group) =>
+                `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
+            )
+          )}
+          .
+        </p>
       )}
       <ul
         aria-label="Code classes"
@@ -183,7 +278,7 @@ export function ScriptCodeClassSummary({
         ))}
       </ul>
       {classes.some((row) => row.class === 'unspendable') && (
-        <p data-testid="unspendable-note" className="text-text-dim text-meta mt-2">
+        <p data-testid="unspendable-note" className="text-text-dim text-body mt-3 max-w-[640px]">
           Unspendable: the code cell sits under a lock no one can unlock — the all-zero lock, or a
           secp256k1 lock over 20 zero bytes, which no known key matches — so its code is effectively
           immutable.

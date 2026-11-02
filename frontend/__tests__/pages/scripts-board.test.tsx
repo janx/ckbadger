@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
+import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { screen, waitFor, within, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
@@ -121,7 +123,7 @@ describe('Scripts list against the Scripts board', () => {
     }
   });
 
-  it('opens with the board lead sentence and a name search (SC-L5)', async () => {
+  it('keeps the board lead sentence (tier 2 since v3) and a name search (SC-L5)', async () => {
     render(<ScriptsPage />);
     expect(
       screen.getByText(
@@ -234,6 +236,236 @@ describe('Scripts list · visual pass (R2b-b)', () => {
     await screen.findByRole('table', { name: 'Scripts' });
     expect(screen.queryByRole('heading', { name: 'Scripts', level: 2 })).toBeNull();
     expect(screen.getByText('3 scripts')).toBeInTheDocument();
+  });
+});
+
+// Hierarchy v3 (plan §1b R11–R16, lane C tasks C0, C1, C3): the index opens like the DAO page —
+// the title row with the search, one short lede, the CKB under these scripts as the one figure and
+// "who can change the code" as its picture; the role tabs head the table; prose in tier 2.
+/** Hue text classes (R11): DAO gold, jade / rouge, the link blues; greys are ink, not colour. */
+const COLOURED_TEXT =
+  /^text-(jade|gold|positive|negative|rouge|warning|emphasis|aqua|info)(-|$)|^text-\[#(2edba3|6aa9c4|68ccf0|f2c55c)\]$/;
+
+describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
+  const classSummary = [
+    {
+      class: 'multisig' as const,
+      lockCellsCount: 161049,
+      lockOwnedCapacitySum: '172700000000000000',
+      referenceCount: 18,
+      familyCount: 18,
+    },
+    {
+      class: 'fixed' as const,
+      lockCellsCount: 9000000,
+      lockOwnedCapacitySum: '4803000000000000000',
+      referenceCount: 40,
+      familyCount: 36,
+    },
+    {
+      class: 'unspendable' as const,
+      lockCellsCount: 3,
+      lockOwnedCapacitySum: '0',
+      referenceCount: 2,
+      familyCount: 4,
+    },
+    {
+      class: 'one_key' as const,
+      lockCellsCount: 92,
+      lockOwnedCapacitySum: '3730000000000000',
+      referenceCount: 7,
+      familyCount: 7,
+    },
+  ];
+  const withSummary = {
+    ...response,
+    classSummary,
+    roleCounts: { all: 70, locks: 41, types: 34 },
+  };
+  const LEAD =
+    'Every cell runs one lock script, which decides who can spend it, and may run one type script, which decides what the cell is and how it may change.';
+
+  beforeEach(() => {
+    stubChartWidth(1376);
+    vi.mocked(api.getScripts).mockResolvedValue(withSummary);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  const hero = () => screen.getByRole('region', { name: 'Scripts' });
+  const tier1 = () => document.querySelector('[data-tier="1"]') as HTMLElement;
+  const tier2 = () => document.querySelector('[data-tier="2"]') as HTMLElement;
+  const figure = () => hero().querySelector('[data-role="figure"]') as HTMLElement;
+
+  it('opens with the title row — h1 and the search — and a lede within 90 characters (R13)', async () => {
+    render(<ScriptsPage />);
+    await within(hero()).findByText((_, el) => el?.getAttribute('data-role') === 'figure-amount');
+    const h1 = within(hero()).getByRole('heading', { level: 1, name: 'Scripts' });
+    expect(h1).toHaveClass('text-index', 'text-text-bright');
+    // The search sits on the h1's row.
+    const row = h1.parentElement!;
+    expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
+    const input = within(row).getByRole('textbox', { name: 'Search scripts' });
+    // One inline group of controls, as the DAO page's range buttons: one line on the title row.
+    const form = input.closest('form')!;
+    expect(form).toHaveClass('whitespace-nowrap');
+    expect(form).not.toHaveClass('flex');
+    expect(within(form).getByRole('button', { name: 'Search' })).toHaveClass('inline-flex', 'h-7');
+    expect(input).toHaveClass('h-7');
+    const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
+    // ≤ 90 (R13), and one line: 71 characters of 13 px mono (7.8 px each) fill the 560 px measure.
+    expect(lede.textContent!.length).toBeLessThanOrEqual(71);
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+      'href',
+      '#evidence'
+    );
+    // The board's lead sentence, whole, is tier 2's first paragraph (nothing deleted).
+    expect(tier1()).not.toHaveTextContent(LEAD);
+    expect(within(tier2()).getByText(LEAD)).toBeInTheDocument();
+    expect(document.getElementById('evidence')).toContainElement(tier2());
+  });
+
+  it('leads with the CKB under these scripts as the one figure, bright, its counts on the same baseline row (R4, R11, R13)', async () => {
+    render(<ScriptsPage />);
+    const amount = await within(hero()).findByText(
+      (_, el) => el?.getAttribute('data-role') === 'figure-amount'
+    );
+    expect(figure()).toHaveTextContent(/^CKB under these scripts/);
+    // 1,727,000,000 + 48,030,000,000 + 0 + 37,300,000 CKB: every class's lock-owned CKB.
+    expect(amount).toHaveTextContent(/^49,794,300,000\.0+ CKB$/);
+    expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
+    const row = amount.parentElement!;
+    expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
+    expect(row.lastElementChild).toHaveTextContent(
+      /^locked by 41 lock scripts · 70 scripts in all · 34 types$/
+    );
+    expect(row.lastElementChild).toHaveClass('text-body', 'text-text-dim');
+  });
+
+  it('draws who can change the code as a 28 px bar under the figure, names and shares inside the segments that fit (R12, R15, C1)', async () => {
+    render(<ScriptsPage />);
+    const bar = await within(hero()).findByRole('img', {
+      name: 'CKB under lock scripts by who can change their code',
+    });
+    expect(bar).toHaveClass('h-[28px]');
+    // The picture's name above it, quiet; no heading of its own (R13).
+    expect(bar.previousElementSibling).toHaveTextContent(/^who can change the code$/);
+    expect(bar.previousElementSibling).toHaveClass('text-meta', 'text-text-dim');
+    expect(within(hero()).queryByRole('heading', { level: 2 })).toBeNull();
+    // Figure before the picture.
+    expect(figure().compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const segments = [...bar.querySelectorAll<HTMLElement>('[data-code-class-segment]')];
+    // A class without lock-owned CKB draws no segment; the order is immutable → multisig → one key.
+    expect(segments.map((s) => s.dataset.codeClassSegment)).toEqual([
+      'fixed',
+      'multisig',
+      'one_key',
+    ]);
+    // 96.5 % of 1,376 px holds its words; 3.47 % and 0.075 % do not, and stay empty (R12: no
+    // exact amounts inside the bar).
+    expect(segments.map((s) => s.textContent)).toEqual([
+      'Immutable · pinned by data hash 96.5%',
+      '',
+      '',
+    ]);
+    expect(bar.textContent).not.toMatch(/\d\.\d{8}/);
+  });
+
+  it('keys the bar in one quiet row and explains it in one caption under it (R12, R14, C1)', async () => {
+    render(<ScriptsPage />);
+    const legend = await screen.findByRole('list', { name: 'Who can change the code, in shares' });
+    expect(legend).toHaveClass('text-small', 'text-text-dim');
+    expect(
+      within(legend)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+    ).toEqual([
+      'Immutable · pinned by data hash 96.5%',
+      'A multisig can replace 3.47%',
+      'One key can replace 0.075%',
+    ]);
+    for (const share of within(legend).getAllByText(/%$/)) expect(share).toHaveClass('text-text');
+    expect(legend.textContent).not.toMatch(/\d\.\d{8}/);
+    const caption = tier1().querySelector('[data-role="caption"]') as HTMLElement;
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    expect(caption.textContent!.length).toBeLessThanOrEqual(160);
+    expect(legend.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('moves the sentence with numbers, the exact amounts per class and the unspendable note to tier 2 (C1)', async () => {
+    render(<ScriptsPage />);
+    await screen.findByRole('list', { name: 'Who can change the code, in shares' });
+    expect(within(tier1()).queryByTestId('code-class-sentence')).toBeNull();
+    expect(within(tier2()).getByTestId('code-class-sentence')).toHaveTextContent(
+      /^Of the 49,794,300,000(\.0+)? CKB under these 41 lock scripts, /
+    );
+    const exact = within(tier2()).getByRole('list', { name: 'Code classes' });
+    expect(exact).toHaveTextContent('1,727,000,000');
+    expect(exact).toHaveTextContent('· 18 scripts');
+    // Tier 1 states no exact class amount (R12: they wait in tier 2).
+    expect(tier1().textContent).not.toContain('1,727,000,000');
+    expect(within(tier1()).queryByTestId('unspendable-note')).toBeNull();
+    // Tier 2's two sections side by side from lg, as the DAO page's evidence (page height).
+    expect(
+      within(tier2()).getByRole('heading', { name: 'How scripts work' }).closest('section')!
+        .parentElement
+    ).toHaveClass('grid', 'lg:grid-cols-2');
+    expect(within(tier2()).getByTestId('unspendable-note')).toHaveTextContent(
+      'secp256k1 lock over 20 zero bytes'
+    );
+  });
+
+  it('heads the table with the All / Locks / Types tabs, 64 px under the hero (C0, R6)', async () => {
+    render(<ScriptsPage />);
+    const list = await screen.findByRole('region', { name: 'Script list' });
+    expect(list).toHaveClass('mt-16');
+    const tabs = within(list).getByRole('group', { name: 'Role' });
+    expect(hero()).not.toContainElement(tabs);
+    const table = await within(list).findByRole('table', { name: 'Scripts' });
+    expect(tabs.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(tabs).getByRole('button', { name: 'Types 34' })).toHaveClass('text-section');
+  });
+
+  it('keeps the figure on every script when a tab filters the table', async () => {
+    render(<ScriptsPage />);
+    const amount = await within(hero()).findByText(
+      (_, el) => el?.getAttribute('data-role') === 'figure-amount'
+    );
+    vi.mocked(api.getScripts).mockResolvedValue({
+      ...withSummary,
+      classSummary: [classSummary[2]],
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Types 34' }));
+    await waitFor(() =>
+      expect(api.getScripts).toHaveBeenLastCalledWith(expect.objectContaining({ role: 'type' }))
+    );
+    // The hero's request never carries the role: the tab is the table's.
+    for (const [params] of vi.mocked(api.getScripts).mock.calls)
+      if (params?.limit === 1) expect(params.role).toBeUndefined();
+    expect(amount).toHaveTextContent(/^49,794,300,000\.0+ CKB$/);
+  });
+
+  it('writes no coloured text in tier 1: the figure is bright and the bar keeps its colours (R11)', async () => {
+    render(<ScriptsPage />);
+    await screen.findByRole('table', { name: 'Scripts' });
+    await screen.findByRole('list', { name: 'Who can change the code, in shares' });
+    const coloured = [...tier1().querySelectorAll('[class]')].filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => COLOURED_TEXT.test(c))
+    );
+    expect(coloured.map((el) => el.outerHTML.slice(0, 80))).toEqual([]);
+  });
+
+  it('keeps tier 1 within the prose budget (§0, §4)', async () => {
+    const { container } = render(<ScriptsPage />);
+    await screen.findByRole('table', { name: 'Scripts' });
+    await screen.findByRole('list', { name: 'Who can change the code, in shares' });
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 });
 

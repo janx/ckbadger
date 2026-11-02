@@ -10,6 +10,7 @@ import type {
   StackedAreaChartResponse,
 } from '@/lib/api';
 import {
+  ScriptCodeClassBar,
   ScriptCodeClassSummary,
   ScriptCapacityEvidenceChart,
   ScriptCustodyEvidence,
@@ -22,26 +23,28 @@ describe('script code evidence', () => {
     vi.restoreAllMocks();
   });
   it('sums exact shannons across all classes without dropping unknown custody', () => {
+    const classes: ScriptCodeClassTotalApi[] = [
+      {
+        class: 'fixed',
+        lockCellsCount: 2,
+        lockOwnedCapacitySum: '900719925474099300',
+        referenceCount: 1,
+        familyCount: 1,
+      },
+      {
+        class: 'unsupported',
+        lockCellsCount: 1,
+        lockOwnedCapacitySum: '900719925474099300',
+        referenceCount: 1,
+        familyCount: 1,
+      },
+    ];
+    // Hierarchy v3: the bar is the index hero's (ScriptCodeClassBar); the summary is tier 2's.
     render(
-      <ScriptCodeClassSummary
-        lockScriptCount={2}
-        classes={[
-          {
-            class: 'fixed',
-            lockCellsCount: 2,
-            lockOwnedCapacitySum: '900719925474099300',
-            referenceCount: 1,
-            familyCount: 1,
-          },
-          {
-            class: 'unsupported',
-            lockCellsCount: 1,
-            lockOwnedCapacitySum: '900719925474099300',
-            referenceCount: 1,
-            familyCount: 1,
-          },
-        ]}
-      />
+      <>
+        <ScriptCodeClassSummary lockScriptCount={2} classes={classes} />
+        <ScriptCodeClassBar classes={classes} />
+      </>
     );
     const sentence = screen.getByTestId('code-class-sentence').textContent;
     expect(sentence).toContain('18,014,398,509.48198600');

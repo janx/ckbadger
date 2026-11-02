@@ -453,15 +453,19 @@ describe('ScriptDetailPage', () => {
     });
   });
 
-  it('follows the board order: History, code versions, cells; references in the developer tier', async () => {
+  it('follows the board order: the hero with its history, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(await screen.findByRole('heading', { name: 'SECP256K1_BLAKE160' })).toBeInTheDocument();
     expect(api.getScriptFamilyDetail).toHaveBeenCalledWith('SECP256K1_BLAKE160');
     const tier1 = document.querySelector('[data-tier="1"]')!;
     const tier2 = document.querySelector('[data-tier="2"]')!;
+    // Hierarchy v3 (R13): the history is the hero's picture, under the figure, with no heading.
+    expect(within(tier1 as HTMLElement).queryByRole('heading', { name: 'History' })).toBeNull();
     expect(
-      within(tier1 as HTMLElement).getByRole('heading', { name: 'History' })
+      await within(screen.getByRole('region', { name: 'SECP256K1_BLAKE160' })).findByTestId(
+        'script-history'
+      )
     ).toBeInTheDocument();
     expect(
       within(tier1 as HTMLElement).getByRole('heading', { name: 'Code versions' })
