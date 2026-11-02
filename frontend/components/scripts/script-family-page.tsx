@@ -1,21 +1,26 @@
 'use client';
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScriptCustodyEvidence } from '@/components/scripts/script-code-evidence';
 import {
   ScriptCellsSummary,
+  ScriptCodeTrack,
   ScriptCustodyFigure,
-  ScriptFactsRail,
+  ScriptCustodyMechanism,
   ScriptHeading,
-  ScriptHistory,
+  ScriptHeroFigure,
+  ScriptHeroMetrics,
+  ScriptHistoryFigure,
+  ScriptHistoryNotes,
+  ScriptHistoryReading,
   ScriptSummarySentence,
   ScriptUseInTransaction,
   blockLink,
@@ -158,6 +163,66 @@ const ANATOMY_LEGEND = [
   ['free', '#1a1f30'],
 ] as const;
 
+type ReferenceRow = NonNullable<ScriptFamilyDetail['references']>[number];
+
+/** Tier 2's "Registered references" table: each reference, its current code and its holder. */
+const REFERENCE_COLUMNS: ListColumn<ReferenceRow>[] = [
+  {
+    key: 'reference',
+    label: 'Reference',
+    minWidth: 250,
+    width: '35%',
+    render: (row) => (
+      <span className="text-text-bright break-all">
+        {row.hashType} · {row.referenceHash}
+      </span>
+    ),
+  },
+  {
+    key: 'code',
+    label: 'Current code version',
+    minWidth: 210,
+    width: '30%',
+    render: (row) => (
+      <span className="text-text-dim break-all">
+        {row.currentVersionHash ?? 'Retired · no current code cell'}
+      </span>
+    ),
+  },
+  {
+    key: 'custody',
+    label: 'Code cell holder',
+    minWidth: 235,
+    width: '35%',
+    render: (row) =>
+      row.custody ? (
+        <ScriptCustodyEvidence custody={row.custody} />
+      ) : (
+        <span className="text-text-dim">Evidence unavailable</span>
+      ),
+  },
+];
+
+/** A tier-1 section (hierarchy R6): h2 at section size, 18 px above its evidence. */
+function Section({
+  title,
+  className,
+  children,
+}: {
+  title: string;
+  className: string;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-label={title} className={`min-w-0 ${className}`}>
+      <div className="mb-[18px]">
+        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export function ScriptFamilyPage({
   family,
   deprecated,
@@ -170,6 +235,8 @@ export function ScriptFamilyPage({
   codeCells,
   cells,
 }: ScriptFamilyPageProps) {
+  // One hover state for the whole history: the picture, its code track and its reading.
+  const [active, setActive] = useState<number | null>(null);
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
   const history = family.history;
@@ -195,7 +262,7 @@ export function ScriptFamilyPage({
   const outpointLink = (d: Deployment) => (
     <Link
       href={`/cell/${d.codeCellTxHash}-${d.codeCellOutputIndex}`}
-      className="text-[#6aa9c4] hover:underline"
+      className="text-text hover:text-jade hover:underline"
     >
       {shortHex(d.codeCellTxHash, 8, 6)}:{d.codeCellOutputIndex}
     </Link>
@@ -257,7 +324,7 @@ export function ScriptFamilyPage({
   const versionCell = (row: Row) => (
     <span className="text-text-bright">
       v{row.number}
-      {row.current && <span className="text-jade text-meta block">current</span>}
+      {row.current && <span className="text-text text-meta block">current</span>}
     </span>
   );
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
@@ -360,7 +427,7 @@ export function ScriptFamilyPage({
             left: (
               <>
                 <span className="text-text-bright font-medium">v{row.number}</span>
-                {row.current && <span className="text-jade"> current</span>}{' '}
+                {row.current && <span className="text-text"> current</span>}{' '}
                 {first ? (
                   <>
                     <span className="text-text">{formatUtc8Date(first.deployedAt)}</span> ·{' '}
@@ -401,406 +468,405 @@ export function ScriptFamilyPage({
   const typeReference = lineage?.[0]?.referenceHash;
   const roleCrumb =
     family.scriptKind === 'lock' ? 'Locks' : family.scriptKind === 'type' ? 'Types' : null;
+  const binaries = typeReference
+    ? `one type id, ${shortHex(typeReference, 8, 6)}, ${rows.length} binaries`
+    : `${rows.length} binaries`;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto px-4 py-8">
-        <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
-          <Link href="/scripts" className="hover:text-text-bright">
-            Scripts
-          </Link>
-          {roleCrumb && (
-            <>
-              {' '}
-              <span className="text-[#343c50]">/</span> {roleCrumb}
-            </>
-          )}
-        </nav>
-        <DetailLayout
-          title={family.name}
-          status={
-            <>
-              <ScriptHeading family={family} />
-              {deprecated && <span className="text-text-dim text-small">· Deprecated</span>}
-            </>
-          }
-          identity={
-            <span className="text-text text-body">
-              {family.description}
-              {family.website && (
+        <div className="text-body min-w-0 font-mono">
+          {/* Hierarchy v3 (R13, R6): the hero, its reading and figures; sections 64 / 72 px apart. */}
+          <div data-tier="1" className="min-w-0">
+            <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
+              <Link href="/scripts" className="hover:text-text-bright">
+                Scripts
+              </Link>
+              {roleCrumb && (
                 <>
-                  {family.description ? ' · ' : ''}
-                  <a href={family.website} className="text-[#6aa9c4] hover:underline">
-                    {family.website.replace(/^https?:\/\//, '').replace(/\/$/, '')} ↗
-                  </a>
+                  {' '}
+                  <span className="text-[#343c50]">/</span> {roleCrumb}
                 </>
               )}
-            </span>
-          }
-          tier2={
-            <DetailSection title="Registered references">
+            </nav>
+            <section aria-label={family.name} className="min-w-0">
+              <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+                <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <h1 className="text-text-bright text-entity break-words font-medium">
+                    {family.name}
+                  </h1>
+                  <ScriptHeading family={family} />
+                  {deprecated && <span className="text-text-dim text-small">· Deprecated</span>}
+                </div>
+                <CapacityRangeSelector value={capacityRange} onChange={onCapacityRange} quiet />
+              </div>
+              {(family.description || family.website) && (
+                <p
+                  data-role="lede"
+                  className="text-text-dim text-body mt-1.5 max-w-[560px] [overflow-wrap:anywhere]"
+                >
+                  {family.description}
+                  {family.website && (
+                    <>
+                      {family.description ? ' · ' : ''}
+                      <a
+                        href={family.website}
+                        className="hover:text-text-bright whitespace-nowrap hover:underline"
+                      >
+                        {family.website.replace(/^https?:\/\//, '').replace(/\/$/, '')} ↗
+                      </a>
+                    </>
+                  )}
+                </p>
+              )}
+              <ScriptHeroFigure family={family} />
+              {chartLoading ? (
+                <p className="text-text-dim text-small mt-[18px] py-6">Loading capacity history…</p>
+              ) : chartError ? (
+                <p role="alert" className="text-negative text-small mt-[18px]">
+                  Capacity history unavailable: {chartError.message}
+                </p>
+              ) : chart?.data.length ? (
+                <ScriptHistoryFigure
+                  family={family}
+                  chart={chart}
+                  lineage={lineage}
+                  numbers={numbers}
+                  active={active}
+                  onActive={setActive}
+                />
+              ) : (
+                <p className="text-text-dim text-small mt-[18px] py-6">No capacity history yet</p>
+              )}
+            </section>
+            {!chartLoading && !chartError && chart?.data.length ? (
+              <>
+                <ScriptCodeTrack
+                  chart={chart}
+                  lineage={lineage}
+                  numbers={numbers}
+                  holders={holders}
+                />
+                <ScriptHistoryReading
+                  chart={chart}
+                  lineage={lineage}
+                  numbers={numbers}
+                  active={active}
+                />
+              </>
+            ) : null}
+            <ScriptHeroMetrics family={family} lineage={lineage} />
+            <Section title="Who can change its code" className="mt-16">
+              <ScriptCustodyFigure family={family} lineage={lineage} holders={holders} />
+            </Section>
+            <Section title="Code versions" className="mt-[72px]">
               <ListTable
-                label="Registered references"
-                rows={family.references}
-                rowKey={(row) => `${row.hashType}:${row.referenceHash}`}
+                label="Code versions"
+                rows={rows}
+                rowKey={(row) => row.version.versionHash}
                 columns={[
                   {
-                    key: 'reference',
-                    label: 'Reference',
-                    minWidth: 250,
-                    width: '35%',
-                    render: (row) => (
-                      <span className="text-text-bright break-all">
-                        {row.hashType} · {row.referenceHash}
-                      </span>
-                    ),
+                    key: 'version',
+                    label: 'Version',
+                    minWidth: 70,
+                    width: '6%',
+                    render: versionCell,
                   },
                   {
-                    key: 'code',
-                    label: 'Current code version',
-                    minWidth: 210,
-                    width: '30%',
-                    render: (row) => (
-                      <span className="text-text-dim break-all">
-                        {row.currentVersionHash ?? 'Retired · no current code cell'}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'custody',
-                    label: 'Code cell holder',
-                    minWidth: 235,
-                    width: '35%',
+                    key: 'deployed',
+                    label: 'Deployed (UTC+8)',
+                    minWidth: 150,
+                    width: '15%',
                     render: (row) =>
-                      row.custody ? (
-                        <ScriptCustodyEvidence custody={row.custody} />
+                      row.version.deployments.length ? (
+                        row.version.deployments.map((deployment) => (
+                          <span key={outpointKey(deployment)} className="block">
+                            {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
+                            {deployment.createdAtBlock !== undefined && (
+                              <span className="text-meta block">
+                                {blockLink(deployment.createdAtBlock)}
+                              </span>
+                            )}
+                          </span>
+                        ))
                       ) : (
-                        <span className="text-text-dim">Evidence unavailable</span>
+                        <span className="text-text-dim">No deployment observed</span>
                       ),
                   },
-                ]}
-                mobileRow={(row) => (
-                  <div className="text-small space-y-2">
-                    <div className="break-all">
-                      {row.hashType} · {row.referenceHash}
-                    </div>
-                    <div className="break-all">
-                      Current code: {row.currentVersionHash ?? 'retired'}
-                    </div>
-                    {row.custody ? (
-                      <ScriptCustodyEvidence custody={row.custody} />
-                    ) : (
-                      'Evidence unavailable'
-                    )}
-                  </div>
-                )}
-              />
-            </DetailSection>
-          }
-        >
-          <ScriptSummarySentence family={family} lineage={lineage} />
-          <div className="grid items-start gap-12 lg:grid-cols-[minmax(0,1fr)_300px]">
-            <div className="min-w-0 space-y-11">
-              <DetailSection
-                title="History"
-                actions={<CapacityRangeSelector value={capacityRange} onChange={onCapacityRange} />}
-              >
-                {chartLoading ? (
-                  <p className="text-text-dim text-small py-6">Loading capacity history…</p>
-                ) : chartError ? (
-                  <p role="alert" className="text-negative text-small">
-                    Capacity history unavailable: {chartError.message}
-                  </p>
-                ) : chart?.data.length ? (
-                  <ScriptHistory
-                    family={family}
-                    chart={chart}
-                    lineage={lineage}
-                    numbers={numbers}
-                    holders={holders}
-                  />
-                ) : (
-                  <p className="text-text-dim text-small py-6">No capacity history yet</p>
-                )}
-              </DetailSection>
-              <DetailSection title="Who can change its code">
-                <ScriptCustodyFigure family={family} lineage={lineage} holders={holders} />
-              </DetailSection>
-            </div>
-            <ScriptFactsRail family={family} lineage={lineage} />
-          </div>
-          <DetailSection
-            title="Code versions"
-            actions={
-              <span className="text-text-dim text-small">
-                {typeReference
-                  ? `one type id, ${shortHex(typeReference, 8, 6)}, ${rows.length} binaries`
-                  : `${rows.length} binaries`}
-              </span>
-            }
-          >
-            <ListTable
-              label="Code versions"
-              rows={rows}
-              rowKey={(row) => row.version.versionHash}
-              columns={[
-                {
-                  key: 'version',
-                  label: 'Version',
-                  minWidth: 70,
-                  width: '6%',
-                  render: versionCell,
-                },
-                {
-                  key: 'deployed',
-                  label: 'Deployed (UTC+8)',
-                  minWidth: 150,
-                  width: '15%',
-                  render: (row) =>
-                    row.version.deployments.length ? (
+                  {
+                    key: 'binary',
+                    label: 'Binary',
+                    minWidth: 90,
+                    width: '8%',
+                    numeric: true,
+                    render: (row) =>
                       row.version.deployments.map((deployment) => (
-                        <span key={outpointKey(deployment)} className="block">
-                          {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
-                          {deployment.createdAtBlock !== undefined && (
-                            <span className="text-meta block">
-                              {blockLink(deployment.createdAtBlock)}
-                            </span>
-                          )}
+                        <span
+                          key={outpointKey(deployment)}
+                          data-testid="code-binary-size"
+                          className="block"
+                        >
+                          {binarySize(deployment)}
                         </span>
-                      ))
-                    ) : (
-                      <span className="text-text-dim">No deployment observed</span>
-                    ),
-                },
-                {
-                  key: 'binary',
-                  label: 'Binary',
-                  minWidth: 90,
-                  width: '8%',
-                  numeric: true,
-                  render: (row) =>
-                    row.version.deployments.map((deployment) => (
-                      <span
-                        key={outpointKey(deployment)}
-                        data-testid="code-binary-size"
-                        className="block"
-                      >
-                        {binarySize(deployment)}
+                      )),
+                  },
+                  {
+                    key: 'hash',
+                    label: 'Data hash',
+                    minWidth: 220,
+                    width: '24%',
+                    render: (row) => (
+                      <span className="text-text-dim text-meta [overflow-wrap:anywhere]">
+                        {row.version.versionHash}
                       </span>
-                    )),
-                },
-                {
-                  key: 'hash',
-                  label: 'Data hash',
-                  minWidth: 220,
-                  width: '24%',
-                  render: (row) => (
-                    <span className="text-text-dim text-meta [overflow-wrap:anywhere]">
-                      {row.version.versionHash}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'cell',
-                  label: 'Code cell',
-                  minWidth: 190,
-                  width: '17%',
-                  render: (row) =>
-                    row.version.deployments.map((deployment) => {
-                      const state = codeCells.get(outpointKey(deployment));
-                      return (
-                        <span key={outpointKey(deployment)} className="block">
-                          {outpointLink(deployment)}
-                          <span className="text-text-dim text-meta block">
-                            {state?.cell && (
-                              <>
-                                <ExactCkb
-                                  shannons={BigInt(state.cell.capacity)}
-                                  signed={false}
-                                  tone="plain"
-                                />{' '}
-                                ·{' '}
-                              </>
-                            )}
-                            {deploymentStatus(deployment)}
-                          </span>
-                        </span>
-                      );
-                    }),
-                },
-                {
-                  key: 'signed',
-                  label: 'Signed by',
-                  minWidth: 190,
-                  width: '18%',
-                  render: (row) =>
-                    row.version.deployments.map((deployment) => {
-                      const { who, note, marked } = signer(deployment);
-                      return marked ? (
-                        <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
-                          {who}
-                          <span className="text-text-dim text-meta block">{note}</span>
-                        </span>
-                      ) : (
-                        <span key={outpointKey(deployment)} className="text-text-dim block">
-                          {who}
-                        </span>
-                      );
-                    }),
-                },
-                {
-                  key: 'usage',
-                  label: 'Live cells using it',
-                  minWidth: 110,
-                  width: '12%',
-                  numeric: true,
-                  render: (row) => versionUsage(row.version.versionHash),
-                },
-              ]}
-              narrowColumns={narrowColumns}
-              mobileRow={versionPhoneRow}
-            />
-          </DetailSection>
-          <DetailSection title="Use it in a transaction">
-            <ScriptUseInTransaction family={family} />
-          </DetailSection>
-          <section id="its-cells" className="min-w-0">
-            <div className="mb-3 flex flex-wrap items-baseline gap-x-4 gap-y-1">
-              <h2 className="text-text-bright text-section font-medium">Its cells</h2>
-              <ScriptCellsSummary family={family} />
-            </div>
-            <div className="text-text-dim text-meta mb-3 flex flex-wrap gap-x-4 gap-y-1">
-              {ANATOMY_LEGEND.map(([name, color]) => (
-                <span key={name} className="inline-flex items-center gap-1.5">
-                  <span
-                    aria-hidden="true"
-                    className="inline-block h-2 w-2 rounded-sm"
-                    style={{ backgroundColor: color }}
-                  />
-                  {name}
-                </span>
-              ))}
-            </div>
-            {cells.loading ? (
-              <p className="text-text-dim text-small py-6">Loading cells…</p>
-            ) : (
-              <ListTable
-                label="Its cells"
-                rows={cells.rows}
-                rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
-                empty={`No live cells use ${family.name}`}
-                columns={[
+                    ),
+                  },
                   {
                     key: 'cell',
-                    label: 'Cell',
-                    minWidth: 160,
-                    width: '15%',
-                    render: (cell) => (
+                    label: 'Code cell',
+                    minWidth: 190,
+                    width: '17%',
+                    render: (row) =>
+                      row.version.deployments.map((deployment) => {
+                        const state = codeCells.get(outpointKey(deployment));
+                        return (
+                          <span key={outpointKey(deployment)} className="block">
+                            {outpointLink(deployment)}
+                            <span className="text-text-dim text-meta block">
+                              {state?.cell && (
+                                <>
+                                  <ExactCkb
+                                    shannons={BigInt(state.cell.capacity)}
+                                    signed={false}
+                                    tone="plain"
+                                  />{' '}
+                                  ·{' '}
+                                </>
+                              )}
+                              {deploymentStatus(deployment)}
+                            </span>
+                          </span>
+                        );
+                      }),
+                  },
+                  {
+                    key: 'signed',
+                    label: 'Signed by',
+                    minWidth: 190,
+                    width: '18%',
+                    render: (row) =>
+                      row.version.deployments.map((deployment) => {
+                        const { who, note, marked } = signer(deployment);
+                        return marked ? (
+                          <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
+                            {who}
+                            <span className="text-text-dim text-meta block">{note}</span>
+                          </span>
+                        ) : (
+                          <span key={outpointKey(deployment)} className="text-text-dim block">
+                            {who}
+                          </span>
+                        );
+                      }),
+                  },
+                  {
+                    key: 'usage',
+                    label: 'Live cells using it',
+                    minWidth: 110,
+                    width: '12%',
+                    numeric: true,
+                    render: (row) => versionUsage(row.version.versionHash),
+                  },
+                ]}
+                narrowColumns={narrowColumns}
+                mobileRow={versionPhoneRow}
+              />
+            </Section>
+            <section
+              id="its-cells"
+              aria-label="Its cells"
+              className="mt-[72px] min-w-0 scroll-mt-4"
+            >
+              <div className="mb-[18px]">
+                <h2 className="text-text-bright text-section font-medium">Its cells</h2>
+              </div>
+              <div className="text-text-dim text-meta mb-3 flex flex-wrap gap-x-4 gap-y-1">
+                {ANATOMY_LEGEND.map(([name, color]) => (
+                  <span key={name} className="inline-flex items-center gap-1.5">
+                    <span
+                      aria-hidden="true"
+                      className="inline-block h-2 w-2 rounded-sm"
+                      style={{ backgroundColor: color }}
+                    />
+                    {name}
+                  </span>
+                ))}
+              </div>
+              {cells.loading ? (
+                <p className="text-text-dim text-small py-6">Loading cells…</p>
+              ) : (
+                <ListTable
+                  label="Its cells"
+                  rows={cells.rows}
+                  rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
+                  empty={`No live cells use ${family.name}`}
+                  columns={[
+                    {
+                      key: 'cell',
+                      label: 'Cell',
+                      minWidth: 160,
+                      width: '15%',
+                      render: (cell) => (
+                        <Link
+                          href={`/cell/${cell.txHash}-${cell.outputIndex}`}
+                          className="text-text hover:text-jade hover:underline"
+                        >
+                          {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
+                        </Link>
+                      ),
+                    },
+                    {
+                      key: 'owner',
+                      label: 'Owner',
+                      minWidth: 170,
+                      width: '16%',
+                      render: (cell) => <CellOwner cell={cell} />,
+                    },
+                    {
+                      key: 'type',
+                      label: 'Also guarded by',
+                      minWidth: 140,
+                      width: '13%',
+                      render: (cell) => <AlsoGuardedBy cell={cell} />,
+                    },
+                    {
+                      key: 'anatomy',
+                      label: 'What it holds',
+                      minWidth: 150,
+                      width: '14%',
+                      render: (cell) => <CellAnatomy cell={cell} />,
+                    },
+                    {
+                      key: 'capacity',
+                      label: 'Capacity',
+                      minWidth: 180,
+                      width: '17%',
+                      numeric: true,
+                      render: (cell) => (
+                        <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
+                      ),
+                    },
+                    {
+                      key: 'occupied',
+                      label: 'Occupied',
+                      minWidth: 90,
+                      width: '9%',
+                      numeric: true,
+                      render: (cell) => <OccupiedBytes cell={cell} />,
+                    },
+                    {
+                      key: 'created',
+                      label: 'Created',
+                      minWidth: 170,
+                      width: '16%',
+                      numeric: true,
+                      render: (cell) => (
+                        <span className="text-text-dim">
+                          {blockLink(cell.createdAtBlock)}
+                          {cell.createdTimestamp && ` · ${formatUtc8Date(cell.createdTimestamp)}`}
+                        </span>
+                      ),
+                    },
+                  ]}
+                  mobileRow={(cell) => (
+                    <div className="text-small min-w-0 space-y-1.5">
                       <Link
                         href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                        className="text-[#6aa9c4] hover:underline"
+                        className="text-text hover:text-jade"
                       >
                         {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
                       </Link>
-                    ),
-                  },
-                  {
-                    key: 'owner',
-                    label: 'Owner',
-                    minWidth: 170,
-                    width: '16%',
-                    render: (cell) => <CellOwner cell={cell} />,
-                  },
-                  {
-                    key: 'type',
-                    label: 'Also guarded by',
-                    minWidth: 140,
-                    width: '13%',
-                    render: (cell) => <AlsoGuardedBy cell={cell} />,
-                  },
-                  {
-                    key: 'anatomy',
-                    label: 'What it holds',
-                    minWidth: 150,
-                    width: '14%',
-                    render: (cell) => <CellAnatomy cell={cell} />,
-                  },
-                  {
-                    key: 'capacity',
-                    label: 'Capacity',
-                    minWidth: 180,
-                    width: '17%',
-                    numeric: true,
-                    render: (cell) => (
-                      <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
-                    ),
-                  },
-                  {
-                    key: 'occupied',
-                    label: 'Occupied',
-                    minWidth: 90,
-                    width: '9%',
-                    numeric: true,
-                    render: (cell) => <OccupiedBytes cell={cell} />,
-                  },
-                  {
-                    key: 'created',
-                    label: 'Created',
-                    minWidth: 170,
-                    width: '16%',
-                    numeric: true,
-                    render: (cell) => (
-                      <span className="text-text-dim">
-                        {blockLink(cell.createdAtBlock)}
-                        {cell.createdTimestamp && ` · ${formatUtc8Date(cell.createdTimestamp)}`}
-                      </span>
-                    ),
-                  },
-                ]}
-                mobileRow={(cell) => (
-                  <div className="text-small min-w-0 space-y-1.5">
-                    <Link
-                      href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                      className="text-[#6aa9c4]"
-                    >
-                      {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
-                    </Link>
-                    <div>
-                      <CellOwner cell={cell} /> · <AlsoGuardedBy cell={cell} />
+                      <div>
+                        <CellOwner cell={cell} /> · <AlsoGuardedBy cell={cell} />
+                      </div>
+                      <CellAnatomy cell={cell} />
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
+                        <span>
+                          <OccupiedBytes cell={cell} /> occupied
+                        </span>
+                      </div>
+                      <div className="text-text-dim">Created {blockLink(cell.createdAtBlock)}</div>
                     </div>
-                    <CellAnatomy cell={cell} />
-                    <div className="flex flex-wrap justify-between gap-2">
-                      <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
-                      <span>
-                        <OccupiedBytes cell={cell} /> occupied
-                      </span>
+                  )}
+                />
+              )}
+              {cells.rows.length > 0 && (
+                <p className="text-text-dim text-small mt-2">
+                  Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
+                  {family.liveCellsCount.toLocaleString('en-US')}
+                </p>
+              )}
+              {cells.rows.length > 0 && (
+                <CursorPagination
+                  total={family.liveCellsCount}
+                  totalLabel="cells"
+                  pageSize={cells.pageSize}
+                  page={cells.page}
+                  currentCount={cells.currentCount}
+                  hasMore={cells.hasMore}
+                  hasPrevious={cells.hasPrevious}
+                  onNext={cells.onNext}
+                  onPrevious={cells.onPrevious}
+                />
+              )}
+            </section>
+          </div>
+          <div id="evidence" className="scroll-mt-4">
+            <DetailTier2>
+              <DetailSection title="How to read this page">
+                <div className="space-y-3">
+                  <ScriptSummarySentence family={family} lineage={lineage} />
+                  <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} />
+                  <p className="text-body max-w-[640px]">
+                    <ScriptCellsSummary family={family} />
+                  </p>
+                </div>
+              </DetailSection>
+              <DetailSection title="How its code can change">
+                <div className="space-y-3">
+                  <ScriptCustodyMechanism family={family} lineage={lineage} binaries={binaries} />
+                </div>
+              </DetailSection>
+              <DetailSection title="Use it in a transaction">
+                <ScriptUseInTransaction family={family} />
+              </DetailSection>
+              <DetailSection title="Registered references">
+                <ListTable
+                  label="Registered references"
+                  rows={family.references}
+                  rowKey={(row) => `${row.hashType}:${row.referenceHash}`}
+                  columns={REFERENCE_COLUMNS}
+                  mobileRow={(row) => (
+                    <div className="text-small space-y-2">
+                      <div className="break-all">
+                        {row.hashType} · {row.referenceHash}
+                      </div>
+                      <div className="break-all">
+                        Current code: {row.currentVersionHash ?? 'retired'}
+                      </div>
+                      {row.custody ? (
+                        <ScriptCustodyEvidence custody={row.custody} />
+                      ) : (
+                        'Evidence unavailable'
+                      )}
                     </div>
-                    <div className="text-text-dim">Created {blockLink(cell.createdAtBlock)}</div>
-                  </div>
-                )}
-              />
-            )}
-            {cells.rows.length > 0 && (
-              <p className="text-text-dim text-small mt-2">
-                Oldest first, as the cell index keeps them · {cells.rows.length} of{' '}
-                {family.liveCellsCount.toLocaleString('en-US')}
-              </p>
-            )}
-            {cells.rows.length > 0 && (
-              <CursorPagination
-                total={family.liveCellsCount}
-                totalLabel="cells"
-                pageSize={cells.pageSize}
-                page={cells.page}
-                currentCount={cells.currentCount}
-                hasMore={cells.hasMore}
-                hasPrevious={cells.hasPrevious}
-                onNext={cells.onNext}
-                onPrevious={cells.onPrevious}
-              />
-            )}
-          </section>
-        </DetailLayout>
+                  )}
+                />
+              </DetailSection>
+            </DetailTier2>
+          </div>
+        </div>
       </main>
     </div>
   );

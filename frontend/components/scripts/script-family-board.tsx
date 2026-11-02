@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { Chart } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -18,6 +18,7 @@ import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
 
@@ -66,9 +67,7 @@ export function ScriptSummarySentence({
   family: ScriptFamilyDetail;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
 }) {
-  const firstDeployed = Math.min(
-    ...family.versions.flatMap((version) => version.deployments.map((d) => d.deployedAt))
-  );
+  const firstDeployed = firstDeployedAt(family);
   const verb =
     family.scriptKind === 'type'
       ? 'decides what'
@@ -78,7 +77,7 @@ export function ScriptSummarySentence({
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
   return (
-    <p data-testid="script-summary" className="text-body max-w-[780px] leading-relaxed">
+    <p data-testid="script-summary" className="text-body max-w-[640px]">
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
@@ -105,104 +104,91 @@ export function ScriptSummarySentence({
   );
 }
 
-function RailFact({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <dt className="text-text-dim text-small">{label}</dt>
-      {children}
-    </div>
+/** First deployment of any version, ms (Infinity when none is observed). */
+function firstDeployedAt(family: ScriptFamilyDetail): number {
+  return Math.min(
+    ...family.versions.flatMap((version) => version.deployments.map((d) => d.deployedAt))
   );
 }
 
-export function ScriptFactsRail({
+/**
+ * The hero's figure (hierarchy v3, C0′, R13): CKB in its cells as the page's one figure, its live
+ * cells (a link down to them) and the occupied share on the same baseline row.
+ */
+export function ScriptHeroFigure({ family }: { family: ScriptFamilyDetail }) {
+  const capacity = BigInt(family.ownedCapacitySum);
+  const occupied = BigInt(family.ownedKnowledgeSum);
+  if (occupied > capacity)
+    throw new Error(`${family.name}: occupied ${occupied} exceeds capacity ${capacity}`);
+  const share = capacity === BigInt(0) ? null : scriptShare(occupied, capacity);
+  return (
+    <HeroFigure
+      label="CKB in its cells"
+      shannons={capacity}
+      companion={
+        <>
+          in{' '}
+          <a href="#its-cells" className="hover:text-text-bright hover:underline">
+            {family.liveCellsCount.toLocaleString('en-US')} live cells
+          </a>
+          {share && ` · ${share} occupied`}
+        </>
+      }
+    />
+  );
+}
+
+/**
+ * The remaining figures in one quiet row (R13; the former facts rail): the code and who holds its
+ * code cell, the first deployment and every cell that ever used it.
+ */
+export function ScriptHeroMetrics({
   family,
   lineage,
 }: {
   family: ScriptFamilyDetail;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
 }) {
-  const capacity = BigInt(family.ownedCapacitySum);
-  const occupied = BigInt(family.ownedKnowledgeSum);
-  if (occupied > capacity)
-    throw new Error(`${family.name}: occupied ${occupied} exceeds capacity ${capacity}`);
-  const share = capacity === BigInt(0) ? null : scriptShare(occupied, capacity);
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
-  const firstDeployed = Math.min(
-    ...family.versions.flatMap((version) => version.deployments.map((d) => d.deployedAt))
-  );
+  const first = firstDeployedAt(family);
   return (
-    <aside aria-label="Script facts" className="min-w-0 lg:sticky lg:top-4 lg:pt-8">
-      <dl className="flex flex-col gap-4">
-        <RailFact label="Live cells">
-          <dd className="text-text-bright text-hero mt-1 font-medium tabular-nums">
-            {family.liveCellsCount.toLocaleString('en-US')}
-          </dd>
-          <dd className="text-text-dim text-small mt-1">
-            of {family.cellsCount.toLocaleString('en-US')} that ever used it ·{' '}
-            <a href="#its-cells" className="hover:text-text-bright whitespace-nowrap">
-              list them →
-            </a>
-          </dd>
-        </RailFact>
-        <RailFact label="CKB in its cells">
-          <dd className="text-body mt-1">
-            <ExactCkb shannons={capacity} signed={false} tone="plain" />
-          </dd>
-          {share && (
-            <dd aria-hidden="true" className="mt-1.5 flex h-1.5 gap-[2px] overflow-hidden rounded">
-              <span
-                style={{
-                  width: `${Number((occupied * BigInt(100000)) / capacity) / 1000}%`,
-                  backgroundColor: DATA_COLOR,
-                }}
-              />
-              <span className="flex-1" style={{ backgroundColor: '#2c3348' }} />
-            </dd>
-          )}
-          <dd className="text-text-dim text-small mt-1">
-            <span style={{ color: DATA_COLOR }}>
-              <ExactCkb shannons={occupied} signed={false} tone="plain" />
-            </span>{' '}
-            occupied{share ? ` · ${share}` : ''}
-          </dd>
-        </RailFact>
-        {code && (
-          <RailFact label="Code">
-            <dd className="text-text-bright text-body mt-1">
-              {code === 'immutable'
-                ? 'Immutable'
-                : `Upgradable · ${formatCount(family.versionsCount, 'version')}`}
-            </dd>
-            {code === 'upgradable' && last && lineage!.length > 1 && (
-              <dd className="text-text-dim text-small mt-1">
-                last replaced {formatUtc8Date(last.timestamp)}
-              </dd>
-            )}
-          </RailFact>
-        )}
-        {last && (
-          <RailFact label="Code cell held by">
-            <dd className="text-small mt-1">
-              <Link
-                href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
-                className="text-text hover:text-jade"
-              >
-                {holderName(last.custody)}
-              </Link>
-            </dd>
-            {last.custody.witnessState === 'never_signed' && (
-              <dd className="text-text-dim text-small mt-0.5">has never signed</dd>
-            )}
-          </RailFact>
-        )}
-        {Number.isFinite(firstDeployed) && (
-          <RailFact label="In use since">
-            <dd className="text-text-bright text-body mt-1">{formatUtc8Date(firstDeployed)}</dd>
-          </RailFact>
-        )}
-      </dl>
-    </aside>
+    <dl
+      aria-label="Script figures"
+      className="mt-7 grid grid-cols-2 gap-x-8 gap-y-4 lg:grid-cols-4"
+    >
+      {code && (
+        <HeroMetric
+          label="Code"
+          note={
+            code === 'upgradable' && last && lineage!.length > 1
+              ? `last replaced ${formatUtc8Date(last.timestamp)}`
+              : undefined
+          }
+        >
+          {code === 'immutable'
+            ? 'Immutable'
+            : `Upgradable · ${formatCount(family.versionsCount, 'version')}`}
+        </HeroMetric>
+      )}
+      {last && (
+        <HeroMetric
+          label="Code cell held by"
+          note={last.custody.witnessState === 'never_signed' ? 'has never signed' : undefined}
+        >
+          <Link
+            href={`/cell/${last.codeCellTxHash}-${last.codeCellOutputIndex}`}
+            className="hover:text-jade"
+          >
+            {holderName(last.custody)}
+          </Link>
+        </HeroMetric>
+      )}
+      {Number.isFinite(first) && (
+        <HeroMetric label="In use since">{formatUtc8Date(first)}</HeroMetric>
+      )}
+      <HeroMetric label="Ever used">{formatCount(family.cellsCount, 'cell')}</HeroMetric>
+    </dl>
   );
 }
 
@@ -210,38 +196,12 @@ function ckbDecimal(shannons: string): string {
   return formatCkbAmount(shannons).full.replaceAll(',', '');
 }
 
-/**
- * History (Script board): CKB in its cells with the occupied part in jade, occupied on its own
- * scale, and the code track (upgrade days, the custodian band) on the same time axis. One hover
- * reading for all of it, including the code version and its holder on that day.
- */
-export function ScriptHistory({
-  family,
-  chart,
-  lineage,
-  numbers,
-  holders,
-}: {
-  family: ScriptFamilyDetail;
-  chart: StackedAreaChartResponse;
-  lineage: readonly ScriptHistoryMarkerApi[] | null;
-  numbers: ReadonlyMap<string, number>;
-  holders: readonly CodeHolder[];
-}) {
-  const [active, setActive] = useState<number | null>(null);
-  for (const key of ['used', 'unused'])
-    if (!chart.series.some((series) => series.key === key))
-      throw new Error(`${family.name} capacity history has no ${key} series`);
-  const data = chart.data.map((point) => ({
-    label: point.date,
-    values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
-  }));
-  const index = active ?? chart.data.length - 1;
-  const point = chart.data[index];
-  const used = point ? BigInt(point.values.used) : null;
-  const unused = point ? BigInt(point.values.unused) : null;
-  const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
-  const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
+/** The history's time axis: where a chart day falls (% of the plot) and the upgrade days on it. */
+function historyAxis(
+  chart: StackedAreaChartResponse,
+  lineage: readonly ScriptHistoryMarkerApi[] | null,
+  numbers: ReadonlyMap<string, number>
+) {
   const scale = Math.max(chart.data.length - 1, 1);
   const position = (day: string) => {
     const at = chart.data.findIndex((p) => p.date >= day);
@@ -253,199 +213,295 @@ export function ScriptHistory({
     if (n === undefined) continue;
     upgradeDays.set(marker.indexedDay, [...(upgradeDays.get(marker.indexedDay) ?? []), n]);
   }
-  if (chart.totalPeak === undefined)
-    throw new Error(`${family.name} capacity history has no totalPeak`);
-  const peak = chart.totalPeak;
-  const capacity = BigInt(family.ownedCapacitySum);
-  const occupiedNow = BigInt(family.ownedKnowledgeSum);
-  const upgradeList = [...upgradeDays];
+  return { position, upgradeList: [...upgradeDays] };
+}
+
+/** Dashed upgrade lines over a panel, on the plot's x (the plots have no axis gutter). */
+function UpgradeLines({
+  upgradeList,
+  position,
+  attribute,
+}: {
+  upgradeList: readonly [string, number[]][];
+  position: (day: string) => number | null;
+  attribute: 'data-upgrade-line' | 'data-upgrade-tick';
+}) {
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 left-0 right-[10px]">
+      {upgradeList.map(([day]) => {
+        const at = position(day);
+        return at === null ? null : (
+          <span
+            key={day}
+            {...{ [attribute]: day }}
+            className="absolute inset-y-0 border-l border-dashed border-[#4b5266]"
+            style={{ left: `${at}%` }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * The hero's picture (Script board History, hierarchy v3 R13): CKB in its cells with the occupied
+ * part in jade (300 px, its name and values inside the plot), then occupied on its own scale; the
+ * days its code was replaced dashed through both. One hover state for the whole history (`active`).
+ */
+export function ScriptHistoryFigure({
+  family,
+  chart,
+  lineage,
+  numbers,
+  active,
+  onActive,
+}: {
+  family: ScriptFamilyDetail;
+  chart: StackedAreaChartResponse;
+  lineage: readonly ScriptHistoryMarkerApi[] | null;
+  numbers: ReadonlyMap<string, number>;
+  active: number | null;
+  onActive: (index: number | null) => void;
+}) {
+  for (const key of ['used', 'unused'])
+    if (!chart.series.some((series) => series.key === key))
+      throw new Error(`${family.name} capacity history has no ${key} series`);
+  const data = chart.data.map((point) => ({
+    label: point.date,
+    values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
+  }));
+  const { position, upgradeList } = historyAxis(chart, lineage, numbers);
   const shared = {
     data,
     unit: 'CKB',
-    height: 170,
-    plotLeft: 88,
+    insideYTicks: true,
     hideCaption: true,
     activeIndex: active,
-    onActiveIndexChange: setActive,
+    onActiveIndexChange: onActive,
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
   return (
-    <div data-testid="script-history" className="min-w-0">
-      <div
-        aria-live="polite"
-        data-testid="script-history-reading"
-        className="border-base-elevated text-small flex min-h-10 flex-wrap items-baseline gap-x-6 gap-y-1.5 border-b pb-2.5"
-      >
-        {point && used !== null && unused !== null ? (
-          <>
-            <span className="text-text-bright text-body">
-              {point.date}
-              {active === null && (
-                <span className="text-text-dim text-small"> · last full day</span>
-              )}
-            </span>
-            <span className="flex items-baseline gap-1.5">
-              <span className="text-text-dim">CKB held</span>{' '}
-              <ExactCkb shannons={used + unused} signed={false} tone="plain" />
-            </span>
-            <span className="flex items-baseline gap-1.5">
-              <span
-                aria-hidden="true"
-                className="inline-block h-2 w-2 rounded-sm"
-                style={{ backgroundColor: DATA_COLOR }}
-              />
-              <span className="text-text-dim">occupied</span>{' '}
-              <span style={{ color: DATA_COLOR }}>
-                <ExactCkb shannons={used} signed={false} tone="plain" />
-              </span>
-            </span>
-            <span className="flex items-baseline gap-1.5">
-              <span
-                aria-hidden="true"
-                className="inline-block h-2 w-2 rounded-sm"
-                style={{ backgroundColor: HELD_CAPACITY_COLOR }}
-              />
-              <span className="text-text-dim">free</span>{' '}
-              <ExactCkb shannons={unused} signed={false} tone="plain" />
-            </span>
-            {deployment && (
-              <span className="flex items-baseline gap-1.5">
-                <span className="text-text-dim">code</span>{' '}
-                <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
-                <span className="text-text-dim">held by {holderName(deployment.custody)}</span>
-              </span>
-            )}
-          </>
-        ) : (
-          <span className="text-text-dim">No capacity history in this range.</span>
-        )}
-      </div>
-      <div className="relative">
-        {/* Upgrade days as dashed lines through both panels and the code track, on the plot's x. */}
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-y-0 left-[88px] right-[10px]"
-        >
-          {upgradeList.map(([day]) => {
-            const at = position(day);
-            return at === null ? null : (
-              <span
-                key={day}
-                data-upgrade-line={day}
-                className="absolute inset-y-0 border-l border-dashed border-[#4b5266]"
-                style={{ left: `${at}%` }}
-              />
-            );
-          })}
-        </div>
-        <p className="text-text-dim text-meta mb-1 mt-3">CKB in {family.name} cells</p>
-        <Chart
-          {...shared}
-          title={`CKB in ${family.name} cells`}
-          subtitle="Occupied and free capacity, indexed chain day"
-          kind="stacked"
-          series={[
-            { key: 'used', label: 'Occupied', color: DATA_COLOR },
-            { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
-          ]}
-        />
-        <p className="text-text-dim text-meta mb-1 mt-4">Occupied by those cells&apos; own bytes</p>
+    <div data-testid="script-history" className="relative mt-[18px] min-w-0">
+      <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-line" />
+      <Chart
+        {...shared}
+        title={`CKB in ${family.name} cells`}
+        subtitle="Occupied and free capacity, indexed chain day"
+        plotName={`CKB in ${family.name} cells · occupied and free`}
+        kind="stacked"
+        height={300}
+        series={[
+          { key: 'used', label: 'Occupied', color: DATA_COLOR },
+          { key: 'unused', label: 'Free', color: HELD_CAPACITY_COLOR },
+        ]}
+      />
+      <div className="mt-2">
         <Chart
           {...shared}
           title="Occupied by those cells' own bytes"
           subtitle="Occupied capacity on its own scale"
+          plotName="occupied by those cells' own bytes"
           kind="area"
-          height={110}
+          height={96}
           series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
         />
-        {lineage && chart.data.length > 0 && (
-          <div aria-label="Code track" className="text-meta mt-2">
-            <div className="relative h-8 pl-[88px] pr-[10px]">
-              <span className="text-text-dim absolute left-0 top-0">code</span>
-              <div className="relative h-full">
-                {upgradeList.map(([day, versions], i) => {
-                  const at = position(day);
-                  return at === null ? null : (
-                    <span
-                      key={day}
-                      data-upgrade-day={day}
-                      data-row={i % 2}
-                      className="text-text-bright absolute whitespace-nowrap pl-1"
-                      style={{ left: `${at}%`, top: i % 2 ? 14 : 0 }}
-                    >
-                      {versions.map((n) => `v${n}`).join(' · ')}
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-            <div
-              className="relative mt-1 pl-[88px] pr-[10px]"
-              style={{ height: 16 + holders.length * 14 }}
-            >
-              <div className="relative h-full">
-                {holders.map((holder, i) => {
-                  const start = position(holder.from.indexedDay);
-                  if (start === null) return null;
-                  const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
-                  // Past the middle a label hangs from its band's end, so it never runs off the
-                  // page; each holder's label has its own row, so labels never overlap.
-                  const anchor = start > 50 ? { right: `${100 - end}%` } : { left: `${start}%` };
-                  return (
-                    <div key={holder.lockArgs}>
-                      <div
-                        data-custodian={holder.lockArgs}
-                        className={`absolute top-0 h-2 rounded-sm border ${holder.neverSigned ? 'border-dashed' : ''}`}
-                        style={{
-                          left: `${start}%`,
-                          width: `${Math.max(end - start, 0)}%`,
-                          borderColor: 'rgba(160,168,190,.7)',
-                          backgroundColor: holder.neverSigned
-                            ? 'transparent'
-                            : 'rgba(160,168,190,.22)',
-                        }}
-                      />
-                      <span
-                        data-custodian-label={holder.lockArgs}
-                        data-row={i}
-                        className="absolute whitespace-nowrap text-[#a0a8be]"
-                        style={{ ...anchor, top: 12 + i * 14 }}
-                      >
-                        {holderName(holder.custody)}
-                        {signingText(holder) ? ` · ${signingText(holder)}` : ''}
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
       </div>
-      {peak && (
-        <p data-testid="script-history-peak" className="text-text-dim text-small mt-3">
-          CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
-          on {peak.date}
-          {capacity > BigInt(0) && (
-            <>
-              {' '}
-              · occupied is now{' '}
-              <span style={{ color: DATA_COLOR }}>
-                <ExactCkb shannons={occupiedNow} signed={false} tone="plain" />
+    </div>
+  );
+}
+
+/**
+ * The code track under the history, on the same time axis: the versions deployed on each upgrade
+ * day and the band of every code cell holder.
+ */
+export function ScriptCodeTrack({
+  chart,
+  lineage,
+  numbers,
+  holders,
+}: {
+  chart: StackedAreaChartResponse;
+  lineage: readonly ScriptHistoryMarkerApi[] | null;
+  numbers: ReadonlyMap<string, number>;
+  holders: readonly CodeHolder[];
+}) {
+  if (!lineage || chart.data.length === 0) return null;
+  const { position, upgradeList } = historyAxis(chart, lineage, numbers);
+  return (
+    <div aria-label="Code track" className="text-meta relative mt-1 min-w-0">
+      <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-tick" />
+      <div className="text-text-dim">code · who held the code cell</div>
+      <div className="relative h-8 pr-[10px]">
+        <div className="relative h-full">
+          {upgradeList.map(([day, versions], i) => {
+            const at = position(day);
+            return at === null ? null : (
+              <span
+                key={day}
+                data-upgrade-day={day}
+                data-row={i % 2}
+                className="text-text-bright absolute whitespace-nowrap pl-1"
+                style={{ left: `${at}%`, top: i % 2 ? 14 : 0 }}
+              >
+                {versions.map((n) => `v${n}`).join(' · ')}
               </span>
-              , {scriptShare(occupiedNow, capacity)} of what the cells hold
-            </>
+            );
+          })}
+        </div>
+      </div>
+      <div className="relative mt-1 pr-[10px]" style={{ height: 16 + holders.length * 14 }}>
+        <div className="relative h-full">
+          {holders.map((holder, i) => {
+            const start = position(holder.from.indexedDay);
+            if (start === null) return null;
+            const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
+            // Past the middle a label hangs from its band's end, so it never runs off the
+            // page; each holder's label has its own row, so labels never overlap.
+            const anchor = start > 50 ? { right: `${100 - end}%` } : { left: `${start}%` };
+            return (
+              <div key={holder.lockArgs}>
+                <div
+                  data-custodian={holder.lockArgs}
+                  className={`absolute top-0 h-2 rounded-sm border ${holder.neverSigned ? 'border-dashed' : ''}`}
+                  style={{
+                    left: `${start}%`,
+                    width: `${Math.max(end - start, 0)}%`,
+                    borderColor: 'rgba(160,168,190,.7)',
+                    backgroundColor: holder.neverSigned ? 'transparent' : 'rgba(160,168,190,.22)',
+                  }}
+                />
+                <span
+                  data-custodian-label={holder.lockArgs}
+                  data-row={i}
+                  className="absolute whitespace-nowrap text-[#a0a8be]"
+                  style={{ ...anchor, top: 12 + i * 14 }}
+                >
+                  {holderName(holder.custody)}
+                  {signingText(holder) ? ` · ${signingText(holder)}` : ''}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The history's one reading (R13), under the picture: the hovered day — else the last full day —
+ * CKB held, occupied and free (exact, in ink; the swatches carry the series colours), and the code
+ * version with its holder on that day.
+ */
+export function ScriptHistoryReading({
+  chart,
+  lineage,
+  numbers,
+  active,
+}: {
+  chart: StackedAreaChartResponse;
+  lineage: readonly ScriptHistoryMarkerApi[] | null;
+  numbers: ReadonlyMap<string, number>;
+  active: number | null;
+}) {
+  const index = active ?? chart.data.length - 1;
+  const point = chart.data[index];
+  const used = point ? BigInt(point.values.used) : null;
+  const unused = point ? BigInt(point.values.unused) : null;
+  const deployment = point && lineage ? deploymentOnDay(lineage, point.date) : null;
+  const version = deployment?.versionHash != null ? numbers.get(deployment.versionHash) : undefined;
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      aria-label="History reading"
+      data-testid="script-history-reading"
+      className="border-base-border-subtle text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-6 gap-y-1.5 border-t pt-2"
+    >
+      {point && used !== null && unused !== null ? (
+        <>
+          <span className="text-text-bright">
+            {point.date}
+            {active === null && <span className="text-text-dim"> · last full day</span>}
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span>CKB held</span> <ExactCkb shannons={used + unused} signed={false} tone="plain" />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block h-2 w-2 rounded-sm"
+              style={{ backgroundColor: DATA_COLOR }}
+            />
+            <span>occupied</span> <ExactCkb shannons={used} signed={false} tone="plain" />
+          </span>
+          <span className="flex items-baseline gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block h-2 w-2 rounded-sm"
+              style={{ backgroundColor: HELD_CAPACITY_COLOR }}
+            />
+            <span>free</span> <ExactCkb shannons={unused} signed={false} tone="plain" />
+          </span>
+          {deployment && (
+            <span className="flex items-baseline gap-1.5">
+              <span>code</span>{' '}
+              <span className="text-text-bright">{version ? `v${version}` : 'unresolved'}</span>{' '}
+              <span>held by {holderName(deployment.custody)}</span>
+            </span>
           )}
-        </p>
+        </>
+      ) : (
+        <span>No capacity history in this range.</span>
       )}
-      <p className="text-text-dim text-small mt-3 max-w-[780px] leading-relaxed">
+    </div>
+  );
+}
+
+/**
+ * How to read the history (tier 2 since hierarchy v3, C2): what occupied and free mean, the dashed
+ * upgrade days, and the peak of CKB held with the occupied part now.
+ */
+export function ScriptHistoryNotes({
+  family,
+  chart,
+  lineage,
+}: {
+  family: ScriptFamilyDetail;
+  chart: StackedAreaChartResponse | undefined;
+  lineage: readonly ScriptHistoryMarkerApi[] | null;
+}) {
+  if (chart && chart.totalPeak === undefined)
+    throw new Error(`${family.name} capacity history has no totalPeak`);
+  const peak = chart?.totalPeak;
+  const capacity = BigInt(family.ownedCapacitySum);
+  const occupiedNow = BigInt(family.ownedKnowledgeSum);
+  return (
+    <>
+      <p className="text-body max-w-[640px]">
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-[#a0a8be]">free</span> is CKB its owners keep
         there.
         {lineage && lineage.length > 1 ? ' Dashed lines mark the days its code was replaced.' : ''}
       </p>
-    </div>
+      {peak && (
+        <p data-testid="script-history-peak" className="text-body max-w-[640px]">
+          CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
+          on {peak.date}
+          {capacity > BigInt(0) && (
+            <>
+              {' '}
+              · occupied is now <ExactCkb
+                shannons={occupiedNow}
+                signed={false}
+                tone="plain"
+              />, {scriptShare(occupiedNow, capacity)} of what the cells hold
+            </>
+          )}
+        </p>
+      )}
+    </>
   );
 }
 
@@ -477,7 +533,7 @@ export function ScriptCustodyFigure({
     const classes = family.codeClasses ?? [];
     if (classes.length && classes.every((row) => isImmutableClass(row.class)))
       return (
-        <p className="text-body max-w-[780px] leading-relaxed">
+        <p data-role="caption" className="text-body max-w-[640px]">
           No one. {family.name} cells name their code by its data hash, or through a code cell that
           can never be spent, so the code they run cannot be replaced.
         </p>
@@ -517,20 +573,7 @@ export function ScriptCustodyFigure({
     return [{ day: formatUtc8Date(holder.from.timestamp), common, total: before.length }];
   });
   return (
-    <div className="min-w-0 space-y-4">
-      <p className="text-body max-w-[780px] leading-relaxed">
-        {family.name} cells point at their code through one code cell&apos;s type id, not at a fixed
-        binary. Whoever can spend that cell can put new code in it, and every {family.name} cell
-        runs the new code from the next block. {NUMBER_WORDS[holders.length] ?? holders.length}{' '}
-        {allMultisig
-          ? holders.length === 1
-            ? 'multisig has'
-            : 'multisigs have'
-          : holders.length === 1
-            ? 'holder has'
-            : 'holders have'}{' '}
-        held it.
-      </p>
+    <>
       <ol
         aria-label="Code cell holders"
         className="grid grid-cols-1 gap-x-6 gap-y-6 md:[grid-template-columns:repeat(var(--holders),minmax(0,1fr))]"
@@ -595,12 +638,52 @@ export function ScriptCustodyFigure({
         ))}
       </ol>
       {handovers.map((handover) => (
-        <p key={handover.day} className="text-text-dim text-meta">
+        <p key={handover.day} className="text-text-dim text-meta mt-2.5">
           ● kept across the handover on {handover.day}: {handover.common} of {handover.total} keys ·
           ○ replaced: {handover.total - handover.common} of {handover.total}
         </p>
       ))}
-    </div>
+      <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+        Whoever can spend its code cell can put new code in it, and every {family.name} cell runs it
+        from the next block. {NUMBER_WORDS[holders.length] ?? holders.length}{' '}
+        {allMultisig
+          ? holders.length === 1
+            ? 'multisig has'
+            : 'multisigs have'
+          : holders.length === 1
+            ? 'holder has'
+            : 'holders have'}{' '}
+        held it.
+      </p>
+    </>
+  );
+}
+
+/**
+ * How a type-id script's code can change (tier 2 since hierarchy v3, C2): the mechanism behind
+ * "Who can change its code". Nothing for code named by its data hash.
+ */
+export function ScriptCustodyMechanism({
+  family,
+  lineage,
+  binaries,
+}: {
+  family: ScriptFamilyDetail;
+  lineage: readonly ScriptHistoryMarkerApi[] | null;
+  /** The Code versions table's former heading note ("one type id, …, N binaries"). */
+  binaries: string;
+}) {
+  return (
+    <>
+      {lineage && (
+        <p className="text-body max-w-[640px]">
+          {family.name} cells point at their code through one code cell&apos;s type id, not at a
+          fixed binary. Whoever can spend that cell can put new code in it, and every {family.name}{' '}
+          cell runs the new code from the next block.
+        </p>
+      )}
+      <p className="text-text-dim text-body max-w-[640px]">Code versions: {binaries}.</p>
+    </>
   );
 }
 
