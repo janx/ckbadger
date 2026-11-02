@@ -120,6 +120,8 @@ describe('Network board (F2 charts)', () => {
     // Hierarchy v3 (R13): reachable now is the hero's figure; the other three share one quiet row.
     const hero = screen.getByRole('region', { name: 'Where the nodes are' });
     expect(hero).toHaveTextContent(/Reachable now\s*62 of 66\s*answered as CKB mainnet nodes/);
+    // Consistency plan C1: the dashboard names the tab, as the page's other states do.
+    expect(document.title).toBe('Where the nodes are · CKBadger');
     const figures = screen.getByRole('group', { name: 'Latest crawler round' });
     expect(figures).toHaveTextContent(/Verified before, not now\s*4/);
     expect(figures).toHaveTextContent(/Heard of\s*181 · 115 never verified/);

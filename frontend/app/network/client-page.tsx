@@ -17,6 +17,7 @@ import {
   useNetworkMap,
 } from '@/app/network/network-map';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 const PAGE_TITLE = 'Where the nodes are';
 
@@ -362,7 +363,12 @@ function PeersDashboard({
   );
 }
 
+const NETWORK_TITLE = [PAGE_TITLE] as const;
+
 export function NetworkClientPage() {
+  // C1: the dashboard has its own hero, not a shared header; every state of the page is this one
+  // topic, so the page names the tab (it renders no NotFoundPage).
+  useDocumentTitle(NETWORK_TITLE);
   const {
     data: summary,
     isLoading,
