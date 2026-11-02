@@ -1,13 +1,37 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '../utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
-import { FiberNetworkGraph } from '@/components/fiber/fiber-network-graph';
+import {
+  FiberGraphNotes,
+  FiberNetworkPicture,
+  FiberNetworkReading,
+  useFiberGraphPin,
+} from '@/components/fiber/fiber-network-graph';
 import network from '../fixtures/fiber-network.json';
 import mainnet from '../fixtures/fiber-network-mainnet.json';
 import type { FiberNetwork } from '@/lib/api';
 
 const node = (tail: string) => screen.getByRole('button', { name: new RegExp(`^Party …${tail},`) });
 const panel = () => screen.getByRole('complementary', { name: 'Party or pair' });
+/** The chosen party's or pair's card, under the legend in the same column. */
+const card = () => panel().querySelector('[data-role="party-or-pair"]') as HTMLElement;
+const readout = () => screen.getByRole('status', { name: 'Party or pair readout' });
+const IDLE = 'a party’s channels and partners, or a pair’s channels';
+
+/** The page's wiring (hierarchy v3): the picture in the hero section, its reading under it. */
+function Graph({ network: net }: { network: FiberNetwork }) {
+  const pin = useFiberGraphPin();
+  return (
+    <>
+      <section aria-label="hero">
+        <FiberNetworkPicture network={net} pin={pin} />
+      </section>
+      <div data-testid="under">
+        <FiberNetworkReading network={net} pin={pin} />
+      </div>
+    </>
+  );
+}
 
 describe('FiberNetworkGraph', () => {
   // The graph is laid out for its measured column (R4); 880 px is its desktop column at 1280.
@@ -17,18 +41,23 @@ describe('FiberNetworkGraph', () => {
     vi.unstubAllGlobals();
   });
 
-  it('draws the network as a graph with the board’s legend and node labels (FF-F1)', () => {
-    const { container } = render(<FiberNetworkGraph network={mainnet as FiberNetwork} />);
-    const heading = screen.getByRole('heading', { name: 'The network, as the chain sees it' });
-    expect(heading).toHaveClass('text-section');
-    for (const legend of [
-      'CKB locked now',
-      'channels over time',
-      'force-closed',
-      'has an open channel',
-    ])
-      expect(screen.getByText(legend)).toBeInTheDocument();
+  it('draws the network with its name inside the plot and the board’s legend at its top right (FF-F1, R13)', () => {
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+    // hierarchy v3: no separate h2 for the hero's picture; its name is written inside the plot
+    expect(screen.queryByRole('heading', { name: 'The network, as the chain sees it' })).toBeNull();
     const svg = container.querySelector('svg[data-fiber-graph]')!;
+    const name = svg.querySelector('[data-role="chart-name"]')!;
+    expect(name).toHaveTextContent('the network, as the chain sees it');
+    expect(name).toHaveAttribute('font-size', '11');
+    expect(Number(name.getAttribute('x'))).toBeLessThanOrEqual(8);
+    // the legend heads the column at the plot's right, before any party or pair is chosen
+    const key = within(panel()).getByRole('list', { name: 'Graph key' });
+    expect(
+      within(key)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual(['CKB locked now', 'channels over time', 'force-closed', 'has an open channel']);
+    expect(key).toHaveClass('text-meta', 'text-text-dim');
     expect(svg.querySelectorAll('[data-node]')).toHaveLength(25);
     expect(svg.querySelectorAll('[data-edge]')).toHaveLength(35);
     expect(within(svg as HTMLElement).getByText('kdeakp')).toBeInTheDocument();
@@ -46,9 +75,15 @@ describe('FiberNetworkGraph', () => {
     expect(screen.queryByText(/channel histories represented/)).toBeNull();
   });
 
+  it('keeps the explainer out of the picture: the column holds the legend until a party is chosen (R13, R14)', () => {
+    render(<Graph network={mainnet as FiberNetwork} />);
+    expect(panel()).not.toHaveTextContent(/tap or hover/i);
+    expect(panel()).not.toHaveTextContent(/Each circle is a party/);
+    expect(panel().querySelector('[data-role="party-or-pair"]')).toBeNull();
+  });
+
   it('hovering a party dims everything outside its neighbourhood and shows the party (FF-F3)', () => {
-    render(<FiberNetworkGraph network={mainnet as FiberNetwork} />);
-    expect(within(panel()).getByText('Tap or hover a party or a pair')).toBeInTheDocument();
+    render(<Graph network={mainnet as FiberNetwork} />);
     fireEvent.mouseEnter(node('ppedrr'));
     expect(node('ppedrr')).toHaveAttribute('data-lit', 'true');
     expect(node('5eyy6y')).toHaveAttribute('data-lit', 'true');
@@ -59,13 +94,15 @@ describe('FiberNetworkGraph', () => {
     // R2b-b: the party's own state counts, first channel and lock name (FF-F3)
     expect(within(panel()).getByText(/^Default Lock · lock hash/)).toBeInTheDocument();
     for (const label of ['closed together', 'force-closed', 'first channel'])
-      expect(within(panel()).getByText(label)).toBeInTheDocument();
+      expect(within(card()).getByText(label)).toBeInTheDocument();
+    // the legend stays while a party is shown
+    expect(within(panel()).getByRole('list', { name: 'Graph key' })).toBeInTheDocument();
     fireEvent.mouseLeave(node('ppedrr'));
     expect(node('kdeakp')).toHaveAttribute('data-lit', 'true');
   });
 
   it('a pair shows open CKB with its unit, lifetime, and block range with separators (FF-F3, FF-F7)', () => {
-    const { container } = render(<FiberNetworkGraph network={network as FiberNetwork} />);
+    const { container } = render(<Graph network={network as FiberNetwork} />);
     const edge = screen.getByRole('button', { name: /^Pair …aaaaaa and …bbbbbb, 2 channels/ });
     fireEvent.click(edge);
     const p = panel();
@@ -84,16 +121,24 @@ describe('FiberNetworkGraph', () => {
     expect(edge).toHaveClass('outline-none');
   });
 
-  it('says plainly when some channels cannot be drawn as a pair', () => {
-    render(<FiberNetworkGraph network={network as FiberNetwork} />);
+  it('says in tier 2 how to read the graph, what a party is, and which channels it cannot draw', () => {
+    render(<FiberGraphNotes network={network as FiberNetwork} />);
     expect(
-      screen.getByText(/ 1 channel with more or fewer than two parties is not drawn\.$/)
+      screen.getByText(/^Each circle is a party: the address that funded/)
     ).toBeInTheDocument();
+    expect(screen.getByText(/^Each line is a pair that opened channels\./)).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /^Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not which node ran it\. 1 channel with more or fewer than two parties is not drawn\.$/
+      )
+    ).toBeInTheDocument();
+    // tier-2 prose at body (R1 roles, as the DAO page's tier 2)
+    for (const p of Array.from(document.querySelectorAll('p'))) expect(p).toHaveClass('text-body');
   });
 
   it('draws the graph 1:1 at its measured width, islands below, with 11 px labels (R4, FF-F8)', () => {
     stubChartWidth(358);
-    const { container } = render(<FiberNetworkGraph network={mainnet as FiberNetwork} />);
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
     const svg = container.querySelector('svg[data-fiber-graph]')!;
     // laid out for the column, never scaled and never scrolled
     expect(svg).toHaveAttribute('width', '358');
@@ -116,12 +161,35 @@ describe('FiberNetworkGraph', () => {
     }
   });
 
+  it('keeps the in-plot name clear of every party: the drawing moves down when one reaches its band', () => {
+    stubChartWidth(358);
+    const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+    const svg = container.querySelector('svg[data-fiber-graph]')!;
+    const drawing = svg.querySelector('[data-role="drawing"]')!;
+    const shift = Number(
+      /translate\(0[ ,]+([\d.]+)\)/.exec(drawing.getAttribute('transform')!)![1]
+    );
+    // the name's 11 px line sits in the top 18 px; no party's ring (r + 4) starts above it
+    const tops = Array.from(svg.querySelectorAll('[data-node]')).map((g) => {
+      const hit = g.querySelector('circle[fill="transparent"]')!;
+      const r = Number(hit.getAttribute('r')) - 8;
+      return Number(hit.getAttribute('cy')) - r - 4 + shift;
+    });
+    expect(Math.min(...tops)).toBeGreaterThanOrEqual(18);
+    expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+  });
+
   it('a tap pins a party’s facts in the line under the graph; a second tap clears it (R6)', () => {
     stubChartWidth(358);
-    render(<FiberNetworkGraph network={mainnet as FiberNetwork} />);
-    const readout = () => screen.getByRole('status', { name: 'Party or pair readout' });
-    expect(readout()).toHaveTextContent('Tap or hover a party or a pair.');
-    expect(readout()).toHaveTextContent('tap or hover');
+    render(<Graph network={mainnet as FiberNetwork} />);
+    // the reading sits under the hero section; its idle line names what it reads, and the
+    // section's one "tap or hover" is the reading's own hint (R14)
+    expect(screen.getByTestId('under').contains(readout())).toBe(true);
+    expect(readout()).toHaveTextContent(`${IDLE}tap or hover`);
+    const hints = [screen.getByRole('region', { name: 'hero' }), screen.getByTestId('under')].map(
+      (el) => (el.textContent!.match(/tap or hover/gi) ?? []).length
+    );
+    expect(hints).toEqual([0, 1]);
     // a tap: the emulated mouseenter, then the click
     fireEvent.mouseEnter(node('ppedrr'));
     fireEvent.click(node('ppedrr'));
@@ -133,25 +201,33 @@ describe('FiberNetworkGraph', () => {
     // the second tap clears the pin even though the emulated hover is still on it
     fireEvent.mouseEnter(node('ppedrr'));
     fireEvent.click(node('ppedrr'));
-    expect(readout()).toHaveTextContent('Tap or hover a party or a pair.');
+    expect(readout()).toHaveTextContent(IDLE);
     expect(node('kdeakp')).toHaveAttribute('data-lit', 'true');
   });
 
   it('pins a pair, lists a hub’s partners by channels, and Escape clears the pin (R6)', () => {
-    render(<FiberNetworkGraph network={mainnet as FiberNetwork} />);
-    const readout = () => screen.getByRole('status', { name: 'Party or pair readout' });
+    render(<Graph network={mainnet as FiberNetwork} />);
     fireEvent.click(node('kdeakp'));
     expect(readout()).toHaveTextContent(/^tapped kdeakp · 165 channels · pairs with /);
     const partners = readout().textContent!.split('pairs with ')[1].split(', ');
     const counts = partners.map((p) => Number(p.split(' ')[1]));
     expect(counts).toEqual([...counts].sort((a, b) => b - a));
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(readout()).toHaveTextContent('Tap or hover a party or a pair.');
+    expect(readout()).toHaveTextContent(IDLE);
     fireEvent.click(
       screen.getAllByRole('button', {
         name: /^Pair …ppedrr and …5eyy6y|^Pair …5eyy6y and …ppedrr/,
       })[0]
     );
     expect(readout()).toHaveTextContent(/^tapped …(ppedrr|5eyy6y) ↔ …(ppedrr|5eyy6y) · 3 channels/);
+  });
+
+  it('writes one caption under the reading: one sentence within 640 px (R13, R14)', () => {
+    render(<Graph network={mainnet as FiberNetwork} />);
+    const caption = screen.getByTestId('under').querySelector('p[data-role="caption"]')!;
+    expect(caption).toHaveClass('text-body', 'max-w-[640px]');
+    // one line inside 640 px (13 px mono, about 8 px a character)
+    expect(caption.textContent!.length * 8).toBeLessThanOrEqual(640);
+    expect(caption.textContent).toMatch(/^Each circle is a party, each line a pair/);
   });
 });
