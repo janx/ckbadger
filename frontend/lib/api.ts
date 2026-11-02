@@ -4355,6 +4355,12 @@ export const api = {
       class?: AddressCellClass;
       /** F2 blocks (R2b-a 9, BA-34): `capacity` pages DAO cells largest first (needs `class: 'dao'`). */
       order?: 'capacity';
+      /**
+       * Consistency round C14 (A6): one collection's objects (needs `class: 'object'`) — the
+       * holdings summary's `objectCollections[].id`, or `none` for the objects it groups under
+       * no collection.
+       */
+      collection?: string;
     } = {}
   ): Promise<CursorPaginatedResponse<AddressCell>> => {
     const query = new URLSearchParams();
@@ -4362,6 +4368,7 @@ export const api = {
     if (params.cursor) query.set('cursor', params.cursor);
     if (params.class) query.set('class', params.class);
     if (params.order) query.set('order', params.order);
+    if (params.collection) query.set('collection', params.collection);
     return fetchApi(`/addresses/${encodeURIComponent(addr)}/cells?${query}`);
   },
 

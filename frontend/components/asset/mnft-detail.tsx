@@ -8,7 +8,7 @@ import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CellVersions } from '@/components/asset/cell-versions';
@@ -265,98 +265,103 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
           </dl>
         </div>
       }
-      facts={[
-        {
-          label: 'Owner',
-          value: history ? (
-            current ? (
-              <>
-                <AppLink href={`/address/${current.ownerAddress}`}>
-                  <Hash hash={current.ownerAddress} className="text-small" copyable={false} />
-                </AppLink>
-                <span className="text-text-dim text-small mt-1 block">
+      // Consistency round C7: the rail's facts as the metrics row under the hero; a time of day
+      // stays in the metric's title.
+      metrics={
+        <AssetMetrics
+          items={[
+            {
+              label: 'Owner',
+              size: 'body',
+              value: history ? (
+                current ? (
+                  <AppLink href={`/address/${current.ownerAddress}`}>
+                    <Hash hash={current.ownerAddress} className="text-body" copyable={false} />
+                  </AppLink>
+                ) : (
+                  'No live cell'
+                )
+              ) : (
+                evidenceState
+              ),
+              note: current ? (
+                <>
                   {current.lockName ?? 'Unregistered lock'} · since{' '}
                   {formatUtc8Date(current.timestamp)}
-                </span>
-              </>
-            ) : (
-              'No live cell'
-            )
-          ) : (
-            evidenceState
-          ),
-        },
-        {
-          label: 'Class',
-          value: (
-            <>
-              <AppLink href={classHref}>{className}</AppLink>
-              <span className="text-text-dim text-small mt-1 block">
-                by {item.issuer.name ?? 'an unnamed issuer'}
-              </span>
-            </>
-          ),
-        },
-        {
-          label: 'Issued',
-          value: first ? (
-            <>
-              <span className="block">{formatUtc8DateTime(first.timestamp)}</span>
-              <span className="text-text-dim text-small mt-1 block">
-                <AppLink href={`/blocks/${first.blockNumber}`}>
-                  {formatBlockNumber(first.blockNumber)}
-                </AppLink>{' '}
-                · to {lockPhrase(first.lockName)}
-              </span>
-            </>
-          ) : (
-            evidenceState
-          ),
-        },
-        {
-          label: 'Last moved',
-          value:
-            last && moves !== null ? (
-              moves === 0 ? (
-                <span className="text-text-dim">Never moved since issue</span>
-              ) : (
-                <>
-                  <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
-                    {formatUtc8DateTime(last.timestamp)}
-                  </AppLink>
-                  <span className="text-text-dim text-small mt-1 block">
-                    <AppLink href={`/blocks/${last.blockNumber}`}>
-                      {formatBlockNumber(last.blockNumber)}
-                    </AppLink>{' '}
-                    · {moves} transfer{moves === 1 ? '' : 's'} since issue
-                  </span>
                 </>
-              )
-            ) : (
-              evidenceState
-            ),
-        },
-        {
-          label: 'CKB held in its cell',
-          value: history ? (
-            current ? (
-              <>
-                <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" wrap />
-                <div className="text-text-dim text-small mt-1">
-                  <span className="text-jade">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
+              ) : undefined,
+            },
+            {
+              label: 'Class',
+              size: 'body',
+              value: <AppLink href={classHref}>{className}</AppLink>,
+              note: `by ${item.issuer.name ?? 'an unnamed issuer'}`,
+            },
+            {
+              label: 'Issued',
+              title: first ? `issued ${formatUtc8DateTime(first.timestamp)}` : undefined,
+              value: first ? formatUtc8Date(first.timestamp) : evidenceState,
+              note: first ? (
+                <>
+                  <AppLink href={`/blocks/${first.blockNumber}`}>
+                    {formatBlockNumber(first.blockNumber)}
+                  </AppLink>{' '}
+                  · to {lockPhrase(first.lockName)}
+                </>
+              ) : undefined,
+            },
+            {
+              label: 'Last moved',
+              title: last && moves ? `last moved ${formatUtc8DateTime(last.timestamp)}` : undefined,
+              value:
+                last && moves !== null ? (
+                  moves === 0 ? (
+                    <span className="text-text-dim">never</span>
+                  ) : (
+                    <AppLink href={`/cell/${last.txHash}-${last.outputIndex}`}>
+                      {formatUtc8Date(last.timestamp)}
+                    </AppLink>
+                  )
+                ) : (
+                  evidenceState
+                ),
+              note:
+                last && moves !== null ? (
+                  moves === 0 ? (
+                    'since issue'
+                  ) : (
+                    <>
+                      <AppLink href={`/blocks/${last.blockNumber}`}>
+                        {formatBlockNumber(last.blockNumber)}
+                      </AppLink>{' '}
+                      · {moves} transfer{moves === 1 ? '' : 's'} since issue
+                    </>
+                  )
+                ) : undefined,
+            },
+            {
+              label: 'CKB held in its cell',
+              value: history ? (
+                current ? (
+                  <ExactCkb shannons={BigInt(current.capacity)} signed={false} tone="plain" wrap />
+                ) : (
+                  'No live cell'
+                )
+              ) : (
+                evidenceState
+              ),
+              note: current ? (
+                <>
+                  <span className="text-text">{ckbText(BigInt(current.occupiedCapacity))}</span>{' '}
                   occupied · {ckbText(BigInt(current.capacity) - BigInt(current.occupiedCapacity))}{' '}
                   free
-                </div>
-              </>
-            ) : (
-              'No live cell'
-            )
-          ) : (
-            evidenceState
-          ),
-        },
-        { label: 'Standard', value: 'm-NFT' },
-      ]}
+                </>
+              ) : undefined,
+            },
+            { label: 'Standard', size: 'body', value: 'm-NFT' },
+          ]}
+        />
+      }
       feed={
         <AssetFeed
           key={objectId}

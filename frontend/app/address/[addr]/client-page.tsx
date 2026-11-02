@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -47,6 +47,26 @@ const activityFilters = [
   ['protocol:rgbpp', 'RGB++'],
 ] as const;
 type ActivityFilter = (typeof activityFilters)[number][0];
+/** C13: the page's h1 — the address (or lock hash) cut to its first 12 and last 8 characters. */
+function shortName(value: string): string {
+  return value.length > 21 ? `${value.slice(0, 12)}…${value.slice(-8)}` : value;
+}
+/**
+ * C14: what a filter chip's one-row page says of its count. The API counts only the unfiltered
+ * feed, so a filtered page tells 0 or 1 committed activities exactly, and otherwise that there
+ * are at least 2. (Page one also carries the pool's unconfirmed rows; they are not counted, as
+ * the unfiltered total does not count them.)
+ */
+function chipCount(page: { data: readonly { poolStatus?: unknown }[]; hasMore: boolean }): {
+  text: string;
+  exact: boolean;
+} {
+  const committed = page.data.filter((row) => row.poolStatus === undefined).length;
+  if (committed > 1)
+    throw new Error(`a filter chip's one-row page holds ${committed} committed activities`);
+  if (page.hasMore) return { text: '2+', exact: false };
+  return { text: String(committed), exact: true };
+}
 /** One address activity page; the list and the tab count share it, so they share its cache entry. */
 const activityPageQuery = (
   lockHash: string | undefined,
@@ -143,6 +163,15 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     enabled: !!lockHash,
     select: (page) => page.total,
   });
+  // C14 (Address.dc.html): every filter chip carries its count — one one-row page per filter.
+  const chipPages = useQueries({
+    queries: activityFilters
+      .filter(([value]) => value !== 'all')
+      .map(([value]) => ({
+        ...activityPageQuery(lockHash, undefined, value, 1),
+        enabled: !!lockHash,
+      })),
+  });
   const transactions = useQuery({
     queryKey: ['address-transactions', lockHash, txPage.cursor, pageSize],
     queryFn: () =>
@@ -203,7 +232,8 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
           <AddressLoadState label="address" error={address.error} loading={address.isLoading} />
         ) : (
           <DetailLayout
-            title="Address"
+            // C13: the page is named by its short address; the full one and its copy are beneath.
+            title={shortName(a.address ?? a.lockScriptHash)}
             documentTitle={[
               a.address ? titleAddress(a.address) : titleHash(a.lockScriptHash),
               'address',
@@ -443,24 +473,52 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                     aria-label="Filter activity"
                     className="flex flex-wrap gap-1 py-1.5"
                   >
-                    {activityFilters.map(([value, label]) => (
-                      <button
-                        key={value}
-                        aria-pressed={filter === value}
-                        onClick={() => {
-                          setFilter(value);
-                          activityPage.reset();
-                        }}
-                        className={cn(
-                          'text-small rounded border px-2.5 py-1.5',
-                          filter === value
-                            ? 'border-base-border bg-base-elevated text-text-bright'
-                            : 'border-base-border-subtle text-text-dim'
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
+                    {activityFilters.map(([value, label], i) => {
+                      const page = value === 'all' ? undefined : chipPages[i - 1].data;
+                      const count =
+                        value === 'all'
+                          ? activitiesCount.data === undefined
+                            ? undefined
+                            : { text: activitiesCount.data.toLocaleString('en-US'), exact: true }
+                          : page && chipCount(page);
+                      const empty = count?.exact === true && count.text === '0';
+                      return (
+                        <button
+                          key={value}
+                          aria-pressed={filter === value}
+                          onClick={() => {
+                            setFilter(value);
+                            activityPage.reset();
+                          }}
+                          className={cn(
+                            'text-small rounded border px-2.5 py-1.5',
+                            filter === value
+                              ? 'border-base-border bg-base-elevated text-text-bright'
+                              : empty
+                                ? 'border-base-border-subtle text-text-ghost'
+                                : 'border-base-border-subtle text-text-dim'
+                          )}
+                        >
+                          {label}
+                          {count && (
+                            <>
+                              {' '}
+                              <span
+                                data-chip-count
+                                className="tabular-nums"
+                                title={
+                                  count.exact
+                                    ? undefined
+                                    : 'at least 2; the API does not count filtered activity'
+                                }
+                              >
+                                {count.text}
+                              </span>
+                            </>
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>

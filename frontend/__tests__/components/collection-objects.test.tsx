@@ -2,7 +2,7 @@
 // The two tests of the retired 24-card gallery are kept here against the new list.
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
-import { api } from '@/lib/api';
+import { api, type CollectionInsights } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
@@ -52,7 +52,7 @@ it('passes the whole-collection trait predicate before cursor pagination', async
   fireEvent.click(container.querySelector('[data-allele="Blue"]')!);
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith('collection', {
-      limit: 8,
+      limit: 20,
       cursor: undefined,
       traits: { Face: 'Blue' },
     })
@@ -60,7 +60,7 @@ it('passes the whole-collection trait predicate before cursor pagination', async
   fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith('collection', {
-      limit: 8,
+      limit: 20,
       cursor: 'older',
       traits: { Face: 'Blue' },
     })
@@ -154,7 +154,8 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
   );
   await screen.findByRole('table', { name: 'Newest objects' });
   const section = screen.getByRole('region', { name: 'Objects' });
-  expect(section).toHaveTextContent('8 · 1 gene · how common each variant is');
+  // C9 / Main.dc.html: the heading counts the genes that vary (the ones with a lane).
+  expect(section).toHaveTextContent('Objects · 8 · one gene varies');
   expect(container.querySelectorAll('[data-lane]')).toHaveLength(1);
   expect(container.querySelector('[data-lane="IMAGE"]')).toBeNull();
   expect(section).toHaveTextContent(
@@ -162,9 +163,11 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
   );
 });
 
-// Table-rows round, lane L2-4: a Newest row is one line — the object's name bright at 13 px (no
-// second line of id: the Id column has it), owner, DNA gel, mint date; the rest in its title.
-it('writes each Newest row on one line with the name bright and the rest in its title (L2-4)', async () => {
+// Table-rows round, lane L2-4: a Newest row is one line — the object's name bright at 13 px; the
+// rest in its title. Consistency round C11 (Main.dc.html): the row is object · the genes that
+// vary · made of · owner · minted; the object is its number (else its short id), never the
+// collection's name again; its id and DNA are in the title.
+it('writes each Newest row on one line with the name bright and the rest in its title (L2-4, C11)', async () => {
   const base = collectionGalleryFilteredProducer.data[0];
   vi.mocked(api.getCollectionGallery).mockResolvedValue(
     emptyPage([
@@ -175,17 +178,53 @@ it('writes each Newest row on one line with the name bright and the rest in its 
   render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
   const table = await screen.findByRole('table', { name: 'Newest objects' });
   const [, numbered, plain] = within(table).getAllByRole('row');
-  const name = within(numbered).getByRole('link', { name: 'Genes #7' });
-  expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'block', 'truncate');
-  // Without a number the id is the Id column's, not a second line under the name.
+  const name = within(numbered).getByRole('link', { name: '#7' });
+  expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+  // Without a number the object is its short id.
   const unnumbered = within(plain).getAllByRole('link')[0];
-  expect(unnumbered).toHaveTextContent('Genes');
-  expect(unnumbered).toHaveAccessibleName('Genes 0x03030303…0303');
-  expect(unnumbered.querySelector('.sr-only')).toHaveTextContent('0x03030303…0303');
-  expect(numbered).toHaveClass('py-1', 'min-h-11');
+  expect(unnumbered).toHaveAccessibleName('0x03030303…0303');
+  expect(numbered).toHaveClass('py-1', 'min-h-[41px]');
+  expect(
+    within(table)
+      .getAllByRole('columnheader')
+      .map((h) => h.textContent)
+  ).toEqual(['Object', 'Face', 'Made of', 'Owner', 'Minted']);
+  const own = base.traits.find((t) => t.name === 'Face')!;
   expect(numbered).toHaveAttribute(
     'title',
-    `Genes #7 · ${base.sporeId} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100`
+    `Genes #7 · ${base.sporeId} · Face ${own.value} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100 · DNA ${base.dnaHex}`
   );
   expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
+});
+
+// Consistency round (Main.dc.html) + RESPONSIVE_LAYOUT rule 4: the gel sits beside the table only
+// when it can be drawn as a gel in 440 px; a collection with more lanes than a 440 px gel holds
+// (above 32, which needs 736 px) puts the gel above the table at full width instead of turning it
+// into the ranked text list.
+it('puts a many-gene gel above the table at full width, a few-gene gel beside it', async () => {
+  const traits = Array.from({ length: 33 }, (_, i) => ({
+    name: `g${i}`,
+    values: [
+      { value: 'a', count: 4 },
+      { value: 'b', count: 4 },
+    ],
+  }));
+  const many = {
+    ...collectionInsightsProducer,
+    currentPattern: { status: 'notDob', steps: [] },
+    genetics: { ...collectionInsightsProducer.genetics, traits },
+  } as CollectionInsights;
+  const { unmount } = render(<CollectionObjects id="collection" title="Genes" insights={many} />);
+  await screen.findByRole('table', { name: 'Newest objects' });
+  const columns = (section: HTMLElement) => section.querySelector('[data-role="objects-columns"]')!;
+  expect(columns(screen.getByRole('region', { name: 'Objects' })).className).not.toMatch(
+    /xl:grid-cols-\[440px/
+  );
+  expect(screen.getByRole('img', { name: /allele gel of 8 objects/ })).toBeInTheDocument();
+  unmount();
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  await screen.findByRole('table', { name: 'Newest objects' });
+  expect(columns(screen.getByRole('region', { name: 'Objects' }))).toHaveClass(
+    'xl:grid-cols-[440px_minmax(0,1fr)]'
+  );
 });

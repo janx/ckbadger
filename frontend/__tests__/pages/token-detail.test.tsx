@@ -180,7 +180,7 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getTokenTransactions).mockResolvedValue(p.transactions);
     render(<TokenDetailPage typeHash={p.token.typeScriptHash} />);
     expect(await screen.findByRole('heading', { name: 'TOK' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Facts')).toHaveTextContent('0.00001000');
+    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('0.00001000');
     expect(await screen.findByRole('table', { name: 'Top 10 holders' })).toHaveTextContent(
       '100.00%'
     );
@@ -195,9 +195,13 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
     expect(screen.getByText(/xUDT · 8 decimals/)).toBeInTheDocument();
     expect(screen.getByText('A test token')).toBeInTheDocument();
-    const facts = screen.getByLabelText('Facts');
-    // F2 objects (D8): not established, with the one sentence that says why.
-    expect(facts).toHaveTextContent('Maximum supply: Not established.');
+    const facts = screen.getByRole('region', { name: 'Metrics' });
+    // F2 objects (D8): not established, with the one sentence that says why (C7: in its title).
+    expect(facts).toHaveTextContent('maximum supply not established');
+    expect(within(facts).getByText('maximum supply not established')).toHaveAttribute(
+      'title',
+      'Not established. Nothing CKBadger can read in this token’s type script fixes a cap.'
+    );
     expect(facts).toHaveTextContent('500,000.00000001');
     expect(await screen.findByRole('heading', { name: 'History' })).toBeInTheDocument();
     // F2 objects (IV-19 / IV-26): live cells and the metadata source live in tier 2.
@@ -214,7 +218,7 @@ describe('TokenDetailPage', () => {
       maximumSupplyStatus: 'unlimited',
     });
     render(<TokenDetailPage typeHash={hash} />);
-    expect(await screen.findByText('Maximum supply: Unlimited')).toBeInTheDocument();
+    expect(await screen.findByText('maximum supply unlimited')).toBeInTheDocument();
   });
   it('labels last full activity neutrally and states newest-first exactly once', async () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
@@ -249,7 +253,9 @@ describe('TokenDetailPage', () => {
     vi.mocked(api.getToken).mockResolvedValue({ ...mockToken, decimals: null });
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByText(/xUDT · Decimals unknown/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Facts')).toHaveTextContent('1,000,000,000,000 (raw)');
+    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+      '1,000,000,000,000 (raw)'
+    );
   });
   it('scales amounts exactly for decimals beyond double precision', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
@@ -259,7 +265,9 @@ describe('TokenDetailPage', () => {
     });
     render(<TokenDetailPage typeHash={hash} />);
     expect(await screen.findByRole('heading', { name: 'TEST' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Facts')).toHaveTextContent('123,456.789012345678901234567890');
+    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+      '123,456.789012345678901234567890'
+    );
   });
   it('shows same-symbol collisions, proven issuer and exact supply changes without guessing provenance', async () => {
     vi.mocked(api.getToken).mockResolvedValue({
@@ -290,7 +298,9 @@ describe('TokenDetailPage', () => {
     expect(await screen.findByText(/Another token also calls itself/)).toHaveTextContent(
       '2 holders'
     );
-    expect(screen.getByLabelText('Facts')).toHaveTextContent('JoyID · owner lock proven');
+    expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+      'JoyID · owner lock proven'
+    );
     const details = await screen.findByText('Every change to the supply (1)');
     fireEvent.click(details);
     const table = screen.getByRole('table', { name: 'Mints and burns' });

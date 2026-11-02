@@ -8,7 +8,12 @@ import {
   type IdentityCollection,
 } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import {
+  AssetDetailShell,
+  AssetMetrics,
+  AssetReadState,
+  type AssetMetric,
+} from '@/components/asset/detail-shell';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CollectionItems } from '@/components/asset/collection-gallery';
 import { CollectionHolders } from '@/components/asset/collection-holders';
@@ -28,10 +33,17 @@ import { Address } from '@/components/ui/address';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
-import { exactUnsignedInteger } from '@/lib/exact-integer';
+import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { HMultiplierReading } from '@/components/ui/h-multiplier';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CompositionBadge } from '@/components/ui/composition-mark';
+import {
+  CompositionSet,
+  compositionCountsFromCollection,
+  type CompositionCounts,
+} from '@/components/ui/composition-set';
+import { RowTag } from '@/components/ui/row-tag';
+import { formatCount } from '@/lib/format-count';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { collectionFeedHeadline } from '@/lib/feed-headlines';
 import { readErrorText } from '@/lib/read-error';
@@ -50,55 +62,107 @@ function identityStandard(standard: string): IdentityStandard {
     throw new Error(`identity collection has no identity standard: ${JSON.stringify(standard)}`);
   return standard as IdentityStandard;
 }
-// ── F2 objects (round 2, OB-C4): the Collection board's opening — the on-chain description
-// with its source, the composition badge with one sentence, and a summary of who holds it. ──
-function collectionCompositionSentence(tier: CompositionTier, onchain: number, live: number) {
-  if (live > 0 && onchain === live && tier === 'btc_ckb')
-    return `All ${live.toLocaleString('en-US')} objects are fully on-chain: records in CKB cells, pictures in Bitcoin inscriptions.`;
-  if (live > 0 && onchain === live && tier === 'pure_ckb')
-    return `All ${live.toLocaleString('en-US')} objects are fully on-chain: records and content in CKB cells.`;
-  if (onchain > 0)
-    return `${onchain.toLocaleString('en-US')} of ${live.toLocaleString('en-US')} objects are fully on-chain.`;
-  return `None of its ${live.toLocaleString('en-US')} objects is fully on-chain.`;
-}
-function CollectionIntro({
-  description,
-  source,
-  composition,
-  live,
-  holders,
-  exactlyOne,
-  held,
+// ── Consistency round (Main.dc.html): the cluster / class hero — the kind and what its objects
+// are made of in one lede, the description as a quote, the display number of live objects with
+// the CKB their cells hold, the composition block and the history; the facts are the metrics row.
+// (F2 OB-C4's opening, every fact of it kept: the description, the composition, the counts.)
+function CollectionLede({
+  kind,
+  dobVersion,
+  counts,
 }: {
-  description: string | null;
-  source: string;
-  composition?: ObjectCollection['composition'];
-  live: number;
-  holders: number;
-  exactlyOne: number | undefined;
-  held: bigint | null;
+  kind: 'spore' | 'object';
+  dobVersion: number | null;
+  counts: CompositionCounts | null;
 }) {
+  const live = counts ? Object.values(counts).reduce((a, b) => a + b, 0) : 0;
+  const only = counts
+    ? (Object.keys(counts) as CompositionTier[]).find((t) => counts[t] === live && live > 0)
+    : undefined;
+  const onchain = counts ? counts.btc_ckb + counts.pure_ckb : 0;
   return (
-    <div className="space-y-3 pt-1">
-      <p className="text-text text-body">
-        {description ?? 'No collection description recorded.'}
-        {description && <span className="text-text-dim"> · {source}</span>}
-      </p>
-      {composition && (
-        <div className="flex flex-wrap items-center gap-3">
-          <CompositionBadge tier={composition.tier} />
-          <span className="text-text text-body">
-            {collectionCompositionSentence(composition.tier, composition.onchainCount, live)}
+    <p className="text-text-dim text-body max-w-[640px]">
+      {/* Responsive B#21: the kind is one unit, so its separator never dangles at a line end. */}
+      <span data-role="collection-kind" className="whitespace-nowrap">
+        {kind === 'spore' ? 'Spore cluster' : 'm-NFT class'}
+        {kind === 'spore' && dobVersion !== null && (
+          <>
+            {' · '}
+            <RowTag>DOB/{dobVersion}</RowTag>
+          </>
+        )}
+      </span>
+      {counts &&
+        live > 0 &&
+        (only ? (
+          <>
+            {' · every object is '}
+            <CompositionBadge tier={only} size="sm" />
+            {only === 'btc_ckb'
+              ? ': its record in a CKB cell, its picture in a Bitcoin inscription.'
+              : only === 'pure_ckb'
+                ? ': its record and its content in CKB cells.'
+                : '.'}
+          </>
+        ) : onchain > 0 ? (
+          ' · some of its objects are fully on-chain, the rest are not.'
+        ) : (
+          ' · none of its objects is fully on-chain.'
+        ))}
+    </p>
+  );
+}
+/** The dim sentence after "N of M fully on-chain": how long the on-chain parts last. */
+function permanence(counts: CompositionCounts): string | null {
+  if (counts.btc_ckb > 0 && counts.pure_ckb === 0)
+    return 'permanent and verifiable, as long as CKB and Bitcoin exist';
+  if (counts.pure_ckb > 0 && counts.btc_ckb === 0)
+    return 'permanent and verifiable, as long as CKB exists';
+  if (counts.pure_ckb > 0) return 'permanent and verifiable, as long as CKB (and Bitcoin) exist';
+  return null;
+}
+/** The page's one figure (R13): the live objects, with the CKB their cells hold beside it. */
+function CollectionFigure({
+  live,
+  total,
+  held,
+  spore,
+}: {
+  live: number;
+  total: number;
+  held: bigint | null;
+  spore: boolean;
+}) {
+  const burned = total - live;
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+      <div data-role="figure" className="min-w-0">
+        <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
+          objects live
+        </div>
+        <div className="text-index sm:text-display text-text-bright font-medium tabular-nums">
+          {live.toLocaleString('en-US')}{' '}
+          {/* C12: the feed's word, "burned", for every kind; Spore's own word stays in the title. */}
+          <span
+            className="text-body text-text-dim font-normal"
+            title={spore ? 'melted, in Spore’s words' : undefined}
+          >
+            {burned === 0
+              ? 'all live · none burned'
+              : `of ${total.toLocaleString('en-US')} minted · ${burned.toLocaleString('en-US')} burned`}
           </span>
         </div>
-      )}
-      <p className="text-text text-body leading-relaxed">
-        {`${live.toLocaleString('en-US')} objects.`}
-        {exactlyOne !== undefined &&
-          ` ${exactlyOne.toLocaleString('en-US')} of their ${holders.toLocaleString('en-US')} holders own exactly one.`}
-        {held !== null &&
-          ` Their cells hold ${(held / BigInt(100000000)).toLocaleString('en-US')}${held % BigInt(100000000) === BigInt(0) ? '' : `.${(held % BigInt(100000000)).toString().padStart(8, '0').replace(/0+$/, '')}`} CKB.`}
-      </p>
+      </div>
+      <div className="text-section text-text-bright tabular-nums">
+        {held !== null ? (
+          <>
+            <ExactCkb shannons={held} signed={false} tone="plain" wrap />{' '}
+            <span className="text-small text-text-dim">held in their cells</span>
+          </>
+        ) : (
+          <span className="text-small text-text-dim">CKB held in their cells not recorded</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -149,7 +213,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
   });
   const data = detail.data,
     object = data && 'composition' in data ? data : undefined;
-  const description =
+  const clusterDescription =
     cluster.data?.description === null || cluster.data?.description === undefined
       ? null
       : parseSporeClusterDescription(cluster.data.description);
@@ -204,66 +268,37 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         <AssetReadState label="collection" error={detail.error} loading={detail.isLoading} />
       </AssetDetailShell>
     );
-  // ── F2 objects (round 2, OB-C8): the Collection board's rail for Spore clusters and m-NFT
-  // classes; identity collections keep their own facts below. ──
+  // ── Consistency round C7 (Main.dc.html): the rail's facts as the metrics row. For a cluster or
+  // class the live objects and the CKB their cells hold are the hero's figure; holders,
+  // transactions, the cluster's creation and its cell's holder are the row. ──
   const weekly = insights.data?.weeklyActivity;
   const mints = weekly?.reduce((n, w) => n + w.mintTransactions, 0);
   const transfers = weekly?.reduce((n, w) => n + w.transferTransactions, 0);
-  const burned = data.totalCount - data.liveCount;
-  const objectFacts = [
+  const burns = weekly?.reduce((n, w) => n + w.burnTransactions, 0);
+  const exactlyOne = insights.data?.holderDistribution.find((b) => b.range === '1')?.holders;
+  const weeklyNote =
+    mints !== undefined && transfers !== undefined && burns !== undefined
+      ? `${formatCount(mints, 'mint')} · ${formatCount(transfers, 'transfer')} · ${formatCount(burns, 'burn')}`
+      : undefined;
+  const objectMetrics: AssetMetric[] = [
     {
-      label: 'Objects',
-      value: (
-        <>
-          {data.liveCount.toLocaleString('en-US')}
-          {/* C12: the feed's word, "burned", for every kind; Spore's own word stays in the title. */}
-          <span
-            className="text-text-dim text-small mt-1 block"
-            title={kind === 'spore' ? 'melted, in Spore’s words' : undefined}
-          >
-            {burned === 0
-              ? 'all live · none burned'
-              : `live · ${burned.toLocaleString('en-US')} of ${data.totalCount.toLocaleString('en-US')} burned`}
-          </span>
-        </>
-      ),
-    },
-    { label: 'Holders', value: data.holdersCount.toLocaleString('en-US') },
-    {
-      label: 'CKB held in their cells',
-      value:
-        held !== null && occupied !== null ? (
-          <CapacityPartition
-            subject={title}
-            total={held.toString()}
-            occupied={occupied.toString()}
-            free={(held - occupied).toString()}
-          />
-        ) : (
-          'Not recorded'
-        ),
+      label: 'Holders',
+      value: data.holdersCount.toLocaleString('en-US'),
+      note: exactlyOne === undefined ? undefined : `${exactlyOne.toLocaleString('en-US')} hold one`,
     },
     // Round 3 (L2): the count is null while the indexer has not derived it — say nothing of it.
-    ...(data.activitiesCount === null && (mints === undefined || transfers === undefined)
-      ? []
+    ...(data.activitiesCount === null
+      ? weeklyNote === undefined
+        ? []
+        : [{ label: 'Mints · transfers · burns', value: weeklyNote, size: 'body' as const }]
       : [
           {
-            label: 'Activity',
-            value: (
-              <>
-                {data.activitiesCount !== null && data.activitiesCount.toLocaleString('en-US')}
-                {mints !== undefined && transfers !== undefined && (
-                  <span className="text-text-dim text-small">
-                    {data.activitiesCount !== null && ' · '}
-                    {mints.toLocaleString('en-US')} mint{mints === 1 ? '' : 's'},{' '}
-                    {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'}
-                    {insights.data?.completeThrough
-                      ? ` through ${insights.data.completeThrough}`
-                      : ''}
-                  </span>
-                )}
-              </>
-            ),
+            label: 'Transactions',
+            value: data.activitiesCount.toLocaleString('en-US'),
+            note: weeklyNote,
+            title: insights.data?.completeThrough
+              ? `mints, transfers and burns counted by complete week through ${insights.data.completeThrough}`
+              : undefined,
           },
         ]),
     ...(cluster.data
@@ -281,31 +316,29 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           },
           {
             label: 'Cluster cell held by',
+            size: 'body' as const,
             value: protocol.data ? (
               protocol.data.current ? (
-                <>
-                  <Address address={protocol.data.current.cell.ownerAddress} />
-                  <span className="text-text-dim text-small mt-1 block">
-                    {protocol.data.current.cell.lockName ?? 'Unregistered lock'}
-                  </span>
-                </>
+                <Address address={protocol.data.current.cell.ownerAddress} className="text-body" />
               ) : (
                 'No current cluster cell'
               )
             ) : (
               'Current cell evidence unavailable'
             ),
+            note: protocol.data?.current ? (
+              <RowTag>{protocol.data.current.cell.lockName ?? 'Unregistered lock'}</RowTag>
+            ) : undefined,
           },
         ]
       : []),
   ];
-  const facts = [
-    { label: 'Standard', value: formatStandard(data.standard) },
-    { label: 'Live', value: data.liveCount.toLocaleString('en-US') },
-    { label: 'Minted / created', value: data.totalCount.toLocaleString('en-US') },
+  const identityMetrics: AssetMetric[] = [
+    { label: 'Standard', size: 'body', value: formatStandard(data.standard) },
     {
-      label: 'Inactive / burned',
-      value: (data.totalCount - data.liveCount).toLocaleString('en-US'),
+      label: 'Live',
+      value: data.liveCount.toLocaleString('en-US'),
+      note: `of ${data.totalCount.toLocaleString('en-US')} minted / created · ${(data.totalCount - data.liveCount).toLocaleString('en-US')} inactive / burned`,
     },
     { label: 'Holders', value: data.holdersCount.toLocaleString('en-US') },
     ...(data.activitiesCount === null
@@ -319,35 +352,70 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ) : (
           'Not recorded'
         ),
+      note:
+        held !== null && occupied !== null && held > BigInt(0)
+          ? `${formatScaledInteger(occupied * BigInt(100), held, 2)}% occupied`
+          : undefined,
     },
-    ...(cluster.data
-      ? [
-          {
-            label: 'Cluster cell owner',
-            value: protocol.data ? (
-              protocol.data.current ? (
-                <Address address={protocol.data.current.cell.ownerAddress} />
-              ) : (
-                'No current cluster cell'
-              )
-            ) : (
-              'Current cell evidence unavailable'
-            ),
-          },
-          {
-            label: 'Created',
-            value:
-              cluster.data.createdAtBlock === null ? (
-                'Not recorded'
-              ) : (
-                <AppLink href={`/blocks/${cluster.data.createdAtBlock}`}>
-                  {formatBlockNumber(cluster.data.createdAtBlock)}
-                </AppLink>
-              ),
-          },
-        ]
-      : []),
   ];
+  const counts = object?.composition ? compositionCountsFromCollection(object.composition) : null;
+  const description =
+    kind === 'spore'
+      ? (clusterDescription?.summary ?? null)
+      : (object?.classDetail?.description ?? null);
+  const history = (
+    <div role="region" aria-label="History" className="min-w-0 space-y-3">
+      {chart.data ? (
+        <>
+          <AssetReadState label="capacity history" error={chart.error} retained />
+          <CapacityHistory
+            history={chart.data}
+            subject={title}
+            weekly={
+              insights.data
+                ? insights.data.weeklyActivity
+                : {
+                    unavailable: insights.error
+                      ? `Weekly transfers unavailable: ${readErrorText(insights.error)}`
+                      : 'Loading weekly transfers…',
+                  }
+            }
+          />
+        </>
+      ) : (
+        <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
+      )}
+      {kind !== 'identity' && mints !== undefined && transfers !== undefined && (
+        <p className="text-text-dim text-small">
+          Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
+          {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
+          {held !== null && occupied !== null && occupied > BigInt(0) && (
+            <>
+              {' · '}
+              <HMultiplierReading held={held} occupied={occupied} />
+            </>
+          )}
+        </p>
+      )}
+    </div>
+  );
+  const objectsKind = kind !== 'identity';
+  const holdersRegion = (
+    <div role="region" aria-label="Who holds it" className="min-w-0">
+      <CollectionHolders
+        queryKey={`${kind}:${id}`}
+        distribution={insights.data?.holderDistribution}
+        assetClass={kind === 'identity' ? undefined : ('objects' as const)}
+        load={(p) =>
+          kind === 'spore'
+            ? api.getSporeClusterHolders(id, p)
+            : kind === 'object'
+              ? api.getObjectCollectionHolders(id, p)
+              : api.getIdentityCollectionHolders(id, p)
+        }
+      />
+    </div>
+  );
   return (
     <AssetDetailShell
       title={title}
@@ -364,66 +432,115 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         },
       ]}
       // F2 identities (round 2, ID-COL-5): an identity collection's id is a route alias, and it
-      // has no description to record; it opens with what the standard is instead.
+      // has no description to record; it opens with what the standard is instead. A cluster or
+      // class is named by its id under the title; its kind leads the lede.
       identity={
+        kind === 'identity' ? undefined : <Hash hash={id} truncate={false} className="text-meta" />
+      }
+      lede={
         kind === 'identity' ? undefined : (
-          <>
-            {/* F2 objects (OB-C4): what kind of collection this is, then its id. The kind is one
-                unit, so its separator never dangles at a line end (B#21); the space after it is
-                where the line may break before the id. */}
-            <span className="text-text-dim text-body whitespace-nowrap">
-              {kind === 'spore'
-                ? `Spore cluster${insights.data?.currentPattern.status === 'dob' && insights.data.currentPattern.version !== null ? ` · DOB/${insights.data.currentPattern.version}` : ''}`
-                : 'm-NFT class'}
-            </span>{' '}
-            <Hash hash={id} truncate={false} className="text-meta" />
-          </>
+          <div className="space-y-2.5">
+            <CollectionLede
+              kind={kind}
+              dobVersion={
+                insights.data?.currentPattern.status === 'dob'
+                  ? insights.data.currentPattern.version
+                  : null
+              }
+              counts={counts}
+            />
+            {description ? (
+              <blockquote
+                className="border-base-border text-text text-body max-w-[640px] border-l pl-3"
+                title={
+                  kind === 'spore'
+                    ? 'the cluster’s description, on chain'
+                    : 'the class description, on chain'
+                }
+              >
+                {description}
+              </blockquote>
+            ) : (
+              <p className="text-text-dim text-small">No collection description recorded.</p>
+            )}
+          </div>
         )
       }
-      facts={kind === 'identity' ? facts : objectFacts}
+      hero={
+        objectsKind ? (
+          <div className="space-y-[22px]">
+            <CollectionFigure
+              live={data.liveCount}
+              total={data.totalCount}
+              held={held}
+              spore={kind === 'spore'}
+            />
+            {counts && (
+              <CompositionSet counts={counts} total={data.liveCount} caption={permanence(counts)} />
+            )}
+            {history}
+          </div>
+        ) : undefined
+      }
+      metrics={<AssetMetrics items={objectsKind ? objectMetrics : identityMetrics} />}
       intro={
         kind === 'identity' ? (
           <IdentityPositioning standard={identityStandard(data.standard)} scope="collection" />
+        ) : undefined
+      }
+      // Main.dc.html screen 3: who holds it beside the recent activity — the shell's feed slot,
+      // after the tier-1 body (lists of rows follow the domain, as on every asset page).
+      feed={
+        objectsKind ? (
+          <div className="grid min-w-0 items-start gap-x-16 gap-y-12 lg:grid-cols-2">
+            {holdersRegion}
+            <AssetFeed
+              queryKey={`${kind}:${id}`}
+              scope="This collection"
+              collection
+              plain
+              // visual pass: every row of a Spore cluster / m-NFT class feed is about objects
+              mark="objects"
+              recent={{ rows: 5, transactions: data.activitiesCount }}
+              loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
+              loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
+              // OB-C9 (CollectionTxs board): the collection's own column, named by it, after Cells.
+              context={{
+                label: title,
+                placement: 'after-cells',
+                render: (tx) => (
+                  <span className="text-text-bright">
+                    {collectionFeedHeadline(
+                      (tx as CollectionFeedTransaction).collectionContext,
+                      tx.hash
+                    )}
+                  </span>
+                ),
+              }}
+            />
+          </div>
         ) : (
-          <CollectionIntro
-            description={description?.summary ?? object?.classDetail?.description ?? null}
-            source={
-              kind === 'spore'
-                ? 'the cluster’s description, on chain'
-                : 'the class description, on chain'
-            }
-            composition={object?.composition}
-            live={data.liveCount}
-            holders={data.holdersCount}
-            exactlyOne={insights.data?.holderDistribution.find((b) => b.range === '1')?.holders}
-            held={held}
+          <AssetFeed
+            queryKey={`${kind}:${id}`}
+            scope="This collection"
+            collection
+            plain={false}
+            loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
+            loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
+            context={{
+              label: title,
+              placement: 'after-cells',
+              render: (tx) => (
+                <span className="text-text-bright">
+                  {collectionFeedHeadline(
+                    (tx as CollectionFeedTransaction).collectionContext,
+                    tx.hash
+                  )}
+                </span>
+              ),
+            }}
           />
         )
-      }
-      feed={
-        <AssetFeed
-          queryKey={`${kind}:${id}`}
-          scope="This collection"
-          collection
-          plain={kind !== 'identity'}
-          // visual pass: every row of a Spore cluster / m-NFT class feed is about objects
-          mark={kind === 'identity' ? undefined : 'objects'}
-          loadActivities={(p) => api.getCollectionActivityFeed(kind, id, p)}
-          loadTransactions={(p) => api.getCollectionTransactions(kind, id, p)}
-          // OB-C9 (CollectionTxs board): the collection's own column, named by it, after Cells.
-          context={{
-            label: title,
-            placement: 'after-cells',
-            render: (tx) => (
-              <span className="text-text-bright">
-                {collectionFeedHeadline(
-                  (tx as CollectionFeedTransaction).collectionContext,
-                  tx.hash
-                )}
-              </span>
-            ),
-          }}
-        />
       }
       tier2={
         // Lane E: tier 2 only where there is evidence (a Spore cluster, an m-NFT class).
@@ -490,7 +607,8 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
         ) : (
           <p className="text-text-dim text-meta">Collection capacity is not recorded.</p>
         ))}
-      {/* F2 objects (OB-C5): Objects first, then History, then Who holds it (Collection board). */}
+      {/* Main.dc.html: Objects (the genes that vary and the objects), then who holds it beside the
+          recent activity. */}
       {kind === 'spore' &&
         (insights.data ? (
           <>
@@ -510,44 +628,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           />
         ))}
       {kind === 'object' && <CollectionItems id={id} kind={kind} />}
-      <div role="region" aria-label="History" className="min-w-0 space-y-3">
-        {chart.data ? (
-          <>
-            <AssetReadState label="capacity history" error={chart.error} retained />
-            <CapacityHistory
-              history={chart.data}
-              subject={title}
-              weekly={
-                insights.data
-                  ? insights.data.weeklyActivity
-                  : {
-                      unavailable: insights.error
-                        ? `Weekly transfers unavailable: ${readErrorText(insights.error)}`
-                        : 'Loading weekly transfers…',
-                    }
-              }
-            />
-          </>
-        ) : (
-          <AssetReadState label="capacity history" error={chart.error} loading={chart.isLoading} />
-        )}
-        {kind !== 'identity' && (
-          <>
-            {mints !== undefined && transfers !== undefined && (
-              <p className="text-text-dim text-small">
-                Minted in {mints.toLocaleString('en-US')} transaction{mints === 1 ? '' : 's'} ·{' '}
-                {transfers.toLocaleString('en-US')} transfer{transfers === 1 ? '' : 's'} since
-                {held !== null && occupied !== null && occupied > BigInt(0) && (
-                  <>
-                    {' · '}
-                    <HMultiplierReading held={held} occupied={occupied} />
-                  </>
-                )}
-              </p>
-            )}
-          </>
-        )}
-      </div>
+      {kind === 'identity' && history}
       {kind !== 'spore' && (
         <AssetReadState
           label="collection insights"
@@ -584,20 +665,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
           )}
         </section>
       )}
-      <div role="region" aria-label="Who holds it" className="min-w-0">
-        <CollectionHolders
-          queryKey={`${kind}:${id}`}
-          distribution={insights.data?.holderDistribution}
-          assetClass={kind === 'identity' ? undefined : ('objects' as const)}
-          load={(p) =>
-            kind === 'spore'
-              ? api.getSporeClusterHolders(id, p)
-              : kind === 'object'
-                ? api.getObjectCollectionHolders(id, p)
-                : api.getIdentityCollectionHolders(id, p)
-          }
-        />
-      </div>
+      {!objectsKind && holdersRegion}
     </AssetDetailShell>
   );
 }

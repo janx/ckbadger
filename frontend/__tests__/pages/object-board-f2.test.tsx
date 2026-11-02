@@ -6,6 +6,7 @@ import { render, screen, fireEvent, within } from '@/__tests__/utils/test-utils'
 import SporeDetailPage from '@/app/objects/[sporeId]/client-page';
 import { api, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import {
@@ -197,14 +198,32 @@ it('draws the sequencing gel and the collection allele gel with "this one" (OB-4
     'The object’s traits are not stored as text. It carries 53 bytes of DNA, and the collection’s decoder reads each gene to express a trait. Its prev.bg gene is a pointer to a Bitcoin inscription; that is what makes it BTC+CKB.'
   );
   expect(container.querySelectorAll('[data-nibble]')).toHaveLength(106);
-  expect(dna).toHaveTextContent(
+  // C10: the collection's gel is its own section beside the DNA, so each has one hint.
+  const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
+  expect(dna.contains(among)).toBe(false);
+  expect(among).toHaveTextContent(
     'Among Nervape 3x · its variant in each gene, and how common it is among the 90'
   );
   expect(container.querySelector('[data-overlay="me"]')!.textContent).toContain('this one');
-  expect(within(dna).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
+  expect(within(among).getByRole('link', { name: 'Open the collection →' })).toHaveAttribute(
     'href',
     expect.stringContaining(`/clusters/${NERVAPE3X_CLUSTER}`)
   );
+  // C9: only the genes that vary among the 90 get a lane; the rest are named once.
+  expect(
+    [...among.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'))
+  ).toEqual(['prev.bg', 'Color', 'Serial']);
+  expect(among.querySelector('[data-role="caption"]')).toHaveTextContent(
+    'Type is image, relief is NERVAPE 3X and Note is empty for every object, so none of them gets a lane.'
+  );
+  for (const section of [dna, among]) {
+    const hints = [...section.querySelectorAll('*')].filter((el) =>
+      [...el.childNodes].some(
+        (n) => n.nodeType === Node.TEXT_NODE && /\b(tap|hover)\b/i.test(n.textContent ?? '')
+      )
+    );
+    expect(hints).toHaveLength(1);
+  }
 });
 
 it('links trait ↔ gene ↔ lane on hover, in every direction (OB-5)', async () => {
@@ -269,9 +288,10 @@ it('places it in its collection with the composition count and cluster cell (OB-
   expect(coll).toHaveTextContent('created at #17,222,190');
 });
 
-it('lists the board facts and one Live style (OB-11, OB-15)', async () => {
-  await page();
-  const rail = screen.getByRole('complementary', { name: 'Facts' });
+it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C7)', async () => {
+  const { container } = await page();
+  expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
+  const rail = screen.getByRole('region', { name: 'Metrics' });
   for (const label of [
     'Owner',
     'Collection',
@@ -285,8 +305,14 @@ it('lists the board facts and one Live style (OB-11, OB-15)', async () => {
   expect(
     await within(rail).findByText('1 transfer since minting', undefined, { timeout: 5000 })
   ).toBeInTheDocument();
-  expect(rail).toHaveTextContent('2026-10-22 14:43:00 UTC+8');
+  // C7: the metric shows the date; the time of day stays in the metric's title.
+  expect(rail).toHaveTextContent('2026-10-22');
+  expect(within(rail).getByText('Minted').parentElement).toHaveAttribute(
+    'title',
+    expect.stringContaining('2026-10-22 14:43:00 UTC+8')
+  );
   expect(within(rail).getByText('Nervape 3x')).toBeInTheDocument();
+  expect(ledeRestatements(container)).toEqual([]);
   expect(screen.getByText('Live')).toHaveClass('text-jade', 'border-jade/40');
 });
 

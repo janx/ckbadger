@@ -54,6 +54,12 @@ describe('Cell page against the Cell board', () => {
       'Transaction 0xbe1b9761…936cd8 / output 1'
     );
     expect(screen.getByRole('button', { name: 'Copy out point' })).toBeInTheDocument();
+    // Consistency round C13: the h1 is the short out point (entity), not the word "Cell"; the
+    // full out point and its copy are the line beneath.
+    const h1 = screen.getByRole('heading', { level: 1 });
+    expect(h1).toHaveTextContent(`${cell.txHash.slice(0, 12)}…${cell.txHash.slice(-8)}:1`);
+    expect(h1).toHaveClass('text-entity');
+    expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
     expect(screen.getByText(/The out point is the cell's only name/)).toHaveTextContent(
       'exists from block #20,801,533 until a transaction spends it.'
     );

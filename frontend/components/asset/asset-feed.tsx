@@ -361,8 +361,148 @@ export interface AssetFeedProps {
   focusItemId?: string;
   /** F2 objects (IV-14): every row of this feed is about one class (the token board's mark). */
   mark?: AssetClass;
+  /**
+   * Consistency round (Main.dc.html, "Recent activity"): open as the newest `rows` activities
+   * under an h2, with two links — all activity, and the transactions (`transactions` names their
+   * count) — that open the full feed (tabs and pages) in place. Omitted: the full feed (old
+   * default).
+   */
+  recent?: { rows: number; transactions: number | null };
 }
-export function AssetFeed({
+export function AssetFeed(props: AssetFeedProps) {
+  const [opened, setOpened] = useState<'activities' | 'transactions' | null>(null);
+  if (!props.recent || opened) return <FullAssetFeed {...props} initialTab={opened ?? undefined} />;
+  return <RecentAssetFeed {...props} recent={props.recent} onOpen={setOpened} />;
+}
+
+/** The newest few activities of an asset, as the board's "Recent activity" (see `recent`). */
+function RecentAssetFeed({
+  queryKey,
+  loadActivities,
+  item,
+  collection = false,
+  plain = false,
+  focusItemId,
+  mark,
+  recent,
+  onOpen,
+}: AssetFeedProps & {
+  recent: NonNullable<AssetFeedProps['recent']>;
+  onOpen: (tab: 'activities' | 'transactions') => void;
+}) {
+  if (!Number.isSafeInteger(recent.rows) || recent.rows <= 0)
+    throw new Error(`recent activity needs a positive row count, got ${recent.rows}`);
+  const acts = useQuery({
+    queryKey: ['asset-feed', queryKey, 'recent', recent.rows],
+    queryFn: () => loadActivities({ limit: recent.rows }),
+  });
+  return (
+    <section aria-label="Recent activity" className="min-w-0">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+        <h2 className="text-text-bright text-section font-medium">Recent activity</h2>
+        <span className="text-small">
+          <button
+            type="button"
+            onClick={() => onOpen('activities')}
+            className="text-text hover:text-text-bright"
+          >
+            All activity →
+          </button>
+          <span className="text-text-ghost"> · </span>
+          <button
+            type="button"
+            onClick={() => onOpen('transactions')}
+            className="text-text hover:text-text-bright tabular-nums"
+          >
+            {recent.transactions === null
+              ? 'All transactions →'
+              : `${recent.transactions.toLocaleString('en-US')} transactions →`}
+          </button>
+        </span>
+      </div>
+      <div className="mt-3.5">
+        {acts.data ? (
+          <>
+            <AssetReadState error={acts.error} label="recent activity" retained />
+            {acts.data.data.length ? (
+              acts.data.data
+                .slice(0, recent.rows)
+                .map((a) => (
+                  <FeedActivityRow
+                    key={a.txHash}
+                    activity={a}
+                    item={item}
+                    collection={collection}
+                    plain={plain}
+                    focusItemId={focusItemId}
+                    mark={mark}
+                  />
+                ))
+            ) : (
+              <p className="text-text-dim text-small py-6">No activities.</p>
+            )}
+          </>
+        ) : (
+          <AssetReadState label="recent activity" error={acts.error} loading={acts.isLoading} />
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** One activity row of an asset feed, its headline from the item or collection context. */
+function FeedActivityRow({
+  activity: a,
+  item,
+  collection,
+  plain,
+  focusItemId,
+  mark,
+}: {
+  activity: GlobalActivity;
+  item?: ItemFeedSubject;
+  collection: boolean;
+  plain: boolean;
+  focusItemId?: string;
+  mark?: AssetClass;
+}) {
+  let headline: ItemFeedHeadline | undefined;
+  let notes: ReadonlyMap<string, string> | undefined;
+  try {
+    notes = item ? classCellNote(a as ItemActivity) : undefined;
+    headline = item
+      ? itemFeedHeadline(a as ItemActivity, item)
+      : collection
+        ? {
+            text: collectionFeedHeadline((a as CollectionFeedActivity).collectionContext, a.txHash),
+            neighbour: false,
+          }
+        : undefined;
+  } catch (error) {
+    // A row that breaks the feed contract is reported in place; the page stays up.
+    return (
+      <div className="border-base-elevated border-b py-3">
+        <ActivityReadError txHash={a.txHash} error={error} />
+      </div>
+    );
+  }
+  return (
+    <ActivityRow
+      activity={a}
+      headline={headline && <FeedHeadlineText headline={headline} />}
+      className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
+      // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
+      mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
+      showScriptDetails={!plain}
+      lockColumn={plain}
+      foldObjects={plain}
+      focusItemId={focusItemId}
+      participantNotes={notes}
+    />
+  );
+}
+
+function FullAssetFeed({
   queryKey,
   scope,
   loadActivities,
@@ -377,8 +517,9 @@ export function AssetFeed({
   plain = false,
   focusItemId,
   mark,
-}: AssetFeedProps) {
-  const [tab, setTab] = useState<'activities' | 'transactions'>('activities');
+  initialTab = 'activities',
+}: AssetFeedProps & { initialTab?: 'activities' | 'transactions' }) {
+  const [tab, setTab] = useState<'activities' | 'transactions'>(initialTab);
   const actsPages = useCursorPagination(),
     txPages = useCursorPagination();
   const pageSize = usePageSize(50);
@@ -423,46 +564,17 @@ export function AssetFeed({
           <AssetReadState error={current.error} label={tab} retained />
           {tab === 'activities' ? (
             acts.data!.data.length ? (
-              acts.data!.data.map((a) => {
-                let headline: ItemFeedHeadline | undefined;
-                let notes: ReadonlyMap<string, string> | undefined;
-                try {
-                  notes = item ? classCellNote(a as ItemActivity) : undefined;
-                  headline = item
-                    ? itemFeedHeadline(a as ItemActivity, item)
-                    : collection
-                      ? {
-                          text: collectionFeedHeadline(
-                            (a as CollectionFeedActivity).collectionContext,
-                            a.txHash
-                          ),
-                          neighbour: false,
-                        }
-                      : undefined;
-                } catch (error) {
-                  // A row that breaks the feed contract is reported in place; the page stays up.
-                  return (
-                    <div key={a.txHash} className="border-base-elevated border-b py-3">
-                      <ActivityReadError txHash={a.txHash} error={error} />
-                    </div>
-                  );
-                }
-                return (
-                  <ActivityRow
-                    key={a.txHash}
-                    activity={a}
-                    headline={headline && <FeedHeadlineText headline={headline} />}
-                    className={headline?.neighbour ? 'opacity-[0.45]' : undefined}
-                    // F2 identities (round 2, ID-C13): every row of an identity's feed is about it.
-                    mark={mark ?? (item?.kind === 'identity' ? 'identities' : undefined)}
-                    showScriptDetails={!plain}
-                    lockColumn={plain}
-                    foldObjects={plain}
-                    focusItemId={focusItemId}
-                    participantNotes={notes}
-                  />
-                );
-              })
+              acts.data!.data.map((a) => (
+                <FeedActivityRow
+                  key={a.txHash}
+                  activity={a}
+                  item={item}
+                  collection={collection}
+                  plain={plain}
+                  focusItemId={focusItemId}
+                  mark={mark}
+                />
+              ))
             ) : (
               <p className="text-text-dim text-small py-6">No activities.</p>
             )

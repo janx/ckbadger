@@ -14,6 +14,7 @@ import {
   within,
 } from '@/__tests__/utils/test-utils';
 import MnftItemDetailPage from '@/app/objects/mnft/[objectId]/client-page';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import {
   api,
   ApiRequestError,
@@ -214,9 +215,11 @@ describe('Mnft board (F2 objects)', () => {
     expect(cell).toHaveTextContent('1 CKB per byte');
   });
 
-  it('lists the board facts (OB-M8) and the class block (OB-M9)', async () => {
-    await page();
-    const rail = screen.getByRole('complementary', { name: 'Facts' });
+  it('lists the board facts as the metrics row (OB-M8, C7) and the class block (OB-M9)', async () => {
+    const { container } = await page();
+    expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
+    const rail = screen.getByRole('region', { name: 'Metrics' });
+    expect(ledeRestatements(container)).toEqual([]);
     for (const label of ['Owner', 'Class', 'Issued', 'Last moved', 'CKB held in its cell'])
       expect(within(rail).getByText(label)).toBeInTheDocument();
     expect(rail).toHaveTextContent('PW Lock · since');

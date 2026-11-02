@@ -179,7 +179,7 @@ it('shows an expired .bit Cell as expired, grey and dashed, while its cell remai
     "The name's term ended on 2026-04-24"
   );
   expect(screen.getByTestId('identity-summary')).not.toHaveTextContent("name's its");
-  expect(screen.getByLabelText('Facts')).toHaveTextContent('Expired');
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent('Expired');
   expect(screen.getByText('held from minting · not renewed')).toBeInTheDocument();
   // The cell itself is still live and holds CKB.
   expect(screen.getByRole('region', { name: 'CKB held in its cell' })).toHaveTextContent(

@@ -299,7 +299,9 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         <span className="text-[#343c50]">/</span> output {cell.outputIndex}
       </nav>
       <DetailLayout
-        title="Cell"
+        // Consistency round C13: the cell is named by its short out point; the full one and its
+        // copy are the identity line beneath.
+        title={`${cell.txHash.slice(0, 12)}…${cell.txHash.slice(-8)}:${cell.outputIndex}`}
         documentTitle={[`${titleHash(cell.txHash)}:${cell.outputIndex}`, 'cell']}
         status={
           <span className="flex flex-wrap items-center gap-3">

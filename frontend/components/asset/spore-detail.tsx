@@ -2,7 +2,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type SporeDetail } from '@/lib/api';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import {
+  AssetDetailShell,
+  AssetMetrics,
+  AssetReadState,
+  type AssetMetric,
+} from '@/components/asset/detail-shell';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CellVersions } from '@/components/asset/cell-versions';
 import { ItemEvidence, ItemTransactionContext } from '@/components/asset/item-evidence';
@@ -28,7 +33,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
-import { formatUtc8DateTime } from '@/lib/utils';
+import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
 import { sequencingGenes } from '@/lib/dob-genes';
@@ -117,98 +122,100 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
     return colors;
   }, [genetics.data, title]);
   const moves = history ? history.length - 1 : null;
-  const facts = [
+  // Consistency round C7: the rail's facts as the metrics row under the hero (R13 — a value and
+  // its inline note; a time of day and the minter's full address stay in the item's title).
+  const metrics: AssetMetric[] = [
     {
       label: 'Owner',
+      size: 'body',
       value: object.ownerLockHash ? (
-        <>
-          <Address address={object.ownerAddress ?? object.ownerLockHash} />
-          <span className="text-text-dim text-small mt-1 block">
-            {last?.lockName ?? (history ? 'Unregistered lock' : 'Loading lock…')}
-          </span>
-        </>
+        <Address address={object.ownerAddress ?? object.ownerLockHash} className="text-body" />
       ) : (
         'No live owner'
       ),
+      note: object.ownerLockHash
+        ? (last?.lockName ?? (history ? 'Unregistered lock' : 'Loading lock…'))
+        : undefined,
     },
     ...(object.clusterId
       ? [
           {
             label: 'Collection',
+            size: 'body' as const,
             value: (
-              <>
-                <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
-                {collection.data && (
-                  <span className="text-text-dim text-small">
-                    {' '}
-                    · {collection.data.liveCount.toLocaleString('en-US')} objects
-                  </span>
-                )}
-              </>
+              <AppLink href={collectionHref!}>{collectionName ?? 'Unnamed collection'}</AppLink>
             ),
+            note: collection.data
+              ? `${collection.data.liveCount.toLocaleString('en-US')} objects`
+              : undefined,
           },
         ]
       : []),
     {
       label: 'Minted',
+      title: first
+        ? `minted ${formatUtc8DateTime(first.timestamp)} by ${first.ownerAddress}`
+        : undefined,
       value: first ? (
-        <>
-          <span>{formatUtc8DateTime(first.timestamp)}</span>
-          <span className="text-text-dim text-small mt-1 block">
-            <AppLink href={`/blocks/${first.blockNumber}`}>
-              {formatBlockNumber(first.blockNumber)}
-            </AppLink>{' '}
-            · by{' '}
-            <Address address={first.ownerAddress} startChars={8} endChars={6} className="inline" />
-          </span>
-        </>
+        formatUtc8Date(first.timestamp)
       ) : (
         <AppLink href={`/blocks/${object.createdAtBlock}`}>
           {formatBlockNumber(object.createdAtBlock)}
         </AppLink>
       ),
+      note: first ? (
+        <>
+          <AppLink href={`/blocks/${first.blockNumber}`}>
+            {formatBlockNumber(first.blockNumber)}
+          </AppLink>{' '}
+          · by{' '}
+          <Address address={first.ownerAddress} startChars={8} endChars={6} className="inline" />
+        </>
+      ) : undefined,
     },
     {
       label: 'Last moved',
+      title: last && moves ? `last moved ${formatUtc8DateTime(last.timestamp)}` : undefined,
       value:
         last && moves !== null ? (
           moves === 0 ? (
-            <span className="text-text-dim">Never moved since minting</span>
+            <span className="text-text-dim">never</span>
           ) : (
-            <>
-              <span>{formatUtc8DateTime(last.timestamp)}</span>
-              <span className="text-text-dim text-small mt-1 block">
-                <AppLink href={`/blocks/${last.blockNumber}`}>
-                  {formatBlockNumber(last.blockNumber)}
-                </AppLink>{' '}
-                · <span>{`${moves} transfer${moves === 1 ? '' : 's'} since minting`}</span>
-              </span>
-            </>
+            formatUtc8Date(last.timestamp)
           )
         ) : (
           <span className="text-text-dim">Loading cell history…</span>
         ),
+      note:
+        last && moves !== null ? (
+          moves === 0 ? (
+            'since minting'
+          ) : (
+            <>
+              <AppLink href={`/blocks/${last.blockNumber}`}>
+                {formatBlockNumber(last.blockNumber)}
+              </AppLink>{' '}
+              · <span>{`${moves} transfer${moves === 1 ? '' : 's'} since minting`}</span>
+            </>
+          )
+        ) : undefined,
     },
     {
       label: 'CKB held in its cell',
-      value: (
+      value: <ExactCkb shannons={held} signed={false} tone="plain" wrap />,
+      // R11: tier 1's words stay uncoloured; the bars keep the occupied colour.
+      note: (
         <>
-          <ExactCkb shannons={held} signed={false} tone="plain" wrap />
-          {/* R11: tier 1's words stay uncoloured; the bars keep the occupied colour. */}
-          <span className="text-text-dim text-small mt-1 block">
-            <span className="text-text">{ckbText(occupied)}</span> occupied ·{' '}
-            {ckbText(held - occupied)} free
-          </span>
+          <span className="text-text">{ckbText(occupied)}</span> occupied ·{' '}
+          {ckbText(held - occupied)} free
         </>
       ),
     },
     {
       label: 'Content',
-      value: (
-        <span className="break-all">
-          {object.contentType} · {object.contentSize.toLocaleString('en-US')} bytes
-        </span>
-      ),
+      size: 'body',
+      value: <span className="break-all">{object.contentType}</span>,
+      note: `${object.contentSize.toLocaleString('en-US')} bytes`,
     },
   ];
   const coll = collection.data;
@@ -272,7 +279,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           </div>
         )
       }
-      facts={facts}
+      metrics={<AssetMetrics items={metrics} />}
       feed={
         <AssetFeed
           key={id}

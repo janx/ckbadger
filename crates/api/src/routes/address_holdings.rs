@@ -142,6 +142,66 @@ struct Params {
     /// `capacity`: largest cell first (ties by owner-index key), for the DAO
     /// class only (BA-34). Default: owner-index order (creation height).
     order: Option<String>,
+    /// Consistency round C14 (A6): with `class=object`, only the objects of one
+    /// collection — `0x<id>` as the holdings summary's `objectCollections[].id`,
+    /// or `none` for the objects it groups under no collection.
+    collection: Option<String>,
+}
+
+/// The object collection a cells page is restricted to (`collection=` with `class=object`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CollectionFilter {
+    Id(Vec<u8>),
+    None,
+}
+impl CollectionFilter {
+    fn parse(raw: &str, class: Option<Class>) -> Result<Self, ApiRouteError> {
+        if class != Some(Class::Object) {
+            return Err(ApiError::bad_request(
+                "collection filters an address's objects; it needs class=object",
+            ));
+        }
+        if raw == "none" {
+            return Ok(Self::None);
+        }
+        let hex_id = raw
+            .strip_prefix("0x")
+            .ok_or_else(|| ApiError::bad_request("collection must be 0x<hex id> or none"))?;
+        let id =
+            hex::decode(hex_id).map_err(|_| ApiError::bad_request("collection id is not hex"))?;
+        if id.is_empty() {
+            return Err(ApiError::bad_request("collection id is empty"));
+        }
+        Ok(Self::Id(id))
+    }
+    /// The same grouping the holdings summary uses: an object cell's visible collection id.
+    fn matches(&self, evidence: &Evidence) -> Result<bool> {
+        let Some((_, Item::Object(entry))) = &evidence.item else {
+            ensure!(
+                evidence.class != Class::Object,
+                "object cell has no indexed object entry"
+            );
+            return Ok(false);
+        };
+        Ok(match self {
+            Self::Id(id) => visible_collection_id(entry) == Some(id.as_slice()),
+            Self::None => visible_collection_id(entry).is_none(),
+        })
+    }
+    fn label(&self) -> String {
+        match self {
+            Self::Id(id) => format!("0x{}", hex::encode(id)),
+            Self::None => "none".to_string(),
+        }
+    }
+}
+/// A cells page's cursor scope: the class, and the collection when one is filtered.
+fn page_scope(class: Option<Class>, collection: Option<&CollectionFilter>) -> String {
+    let class = class.map_or("all", Class::label);
+    match collection {
+        Some(c) => format!("{class}@{}", c.label()),
+        None => class.to_string(),
+    }
 }
 
 /// `/addresses/{addr}/cells?class=dao&order=capacity`'s cursor: the last
@@ -713,11 +773,11 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
     })
 }
 
-fn cursor(raw: &str, owner: &[u8], class: Option<Class>) -> Result<Vec<u8>, ApiRouteError> {
-    let expected = format!("v1:{}:", class.map_or("all", Class::label));
-    let suffix = raw
-        .strip_prefix(&expected)
-        .ok_or_else(|| ApiError::bad_request("cell cursor belongs to a different class"))?;
+fn cursor(raw: &str, owner: &[u8], scope: &str) -> Result<Vec<u8>, ApiRouteError> {
+    let expected = format!("v1:{scope}:");
+    let suffix = raw.strip_prefix(&expected).ok_or_else(|| {
+        ApiError::bad_request("cell cursor belongs to a different class or collection")
+    })?;
     let key = hex::decode(suffix).map_err(|_| ApiError::bad_request("invalid cell cursor hex"))?;
     if key.len() != 74 || !key.starts_with(owner) {
         return Err(ApiError::bad_request(
@@ -750,12 +810,23 @@ async fn cells(
         }
     };
     if by_capacity {
+        if params.collection.is_some() {
+            return Err(ApiError::bad_request(
+                "order=capacity pages DAO cells; it takes no collection",
+            ));
+        }
         return ok(dao_cells_by_capacity(state, owner, params).await?);
     }
+    let collection = params
+        .collection
+        .as_deref()
+        .map(|raw| CollectionFilter::parse(raw, params.class))
+        .transpose()?;
+    let scope = page_scope(params.class, collection.as_ref());
     let after = params
         .cursor
         .as_deref()
-        .map(|s| cursor(s, &owner, params.class))
+        .map(|s| cursor(s, &owner, &scope))
         .transpose()?;
     let page = tokio::task::spawn_blocking(move || -> Result<_> {
         let need = params.limit as usize + 1;
@@ -767,7 +838,12 @@ async fn cells(
             &owner,
             after.as_deref(),
             |key, hash, index, info, evidence| {
-                if params.class.is_none_or(|c| c == evidence.class) {
+                if params.class.is_none_or(|c| c == evidence.class)
+                    && match &collection {
+                        Some(c) => c.matches(&evidence)?,
+                        None => true,
+                    }
+                {
                     rows.push((key.to_vec(), hash.to_vec(), index, info.clone(), evidence));
                     return Ok(rows.len() < need);
                 }
@@ -778,8 +854,7 @@ async fn cells(
         rows.truncate(params.limit as usize);
         let next = has_more.then(|| {
             format!(
-                "v1:{}:{}",
-                params.class.map_or("all", Class::label),
+                "v1:{scope}:{}",
                 hex::encode(&rows.last().expect("nonempty next page").0)
             )
         });

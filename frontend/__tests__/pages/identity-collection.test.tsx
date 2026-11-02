@@ -28,8 +28,9 @@ it('shows identities, exact created/live counts, capacity history and parallel r
   render(<Page collectionId="dotbit" />);
   await screen.findByRole('heading', { name: '.bit' });
   expect(await screen.findByRole('heading', { name: 'Identities' })).toBeInTheDocument();
-  expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent(
-    'Minted / created2'
+  // C7: the rail is the metrics row; "minted / created" is the Live metric's note.
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    'of 2 minted / created'
   );
   expect(screen.getByRole('tab', { name: 'Activities' })).toHaveAttribute('aria-selected', 'true');
   fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
@@ -164,7 +165,7 @@ it('names each identity owner by address, a .cell owner by its prefix when unres
 it('opens with what the standard is, not its route alias or a placeholder (ID-COL-5)', async () => {
   render(<Page collectionId="dotbit" />);
   // Wait for the collection itself, not the loading shell that shares its title.
-  await screen.findByRole('complementary', { name: 'Facts' });
+  await screen.findByRole('region', { name: 'Metrics' });
   const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
   expect(header).not.toHaveTextContent('No collection description recorded.');
   expect(header).not.toHaveTextContent('dotbit');

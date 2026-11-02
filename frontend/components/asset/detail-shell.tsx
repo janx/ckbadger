@@ -41,6 +41,17 @@ interface AssetDetailShellBaseProps {
    * rail still sits beside the header and tier 1.
    */
   railAfterHeader?: boolean;
+  /**
+   * Consistency round C7 (Main.dc.html): the page's figure and picture — the display number, a
+   * composition block, the history chart — inside the hero section after the lede (R13). Needs
+   * `lede`.
+   */
+  hero?: ReactNode;
+  /**
+   * Consistency round C7: the metrics row (`AssetMetrics`) under the hero, in place of the facts
+   * rail. A page that passes `metrics` and no `facts` is one column: no 260 px rail track.
+   */
+  metrics?: ReactNode;
 }
 /**
  * `title` is the h1; `documentTitle` (C1) names the browser tab — asset pages give
@@ -63,7 +74,10 @@ export function AssetDetailShell({
   tier2,
   media,
   railAfterHeader = false,
+  hero,
+  metrics,
 }: AssetDetailShellProps) {
+  if (hero && !lede) throw new Error('AssetDetailShell: a hero figure needs the lede it follows');
   useDocumentTitle(documentTitleParts(title, documentTitle));
   const titleId = useId();
   const named = (
@@ -85,14 +99,19 @@ export function AssetDetailShell({
     <>
       <section aria-labelledby={titleId} className="min-w-0 space-y-3">
         {named}
-        {lede}
+        <div data-role="lede">{lede}</div>
+        {hero && (
+          <div data-role="hero" className="min-w-0 pt-6">
+            {hero}
+          </div>
+        )}
       </section>
-      {intro}
+      {intro && <div data-role="intro">{intro}</div>}
     </>
   ) : (
     <>
       {named}
-      {intro}
+      {intro && <div data-role="intro">{intro}</div>}
     </>
   );
   const headerEl = (
@@ -147,13 +166,17 @@ export function AssetDetailShell({
       <main className="text-body container mx-auto min-w-0 px-4 py-8 font-mono">
         <div
           data-tier="1"
-          className="grid min-w-0 items-start gap-10 lg:grid-cols-[minmax(0,1fr)_260px]"
+          className={cn(
+            'grid min-w-0 items-start gap-10',
+            facts && 'lg:grid-cols-[minmax(0,1fr)_260px]'
+          )}
         >
           {railAfterHeader ? (
             <>
               {headerEl}
               {asideEl}
               <div data-tier1-body className="min-w-0 space-y-10 lg:col-start-1 lg:row-start-2">
+                {metrics}
                 {children}
               </div>
             </>
@@ -161,6 +184,7 @@ export function AssetDetailShell({
             <>
               <div className="min-w-0 space-y-10">
                 {headerEl}
+                {metrics}
                 {children}
               </div>
               {asideEl}
@@ -171,6 +195,49 @@ export function AssetDetailShell({
         {tier2 && <DetailTier2>{tier2}</DetailTier2>}
       </main>
     </div>
+  );
+}
+/** One metric of the asset metrics row (C7, R13). */
+export interface AssetMetric {
+  label: string;
+  value: ReactNode;
+  /** The inline dim note after the value: "· 748 hold one". */
+  note?: ReactNode;
+  /** `body` for a value that is a name or an address (the board's 13 px); default `section`. */
+  size?: 'section' | 'body';
+  /** What the row leaves out of sight (a full date, an exact amount), on hover. */
+  title?: string;
+}
+/**
+ * Consistency round C7: the facts rail as one row under the hero (R13: a meta label over a
+ * section-size value and its inline dim note) — one column on a phone, two from sm, one grid row
+ * from lg.
+ */
+export function AssetMetrics({ items }: { items: readonly AssetMetric[] }) {
+  return (
+    <section aria-label="Metrics" data-role="metrics" className="min-w-0">
+      <dl className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-2 lg:auto-cols-[minmax(0,1fr)] lg:grid-flow-col lg:grid-cols-none">
+        {items.map((m) => (
+          <div key={m.label} className="min-w-0" title={m.title}>
+            <dt className="text-text-dim text-meta">{m.label}</dt>
+            <dd
+              className={cn(
+                'text-text-bright mt-0.5 min-w-0 break-words tabular-nums',
+                m.size === 'body' ? 'text-body' : 'text-section'
+              )}
+            >
+              {m.value}
+              {m.note && (
+                <span data-role="metric-note" className="text-text-dim text-small">
+                  {' · '}
+                  <span>{m.note}</span>
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   );
 }
 export function AssetReadState({

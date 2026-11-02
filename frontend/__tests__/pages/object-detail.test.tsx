@@ -83,7 +83,11 @@ it('retains full long content type and never links absent ownership to a null ad
     ownerAddress: null,
   });
   const { container } = render(<SporeDetailPage sporeId={id} />);
-  expect(await screen.findByText(contentType + ' · 38 bytes')).toHaveClass('break-all');
+  // C7: the content type is the Content metric's value, its size the inline note.
+  expect(await screen.findByText(contentType)).toHaveClass('break-all');
+  expect(screen.getByText(contentType).closest('dd')).toHaveTextContent(
+    contentType + ' · 38 bytes'
+  );
   expect(screen.getByText('No live owner')).toBeInTheDocument();
   expect(container.querySelector('a[href*="/null"]')).toBeNull();
   expect(api.getObjectGenetics).not.toHaveBeenCalled();

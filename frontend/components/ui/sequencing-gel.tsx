@@ -8,7 +8,7 @@
 // it is the board's side-by-side map; narrower, the lanes keep up to 20 px and the gene columns
 // become rows under the map (name · bytes · raw → value), the value the last thing to lose room.
 // A tap on a gene pins it (`usePinnedReadout`): its span lights on the map, its row in the list.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type { SequencingGene, SequencingLayout } from '@/lib/dob-genes';
 import { GEL_COLORS } from '@/lib/design-tokens';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -68,6 +68,12 @@ export interface SequencingGelProps {
   /** The gene (by name) lit by any of the three linked views; null when none is. */
   active: string | null;
   onActive: (gene: string | null) => void;
+  /**
+   * Consistency round C10: the readout's words while nothing is hovered or pinned; default
+   * "Tap or hover a gene.". A page whose readout row already carries the section's one hint
+   * passes words without it.
+   */
+  idle?: ReactNode;
 }
 
 interface FormProps {
@@ -78,7 +84,7 @@ interface FormProps {
   bind: (name: string) => PinnedTargetProps;
 }
 
-export function SequencingGel({ layout, subject, active, onActive }: SequencingGelProps) {
+export function SequencingGel({ layout, subject, active, onActive, idle }: SequencingGelProps) {
   const { bytes, genes } = layout;
   const [box, measured] = useElementWidth<HTMLDivElement>();
   const width = measured === null ? null : Math.floor(measured);
@@ -107,7 +113,7 @@ export function SequencingGel({ layout, subject, active, onActive }: SequencingG
       <ReadoutRow
         label="Gene readout"
         pinned={lit !== null && lit === readout.pinned}
-        idle={tapOrHover('a gene.', { capital: true })}
+        idle={idle ?? tapOrHover('a gene.', { capital: true })}
       >
         {gene
           ? `${gene.name} · ${bytesOf(gene)} · ${gene.rule} · ${shortRaw(gene.raw)} → ${valueOf(gene)}`

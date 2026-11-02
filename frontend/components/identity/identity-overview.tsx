@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { DotbitBitCellRef, DotCellItem, DotCellPartyRef, ItemProtocol } from '@/lib/api';
 import { AppLink } from '@/components/ui/app-link';
+import type { AssetMetric } from '@/components/asset/detail-shell';
 import { Address } from '@/components/ui/address';
 import { ExactCkb } from '@/components/activity-event-row';
 import { Hash } from '@/components/ui/hash';
@@ -33,42 +34,35 @@ function currentCell(protocol: IdentityProtocol) {
   return last.cell;
 }
 
-function heldFact(protocol: IdentityProtocol, isLive: boolean) {
+// Consistency round C7: every fact is one metric of the row under the hero — its value, and what
+// used to be the rail's second line as the inline note (R13).
+function heldFact(protocol: IdentityProtocol, isLive: boolean): AssetMetric {
   const cell = currentCell(protocol);
   const held = isLive ? BigInt(cell.capacity) : BigInt(0);
   const occupied = isLive ? BigInt(cell.occupiedCapacity) : BigInt(0);
   if (occupied > held) throw new Error(`${protocol.itemId}: occupied exceeds the cell's capacity`);
   return {
     label: 'CKB held in its cell',
-    value: (
+    value: <ExactCkb shannons={held} signed={false} tone="plain" wrap />,
+    note: isLive ? (
       <>
-        <ExactCkb shannons={held} signed={false} tone="plain" wrap />
-        <Sub>
-          {isLive ? (
-            <>
-              <span className="text-jade">
-                <ExactCkb shannons={occupied} signed={false} tone="plain" />
-              </span>{' '}
-              occupied · <ExactCkb shannons={held - occupied} signed={false} tone="plain" /> free
-            </>
-          ) : (
-            'no live cell'
-          )}
-        </Sub>
+        <span className="text-text">
+          <ExactCkb shannons={occupied} signed={false} tone="plain" />
+        </span>{' '}
+        occupied · <ExactCkb shannons={held - occupied} signed={false} tone="plain" /> free
       </>
+    ) : (
+      'no live cell'
     ),
   };
 }
 
-function expiryFact(term: IdentityTerm, now: number, grace?: number) {
+function expiryFact(term: IdentityTerm, now: number, grace?: number): AssetMetric {
   if (term.kind === 'unrecorded')
     return {
       label: 'Expires',
-      value: (
-        <>
-          not recorded<Sub>version {term.version} stores no expiry</Sub>
-        </>
-      ),
+      value: 'not recorded',
+      note: `version ${term.version} stores no expiry`,
     };
   if (term.kind !== 'term') throw new Error('expiry fact of an identity without a term');
   const expired = now >= term.expiresAt,
@@ -76,46 +70,34 @@ function expiryFact(term: IdentityTerm, now: number, grace?: number) {
     last = term.renewals.at(-1);
   return {
     label: expired ? 'Expired' : 'Expires',
-    value: (
+    value: formatUtc8Date(term.expiresAt),
+    note: (
       <>
-        {formatUtc8Date(term.expiresAt)}
-        <Sub>
-          {expired ? `${plural(days, 'day', 'days')} ago` : `in ${plural(days, 'day', 'days')}`}
-          {last ? ` · renewed ${formatUtc8Date(last.at)}` : ' · never renewed'}
-          {grace !== undefined ? ` · grace to ${formatUtc8Date(grace)}` : ''}
-        </Sub>
+        {expired ? `${plural(days, 'day', 'days')} ago` : `in ${plural(days, 'day', 'days')}`}
+        {last ? ` · renewed ${formatUtc8Date(last.at)}` : ' · never renewed'}
+        {grace !== undefined ? ` · grace to ${formatUtc8Date(grace)}` : ''}
       </>
     ),
   };
 }
 
-function blockFact(label: string, timestamp: string | number, block: number) {
+/** A date metric; the time of day stays in its title (C7). */
+function blockFact(label: string, timestamp: string | number, block: number): AssetMetric {
   return {
     label,
-    value: (
-      <>
-        {formatUtc8DateTime(timestamp)}
-        <Sub>
-          <AppLink href={`/blocks/${block}`}>{formatBlockNumber(block)}</AppLink>
-        </Sub>
-      </>
-    ),
+    title: `${label.toLowerCase()} ${formatUtc8DateTime(timestamp)}`,
+    value: formatUtc8Date(timestamp),
+    note: <AppLink href={`/blocks/${block}`}>{formatBlockNumber(block)}</AppLink>,
   };
 }
 
-function ownerFact(protocol: IdentityProtocol, note: string) {
+function ownerFact(protocol: IdentityProtocol, note: string): AssetMetric {
   const cell = currentCell(protocol);
   return {
     label: 'Owner',
-    value: (
-      <>
-        <Address address={cell.ownerAddress} className="text-body" />
-        <Sub>
-          {cell.lockName ?? 'lock not named'}
-          {note}
-        </Sub>
-      </>
-    ),
+    size: 'body',
+    value: <Address address={cell.ownerAddress} className="text-body" />,
+    note: `${cell.lockName ?? 'lock not named'}${note}`,
   };
 }
 
@@ -130,13 +112,14 @@ function physicalSince(protocol: IdentityProtocol, first: string) {
 }
 
 /** `.bit` sub-accounts from the witness switch (R2b-b-17), since the version that set it. */
-function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>) {
+function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>): AssetMetric[] {
   const d = protocol.versions.at(-1)!.decoded;
   if (d.enableSubAccount === undefined) return [];
   if (d.enableSubAccount === null)
     return [
       {
         label: 'Sub-accounts',
+        size: 'body',
         value: <span className="text-text">not in witness v{d.witnessVersion}</span>,
       },
     ];
@@ -145,14 +128,29 @@ function subAccountsFact(protocol: Extract<IdentityProtocol, { kind: 'dotbit' }>
   return [
     {
       label: 'Sub-accounts',
-      value: (
-        <>
-          <span className="text-text">{on ? 'enabled' : 'not enabled'}</span>
-          {on && <Sub>since {formatUtc8Date(since.cell.timestamp)}</Sub>}
-        </>
-      ),
+      size: 'body',
+      value: <span className="text-text">{on ? 'enabled' : 'not enabled'}</span>,
+      note: on ? `since ${formatUtc8Date(since.cell.timestamp)}` : undefined,
     },
   ];
+}
+
+/** A `.cell` named party as a metric: the resolved address, else the 20-byte prefix (C7). */
+function partyFact(label: string, party: DotCellPartyRef): AssetMetric {
+  return {
+    label,
+    size: 'body',
+    value: party.lockHash ? (
+      <AppLink href={`/address/${party.address ?? party.lockHash}`}>
+        <Hash hash={party.address ?? party.lockHash} copyable={false} className="text-body" />
+      </AppLink>
+    ) : (
+      <Hash hash={party.hashPrefix} truncate={false} copyable={false} className="text-small" />
+    ),
+    note: party.lockHash
+      ? (party.scriptName ?? 'lock not named')
+      : 'prefix · no uniquely resolved lock',
+  };
 }
 
 /**
@@ -192,9 +190,10 @@ export interface IdentityFactsInput {
  * Round 3 (contracts L3, ID-B-N1): the reverse of the `.bit Cell` page's ".bit account" fact —
  * every live `.bit Cell` whose data names this account, by id, each linked to its page.
  */
-function bitCellsFact(bitCells: DotbitBitCellRef[]) {
+function bitCellsFact(bitCells: DotbitBitCellRef[]): AssetMetric {
   return {
     label: '.bit Cells',
+    size: 'body',
     value:
       bitCells.length === 0 ? (
         <span className="text-text-dim">none</span>
@@ -225,7 +224,7 @@ export function identityFacts({
   createdAtBlock,
   dotcell,
   bitCells,
-}: IdentityFactsInput): { label: string; value: ReactNode }[] {
+}: IdentityFactsInput): AssetMetric[] {
   switch (protocol.kind) {
     case 'dotbit': {
       const d = protocol.versions.at(-1)!.decoded;
@@ -242,18 +241,13 @@ export function identityFacts({
         blockFact('Registered', Number(d.registeredAt) * 1000, createdAtBlock),
         {
           label: 'Records',
-          value: (
-            <>
-              {d.records.length ? d.records.length.toLocaleString('en-US') : 'none set'}
-              {typeof d.lastEditRecordsAt === 'string' && (
-                <Sub>
-                  {d.lastEditRecordsAt === '0'
-                    ? 'never edited'
-                    : `last edited ${formatUtc8Date(Number(d.lastEditRecordsAt) * 1000)}`}
-                </Sub>
-              )}
-            </>
-          ),
+          value: d.records.length ? d.records.length.toLocaleString('en-US') : 'none set',
+          note:
+            typeof d.lastEditRecordsAt === 'string'
+              ? d.lastEditRecordsAt === '0'
+                ? 'never edited'
+                : `last edited ${formatUtc8Date(Number(d.lastEditRecordsAt) * 1000)}`
+              : undefined,
         },
         ...subAccountsFact(protocol),
         // null: the indexer has not derived the .bit Cell index yet — say nothing (L3 ruling).
@@ -270,19 +264,15 @@ export function identityFacts({
         blockFact('Minted', mint.timestamp, mint.blockNumber),
         {
           label: '.bit account',
+          size: 'body',
           value: d.linkedAccount ? (
-            <>
-              <AppLink href={`/identities/dotbit/${d.linkedAccount.id}`}>
-                {d.linkedAccount.name ?? d.linkedAccount.id}
-              </AppLink>
-              <span className="text-text-dim font-normal">
-                {' '}
-                · {d.linkedAccount.isLive ? 'live' : 'not live'}
-              </span>
-            </>
+            <AppLink href={`/identities/dotbit/${d.linkedAccount.id}`}>
+              {d.linkedAccount.name ?? d.linkedAccount.id}
+            </AppLink>
           ) : (
             <span className="text-text-dim">not indexed</span>
           ),
+          note: d.linkedAccount ? (d.linkedAccount.isLive ? 'live' : 'not live') : undefined,
         },
         heldFact(protocol, isLive),
       ];
@@ -296,7 +286,7 @@ export function identityFacts({
         ...(protocol.versions.length > 1
           ? [blockFact('Last updated', last.timestamp, last.blockNumber)]
           : []),
-        { label: 'Expiry', value: <span className="text-text">none</span> },
+        { label: 'Expiry', size: 'body', value: <span className="text-text">none</span> },
         heldFact(protocol, isLive),
       ];
     }
@@ -309,24 +299,18 @@ export function identityFacts({
       const first = protocol.versions[0].cell;
       const children = dotcell.children.length;
       return [
-        { label: 'Owner', value: <PartyLine party={dotcell.owner} /> },
-        { label: 'Manager', value: <PartyLine party={dotcell.manager} /> },
+        partyFact('Owner', dotcell.owner),
+        partyFact('Manager', dotcell.manager),
         expiryFact(term, now, term.kind === 'term' ? term.graceEnd : undefined),
         blockFact('Registered', first.timestamp, createdAtBlock),
         {
           label: 'Records',
-          value: (
-            <>
-              {stored.length.toLocaleString('en-US')}
-              <Sub>
-                {plural(records.addresses.length, 'address', 'addresses')} ·{' '}
-                {plural(records.profile.length, 'profile key', 'profile keys')}
-              </Sub>
-            </>
-          ),
+          value: stored.length.toLocaleString('en-US'),
+          note: `${plural(records.addresses.length, 'address', 'addresses')} · ${plural(records.profile.length, 'profile key', 'profile keys')}`,
         },
         {
           label: 'Sub-names · for sale',
+          size: 'body',
           value: (
             <span className="text-text">
               {children === 0 && !dotcell.childrenHasMore

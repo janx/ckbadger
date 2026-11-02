@@ -200,7 +200,8 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
     expect(comp).toHaveTextContent('444 Spore clusters · 5,209 m-NFT classes');
     expect(
       within(comp).getByRole('img', {
-        name: /Collections by composition: BTC\+CKB 35, Pure CKB 322/,
+        // C8: the shared composition block names its set bar by the set.
+        name: /Composition of the 5,653 collections: BTC\+CKB 35, Pure CKB 322/,
       })
     ).toBeInTheDocument();
     const chips = within(comp).getByRole('group', { name: 'Filter by composition' });
@@ -210,6 +211,9 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
     );
     const btc = within(chips).getByRole('button', { name: /BTC\+CKB 35/ });
     expect(btc.querySelector('[data-composition-mark="btc_ckb"]')).not.toBeNull();
+    // C8: every tier is a chip with its count; a tier no collection has stays, dimmed and off.
+    expect(within(chips).getAllByRole('button')).toHaveLength(6);
+    for (const chip of within(chips).getAllByRole('button')) expect(chip).toHaveTextContent(/\d/);
     fireEvent.click(btc);
     await waitFor(() =>
       expect(api.getAssets).toHaveBeenLastCalledWith(

@@ -8,6 +8,7 @@ import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/te
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
 import { mockItemReads, emptyPage } from '@/__tests__/utils/item-read-fixtures';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { collectionActivityFeedProducer } from '@/__tests__/msw/fixtures/collection-feed';
@@ -112,18 +113,31 @@ async function page() {
   return view;
 }
 
-it('makes Objects one allele gel plus the 8 newest, without per-variant button lists (OB-C1, OB-C2, OB-C3)', async () => {
+// Consistency round C9 / C11 (Main.dc.html): lanes only for the genes that vary, named in words
+// where a DOB/1 key has one; the rest named in one caption; the gel beside the twenty newest.
+it('makes Objects the gel of the genes that vary beside the 20 newest (OB-C1, C9, C11)', async () => {
   const { container } = await page();
   const objects = screen.getByRole('region', { name: 'Objects' });
-  expect(objects).toHaveTextContent('90 · 6 genes · how common each variant is');
+  expect(within(objects).getByRole('heading', { level: 2 })).toHaveTextContent(
+    'Objects · 90 · three genes vary'
+  );
   expect(
     within(objects).getByRole('img', { name: /allele gel of 90 objects/ })
   ).toBeInTheDocument();
   expect(screen.queryByRole('region', { name: 'Collection allele frequencies' })).toBeNull();
-  expect(container.querySelectorAll('[data-lane]')).toHaveLength(6);
+  expect(
+    [...container.querySelectorAll('[data-lane]')].map((l) => l.getAttribute('data-lane'))
+  ).toEqual(['prev.bg', 'Color', 'Serial']);
+  // prev.bg reads as a word on its lane.
+  expect(container.querySelector('[data-lane="prev.bg"] [data-gene-caption]')).toHaveTextContent(
+    'Background'
+  );
+  expect(objects.querySelector('[data-role="caption"]')).toHaveTextContent(
+    'Type is image, relief is NERVAPE 3X and Note is empty for every object, so none of them gets a lane.'
+  );
   expect(within(objects).queryAllByRole('button', { name: /more .* variants/ })).toHaveLength(0);
   expect(api.getCollectionGallery).toHaveBeenCalledWith(NERVAPE3X_CLUSTER, {
-    limit: 8,
+    limit: 20,
     cursor: undefined,
     traits: {},
   });
@@ -132,12 +146,16 @@ it('makes Objects one allele gel plus the 8 newest, without per-variant button l
     within(table)
       .getAllByRole('columnheader')
       .map((h) => h.textContent)
-  ).toEqual(['Object', 'Id', 'Owner', 'DNA · read →', 'Minted']);
+  ).toEqual(['Object', 'Background', 'Color', 'Made of', 'Owner', 'Minted']);
   expect(within(table).getAllByRole('row')).toHaveLength(9);
-  expect(within(table).getAllByRole('img', { name: /DNA:/ })).toHaveLength(8);
-  expect(objects).toHaveTextContent(
-    'tap or hover a row to see its genotype · tap a band or variant to filter'
+  expect(within(table).getAllByText('BTC+CKB')).toHaveLength(8);
+  // C10: one hint in the section — the readout row's.
+  const hints = [...objects.querySelectorAll('*')].filter((el) =>
+    [...el.childNodes].some(
+      (n) => n.nodeType === Node.TEXT_NODE && /\b(tap|hover)\b/i.test(n.textContent ?? '')
+    )
   );
+  expect(hints).toHaveLength(1);
 });
 
 it('shows a row’s genotype on the gel while the row is hovered (OB-C2)', async () => {
@@ -147,7 +165,7 @@ it('shows a row’s genotype on the gel while the row is hovered (OB-C2)', async
   const row = screen.getAllByRole('row')[1];
   fireEvent.mouseEnter(row);
   expect(overlay).toHaveAttribute('opacity', '1');
-  expect(overlay.querySelectorAll('[data-tick]')).toHaveLength(6);
+  expect(overlay.querySelectorAll('[data-tick]')).toHaveLength(3);
   expect(row).toHaveAttribute('data-active', 'true');
   fireEvent.mouseLeave(row);
   expect(overlay).toHaveAttribute('opacity', '0');
@@ -158,7 +176,7 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
   fireEvent.click(container.querySelector('[data-lane="Color"] [data-allele="Calm Blue"]')!);
   await waitFor(() =>
     expect(api.getCollectionGallery).toHaveBeenLastCalledWith(NERVAPE3X_CLUSTER, {
-      limit: 8,
+      limit: 20,
       cursor: undefined,
       traits: { Color: 'Calm Blue' },
     })
@@ -182,42 +200,97 @@ it('filters the newest list by clicking a band, and clears it (OB-N2: every vari
   ).not.toHaveAttribute('stroke');
 });
 
-it('orders sections as the board: Objects, History, Who holds it (OB-C5)', async () => {
+// Main.dc.html: the history is the hero's picture; then Objects; then who holds it beside the
+// recent activity.
+it('orders sections as the board: History in the hero, Objects, Who holds it beside Recent activity', async () => {
   await page();
   const heads = screen
     .getAllByRole('heading', { level: 2 })
-    .map((h) => h.textContent)
-    .filter((t) => ['Objects', 'History', 'Who holds it'].includes(t ?? ''));
-  expect(heads).toEqual(['Objects', 'History', 'Who holds it']);
+    .map((h) => (h.textContent ?? '').split(' · ')[0])
+    .filter((t) => ['Objects', 'History', 'Who holds it', 'Recent activity'].includes(t));
+  expect(heads).toEqual(['History', 'Objects', 'Who holds it', 'Recent activity']);
+  const holders = screen.getByRole('region', { name: 'Who holds it' });
+  expect(holders.parentElement).toHaveClass('lg:grid-cols-2');
+  expect(holders.parentElement).toContainElement(
+    screen.getByRole('region', { name: 'Recent activity' })
+  );
+  // Screen 3 is the shell's feed slot: lists of rows follow the tier-1 body, before tier 2.
+  const tier1 = document.querySelector('[data-tier="1"]')!;
+  expect(tier1.contains(holders)).toBe(false);
+  expect(tier1.compareDocumentPosition(holders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 });
 
-it('opens with the cluster kind, its on-chain description, the composition sentence and a summary (OB-C4)', async () => {
+it('opens Recent activity with five rows and two links that open the full feed in place', async () => {
+  vi.spyOn(api, 'getCollectionActivityFeed').mockImplementation(async (_kind, _id, p) => ({
+    ...collectionActivityFeedProducer,
+    data: Array.from({ length: p?.limit ?? 50 }, (_, i) => ({
+      ...collectionActivityFeedProducer.data[0],
+      txHash: `0x${(i + 1).toString(16).padStart(64, '0')}`,
+    })),
+  }));
   await page();
+  const recent = screen.getByRole('region', { name: 'Recent activity' });
+  await waitFor(() => expect(within(recent).getAllByRole('article')).toHaveLength(5));
+  expect(api.getCollectionActivityFeed).toHaveBeenCalledWith('spore', NERVAPE3X_CLUSTER, {
+    limit: 5,
+  });
+  expect(within(recent).queryByRole('tab')).toBeNull();
+  fireEvent.click(within(recent).getByRole('button', { name: '184 transactions →' }));
+  expect(await screen.findByRole('tab', { name: 'Transactions' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  );
+  expect(screen.queryByRole('region', { name: 'Recent activity' })).toBeNull();
+});
+
+// Consistency round (Main.dc.html): the lede is the kind and what every object is made of; the
+// description is a quote; the hero's figure, the composition block and the metrics carry the rest.
+it('opens with the cluster kind, its on-chain description, its composition and a summary (OB-C4, C7, C8)', async () => {
+  const { container } = await page();
   // Consistency plan C1: the tab names the cluster.
   expect(document.title).toBe('Nervape 3x · cluster · CKBadger');
   const header = screen.getByRole('banner');
-  expect(header).toHaveTextContent('Spore cluster · DOB/0');
+  const lede = header.querySelector('[data-role="lede"]')!;
+  expect(lede).toHaveTextContent(
+    'Spore cluster · DOB/0 · every object is BTC+CKB: its record in a CKB cell, its picture in a Bitcoin inscription.'
+  );
   // Responsive fix plan 2026-11-01 (A12e, report B#21): the kind is one unit, so "Spore cluster ·"
-  // no longer dangles at a line end; the line may break before the id instead.
-  const kind = within(header).getByText('Spore cluster · DOB/0');
-  expect(kind).toHaveClass('whitespace-nowrap');
-  expect(kind.nextSibling?.textContent).toBe(' ');
-  expect(header).toHaveTextContent('NVAP 3X · the cluster’s description, on chain');
-  expect(header).toHaveTextContent(
-    'All 90 objects are fully on-chain: records in CKB cells, pictures in Bitcoin inscriptions.'
+  // never dangles at a line end.
+  expect(lede.querySelector('[data-role="collection-kind"]')).toHaveClass('whitespace-nowrap');
+  expect(within(header).getByText('NVAP 3X')).toHaveAttribute(
+    'title',
+    'the cluster’s description, on chain'
   );
-  expect(header).toHaveTextContent(
-    '90 objects. 90 of their 90 holders own exactly one. Their cells hold 28,920 CKB.'
+  const hero = header.querySelector('[data-role="hero"]')!;
+  expect(hero.querySelector('[data-role="figure"]')).toHaveTextContent(
+    'objects live90 all live · none burned'
   );
+  expect(hero).toHaveTextContent('28,920.00000000 CKB held in their cells');
+  expect(
+    within(hero as HTMLElement).getByRole('group', { name: 'Object composition' })
+  ).toHaveTextContent(
+    '90 of 90 fully on-chain · permanent and verifiable, as long as CKB and Bitcoin exist'
+  );
+  expect(screen.getByRole('region', { name: 'Metrics' })).toHaveTextContent(
+    'Holders90 · 90 hold one'
+  );
+  expect(ledeRestatements(container)).toEqual([]);
 });
 
-it('gives the rail the board facts (OB-C8) and the history its minting line (OB-C6)', async () => {
+it('gives the metrics row the board facts (OB-C8, C7) and the history its minting line (OB-C6)', async () => {
   await page();
-  const rail = screen.getByRole('complementary', { name: 'Facts' });
-  for (const label of ['Objects', 'Holders', 'CKB held in their cells', 'Activity', 'Created'])
-    expect(within(rail).getByText(label)).toBeInTheDocument();
-  expect(rail).toHaveTextContent('all live · none burned');
-  expect(rail).toHaveTextContent('184 · 90 mints, 94 transfers through 2026-10-24');
+  expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
+  const rail = screen.getByRole('region', { name: 'Metrics' });
+  expect(
+    within(rail)
+      .getAllByRole('term')
+      .map((t) => t.textContent)
+  ).toEqual(['Holders', 'Transactions', 'Created', 'Cluster cell held by']);
+  expect(rail).toHaveTextContent('184 · 90 mints · 94 transfers · 0 burns');
+  expect(within(rail).getByText('Transactions').parentElement).toHaveAttribute(
+    'title',
+    'mints, transfers and burns counted by complete week through 2026-10-24'
+  );
   const history = screen.getByRole('region', { name: 'History' });
   expect(history).toHaveTextContent('Minted in 90 transactions · 94 transfers since');
   // Consistency plan C12: the H-multiplier is never bare; its definition reads with it.
@@ -227,14 +300,17 @@ it('gives the rail the board facts (OB-C8) and the history its minting line (OB-
 });
 
 it('says "burned" for the objects no longer live, Spore\'s "melted" kept in the title (C12)', async () => {
+  const before = await api.getObjectCollection(NERVAPE3X_CLUSTER);
   vi.mocked(api.getObjectCollection).mockResolvedValue({
-    ...(await api.getObjectCollection(NERVAPE3X_CLUSTER)),
+    ...before,
     liveCount: 88,
     totalCount: 90,
+    // C8: the composition counts the live objects, so it counts 88 too (the set must add up).
+    composition: { ...before.composition!, onchainCount: 88 },
   });
   const { container } = await page();
-  const rail = screen.getByRole('complementary', { name: 'Facts' });
-  const line = within(rail).getByText('live · 2 of 90 burned');
+  const figure = container.querySelector('[data-role="figure"]') as HTMLElement;
+  const line = within(figure).getByText('of 90 minted · 2 burned');
   expect(line).toHaveAttribute('title', 'melted, in Spore’s words');
   expect(container.textContent).not.toMatch(/melted/);
 });
