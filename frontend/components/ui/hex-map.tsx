@@ -196,6 +196,8 @@ export interface ScaleSegment {
   title: string;
   /** What a hover or tap on the part reports; omitted, the part is not interactive. */
   target?: string;
+  /** The narrowest the part is drawn (default: room for its short label, else the floor). */
+  minWidth?: number;
 }
 
 export interface ByteScaleMapProps {
@@ -254,7 +256,7 @@ export function ByteScaleMap({
           segments.map((s) => ({
             start: s.start,
             end: s.end,
-            min: s.short ? room(s.short) : undefined,
+            min: s.minWidth ?? (s.short ? room(s.short) : undefined),
           })),
           SCALE_DEFAULTS
         );

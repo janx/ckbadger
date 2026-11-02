@@ -39,6 +39,12 @@ describe('ScriptByteMap', () => {
     expect(
       screen.getByRole('img', { name: 'lock script offsets: 0, 32, 33, 53' })
     ).toBeInTheDocument();
+    // the one hash_type byte is a 24 px part (Address board), so both of its edges are labelled
+    expect(
+      [...screen.getByRole('img', { name: /offsets/ }).querySelectorAll('text')].map(
+        (t) => t.textContent
+      )
+    ).toEqual(['0', '32', '33', '53']);
   });
 
   it('gives the three parts one row each: the code linked, the hash type in a sentence, the args', () => {

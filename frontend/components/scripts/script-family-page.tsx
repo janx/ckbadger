@@ -346,7 +346,10 @@ function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
         <>
           <ListTable
             label="Registered references"
-            columns={columns.map((c) => ({ ...c, header: <Head label={c.label} /> }))}
+            columns={columns.map((c) => ({
+              ...c,
+              header: <span className="text-meta whitespace-nowrap">{c.label}</span>,
+            }))}
             rows={references}
             rowKey={(r) => `${r.hashType}:${r.referenceHash}`}
             density="row"

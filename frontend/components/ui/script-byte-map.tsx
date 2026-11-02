@@ -86,6 +86,8 @@ export function ScriptByteMap({
       end: 33,
       label: '1',
       short: '1',
+      // the Address board: the one byte is a 24 px part, so 32 and 33 both read on the ruler
+      minWidth: 24,
       color: SCRIPT_INKS.hashType,
       title: `hash_type · [32..33) · 1 B${script ? ` · ${script.hashType}` : ''}`,
     },
