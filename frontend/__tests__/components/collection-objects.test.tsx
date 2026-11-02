@@ -342,7 +342,19 @@ describe('gene cells keep their share whole (lane A follow-up)', () => {
     render(<CollectionObjects id="collection" title="Nervape Headwear" insights={insights} />);
     const table = (await screen.findByRole('table', { name: 'Newest objects' })) as HTMLElement;
     checkCells(table);
+    // The count is the visible share; "of 1,298" (the same for every cell) is in the cell's title,
+    // so the object and owner columns keep their room.
     const view = table.querySelectorAll('[data-gene-cell]')[0];
-    expect(view).toHaveTextContent('0 · 1,139 of 1,298');
+    expect(view).toHaveTextContent(/^0 · 1,139$/);
+    expect(view).toHaveAttribute('title', 'View = 0 · 1,139 of 1,298 objects');
+    expect(within(table).getByRole('columnheader', { name: 'View' })).toHaveAttribute(
+      'title',
+      'prev.view · beside each value, how many of the 1,298 objects carry it'
+    );
+    // One line per object from md up; below it every column stays, in pairs.
+    expect(table.querySelectorAll('[role="row"]')[1]).toHaveClass(
+      'grid-cols-[minmax(0,1fr)_auto]',
+      'md:grid-cols-[var(--object-cols)]'
+    );
   });
 });

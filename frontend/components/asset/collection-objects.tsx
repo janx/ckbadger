@@ -73,19 +73,21 @@ const NUMERIC = /^[\d,.]+$/;
 const WORD_VALUE_CH = 8;
 /** The swatch and its gap, in ch of the 12 px monospaced row text. */
 const SWATCH_CH = 3;
-/** A gene cell's share of the objects: " · 3 of 1,298". */
-const geneShare = (count: number, total: number) =>
-  ` · ${count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}`;
+/**
+ * A gene cell's share of the objects as shown: " · 3" — how many carry the value. "of 1,298" is the
+ * same in every cell, so it is the cell's and the header's title, and the columns keep their room.
+ */
+const geneShare = (count: number) => ` · ${count.toLocaleString('en-US')}`;
 /**
  * Lane A follow-up: a gene column's minimum width in ch — the swatch, the shown part of the widest
  * value (a number whole, words up to 8 characters) and the widest share of its lane, so no cell
  * ever cuts its share or a number. The rows are monospaced, so characters measure the width.
  */
-function geneColumnCh(lane: AlleleLane, total: number): number {
+function geneColumnCh(lane: AlleleLane): number {
   return lane.bands.reduce((max, b) => {
     const text = geneCellText(b.value);
     const shown = NUMERIC.test(text) ? text.length : Math.min(text.length, WORD_VALUE_CH);
-    return Math.max(max, SWATCH_CH + shown + geneShare(b.count, total).length);
+    return Math.max(max, SWATCH_CH + shown + geneShare(b.count).length);
   }, 0);
 }
 
@@ -189,12 +191,13 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
   // owner columns share the rest.
   const objectCols = [
     'minmax(0,1.3fr)',
-    ...columns.map((lane, i) => `minmax(${geneColumnCh(lane, total)}ch,${i === 0 ? 1.1 : 0.8}fr)`),
+    ...columns.map((lane, i) => `minmax(${geneColumnCh(lane)}ch,${i === 0 ? 1.1 : 0.8}fr)`),
     '88px',
     'minmax(0,1.6fr)',
     '88px',
   ].join(' ');
-  const grid = cn(ROW_GRID, 'sm:grid-cols-[var(--object-cols)]');
+  // One line per object from md up (the share text needs the room); below it the cells pair up.
+  const grid = cn(ROW_GRID, 'md:grid-cols-[var(--object-cols)]');
   const filtered = Object.keys(traits).length > 0;
   return (
     <section aria-label="Objects" className="min-w-0 space-y-[18px]">
@@ -285,10 +288,14 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                 className="text-small min-w-0"
                 style={{ '--object-cols': objectCols } as CSSProperties}
               >
-                <div role="row" className={cn(grid, 'text-text-dim text-meta hidden h-7 sm:grid')}>
+                <div role="row" className={cn(grid, 'text-text-dim text-meta hidden h-7 md:grid')}>
                   <span role="columnheader">Object</span>
                   {columns.map((lane) => (
-                    <span key={lane.gene} role="columnheader" title={lane.gene}>
+                    <span
+                      key={lane.gene}
+                      role="columnheader"
+                      title={`${lane.gene} · beside each value, how many of the ${total.toLocaleString('en-US')} objects carry it`}
+                    >
                       {geneLabel(lane.gene)}
                     </span>
                   ))}
@@ -352,7 +359,11 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                             role="cell"
                             data-gene-cell
                             className="flex min-w-0 items-center whitespace-nowrap"
-                            title={own ? `${geneLabel(lane.gene)} = ${own.value}` : undefined}
+                            title={
+                              own
+                                ? `${geneLabel(lane.gene)} = ${own.value}${band ? ` · ${band.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects` : ''}`
+                                : undefined
+                            }
                           >
                             {own ? (
                               <>
@@ -381,7 +392,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                                     data-role="gene-share"
                                     className="text-text-ghost shrink-0 whitespace-nowrap"
                                   >
-                                    {geneShare(band.count, total)}
+                                    {geneShare(band.count)}
                                   </span>
                                 )}
                               </>
@@ -417,7 +428,7 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                           <span className="text-text-dim">No live owner</span>
                         )}
                       </span>
-                      <span role="cell" className="text-text-dim tabular-nums sm:text-right">
+                      <span role="cell" className="text-text-dim tabular-nums md:text-right">
                         {/* R-2: the minting block's chain time, on the site's UTC+8 clock. */}
                         <AppLink
                           href={`/blocks/${item.createdAtBlock}`}
