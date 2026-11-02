@@ -328,17 +328,20 @@ const TRACK = 120;
 const AMOUNT_WIDTH = 118;
 
 /**
- * An exact amount of `unitDecimals` decimals rounded half-up to 2 places (fewer when the unit has
- * fewer): the row's form of it (T1). The exact amount stays in the row's title.
+ * An exact amount of `unitDecimals` decimals CUT to 2 places (fewer when the unit has fewer): the
+ * row's form of it (T1). Never rounded — a rounded figure can show a digit that is not on chain
+ * (site precedent, hierarchy lane D3); the exact amount stays in the row's title.
  */
 function twoPlaces(value: bigint, unitDecimals: number): { whole: string; fraction: string } {
-  const text = formatScaledInteger(
-    value,
-    BigInt(10) ** BigInt(unitDecimals),
-    Math.min(unitDecimals, 2)
-  );
-  const [whole, fraction = ''] = text.split('.');
-  return { whole: BigInt(whole).toLocaleString('en-US'), fraction };
+  if (value < BigInt(0) || !Number.isInteger(unitDecimals) || unitDecimals < 0)
+    throw new Error(`invalid amount ${value} with ${unitDecimals} decimals`);
+  const places = Math.min(unitDecimals, 2);
+  const kept = value / BigInt(10) ** BigInt(unitDecimals - places);
+  const unit = BigInt(10) ** BigInt(places);
+  return {
+    whole: (kept / unit).toLocaleString('en-US'),
+    fraction: places === 0 ? '' : (kept % unit).toString().padStart(places, '0'),
+  };
 }
 
 /** CKB to 2 dp, the 2 decimals 11 px dim (board: "2,885,438.81"). */

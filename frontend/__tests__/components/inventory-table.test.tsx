@@ -1,7 +1,12 @@
 import { afterEach, vi } from 'vitest';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
-import { InventoryRows, AssetAmount } from '@/components/asset/inventory-table';
+import {
+  InventoryRows,
+  AssetAmount,
+  CkbTwoPlaces,
+  TokenTwoPlaces,
+} from '@/components/asset/inventory-table';
 import type { Asset } from '@/lib/api';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { formatTick } from '@/lib/chart-ticks';
@@ -219,7 +224,9 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
     const table = mount();
     const supply = cellUnder(table, 2, 'Supply');
     expect(supply).toHaveClass('text-text-dim');
-    expect(supply).toHaveTextContent('16,063,603.57');
+    // Cut at 2 dp, never rounded up (site precedent, lane D3): .56572848 shows as .56.
+    expect(supply).toHaveTextContent('16,063,603.56');
+    expect(supply).not.toHaveTextContent('16,063,603.57');
     expect(within(supply).getByTitle('16,063,603.56572848')).toBeInTheDocument();
   });
 
@@ -427,6 +434,29 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
       'title',
       'Cellula .bit · .bit Cell · 541 live · 656 ever registered · 366 holders · 400 CKB held · 133.0000005 CKB occupied (33.3%)'
     );
+  });
+});
+
+// Table-rows L2 follow-up: a row's 2-dp amount is the exact amount CUT at 2 places, never rounded
+// (a rounded figure can show a digit that is not on chain); the exact value is in the title.
+describe('2-dp row amounts truncate, never round (table-rows L2)', () => {
+  it('cuts 1,234.56789 to 1,234.56 for CKB and token amounts, the exact value in the title', () => {
+    const { container, rerender } = render(<CkbTwoPlaces shannons={BigInt('123456789000')} />);
+    expect(container).toHaveTextContent(/^1,234\.56$/);
+    rerender(<TokenTwoPlaces amount="123456789" decimals={5} />);
+    expect(container).toHaveTextContent(/^1,234\.56$/);
+    expect(container.firstElementChild).toHaveAttribute('title', '1,234.56789');
+  });
+  it('never carries .999 into the next whole unit', () => {
+    const { container, rerender } = render(<CkbTwoPlaces shannons={BigInt('123499900000')} />);
+    expect(container).toHaveTextContent(/^1,234\.99$/);
+    rerender(<TokenTwoPlaces amount="99999999" decimals={8} />);
+    expect(container).toHaveTextContent(/^0\.99$/);
+    rerender(<TokenTwoPlaces amount="1999" decimals={3} />);
+    expect(container).toHaveTextContent(/^1\.99$/);
+    // A unit with fewer than 2 decimals prints what it has.
+    rerender(<TokenTwoPlaces amount="12349" decimals={1} />);
+    expect(container).toHaveTextContent(/^1,234\.9$/);
   });
 });
 
