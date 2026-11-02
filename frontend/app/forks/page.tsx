@@ -312,7 +312,7 @@ export default function ForksPage() {
             title="Forks"
             lede={
               <>
-                The chain keeps one of two rival blocks; the other becomes an uncle.{' '}
+                Two blocks, one height: one stays, one is an uncle.{' '}
                 <a
                   href="#evidence"
                   className="hover:text-text-bright whitespace-nowrap hover:underline"

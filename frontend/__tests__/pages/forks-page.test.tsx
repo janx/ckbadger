@@ -35,9 +35,10 @@ describe('ForksPage', () => {
       'text-index'
     );
     // R13: one short lede, dim, ≤ 90 characters, with the way down to tier 2
-    const lede = within(hero).getByText(/^The chain keeps one of two rival blocks/);
+    const lede = within(hero).getByText(/^Two blocks, one height: one stays, one is an uncle\./);
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
-    expect(lede.textContent!.length).toBeLessThanOrEqual(90);
+    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'

@@ -82,6 +82,8 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
   const lane = Math.max(...ticks.map((v) => v.toLocaleString('en-US').length)) * CHAR + 8;
   const bw = (W - lane) / Math.max(days.length, 1);
   const y = (v: number) => top + H0 - (v / cap) * H0;
+  // A value whose label would reach into the name's band is not written (as the DAO charts).
+  const written = (v: number) => y(v) - 4 - 11 >= top;
   const base = top + H0;
   const keyY2 = oneLine ? 0 : NAME_LINE_2;
   return (
@@ -137,9 +139,11 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
               stroke={FORK_COLORS.grid}
               strokeDasharray="3 5"
             />
-            <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={GHOST}>
-              {v.toLocaleString('en-US')}
-            </text>
+            {written(v) && (
+              <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={GHOST}>
+                {v.toLocaleString('en-US')}
+              </text>
+            )}
           </g>
         ))}
         <line x1="0" x2={W} y1={base} y2={base} stroke={FORK_COLORS.axis} />

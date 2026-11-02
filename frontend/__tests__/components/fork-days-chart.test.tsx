@@ -49,8 +49,9 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       Number(grey[1].getAttribute('y')) + Number(grey[1].getAttribute('height')),
       5
     );
-    // a round scale: 100, 200, 300
-    expect(screen.getByText('300')).toBeInTheDocument();
+    // a round scale: 100, 200, 300 (its top in the name's band, unwritten)
+    expect(screen.getByText('200')).toBeInTheDocument();
+    expect(container.querySelectorAll('svg line[stroke-dasharray="3 5"]')).toHaveLength(3);
   });
 
   it('is the hero’s picture: at least 280 px tall, its name and key inside the plot, ticks inside in ghost ink (R13)', () => {
@@ -67,9 +68,11 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
       expect(Number(text.getAttribute('y'))).toBeLessThanOrEqual(20);
     }
     expect(name.querySelectorAll('rect')).toHaveLength(2);
-    // ticks: ghost ink, written inside the plot's own gridlines (no axis column)
+    // ticks: ghost ink, written inside the plot's own gridlines (no axis column); the top value
+    // would sit in the name's band, so it is not written (as the DAO page's charts)
     const ticks = Array.from(svg.querySelectorAll('[data-role="y-tick"]'));
-    expect(ticks.map((t) => t.textContent)).toEqual(['100', '200', '300']);
+    expect(ticks.map((t) => t.textContent)).toEqual(['100', '200']);
+    for (const t of ticks) expect(Number(t.getAttribute('y')) - 11).toBeGreaterThanOrEqual(28);
     for (const t of ticks) {
       expect(t).toHaveAttribute('fill', '#343c50');
       expect(Number(t.getAttribute('x'))).toBe(0);

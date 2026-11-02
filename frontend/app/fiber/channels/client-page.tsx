@@ -273,7 +273,7 @@ export default function FiberChannelsPage() {
             title="Fiber channels"
             lede={
               <>
-                A Fiber channel touches the chain only when it opens and when it closes.{' '}
+                Channels touch the chain only to open and to close.{' '}
                 <a
                   href="#evidence"
                   className="hover:text-text-bright whitespace-nowrap hover:underline"

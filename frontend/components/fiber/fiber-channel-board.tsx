@@ -151,7 +151,8 @@ function Summary({
 }
 
 /**
- * The hero's lede (hierarchy v3, R13): the channel's story in one line of ≤ 90 characters; the
+ * The hero's lede (hierarchy v3, R13): the channel's story in one line (≤ 67 characters fill the
+ * 560 px lede at 13 px); the
  * full story, with what each side put in, is the tier-2 `Summary`.
  */
 function ledeSentence(channel: FiberChannelDetail): string {
@@ -163,13 +164,13 @@ function ledeSentence(channel: FiberChannelDetail): string {
   const delay = () => epochDelayWords(required(channel.delayEpochDecoded, 'a decoded delay', id));
   switch (channel.state) {
     case 'open':
-      return `Open for ${lifetime}; the payments inside it never touch the chain.`;
+      return `Open for ${lifetime}; its payments never touch the chain.`;
     case 'cooperativelyClosed':
       return `Closed together ${lifetime} after it opened, in one transaction.`;
     case 'forceClosed':
       return `Force-closed ${lifetime} after it opened; the payout waits ${delay()}.`;
     case 'settled':
-      return `Force-closed ${lifetime} after it opened, then settled after a wait of ${delay()}.`;
+      return `Force-closed ${lifetime} after it opened; settled after ${delay()}.`;
   }
 }
 

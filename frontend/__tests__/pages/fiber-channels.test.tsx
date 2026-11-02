@@ -65,9 +65,10 @@ describe('FiberChannelsPage', () => {
       'text-index'
     );
     // R13: one short lede (dim, ≤ 90 characters) and the way down to the explanation in tier 2
-    const lede = within(hero).getByText(/^A Fiber channel touches the chain only when it opens/);
+    const lede = within(hero).getByText(/^Channels touch the chain only to open and to close\./);
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
-    expect(lede.textContent!.length).toBeLessThanOrEqual(90);
+    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'

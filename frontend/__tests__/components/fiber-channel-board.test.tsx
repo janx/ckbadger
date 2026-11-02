@@ -114,10 +114,11 @@ describe('FiberChannelBoard', () => {
     expect(within(hero).getByText(channel.channelId)).toBeInTheDocument();
     // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
     const lede = within(hero).getByText(
-      'Force-closed 8 d 3 h after it opened, then settled after a wait of 6 epochs.'
+      'Force-closed 8 d 3 h after it opened; settled after 6 epochs.'
     );
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
-    expect(lede.textContent!.length).toBeLessThanOrEqual(90);
+    // one line in its 560 px (about 8.3 px a character at 13 px), as the DAO page's lede
+    expect(lede.textContent!.length).toBeLessThanOrEqual(67);
     // the display figure: the channel's capacity, exact, bright (R4, R11)
     const capacity = within(hero).getByText(
       (_, el) => el?.getAttribute('data-role') === 'capacity'
