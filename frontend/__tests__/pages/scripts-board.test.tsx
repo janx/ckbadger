@@ -111,16 +111,17 @@ describe('Scripts list against the Scripts board', () => {
   });
 
   // Responsive fix plan 2026-11-01 (A12d, report C#12): one clamped line cut the description
-  // mid-sentence on narrow widths; below md it may take two lines, the desktop table keeps one.
-  it('lets a description take two lines below md', async () => {
+  // mid-sentence on narrow widths. Table-rows L1-1 (D3): the table row no longer shows it — the
+  // whole sentence is the row's title, and the phone row writes it in full (never clamped).
+  it('keeps the whole description in the row title, never clamped', async () => {
     render(<ScriptsPage />);
-    const descriptions = await screen.findAllByText(
-      'An universal Account Protocol for Web3 Mass-adoption'
+    const table = await screen.findByRole('table', { name: 'Scripts' });
+    const row = within(table).getByRole('link', { name: 'JoyID' }).closest('tr') as HTMLElement;
+    expect(row.getAttribute('title')).toContain(
+      ' · An universal Account Protocol for Web3 Mass-adoption · '
     );
-    for (const d of descriptions) {
-      expect(d).toHaveClass('line-clamp-2', 'md:line-clamp-1');
-      expect(d).not.toHaveClass('truncate');
-    }
+    expect(row).not.toHaveTextContent('An universal Account Protocol');
+    expect(table.querySelector('[class*="line-clamp"]')).toBeNull();
   });
 
   it('keeps the board lead sentence (tier 2 since v3) and a name search (SC-L5)', async () => {
@@ -133,31 +134,32 @@ describe('Scripts list against the Scripts board', () => {
     expect(screen.getByPlaceholderText('Search by name or code hash')).toBeInTheDocument();
   });
 
-  it('writes the Code column as Immutable or Upgradable · N versions · by whom (SC-L2, SC-L4)', async () => {
+  it('writes the Code column as immutable or upgradable · N versions, by whom in its title (SC-L2, SC-L4, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const row = (name: string) =>
       within(table).getByRole('link', { name }).closest('tr') as HTMLElement;
     const joyCode = within(row('JoyID')).getByTestId('script-code-class');
-    expect(joyCode.textContent).toContain('Upgradable · 5 versions');
-    expect(joyCode.textContent).toContain('by a multisig');
-    expect(within(row('Default Lock')).getByTestId('script-code-class').textContent).toContain(
-      'Immutable'
+    expect(joyCode.textContent).toBe('upgradable · 5 versions');
+    expect(joyCode.getAttribute('title')).toContain('by a multisig');
+    expect(within(row('Default Lock')).getByTestId('script-code-class').textContent).toBe(
+      'immutable'
     );
     expect(table.textContent).not.toMatch(/Fixed bytecode|code classes/);
     // No class evidence from the API stays visible as such, never invented.
     expect(
       within(row('Godwoken Custodian Lock')).getByTestId('script-code-class').textContent
-    ).toBe('Code evidence unavailable');
+    ).toBe('code evidence unavailable');
   });
 
-  it('shows "of N ever" and exact CKB, and a rounded occupied share (SC-L6, SC-L7)', async () => {
+  it('shows "of N ever" and exact CKB in the title, 2 dp in the row, and a rounded occupied share (SC-L6, SC-L7, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const joyRow = within(table).getByRole('link', { name: 'JoyID' }).closest('tr') as HTMLElement;
     expect(joyRow.textContent).toContain('161,049');
-    expect(joyRow.textContent).toContain('of 2,707,778 ever');
+    expect(joyRow.getAttribute('title')).toContain('161,049 live of 2,707,778 cells ever');
     expect(joyRow.textContent).toContain('456,002,179.57');
+    expect(joyRow.getAttribute('title')).toContain('456,002,179.57000000 CKB');
     expect(joyRow.textContent).not.toContain('456.00M');
     expect(joyRow.textContent).toContain('4.19%');
     const godRow = within(table)
@@ -167,12 +169,13 @@ describe('Scripts list against the Scripts board', () => {
     expect(godRow.textContent).not.toContain('0.00%');
   });
 
-  it('marks deprecated in grey, not red (SC-L8)', async () => {
+  it('marks deprecated in grey, not red: a ghost row tag (SC-L8, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const mark = within(table).getByText('deprecated');
     expect(mark.className).not.toMatch(/negative|rouge/);
-    expect(mark.className).toContain('text-text-dim');
+    expect(mark).toHaveAttribute('data-row-tag', 'ghost');
+    expect(mark).toHaveClass('text-[#4b5266]', 'border-dashed');
   });
 
   it('uses underline role tabs and one "sorted by" control in board words (SC-L8)', async () => {
@@ -206,16 +209,16 @@ describe('Scripts list · visual pass (R2b-b)', () => {
     vi.mocked(api.getScripts).mockResolvedValue(response);
   });
 
-  it('dates the code: "since" for upgradable code, "genesis" for genesis code (SC-L4)', async () => {
+  it('dates the code in its title: "since" for upgradable code, "genesis" for genesis code (SC-L4, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const code = (name: string) =>
       within(within(table).getByRole('link', { name }).closest('tr') as HTMLElement).getByTestId(
         'script-code-class'
       );
-    expect(code('JoyID')).toHaveTextContent('by a multisig · since 2023-10-07');
-    expect(code('Default Lock')).toHaveTextContent('genesis · code cell unspendable');
-    expect(code('Godwoken Custodian Lock')).toHaveTextContent('Code evidence unavailable');
+    expect(code('JoyID').getAttribute('title')).toContain('by a multisig · since 2023-10-07');
+    expect(code('Default Lock').getAttribute('title')).toContain('genesis · code cell unspendable');
+    expect(code('Godwoken Custodian Lock')).toHaveTextContent('code evidence unavailable');
   });
 
   it('searches by code hash through the API (SC-L5)', async () => {
