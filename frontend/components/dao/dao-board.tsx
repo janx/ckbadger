@@ -18,6 +18,7 @@ import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { ReadoutRow } from '@/components/ui/readout-row';
 
 /** R8: every chart response carries the FIRST point holding its greatest value (null when empty). */
 export interface ChartPeakPoint {
@@ -80,7 +81,7 @@ function Section({
 }) {
   return (
     <section className="min-w-0" aria-label={title}>
-      <div className="mb-3.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+      <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-text-bright text-section font-medium">{title}</h2>
         {note && <span className="text-text-dim text-small">{note}</span>}
       </div>
@@ -609,12 +610,6 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
     );
   return (
     <Section title="When deposits can leave" note={`at indexed epoch ${evidence.tipEpoch.display}`}>
-      <p className="text-text text-body mb-4 leading-relaxed">
-        A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A
-        withdrawal completes only at the end of a cycle. Each bar is the CKB whose current cycle
-        ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
-        calendar dates.
-      </p>
       <div
         className="grid grid-cols-[repeat(30,minmax(0,1fr))] gap-[3px]"
         role="list"
@@ -631,7 +626,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               aria-label={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
               onFocus={() => setSelectedDay(row.nominalDay)}
               onMouseEnter={() => setSelectedDay(row.nominalDay)}
-              className="focus:outline-interactive group flex h-28 flex-col justify-end focus:outline"
+              className="focus:outline-interactive group flex h-[180px] flex-col justify-end focus:outline"
               title={`Nominal day ${row.nominalDay}, epochs +${row.fromEpochOffset} to +${row.throughEpochOffset}: ${row.count} deposits, ${row.capacity} shannons`}
             >
               <div
@@ -646,32 +641,43 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           );
         })}
       </div>
-      <div className="text-text-dim text-meta mt-1 flex justify-between">
+      <div className="text-text-dim text-meta mt-0.5 flex justify-between">
         <span>days from now · 6 epochs a day</span>
         <span>{plural(evidence.phase0.count, 'deposit')}</span>
       </div>
-      <div className="text-text-bright text-small mt-2 min-h-5" aria-live="polite">
-        {selectedDay === null
-          ? null
-          : (() => {
-              const row = evidence.windows[selectedDay - 1];
-              return (
-                <>
-                  Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
-                  {row.throughEpochOffset} · <Amount value={row.capacity} /> CKB in{' '}
-                  {row.count.toLocaleString()} deposits
-                </>
-              );
-            })()}
+      {/* Hierarchy D5: one readout row under the bars, opening on the next day's cycle end. */}
+      <div className="mt-2.5">
+        <ReadoutRow
+          label="Cycle reading"
+          pinned={false}
+          idle={
+            <>
+              <span className="text-text-bright">
+                <Amount value={first.capacity} /> CKB
+              </span>{' '}
+              in {plural(first.count, 'deposit')} ends its cycle within a day ·{' '}
+              <span className="whitespace-nowrap">
+                epochs +{first.fromEpochOffset} to +{first.throughEpochOffset}
+              </span>
+            </>
+          }
+        >
+          {selectedDay === null
+            ? null
+            : (() => {
+                const row = evidence.windows[selectedDay - 1];
+                return (
+                  <span className="text-text-bright">
+                    Nominal day {selectedDay} · epochs +{row.fromEpochOffset} through +
+                    {row.throughEpochOffset} · <Amount value={row.capacity} /> CKB in{' '}
+                    {row.count.toLocaleString()} deposits
+                  </span>
+                );
+              })()}
+        </ReadoutRow>
       </div>
-      <p className="text-body">
-        <span className="text-text-bright">
-          <Amount value={first.capacity} /> CKB
-        </span>{' '}
-        in {plural(first.count, 'deposit')} ends its cycle within a day.
-      </p>
-      <div className="border-base-border-subtle mt-3 flex flex-col gap-1.5 border-t pt-3">
-        <span className="text-text-dim text-small">
+      <div className="mt-5 flex flex-col">
+        <span className="text-text-dim text-meta">
           withdrawals already requested · {plural(evidence.phase1.count, 'cell')} ·{' '}
           <span className="text-text">
             <Amount value={evidence.phase1.capacity} /> CKB
@@ -681,34 +687,33 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
           <div
             role="img"
             aria-label={`Withdrawal requests: past the window ${formatCapacity(readyShannons)}, waiting ${formatCapacity(waitingShannons)}`}
-            className="flex h-2 w-full gap-0.5 overflow-hidden rounded"
+            className="mt-2 flex h-[18px] w-full gap-0.5 overflow-hidden"
           >
             <span
-              className="bg-gold opacity-45"
+              className="bg-gold rounded-[3px] opacity-45"
               style={{ width: `${formatPercent(readyShannons, requested, 4)}%` }}
             />
             <span
-              className="bg-gold"
+              className="bg-gold rounded-[3px]"
               style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
             />
           </div>
         )}
-        <span className="text-small leading-relaxed">
+        <span className="text-text-dim text-small mt-2">
           <span className="text-text-bright">
             <Amount value={ready.capacity} /> CKB
           </span>{' '}
-          in {plural(ready.count, 'cell')} is past its window and can be claimed now; its
-          compensation stopped growing at the request.{' '}
+          in {plural(ready.count, 'cell')} is past its window and can be claimed now ·{' '}
           <span className="text-text-bright">
             <Amount value={waiting.capacity} /> CKB
           </span>{' '}
-          in {plural(waiting.count, 'cell')} waits for its window.
-        </span>
-        <span className="text-text-dim text-meta">
-          Epoch-lock readiness alone does not prove a complete withdraw transaction; the required
-          input, headers, witnesses and script execution still apply.
+          in {plural(waiting.count, 'cell')} waits for its window
         </span>
       </div>
+      <p className="text-text text-body mt-4">
+        A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A
+        withdrawal completes only when a cycle ends.
+      </p>
     </Section>
   );
 }
@@ -1053,12 +1058,17 @@ function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
         <p>
           AR, in every block header, is the DAO&apos;s growth index. The depositors&apos; share
           counts phase-0 deposits, free capacity + compensation already accrued; withdrawal requests
-          take no share.
+          take no share, and a withdrawal request&apos;s compensation stopped growing at the
+          request. In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle
+          ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
+          calendar dates.
         </p>
         <p>
           Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
-          occupied size of live cells. No cell can ever claim the burnt share. A hardfork could only
-          put future secondary issuance to use; what is burnt stays burnt.
+          occupied size of live cells. Epoch-lock readiness alone does not prove a complete withdraw
+          transaction; the required input, headers, witnesses and script execution still apply. No
+          cell can ever claim the burnt share. A hardfork could only put future secondary issuance
+          to use; what is burnt stays burnt.
         </p>
       </div>
       <Link

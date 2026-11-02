@@ -119,9 +119,15 @@ describe('DaoBoard', () => {
     );
     // Board wording (DAO-14) for the same readiness partition.
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
-      '500.00000000 CKB in 1 cell waits for its window.'
+      '500.00000000 CKB in 1 cell waits for its window'
     );
-    expect(screen.getByText(/does not prove a complete withdraw transaction/)).toBeInTheDocument();
+    // Hierarchy D5: the epoch-lock caveat is developer evidence (tier 2), not under the bars.
+    expect(
+      screen.getByText(/does not prove a complete withdraw transaction/).closest('[data-tier="2"]')
+    ).not.toBeNull();
+    expect(screen.getByRole('region', { name: 'When deposits can leave' })).not.toHaveTextContent(
+      /does not prove a complete withdraw transaction/
+    );
     expect(screen.getByTestId('sources')).toBeInTheDocument();
   });
 
@@ -669,25 +675,51 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
 });
 
 describe('DaoBoard when deposits can leave (DAO-14)', () => {
-  it('says what ends its cycle within a day and what is already requested', () => {
+  it('says what ends its cycle within a day and what is already requested, chart first (D5)', () => {
     stubCalculator();
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     const windows = screen.getByRole('region', { name: 'When deposits can leave' });
     expect(windows).toHaveTextContent('days from now · 6 epochs a day2 deposits');
-    expect(windows).toHaveTextContent('300.00000000 CKB in 1 deposit ends its cycle within a day.');
+    // The readout row under the bars (hairline, tap or hover) opens on the next day's cycle end.
+    const reading = within(windows).getByRole('status', { name: 'Cycle reading' });
+    expect(reading).toHaveClass('border-t', 'text-small');
+    expect(reading).toHaveTextContent(
+      '300.00000000 CKB in 1 deposit ends its cycle within a day · epochs +0 to +6tap or hover'
+    );
     expect(windows).toHaveTextContent('withdrawals already requested · 2 cells · 900.00000000 CKB');
     expect(windows).toHaveTextContent(
-      '400.00000000 CKB in 1 cell is past its window and can be claimed now; its compensation stopped growing at the request. 500.00000000 CKB in 1 cell waits for its window.'
+      '400.00000000 CKB in 1 cell is past its window and can be claimed now · 500.00000000 CKB in 1 cell waits for its window'
     );
     const ready = within(windows).getByRole('img', { name: /^Withdrawal requests/ });
     expect(ready).toHaveAccessibleName(
       'Withdrawal requests: past the window 400.00000000 CKB, waiting 500.00000000 CKB'
     );
-    // The next day's bar leads; the rest are quieter (board).
+    expect(ready).toHaveClass('h-[18px]');
+    // The next day's bar leads; the rest are quieter (board). Bars are 180 px tall (R9).
+    const cycles = within(windows).getByRole('list', { name: 'Phase-0 cycle boundaries' });
+    for (const item of within(cycles).getAllByRole('listitem'))
+      expect(item).toHaveClass('h-[180px]');
     const bars = windows.querySelectorAll('[data-window-bar]');
     expect(bars).toHaveLength(30);
     expect(bars[0]).toHaveClass('opacity-90');
     expect(bars[1]).toHaveClass('opacity-50');
+    // ONE caption, at the bottom, after the evidence.
+    const caption = within(windows).getByText(
+      'A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A withdrawal completes only when a cycle ends.'
+    );
+    expect(cycles.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ready.compareDocumentPosition(caption) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(caption).toHaveClass('text-body');
+    // How to read the bars, and what a request's compensation does, moved to tier 2.
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    for (const moved of [
+      /each bar is the CKB whose current cycle ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted calendar dates\./,
+      /compensation stopped growing at the request/,
+      /Epoch-lock readiness alone does not prove a complete withdraw transaction; the required input, headers, witnesses and script execution still apply\./,
+    ]) {
+      expect(windows).not.toHaveTextContent(moved);
+      expect(tier2).toHaveTextContent(moved);
+    }
   });
 });
 
