@@ -12,6 +12,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatExactDecimal } from '@/lib/exact-integer';
 import { cn } from '@/lib/utils';
 import type { HardforkHashTypeLaneF2 } from '@/lib/api';
+import { useDocumentTitle } from '@/lib/use-document-title';
 
 type Timeline = Awaited<ReturnType<typeof api.getHardforks>>;
 type Edition = Timeline['events'][number];
@@ -250,7 +251,10 @@ function chainSpan(data: { genesisTimestampMs: number | null; tipTimestampMs: nu
   return { genesisMs, tipMs };
 }
 
+const HARDFORKS_TITLE = ['Hardforks'] as const;
+
 export default function HardforksPage() {
+  useDocumentTitle(HARDFORKS_TITLE);
   const network = useActiveNetwork();
   const { data, isLoading, error } = useQuery({
     queryKey: ['hardforks', network],

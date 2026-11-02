@@ -238,6 +238,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   return (
     <AssetDetailShell
       title={title}
+      documentTitle={[title, 'object']}
       kind="objects"
       breadcrumb={[
         { label: 'Inventory', href: '/inventory/objects' },

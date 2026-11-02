@@ -32,6 +32,7 @@ import { cn, formatUtc8Date } from '@/lib/utils';
 import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { usePageSize } from '@/hooks/usePageSize';
+import { titleAddress, titleHash } from '@/lib/use-document-title';
 
 const activityFilters = [
   ['all', 'All'],
@@ -202,6 +203,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
         ) : (
           <DetailLayout
             title="Address"
+            documentTitle={[
+              a.address ? titleAddress(a.address) : titleHash(a.lockScriptHash),
+              'address',
+            ]}
             identity={<AddressIdentity value={a.address ?? a.lockScriptHash} />}
             status={
               <span className="text-text-dim text-small flex flex-wrap items-center gap-x-4 gap-y-1">

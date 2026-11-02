@@ -193,6 +193,8 @@ it('orders sections as the board: Objects, History, Who holds it (OB-C5)', async
 
 it('opens with the cluster kind, its on-chain description, the composition sentence and a summary (OB-C4)', async () => {
   await page();
+  // Consistency plan C1: the tab names the cluster.
+  expect(document.title).toBe('Nervape 3x · cluster · CKBadger');
   const header = screen.getByRole('banner');
   expect(header).toHaveTextContent('Spore cluster · DOB/0');
   // Responsive fix plan 2026-11-01 (A12e, report B#21): the kind is one unit, so "Spore cluster ·"

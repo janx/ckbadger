@@ -53,6 +53,8 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     expect(screen.queryByText('notFound')).toBeNull();
     // The address is refused by its shape: no API request is made for it.
     expect(getForkAt).not.toHaveBeenCalled();
+    // C1: the tab says so too.
+    expect(document.title).toBe('Not found · CKBadger');
   });
 
   it('an uncle index that is not a number is a 404 too (the same notFound() signal)', async () => {

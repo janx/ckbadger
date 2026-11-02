@@ -5,6 +5,9 @@ import { ErrorPageShell } from '@/components/error-page-shell';
 import { ErrorVessels, VesselsCaption } from '@/components/error-vessels';
 import { usePathname } from '@/src/navigation';
 import { useNotFoundEvidence, type NotFoundEntity } from '@/lib/not-found-evidence';
+import { useDocumentTitle } from '@/lib/use-document-title';
+
+const NOT_FOUND_TITLE = ['Not found'] as const;
 
 interface NotFoundPageProps {
   entity?: NotFoundEntity;
@@ -16,6 +19,7 @@ interface NotFoundPageProps {
 export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPageProps = {}) {
   const pathname = usePathname();
   const lookup = useNotFoundEvidence(entity);
+  useDocumentTitle(NOT_FOUND_TITLE);
   const title = entity ? (
     lookup.evidence?.alternative ? (
       <>

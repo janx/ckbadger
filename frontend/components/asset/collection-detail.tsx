@@ -166,6 +166,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       ? (cluster.data?.name ?? 'Unnamed collection')
       : (data?.name ??
         (kind === 'identity' ? formatStandard(data?.standard ?? id) : 'Object collection'));
+  // C1: the tab names the collection by what it is — a Spore cluster, an m-NFT class, an
+  // identity collection.
+  const documentTitle = [
+    title,
+    kind === 'spore' ? 'cluster' : kind === 'object' ? 'class' : 'collection',
+  ];
   if (!data && isNotFoundApiError(detail.error)) {
     const path = kind === 'identity' ? 'identities' : 'objects';
     return (
@@ -182,6 +188,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
     return (
       <AssetDetailShell
         title={title}
+        documentTitle={documentTitle}
         kind={kind === 'identity' ? 'identities' : 'objects'}
         breadcrumb={[
           {
@@ -340,6 +347,7 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
   return (
     <AssetDetailShell
       title={title}
+      documentTitle={documentTitle}
       kind={kind === 'identity' ? 'identities' : 'objects'}
       breadcrumb={[
         {

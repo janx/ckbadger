@@ -246,6 +246,8 @@ describe('BlockDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/^#8,775,638$/);
     });
+    // Consistency plan C1: the tab names the page.
+    expect(document.title).toBe('#8,775,638 · block · CKBadger');
 
     expect(screen.queryByText(/HARDFORK ACTIVATION/i)).not.toBeInTheDocument();
 

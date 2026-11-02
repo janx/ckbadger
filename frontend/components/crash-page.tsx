@@ -8,6 +8,9 @@ import { ErrorVessels, VesselsCaption } from '@/components/error-vessels';
 import { usePathname } from '@/src/navigation';
 import { resolveBuildVersion } from '@/lib/runtime-config';
 import { isKnownNetwork } from '@/lib/active-network';
+import { useDocumentTitle } from '@/lib/use-document-title';
+
+const ERROR_TITLE = ['Error'] as const;
 
 interface CrashPageProps {
   message: string;
@@ -29,6 +32,7 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
   const network = isKnownNetwork(networkSegment) ? networkSegment : 'not resolved';
   const build = resolveBuildVersion();
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  useDocumentTitle(ERROR_TITLE);
   const recovery = pathname.startsWith('/fiber/')
     ? { href: '/fiber/channels', label: 'Back to Fiber channels' }
     : pathname.startsWith('/tx/')

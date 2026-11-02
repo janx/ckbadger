@@ -362,6 +362,8 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
     const heading = await screen.findByRole('heading', { name: /consumed → .* created$/ });
     expect(heading.textContent).toMatch(/^1 cell consumed → (1 cell|\d+ cells) created$/);
+    // Consistency plan C1: the tab names the page.
+    expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4} · transaction · CKBadger$/);
     expect(screen.queryByText(/\b1 cells\b/)).toBeNull();
     expect(screen.getByText(/\d confirmations?$/)).toBeInTheDocument();
   });

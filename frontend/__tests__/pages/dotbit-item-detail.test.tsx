@@ -178,6 +178,8 @@ it('reads like the .bit board: badge, summary, held-until bar, domain facts, int
   render(<Page identityId={evidence.itemId} />);
   const facts = await screen.findByRole('complementary', { name: 'Facts' }, { timeout: 4000 });
   expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('alice.bit');
+  // Consistency plan C1: the tab names the page.
+  expect(document.title).toBe('alice.bit · identity · CKBadger');
   expect(
     screen.getByRole('heading', { level: 1 }).querySelector('.text-identity')
   ).toHaveTextContent('.bit');

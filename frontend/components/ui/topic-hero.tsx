@@ -1,5 +1,10 @@
 import { useId, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import {
+  documentTitleParts,
+  useDocumentTitle,
+  type DocumentTitleProps,
+} from '@/lib/use-document-title';
 
 // F2 group `fiber`: the hero of the Fiber and Forks boards (V65, V67) — title and a one-sentence
 // lede on the left, a 2 × 2 grid of figures on the right (hierarchy plan R1: index title, body
@@ -27,8 +32,7 @@ export interface TopicDisplayFigure {
   tone?: 'jade';
 }
 
-interface TopicHeroProps {
-  title: ReactNode;
+interface TopicHeroBaseProps {
   /** One sentence under the title; the concept prose belongs in tier 2. */
   lede: ReactNode;
   /** Undefined while the data loads: no empty grid (or, in the figure layout, no quiet row). */
@@ -47,8 +51,11 @@ interface TopicHeroProps {
   /** `figure` layout: the picture's reading row and caption, under the hero section. */
   reading?: ReactNode;
 }
+/** `title` is the h1 and, as `[title]`, the browser tab's name (C1) unless `documentTitle` says. */
+type TopicHeroProps = TopicHeroBaseProps & DocumentTitleProps;
 
 export function TopicHero(props: TopicHeroProps) {
+  useDocumentTitle(documentTitleParts(props.title, props.documentTitle));
   return props.layout === 'figure' ? <FigureHero {...props} /> : <GridHero {...props} />;
 }
 

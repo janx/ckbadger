@@ -7,6 +7,7 @@ import { FiberChannelBoard } from '@/components/fiber/fiber-channel-board';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
+import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 
 export default function FiberChannelDetailPage() {
   const { id } = useParams();
@@ -41,6 +42,11 @@ export default function FiberChannelDetailPage() {
     <div className="bg-base-bg min-h-screen">
       <Header />
       <main className="container mx-auto max-w-[1280px] px-4 pb-[72px] pt-7">
+        <DocumentTitle
+          parts={
+            channel.data ? [titleHash(channel.data.channelId), 'Fiber channel'] : ['Fiber channel']
+          }
+        />
         <nav aria-label="Breadcrumb" className="text-text-dim text-small">
           <Link href="/fiber/channels" className="hover:text-text">
             Fiber

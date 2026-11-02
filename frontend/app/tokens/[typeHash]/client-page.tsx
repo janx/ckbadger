@@ -120,6 +120,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
     <AssetDetailShell
       kind="tokens"
       title={tokenLabel}
+      documentTitle={[tokenLabel, 'token']}
       breadcrumb={[
         { label: 'Inventory', href: '/inventory/tokens' },
         { label: 'Tokens', href: '/inventory/tokens' },

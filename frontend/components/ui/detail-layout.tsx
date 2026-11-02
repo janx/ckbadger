@@ -1,5 +1,10 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import {
+  documentTitleParts,
+  useDocumentTitle,
+  type DocumentTitleProps,
+} from '@/lib/use-document-title';
 
 /** Which information tier a section sits in; tier-2 headings are quieter (FINAL_REVIEW, TX-16). */
 const DetailTierContext = createContext<1 | 2>(1);
@@ -31,8 +36,7 @@ export interface DetailFact {
   label: string;
   value: ReactNode;
 }
-export interface DetailLayoutProps {
-  title: ReactNode;
+interface DetailLayoutBaseProps {
   kind?: 'entity' | 'topic' | 'index';
   identity?: ReactNode;
   status?: ReactNode;
@@ -45,10 +49,16 @@ export interface DetailLayoutProps {
   rawOpen?: boolean;
   className?: string;
 }
+/**
+ * `title` is the h1; `documentTitle` (C1) names the browser tab when the h1 is not the page's name
+ * or is not a plain string (entity pages: `[name, kind]`, e.g. `['#20,894,843', 'block']`).
+ */
+export type DetailLayoutProps = DetailLayoutBaseProps & DocumentTitleProps;
 
 /** Domain first, with one enforced boundary (DetailTier2) before developer evidence. */
 export function DetailLayout({
   title,
+  documentTitle,
   kind = 'entity',
   identity,
   status,
@@ -60,6 +70,7 @@ export function DetailLayout({
   rawOpen,
   className,
 }: DetailLayoutProps) {
+  useDocumentTitle(documentTitleParts(title, documentTitle));
   return (
     <div className={cn('text-body min-w-0 font-mono', className)}>
       <header className="mb-8">

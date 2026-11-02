@@ -46,6 +46,8 @@ it('renders exact held/occupied/free capacity and canonical cell versions before
   expect(
     await screen.findByRole('heading', { level: 1, name: 'Genes' }, { timeout: 5000 })
   ).toHaveClass('text-entity');
+  // Consistency plan C1: the tab names the page.
+  expect(document.title).toBe('Genes · object · CKBadger');
   expect(await screen.findByLabelText('Genes cell versions')).toHaveTextContent('500.00000000');
   expect(screen.getByLabelText(`Object ${id} capacity partition`)).toHaveTextContent(
     '229.00000000'

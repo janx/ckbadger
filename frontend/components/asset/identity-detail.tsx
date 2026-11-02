@@ -226,6 +226,7 @@ export function CanonicalIdentityDetail({
   return (
     <AssetDetailShell
       title={<IdentityName name={parts.name} suffix={parts.suffix} />}
+      documentTitle={[`${parts.name}${parts.suffix}`, 'identity']}
       kind="identities"
       railAfterHeader
       breadcrumb={[
