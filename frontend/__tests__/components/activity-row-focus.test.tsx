@@ -1,8 +1,9 @@
 // Consistency round 2026-11-02, lane F (C3): one activity row site-wide. `focusLockHash` draws the
 // participant a page is about first, its address as text (the page is already its page), with its
 // lock tag and a "this address" tag; every other participant is drawn as before. A participant
-// line whose objects all share one composition tier says it once, at the end of its items; mixed
-// tiers keep one badge per object. jsdom does not lay out, so these assert structure and order.
+// line whose items are all objects of one composition tier says it once, at the end of its items;
+// mixed tiers, or a token / identity on the line, keep one badge per object. jsdom does not lay
+// out, so these assert structure and order.
 import { fireEvent, render, within } from '@/__tests__/utils/test-utils';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import type { CompositionTier } from '@/lib/asset-utils';
@@ -149,7 +150,7 @@ describe('focusLockHash: the participant the page is about', () => {
   });
 });
 
-describe('composition badges: once per participant line when its objects share a tier', () => {
+describe('composition badges: once per participant line when all its items share a tier', () => {
   const badges = (el: HTMLElement) => el.querySelectorAll('[data-composition]');
 
   it('says a shared tier once, after the items and before occupied', () => {
@@ -208,6 +209,24 @@ describe('composition badges: once per participant line when its objects share a
     fireEvent.click(more);
     expect(line.querySelectorAll('a[href*="/objects/"]')).toHaveLength(5);
     expect(badges(line)).toHaveLength(1);
+  });
+
+  it('keeps the badge on the object when the line also moves a token or an identity, which carry no tier', () => {
+    // A .cell mint: the deed object arrives and the name identity departs on one line. A badge at
+    // the line's end would read as the identity's tier.
+    const deed = row([
+      party('hprdnn', {
+        itemDeltas: [
+          object(1, 1, 'pure_ckb'),
+          { kind: 'identity', standard: 'dotcell', identityId: '0x' + 'f6'.repeat(20), delta: -1 },
+        ],
+      }),
+    ]);
+    const { container } = render(<ActivityRow activity={deed} />);
+    const [line] = lines(container);
+    expect(line.querySelector('[data-role="composition"]')).toBeNull();
+    const items = [...line.querySelectorAll('[data-role="item"]')];
+    expect(items.map((i) => i.querySelectorAll('[data-composition]').length)).toEqual([1, 0]);
   });
 
   it('draws no badge for objects that carry no tier', () => {

@@ -410,15 +410,16 @@ function ItemOnLine({
 }
 
 /**
- * Consistency C3: the one composition tier every object of a participant line shares, said once
- * at the end of its items; null when there is no object, when an object carries no tier, or when
- * the tiers differ — then each object keeps its own badge. Tokens and identities carry no tier.
+ * Consistency C3: the one composition tier every item of a participant line shares, said once at
+ * the end of its items. Only objects carry a tier, so a line that also moves a token or an
+ * identity has none to share (a badge at its end would read as theirs); null too when an object
+ * carries no tier or the tiers differ — then each object keeps its own badge.
  */
 export function lineCompositionTier(items: ItemDelta[]): CompositionTier | null {
-  const tiers = items.flatMap((i) => (i.kind === 'object' ? [i.composition ?? null] : []));
-  const first = tiers[0];
-  if (first === undefined || first === null) return null;
-  return tiers.every((t) => t === first) ? first : null;
+  const first = items[0];
+  if (first === undefined || first.kind !== 'object' || !first.composition) return null;
+  const tier = first.composition;
+  return items.every((i) => i.kind === 'object' && i.composition === tier) ? tier : null;
 }
 
 /**
