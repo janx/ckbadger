@@ -1,10 +1,10 @@
 'use client';
 
-import { Fragment } from 'react';
+import { Fragment, type RefObject } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
-import { usePinnedReadout } from '@/hooks/usePinnedReadout';
+import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
@@ -265,17 +265,28 @@ function PeerReadout({ point, roundId }: { point: Point; roundId: number | null 
   );
 }
 
+/** The map's shared state: its data, its measured size and the node a pointer or a tap names. */
+export interface NetworkMapState {
+  neverVerified: number;
+  readout: PinnedReadout<string>;
+  ref: RefObject<HTMLDivElement | null>;
+  width: number;
+  height: number;
+  isLoading: boolean;
+  error: unknown;
+  ready: NetworkMap | null;
+  placed: ReturnType<typeof layoutCountryClusters> | null;
+  selected: Point | null;
+}
+
 /**
- * Where the verified nodes are (Network board V70): every verified peer a dot at its GeoIP place,
- * reachable solid, verified-before hollow, this node's session peers ringed wherever they are; the
- * never-verified peers a strip beneath. No link is drawn and nothing is centred (user correction).
- * A hovered or focused node is named in the line under the map and in the panel; a tap pins it
- * there until a second tap on it or Escape (R6).
+ * The map's state, for a page that places the picture and the lines under it apart (the hero's
+ * section holds the picture; its reading follows the section). A refetched map without the pinned
+ * (or hovered) node lets it go: a reading names a drawn node.
  */
-export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
+export function useNetworkMap(neverVerified: number): NetworkMapState {
   // A named node stays named until the pointer leaves the map (sticky), as before R6.
   const readout = usePinnedReadout<string>(String, { sticky: true });
-  const selectedId = readout.active;
   const [ref, measured] = useElementWidth<HTMLDivElement>();
   const { data, isLoading, error } = useQuery({
     queryKey: ['network', 'map'],
@@ -290,18 +301,29 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
   const height = Math.max(220, Math.round(width * 0.49));
   const ready = !isLoading && !error && data ? data : null;
   const placed = ready ? layoutCountryClusters(ready.points, width, height) : null;
-  const layout = placed?.dots ?? [];
-  // A refetched map without the pinned (or hovered) node lets it go: a reading names a drawn node.
+  const selectedId = readout.active;
   if (selectedId !== null && ready && !ready.points.some((point) => point.peerId === selectedId))
     readout.clear();
   const selected = ready?.points.find((point) => point.peerId === selectedId) ?? null;
+  return { neverVerified, readout, ref, width, height, isLoading, error, ready, placed, selected };
+}
+
+/**
+ * Where the verified nodes are (Network board V70): every verified peer a dot at its GeoIP place,
+ * reachable solid, verified-before hollow, this node's session peers ringed wherever they are. No
+ * link is drawn and nothing is centred (user correction). Beside it, the panel that names a hovered
+ * or focused node; a tap pins it there until a second tap on it or Escape (R6).
+ */
+export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
+  const { readout, ref, width, height, isLoading, error, ready, placed, selected } = map;
+  const selectedId = readout.active;
+  const layout = placed?.dots ?? [];
   const countryLabels = placed?.labels ?? [];
   const listedCountries = placed?.listed ?? [];
   const reachable = ready?.points.filter((point) => point.reachable).length ?? 0;
   const ringed = ready?.points.filter((point) => point.localSessionObserved).length ?? 0;
-  const perRow = Math.max(8, Math.floor(width / 14));
   return (
-    <figure className="m-0 min-w-0">
+    <div className="min-w-0">
       {ready && (
         <p className="text-text-dim text-small mb-3">
           {ready.located.toLocaleString()} verified nodes in{' '}
@@ -319,148 +341,97 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
               Crawler locations unavailable: {String(error)}
             </p>
           ) : (
-            <>
-              <svg
-                width={width}
-                height={height}
-                viewBox={`0 0 ${width} ${height}`}
-                role="img"
-                aria-label="Approximate GeoIP locations of retained verified CKB peers"
-                className="block"
-                onMouseLeave={() => readout.hover(null)}
-              >
-                {[1, 2, 3, 4, 5, 6, 7].map((k) => (
-                  <line
-                    key={'lon' + k}
-                    x1={(width * k) / 8}
-                    x2={(width * k) / 8}
-                    y1="0"
-                    y2={height}
-                    stroke="#121620"
-                  />
-                ))}
-                {[1, 2, 3, 4, 5].map((k) => (
-                  <line
-                    key={'lat' + k}
-                    x1="0"
-                    x2={width}
-                    y1={(height * k) / 6}
-                    y2={(height * k) / 6}
-                    stroke={k === 3 ? '#1a1f30' : '#121620'}
-                  />
-                ))}
-                {countryLabels.map(({ country, count, x, y }) => (
-                  <text
-                    key={country}
-                    data-country-label
-                    x={x}
-                    y={y}
-                    textAnchor="middle"
-                    fontSize="10"
-                    fill="#7c849c"
-                    stroke="#0c0e15"
-                    strokeWidth="3"
-                    paintOrder="stroke"
-                  >
-                    {country} {count}
-                  </text>
-                ))}
-                {layout.map(({ point, x, y }) => (
-                  <g
-                    key={point.peerId}
-                    data-peer={point.peerId}
-                    {...readout.bind(point.peerId)}
-                    aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
-                      point.reachable ? 'reachable now' : 'verified before, not reachable now'
-                    }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
-                    opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
-                    className="cursor-pointer outline-none"
-                  >
-                    <circle cx={x} cy={y} r="5.5" fill="transparent" />
-                    {point.localSessionObserved && (
-                      <circle
-                        data-ring
-                        cx={x}
-                        cy={y}
-                        r={RING_R}
-                        fill="none"
-                        stroke="#dee2ec"
-                        strokeWidth="1.2"
-                      />
-                    )}
-                    {point.reachable ? (
-                      <circle
-                        data-dot="reachable"
-                        cx={x}
-                        cy={y}
-                        r={DOT_R}
-                        fill={DATA_COLOR}
-                        fillOpacity={point.localSessionObserved ? 0.9 : 0.55}
-                      />
-                    ) : (
-                      <circle
-                        data-dot="verified-before"
-                        cx={x}
-                        cy={y}
-                        r="3.3"
-                        fill="#0c0e15"
-                        stroke="#dee2ec"
-                        strokeWidth="0.9"
-                      />
-                    )}
-                  </g>
-                ))}
-              </svg>
-              <ReadoutRow
-                label="Node readout"
-                pinned={readout.showingPin}
-                idle={tapOrHover('a node.', { capital: true })}
-              >
-                {selected ? peerLine(selected) : null}
-              </ReadoutRow>
-              {listedCountries.length > 0 && (
-                <p
-                  aria-label="Countries with one verified node"
-                  className="text-text-dim text-small leading-relaxed"
+            <svg
+              width={width}
+              height={height}
+              viewBox={`0 0 ${width} ${height}`}
+              role="img"
+              aria-label="Approximate GeoIP locations of retained verified CKB peers"
+              className="block"
+              onMouseLeave={() => readout.hover(null)}
+            >
+              {[1, 2, 3, 4, 5, 6, 7].map((k) => (
+                <line
+                  key={'lon' + k}
+                  x1={(width * k) / 8}
+                  x2={(width * k) / 8}
+                  y1="0"
+                  y2={height}
+                  stroke="#121620"
+                />
+              ))}
+              {[1, 2, 3, 4, 5].map((k) => (
+                <line
+                  key={'lat' + k}
+                  x1="0"
+                  x2={width}
+                  y1={(height * k) / 6}
+                  y2={(height * k) / 6}
+                  stroke={k === 3 ? '#1a1f30' : '#121620'}
+                />
+              ))}
+              {countryLabels.map(({ country, count, x, y }) => (
+                <text
+                  key={country}
+                  data-country-label
+                  x={x}
+                  y={y}
+                  textAnchor="middle"
+                  fontSize="10"
+                  fill="#7c849c"
+                  stroke="#0c0e15"
+                  strokeWidth="3"
+                  paintOrder="stroke"
                 >
-                  One verified node each, not labelled on the map:{' '}
-                  {listedCountries.map(({ country, count }, i) => (
-                    <Fragment key={country}>
-                      {i > 0 && ' · '}
-                      <span data-country-listed className="whitespace-nowrap">
-                        <span className="text-text">{country}</span> {count}
-                      </span>
-                    </Fragment>
-                  ))}
-                </p>
-              )}
-              {neverVerified > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-text-dim text-small">
-                    {neverVerified.toLocaleString()} more peers were only heard of: never verified,
-                    so their place is unknown
-                  </span>
-                  <svg
-                    role="img"
-                    aria-label={`${neverVerified} peers only heard of`}
-                    width={width}
-                    height={12 + Math.floor((neverVerified - 1) / perRow) * 9}
-                    className="block"
-                  >
-                    {Array.from({ length: neverVerified }, (_, k) => (
-                      <circle
-                        key={k}
-                        data-unlocated
-                        cx={6 + (k % perRow) * ((width - 12) / Math.max(1, perRow - 1))}
-                        cy={6 + Math.floor(k / perRow) * 9}
-                        r="1.8"
-                        fill="#4b5266"
-                      />
-                    ))}
-                  </svg>
-                </div>
-              )}
-            </>
+                  {country} {count}
+                </text>
+              ))}
+              {layout.map(({ point, x, y }) => (
+                <g
+                  key={point.peerId}
+                  data-peer={point.peerId}
+                  {...readout.bind(point.peerId)}
+                  aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
+                    point.reachable ? 'reachable now' : 'verified before, not reachable now'
+                  }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
+                  opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
+                  className="cursor-pointer outline-none"
+                >
+                  <circle cx={x} cy={y} r="5.5" fill="transparent" />
+                  {point.localSessionObserved && (
+                    <circle
+                      data-ring
+                      cx={x}
+                      cy={y}
+                      r={RING_R}
+                      fill="none"
+                      stroke="#dee2ec"
+                      strokeWidth="1.2"
+                    />
+                  )}
+                  {point.reachable ? (
+                    <circle
+                      data-dot="reachable"
+                      cx={x}
+                      cy={y}
+                      r={DOT_R}
+                      fill={DATA_COLOR}
+                      fillOpacity={point.localSessionObserved ? 0.9 : 0.55}
+                    />
+                  ) : (
+                    <circle
+                      data-dot="verified-before"
+                      cx={x}
+                      cy={y}
+                      r="3.3"
+                      fill="#0c0e15"
+                      stroke="#dee2ec"
+                      strokeWidth="0.9"
+                    />
+                  )}
+                </g>
+              ))}
+            </svg>
           )}
         </div>
         {ready && (
@@ -476,22 +447,96 @@ export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
                 reachable={reachable}
                 before={ready.points.length - reachable}
                 ringed={ringed}
-                neverVerified={neverVerified}
+                neverVerified={map.neverVerified}
               />
             )}
           </aside>
         )}
       </div>
-      {ready && (
-        <figcaption className="text-text-dim text-small mt-3 leading-relaxed">
-          {ready.located.toLocaleString()} of {ready.verifiedRetained.toLocaleString()} retained
-          verified peers have approximate GeoIP coordinates;{' '}
-          {ready.locationUnavailable.toLocaleString()} locations are unavailable. Dots with close
-          coordinates are displaced to keep them selectable. There is no centre: every node keeps a
-          handful of connections of its own, and that mesh cannot be observed from outside, so no
-          links are drawn.
-        </figcaption>
+    </div>
+  );
+}
+
+/**
+ * The lines under the map: the reading of the named node, the single-node countries a phone map
+ * does not label, the never-verified peers as a strip (data, so it stays with the picture), and
+ * the map's notes.
+ */
+export function NetworkMapFootnotes({ map }: { map: NetworkMapState }) {
+  const { readout, width, ready, placed, selected, neverVerified } = map;
+  if (!ready) return null;
+  const listedCountries = placed?.listed ?? [];
+  const perRow = Math.max(8, Math.floor(width / 14));
+  return (
+    <div className="mt-3 flex min-w-0 flex-col gap-3">
+      <ReadoutRow
+        label="Node readout"
+        pinned={readout.showingPin}
+        idle={tapOrHover('a node.', { capital: true })}
+      >
+        {selected ? peerLine(selected) : null}
+      </ReadoutRow>
+      {listedCountries.length > 0 && (
+        <p
+          aria-label="Countries with one verified node"
+          className="text-text-dim text-small leading-relaxed"
+        >
+          One verified node each, not labelled on the map:{' '}
+          {listedCountries.map(({ country, count }, i) => (
+            <Fragment key={country}>
+              {i > 0 && ' · '}
+              <span data-country-listed className="whitespace-nowrap">
+                <span className="text-text">{country}</span> {count}
+              </span>
+            </Fragment>
+          ))}
+        </p>
       )}
-    </figure>
+      {neverVerified > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-text-dim text-small">
+            {neverVerified.toLocaleString()} more peers were only heard of: never verified, so their
+            place is unknown
+          </span>
+          <svg
+            role="img"
+            aria-label={`${neverVerified} peers only heard of`}
+            width={width}
+            height={12 + Math.floor((neverVerified - 1) / perRow) * 9}
+            className="block"
+          >
+            {Array.from({ length: neverVerified }, (_, k) => (
+              <circle
+                key={k}
+                data-unlocated
+                cx={6 + (k % perRow) * ((width - 12) / Math.max(1, perRow - 1))}
+                cy={6 + Math.floor(k / perRow) * 9}
+                r="1.8"
+                fill="#4b5266"
+              />
+            ))}
+          </svg>
+        </div>
+      )}
+      <p className="text-text-dim text-small leading-relaxed">
+        {ready.located.toLocaleString()} of {ready.verifiedRetained.toLocaleString()} retained
+        verified peers have approximate GeoIP coordinates;{' '}
+        {ready.locationUnavailable.toLocaleString()} locations are unavailable. Dots with close
+        coordinates are displaced to keep them selectable. There is no centre: every node keeps a
+        handful of connections of its own, and that mesh cannot be observed from outside, so no
+        links are drawn.
+      </p>
+    </div>
+  );
+}
+
+/** The map and the lines under it, together (a page without a hero to split them across). */
+export function NetworkMapView({ neverVerified }: { neverVerified: number }) {
+  const map = useNetworkMap(neverVerified);
+  return (
+    <div className="min-w-0">
+      <NetworkMapPicture map={map} />
+      <NetworkMapFootnotes map={map} />
+    </div>
   );
 }

@@ -109,22 +109,23 @@ describe('Network board (F2 charts)', () => {
   beforeEach(() => stubChartWidth(880));
   afterEach(() => vi.restoreAllMocks());
 
-  it('heads the page in plain words with four quiet figures, no red and no tracked capitals (CH-53)', async () => {
+  it('heads the page in plain words with one figure and three quiet ones, no red and no tracked capitals (CH-53)', async () => {
     server.use(
       http.get(`${API_BASE}/network/summary`, () =>
         HttpResponse.json({ enabled: true, hasData: true, lastRound, activeRound: null })
       )
     );
     const { container } = render(wrap(<NetworkClientPage />));
-    expect(
-      await screen.findByText(/CKB nodes find each other by word of mouth/)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/^Nodes find each other by word of mouth/)).toBeInTheDocument();
+    // Hierarchy v3 (R13): reachable now is the hero's figure; the other three share one quiet row.
+    const hero = screen.getByRole('region', { name: 'Where the nodes are' });
+    expect(hero).toHaveTextContent(/Reachable now\s*62\s*answered as CKB mainnet nodes/);
     const figures = screen.getByRole('group', { name: 'Latest crawler round' });
-    expect(figures).toHaveTextContent(/Reachable now\s*62\s*answered as CKB mainnet nodes/);
     expect(figures).toHaveTextContent(/Verified before, not now\s*4/);
-    expect(figures).toHaveTextContent(/Heard of\s*181\s*115 never verified/);
-    expect(figures).toHaveTextContent(/Latest round\s*#97\s*.*UTC\+8 · 14 min · 2,345 dials/);
-    expect(figures.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
+    expect(figures).toHaveTextContent(/Heard of\s*181 · 115 never verified/);
+    expect(figures).toHaveTextContent(/Latest round\s*#97 · .*UTC\+8 · 14 min · 2,345 dials/);
+    for (const el of [hero, figures])
+      expect(el.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
     // The old tier-1 evidence box and per-round counters moved to the developer tier.
     const tier2 = container.querySelector('[data-tier="2"]')!;
     expect(within(tier2 as HTMLElement).getByText(/2,345 address attempts/)).toBeInTheDocument();
@@ -178,8 +179,9 @@ describe('Network board (F2 charts)', () => {
     const dot = screen.getByRole('button', { name: /^US peer 12200fce0b…/ });
     const readout = screen.getByRole('status', { name: 'Node readout' });
     const panel = screen.getByRole('complementary', { name: 'Selected peer evidence' });
-    // the line sits right under the map
-    expect(svg.nextElementSibling).toBe(readout);
+    // the line opens the lines under the map (hierarchy v3: the picture, then its reading)
+    expect(readout.parentElement!.firstElementChild).toBe(readout);
+    expect(readout.parentElement!.previousElementSibling!.contains(svg)).toBe(true);
     expect(readout).toHaveTextContent('Tap or hover a node.');
     // a tap: the emulated hover and focus, then the click; the pin outlasts the pointer
     fireEvent.mouseEnter(dot);
