@@ -199,6 +199,12 @@ describe('FiberChannelsPage', () => {
     ])
       for (const node of Array.from(cell.childNodes))
         expect(node.nodeType === Node.TEXT_NODE && node.textContent!.trim() !== '').toBe(false);
+    // Table-rows T5: the channel id is the row's one bright thing (it read in the id blue).
+    const id = within(table).getAllByRole('link')[0];
+    expect(id).toHaveAttribute('href', expect.stringMatching(/^\/mainnet\/fiber\/channels\/0x/));
+    expect(id).toHaveClass('text-text-bright');
+    expect(id).not.toHaveClass('text-[#6aa9c4]');
+    expect(Array.from(table.querySelectorAll('tbody .text-text-bright'))).toEqual([id]);
     expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
     expect(screen.getByText('sorted by capacity')).toHaveClass('text-meta');
     expect(screen.getByText(/Showing 1-1 of 38 channels/)).toBeInTheDocument();

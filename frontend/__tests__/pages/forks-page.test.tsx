@@ -223,9 +223,11 @@ describe('ForksPage', () => {
     expect(within(table()).getByText('1 of 1 tx committed later')).toHaveClass('block', 'w-fit');
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
-    // R11: the fate reads in bright ink; the glyph's arrow keeps the jade
+    // Table-rows T5 (was R11's bright ink): the fork point is the row's one bright thing, so the
+    // fate reads in body ink; the glyph's arrow keeps the jade
     const fate = within(table()).getByText('uncle in #12 (+1)');
-    expect(fate).toHaveClass('text-text-bright');
+    expect(fate).toHaveClass('text-text');
+    expect(fate).not.toHaveClass('text-text-bright');
     expect(fate).not.toHaveClass('text-jade');
     expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
@@ -322,6 +324,9 @@ describe('ForksPage', () => {
       `/mainnet/address/${address}`
     );
     expect(within(table()).getByRole('link', { name: '…2cdyx8' })).toBeInTheDocument();
+    // T5: the fork point is the row's one bright thing; both miners read in body ink.
+    for (const name of ['Example Pool', '…2cdyx8'])
+      expect(within(table()).getByRole('link', { name })).not.toHaveClass('text-text-bright');
   });
 
   it('links a row from firstOrphanHash even without the node preview', async () => {
@@ -367,8 +372,36 @@ describe('ForksPage', () => {
     );
     expect(within(table()).getByText('indexed #12 → node #13')).toBeInTheDocument();
     expect(within(table()).queryByRole('link', { name: /^20\d\d-/ })).toBeNull();
-    expect(
-      within(table()).getByText('nothing was rolled back, so no detail page')
-    ).toBeInTheDocument();
+    // Table-rows T1: why there is no link is a footnote; it left the row for the row's title.
+    expect(within(table()).queryByText('nothing was rolled back, so no detail page')).toBeNull();
+    expect(within(table()).getAllByRole('row')[1]).toHaveAttribute(
+      'title',
+      expect.stringContaining('nothing was rolled back, so no detail page')
+    );
+  });
+
+  // Table-rows T5 / T1: one bright thing per row, the fork point at body; "Seen" is one line in
+  // body ink, its age and any missing-address words in the row's title; the gap is a 12 px number.
+  // The phone row keeps every line it had.
+  it('leads each switch with its fork point; seen is one line, its age in the row title (T5, T1)', async () => {
+    vi.mocked(api.getForks).mockResolvedValue(list());
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const row = within(table()).getAllByRole('row')[1];
+    const point = within(row).getByRole('link', { name: '#10' });
+    expect(point).toHaveClass('text-text-bright');
+    expect(point.closest('td')).toHaveClass('text-body');
+    expect(within(row).getByText('depth 1')).toHaveClass('text-meta', 'text-text-dim');
+    const brights = Array.from(row.querySelectorAll('.text-text-bright'));
+    expect(brights).toEqual([point]);
+    const seen = within(row).getByRole('link', { name: '2025-08-01 06:13:20' });
+    expect(seen).toHaveClass('text-text');
+    const seenCell = seen.closest('td')!;
+    expect(seenCell).toHaveTextContent(/^2025-08-01 06:13:20$/);
+    expect(row.getAttribute('title')).toMatch(
+      /^seen 2025-08-01 06:13:20 UTC\+8, .+ ago · fork point #10, depth 1$/
+    );
+    expect(within(row).getByText('50 ms')).toHaveClass('text-small', 'tabular-nums');
   });
 });

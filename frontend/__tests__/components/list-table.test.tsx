@@ -207,6 +207,22 @@ describe('ListTable row density and row title (table-rows plan T2, lane R1)', ()
     expect(plain.every((c) => c.includes('py-3'))).toBe(true);
   });
 
+  // Table-rows T5 (coordinator ruling, lane M): column heads at meta (11 px), dim, in both
+  // densities and both table forms; the 12 px padding is unchanged.
+  it('sets every column head at 11 px dim (T5)', () => {
+    stubChartWidth(608);
+    const { unmount } = render(table());
+    for (const th of headsOf(screen.getByRole('table', { name: 'Holdings' }))) {
+      expect(th).toHaveClass('text-meta', 'text-text-dim', 'py-3', 'font-normal');
+      expect(th).not.toHaveClass('text-small');
+    }
+    unmount();
+    stubChartWidth(300);
+    render(table({ narrowColumns: NARROW, density: 'row' }));
+    for (const th of headsOf(screen.getByRole('table', { name: 'Holdings' })))
+      expect(th).toHaveClass('text-meta', 'text-text-dim', 'py-3');
+  });
+
   it('gives the narrower table the same density', () => {
     stubChartWidth(300);
     render(table({ narrowColumns: NARROW, density: 'row' }));

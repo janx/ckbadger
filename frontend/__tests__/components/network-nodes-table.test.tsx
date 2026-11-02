@@ -182,6 +182,51 @@ describe('PeersTable form by measured width (T3)', () => {
     expect(row).not.toHaveTextContent('Identify ·');
   });
 
+  // Table-rows T8: where the row has the room (from 560 px, the wide phone-row rule), the folded
+  // peer is one line — id, dial alias cut to fit (whole in its title and the expander), the dial
+  // state as a row tag; on a phone the alias keeps its own line. The dial state is a kind, so a
+  // RowTag (accent for a same-network Identify) in every form, also the full table.
+  it('folds each peer to one line where it fits, its dial state a row tag (T8)', async () => {
+    stubChartWidth(1248);
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const [reachable, candidate, undialed] = screen.getAllByTestId('peer-row');
+    const toggle = within(reachable).getByRole('button', {
+      name: `Show evidence for ${REACHABLE_PEER_ID}`,
+    });
+    expect(toggle).toHaveClass('grid-cols-[14px_auto_minmax(0,1fr)_auto]', 'items-center');
+    const alias = within(toggle).getByText('/ip4/1.2.3.4/tcp/8115');
+    // As wide as its words, at most its column (R16: a text box is its words), cut to fit.
+    expect(alias).toHaveClass('truncate', 'justify-self-start', 'max-w-full');
+    expect(alias).toHaveAttribute('title', '/ip4/1.2.3.4/tcp/8115');
+    expect(alias).not.toHaveClass('col-span-2');
+    const tag = within(toggle).getByText('Same-network Identify');
+    expect(tag).toHaveAttribute('data-row-tag', 'accent');
+    expect(within(candidate).getByText('Aliases exhausted')).toHaveAttribute(
+      'data-row-tag',
+      'ghost'
+    );
+    expect(within(undialed).getByText('Not dialed by this crawler')).toHaveAttribute(
+      'data-row-tag',
+      'ghost'
+    );
+    expect(document.querySelector('.bg-positive\\/10')).toBeNull();
+  });
+
+  it('keeps the alias on its own line in a phone-wide fold, the tag allowed to wrap', async () => {
+    stubChartWidth(358);
+    render(<PeersTable />);
+    await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
+    const toggle = within(screen.getAllByTestId('peer-row')[0]).getByRole('button', {
+      name: `Show evidence for ${REACHABLE_PEER_ID}`,
+    });
+    expect(toggle).toHaveClass('grid-cols-[14px_auto_minmax(0,1fr)]', 'min-h-[44px]');
+    expect(within(toggle).getByText('/ip4/1.2.3.4/tcp/8115')).toHaveClass('col-span-2');
+    const tag = within(toggle).getByText('Same-network Identify');
+    expect(tag).toHaveAttribute('data-row-tag', 'accent');
+    expect(tag).toHaveClass('whitespace-normal');
+  });
+
   it('opens the expander onto every column as labelled pairs, the multiaddr wrapping', async () => {
     stubChartWidth(358);
     render(<PeersTable />);
@@ -221,6 +266,9 @@ describe('PeersTable form by measured width (T3)', () => {
     await waitFor(() => expect(screen.getAllByTestId('peer-row')).toHaveLength(3));
     for (const label of COLUMN_LABELS) expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.getAllByTestId('peer-row')[0]).toHaveTextContent('0.114.0');
+    expect(
+      within(screen.getAllByTestId('peer-row')[0]).getByText('Same-network Identify')
+    ).toHaveAttribute('data-row-tag', 'accent');
     expect(screen.queryByTestId('peer-columns')).toBeNull();
     expect(document.querySelector('.overflow-x-auto')).toBeNull();
   });

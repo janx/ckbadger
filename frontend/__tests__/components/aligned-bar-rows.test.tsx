@@ -19,6 +19,9 @@ describe('ScaleHeader, one export in aligned-bar.tsx (table-rows R2)', () => {
     expect(head).toHaveClass('flex', 'flex-col');
     expect(head.style.gap).toBe('3px');
     expect(head).toHaveTextContent(/^Size, bytes04,000$/);
+    // T5 (coordinator ruling, lane M): the name is a column head, 11 px like every head.
+    expect(head.firstElementChild).toHaveTextContent(/^Size, bytes$/);
+    expect(head.firstElementChild).toHaveClass('text-meta');
     const ticks = ticksOf(head);
     expect(ticks).toHaveAttribute('aria-hidden', 'true');
     expect(ticks).toHaveClass('text-meta', 'flex', 'justify-between');

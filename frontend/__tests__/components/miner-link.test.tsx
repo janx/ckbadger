@@ -26,6 +26,17 @@ describe('MinerLink', () => {
     expect(screen.queryByRole('link')).toBeNull();
   });
 
+  // Table-rows T5: in a list row the key cell is the one bright thing, so a row can set the
+  // miner in body ink; everywhere else it stays bright as before.
+  it('is bright by default and takes a row ink from its caller', () => {
+    const { rerender } = render(<MinerLink address={address} pool="Example Pool" />);
+    expect(screen.getByRole('link', { name: 'Example Pool' })).toHaveClass('text-text-bright');
+    rerender(<MinerLink address={address} pool="Example Pool" className="text-text" />);
+    const link = screen.getByRole('link', { name: 'Example Pool' });
+    expect(link).toHaveClass('text-text', 'hover:text-jade');
+    expect(link).not.toHaveClass('text-text-bright');
+  });
+
   it('has one naming rule for text-only places (tree tiles, the narrative)', () => {
     expect(minerName(address, null)).toBe('…93hhsj');
     expect(minerName(address, 'Example Pool')).toBe('Example Pool');

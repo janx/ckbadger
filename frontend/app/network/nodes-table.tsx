@@ -3,7 +3,8 @@
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { TerminalRow } from '@/components/ui/terminal-panel';
-import { Badge } from '@/components/ui/page-header';
+import { RowTag, type RowTagVariant } from '@/components/ui/row-tag';
+import { WIDE_ROW_MIN_WIDTH } from '@/components/ui/list-table';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import {
@@ -75,21 +76,26 @@ function optionalAge(timestamp: number | null): string {
   return timestamp == null ? '—' : formatTimeAgo(timestamp * 1000);
 }
 
-function crawlerDialStateBadge(state: NetworkPeerDisplayState): {
+/**
+ * The crawler's dial state, a kind, as a row tag (table-rows T8): accent for a completed
+ * same-network Identify, plain for a verification seen before or a foreign network, set back
+ * (ghost) where nothing was verified.
+ */
+function crawlerDialStateTag(state: NetworkPeerDisplayState): {
   label: string;
-  variant: 'green' | 'neutral' | 'blue' | 'red' | 'gray';
+  variant: RowTagVariant;
 } {
   switch (state) {
     case 'reachable':
-      return { label: 'Same-network Identify', variant: 'green' };
+      return { label: 'Same-network Identify', variant: 'accent' };
     case 'verifiedUnavailable':
-      return { label: 'Aliases exhausted · prior verification', variant: 'neutral' };
+      return { label: 'Aliases exhausted · prior verification', variant: 'default' };
     case 'advertisedUnverified':
-      return { label: 'Aliases exhausted', variant: 'gray' };
+      return { label: 'Aliases exhausted', variant: 'ghost' };
     case 'foreignNetwork':
-      return { label: 'Foreign-network Identify', variant: 'red' };
+      return { label: 'Foreign-network Identify', variant: 'default' };
     case 'noCompletedObservation':
-      return { label: 'Not dialed by this crawler', variant: 'blue' };
+      return { label: 'Not dialed by this crawler', variant: 'ghost' };
   }
 }
 
@@ -312,7 +318,7 @@ function peerColumns(peer: NetworkPeerSummary): Array<{
   pair?: string;
   title?: string;
 }> {
-  const state = crawlerDialStateBadge(peer.crawlerDialState);
+  const state = crawlerDialStateTag(peer.crawlerDialState);
   const participation = [
     peer.participation.discoveryAdvertised ? 'Discovery ad' : null,
     peer.participation.directSessionObserved ? 'Direct CKB session' : null,
@@ -345,7 +351,7 @@ function peerColumns(peer: NetworkPeerSummary): Array<{
     },
     {
       label: 'Crawler dial result',
-      value: <Badge variant={state.variant}>{state.label}</Badge>,
+      value: <RowTag variant={state.variant}>{state.label}</RowTag>,
       cell: '',
     },
     {
@@ -406,12 +412,22 @@ function PeerEvidenceRow({ peerId }: { peerId: string }) {
  * One peer. Where the eleven columns fit, a table row; otherwise (board T3-peer-evidence.dc.html)
  * the row is the peer id, its dial alias and its dial state, the whole row a 44 px expander, and
  * opening it lists every column as a labelled pair — the multiaddr wrapping, never cut — above
- * the retained evidence.
+ * the retained evidence. `oneLine` (table-rows T8, from `WIDE_ROW_MIN_WIDTH`): the three on one
+ * line, the alias cut to fit (whole in its title and in the expander); below it, the alias keeps a
+ * line of its own.
  */
-function PeerRow({ peer, folded }: { peer: NetworkPeerSummary; folded: boolean }) {
+function PeerRow({
+  peer,
+  folded,
+  oneLine,
+}: {
+  peer: NetworkPeerSummary;
+  folded: boolean;
+  oneLine: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const columns = peerColumns(peer);
-  const state = crawlerDialStateBadge(peer.crawlerDialState);
+  const state = crawlerDialStateTag(peer.crawlerDialState);
   const toggle = {
     onClick: () => setExpanded((value) => !value),
     title: peer.peerId,
@@ -423,28 +439,54 @@ function PeerRow({ peer, folded }: { peer: NetworkPeerSummary; folded: boolean }
     return (
       <Fragment>
         <TerminalRow data-testid="peer-row" className="px-0 py-0">
-          <button
-            type="button"
-            {...toggle}
-            className="grid min-h-[44px] w-full grid-cols-[14px_auto_minmax(0,1fr)] items-start gap-x-2 gap-y-0.5 px-1 py-2 text-left font-mono sm:px-3"
-          >
-            <span aria-hidden="true" className="text-text-dim text-small">
-              {expanded ? '▾' : '▸'}
-            </span>
-            {/* The id keeps its width (already cut in the middle); the dial state takes what is
-                left of the line and wraps inside its badge only when it must. */}
-            <span className="text-aqua text-small whitespace-nowrap">
-              {truncateHash(peer.peerId)}
-            </span>
-            <span className="min-w-0 justify-self-end">
-              <Badge variant={state.variant} className="text-meta leading-snug">
-                {state.label}
-              </Badge>
-            </span>
-            <span className="text-text text-meta col-span-2 col-start-2 min-w-0 truncate">
-              {orDash(peer.primaryAddr)}
-            </span>
-          </button>
+          {oneLine ? (
+            <button
+              type="button"
+              {...toggle}
+              className="grid min-h-[44px] w-full grid-cols-[14px_auto_minmax(0,1fr)_auto] items-center gap-x-3 px-1 py-2 text-left font-mono sm:px-3"
+            >
+              <span aria-hidden="true" className="text-text-dim text-small">
+                {expanded ? '▾' : '▸'}
+              </span>
+              <span className="text-aqua text-small whitespace-nowrap">
+                {truncateHash(peer.peerId)}
+              </span>
+              {/* As wide as its words (R16), at most the column, cut to fit. */}
+              <span
+                className="text-text text-meta min-w-0 max-w-full justify-self-start truncate"
+                title={peer.primaryAddr ?? undefined}
+              >
+                {orDash(peer.primaryAddr)}
+              </span>
+              <RowTag variant={state.variant}>{state.label}</RowTag>
+            </button>
+          ) : (
+            <button
+              type="button"
+              {...toggle}
+              className="grid min-h-[44px] w-full grid-cols-[14px_auto_minmax(0,1fr)] items-start gap-x-2 gap-y-0.5 px-1 py-2 text-left font-mono sm:px-3"
+            >
+              <span aria-hidden="true" className="text-text-dim text-small">
+                {expanded ? '▾' : '▸'}
+              </span>
+              {/* The id keeps its width (already cut in the middle); the dial state takes what is
+                  left of the line and wraps inside its tag only when it must. */}
+              <span className="text-aqua text-small whitespace-nowrap">
+                {truncateHash(peer.peerId)}
+              </span>
+              <span className="min-w-0 justify-self-end">
+                <RowTag variant={state.variant} className="whitespace-normal">
+                  {state.label}
+                </RowTag>
+              </span>
+              <span
+                className="text-text text-meta col-span-2 col-start-2 min-w-0 max-w-full justify-self-start truncate"
+                title={peer.primaryAddr ?? undefined}
+              >
+                {orDash(peer.primaryAddr)}
+              </span>
+            </button>
+          )}
           {expanded && (
             <dl
               data-testid="peer-columns"
@@ -508,6 +550,8 @@ export function PeersTable() {
   // The measured width decides (docs/RESPONSIVE_LAYOUT.md rule 4): the table only where all
   // eleven columns fit, never a sideways scroller. Until measured, the table is assumed.
   const folded = boxWidth !== null && boxWidth < TABLE_MIN_PX;
+  // Table-rows T8: a folded peer is one line where the row has the wide phone row's room.
+  const oneLine = boxWidth !== null && boxWidth >= WIDE_ROW_MIN_WIDTH;
 
   const { data, isLoading, isError, isFetching } = useQuery({
     queryKey: ['network', 'peers', filters, cursor],
@@ -655,7 +699,9 @@ export function PeersTable() {
                 No peers match these evidence filters
               </div>
             ) : (
-              rows.map((peer) => <PeerRow key={peer.peerId} peer={peer} folded={folded} />)
+              rows.map((peer) => (
+                <PeerRow key={peer.peerId} peer={peer} folded={folded} oneLine={oneLine} />
+              ))
             )}
           </div>
         </div>

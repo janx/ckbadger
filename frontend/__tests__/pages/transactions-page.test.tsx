@@ -104,8 +104,11 @@ describe('TransactionsPage', () => {
 
     const hash = '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
     expect(screen.getAllByTitle(hash)).toHaveLength(1);
+    // Table-rows T5: the hash is the row's key, 13 px bright on an 18 px line (it read in neutral
+    // 12 px ink); still no colour of its own.
     for (const hashDisplay of screen.getAllByTitle(hash)) {
-      expect(hashDisplay).toHaveClass('text-text', 'text-small');
+      expect(hashDisplay).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
+      expect(hashDisplay).not.toHaveClass('text-small');
       expect(hashDisplay.children).toHaveLength(0);
       expect(hashDisplay.closest('a')).toHaveAttribute('href', `/mainnet/tx/${hash}`);
     }
@@ -227,8 +230,11 @@ describe('Transactions pool view', () => {
     const pool = screen.getByRole('table', { name: 'Transactions in the pool' });
     expect(pool).toHaveTextContent('Status · waiting');
     expect(pool).not.toHaveTextContent('Seen');
+    // Table-rows T5: the hash is the pool row's key, at body and bright on an 18 px line (it read
+    // in neutral 12 px ink); still no status colour on it.
     for (const hash of screen.getAllByTitle(`0x${'ab'.repeat(32)}`)) {
-      expect(hash).toHaveClass('text-text', 'text-small');
+      expect(hash).toHaveClass('text-text-bright', 'text-body', 'leading-[18px]');
+      expect(hash).not.toHaveClass('text-small');
       expect(hash).toHaveTextContent('0xababababab...ababab');
       expect(hash.children).toHaveLength(0);
       expect(hash.closest('a')).toHaveAttribute('href', `/mainnet/tx/0x${'ab'.repeat(32)}`);

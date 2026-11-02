@@ -107,6 +107,21 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(row.querySelector('[data-share-bar]')).toHaveAttribute('data-share-bar', '10%');
   });
 
+  // Table-rows T5: the depositor is the row's one bright thing, at body, on an 18 px line so the
+  // row keeps its one-line height; the rank and the share stay dim, the numbers small.
+  it('leads each row with the depositor at 13 px bright (T5)', async () => {
+    vi.mocked(api.getDaoDepositors).mockResolvedValueOnce(page([1], null));
+    render(<DaoDepositorsPage />);
+    const table = await screen.findByRole('table', { name: 'DAO depositors' });
+    const depositor = within(table).getByRole('link', { name: 'ckb1qzda0cr0…ssd2hqn' });
+    expect(depositor).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]');
+    const [rank, , deposits, capacity, share] = Array.from(table.querySelectorAll('tbody td'));
+    expect(rank.firstElementChild).toHaveClass('text-text-dim');
+    expect(share.firstElementChild).toHaveClass('text-text-dim');
+    for (const cell of [rank, deposits, capacity, share])
+      expect(cell.querySelector('.text-body')).toBeNull();
+  });
+
   it('puts a depositor on one line in the 640 band, where the five-column table does not fit', async () => {
     atContainerWidth(608);
     onTestFinished(() => {

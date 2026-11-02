@@ -14,6 +14,7 @@ import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from 
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatBlockNumber } from '@/lib/format-block';
 import { retryTransientOnly } from '@/lib/query-client';
+import { cn } from '@/lib/utils';
 
 /** Depositors a page from md up; twenty below it (R2). */
 const PAGE = 50;
@@ -29,11 +30,18 @@ function Ckb({ shannons }: { shannons: string }) {
   );
 }
 
-/** A depositor by address, or by its lock hash when the lock encodes to no address (L1). */
-function Depositor({ row }: { row: DaoDepositorRow }) {
+/**
+ * A depositor by address, or by its lock hash when the lock encodes to no address (L1). In the
+ * table it is the row's key (table-rows T5): `className` sets it at body on the row's 18 px line.
+ */
+function Depositor({ row, className }: { row: DaoDepositorRow; className?: string }) {
   const id = row.address ?? row.lockScriptHash;
   return (
-    <Link href={`/address/${id}`} className="text-text-bright hover:underline" title={id}>
+    <Link
+      href={`/address/${id}`}
+      className={cn('text-text-bright hover:underline', className)}
+      title={id}
+    >
       {id.slice(0, 12)}…{id.slice(-7)}
     </Link>
   );
@@ -50,7 +58,7 @@ const COLUMNS: ListColumn<DaoDepositorRow>[] = [
     key: 'depositor',
     label: 'Depositor',
     minWidth: 260,
-    render: (d) => <Depositor row={d} />,
+    render: (d) => <Depositor row={d} className="text-body leading-[18px]" />,
   },
   {
     key: 'deposits',
