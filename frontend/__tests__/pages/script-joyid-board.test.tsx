@@ -96,7 +96,7 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('In use since2023-10-07');
   });
 
-  it('draws History with occupied in jade, a separate occupied panel and the code track (SC-S2, SC-S3)', async () => {
+  it('draws History with occupied in jade, a separate occupied panel and the version days in the plot (SC-S2, SC-S3, L1-3 ruling)', async () => {
     const { container } = { container: document.body };
     await renderJoyid();
     const fills = [...container.querySelectorAll('svg path[fill]')].map((p) =>
@@ -113,71 +113,78 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(reading).toHaveTextContent('2026-10-29');
     expect(reading).toHaveTextContent('CKB held 456,002,179.57');
     expect(reading).toHaveTextContent('code v5 held by multisig 0x6598…d696');
-    const track = screen.getByLabelText('Code track');
-    expect(within(track).getByText('v1 · v2')).toBeInTheDocument();
-    expect(within(track).getByText('v3 · v4')).toBeInTheDocument();
-    expect(within(track).getByText('v5')).toBeInTheDocument();
-    expect(track).toHaveTextContent('multisig 0xd1db…b95c · 3 of 5 signatures');
-    expect(track).toHaveTextContent('multisig 0x6598…d696 · signers not on chain yet');
+    // Table-rows L1-3 ruling (board ScriptDetail): no code track under the chart. The version days
+    // are ghost labels inside the plot; the holders are the timeline's segments.
+    expect(screen.queryByLabelText('Code track')).toBeNull();
+    const history = screen.getByTestId('script-history');
+    expect(
+      [...history.querySelectorAll<HTMLElement>('[data-upgrade-label]')].map((l) => l.textContent)
+    ).toEqual(['v3 · v4', 'v5']);
+    const timeline = screen.getByTestId('holder-timeline');
+    expect(timeline).toHaveTextContent('multisig 0xd1db…b95c · 3 of 5 signatures');
+    expect(
+      [...timeline.querySelectorAll<HTMLElement>('[data-holder]')].map((s) => s.title).join(' ')
+    ).toContain('multisig 0x65983f…d696 · signers not on chain yet');
     expect(document.body.textContent).not.toMatch(/common knowledge/i);
   });
 
-  it('shows who can change the code as three multisigs, key by key (SC-S4)', async () => {
+  // Table-rows L1-3 (T8): the three columns of sentences became one holder timeline; the keys, what
+  // each signed and the keys kept across a handover are each segment's title.
+  it('shows who can change the code as three multisigs on one timeline, keys in the titles (SC-S4, L1-3)', async () => {
     await renderJoyid();
-    const holders = screen.getByRole('list', { name: 'Code cell holders' });
-    // one column at 390 px, one per holder from md up (no horizontal overflow on phones)
-    expect(holders).toHaveClass('grid-cols-1');
-    expect(holders.style.getPropertyValue('--holders')).toBe('3');
-    const columns = within(holders)
-      .getAllByRole('listitem')
-      .filter((li) => li.dataset.holder);
-    expect(columns).toHaveLength(3);
-    expect(columns[0]).toHaveTextContent('2023-10-07 → 2025-08-28');
-    expect(columns[0]).toHaveTextContent('3 of 5 signatures');
-    expect(columns[0]).toHaveTextContent('signed v2 and v3');
-    expect(columns[1]).toHaveTextContent('signed v4 and v5');
-    expect(columns[2]).toHaveTextContent('has never signed');
-    expect(columns[2]).toHaveTextContent(
-      'Its keys and threshold appear on chain the first time it signs.'
+    const section = screen.getByRole('region', { name: 'Who can change its code' });
+    expect(within(section).queryByRole('list', { name: 'Code cell holders' })).toBeNull();
+    const bar = within(section).getByRole('group', { name: /^Who held JoyID's code cell/ });
+    const segments = [...bar.querySelectorAll<HTMLElement>('[data-holder]')];
+    expect(segments).toHaveLength(3);
+    expect(segments[0].title).toContain('2023-10-07 → 2025-08-28');
+    expect(segments[0].title).toContain('3 of 5 signatures');
+    expect(segments[0].title).toContain('signed v2 and v3');
+    expect(segments[1].title).toContain('signed v4 and v5');
+    expect(segments[2].title).toContain('has never signed');
+    expect(segments[2].title).toContain(
+      'its keys and threshold appear on chain the first time it signs'
     );
-    expect(columns[0].querySelectorAll('[data-kept="true"]')).toHaveLength(2);
-    expect(columns[1].querySelectorAll('[data-kept="true"]')).toHaveLength(2);
-    expect(
-      screen.getByText(/kept across the handover on 2025-08-28: 2 of 5 keys/)
-    ).toBeInTheDocument();
-    expect(screen.getByText(/Three multisigs have held it\./)).toBeInTheDocument();
+    expect(segments[0].title.match(/0x[0-9a-f]{40}/g)).toHaveLength(6);
+    expect(segments[1].title).toContain(
+      'kept 2 of 5 keys of multisig 0xd1db…b95c at the handover on 2025-08-28'
+    );
+    expect(screen.getByRole('status', { name: 'Code cell holder reading' })).toHaveTextContent(
+      '3 holders · 5 versions · 2 handovers'
+    );
   });
 
-  it('merges the versions into one full-width table (SC-S5)', async () => {
+  // Table-rows L1-4: one line per version, newest first (board ScriptDetail); the exact time, the
+  // binary, the code cell's CKB, the signer and the fate are each row's title.
+  it('merges the versions into one full-width table, newest first (SC-S5, L1-4)', async () => {
     await renderJoyid();
     expect(screen.queryByRole('table', { name: 'Code cell deployments' })).toBeNull();
     const table = screen.getByRole('table', { name: 'Code versions' });
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows.map((row) => row.textContent!.match(/^v\d/)![0])).toEqual([
-      'v1',
-      'v2',
-      'v3',
-      'v4',
       'v5',
+      'v4',
+      'v3',
+      'v2',
+      'v1',
     ]);
-    await waitFor(() => expect(rows[0]).toHaveTextContent('96,760 B'));
-    expect(rows[0]).toHaveTextContent('2023-10-07 15:39');
-    expect(rows[0]).toHaveTextContent('#11,132,140');
-    expect(rows[0]).toHaveTextContent('consumed by v2');
-    expect(rows[0]).toHaveTextContent('first deployed');
-    expect(rows[0]).toHaveTextContent('into multisig 0xd1db…b95c');
-    expect(rows[2]).toHaveTextContent('hands it to 0x07a2…68ca');
-    expect(rows[4]).toHaveTextContent('current');
-    expect(rows[4]).toHaveTextContent('100,438.00000000');
-    expect(rows[4]).toHaveTextContent('live');
+    const title = (row: HTMLElement) => row.getAttribute('title')!;
+    await waitFor(() => expect(title(rows[4])).toContain('96,760 B'));
+    expect(title(rows[4])).toContain('2023-10-07 15:39');
+    expect(rows[4]).toHaveTextContent('#11,132,140');
+    expect(title(rows[4])).toContain('consumed by v2');
+    expect(title(rows[4])).toContain('first deployed');
+    expect(title(rows[4])).toContain('into multisig 0xd1db…b95c');
+    expect(title(rows[2])).toContain('hands it to 0x07a2…68ca');
+    expect(rows[0]).toHaveTextContent('live · current');
+    expect(title(rows[0])).toContain('100,438.00000000');
     expect(screen.getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)).toBeInTheDocument();
   });
 
-  it('says how to use it in a transaction (SC-S6)', async () => {
+  // Table-rows L1-5: the recipe is "The script" facts (board ScriptDetail's tier 2).
+  it('says how to use it in a transaction, in the script facts (SC-S6, L1-5)', async () => {
     await renderJoyid();
-    const section = screen
-      .getByRole('heading', { name: 'Use it in a transaction' })
-      .closest('section')!;
+    const section = screen.getByRole('heading', { name: 'The script' }).closest('section')!;
     expect(section).toHaveTextContent(
       '0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323'
     );
@@ -185,7 +192,8 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(section).toHaveTextContent(
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0'
     );
-    expect(section).toHaveTextContent('Pin this exact binary instead');
+    expect(section).toHaveTextContent('pin instead');
+    expect(section).toHaveTextContent('pins this exact binary');
     expect(section).toHaveTextContent(
       '0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe'
     );
@@ -218,14 +226,15 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     );
   });
 
-  it('keeps registered references in the developer tier (SC-S9)', async () => {
+  // Table-rows L1-5: the registered references are "The script" facts, one list per reference.
+  it('keeps registered references in the developer tier (SC-S9, L1-5)', async () => {
     await renderJoyid();
     const tier1 = document.querySelector('[data-tier="1"]') as HTMLElement;
     const tier2 = document.querySelector('[data-tier="2"]') as HTMLElement;
-    expect(within(tier1).queryByRole('heading', { name: 'Registered references' })).toBeNull();
-    expect(
-      within(tier2).getByRole('heading', { name: 'Registered references' })
-    ).toBeInTheDocument();
+    expect(within(tier1).queryByRole('heading', { name: 'The script' })).toBeNull();
+    const facts = within(tier2).getByRole('heading', { name: 'The script' }).closest('section')!;
+    expect(facts.querySelectorAll('dl')).toHaveLength(fixture.family.references.length);
+    expect(facts).toHaveTextContent('Lock args 0x65983f1d7520543a6f182a50354fb4ae2deed696');
   });
 });
 
@@ -252,18 +261,39 @@ describe('JoyID script page · visual pass', () => {
     expect(within(history).queryByRole('link', { name: /v1 · v2 · 2023-10-07/ })).toBeNull();
   });
 
-  it('staggers code-track labels so neighbours never overlap (390 px)', async () => {
+  // Table-rows L1-3 ruling: the code track's staggered rows are gone with the track. The plot's
+  // version labels share the name's line, one per deployment day, the newest first: a label that
+  // would touch the plot's name or a newer label is left out (its dashed line stays).
+  it('labels the upgrade days in the plot, one per day, never over the plot name or each other', async () => {
     await renderJoyid();
-    const track = screen.getByLabelText('Code track');
-    expect(
-      [...track.querySelectorAll<HTMLElement>('[data-upgrade-day]')].map((n) => n.dataset.row)
-    ).toEqual(['0', '1', '0']);
-    const custodians = [...track.querySelectorAll<HTMLElement>('[data-custodian-label]')];
-    // one row per holder: at 390 px the first and last labels would otherwise collide
-    expect(custodians.map((n) => n.dataset.row)).toEqual(['0', '1', '2']);
-    // a label that starts past the middle hangs from the right edge instead of running off it
-    expect(custodians[2].style.right).toBe('0%');
-    expect(custodians[0].style.left).toBe('0%');
+    const history = screen.getByTestId('script-history');
+    const labels = [...history.querySelectorAll<HTMLElement>('[data-upgrade-label]')];
+    expect(labels.map((l) => l.dataset.upgradeLabel)).toEqual(['2025-08-28', '2025-11-21']);
+    expect(labels.map((l) => l.style.left)).toEqual(['60%', '80%']);
+    for (const l of labels) expect(l).toHaveClass('text-meta', 'text-[#4b5266]');
+    // The first day sits under the plot's name at the left edge: its line, not its label.
+    expect(history.querySelector('[data-upgrade-label="2023-10-07"]')).toBeNull();
+    expect(history.querySelectorAll('[data-custodian]')).toHaveLength(0);
+  });
+
+  // At 358 px the plot's name takes 274 of the 348 px line: no label fits beside it, so none is
+  // written; the three dashed lines stay, and the versions are the timeline's ticks.
+  it('writes no version label over the plot name on a phone (358 px); the lines stay', async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    stubLayoutWidths({ chart: 358, list: 358 });
+    vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
+    vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
+    vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
+    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
+    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    vi.mocked(api.lookupScripts).mockResolvedValue({});
+    render(<ScriptDetailPage name="JoyID" />);
+    await screen.findByRole('heading', { name: 'JoyID', level: 1 });
+    const history = await screen.findByTestId('script-history');
+    expect(history.querySelectorAll('[data-upgrade-label]')).toHaveLength(0);
+    expect(history.querySelectorAll('[data-upgrade-line]')).toHaveLength(3);
+    expect(screen.getAllByTestId('holder-timeline')[0]).toHaveTextContent('v5 2025-11-21');
   });
 
   it('states the peak of CKB held from the API (SC-S8, R2b-b totalPeak)', async () => {
@@ -372,13 +402,13 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     for (const t of ticks) expect(t.getAttribute('text-anchor')).not.toBe('end');
   });
 
-  it('reads the last full day in one row under the code track, then the remaining figures in one quiet row (R13)', async () => {
+  // Table-rows L1-3 ruling: no code track between the picture and its reading any more.
+  it('reads the last full day in one row under the picture, then the remaining figures in one quiet row (R13)', async () => {
     await renderJoyid();
-    const track = screen.getByLabelText('Code track');
+    expect(screen.queryByLabelText('Code track')).toBeNull();
     const reading = screen.getByTestId('script-history-reading');
     const metrics = screen.getByLabelText('Script figures');
-    expect(follows(hero(), track)).toBe(true);
-    expect(follows(track, reading)).toBe(true);
+    expect(follows(hero(), reading)).toBe(true);
     expect(follows(reading, metrics)).toBe(true);
     expect(reading).toHaveClass('text-small', 'border-t');
     expect(reading).toHaveTextContent('2026-10-29');
@@ -432,19 +462,18 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
   });
 
-  it('says who can change its code in two sentences under the holders; the mechanism in tier 2 (C2)', async () => {
+  it('says who can change its code in one caption under the holder timeline; the mechanism in tier 2 (C2, L1-3)', async () => {
     await renderJoyid();
     const section = screen.getByRole('region', { name: 'Who can change its code' });
     expect(within(section).getByRole('heading', { level: 2 })).toHaveClass('text-section');
-    const holders = within(section).getByRole('list', { name: 'Code cell holders' });
+    const timeline = within(section).getByTestId('holder-timeline');
     const caption = section.querySelector('[data-role="caption"]') as HTMLElement;
     expect(caption).toHaveTextContent(
-      /^Whoever can spend its code cell can put new code in it, and every JoyID cell runs it from the next block\. Three multisigs have held it\.$/
+      /^Whoever can spend the code cell can put new code in it; every JoyID cell runs the new code from the next block\.$/
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
     expect(caption).toHaveClass('text-body', 'max-w-[640px]');
-    expect(follows(holders, caption)).toBe(true);
-    expect(section.lastElementChild).toBe(caption);
+    expect(timeline.lastElementChild).toBe(caption);
     expect(tier1()).not.toHaveTextContent('point at their code through one code cell');
     expect(tier2()).toHaveTextContent(
       "JoyID cells point at their code through one code cell's type id, not at a fixed binary. Whoever can spend that cell can put new code in it, and every JoyID cell runs the new code from the next block."
@@ -457,23 +486,21 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(tier1()).toContainElement(versions);
     const h2 = within(tier1()).getByRole('heading', { name: 'Code versions', level: 2 });
     expect(h2).toHaveClass('text-section');
-    expect(h2.parentElement!.children).toHaveLength(1);
+    // The heading row holds the h2 and the board's quiet order note only (L1-4).
+    expect(h2.parentElement!.children).toHaveLength(2);
+    expect(h2.nextElementSibling).toHaveTextContent(/^newest first$/);
     expect(
       within(tier2()).getByText(/one type id, 0xd00c84f0…318323, 5 binaries/)
     ).toBeInTheDocument();
-    expect(
-      within(tier2()).getByRole('heading', { name: 'Use it in a transaction' })
-    ).toBeInTheDocument();
-    expect(within(tier1()).queryByRole('heading', { name: 'Use it in a transaction' })).toBeNull();
+    // Table-rows L1-5: the recipe is "The script" facts.
+    expect(within(tier2()).getByRole('heading', { name: 'The script' })).toBeInTheDocument();
+    expect(within(tier1()).queryByRole('heading', { name: 'The script' })).toBeNull();
     // The cells' summary line, with its exact totals, is tier 2's too (R14).
     expect(within(tier2()).getByTestId('script-cells-summary')).toBeInTheDocument();
-    // Tier 2: the two prose sections side by side from lg, the recipe and references full width.
+    // Tier 2: the board's two blocks side by side from lg, nothing else.
     const read = within(tier2()).getByRole('heading', { name: 'How to read this page' });
     expect(read.closest('section')!.parentElement).toHaveClass('grid', 'lg:grid-cols-2');
-    for (const name of ['Use it in a transaction', 'Registered references'])
-      expect(within(tier2()).getByRole('heading', { name }).closest('section')).toHaveClass(
-        'lg:col-span-2'
-      );
+    expect(read.closest('section')!.parentElement!.children).toHaveLength(2);
   });
 
   it('spaces tier 1 like the DAO page: 64 px under the hero, then 72 px, h2 18 px above its evidence (R6)', async () => {
@@ -492,16 +519,26 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     );
   });
 
-  it('writes no coloured text in tier 1: the figure is bright, the graphics keep their colours (R11)', async () => {
+  // Table-rows L1-4: the board's one accent, the "live · current" class-mark tag of the version the
+  // cells run now, is the only coloured text tier 1 keeps (RowTag accent, as the boards draw it).
+  it('writes no coloured text in tier 1 but the live · current tag: the figure is bright, the graphics keep their colours (R11)', async () => {
     await renderJoyid();
     await waitFor(() =>
-      expect(screen.getByRole('table', { name: 'Code versions' })).toHaveTextContent('96,760 B')
+      expect(
+        within(screen.getByRole('table', { name: 'Code versions' }))
+          .getAllByRole('row')[5]
+          .getAttribute('title')
+      ).toContain('96,760 B')
     );
-    const coloured = [...tier1().querySelectorAll('[class]')].filter((el) =>
-      el
-        .getAttribute('class')!
-        .split(/\s+/)
-        .some((c) => COLOURED_TEXT.test(c))
+    const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
+    expect(accents.map((el) => el.textContent)).toEqual(['live · current']);
+    const coloured = [...tier1().querySelectorAll('[class]')].filter(
+      (el) =>
+        !el.matches('[data-row-tag="accent"]') &&
+        el
+          .getAttribute('class')!
+          .split(/\s+/)
+          .some((c) => COLOURED_TEXT.test(c))
     );
     expect(coloured.map((el) => el.outerHTML.slice(0, 90))).toEqual([]);
     const inked = [...tier1().querySelectorAll<HTMLElement>('[style]')].filter(
@@ -538,8 +575,9 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
     const rows = await screen.findAllByTestId('code-version-row-mobile');
     expect(screen.queryByRole('table', { name: 'Code versions' })).toBeNull();
     expect(rows).toHaveLength(5);
-    await waitFor(() => expect(rows[0]).toHaveTextContent('96,760 B'));
-    const first = phoneLines(rows[0]);
+    // Newest first since table-rows L1-4: v1 is the last row.
+    await waitFor(() => expect(rows[4]).toHaveTextContent('96,760 B'));
+    const first = phoneLines(rows[4]);
     expect(first.map((l) => [l.key, l.tone])).toEqual([
       ['version', 'body'],
       ['hash', 'quiet'],
@@ -553,7 +591,7 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
       /^#11,132,140 · 96,760 B · .+ CKB · first deployed into multisig 0xd1db…b95c$/
     );
     expect(first[2].right).toMatch(/^live cells using it: /);
-    const last = phoneLines(rows[4]);
+    const last = phoneLines(rows[0]);
     expect(last[0].left).toMatch(/^v5 current /);
     expect(last[0].right).toBe('live');
   });
@@ -567,7 +605,8 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
         .map((h) => h.textContent)
     ).toEqual(['v', 'Deployed', 'Code cell · version hash', 'Status', 'Live cells']);
     expect(Number.parseFloat(table.style.minWidth)).toBeLessThanOrEqual(608);
-    const [first] = within(table).getAllByRole('row').slice(1);
+    // Newest first since table-rows L1-4: v1 is the last row.
+    const first = within(table).getAllByRole('row').slice(1).at(-1)!;
     const cell = first.querySelectorAll('td')[2];
     await waitFor(() => expect(cell).toHaveTextContent('96,760 B · first deployed into multisig'));
     expect(cell.lastElementChild!.textContent).toMatch(/^0x[0-9a-f]{64}$/);

@@ -1,6 +1,7 @@
 'use client';
 import type { ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { useElementWidth } from '@/hooks/useElementWidth';
 import { Chart } from '@/components/ui/chart';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
@@ -17,7 +18,6 @@ import { formatCount } from '@/lib/format-count';
 import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
 import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
-import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
@@ -63,9 +63,12 @@ function holderSentence(custody: ScriptCustodyApi): string {
 export function ScriptSummarySentence({
   family,
   lineage,
+  inline = false,
 }: {
   family: ScriptFamilyDetail;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
+  /** A span inside a paragraph (table-rows L1-5) instead of a paragraph of its own. */
+  inline?: boolean;
 }) {
   const firstDeployed = firstDeployedAt(family);
   const verb =
@@ -76,8 +79,12 @@ export function ScriptSummarySentence({
         : 'guards';
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
+  const Sentence = inline ? 'span' : 'p';
   return (
-    <p data-testid="script-summary" className="text-body max-w-[640px]">
+    <Sentence
+      data-testid="script-summary"
+      className={inline ? undefined : 'text-body max-w-[640px]'}
+    >
       {family.name} {verb}{' '}
       <span className="text-text-bright">{family.liveCellsCount.toLocaleString('en-US')}</span> live
       cells holding{' '}
@@ -100,7 +107,7 @@ export function ScriptSummarySentence({
       {code === 'upgradable' && lineage && lineage.length === 1 && (
         <> Its code is upgradable by {holderSentence(lineage[0].custody)}.</>
       )}
-    </p>
+    </Sentence>
   );
 }
 
@@ -243,6 +250,68 @@ function UpgradeLines({
   );
 }
 
+/** A monospace advance at 11 px: whole pixels where Chromium snaps them. */
+const LABEL_ADVANCE = Math.max(Math.round(0.6 * 11), 0.6 * 11);
+/** px between a version label and its dashed line, and between two labels or a label and the name. */
+const LABEL_PAD = 4;
+const LABEL_GAP = 8;
+
+/**
+ * The version days written inside the main plot (board ScriptDetail: "v3 · v4", "v5" in ghost ink on
+ * the name's line), one label per deployment day. The newest day is placed first; a label that
+ * would touch the plot's name or a label already placed is left out — its dashed line stays, and
+ * its versions are the timeline's ticks and the versions table's rows.
+ */
+function UpgradeLabels({
+  upgradeList,
+  position,
+  width,
+  plotName,
+}: {
+  upgradeList: readonly [string, number[]][];
+  position: (day: string) => number | null;
+  width: number | null;
+  plotName: string;
+}) {
+  if (width === null) return null;
+  const plot = width - 10;
+  const taken: [number, number][] = [[0, LABEL_PAD * 2 + plotName.length * LABEL_ADVANCE]];
+  const placed: { day: string; text: string; at: number; right: boolean }[] = [];
+  const days = upgradeList
+    .map(([day, versions]) => ({ day, versions, at: position(day) }))
+    .filter((d): d is { day: string; versions: number[]; at: number } => d.at !== null)
+    .sort((a, b) => b.at - a.at);
+  for (const { day, versions, at } of days) {
+    const text = versions.map((n) => `v${n}`).join(' · ');
+    const w = text.length * LABEL_ADVANCE;
+    const x = (at / 100) * plot;
+    const right = x + LABEL_PAD + w > plot;
+    const box: [number, number] = right ? [x - LABEL_PAD - w, x] : [x, x + LABEL_PAD + w];
+    if (taken.some(([a, b]) => box[0] < b + LABEL_GAP && a < box[1] + LABEL_GAP)) continue;
+    taken.push(box);
+    placed.push({ day, text, at, right });
+  }
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none absolute left-0 right-[10px] top-0 h-[28px]"
+    >
+      {placed
+        .sort((a, b) => a.at - b.at)
+        .map(({ day, text, at, right }) => (
+          <span
+            key={day}
+            data-upgrade-label={day}
+            className={`text-meta absolute top-[5px] whitespace-nowrap leading-[14px] text-[#4b5266] ${right ? 'pr-1' : 'pl-1'}`}
+            style={right ? { right: `${100 - at}%` } : { left: `${at}%` }}
+          >
+            {text}
+          </span>
+        ))}
+    </div>
+  );
+}
+
 /**
  * The hero's picture (Script board History, hierarchy v3 R13): CKB in its cells with the occupied
  * part in jade (300 px, its name and values inside the plot), then occupied on its own scale; the
@@ -263,6 +332,7 @@ export function ScriptHistoryFigure({
   active: number | null;
   onActive: (index: number | null) => void;
 }) {
+  const [ref, width] = useElementWidth<HTMLDivElement>();
   for (const key of ['used', 'unused'])
     if (!chart.series.some((series) => series.key === key))
       throw new Error(`${family.name} capacity history has no ${key} series`);
@@ -271,6 +341,7 @@ export function ScriptHistoryFigure({
     values: { used: ckbDecimal(point.values.used), unused: ckbDecimal(point.values.unused) },
   }));
   const { position, upgradeList } = historyAxis(chart, lineage, numbers);
+  const plotName = `CKB in ${family.name} cells · occupied and free`;
   const shared = {
     data,
     unit: 'CKB',
@@ -281,13 +352,19 @@ export function ScriptHistoryFigure({
     formatValue: (value: string) => formatExactDecimal(value, 'script cell capacity'),
   } as const;
   return (
-    <div data-testid="script-history" className="relative mt-[18px] min-w-0">
+    <div ref={ref} data-testid="script-history" className="relative mt-[18px] min-w-0">
       <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-line" />
+      <UpgradeLabels
+        upgradeList={upgradeList}
+        position={position}
+        width={width}
+        plotName={plotName}
+      />
       <Chart
         {...shared}
         title={`CKB in ${family.name} cells`}
         subtitle="Occupied and free capacity, indexed chain day"
-        plotName={`CKB in ${family.name} cells · occupied and free`}
+        plotName={plotName}
         kind="stacked"
         height={300}
         series={[
@@ -305,84 +382,6 @@ export function ScriptHistoryFigure({
           height={96}
           series={[{ key: 'used', label: 'Occupied', color: DATA_COLOR }]}
         />
-      </div>
-    </div>
-  );
-}
-
-/**
- * The code track under the history, on the same time axis: the versions deployed on each upgrade
- * day and the band of every code cell holder.
- */
-export function ScriptCodeTrack({
-  chart,
-  lineage,
-  numbers,
-  holders,
-}: {
-  chart: StackedAreaChartResponse;
-  lineage: readonly ScriptHistoryMarkerApi[] | null;
-  numbers: ReadonlyMap<string, number>;
-  holders: readonly CodeHolder[];
-}) {
-  if (!lineage || chart.data.length === 0) return null;
-  const { position, upgradeList } = historyAxis(chart, lineage, numbers);
-  return (
-    <div aria-label="Code track" className="text-meta relative mt-1 min-w-0">
-      <UpgradeLines upgradeList={upgradeList} position={position} attribute="data-upgrade-tick" />
-      <div className="text-text-dim pt-1.5">code · who held the code cell</div>
-      <div className="relative h-8 pr-[10px]">
-        <div className="relative h-full">
-          {upgradeList.map(([day, versions], i) => {
-            const at = position(day);
-            return at === null ? null : (
-              <span
-                key={day}
-                data-upgrade-day={day}
-                data-row={i % 2}
-                className="text-text-bright absolute whitespace-nowrap pl-1"
-                style={{ left: `${at}%`, top: i % 2 ? 14 : 0 }}
-              >
-                {versions.map((n) => `v${n}`).join(' · ')}
-              </span>
-            );
-          })}
-        </div>
-      </div>
-      <div className="relative mt-1 pr-[10px]" style={{ height: 16 + holders.length * 14 }}>
-        <div className="relative h-full">
-          {holders.map((holder, i) => {
-            const start = position(holder.from.indexedDay);
-            if (start === null) return null;
-            const end = holder.until ? (position(holder.until.indexedDay) ?? 100) : 100;
-            // Past the middle a label hangs from its band's end, so it never runs off the
-            // page; each holder's label has its own row, so labels never overlap.
-            const anchor = start > 50 ? { right: `${100 - end}%` } : { left: `${start}%` };
-            return (
-              <div key={holder.lockArgs}>
-                <div
-                  data-custodian={holder.lockArgs}
-                  className={`absolute top-0 h-2 rounded-sm border ${holder.neverSigned ? 'border-dashed' : ''}`}
-                  style={{
-                    left: `${start}%`,
-                    width: `${Math.max(end - start, 0)}%`,
-                    borderColor: 'rgba(160,168,190,.7)',
-                    backgroundColor: holder.neverSigned ? 'transparent' : 'rgba(160,168,190,.22)',
-                  }}
-                />
-                <span
-                  data-custodian-label={holder.lockArgs}
-                  data-row={i}
-                  className="absolute whitespace-nowrap text-[#a0a8be]"
-                  style={{ ...anchor, top: 12 + i * 14 }}
-                >
-                  {holderName(holder.custody)}
-                  {signingText(holder) ? ` · ${signingText(holder)}` : ''}
-                </span>
-              </div>
-            );
-          })}
-        </div>
       </div>
     </div>
   );
@@ -466,27 +465,33 @@ export function ScriptHistoryNotes({
   family,
   chart,
   lineage,
+  inline = false,
 }: {
   family: ScriptFamilyDetail;
   chart: StackedAreaChartResponse | undefined;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
+  /** Spans inside a paragraph (table-rows L1-5) instead of two paragraphs. */
+  inline?: boolean;
 }) {
   if (chart && chart.totalPeak === undefined)
     throw new Error(`${family.name} capacity history has no totalPeak`);
   const peak = chart?.totalPeak;
   const capacity = BigInt(family.ownedCapacitySum);
   const occupiedNow = BigInt(family.ownedKnowledgeSum);
+  const Sentence = inline ? 'span' : 'p';
+  const block = inline ? undefined : 'text-body max-w-[640px]';
   return (
     <>
-      <p className="text-body max-w-[640px]">
+      <Sentence className={block}>
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
         {family.name} guards; <span className="text-[#a0a8be]">free</span> is CKB its owners keep
         there.
         {lineage && lineage.length > 1 ? ' Dashed lines mark the days its code was replaced.' : ''}
-      </p>
+      </Sentence>
+      {inline && peak && ' '}
       {peak && (
-        <p data-testid="script-history-peak" className="text-body max-w-[640px]">
+        <Sentence data-testid="script-history-peak" className={block}>
           CKB held peaked at <ExactCkb shannons={BigInt(peak.value)} signed={false} tone="plain" />{' '}
           on {peak.date}
           {capacity > BigInt(0) && (
@@ -499,7 +504,8 @@ export function ScriptHistoryNotes({
               />, {scriptShare(occupiedNow, capacity)} of what the cells hold
             </>
           )}
-        </p>
+          {inline && '.'}
+        </Sentence>
       )}
     </>
   );
@@ -667,93 +673,30 @@ export function ScriptCustodyMechanism({
   family,
   lineage,
   binaries,
+  inline = false,
 }: {
   family: ScriptFamilyDetail;
   lineage: readonly ScriptHistoryMarkerApi[] | null;
   /** The Code versions table's former heading note ("one type id, …, N binaries"). */
   binaries: string;
+  /** Spans inside a paragraph (table-rows L1-5) instead of two paragraphs. */
+  inline?: boolean;
 }) {
+  const Sentence = inline ? 'span' : 'p';
   return (
     <>
       {lineage && (
-        <p className="text-body max-w-[640px]">
+        <Sentence className={inline ? undefined : 'text-body max-w-[640px]'}>
           {family.name} cells point at their code through one code cell&apos;s type id, not at a
           fixed binary. Whoever can spend that cell can put new code in it, and every {family.name}{' '}
           cell runs the new code from the next block.
-        </p>
+        </Sentence>
       )}
-      <p className="text-text-dim text-body max-w-[640px]">Code versions: {binaries}.</p>
+      {inline && lineage && ' '}
+      <Sentence className={inline ? undefined : 'text-text-dim text-body max-w-[640px]'}>
+        Code versions: {binaries}.
+      </Sentence>
     </>
-  );
-}
-
-/** "Use it in a transaction": the reference to put in a script, and the cell dep that serves it. */
-export function ScriptUseInTransaction({ family }: { family: ScriptFamilyDetail }) {
-  const references = family.references ?? [];
-  if (!references.length) return null;
-  return (
-    <div className="space-y-5">
-      {references.map((reference) => {
-        const version = family.versions.find(
-          (candidate) => candidate.versionHash === reference.currentVersionHash
-        );
-        const live =
-          version?.deployments.filter((deployment) => deployment.status === 'live') ?? [];
-        return (
-          <dl
-            key={`${reference.hashType}:${reference.referenceHash}`}
-            className="text-small grid gap-x-10 gap-y-3 md:grid-cols-3"
-          >
-            <div className="min-w-0">
-              <dt className="text-text-dim">Code hash · hash type</dt>
-              <dd className="mt-0.5 [overflow-wrap:anywhere]">{reference.referenceHash}</dd>
-              <dd className="text-text-dim mt-0.5">
-                {reference.hashType} ·{' '}
-                {reference.hashType === 'type' ? 'follows every upgrade' : 'pins this exact binary'}
-              </dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-text-dim">Cell dep · dep type code</dt>
-              {live.length ? (
-                live.map((deployment) => (
-                  <dd
-                    key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
-                    className="mt-0.5 [overflow-wrap:anywhere]"
-                  >
-                    <Link
-                      href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
-                      className="text-text hover:text-jade"
-                    >
-                      {deployment.codeCellTxHash}
-                      <OutpointIndex index={deployment.codeCellOutputIndex} />
-                    </Link>
-                  </dd>
-                ))
-              ) : (
-                <dd className="text-text-dim mt-0.5">
-                  {reference.currentVersionHash
-                    ? 'No live code cell for the current version'
-                    : 'Retired: no current code cell'}
-                </dd>
-              )}
-              {live.length > 0 && (
-                <dd className="text-text-dim mt-0.5">the live code cell of the current version</dd>
-              )}
-            </div>
-            {reference.hashType === 'type' && version && (
-              <div className="min-w-0">
-                <dt className="text-text-dim">Pin this exact binary instead</dt>
-                <dd className="mt-0.5 [overflow-wrap:anywhere]">{version.versionHash}</dd>
-                <dd className="text-text-dim mt-0.5">
-                  its data hash, with hash type data1 or data2; an upgrade will not reach cells that
-                  pin it
-                </dd>
-              </div>
-            )}
-          </dl>
-        );
-      })}
-    </div>
   );
 }
 

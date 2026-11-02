@@ -9,10 +9,10 @@ import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ScriptCustodyEvidence } from '@/components/scripts/script-code-evidence';
+import { ScriptCustodyEvidence, isImmutableClass } from '@/components/scripts/script-code-evidence';
+import { HolderTimeline } from '@/components/scripts/holder-timeline';
 import {
   ScriptCellsSummary,
-  ScriptCodeTrack,
   ScriptCustodyFigure,
   ScriptCustodyMechanism,
   ScriptHeading,
@@ -22,12 +22,16 @@ import {
   ScriptHistoryNotes,
   ScriptHistoryReading,
   ScriptSummarySentence,
-  ScriptUseInTransaction,
   blockLink,
 } from '@/components/scripts/script-family-board';
 import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/api';
 import type { CapacityRangeKey } from '@/lib/capacity-range';
-import { formatCapacity, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { formatBlockNumber } from '@/lib/format-block';
+import { formatCount } from '@/lib/format-count';
+import { cn } from '@/lib/utils';
+import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { RowTag } from '@/components/ui/row-tag';
 import {
   codeHolders,
   holderName,
@@ -165,51 +169,125 @@ const ANATOMY_LEGEND = [
 
 type ReferenceRow = NonNullable<ScriptFamilyDetail['references']>[number];
 
-/** Tier 2's "Registered references" table: each reference, its current code and its holder. */
-const REFERENCE_COLUMNS: ListColumn<ReferenceRow>[] = [
-  {
-    key: 'reference',
-    label: 'Reference',
-    minWidth: 250,
-    width: '35%',
-    render: (row) => (
-      <span className="text-text-bright break-all">
-        {row.hashType} · {row.referenceHash}
-      </span>
-    ),
-  },
-  {
-    key: 'code',
-    label: 'Current code version',
-    minWidth: 210,
-    width: '30%',
-    render: (row) => (
-      <span className="text-text-dim break-all">
-        {row.currentVersionHash ?? 'Retired · no current code cell'}
-      </span>
-    ),
-  },
-  {
-    key: 'custody',
-    label: 'Code cell holder',
-    minWidth: 235,
-    width: '35%',
-    render: (row) =>
-      row.custody ? (
-        <ScriptCustodyEvidence custody={row.custody} />
-      ) : (
-        <span className="text-text-dim">Evidence unavailable</span>
-      ),
-  },
-];
+/**
+ * Tier 2's "The script" (table-rows L1-5, board ScriptDetail): its cells, then one definition list
+ * per registered reference — the reference and how it follows the code, the current code and how to
+ * pin it instead, the cell dep that serves it, and the evidence of who holds its code cell. The
+ * former "Use it in a transaction" and "Registered references" blocks, fact for fact.
+ */
+function ScriptFacts({ family }: { family: ScriptFamilyDetail }) {
+  const references: ReferenceRow[] = family.references ?? [];
+  const term = 'text-text-dim';
+  const value = 'm-0 min-w-0 [overflow-wrap:anywhere]';
+  return (
+    <div className="text-small space-y-5">
+      {(references.length ? references : [null]).map((reference, i) => {
+        const version = reference
+          ? family.versions.find((v) => v.versionHash === reference.currentVersionHash)
+          : undefined;
+        const live = version?.deployments.filter((d) => d.status === 'live') ?? [];
+        return (
+          <dl
+            key={reference ? `${reference.hashType}:${reference.referenceHash}` : 'cells'}
+            className={cn(
+              'grid grid-cols-[110px_minmax(0,1fr)] gap-x-3 gap-y-1',
+              i > 0 && 'border-base-border-subtle border-t pt-4'
+            )}
+          >
+            {i === 0 && (
+              <>
+                <dt className={term}>its cells</dt>
+                <dd className={value}>
+                  <ScriptCellsSummary family={family} />
+                </dd>
+              </>
+            )}
+            {reference && (
+              <>
+                <dt className={term}>code hash</dt>
+                <dd className={value}>{reference.referenceHash}</dd>
+                <dt className={term}>hash type</dt>
+                <dd className={value}>
+                  {reference.hashType} ·{' '}
+                  {reference.hashType === 'type'
+                    ? 'follows every upgrade'
+                    : 'pins this exact binary'}{' '}
+                  · {formatCount(reference.liveCellsCount, 'live cell')}
+                </dd>
+                <dt className={term}>current code</dt>
+                <dd className={value}>
+                  {reference.currentVersionHash ?? 'Retired · no current code cell'}
+                </dd>
+                {reference.hashType === 'type' && version && (
+                  <>
+                    <dt className={term}>pin instead</dt>
+                    <dd className={cn(value, 'text-text-dim')}>
+                      its data hash with hash type data1 or data2 pins this exact binary; an upgrade
+                      will not reach cells that pin it
+                    </dd>
+                  </>
+                )}
+                <dt className={term}>cell dep</dt>
+                <dd className={value}>
+                  {live.length ? (
+                    live.map((deployment) => (
+                      <span
+                        key={`${deployment.codeCellTxHash}:${deployment.codeCellOutputIndex}`}
+                        className="block"
+                      >
+                        <Link
+                          href={`/cell/${deployment.codeCellTxHash}-${deployment.codeCellOutputIndex}`}
+                          className="text-text hover:text-jade"
+                        >
+                          {deployment.codeCellTxHash}
+                          <OutpointIndex index={deployment.codeCellOutputIndex} />
+                        </Link>
+                        <span className="text-text-dim">
+                          {' '}
+                          · dep type code · the live code cell of the current version
+                        </span>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-text-dim">
+                      {reference.currentVersionHash
+                        ? 'No live code cell for the current version'
+                        : 'Retired: no current code cell'}
+                    </span>
+                  )}
+                </dd>
+                <dt className={term}>held by</dt>
+                <dd className={value}>
+                  {reference.custody ? (
+                    <ScriptCustodyEvidence custody={reference.custody} />
+                  ) : (
+                    <span className="text-text-dim">Evidence unavailable</span>
+                  )}
+                </dd>
+              </>
+            )}
+          </dl>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A column head at 11 px (T5). */
+function Head({ label }: { label: string }) {
+  return <span className="text-meta">{label}</span>;
+}
 
 /** A tier-1 section (hierarchy R6): h2 at section size, 18 px above its evidence. */
 function Section({
   title,
+  note,
   className,
   children,
 }: {
   title: string;
+  /** A quiet word on the heading's row, right (the board's "newest first"). */
+  note?: string;
   className: string;
   children: ReactNode;
 }) {
@@ -217,6 +295,7 @@ function Section({
     <section aria-label={title} className={`min-w-0 ${className}`}>
       <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-text-bright text-section font-medium">{title}</h2>
+        {note && <span className="text-text-dim text-small">{note}</span>}
       </div>
       {children}
     </section>
@@ -235,7 +314,7 @@ export function ScriptFamilyPage({
   codeCells,
   cells,
 }: ScriptFamilyPageProps) {
-  // One hover state for the whole history: the picture, its code track and its reading.
+  // One hover state for the whole history: the picture and its reading.
   const [active, setActive] = useState<number | null>(null);
   if (!family.references || !family.history)
     throw new Error(`/scripts/${family.name} lacks references or history`);
@@ -243,6 +322,11 @@ export function ScriptFamilyPage({
   const numbers = versionNumbers(family);
   const lineage = typeLineage(history);
   const holders = lineage ? codeHolders(lineage, history, numbers) : [];
+  // Code no one can replace (pinned by data hash, or in a code cell no one can spend) is said in
+  // words, never drawn as a line of holders.
+  const immutable =
+    (family.codeClasses ?? []).length > 0 &&
+    (family.codeClasses ?? []).every((row) => isImmutableClass(row.class));
   const deploymentOf = new Map(
     orderedVersions(family).flatMap((version) =>
       version.deployments.map(
@@ -251,7 +335,8 @@ export function ScriptFamilyPage({
       )
     )
   );
-  const rows = orderedVersions(family).map((version) => ({
+  // Newest first (board ScriptDetail): the version cells run now leads.
+  const rows = [...orderedVersions(family)].reverse().map((version) => ({
     version,
     number: numbers.get(version.versionHash)!,
     current: version.deployments.some((deployment) => deployment.status === 'live'),
@@ -327,13 +412,185 @@ export function ScriptFamilyPage({
       {row.current && <span className="text-text text-meta block">current</span>}
     </span>
   );
+  /** The deployment a one-line version row writes: its first; the others are its title's. */
+  const leadOf = (row: Row): Deployment | undefined =>
+    [...row.version.deployments].sort((a, b) => a.deployedAt - b.deployedAt)[0];
+  /** "replaced at #17,894,900": what became of a version no live code cell holds. */
+  const replacedText = (d: Deployment | undefined): string =>
+    !d
+      ? 'no code cell observed'
+      : d.consumedAtBlock !== undefined && d.consumedAtBlock !== null
+        ? `replaced at ${formatBlockNumber(d.consumedAtBlock)}`
+        : d.status === 'consumed'
+          ? deploymentStatus(d)
+          : 'status unavailable';
+  /** Who signed a deployment, for the title: "signed by X, hands it to Y" or "first deployed into Y". */
+  const signerTitle = (d: Deployment): string => {
+    const { who, note, marked } = signer(d);
+    if (!marked) return who;
+    if (who === 'first deployed') return `${who} ${note}`;
+    return note ? `signed by ${who}, ${note}` : `signed by ${who}`;
+  };
+  /**
+   * A version row's hover (L1-4): every field that left the line — the exact time, each code cell
+   * with its binary and CKB, who held and who signed it, its fate, and the data hash.
+   */
+  const versionTitle = (row: Row): string => {
+    const deployments = [...row.version.deployments].sort((a, b) => a.deployedAt - b.deployedAt);
+    return [
+      `v${row.number}`,
+      row.current ? 'live · current' : replacedText(leadOf(row)),
+      ...(deployments.length ? [] : ['no deployment observed']),
+      ...deployments.flatMap((d) => {
+        const state = codeCells.get(outpointKey(d));
+        return [
+          `deployed ${formatUtc8DateTime(d.deployedAt).slice(0, 16)} (UTC+8)${d.createdAtBlock !== undefined ? ` at ${formatBlockNumber(d.createdAtBlock)}` : ''}`,
+          `code cell ${outpointKey(d)}`,
+          state?.cell
+            ? `${state.cell.dataSize.toLocaleString('en-US')} B binary`
+            : state?.error
+              ? `binary unavailable: ${state.error.message}`
+              : 'binary loading',
+          ...(state?.cell ? [`${formatCkbAmount(state.cell.capacity).full} CKB`] : []),
+          d.custody ? `held by ${holderName(d.custody)}` : 'custody unavailable',
+          signerTitle(d),
+          deploymentStatus(d),
+        ];
+      }),
+      `data hash ${row.version.versionHash}`,
+    ].join(' · ');
+  };
+  /** One 36 px line (board: 36): the row density's 11 px padding, 2 px less. */
+  const ROW = 'py-[9px]';
+  const columns: ListColumn<Row>[] = [
+    {
+      key: 'version',
+      label: 'Version',
+      header: <Head label="Version" />,
+      minWidth: 64,
+      className: ROW,
+      render: (row) => {
+        const lead = leadOf(row);
+        const label = `v${row.number}`;
+        return lead ? (
+          <Link
+            href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
+            className="text-body text-text-bright leading-[18px] hover:underline"
+          >
+            {label}
+          </Link>
+        ) : (
+          <span className="text-body text-text-bright leading-[18px]">{label}</span>
+        );
+      },
+    },
+    {
+      key: 'deployed',
+      label: 'Deployed',
+      header: <Head label="Deployed" />,
+      minWidth: 110,
+      className: ROW,
+      render: (row) => {
+        const lead = leadOf(row);
+        return lead ? (
+          <span className="tabular-nums">{formatUtc8Date(lead.deployedAt)}</span>
+        ) : (
+          <span className="text-text-dim">—</span>
+        );
+      },
+    },
+    {
+      key: 'block',
+      label: 'Block',
+      header: <Head label="Block" />,
+      minWidth: 120,
+      numeric: true,
+      className: ROW,
+      render: (row) => {
+        const block = leadOf(row)?.createdAtBlock;
+        return block !== undefined ? (
+          <Link href={`/blocks/${block}`} className="text-text-dim hover:text-jade">
+            {formatBlockNumber(block)}
+          </Link>
+        ) : (
+          <span className="text-text-dim">—</span>
+        );
+      },
+    },
+    {
+      key: 'cell',
+      label: 'Code cell',
+      header: <Head label="Code cell" />,
+      minWidth: 160,
+      width: '22%',
+      className: ROW,
+      render: (row) => {
+        const lead = leadOf(row);
+        if (!lead) return <span className="text-text-dim">No deployment observed</span>;
+        const more = row.version.deployments.filter((d) => d !== lead);
+        return (
+          <span title={outpointKey(lead)} className="flex min-w-0 items-center gap-2">
+            <span className="text-text-dim truncate">
+              {shortHex(lead.codeCellTxHash, 6, 4)}:{lead.codeCellOutputIndex}
+            </span>
+            {more.length > 0 && (
+              <RowTag title={more.map(outpointKey).join(', ')}>+{more.length}</RowTag>
+            )}
+          </span>
+        );
+      },
+    },
+    {
+      key: 'held',
+      label: 'Held by',
+      header: <Head label="Held by" />,
+      minWidth: 190,
+      // The column that takes the free width.
+      width: 'auto',
+      className: `${ROW} truncate`,
+      render: (row) => {
+        const custody = leadOf(row)?.custody;
+        return custody ? (
+          <span>{holderName(custody)}</span>
+        ) : (
+          <span className="text-text-dim">custody unavailable</span>
+        );
+      },
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      header: <Head label="Status" />,
+      minWidth: 200,
+      width: '18%',
+      className: `${ROW} truncate`,
+      render: (row) =>
+        row.current ? (
+          <RowTag variant="accent">live · current</RowTag>
+        ) : (
+          <span className="text-text-dim">{replacedText(leadOf(row))}</span>
+        ),
+    },
+    {
+      key: 'usage',
+      label: 'Live cells',
+      header: <Head label="Live cells" />,
+      minWidth: 100,
+      numeric: true,
+      className: ROW,
+      render: (row) => versionUsage(row.version.versionHash),
+    },
+  ];
+  /** The narrow table keeps its stacked cells: the default density's padding, top-aligned. */
+  const NARROW = 'py-3 align-top';
   /** Board L7's 640 table: five columns, the version hash the code cell's second line. */
   const narrowColumns: ListColumn<Row>[] = [
-    { key: 'version', label: 'v', minWidth: 64, render: versionCell },
+    { key: 'version', label: 'v', minWidth: 64, className: NARROW, render: versionCell },
     {
       key: 'deployed',
       label: 'Deployed',
       minWidth: 96,
+      className: NARROW,
       render: (row) =>
         row.version.deployments.length ? (
           row.version.deployments.map((d) => (
@@ -352,6 +609,7 @@ export function ScriptFamilyPage({
       key: 'cell',
       label: 'Code cell · version hash',
       minWidth: 228,
+      className: NARROW,
       // The column that takes the free width (the board's 1fr).
       width: 'auto',
       render: (row) => (
@@ -374,7 +632,7 @@ export function ScriptFamilyPage({
       key: 'status',
       label: 'Status',
       minWidth: 112,
-      className: 'text-text-dim',
+      className: `text-text-dim ${NARROW}`,
       render: (row) =>
         row.version.deployments.map((d) => (
           <span key={outpointKey(d)} className="block">
@@ -386,6 +644,7 @@ export function ScriptFamilyPage({
       key: 'usage',
       label: 'Live cells',
       minWidth: 80,
+      className: NARROW,
       numeric: true,
       render: (row) => versionUsage(row.version.versionHash),
     },
@@ -548,144 +807,39 @@ export function ScriptFamilyPage({
               )}
             </section>
             {!chartLoading && !chartError && chart?.data.length ? (
-              <>
-                <ScriptCodeTrack
-                  chart={chart}
-                  lineage={lineage}
-                  numbers={numbers}
-                  holders={holders}
-                />
-                <ScriptHistoryReading
-                  chart={chart}
-                  lineage={lineage}
-                  numbers={numbers}
-                  active={active}
-                />
-              </>
+              <ScriptHistoryReading
+                chart={chart}
+                lineage={lineage}
+                numbers={numbers}
+                active={active}
+              />
             ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
             <Section title="Who can change its code" className="mt-16">
-              <ScriptCustodyFigure family={family} lineage={lineage} holders={holders} />
+              {lineage && holders.length && !immutable ? (
+                // T8: one Type ID lineage is a holder timeline.
+                <HolderTimeline
+                  family={family}
+                  lineage={lineage}
+                  holders={holders}
+                  numbers={numbers}
+                  now={Date.now()}
+                />
+              ) : (
+                // Immutable code, or several references with no single lineage: said in words.
+                <ScriptCustodyFigure family={family} lineage={null} holders={[]} />
+              )}
             </Section>
-            <Section title="Code versions" className="mt-[72px]">
+            <Section title="Code versions" note="newest first" className="mt-[72px]">
               <ListTable
                 label="Code versions"
                 rows={rows}
                 rowKey={(row) => row.version.versionHash}
-                columns={[
-                  {
-                    key: 'version',
-                    label: 'Version',
-                    minWidth: 70,
-                    width: '6%',
-                    render: versionCell,
-                  },
-                  {
-                    key: 'deployed',
-                    label: 'Deployed (UTC+8)',
-                    minWidth: 150,
-                    width: '15%',
-                    render: (row) =>
-                      row.version.deployments.length ? (
-                        row.version.deployments.map((deployment) => (
-                          <span key={outpointKey(deployment)} className="block">
-                            {formatUtc8DateTime(deployment.deployedAt).slice(0, 16)}
-                            {deployment.createdAtBlock !== undefined && (
-                              <span className="text-meta block">
-                                {blockLink(deployment.createdAtBlock)}
-                              </span>
-                            )}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-text-dim">No deployment observed</span>
-                      ),
-                  },
-                  {
-                    key: 'binary',
-                    label: 'Binary',
-                    minWidth: 90,
-                    width: '8%',
-                    numeric: true,
-                    render: (row) =>
-                      row.version.deployments.map((deployment) => (
-                        <span
-                          key={outpointKey(deployment)}
-                          data-testid="code-binary-size"
-                          className="block"
-                        >
-                          {binarySize(deployment)}
-                        </span>
-                      )),
-                  },
-                  {
-                    key: 'hash',
-                    label: 'Data hash',
-                    minWidth: 220,
-                    width: '24%',
-                    render: (row) => (
-                      <span className="text-text-dim text-meta [overflow-wrap:anywhere]">
-                        {row.version.versionHash}
-                      </span>
-                    ),
-                  },
-                  {
-                    key: 'cell',
-                    label: 'Code cell',
-                    minWidth: 190,
-                    width: '17%',
-                    render: (row) =>
-                      row.version.deployments.map((deployment) => {
-                        const state = codeCells.get(outpointKey(deployment));
-                        return (
-                          <span key={outpointKey(deployment)} className="block">
-                            {outpointLink(deployment)}
-                            <span className="text-text-dim text-meta block">
-                              {state?.cell && (
-                                <>
-                                  <ExactCkb
-                                    shannons={BigInt(state.cell.capacity)}
-                                    signed={false}
-                                    tone="plain"
-                                  />{' '}
-                                  ·{' '}
-                                </>
-                              )}
-                              {deploymentStatus(deployment)}
-                            </span>
-                          </span>
-                        );
-                      }),
-                  },
-                  {
-                    key: 'signed',
-                    label: 'Signed by',
-                    minWidth: 190,
-                    width: '18%',
-                    render: (row) =>
-                      row.version.deployments.map((deployment) => {
-                        const { who, note, marked } = signer(deployment);
-                        return marked ? (
-                          <span key={outpointKey(deployment)} className="block text-[#a0a8be]">
-                            {who}
-                            <span className="text-text-dim text-meta block">{note}</span>
-                          </span>
-                        ) : (
-                          <span key={outpointKey(deployment)} className="text-text-dim block">
-                            {who}
-                          </span>
-                        );
-                      }),
-                  },
-                  {
-                    key: 'usage',
-                    label: 'Live cells using it',
-                    minWidth: 110,
-                    width: '12%',
-                    numeric: true,
-                    render: (row) => versionUsage(row.version.versionHash),
-                  },
-                ]}
+                density="row"
+                rowTitle={versionTitle}
+                // T5: body ink for the row, the version alone bright.
+                rowClassName={() => 'text-text'}
+                columns={columns}
                 narrowColumns={narrowColumns}
                 mobileRow={versionPhoneRow}
               />
@@ -718,16 +872,19 @@ export function ScriptFamilyPage({
                   rows={cells.rows}
                   rowKey={(cell) => `${cell.txHash}:${cell.outputIndex}`}
                   empty={`No live cells use ${family.name}`}
+                  // T5: body ink for the row, the cell alone bright.
+                  rowClassName={() => 'text-text'}
                   columns={[
                     {
                       key: 'cell',
                       label: 'Cell',
+                      header: <Head label="Cell" />,
                       minWidth: 160,
                       width: '15%',
                       render: (cell) => (
                         <Link
                           href={`/cell/${cell.txHash}-${cell.outputIndex}`}
-                          className="text-text hover:text-jade hover:underline"
+                          className="text-body text-text-bright hover:text-jade leading-[18px] hover:underline"
                         >
                           {shortHex(cell.txHash, 6, 4)}:{cell.outputIndex}
                         </Link>
@@ -736,6 +893,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'owner',
                       label: 'Owner',
+                      header: <Head label="Owner" />,
                       minWidth: 170,
                       width: '16%',
                       render: (cell) => <CellOwner cell={cell} />,
@@ -743,6 +901,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'type',
                       label: 'Also guarded by',
+                      header: <Head label="Also guarded by" />,
                       minWidth: 140,
                       width: '13%',
                       render: (cell) => <AlsoGuardedBy cell={cell} />,
@@ -750,6 +909,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'anatomy',
                       label: 'What it holds',
+                      header: <Head label="What it holds" />,
                       minWidth: 150,
                       width: '14%',
                       render: (cell) => <CellAnatomy cell={cell} />,
@@ -757,6 +917,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'capacity',
                       label: 'Capacity',
+                      header: <Head label="Capacity" />,
                       minWidth: 180,
                       width: '17%',
                       numeric: true,
@@ -767,6 +928,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'occupied',
                       label: 'Occupied',
+                      header: <Head label="Occupied" />,
                       minWidth: 90,
                       width: '9%',
                       numeric: true,
@@ -775,6 +937,7 @@ export function ScriptFamilyPage({
                     {
                       key: 'created',
                       label: 'Created',
+                      header: <Head label="Created" />,
                       minWidth: 170,
                       width: '16%',
                       numeric: true,
@@ -832,45 +995,21 @@ export function ScriptFamilyPage({
           </div>
           <div id="evidence" className="scroll-mt-4">
             <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+              {/* Board ScriptDetail (table-rows L1-5): one paragraph, then the script's facts. */}
               <DetailSection title="How to read this page">
-                <div className="space-y-3">
-                  <ScriptSummarySentence family={family} lineage={lineage} />
-                  <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} />
-                  <p className="text-body max-w-[640px]">
-                    <ScriptCellsSummary family={family} />
-                  </p>
-                </div>
+                <p className="text-body max-w-[640px]">
+                  <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} inline />{' '}
+                  <ScriptSummarySentence family={family} lineage={lineage} inline />{' '}
+                  <ScriptCustodyMechanism
+                    family={family}
+                    lineage={lineage}
+                    binaries={binaries}
+                    inline
+                  />
+                </p>
               </DetailSection>
-              <DetailSection title="How its code can change">
-                <div className="space-y-3">
-                  <ScriptCustodyMechanism family={family} lineage={lineage} binaries={binaries} />
-                </div>
-              </DetailSection>
-              <DetailSection title="Use it in a transaction" className="lg:col-span-2">
-                <ScriptUseInTransaction family={family} />
-              </DetailSection>
-              <DetailSection title="Registered references" className="lg:col-span-2">
-                <ListTable
-                  label="Registered references"
-                  rows={family.references}
-                  rowKey={(row) => `${row.hashType}:${row.referenceHash}`}
-                  columns={REFERENCE_COLUMNS}
-                  mobileRow={(row) => (
-                    <div className="text-small space-y-2">
-                      <div className="break-all">
-                        {row.hashType} · {row.referenceHash}
-                      </div>
-                      <div className="break-all">
-                        Current code: {row.currentVersionHash ?? 'retired'}
-                      </div>
-                      {row.custody ? (
-                        <ScriptCustodyEvidence custody={row.custody} />
-                      ) : (
-                        'Evidence unavailable'
-                      )}
-                    </div>
-                  )}
-                />
+              <DetailSection title="The script">
+                <ScriptFacts family={family} />
               </DetailSection>
             </DetailTier2>
           </div>

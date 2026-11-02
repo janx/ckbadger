@@ -1,13 +1,17 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useInRouterContext } from 'react-router-dom';
+import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { ListTable } from '@/components/ui/list-table';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
+import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { RowTag } from '@/components/ui/row-tag';
 import {
   ScriptCodeClassBar,
   ScriptCodeClassLegend,
@@ -25,9 +29,9 @@ import { getScriptDetailHref } from '@/lib/detail-routes';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { getScriptRefBadgeLabel, normalizeScriptRefHashType } from '@/lib/script-ref';
-import { formatUtc8Date, truncateHash } from '@/lib/utils';
+import { formatCkbAmount, formatUtc8Date, truncateHash } from '@/lib/utils';
 import { formatCount } from '@/lib/format-count';
-import { DATA_COLOR } from '@/lib/design-tokens';
+import { formatTick, niceCeil } from '@/lib/chart-ticks';
 
 type SortKey = 'name' | 'usedAs' | 'description' | 'used' | 'capacity' | 'liveCells' | 'cells';
 type SortDirection = 'asc' | 'desc';
@@ -104,26 +108,30 @@ function CodeClassPip({ replaceable }: { replaceable: boolean }) {
   );
 }
 
-/** The board's Code column: "Immutable" or "Upgradable · N versions", then by whom. */
+/**
+ * The Code column on one line (table-rows L1-1, board Scripts): "immutable" or "upgradable · N
+ * versions" in dim ink with its pip; by whom and since when are its title (and the row's).
+ */
 function ScriptCodeClass({ script }: { script: KnownScript }) {
   const code = scriptCodeClass(script);
-  if (!code)
-    return (
-      <span data-testid="script-code-class" className="text-text-dim">
-        Code evidence unavailable
-      </span>
-    );
   return (
-    <span data-testid="script-code-class" className="flex min-w-0 flex-col gap-0.5">
-      <span
-        className={`inline-flex items-center gap-2 ${code.replaceable ? 'text-text-bright' : 'text-text'}`}
-      >
-        <CodeClassPip replaceable={code.replaceable} />
-        {code.head}
+    <span
+      data-testid="script-code-class"
+      title={codeStatusText(script)}
+      className="text-text-dim flex min-w-0 items-center gap-2 whitespace-nowrap"
+    >
+      {code && <CodeClassPip replaceable={code.replaceable} />}
+      <span className="truncate">
+        {code ? code.head.toLowerCase() : 'code evidence unavailable'}
       </span>
-      <span className="text-text-dim text-meta">{code.sub}</span>
     </span>
   );
+}
+
+/** "upgradable · 5 versions · by a multisig · since 2023-10-07": the code status in full. */
+function codeStatusText(script: KnownScript): string {
+  const code = scriptCodeClass(script);
+  return code ? `${code.head.toLowerCase()} · ${code.sub}` : 'code evidence unavailable';
 }
 
 /**
@@ -200,16 +208,20 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
   );
 }
 
-function occupiedShare(script: KnownScript): { share: string; width: string } {
-  const total = BigInt(script.ownedCapacitySum!);
-  const occupied = BigInt(script.ownedKnowledgeSum!);
+/** The exact CKB in a family's live cells and the occupied part of it, checked. */
+function heldCapacity(script: KnownScript): { total: bigint; occupied: bigint } {
+  if (script.ownedCapacitySum === undefined || script.ownedKnowledgeSum === undefined)
+    throw new Error(`Script ${script.codeHash} row has no owned capacity`);
+  const total = BigInt(script.ownedCapacitySum);
+  const occupied = BigInt(script.ownedKnowledgeSum);
   if (occupied < BigInt(0) || occupied > total)
     throw new Error(`Script ${script.codeHash} has invalid occupied capacity`);
-  if (total === BigInt(0)) return { share: '0%', width: '0%' };
-  return {
-    share: scriptShare(occupied, total),
-    width: `${Number((occupied * BigInt(1000000)) / total) / 10000}%`,
-  };
+  return { total, occupied };
+}
+
+function occupiedShare(script: KnownScript): { share: string } {
+  const { total, occupied } = heldCapacity(script);
+  return { share: total === BigInt(0) ? '0%' : scriptShare(occupied, total) };
 }
 
 function capacityText(value: string) {
@@ -220,28 +232,133 @@ function countText(value: number | undefined): string {
   return value === undefined ? 'unavailable' : value.toLocaleString('en-US');
 }
 
+function roleText(script: KnownScript): string {
+  return script.scriptKind ? script.scriptKind.replace('+', ' + ') : 'unregistered';
+}
+
+/** An unlabeled family's identity: its reference, short. */
+function refText(script: KnownScript): string {
+  return `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
+}
+
+/**
+ * The Script column on one line (T5): the name at 13 px bright, its role and a ghost "deprecated"
+ * as row tags. An unlabeled family keeps its short reference beside the tag (it is its identity);
+ * a description is the row's title.
+ */
 function ScriptName({ script }: { script: KnownScript }) {
   const name = hasName(script) ? script.name!.trim() : 'Unlabeled';
-  const ref = `${getScriptRefBadgeLabel(script.hashType)} · ${truncateHash(script.codeHash, 10, 8)}`;
   return (
-    <div className="min-w-0">
+    <span className="flex min-w-0 items-center gap-2">
       <AppLink
         href={scriptHref(script)}
         title={!hasName(script) ? `${script.hashType} ref:${script.codeHash}` : undefined}
-        className="text-text-bright hover:text-emphasis font-medium hover:underline"
+        className="text-body text-text-bright hover:text-emphasis min-w-0 truncate leading-[18px] hover:underline"
       >
         {name}
       </AppLink>
-      {script.deprecated && <span className="text-text-dim text-meta ml-2">deprecated</span>}
-      {/* Two lines below md, so the meaning survives the clamp (C#12); one in the md table. */}
-      <div
-        className="text-text-dim text-meta mt-1 line-clamp-2 md:line-clamp-1"
-        title={script.description ?? ref}
-      >
-        {hasName(script) ? script.description : ref}
-      </div>
-    </div>
+      <RowTag>{roleText(script)}</RowTag>
+      {script.deprecated && <RowTag variant="ghost">deprecated</RowTag>}
+      {!hasName(script) && (
+        <span className="text-text-dim text-meta truncate">{refText(script)}</span>
+      )}
+    </span>
   );
+}
+
+/** "454,352,694.86": an exact CKB amount cut (never rounded up) to 2 decimals; the exact one is the row's title. */
+function CkbTwoDp({ shannons }: { shannons: bigint }) {
+  const { integer, decimal } = formatCkbAmount(shannons);
+  return (
+    <span data-ckb-2dp className="whitespace-nowrap">
+      {integer}
+      <span className="text-text-dim text-meta">.{decimal.slice(0, 2)}</span>
+    </span>
+  );
+}
+
+/** A column head at 11 px (T5). */
+function Head({ label }: { label: string }) {
+  return <span className="text-meta">{label}</span>;
+}
+
+/** The bar column's track (px): every row and the header ticks share it. */
+const CKB_TRACK = 240;
+/**
+ * The printed amount right of the track: the board's 118 px plus the room "46,743,011,404.23" takes
+ * at 12 px with its 11 px decimals, so the largest amount on the page never wraps.
+ */
+const CKB_DISPLAY = 128;
+const SHANNONS_PER_CKB = BigInt(100000000);
+
+/** Whole CKB, for the bar's geometry only (the printed amount and the title stay exact). */
+function wholeCkb(shannons: bigint): number {
+  return Number(shannons / SHANNONS_PER_CKB);
+}
+
+/**
+ * The bar column's scale: the page's largest whole-CKB amount rounded up to a round 1 / 1.5 / 2 /
+ * 2.5 / 3 / 4 / 5 / 6 / 8 × 10^k (board: 46.7B → "0 · 25B · 50B"). A page whose scripts hold
+ * nothing draws empty tracks on a scale of 1.
+ */
+function ckbBarScale(values: readonly number[]): number {
+  const max = values.length ? Math.max(...values) : 0;
+  if (max === 0) return 1;
+  const scale = Math.round(niceCeil(max));
+  if (!Number.isSafeInteger(scale) || scale < max)
+    throw new Error(`Scripts bar scale ${scale} does not cover ${max} CKB`);
+  return scale;
+}
+
+/** What the list's bar shows (ruling D2): the sort column's CKB, or the occupied share of it. */
+type BarField = 'ckb' | 'occupied';
+const BAR_FIELDS: readonly { value: BarField; label: string }[] = [
+  { value: 'ckb', label: 'CKB' },
+  { value: 'occupied', label: 'occupied' },
+];
+
+function barFromUrl(raw: string | null): BarField {
+  return raw === 'occupied' ? 'occupied' : 'ckb';
+}
+
+/** The occupied share's bar runs on parts per million of the CKB in the cells. */
+const SHARE_SCALE = 1_000_000;
+
+/**
+ * Occupied ÷ CKB in the cells, in ppm, for the bar's geometry: rounded up, so a nonzero share is
+ * never drawn empty (the printed share and the title stay exact).
+ */
+function occupiedPpm(script: KnownScript): number {
+  const { total, occupied } = heldCapacity(script);
+  if (total === BigInt(0)) return 0;
+  const scale = BigInt(SHARE_SCALE);
+  return Number((occupied * scale + total - BigInt(1)) / total);
+}
+
+/** "0 · 50 · 100 %": the occupied-share scale's ticks. */
+function shareTick(ppm: number): string {
+  const percent = (ppm / SHARE_SCALE) * 100;
+  return ppm === SHARE_SCALE ? `${percent} %` : String(percent);
+}
+
+/**
+ * The row's hover (D3): every field that left the row — role, description, the code status with
+ * holder and date, cells ever, the exact amount and the occupied CKB with its share.
+ */
+function scriptRowTitle(script: KnownScript): string {
+  const { total, occupied } = heldCapacity(script);
+  return [
+    hasName(script)
+      ? script.name!.trim()
+      : `Unlabeled ${script.hashType ?? ''} ref ${script.codeHash}`,
+    roleText(script),
+    ...(script.deprecated ? ['deprecated'] : []),
+    ...(hasName(script) && script.description?.trim() ? [script.description.trim()] : []),
+    codeStatusText(script),
+    `${countText(script.liveCellsCount)} live of ${countText(script.cellsCount)} cells ever`,
+    `${formatCkbAmount(total).full} CKB`,
+    `${formatCkbAmount(occupied).full} occupied (${occupiedShare(script).share})`,
+  ].join(' · ');
 }
 
 /** The board's lead sentence: what a lock and a type script are (tier 2 since hierarchy v3). */
@@ -272,6 +389,25 @@ function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
 }
 
 export default function ScriptsPage() {
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const inRouter = useInRouterContext();
+  const urlBar = barFromUrl(searchParams.get('bar'));
+  const [bar, setBar] = useState<BarField>(urlBar);
+  // D2: the bar follows its URL, also when a link or history entry changes it under this page.
+  useEffect(() => setBar(urlBar), [urlBar]);
+  const chooseBar = (value: BarField) => {
+    setBar(value);
+    // Replace: a view choice is not a step of history. Outside a router there is no address to
+    // keep in step, and leaving the page would reload it.
+    if (inRouter) {
+      const query = new URLSearchParams(searchParams);
+      if (value === 'ckb') query.delete('bar');
+      else query.set('bar', value);
+      router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
+    }
+  };
   const pagination = useCursorPagination();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
@@ -308,73 +444,79 @@ export default function ScriptsPage() {
     pagination.reset();
   }
 
-  const columns = [
+  const rows = data?.data ?? [];
+  const ckbScale = ckbBarScale(rows.map((s) => wholeCkb(heldCapacity(s).total)));
+  const barScale = bar === 'occupied' ? SHARE_SCALE : ckbScale;
+  const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
       label: 'Script',
-      minWidth: 205,
-      width: '24%',
-      render: (s: KnownScript) => <ScriptName script={s} />,
-    },
-    {
-      key: 'role',
-      label: 'Role',
-      minWidth: 85,
-      width: '8%',
-      render: (s: KnownScript) => (
-        <span className="text-text-dim">
-          {s.scriptKind ? s.scriptKind.replace('+', ' + ') : 'unregistered'}
-        </span>
-      ),
+      header: <Head label="Script" />,
+      minWidth: 220,
+      width: 'auto',
+      render: (s) => <ScriptName script={s} />,
     },
     {
       key: 'code',
       label: 'Code',
-      minWidth: 210,
-      width: '22%',
-      render: (s: KnownScript) => <ScriptCodeClass script={s} />,
+      header: <Head label="Code" />,
+      minWidth: 220,
+      render: (s) => <ScriptCodeClass script={s} />,
     },
     {
       key: 'cells',
       label: 'Live cells',
-      minWidth: 120,
-      width: '12%',
+      header: <Head label="Live cells" />,
+      minWidth: 110,
       numeric: true,
-      render: (s: KnownScript) => (
-        <span className="tabular-nums">
+      render: (s) => (
+        <span
+          title={`${countText(s.liveCellsCount)} live of ${countText(s.cellsCount)} cells ever`}
+        >
           {countText(s.liveCellsCount)}
-          <span className="text-text-ghost text-meta block">of {countText(s.cellsCount)} ever</span>
         </span>
       ),
     },
     {
       key: 'capacity',
-      label: 'CKB in its cells · occupied',
-      minWidth: 225,
-      width: '24%',
-      render: (s: KnownScript) => (
-        <div className="min-w-0">
-          <div>{capacityText(s.ownedCapacitySum!)}</div>
-          <div className="bg-base-elevated mt-1 flex h-1 w-full overflow-hidden rounded">
-            <div
-              className="h-full"
-              style={{
-                width: occupiedShare(s).width,
-                minWidth: occupiedShare(s).width === '0%' ? 0 : 2,
-                backgroundColor: DATA_COLOR,
-              }}
-            />
-          </div>
-        </div>
+      label: 'CKB in its cells',
+      // track + 10 px + the printed amount + the cell's 16 px gutter
+      minWidth: CKB_TRACK + 10 + CKB_DISPLAY + 16,
+      header: (
+        <ScaleHeader
+          label={bar === 'occupied' ? 'CKB in its cells · bar: occupied share' : 'CKB in its cells'}
+          scale={barScale}
+          trackWidth={CKB_TRACK}
+          midpoint
+          format={bar === 'occupied' ? shareTick : (n) => formatTick(n, ckbScale / 2)}
+        />
       ),
+      render: (s) => {
+        const { total } = heldCapacity(s);
+        return (
+          <AlignedBar
+            label={bar === 'occupied' ? 'Occupied share of CKB in its cells' : 'CKB in its cells'}
+            scale={barScale}
+            trackWidth={CKB_TRACK}
+            minFill={2}
+            segments={[
+              bar === 'occupied'
+                ? { key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }
+                : { key: 'ckb', label: 'CKB', value: wholeCkb(total), tone: 'data' },
+            ]}
+            display={<CkbTwoDp shannons={total} />}
+            displayWidth={CKB_DISPLAY}
+          />
+        );
+      },
     },
     {
       key: 'occupied',
       label: 'Occupied',
+      header: <Head label="Occupied" />,
       minWidth: 90,
-      width: '10%',
       numeric: true,
-      render: (s: KnownScript) => <span className="text-text-dim">{occupiedShare(s).share}</span>,
+      render: (s) => <span className="text-text-dim">{occupiedShare(s).share}</span>,
     },
   ];
 
@@ -519,6 +661,25 @@ export default function ScriptsPage() {
                 >
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </button>
+                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. */}
+                <span
+                  role="group"
+                  aria-label="Bar shows"
+                  className="ml-3 inline-flex items-center whitespace-nowrap"
+                >
+                  <span className="mr-2">bar:</span>
+                  {BAR_FIELDS.map((field, i) => (
+                    <button
+                      key={field.value}
+                      type="button"
+                      aria-pressed={bar === field.value}
+                      onClick={() => chooseBar(field.value)}
+                      className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l-[4px]' : '-ml-px rounded-r-[4px]'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+                    >
+                      {field.label}
+                    </button>
+                  ))}
+                </span>
                 {data?.total !== undefined && data.total !== null && (
                   <span className="ml-auto">{formatCount(data.total, 'script')}</span>
                 )}
@@ -534,9 +695,13 @@ export default function ScriptsPage() {
                 <ListTable
                   label="Scripts"
                   columns={columns}
-                  rows={data?.data ?? []}
+                  rows={rows}
                   rowKey={(s) => s.codeHash}
                   empty="No scripts found"
+                  density="row"
+                  rowTitle={scriptRowTitle}
+                  // T5: body ink for the row, the name alone bright.
+                  rowClassName={() => 'text-text'}
                   mobileRow={(s, wide) => <ScriptPhoneRow script={s} wide={wide} />}
                 />
               )}
