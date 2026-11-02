@@ -109,22 +109,23 @@ describe('Network board (F2 charts)', () => {
   beforeEach(() => stubChartWidth(880));
   afterEach(() => vi.restoreAllMocks());
 
-  it('heads the page in plain words with four quiet figures, no red and no tracked capitals (CH-53)', async () => {
+  it('heads the page in plain words with one figure and three quiet ones, no red and no tracked capitals (CH-53)', async () => {
     server.use(
       http.get(`${API_BASE}/network/summary`, () =>
         HttpResponse.json({ enabled: true, hasData: true, lastRound, activeRound: null })
       )
     );
     const { container } = render(wrap(<NetworkClientPage />));
-    expect(
-      await screen.findByText(/CKB nodes find each other by word of mouth/)
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/^Nodes find each other by word of mouth/)).toBeInTheDocument();
+    // Hierarchy v3 (R13): reachable now is the hero's figure; the other three share one quiet row.
+    const hero = screen.getByRole('region', { name: 'Where the nodes are' });
+    expect(hero).toHaveTextContent(/Reachable now\s*62 of 66\s*answered as CKB mainnet nodes/);
     const figures = screen.getByRole('group', { name: 'Latest crawler round' });
-    expect(figures).toHaveTextContent(/Reachable now\s*62\s*answered as CKB mainnet nodes/);
     expect(figures).toHaveTextContent(/Verified before, not now\s*4/);
-    expect(figures).toHaveTextContent(/Heard of\s*181\s*115 never verified/);
-    expect(figures).toHaveTextContent(/Latest round\s*#97\s*.*UTC\+8 · 14 min · 2,345 dials/);
-    expect(figures.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
+    expect(figures).toHaveTextContent(/Heard of\s*181 · 115 never verified/);
+    expect(figures).toHaveTextContent(/Latest round\s*#97 · .*UTC\+8 · 14 min · 2,345 dials/);
+    for (const el of [hero, figures])
+      expect(el.querySelector('.uppercase, [class*="rouge"], [class*="negative"]')).toBeNull();
     // The old tier-1 evidence box and per-round counters moved to the developer tier.
     const tier2 = container.querySelector('[data-tier="2"]')!;
     expect(within(tier2 as HTMLElement).getByText(/2,345 address attempts/)).toBeInTheDocument();
@@ -154,12 +155,13 @@ describe('Network board (F2 charts)', () => {
     server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
     render(wrap(<NetworkMapView neverVerified={115} />));
     const panel = await screen.findByRole('complementary', { name: 'Selected peer evidence' });
-    expect(panel).toHaveTextContent('Tap or hover a node');
+    // Hierarchy v3: the key is drawn; the hint is the reading row's, the prose tier 2's.
+    expect(within(panel).getByRole('img', { name: /^Key:/ })).toBeInTheDocument();
     expect(panel).toHaveTextContent('reachable now · 3');
     expect(panel).toHaveTextContent('verified before, not now · 1');
     expect(panel).toHaveTextContent("this node's 1 session peers");
     expect(panel).toHaveTextContent('heard of, never verified · 115');
-    expect(panel).toHaveTextContent(/none are drawn/);
+    expect(panel).not.toHaveTextContent(/tap or hover|none are drawn/i);
     fireEvent.focus(screen.getByLabelText(/^US peer 12200fce0b…/));
     // R-13 (CH-57): titled by the alias the crawler last verified, the peer id beneath.
     expect(panel.querySelector('p')).toHaveTextContent('/ip4/203.0.113.7/tcp/8115');
@@ -178,9 +180,10 @@ describe('Network board (F2 charts)', () => {
     const dot = screen.getByRole('button', { name: /^US peer 12200fce0b…/ });
     const readout = screen.getByRole('status', { name: 'Node readout' });
     const panel = screen.getByRole('complementary', { name: 'Selected peer evidence' });
-    // the line sits right under the map
-    expect(svg.nextElementSibling).toBe(readout);
-    expect(readout).toHaveTextContent('Tap or hover a node.');
+    // the line opens the lines under the map (hierarchy v3: the picture, then its reading)
+    expect(readout.parentElement!.firstElementChild).toBe(readout);
+    expect(readout.parentElement!.previousElementSibling!.contains(svg)).toBe(true);
+    expect(readout).toHaveTextContent(/^4 verified nodes in 2 countriestap or hover$/);
     // a tap: the emulated hover and focus, then the click; the pin outlasts the pointer
     fireEvent.mouseEnter(dot);
     fireEvent.focus(dot);
@@ -194,8 +197,8 @@ describe('Network board (F2 charts)', () => {
     // a second tap on it lets go, though the emulated hover is still on it
     fireEvent.mouseEnter(dot);
     fireEvent.click(dot);
-    expect(readout).toHaveTextContent('Tap or hover a node.');
-    expect(panel).toHaveTextContent('Tap or hover a node');
+    expect(readout).toHaveTextContent(/^4 verified nodes in 2 countriestap or hover$/);
+    expect(within(panel).getByRole('img', { name: /^Key:/ })).toBeInTheDocument();
   });
 
   it('lets a pin go when a refetched map no longer has its node (R6)', async () => {
@@ -213,7 +216,7 @@ describe('Network board (F2 charts)', () => {
     act(() => {
       client.setQueryData(['network', 'map'], gone);
     });
-    await waitFor(() => expect(readout).toHaveTextContent('Tap or hover a node.'));
+    await waitFor(() => expect(readout).toHaveTextContent(/^4 verified nodes in 2 countries/));
   });
 
   it('says nothing of an alias or a session the API does not give (R-13)', async () => {
@@ -312,13 +315,13 @@ describe('Network board (F2 charts)', () => {
     expect(fills[0]).toHaveStyle({ backgroundColor: '#2edba3' });
   });
 
-  it('draws verified as a line over the reachable area, with dated x labels (CH-58)', async () => {
+  it('draws verified as a line over the reachable area, with its first and last day on the axis (CH-58, R14)', async () => {
     render(wrap(<NetworkTrends />));
     const svg = await screen.findByRole('img', { name: 'Verified and reachable peers, peers' });
     expect(svg.querySelectorAll('path[fill="#dee2ec"]')).toHaveLength(0);
     expect(svg.querySelector('path[fill="#2edba3"]')).not.toBeNull();
     const ticks = [...svg.querySelectorAll('[data-x-tick]')].map((n) => n.textContent);
-    expect(ticks).toEqual(['07-01', '07-02', '07-03']);
+    expect(ticks).toEqual(['07-01', '07-03']);
     // The daily share tables are developer evidence, not part of "Over time".
     expect(screen.queryByText('Client Version Share')).toBeNull();
   });

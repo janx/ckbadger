@@ -490,6 +490,13 @@ function PeerRow({ peer, folded }: { peer: NetworkPeerSummary; folded: boolean }
   );
 }
 
+/**
+ * Five peers first (hierarchy R5, a list on a topic page), then fifty more a page: every peer stays
+ * one "Load more" away, and the cursor is a peer id, so the page sizes may differ.
+ */
+const FIRST_PEERS = 5;
+const MORE_PEERS = 50;
+
 export function PeersTable() {
   const [filters, setFilters] = useState<PeerFilters>({});
   const [cursor, setCursor] = useState<string | undefined>();
@@ -504,7 +511,8 @@ export function PeersTable() {
 
   const { data, isLoading, isError, isFetching } = useQuery({
     queryKey: ['network', 'peers', filters, cursor],
-    queryFn: () => api.getNetworkPeers({ ...filters, cursor }),
+    queryFn: () =>
+      api.getNetworkPeers({ ...filters, cursor, limit: cursor ? MORE_PEERS : FIRST_PEERS }),
   });
 
   useEffect(() => {

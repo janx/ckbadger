@@ -3,16 +3,22 @@
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
-import { Badge } from '@/components/ui/page-header';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/network/distributions';
-import { NetworkShareHistory, NetworkTrends } from '@/app/network/trends';
+import { NetworkShareHistory, NetworkTrendNotes, NetworkTrends } from '@/app/network/trends';
 import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
-import { NetworkMapView } from '@/app/network/network-map';
+import {
+  NetworkMapFootnotes,
+  NetworkMapNotes,
+  NetworkMapPicture,
+  useNetworkMap,
+} from '@/app/network/network-map';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+
+const PAGE_TITLE = 'Where the nodes are';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
@@ -41,7 +47,7 @@ function ReachabilityCaveat({ className }: { className?: string }) {
     <div
       className={`border-base-border bg-base-surface rounded border px-4 py-3 ${className ?? ''}`}
     >
-      <p className="text-text-dim text-small font-mono leading-relaxed">
+      <p className="text-text-dim text-body font-mono">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
         network; nodes behind NAT or firewalls can stay hidden.
@@ -127,49 +133,169 @@ function MaxMindAttribution() {
   if (!data || !hasGeoData(data.countries)) return null;
 
   return (
-    <p className="text-text-dim border-base-border/60 text-small mt-2 border-t pt-3 font-mono">
+    <p className="text-text-dim border-base-border/60 text-meta mt-8 border-t pt-3 font-mono">
       Geo/ASN data © MaxMind (GeoLite2)
     </p>
   );
 }
 
-/**
- * The latest round in four quiet figures, the board's wording: no tracked capitals and no alarm
- * red, because "not reachable now" is not "gone" (CH-53).
- */
-function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
-  const network = useActiveNetwork();
-  const minutes = Math.round((lastRound.finishedAt - lastRound.startedAt) / 60);
-  if (!(minutes >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
-  const figure = (label: string, value: string, note?: string, jade = false) => (
-    <div key={label}>
-      <dt className="text-text-dim text-small">{label}</dt>
-      <dd className={`text-hero mt-0.5 tabular-nums ${jade ? 'text-jade' : 'text-text-bright'}`}>
-        {value}
+/** One figure of the hero's quiet row (R13): a meta label over a section-size value, its note inline. */
+function Metric({ label, children, note }: { label: string; children: ReactNode; note?: string }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-text-dim text-meta">{label}</dt>
+      <dd className="text-text-bright text-section mt-0.5 tabular-nums">
+        {children}
+        {note && <span className="text-text-dim text-small"> · {note}</span>}
       </dd>
-      {note && <dd className="text-text-dim text-meta mt-0.5">{note}</dd>}
     </div>
   );
+}
+
+/**
+ * The latest round's other figures in one quiet row, the board's wording: no tracked capitals and
+ * no alarm red, because "not reachable now" is not "gone" (CH-53). Reachable now is the hero's figure.
+ */
+function RoundFigures({ lastRound }: { lastRound: NetworkLastRound }) {
+  const minutes = Math.round((lastRound.finishedAt - lastRound.startedAt) / 60);
+  if (!(minutes >= 0)) throw new Error(`crawler round #${lastRound.roundId} ends before it starts`);
   return (
-    <dl role="group" aria-label="Latest crawler round" className="grid grid-cols-2 gap-x-7 gap-y-4">
-      {figure(
-        'Reachable now',
-        lastRound.reachablePeers.toLocaleString(),
-        `answered as CKB ${network} nodes`,
-        true
-      )}
-      {figure('Verified before, not now', lastRound.verifiedUnavailablePeers.toLocaleString())}
-      {figure(
-        'Heard of',
-        lastRound.candidatePeers.toLocaleString(),
-        `${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString()} never verified`
-      )}
-      {figure(
-        'Latest round',
-        `#${lastRound.roundId}`,
-        `${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${minutes} min · ${lastRound.addressAttempts.toLocaleString()} dials`
-      )}
+    <dl
+      role="group"
+      aria-label="Latest crawler round"
+      className="mt-7 grid grid-cols-1 gap-x-8 gap-y-4 sm:grid-cols-3"
+    >
+      <Metric label="Verified before, not now">
+        {lastRound.verifiedUnavailablePeers.toLocaleString()}
+      </Metric>
+      <Metric
+        label="Heard of"
+        note={`${lastRound.peerOutcomes.exhausted.withoutRetainedVerification.toLocaleString()} never verified`}
+      >
+        {lastRound.candidatePeers.toLocaleString()}
+      </Metric>
+      <Metric
+        label="Latest round"
+        note={`${formatUtc8DateTime(lastRound.finishedAt * 1000).slice(5, 16)} UTC+8 · ${minutes} min · ${lastRound.addressAttempts.toLocaleString()} dials`}
+      >
+        #{lastRound.roundId}
+      </Metric>
     </dl>
+  );
+}
+
+/** The page title (index step), in the hero's title row. */
+function NetworkHeading() {
+  return <h1 className="text-text-bright text-index font-medium">{PAGE_TITLE}</h1>;
+}
+
+/** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
+function NetworkLede() {
+  return (
+    <p data-role="lede" className="text-text-dim text-body mt-1.5 max-w-[560px]">
+      Nodes find each other by word of mouth; unreachable is not gone.{' '}
+      <a href="#evidence" className="hover:text-text-bright whitespace-nowrap hover:underline">
+        How it works ↓
+      </a>
+    </p>
+  );
+}
+
+/**
+ * The hero (hierarchy v3, R13): the title row (h1, the round and its age, a round in progress as
+ * plain words), one sentence, reachable now as the page's one figure in jade (R11) with its
+ * companion on the same baseline, and the map right under it. The map's lines and the round's other
+ * figures in one quiet row follow the section.
+ */
+function Hero({
+  lastRound,
+  activeRound,
+  enabled,
+}: {
+  lastRound: NetworkLastRound;
+  activeRound: NetworkActiveRound | null;
+  enabled: boolean;
+}) {
+  const network = useActiveNetwork();
+  if (lastRound.reachablePeers > lastRound.verifiedRetainedPeers)
+    throw new Error(
+      `crawler round #${lastRound.roundId}: ${lastRound.reachablePeers} reachable exceed the ${lastRound.verifiedRetainedPeers} verified`
+    );
+  const map = useNetworkMap(lastRound.peerOutcomes.exhausted.withoutRetainedVerification);
+  const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
+  return (
+    <div className="min-w-0">
+      <section aria-label={PAGE_TITLE} className="min-w-0">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+          <NetworkHeading />
+          <p className="text-text-dim text-small">
+            Round #{lastRound.roundId} · updated {updatedAgo}
+            {activeRound &&
+              (activeRound.blockedReason
+                ? ` · round #${activeRound.roundId} blocked`
+                : ` · round #${activeRound.roundId} crawling ${activeRound.completedPeers}/${activeRound.candidatePeers}`)}
+          </p>
+        </div>
+        <NetworkLede />
+        {!enabled && (
+          <p role="status" className="text-info text-small mt-3">
+            Crawler disabled. This retained evidence is not live.
+          </p>
+        )}
+        {activeRound?.blockedReason && (
+          <p className="border-negative/30 bg-negative/10 text-negative text-small mt-3 rounded border px-3 py-2 font-mono">
+            Active crawler round blocked: {activeRound.blockedReason}
+          </p>
+        )}
+        <div data-role="figure" className="mt-9 min-w-0">
+          <div className="text-text-dim text-meta mb-1.5">Reachable now</div>
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+            {/* The display line box (40 px) holds the figure and its scale as one line. */}
+            <span className="text-index sm:text-display whitespace-nowrap">
+              <span
+                data-role="reachable"
+                className="text-jade text-index sm:text-display font-medium tabular-nums"
+              >
+                {lastRound.reachablePeers.toLocaleString()}
+              </span>
+              {/* Its scale, dim, as the DAO figure's fraction: of the verified nodes retained. */}
+              <span data-role="reachable-of" className="text-hero text-text-dim tabular-nums">
+                {' '}
+                of {lastRound.verifiedRetainedPeers.toLocaleString()}
+              </span>
+            </span>
+            <span className="text-text-dim text-body">answered as CKB {network} nodes</span>
+          </div>
+        </div>
+        <div className="mt-[18px] min-w-0">
+          <NetworkMapPicture map={map} />
+        </div>
+      </section>
+      <NetworkMapFootnotes map={map} />
+      <RoundFigures lastRound={lastRound} />
+    </div>
+  );
+}
+
+/** Tier 2's first section: what the hero states as a figure and a map, in words. */
+function HowTheCrawlerSees() {
+  return (
+    <DetailSection title="How the crawler sees the network">
+      <p className="text-text-dim text-body">
+        CKB nodes find each other by word of mouth: each node tells its peers about other nodes it
+        knows. This crawler asks every node it can reach, then tries to connect to each one it hears
+        about. A node it cannot reach may still be running, behind NAT or a firewall.
+      </p>
+      <div className="mt-3.5">
+        <NetworkMapNotes />
+      </div>
+      <p className="text-text-dim text-body mt-3.5">
+        “Which software they run” counts every verified node, reachable now or verified before.
+      </p>
+      <div className="mt-3.5">
+        <NetworkTrendNotes />
+      </div>
+    </DetailSection>
   );
 }
 
@@ -182,81 +308,57 @@ function PeersDashboard({
   activeRound: NetworkActiveRound | null;
   enabled: boolean;
 }) {
-  const updatedAgo = formatTimeAgo(lastRound.finishedAt * 1000);
-
   return (
-    <DetailLayout
-      title="Where the nodes are"
-      kind="topic"
-      identity={
-        <div className="grid min-w-0 items-end gap-x-12 gap-y-6 lg:grid-cols-[minmax(0,1fr)_460px]">
-          <p className="text-text text-body max-w-[720px] leading-relaxed">
-            CKB nodes find each other by word of mouth: each node tells its peers about other nodes
-            it knows. This crawler asks every node it can reach, then tries to connect to each one
-            it hears about. A node it cannot reach may still be running, behind NAT or a firewall.
-          </p>
-          <RoundFigures lastRound={lastRound} />
-        </div>
-      }
-    >
-      {!enabled && (
-        <p role="status" className="text-info text-small">
-          Crawler disabled. This retained evidence is not live.
-        </p>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-text-dim text-small">
-          Round #{lastRound.roundId} · updated {updatedAgo}
-        </span>
-        {activeRound && (
-          <Badge variant="blue">
-            {activeRound.blockedReason
-              ? `round #${activeRound.roundId} blocked`
-              : `round #${activeRound.roundId} crawling ${activeRound.completedPeers}/${activeRound.candidatePeers}`}
-          </Badge>
-        )}
-      </div>
-
-      {activeRound?.blockedReason && (
-        <p className="border-negative/30 bg-negative/10 text-negative text-small rounded border px-3 py-2 font-mono">
-          Active crawler round blocked: {activeRound.blockedReason}
-        </p>
-      )}
-
-      <DetailSection title="Verified peers across the world">
-        <NetworkMapView
-          neverVerified={lastRound.peerOutcomes.exhausted.withoutRetainedVerification}
-        />
-        <div className="mt-6">
+    <div className="text-body min-w-0 font-mono">
+      {/* Hierarchy R6: hero → first section 64 px, sections 72 px apart, h2 → evidence 18. */}
+      <div data-tier="1" className="min-w-0">
+        <Hero lastRound={lastRound} activeRound={activeRound} enabled={enabled} />
+        <div className="mt-16 min-w-0">
           <HostingBar />
         </div>
-      </DetailSection>
-      <NetworkDistributions />
-      <NetworkTrends />
-      <MaxMindAttribution />
-      <DetailTier2>
-        <DetailSection title="Crawler round evidence">
-          <p className="text-text-dim text-small leading-relaxed">
-            Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
-            attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
-            observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates ·{' '}
-            {lastRound.foreignPeers.toLocaleString()} foreign peers ·{' '}
-            {lastRound.newVerifiedPeers.toLocaleString()} newly verified
-          </p>
-          <ReachabilityCaveat className="mt-3" />
-        </DetailSection>
-        <DetailSection title="Protocols they speak">
-          <NetworkProtocols />
-        </DetailSection>
-        <DetailSection title="Daily version and country counts">
-          <NetworkShareHistory />
-        </DetailSection>
-        <DetailSection title="Who named whom">
-          <AdvertisementGraph roundId={lastRound.roundId} />
-        </DetailSection>
-        <PeersTable />
-      </DetailTier2>
-    </DetailLayout>
+        <div className="mt-[72px] min-w-0">
+          <NetworkDistributions />
+        </div>
+        <div className="mt-[72px] min-w-0">
+          <NetworkTrends />
+        </div>
+        <MaxMindAttribution />
+      </div>
+      {/* "How it works ↓" in the hero lands on the evidence boundary. */}
+      <div id="evidence" className="scroll-mt-4">
+        {/* Two columns from lg: the explanation and the round beside the daily counts; the two
+            long lists (who named whom, the peers) run the full width under them. */}
+        <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+          <div className="flex min-w-0 flex-col gap-8">
+            <HowTheCrawlerSees />
+            <DetailSection title="Crawler round evidence">
+              <p className="text-text-dim text-small leading-relaxed">
+                Round #{lastRound.roundId}: {lastRound.addressAttempts.toLocaleString()} address
+                attempts · {lastRound.nonSuccessfulAddressAttempts.toLocaleString()} non-successful
+                observations · {lastRound.exhaustedCandidates.toLocaleString()} exhausted candidates
+                · {lastRound.foreignPeers.toLocaleString()} foreign peers ·{' '}
+                {lastRound.newVerifiedPeers.toLocaleString()} newly verified
+              </p>
+              <ReachabilityCaveat className="mt-3" />
+            </DetailSection>
+            <DetailSection title="Protocols they speak">
+              <NetworkProtocols />
+            </DetailSection>
+          </div>
+          <DetailSection title="Daily version and country counts">
+            <NetworkShareHistory />
+          </DetailSection>
+          <div className="min-w-0 lg:col-span-2">
+            <DetailSection title="Who named whom">
+              <AdvertisementGraph roundId={lastRound.roundId} />
+            </DetailSection>
+          </div>
+          <div className="min-w-0 lg:col-span-2">
+            <PeersTable />
+          </div>
+        </DetailTier2>
+      </div>
+    </div>
   );
 }
 
@@ -274,7 +376,7 @@ export function NetworkClientPage() {
   let content: ReactNode;
   if (error) {
     content = (
-      <DetailLayout title="Where the nodes are" kind="topic">
+      <DetailLayout title={PAGE_TITLE} kind="topic">
         <p role="alert" className="text-negative">
           Crawler summary unavailable: {String(error)}
         </p>
@@ -285,7 +387,7 @@ export function NetworkClientPage() {
   } else if (!summary.hasData || !summary.lastRound) {
     content = (
       <DetailLayout
-        title="Where the nodes are"
+        title={PAGE_TITLE}
         kind="topic"
         identity="As this crawler saw the CKB L1 network."
       >

@@ -6,8 +6,8 @@ import { api, type NetworkHistory } from '@/lib/api';
 import { Chart, type ChartGap, type ChartPoint, type ChartSeries } from '@/components/ui/chart';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatExactDecimal } from '@/lib/exact-integer';
-import { axisTicks } from '@/components/charts/chart-model';
 import { formatUtc8Date } from '@/lib/utils';
+import { TopicSection } from '@/app/network/topic-section';
 
 // Seconds-precision "now" so the API drops the current (incomplete) daily bucket.
 function nowSeconds(): number {
@@ -160,7 +160,7 @@ function ShareTrend({
         <p className="text-text-dim text-small">No completed daily crawler observations yet.</p>
       ) : (
         <>
-          <p className="text-text-dim text-meta mb-3">
+          <p className="text-text-dim text-body mb-3">
             Retained top-label counts per observed day. The historical total and omitted labels were
             not recorded, so percentages are unavailable.
           </p>
@@ -197,7 +197,8 @@ function ShareTrend({
   );
 }
 
-export function NetworkTrends() {
+/** The daily peer histories, shared by the chart and its notes (one fetch each, react-query). */
+function usePeerHistories() {
   const verifiedPeers = useQuery({
     queryKey: ['network', 'history', 'verifiedPeers', 'day'],
     queryFn: () => api.getNetworkHistory('verifiedPeers', 'day', undefined, nowSeconds()),
@@ -208,11 +209,24 @@ export function NetworkTrends() {
     queryFn: () => api.getNetworkHistory('reachablePeers', 'day', undefined, nowSeconds()),
     refetchInterval: 60000,
   });
-  // The board: reachable a jade area, verified a white line over it (CH-58).
-  const peerSeries: ChartSeries[] = [
-    { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
-    { key: 'verified', label: 'Verified (retained)', color: '#dee2ec', lineOnly: true },
-  ];
+  return { verifiedPeers, reachablePeers };
+}
+
+/** The board: reachable a jade area, verified a white line over it (CH-58). */
+const PEER_SERIES: ChartSeries[] = [
+  { key: 'reachable', label: 'Same-network reachable', color: DATA_COLOR },
+  { key: 'verified', label: 'Verified (retained)', color: '#dee2ec', lineOnly: true },
+];
+const PEER_UNIT = 'peers';
+const formatPeers = (value: string) => formatExactDecimal(value, 'peer count');
+
+/**
+ * "Over time" (hierarchy v3): the chart named inside its plot with its values inside (no caption
+ * block, no coloured key), the first and last day on the axis, one reading row that rests on the
+ * latest day, and one caption. How to read it and its coverage are tier 2 (`NetworkTrendNotes`).
+ */
+export function NetworkTrends() {
+  const { verifiedPeers, reachablePeers } = usePeerHistories();
   const peerCounts = mergePeerCounts(verifiedPeers.data, reachablePeers.data);
   const peerHistoryError =
     verifiedPeers.isError || reachablePeers.isError
@@ -223,58 +237,84 @@ export function NetworkTrends() {
   const peerHistory = !peerHistoryError && peerCounts.data.length ? verifiedPeers.data : undefined;
   const coverage = peerHistory?.dailyCoverage ?? [];
   const gaps = peerHistory ? peerGaps(peerHistory) : [];
+  const days = peerCounts.data;
+  const last = days[days.length - 1];
+  // R14: the first and the last day name the axis.
+  const xTicks = days.length
+    ? [...new Set([0, days.length - 1])].map((index) => ({
+        index,
+        label: days[index].label.slice(5),
+      }))
+    : [];
 
   return (
-    <section className="space-y-4">
-      <h2 className="text-text-bright text-section font-mono font-medium">Over time</h2>
-      <p className="text-text-dim text-small font-mono">
-        Daily history of retained verified peers, by UTC+8 day. The current (incomplete) day is
-        excluded. Round counts were not recorded. Days older than the crawler&apos;s hourly
-        retention show as gaps, never zero.
-        {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
-          <> {coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo)}</>
-        )}
-      </p>
+    <TopicSection title="Over time">
+      {peerHistoryError ? (
+        <p role="alert" className="text-negative text-small font-mono">
+          {peerHistoryError}
+        </p>
+      ) : peerHistoryLoading ? (
+        <p role="status" className="text-text-dim text-small font-mono">
+          Loading verified peer history…
+        </p>
+      ) : days.length === 0 ? (
+        <p className="text-text-dim text-small font-mono">
+          No completed daily crawler observations yet.
+        </p>
+      ) : (
+        <>
+          <Chart
+            title="Verified and reachable peers"
+            subtitle="Retained peers per completed UTC+8 day"
+            data={days}
+            series={PEER_SERIES}
+            unit={PEER_UNIT}
+            kind="area"
+            height={200}
+            xDomain={
+              coverage.length > 1 ? [coverage[0].ts, coverage[coverage.length - 1].ts] : undefined
+            }
+            gaps={gaps}
+            formatValue={formatPeers}
+            xTicks={xTicks}
+            pointDots
+            plotName="verified and reachable peers per completed UTC+8 day"
+            insideYTicks
+            pinnedReadout={{
+              label: 'Peer reading',
+              idle: `${last.label}${PEER_SERIES.map(
+                (s) => ` · ${s.label} ${formatPeers(last.values[s.key])} ${PEER_UNIT}`
+              ).join('')}`,
+            }}
+          />
+          <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+            The white line is every verified node the crawler retained that day; the jade area is
+            the part of them that was reachable.
+          </p>
+        </>
+      )}
+    </TopicSection>
+  );
+}
 
-      <TrendPanel title="Retained verification state (daily)">
-        {peerHistoryError ? (
-          <p role="alert" className="text-negative text-small font-mono">
-            {peerHistoryError}
-          </p>
-        ) : peerHistoryLoading ? (
-          <p role="status" className="text-text-dim text-small font-mono">
-            Loading verified peer history…
-          </p>
-        ) : peerCounts.data.length === 0 ? (
-          <p className="text-text-dim text-small font-mono">
-            No completed daily crawler observations yet.
-          </p>
-        ) : (
-          <>
-            <Chart
-              title="Verified and reachable peers"
-              subtitle="Retained peers per completed UTC+8 day"
-              data={peerCounts.data}
-              series={peerSeries}
-              unit="peers"
-              kind="area"
-              height={240}
-              xDomain={
-                coverage.length > 1 ? [coverage[0].ts, coverage[coverage.length - 1].ts] : undefined
-              }
-              gaps={gaps}
-              formatValue={(value) => formatExactDecimal(value, 'peer count')}
-              xTicks={axisTicks(peerCounts.data, 'date', 6)}
-              pointDots
-            />
-            <p className="text-text-dim text-meta mt-2">
-              {gaps.length > 0 && 'Shaded days have no retained round observation. '}
-              Rounds per day are unavailable because the crawler did not record counts.
-            </p>
-          </>
-        )}
-      </TrendPanel>
-    </section>
+/**
+ * Tier 2: how to read "Over time" — what each day is, what is left out, what a shaded day means —
+ * and the days it covers. Shares the chart's verified-peer history (one fetch).
+ */
+export function NetworkTrendNotes() {
+  const { verifiedPeers } = usePeerHistories();
+  return (
+    <p className="text-text-dim text-body">
+      “Over time” draws the retained verification state (daily): verified and reachable peers per
+      completed UTC+8 day. Daily history of retained verified peers, by UTC+8 day. The current
+      (incomplete) day is excluded. Round counts were not recorded. Days older than the
+      crawler&apos;s hourly retention show as gaps, never zero.
+      {verifiedPeers.data?.coverageFrom != null && verifiedPeers.data.coverageTo != null && (
+        <> {coverageLine(verifiedPeers.data.coverageFrom, verifiedPeers.data.coverageTo)}</>
+      )}{' '}
+      Shaded days have no retained round observation. Rounds per day are unavailable because the
+      crawler did not record counts.
+    </p>
   );
 }
 
@@ -291,7 +331,8 @@ export function NetworkShareHistory() {
     refetchInterval: 60000,
   });
   return (
-    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+    // Stacked: tier 2 gives the daily counts one column of its own from lg.
+    <div className="grid grid-cols-1 gap-4">
       <ShareTrend
         title="Client Version Share"
         history={versionShare.data}
