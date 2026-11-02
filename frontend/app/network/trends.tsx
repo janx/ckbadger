@@ -160,7 +160,7 @@ function ShareTrend({
         <p className="text-text-dim text-small">No completed daily crawler observations yet.</p>
       ) : (
         <>
-          <p className="text-text-dim text-meta mb-3">
+          <p className="text-text-dim text-body mb-3">
             Retained top-label counts per observed day. The historical total and omitted labels were
             not recorded, so percentages are unavailable.
           </p>

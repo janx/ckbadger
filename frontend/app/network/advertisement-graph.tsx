@@ -38,7 +38,7 @@ export function AdvertisementGraph({ roundId }: { roundId: number }) {
   const visible = showAll ? data.edges : data.edges.slice(0, FIRST_OBSERVATIONS);
   return (
     <div className="min-w-0">
-      <p className="text-text-dim text-small mb-4 max-w-4xl leading-relaxed">
+      <p className="text-text-dim text-body mb-4 max-w-4xl">
         {data.distinctPeerPairs.toLocaleString()} unique advertiser → target peer pairs across{' '}
         {data.edges.length.toLocaleString()} retained endpoint alias observations in completed round
         #{roundId}. Each row is one address-book report — who named whom — never a connection, so

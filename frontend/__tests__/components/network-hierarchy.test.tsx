@@ -623,3 +623,44 @@ describe('Network tier 2 lists, five rows first (R5, R8; lane N, N4)', () => {
     expect(screen.getByRole('button', { name: 'Show first 10 observations' })).toBeInTheDocument();
   });
 });
+
+describe('Network tier 2 prose at body (R1: meta is never prose; lane D3 ruling)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('sets the tier-2 explanations at body: the round caveat, the daily-count note, the who-named-whom intro', async () => {
+    stubChartWidth(1248);
+    server.use(
+      http.get(`${API_BASE}/network/advertisements`, () =>
+        HttpResponse.json({
+          roundId: 97,
+          finishedAt: 1761783240,
+          coverage: 'retainedLatestObservationOnly',
+          distinctPeerPairs: 1,
+          edges: [
+            {
+              advertiserPeerId: 'aaaaaaaa'.repeat(8),
+              targetPeerId: 'bbbbbbbb'.repeat(8),
+              alias: '/ip4/5.6.7.8/tcp/8115',
+              observedAt: 1761783240,
+            },
+          ],
+        })
+      )
+    );
+    const { tier2 } = await renderPage();
+    await within(tier2).findByRole('list', { name: /Directed advertiser/ });
+    await waitFor(() =>
+      expect(within(tier2).getAllByText(/percentages are unavailable/).length).toBeGreaterThan(0)
+    );
+    const prose = [
+      within(tier2).getByText(/^Evidence boundary: an advertised candidate/),
+      ...within(tier2).getAllByText(/^Retained top-label counts per observed day/),
+      within(tier2).getByText(/unique advertiser → target peer pairs/),
+    ];
+    expect(prose).toHaveLength(4);
+    for (const p of prose) {
+      expect(p).toHaveClass('text-body');
+      expect(p.className).not.toMatch(/(^|\s)text-(meta|small)(\s|$)/);
+    }
+  });
+});

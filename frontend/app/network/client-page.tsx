@@ -47,7 +47,7 @@ function ReachabilityCaveat({ className }: { className?: string }) {
     <div
       className={`border-base-border bg-base-surface rounded border px-4 py-3 ${className ?? ''}`}
     >
-      <p className="text-text-dim text-small font-mono leading-relaxed">
+      <p className="text-text-dim text-body font-mono">
         Evidence boundary: an advertised candidate is not verified until this crawler completes an
         authenticated, same-network Identify exchange. These local observations are not the full
         network; nodes behind NAT or firewalls can stay hidden.
