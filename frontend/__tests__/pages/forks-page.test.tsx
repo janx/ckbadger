@@ -173,6 +173,12 @@ describe('ForksPage', () => {
       )
     ).toBeInTheDocument();
     expect(within(tier2).getByText(/focus the chart and use ← →/)).toBeInTheDocument();
+    // two balanced columns: the concept and the window's record | how the chart is drawn
+    const columns = tier2.querySelector('[data-tier="2"] > div')!.children;
+    expect(columns).toHaveLength(2);
+    expect(columns[0]).toHaveTextContent(/aiming at one in 40 blocks/);
+    expect(columns[1]).toHaveTextContent(/focus the chart and use ← →/);
+    expect(columns[1]).toHaveTextContent(/indexer's detection wall time/);
   });
 
   it('gives every switch a fork glyph, the miners, the gap and its fate, linked by D7 (FF-L3, FF-L4)', async () => {
@@ -206,6 +212,15 @@ describe('ForksPage', () => {
     );
     expect(key.querySelector('.text-jade')).toBeNull();
     expect(within(table()).getByText('depth 1')).toBeInTheDocument();
+    // R15 (toward 32–34 px rows): 6 px above and below the 44 px glyph
+    for (const cell of within(table()).getAllByRole('cell'))
+      expect(cell).toHaveClass('text-body', 'py-1.5');
+    // the heads hold their words in an inline element, and a cell's second line is as wide as
+    // its words (R16: a text box is its words)
+    for (const head of within(table()).getAllByRole('columnheader'))
+      expect(head.firstElementChild?.tagName).toBe('SPAN');
+    expect(within(table()).getByText('depth 1')).toHaveClass('block', 'w-fit');
+    expect(within(table()).getByText('1 of 1 tx committed later')).toHaveClass('block', 'w-fit');
     expect(table().querySelector('[data-uncle-link]')).not.toBeNull();
     expect(within(table()).getByText('50 ms')).toBeInTheDocument();
     // R11: the fate reads in bright ink; the glyph's arrow keeps the jade

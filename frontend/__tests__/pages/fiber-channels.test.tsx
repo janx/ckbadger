@@ -135,6 +135,12 @@ describe('FiberChannelsPage', () => {
     ).toBeInTheDocument();
     expect(tier2).toHaveTextContent(/Each circle is a party: the address that funded/);
     expect(tier2).toHaveTextContent(/Parties are on-chain addresses, not Fiber node ids/);
+    // two balanced columns: what the chain sees (with what a party is) | how to read the graph
+    const columns = tier2.querySelector(':scope > div')!.children;
+    expect(columns).toHaveLength(2);
+    expect(columns[0]).toHaveTextContent(/Fiber is a payment-channel network/);
+    expect(columns[0]).toHaveTextContent(/Parties are on-chain addresses/);
+    expect(columns[1]).toHaveTextContent(/Each circle is a party: the address/);
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     expect(tier1).not.toHaveTextContent(/Fiber is a payment-channel network/);
     expect(tier1).not.toHaveTextContent(/Parties are on-chain addresses/);
@@ -178,9 +184,21 @@ describe('FiberChannelsPage', () => {
     ).toEqual(['Channel', 'Parties', 'Capacity', 'Opened', 'Open for']);
     expect(within(table).getByText('2023-11-15')).toBeInTheDocument();
     expect(within(table).getByText('3 m 20 s')).toBeInTheDocument();
-    expect(within(table).getByText('0xaaaaaaaa…aaaaaa')).toBeInTheDocument();
-    // R15: table rows 32–34 px — 18 px lines with 7 px above and below
-    for (const cell of within(table).getAllByRole('cell')) expect(cell).toHaveClass('py-[7px]');
+    // a party reads by its last six characters, as the graph names it (board L8, R16); the whole
+    // lock hash (or address) stays its title and link
+    expect(within(table).getByText('…aaaaaa')).toHaveAttribute('title', `0x${'aa'.repeat(32)}`);
+    expect(within(table).queryByText('0xaaaaaaaa…aaaaaa')).toBeNull();
+    // R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), a 20.8 px line
+    // with 6 px above and below
+    for (const cell of within(table).getAllByRole('cell'))
+      expect(cell).toHaveClass('text-body', 'py-1.5');
+    // every head and cell holds its words in an inline element (R16: a text box is its words)
+    for (const cell of [
+      ...within(table).getAllByRole('columnheader'),
+      ...within(table).getAllByRole('cell'),
+    ])
+      for (const node of Array.from(cell.childNodes))
+        expect(node.nodeType === Node.TEXT_NODE && node.textContent!.trim() !== '').toBe(false);
     expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
     expect(screen.getByText('sorted by capacity')).toHaveClass('text-meta');
     expect(screen.getByText(/Showing 1-1 of 38 channels/)).toBeInTheDocument();

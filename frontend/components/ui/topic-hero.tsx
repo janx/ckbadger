@@ -102,13 +102,16 @@ function FigureHero({
     <div className="min-w-0">
       <section aria-labelledby={titleId} className="min-w-0">
         {breadcrumb}
-        <h1 id={titleId} className="text-text-bright text-index font-medium">
-          {title}
-        </h1>
+        {/* The title row, as the DAO page's (the h1 a flex item, its box the size of its words). */}
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+          <h1 id={titleId} className="text-text-bright text-index font-medium">
+            {title}
+          </h1>
+        </div>
         <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{lede}</p>
         {figure && (
           <div data-role="figure" className="mt-9 min-w-0">
-            <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
+            <div className="text-text-dim text-meta mb-1.5 w-fit uppercase tracking-[0.08em]">
               {figure.label}
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
@@ -145,7 +148,7 @@ function FigureHero({
           {figures.map((item, index) => (
             <div key={index} className="min-w-0">
               <dt className="text-text-dim text-meta">{item.label}</dt>
-              <dd className="text-text-bright text-section mt-0.5 tabular-nums">
+              <dd className="text-text-bright text-section mt-0.5 w-fit tabular-nums">
                 {item.value}
                 {item.sub && <span className="text-text-dim text-small"> · {item.sub}</span>}
               </dd>

@@ -5,7 +5,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
-import { ListTable } from '@/components/ui/list-table';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { ForkDaysPlot, ForkDaysReading, useForkDaysPin } from '@/components/forks/fork-days-chart';
@@ -30,6 +30,18 @@ import { formatExactDecimal } from '@/lib/exact-integer';
 import { formatTimeAgo, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 
 type Overview = Awaited<ReturnType<typeof api.getForkOverview>>;
+
+/** Each column head holds its words in a span, so its text box is its words (R16), not the cell. */
+function spanHeads<T>(columns: ListColumn<T>[]): ListColumn<T>[] {
+  return columns.map((column) => ({
+    ...column,
+    header: column.header ?? <span>{column.label}</span>,
+  }));
+}
+
+/** R15, toward 32–34 px rows: rows at body (as the DAO page's depositor rows), 6 px above and
+ * below the 44 px fork glyph. */
+const ROW = 'text-body py-1.5';
 
 const PREVIEW_STATUS_WORDS: Record<ReorgEvent['previewStatus'], string> = {
   available: 'available',
@@ -132,9 +144,9 @@ function Seen({ event }: { event: ReorgEvent }) {
       ) : (
         <span className="text-text-bright">{when}</span>
       )}
-      <span className="text-text-dim text-meta block">{formatTimeAgo(event.detectedAt)}</span>
+      <span className="text-text-dim text-meta block w-fit">{formatTimeAgo(event.detectedAt)}</span>
       {!href && (
-        <span className="text-text-dim text-meta block">
+        <span className="text-text-dim text-meta block w-fit">
           {missingAddressWords(event.firstOrphanStatus)}
         </span>
       )}
@@ -148,7 +160,7 @@ function ForkPoint({ event }: { event: ReorgEvent }) {
       <Link href={`/blocks/${event.forkPointNumber}`} className="text-text-bright hover:text-jade">
         {formatBlockNumber(event.forkPointNumber)}
       </Link>
-      <span className="text-text-dim text-meta block">depth {event.depth}</span>
+      <span className="text-text-dim text-meta block w-fit">depth {event.depth}</span>
     </span>
   );
 }
@@ -222,7 +234,7 @@ function Fate({ event }: { event: ReorgEvent }) {
     return (
       <span>
         <span className="text-text-bright">No rollback at detection</span>
-        <span className="text-text-dim text-meta block">
+        <span className="text-text-dim text-meta block w-fit">
           indexed {formatBlockNumber(event.oldTipNumber)} → node{' '}
           {formatBlockNumber(event.newTipNumber)}
         </span>
@@ -242,7 +254,7 @@ function Fate({ event }: { event: ReorgEvent }) {
       ) : (
         <span className="text-text-bright">{words}</span>
       )}
-      <span className="text-text-dim text-meta block">
+      <span className="text-text-dim text-meta block w-fit">
         {noncellbaseTransactions === 0
           ? 'cellbase only'
           : `${committedLaterTransactions.toLocaleString('en-US')} of ${noncellbaseTransactions.toLocaleString('en-US')} tx committed later`}
@@ -370,33 +382,38 @@ export default function ForksPage() {
                   rows={events.data.data}
                   rowKey={(event) => String(event.id)}
                   empty="No branch switches observed by this node. Chain uncles above can still exist."
-                  columns={[
+                  columns={spanHeads<ReorgEvent>([
                     {
                       key: 'seen',
+                      className: ROW,
                       label: 'Seen (UTC+8)',
                       minWidth: 160,
                       render: (e) => <Seen event={e} />,
                     },
                     {
                       key: 'fork',
+                      className: ROW,
                       label: 'Fork point',
                       minWidth: 120,
                       render: (e) => <ForkPoint event={e} />,
                     },
                     {
                       key: 'shape',
+                      className: ROW,
                       label: 'Shape',
                       minWidth: 226,
                       render: (e) => <Shape event={e} />,
                     },
                     {
                       key: 'miners',
+                      className: ROW,
                       label: 'Dropped block’s miner vs winner’s',
                       minWidth: 260,
                       render: (e) => <Miners event={e} />,
                     },
                     {
                       key: 'apart',
+                      className: ROW,
                       label: 'Found apart',
                       minWidth: 100,
                       numeric: true,
@@ -404,11 +421,12 @@ export default function ForksPage() {
                     },
                     {
                       key: 'fate',
+                      className: ROW,
                       label: 'What became of it',
                       minWidth: 210,
                       render: (e) => <Fate event={e} />,
                     },
-                  ]}
+                  ])}
                   mobileRow={(event) => (
                     <div className="text-small min-w-0 space-y-2">
                       <div className="flex flex-wrap justify-between gap-2">
@@ -441,36 +459,45 @@ export default function ForksPage() {
         </div>
         <div id="evidence" className="scroll-mt-4">
           <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
-            <DetailSection title="How forks are counted">
-              <div className="flex flex-col gap-3">
-                <p className="text-text-dim text-body">
-                  Two miners sometimes find a block at the same height, a fraction of a second
-                  apart. The chain keeps one. The other is not lost: a later block includes it as an
-                  uncle, and CKB counts uncles to measure how often this happens and set the
-                  difficulty, aiming at one in 40 blocks.
-                </p>
-                {data && data.days.length > 0 && (
+            <div className="min-w-0">
+              <DetailSection title="How forks are counted">
+                <div className="flex flex-col gap-3">
                   <p className="text-text-dim text-body">
-                    The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
-                    {formatCount(data.days.length, 'day')}; this node switched branches{' '}
-                    {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only
-                    notices a fork when the losing block reached it first and it had to switch. The
-                    uncles are the complete record, and they are on chain for anyone to recount.
+                    Two miners sometimes find a block at the same height, a fraction of a second
+                    apart. The chain keeps one. The other is not lost: a later block includes it as
+                    an uncle, and CKB counts uncles to measure how often this happens and set the
+                    difficulty, aiming at one in 40 blocks.
                   </p>
-                )}
-                <p className="text-text-dim text-body">
-                  In the chart each grey bar is a day&apos;s uncles on chain and the jade inside it
-                  this node&apos;s branch switches that day; point at a day, or focus the chart and
-                  use ← → to step through the days.
-                </p>
-                {data && <p className="text-text-dim text-body">Days: {data.scope}.</p>}
-              </div>
-            </DetailSection>
-            {competing && (
-              <DetailSection title="This node’s branch switches, compared">
-                <p className="text-text-dim text-body">{competing}</p>
+                  {data && data.days.length > 0 && (
+                    <p className="text-text-dim text-body">
+                      The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
+                      {formatCount(data.days.length, 'day')}; this node switched branches{' '}
+                      {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only
+                      notices a fork when the losing block reached it first and it had to switch.
+                      The uncles are the complete record, and they are on chain for anyone to
+                      recount.
+                    </p>
+                  )}
+                </div>
               </DetailSection>
-            )}
+            </div>
+            <div className="min-w-0 space-y-8">
+              <DetailSection title="How the chart is drawn">
+                <div className="flex flex-col gap-3">
+                  <p className="text-text-dim text-body">
+                    In the chart each grey bar is a day&apos;s uncles on chain and the jade inside
+                    it this node&apos;s branch switches that day; point at a day, or focus the chart
+                    and use ← → to step through the days.
+                  </p>
+                  {data && <p className="text-text-dim text-body">Days: {data.scope}.</p>}
+                </div>
+              </DetailSection>
+              {competing && (
+                <DetailSection title="This node’s branch switches, compared">
+                  <p className="text-text-dim text-body">{competing}</p>
+                </DetailSection>
+              )}
+            </div>
           </DetailTier2>
         </div>
       </main>

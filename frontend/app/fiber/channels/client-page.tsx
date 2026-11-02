@@ -6,6 +6,7 @@ import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import {
   FiberGraphNotes,
+  FiberPartiesNote,
   FiberNetworkPicture,
   FiberNetworkReading,
   useFiberGraphPin,
@@ -21,10 +22,19 @@ import { formatCount } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { ExactCkb } from '@/components/activity-event-row';
-import { ListTable } from '@/components/ui/list-table';
+import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 
 type StateFilter = 'all' | FiberChannelState;
+
+/** Each column head holds its words in a span, so its text box is its words (R16), not the cell. */
+function spanHeads<T>(columns: ListColumn<T>[]): ListColumn<T>[] {
+  return columns.map((column) => ({
+    ...column,
+    header: column.header ?? <span>{column.label}</span>,
+  }));
+}
+
 /** The board's chip order and words (Fiber V65); counts are the summary's own fields. */
 const filters: {
   value: StateFilter;
@@ -45,14 +55,16 @@ const filters: {
   },
   { value: 'all', label: 'All', count: (s) => s.totalChannels },
 ];
-/** R15: table rows 32–34 px — an 18 px line with 7 px above and below. */
-const ROW = 'py-[7px]';
+/** R15: table rows 32–34 px — rows at body (as the DAO page's depositor rows), 6 px above and below. */
+const ROW = 'text-body py-1.5';
 const shortId = (hash: string) => `${hash.slice(0, 10)}…${hash.slice(-6)}`;
 
+/**
+ * A party in the table, by the last six characters the graph names it with (board L8; R16: the
+ * table reads like the graph above it); its whole address or lock hash is its title and link.
+ */
 function Party({ party }: { party: FiberChannel['observedParties'][number] }) {
-  const text = party.address
-    ? `${party.address.slice(0, 10)}…${party.address.slice(-6)}`
-    : `${party.lockScriptHash.slice(0, 10)}…${party.lockScriptHash.slice(-6)}`;
+  const text = `…${(party.address ?? party.lockScriptHash).slice(-6)}`;
   return party.address ? (
     <Link
       href={`/address/${party.address}`}
@@ -264,7 +276,7 @@ export default function FiberChannelsPage() {
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto max-w-[1280px] px-4 pb-[72px] pt-7">
+      <main className="container mx-auto max-w-[1280px] px-4 pb-16 pt-7">
         {/* Hierarchy v3 (R13): the hero is open now and the network picture; the concept and the
             graph's explainer are tier 2. Hero → first section 64 px (R6). */}
         <div data-tier="1" className="min-w-0">
@@ -352,7 +364,7 @@ export default function FiberChannelsPage() {
                   rows={channels.data.data}
                   rowKey={(channel) => channel.channelId}
                   empty={`No ${chosen.label.toLowerCase()} channels observed.`}
-                  columns={[
+                  columns={spanHeads<FiberChannel>([
                     {
                       key: 'channel',
                       className: ROW,
@@ -408,7 +420,7 @@ export default function FiberChannelsPage() {
                       label: 'Opened',
                       minWidth: 120,
                       className: cn(ROW, 'text-text-dim'),
-                      render: (channel) => formatUtc8Date(channel.openTimestamp),
+                      render: (channel) => <span>{formatUtc8Date(channel.openTimestamp)}</span>,
                     },
                     {
                       key: 'lifetime',
@@ -416,9 +428,9 @@ export default function FiberChannelsPage() {
                       label: lastColumn,
                       minWidth: 110,
                       numeric: true,
-                      render: lifetime,
+                      render: (channel) => <span>{lifetime(channel)}</span>,
                     },
-                  ]}
+                  ])}
                   mobileRow={(channel, wide) => <ChannelPhoneRow channel={channel} wide={wide} />}
                 />
                 {(channels.data.hasMore || pagination.hasPrevious) && (
@@ -442,17 +454,18 @@ export default function FiberChannelsPage() {
         <div id="evidence" className="scroll-mt-4">
           <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
             <DetailSection title="What the chain sees of Fiber">
-              <p className="text-text-dim text-body">
-                Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in one
-                shared cell and pay each other off chain as often as they like. Only opening and
-                closing a channel touch the chain, so that is what CKBadger sees.
-              </p>
+              <div className="flex flex-col gap-3">
+                <p className="text-text-dim text-body">
+                  Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in
+                  one shared cell and pay each other off chain as often as they like. Only opening
+                  and closing a channel touch the chain, so that is what CKBadger sees.
+                </p>
+                {network.data && <FiberPartiesNote network={network.data} />}
+              </div>
             </DetailSection>
-            {network.data && (
-              <DetailSection title="How to read the graph">
-                <FiberGraphNotes network={network.data} />
-              </DetailSection>
-            )}
+            <DetailSection title="How to read the graph">
+              <FiberGraphNotes />
+            </DetailSection>
           </DetailTier2>
         </div>
       </main>

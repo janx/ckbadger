@@ -70,6 +70,8 @@ describe('TopicHero figure layout (hierarchy v3, R11, R13)', () => {
     expect(section.tagName).toBe('SECTION');
     const title = within(section).getByRole('heading', { level: 1, name: 'Fiber channels' });
     expect(title).toHaveClass('text-index');
+    // the title row, as the DAO page's: the h1 is a flex item, its box the size of its words
+    expect(title.parentElement).toHaveClass('flex', 'items-baseline', 'justify-between');
     const lede = within(section).getByText(/^A Fiber channel touches the chain/);
     expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
     expect(lede.textContent!.length).toBeLessThanOrEqual(90);
@@ -84,7 +86,7 @@ describe('TopicHero figure layout (hierarchy v3, R11, R13)', () => {
     const row = companion.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(row.contains(value)).toBe(true);
-    expect(within(section).getByText('open now')).toHaveClass('text-meta', 'uppercase');
+    expect(within(section).getByText('open now')).toHaveClass('text-meta', 'uppercase', 'w-fit');
     // the picture directly under the figure, inside the hero section
     const picture = within(section).getByTestId('picture');
     expect(row.compareDocumentPosition(picture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -111,7 +113,7 @@ describe('TopicHero figure layout (hierarchy v3, R11, R13)', () => {
     const values = screen.getAllByRole('definition');
     // one dd per figure: the note sits inline in it, never a second line
     expect(values).toHaveLength(3);
-    for (const dd of values) expect(dd).toHaveClass('text-section', 'text-text-bright');
+    for (const dd of values) expect(dd).toHaveClass('text-section', 'text-text-bright', 'w-fit');
     expect(values[0]).toHaveTextContent(/^345 · since 2025-02-28 · 1 in USDI$/);
     expect(within(values[0]).getByText(/since 2025-02-28/)).toHaveClass(
       'text-small',

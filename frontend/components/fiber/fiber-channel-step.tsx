@@ -156,7 +156,7 @@ export function FiberChannelStep({
             onward="the channel, onward"
             hideGroups
           />
-          <div className="text-small flex flex-col gap-1 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5">
+          <div className="text-small flex flex-col items-start gap-1 rounded-md border border-dashed border-[#4b5266] px-3 py-2.5">
             <span className="text-text-bright">{box.head}</span>
             {box.lines.map((line, index) => (
               <span key={index} className="text-text-dim">
@@ -171,7 +171,8 @@ export function FiberChannelStep({
   return (
     <div className="flex min-w-0 flex-col gap-2.5">
       {header}
-      {description && <p className="text-text text-body">{description}</p>}
+      {/* The step's one caption, at caption width (R14). */}
+      {description && <p className="text-text text-body max-w-[640px]">{description}</p>}
       {body}
     </div>
   );

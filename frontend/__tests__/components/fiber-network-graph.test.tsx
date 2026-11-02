@@ -3,6 +3,7 @@ import { fireEvent, render, screen, within } from '../utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import {
   FiberGraphNotes,
+  FiberPartiesNote,
   FiberNetworkPicture,
   FiberNetworkReading,
   useFiberGraphPin,
@@ -122,7 +123,12 @@ describe('FiberNetworkGraph', () => {
   });
 
   it('says in tier 2 how to read the graph, what a party is, and which channels it cannot draw', () => {
-    render(<FiberGraphNotes network={network as FiberNetwork} />);
+    render(
+      <>
+        <FiberGraphNotes />
+        <FiberPartiesNote network={network as FiberNetwork} />
+      </>
+    );
     expect(
       screen.getByText(/^Each circle is a party: the address that funded/)
     ).toBeInTheDocument();

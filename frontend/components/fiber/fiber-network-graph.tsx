@@ -500,12 +500,8 @@ export function FiberNetworkReading({ network, pin }: Props) {
   );
 }
 
-/**
- * Tier 2, "How to read the graph": the explainer the picture's column used to hold, what a party
- * is, and the channels the graph cannot draw as a pair.
- */
-export function FiberGraphNotes({ network }: { network: FiberNetwork }) {
-  const data = useMemo(() => fiberGraphData(network), [network]);
+/** Tier 2, "How to read the graph": the explainer the picture's column used to hold. */
+export function FiberGraphNotes() {
   return (
     <div className="flex flex-col gap-3">
       <p className="text-text-dim text-body">
@@ -517,12 +513,19 @@ export function FiberGraphNotes({ network }: { network: FiberNetwork }) {
         time; green with the CKB locked between them right now; a dashed line means a channel was
         force-closed.
       </p>
-      <p className="text-text-dim text-body">
-        Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel,
-        not which node ran it.
-        {data.unpairedChannels > 0 &&
-          ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${data.unpairedChannels === 1 ? 'is' : 'are'} not drawn.`}
-      </p>
     </div>
+  );
+}
+
+/** Tier 2: what a party is, and the channels the graph cannot draw as a pair. */
+export function FiberPartiesNote({ network }: { network: FiberNetwork }) {
+  const data = useMemo(() => fiberGraphData(network), [network]);
+  return (
+    <p className="text-text-dim text-body">
+      Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not
+      which node ran it.
+      {data.unpairedChannels > 0 &&
+        ` ${formatCount(data.unpairedChannels, 'channel')} with more or fewer than two parties ${data.unpairedChannels === 1 ? 'is' : 'are'} not drawn.`}
+    </p>
   );
 }

@@ -111,7 +111,8 @@ describe('FiberChannelBoard', () => {
       'text-entity'
     );
     expect(within(hero).getByText('force-closed · settled')).toBeInTheDocument();
-    expect(within(hero).getByText(channel.channelId)).toBeInTheDocument();
+    expect(within(hero).getByText(channel.channelId)).toHaveClass('w-fit', 'max-w-full');
+    expect(within(hero).getByText('capacity')).toHaveClass('w-fit');
     // R13: one lede, dim, ≤ 90 characters — the channel's story in one line
     const lede = within(hero).getByText(
       'Force-closed 8 d 3 h after it opened; settled after 6 epochs.'
@@ -155,6 +156,13 @@ describe('FiberChannelBoard', () => {
     );
     expect(tier1).not.toHaveTextContent(/net into the opening transaction/);
     expect(tier1).not.toHaveTextContent(/the chain does not say which side paid them/);
+    // the words share the right column with the witnesses, beside the locks (page height)
+    const words = within(tier2).getByRole('heading', { name: 'The channel, in words' });
+    const witnesses = within(tier2).getByRole('heading', { name: 'Witnesses and timing' });
+    const locks = within(tier2).getByRole('heading', { name: 'The two locks' });
+    const column = (h: HTMLElement) => h.closest('[data-column]');
+    expect(column(words)).toBe(column(witnesses));
+    expect(column(words)).not.toBe(column(locks));
     // (the tier-1 prose budget is checked on the page with the real step diagrams)
   });
 

@@ -67,7 +67,13 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
       'out:0'
     );
     expect(screen.getByText(/in:0 → out:0 · the channel continues/)).toBeInTheDocument();
-    expect(screen.getByText('→ step 3, after 6 epochs')).toBeInTheDocument();
+    // the step's box: each line as wide as its words (R16: a text box is its words)
+    expect(screen.getByText('→ step 3, after 6 epochs').parentElement).toHaveClass('items-start');
+    // the step's one caption, at caption width (R14)
+    expect(screen.getByText('One side posted the commitment.')).toHaveClass(
+      'text-body',
+      'max-w-[640px]'
+    );
     // script groups stay out of tier 1 (FF-C5)
     expect(screen.queryByText('Script groups')).toBeNull();
   });

@@ -412,6 +412,31 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   const partyOf = (lockHash: string) =>
     channel.observedParties.find((party) => party.lockScriptHash === lockHash);
   const titleId = useId();
+  // Tier 2 (F2): every sentence that left tier 1, beside the lock evidence when it has loaded.
+  const words = (
+    <DetailSection title="The channel, in words">
+      <div className="flex flex-col gap-3">
+        <Summary channel={channel} evidence={evidence} />
+        {(channel.state === 'forceClosed' || channel.state === 'settled') && (
+          <p className="text-text-dim text-body">
+            A force close moves the funding cell to a commitment lock with a wait of{' '}
+            {epochDelayWords(
+              required(channel.delayEpochDecoded, 'a decoded delay', channel.channelId)
+            )}
+            , so the other side can answer with a newer state.
+          </p>
+        )}
+        {atOpen && (
+          <p className="text-text-dim text-body">
+            The chain never sees a Fiber payment, only the split when the channel opens and the
+            split when it closes.
+            {atClose &&
+              ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
+          </p>
+        )}
+      </div>
+    </DetailSection>
+  );
   return (
     <div>
       {/* Hierarchy v3 (R13): the hero — title, id, one lede, the capacity and the pair — then
@@ -424,10 +449,12 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
             </h1>
             <span className="text-text-dim text-body">{FIBER_STATE_WORDS[channel.state]}</span>
           </div>
-          <p className="text-text-dim text-small mt-1.5 break-all">{channel.channelId}</p>
+          <p className="text-text-dim text-small mt-1.5 w-fit max-w-full break-all">
+            {channel.channelId}
+          </p>
           <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{ledeSentence(channel)}</p>
           <div data-role="figure" className="mt-9 min-w-0">
-            <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
+            <div className="text-text-dim text-meta mb-1.5 w-fit uppercase tracking-[0.08em]">
               capacity
             </div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
@@ -514,130 +541,116 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
 
       <div id="evidence" className="scroll-mt-4">
         <DetailTier2>
-          <DetailSection title="The channel, in words">
-            <div className="flex flex-col gap-3">
-              <Summary channel={channel} evidence={evidence} />
-              {(channel.state === 'forceClosed' || channel.state === 'settled') && (
-                <p className="text-text-dim text-body">
-                  A force close moves the funding cell to a commitment lock with a wait of{' '}
-                  {epochDelayWords(
-                    required(channel.delayEpochDecoded, 'a decoded delay', channel.channelId)
-                  )}
-                  , so the other side can answer with a newer state.
-                </p>
-              )}
-              {atOpen && (
-                <p className="text-text-dim text-body">
-                  The chain never sees a Fiber payment, only the split when the channel opens and
-                  the split when it closes.
-                  {atClose &&
-                    ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
-                </p>
-              )}
-            </div>
-          </DetailSection>
+          {!evidence && words}
           {evidence && (
             <>
               <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
-                <DetailSection title="The two locks">
-                  <div className="text-small flex flex-col gap-3">
-                    <div>
-                      <div className="text-text-dim">
-                        Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
-                      </div>
-                      <div className="text-text-bright break-all">{evidence.funding.lockArgs}</div>
-                      <div className="text-text-dim">
-                        blake160 of the two parties’ aggregated public key
-                      </div>
-                      <Link
-                        href={`/script/${evidence.funding.lockCodeHash}?hashType=${evidence.funding.lockHashType}`}
-                        className="break-all text-[#6aa9c4]"
-                      >
-                        {evidence.funding.lockCodeHash}
-                      </Link>
-                    </div>
-                    {tracked ? (
+                <div data-column="left" className="min-w-0">
+                  <DetailSection title="The two locks">
+                    <div className="text-small flex flex-col gap-3">
                       <div>
-                        <div className="text-text-dim mb-1">
-                          Fiber Commitment Lock · args, {argsBytes(tracked.lockArgs)} bytes ·{' '}
-                          {tracked.lockFormat}
+                        <div className="text-text-dim">
+                          Fiber Funding Lock · args, {argsBytes(evidence.funding.lockArgs)} bytes
                         </div>
-                        <Grid>
-                          <span className="text-text-dim">Current commitment</span>
-                          <Link
-                            href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
-                            className="min-w-0 break-all text-[#6aa9c4]"
-                          >
-                            {tracked.txHash}
-                            <OutpointIndex index={tracked.outputIndex} />
-                          </Link>
-                          <span className="text-text-dim">Pubkey hash · 20</span>
-                          <span className="text-text-bright break-all">{tracked.pubkeyHash}</span>
-                          <span className="text-text-dim">Delay · 8 bytes, LE</span>
-                          <span className="text-text-bright min-w-0">
-                            <span className="break-all">
-                              {delayBytes!.littleEndian} = {delayBytes!.value}
-                            </span>{' '}
-                            · {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
-                          </span>
-                          <span className="text-text-dim">Version · exact u64</span>
-                          <span className="text-text-bright break-all">{tracked.version}</span>
-                          {tracked.lockFormat === 'full57' && (
-                            <>
-                              <span className="text-text-dim">Settlement hash / flag</span>
-                              <span className="text-text-bright break-all">
-                                {tracked.settlementHash ?? 'none'} ·{' '}
-                                {tracked.settlementFlag ?? 'none'}
-                              </span>
-                            </>
-                          )}
-                          <span className="text-text-dim">Commitment script</span>
-                          <Link
-                            href={`/script/${tracked.lockCodeHash}?hashType=${tracked.lockHashType}`}
-                            className="min-w-0 break-all text-[#6aa9c4]"
-                          >
-                            {tracked.lockCodeHash}
-                          </Link>
-                        </Grid>
+                        <div className="text-text-bright break-all">
+                          {evidence.funding.lockArgs}
+                        </div>
+                        <div className="text-text-dim">
+                          blake160 of the two parties’ aggregated public key
+                        </div>
+                        <Link
+                          href={`/script/${evidence.funding.lockCodeHash}?hashType=${evidence.funding.lockHashType}`}
+                          className="break-all text-[#6aa9c4]"
+                        >
+                          {evidence.funding.lockCodeHash}
+                        </Link>
                       </div>
-                    ) : (
-                      <p className="text-text-dim">No commitment cell has appeared on chain.</p>
-                    )}
-                  </div>
-                </DetailSection>
-                <DetailSection title="Witnesses and timing">
-                  <Grid>
-                    {evidence.stages.map((stage) => (
-                      <span key={stage.txHash} className="contents">
-                        <span className="text-text-dim">
-                          {stage.stage === STAGE_KEYS.close &&
-                          (channel.state === 'forceClosed' || channel.state === 'settled')
-                            ? 'force close'
-                            : (STAGE_WORDS[stage.stage] ?? stage.stage)}
+                      {tracked ? (
+                        <div>
+                          <div className="text-text-dim mb-1">
+                            Fiber Commitment Lock · args, {argsBytes(tracked.lockArgs)} bytes ·{' '}
+                            {tracked.lockFormat}
+                          </div>
+                          <Grid>
+                            <span className="text-text-dim">Current commitment</span>
+                            <Link
+                              href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
+                              className="min-w-0 break-all text-[#6aa9c4]"
+                            >
+                              {tracked.txHash}
+                              <OutpointIndex index={tracked.outputIndex} />
+                            </Link>
+                            <span className="text-text-dim">Pubkey hash · 20</span>
+                            <span className="text-text-bright break-all">{tracked.pubkeyHash}</span>
+                            <span className="text-text-dim">Delay · 8 bytes, LE</span>
+                            <span className="text-text-bright min-w-0">
+                              <span className="break-all">
+                                {delayBytes!.littleEndian} = {delayBytes!.value}
+                              </span>{' '}
+                              · {formatEpochDelay(tracked.delayEpochDecoded, tracked.delayEpoch)}
+                            </span>
+                            <span className="text-text-dim">Version · exact u64</span>
+                            <span className="text-text-bright break-all">{tracked.version}</span>
+                            {tracked.lockFormat === 'full57' && (
+                              <>
+                                <span className="text-text-dim">Settlement hash / flag</span>
+                                <span className="text-text-bright break-all">
+                                  {tracked.settlementHash ?? 'none'} ·{' '}
+                                  {tracked.settlementFlag ?? 'none'}
+                                </span>
+                              </>
+                            )}
+                            <span className="text-text-dim">Commitment script</span>
+                            <Link
+                              href={`/script/${tracked.lockCodeHash}?hashType=${tracked.lockHashType}`}
+                              className="min-w-0 break-all text-[#6aa9c4]"
+                            >
+                              {tracked.lockCodeHash}
+                            </Link>
+                          </Grid>
+                        </div>
+                      ) : (
+                        <p className="text-text-dim">No commitment cell has appeared on chain.</p>
+                      )}
+                    </div>
+                  </DetailSection>
+                </div>
+                <div data-column="right" className="min-w-0 space-y-8">
+                  {words}
+                  <DetailSection title="Witnesses and timing">
+                    <Grid>
+                      {evidence.stages.map((stage) => (
+                        <span key={stage.txHash} className="contents">
+                          <span className="text-text-dim">
+                            {stage.stage === STAGE_KEYS.close &&
+                            (channel.state === 'forceClosed' || channel.state === 'settled')
+                              ? 'force close'
+                              : (STAGE_WORDS[stage.stage] ?? stage.stage)}
+                          </span>
+                          <StageWitnesses stage={stage} />
                         </span>
-                        <StageWitnesses stage={stage} />
-                      </span>
-                    ))}
-                    {waitParts.length > 0 && (
-                      <>
-                        <span className="text-text-dim">the wait</span>
-                        <span className="text-text">{waitParts.join(' · ')}</span>
-                      </>
-                    )}
-                    {tracked && (
-                      <>
-                        <span className="text-text-dim">delay rule</span>
-                        <span className="text-text">
-                          {tracked.epochLock === 'firstSettlementDelay'
-                            ? `first settlement delay ${tracked.epochLockMetAtTip ? 'met' : 'waiting'}: ready at epoch ${tracked.readyEpoch}; indexed tip at ${tracked.tipEpoch}`
-                            : tracked.epochLock === 'subsequentSettlementNoReappliedDelay'
-                              ? 'Subsequent settlement cell: original delay is not reapplied; other transaction conditions remain.'
-                              : 'Legacy 36-byte form: the deployed delay rule is not asserted here.'}
-                        </span>
-                      </>
-                    )}
-                  </Grid>
-                </DetailSection>
+                      ))}
+                      {waitParts.length > 0 && (
+                        <>
+                          <span className="text-text-dim">the wait</span>
+                          <span className="text-text">{waitParts.join(' · ')}</span>
+                        </>
+                      )}
+                      {tracked && (
+                        <>
+                          <span className="text-text-dim">delay rule</span>
+                          <span className="text-text">
+                            {tracked.epochLock === 'firstSettlementDelay'
+                              ? `first settlement delay ${tracked.epochLockMetAtTip ? 'met' : 'waiting'}: ready at epoch ${tracked.readyEpoch}; indexed tip at ${tracked.tipEpoch}`
+                              : tracked.epochLock === 'subsequentSettlementNoReappliedDelay'
+                                ? 'Subsequent settlement cell: original delay is not reapplied; other transaction conditions remain.'
+                                : 'Legacy 36-byte form: the deployed delay rule is not asserted here.'}
+                          </span>
+                        </>
+                      )}
+                    </Grid>
+                  </DetailSection>
+                </div>
               </div>
               {evidence.openingPartyFlows.length > 0 && (
                 <DetailSection title="Opening transaction, per party">
