@@ -859,9 +859,18 @@ export default function TransactionDetailPage() {
       code: !g.ran ? (
         attachedDeps.length > 0 ? (
           attachedDeps.map(({ d, i }) => (
-            <a key={i} href={`#tx-dep-${i}`} className="text-text-dim hover:text-jade block">
-              code {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex} · not run here
-            </a>
+            <span key={i} className="text-text-dim block">
+              <a href={`#tx-dep-${i}`} className="hover:text-jade">
+                code
+              </a>{' '}
+              <Link
+                href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
+                className="hover:text-jade"
+              >
+                {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
+              </Link>{' '}
+              · not run here
+            </span>
           ))
         ) : null
       ) : isProvisional ? (
@@ -873,13 +882,19 @@ export default function TransactionDetailPage() {
       ) : codeDeps.length === 0 ? (
         <span className="text-text-dim">No matching dep</span>
       ) : (
+        // The kind jumps to the dep row's evidence below; the out point opens the code cell.
         codeDeps.map(({ d, i }) => (
-          <a key={i} href={`#tx-dep-${i}`} className="hover:text-jade block">
-            {d.depType === 'dep_group' ? 'dep group' : 'code'}{' '}
-            <span className="text-text-dim">
+          <span key={i} className="block">
+            <a href={`#tx-dep-${i}`} className="hover:text-jade">
+              {d.depType === 'dep_group' ? 'dep group' : 'code'}
+            </a>{' '}
+            <Link
+              href={`/cell/${d.outPointTxHash}-${d.outPointIndex}`}
+              className="text-text-dim hover:text-jade"
+            >
               {truncateHash(d.outPointTxHash, 10, 6)}:{d.outPointIndex}
-            </span>
-          </a>
+            </Link>
+          </span>
         ))
       ),
     };

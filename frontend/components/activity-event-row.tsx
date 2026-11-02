@@ -995,9 +995,25 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
   const meta = protocolActionMeta(pa);
   const parts: React.ReactNode[] = [];
   if (meta.channelOutpoint) {
-    // `0x<funding tx hash>:<index>`: shorten the hash, keep the index whole.
+    // `0x<funding tx hash>:<index>`: shorten the hash, keep the index whole. The out point names
+    // the channel's funding cell, so it opens that cell's page.
     const [hash, index] = meta.channelOutpoint.split(':');
-    parts.push(`channel ${truncateHash(hash, 10, 4)}${index === undefined ? '' : `:${index}`}`);
+    parts.push(
+      index === undefined ? (
+        `channel ${truncateHash(hash, 10, 4)}`
+      ) : (
+        <>
+          channel{' '}
+          <Link
+            href={`/cell/${hash}-${index}`}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {truncateHash(hash, 10, 4)}:{index}
+          </Link>
+        </>
+      )
+    );
   }
   if (meta.capacity !== null) {
     parts.push(

@@ -106,6 +106,13 @@ describe('Code versions rows (table-rows L1-4)', () => {
       'title',
       '0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9:0'
     );
+    // The out point opens the code cell too, in dim ink (T5: the version stays the bright thing).
+    const outpoint = within(cell).getByRole('link', { name: '0x673e18…55f9:0' });
+    expect(outpoint).toHaveAttribute(
+      'href',
+      '/mainnet/cell/0x673e1843035ce9c249efc36b62865e7a7c9f6e2ca6fc9c66fd108307e81355f9-0'
+    );
+    expect(outpoint).toHaveClass('text-text-dim');
     expect(held).toHaveTextContent(/^multisig 0x6598…d696$/);
     // T5: one bright thing a row — the version; the rest in body ink or dim.
     expect(rows[0]).toHaveClass('text-text');

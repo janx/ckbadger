@@ -99,6 +99,48 @@ describe('script code evidence', () => {
     expect(screen.getByText(/This holder signed to spend/)).toBeInTheDocument();
   });
 
+  it('links every code cell each holder owns to its cell page', () => {
+    const txA = `0x${'aa'.repeat(32)}`;
+    const txB = `0x${'bb'.repeat(32)}`;
+    const owner = (lockArgs: string, codeCells: string[]) => ({
+      lockCodeHash: '0x01',
+      lockHashType: 'type',
+      lockArgs,
+      class: 'one_key' as const,
+      codeCells,
+    });
+    render(
+      <ScriptCustodyEvidence
+        custody={{
+          class: 'mixed',
+          lockCodeHash: null,
+          lockHashType: null,
+          lockArgs: null,
+          threshold: null,
+          keyCount: null,
+          requireFirstN: null,
+          keyHashes: [],
+          verifiedByTx: null,
+          witnessState: 'not_applicable',
+          owners: [owner('0x02', [`${txA}:0`, `${txA}:1`]), owner('0x03', [`${txB}:2`])],
+        }}
+      />
+    );
+    expect(screen.getByRole('link', { name: `${txA}:0` })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${txA}-0`
+    );
+    expect(screen.getByRole('link', { name: `${txA}:1` })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${txA}-1`
+    );
+    expect(screen.getByRole('link', { name: `${txB}:2` })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${txB}-2`
+    );
+    expect(screen.getByText(/2 code cells:/)).toBeInTheDocument();
+  });
+
   it('shows no observed events without inventing a deployment', () => {
     render(<ScriptCodeHistory markers={[]} />);
     expect(
@@ -191,6 +233,18 @@ describe('script code evidence', () => {
     expect(screen.getAllByRole('link', { name: /code · 1 event/ })).toHaveLength(2);
     expect(screen.getAllByRole('button', { name: /2024-08-01 · deployed/ })).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: /2024-11-01 · deployed/ })).toHaveLength(1);
+    // Each chip names its code cell by out point (not the reference hash), opening the cell page.
+    const codeCell = seed.codeCellTxHash;
+    const short = `${codeCell.slice(0, 8)}...${codeCell.slice(-6)}`;
+    expect(screen.getByRole('link', { name: `${short}:0` })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${codeCell}-0`
+    );
+    expect(screen.getByRole('link', { name: `${short}:1` })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${codeCell}-1`
+    );
+    expect(document.body.textContent).not.toContain(seed.referenceHash.slice(0, 8));
   });
 
   it('pairs upgrade custody only within the same exact reference when a transaction upgrades two anchors', () => {

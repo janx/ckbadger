@@ -4,6 +4,7 @@ import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { CellMicroscope, cellDataParts, cellOutputParts } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import type { Cell } from '@/lib/api';
+import { STICKY_RAIL } from '@/components/layout/sticky-header';
 
 const cell = {
   txHash: `0x${'01'.repeat(32)}`,
@@ -43,6 +44,15 @@ const cell = {
 } as Cell;
 
 describe('cell microscope', () => {
+  it('sticks the field detail one gutter under the measured site header, not a fixed offset', () => {
+    // A long hex dump scrolls far; the detail must stay visible below the header, never under it.
+    render(<CellMicroscope cell={cell} />);
+    const aside = screen.getByLabelText('Field detail');
+    expect(aside).toHaveClass(...STICKY_RAIL.split(' '));
+    expect(STICKY_RAIL).toContain('var(--sticky-header-h)');
+    expect(aside.className).not.toMatch(/\blg:top-\d/);
+  });
+
   it('partitions serialized output and fills only unclassified data gaps', () => {
     expect(cellOutputParts(cell).map((part) => [part.start, part.end, part.occupied])).toEqual([
       [0, 4, false],

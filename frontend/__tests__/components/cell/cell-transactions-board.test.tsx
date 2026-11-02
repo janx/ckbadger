@@ -177,6 +177,25 @@ describe('Its transactions against the Cell board', () => {
     ).toBeInTheDocument();
   });
 
+  it("links each executed group's cell dep out point to its cell page", async () => {
+    const depTx = `0x${'dd'.repeat(32)}`;
+    getTransactionCellDeps.mockResolvedValue([
+      {
+        outPointTxHash: depTx,
+        outPointIndex: 1,
+        depType: 'dep_group',
+        scriptHashes: [`0x${'a1'.repeat(32)}`],
+        outputLockScriptHashes: [],
+        resolvedCells: [],
+      },
+    ]);
+    view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
+    await screen.findByLabelText(`Transaction ${cell.txHash} structure`);
+    const dep = await screen.findByRole('link', { name: `${depTx}:1` });
+    expect(dep).toHaveAttribute('href', expect.stringMatching(new RegExp(`/cell/${depTx}-1$`)));
+    expect(dep.parentElement).toHaveTextContent(`${depTx}:1 (dep_group)`);
+  });
+
   it('carries the live cell past its transaction into a dashed "Not spent yet" box (SC-C7)', async () => {
     view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
     const structure = await screen.findByLabelText(`Transaction ${cell.txHash} structure`);

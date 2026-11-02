@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AppLink } from '@/components/ui/app-link';
 import { Chart } from '@/components/ui/chart';
@@ -288,6 +288,21 @@ export function ScriptCodeClassSummary({
   );
 }
 
+/** A code cell the API names as `0x<tx hash>:<output index>`, opening its cell page. */
+function CodeCellLink({ outpoint }: { outpoint: string }) {
+  const at = outpoint.lastIndexOf(':');
+  if (at < 1 || at === outpoint.length - 1)
+    throw new Error(`Code cell out point "${outpoint}" is not "0x<tx hash>:<output index>"`);
+  return (
+    <AppLink
+      href={`/cell/${outpoint.slice(0, at)}-${outpoint.slice(at + 1)}`}
+      className="text-emphasis hover:underline"
+    >
+      {outpoint}
+    </AppLink>
+  );
+}
+
 export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }) {
   const signer = custody.verifiedByTx;
   return (
@@ -341,7 +356,13 @@ export function ScriptCustodyEvidence({ custody }: { custody: ScriptCustodyApi }
             >
               {scriptClassLabel(owner.class)} · {owner.lockHashType} {owner.lockCodeHash} · args{' '}
               {owner.lockArgs} · {owner.codeCells.length} code cell
-              {owner.codeCells.length === 1 ? '' : 's'}: {owner.codeCells.join(', ')}
+              {owner.codeCells.length === 1 ? '' : 's'}:{' '}
+              {owner.codeCells.map((outpoint, i) => (
+                <Fragment key={outpoint}>
+                  {i > 0 && ', '}
+                  <CodeCellLink outpoint={outpoint} />
+                </Fragment>
+              ))}
             </li>
           ))}
         </ul>
@@ -523,17 +544,28 @@ export function ScriptCapacityEvidenceChart({
             Code and custodian events on the same indexed calendar as the chart
           </div>
           <div className="flex max-w-full gap-2 overflow-x-auto pb-2">
+            {/* One chip an event: the day · event · block selects it; the out point opens the code cell. */}
             {markers.map((marker) => (
-              <button
+              <span
                 key={key(marker)}
-                type="button"
-                onClick={() => setSelectedKey(key(marker))}
-                aria-pressed={selected === marker}
-                className="border-base-border text-text-dim hover:text-text-bright text-meta shrink-0 rounded border px-2 py-1"
+                className="border-base-border text-text-dim text-meta inline-flex shrink-0 items-center gap-1 rounded border px-2 py-1"
               >
-                {marker.indexedDay} · {marker.event} · {formatBlockNumber(marker.blockNumber)} ·{' '}
-                {truncateHash(marker.referenceHash, 8, 6)}:{marker.codeCellOutputIndex}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedKey(key(marker))}
+                  aria-pressed={selected === marker}
+                  className="hover:text-text-bright"
+                >
+                  {marker.indexedDay} · {marker.event} · {formatBlockNumber(marker.blockNumber)}
+                </button>
+                <span aria-hidden="true">·</span>
+                <AppLink
+                  href={`/cell/${marker.codeCellTxHash}-${marker.codeCellOutputIndex}`}
+                  className="hover:text-text-bright hover:underline"
+                >
+                  {truncateHash(marker.codeCellTxHash, 8, 6)}:{marker.codeCellOutputIndex}
+                </AppLink>
+              </span>
             ))}
           </div>
           {selected && (

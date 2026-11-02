@@ -530,9 +530,12 @@ export function ScriptFamilyPage({
         const more = row.version.deployments.filter((d) => d !== lead);
         return (
           <span title={outpointKey(lead)} className="flex min-w-0 items-center gap-2">
-            <span className="text-text-dim truncate">
+            <Link
+              href={`/cell/${lead.codeCellTxHash}-${lead.codeCellOutputIndex}`}
+              className="text-text-dim hover:text-jade truncate"
+            >
               {shortHex(lead.codeCellTxHash, 6, 4)}:{lead.codeCellOutputIndex}
-            </span>
+            </Link>
             {more.length > 0 && (
               <RowTag title={more.map(outpointKey).join(', ')}>+{more.length}</RowTag>
             )}

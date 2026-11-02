@@ -859,6 +859,11 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       />
     );
     expect(document.body).toHaveTextContent('channel 0x0d3870bb...6e26:0 · 750.00000000 CKB');
+    // The channel's out point is its funding cell: it opens that cell's page.
+    expect(screen.getByRole('link', { name: '0x0d3870bb...6e26:0' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(/\/cell\/0x0d3870bb0+6e26-0$/)
+    );
   });
 
   it('reads an amount past 2^53 exactly', () => {

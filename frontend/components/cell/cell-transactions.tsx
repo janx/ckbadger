@@ -117,10 +117,13 @@ export function TransactionEvidence({
                 ? deps.map((dep, i) => (
                     <span key={`${dep.outPointTxHash}:${dep.outPointIndex}`}>
                       {i > 0 && ', '}
-                      <span className="[overflow-wrap:anywhere]">
+                      <Link
+                        href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
+                        className="hover:text-jade [overflow-wrap:anywhere]"
+                      >
                         {dep.outPointTxHash}
                         <OutpointIndex index={dep.outPointIndex} />
-                      </span>{' '}
+                      </Link>{' '}
                       ({dep.depType})
                     </span>
                   ))

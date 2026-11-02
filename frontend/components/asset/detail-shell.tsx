@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { Header } from '@/components/layout/header';
+import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
 import { DetailTier2 } from '@/components/ui/detail-layout';
@@ -114,7 +115,8 @@ export function AssetDetailShell({
     <aside
       aria-label="Facts"
       className={cn(
-        'min-w-0 lg:sticky lg:top-24 lg:pt-8',
+        'min-w-0 lg:pt-8',
+        STICKY_RAIL,
         railAfterHeader && 'lg:col-start-2 lg:row-span-2 lg:row-start-1'
       )}
     >

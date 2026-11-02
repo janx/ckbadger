@@ -3,6 +3,7 @@
 import { useMemo, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -457,7 +458,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
       <aside
         aria-label="Party or pair"
         aria-live="polite"
-        className="text-small min-w-0 lg:sticky lg:top-4"
+        className={`text-small min-w-0 ${STICKY_RAIL}`}
       >
         <GraphKey />
         {(activeNode || activeEdge) && (

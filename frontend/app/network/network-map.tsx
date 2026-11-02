@@ -6,6 +6,7 @@ import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
 
@@ -459,7 +460,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
           <aside
             aria-label="Selected peer evidence"
             aria-live="polite"
-            className="border-base-border-subtle text-small min-w-0 self-start rounded border px-3.5 py-3 lg:sticky lg:top-4"
+            className={`border-base-border-subtle text-small min-w-0 self-start rounded border px-3.5 py-3 ${STICKY_RAIL}`}
           >
             {selected ? (
               <PeerReadout point={selected} roundId={ready.roundId} />

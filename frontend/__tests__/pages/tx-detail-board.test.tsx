@@ -410,9 +410,25 @@ describe('Transaction board, tier 2', () => {
       'true'
     );
     expect(screen.getByTestId('tx-io-output-0')).toHaveAttribute('data-highlighted', 'true');
-    expect(
-      document.querySelector('[data-group-row="lock:attached:0xoutputlock"]')
-    ).toHaveTextContent('code 0xd00a0222...2c47f7:0 · not run here');
+    const attached = document.querySelector(
+      '[data-group-row="lock:attached:0xoutputlock"]'
+    ) as HTMLElement;
+    expect(attached).toHaveTextContent('code 0xd00a0222...2c47f7:0 · not run here');
+    // In the code column the out point opens the code cell; the kind jumps to the dep row.
+    expect(within(attached).getByRole('link', { name: '0xd00a0222...2c47f7:0' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/cell/0xd00a0222${'00'.repeat(26)}2c47f7-0$`))
+    );
+    expect(within(attached).getByRole('link', { name: 'code' })).toHaveAttribute(
+      'href',
+      '#tx-dep-2'
+    );
+    const spore = document.querySelector('[data-group-row="type:run:0xtypescript"]') as HTMLElement;
+    expect(within(spore).getByRole('link', { name: '0x96b198fb...b69824:0' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(new RegExp(`/cell/0x96b198fb${'00'.repeat(26)}b69824-0$`))
+    );
+    expect(within(spore).getByRole('link', { name: 'code' })).toHaveAttribute('href', '#tx-dep-1');
   });
 
   it('draws the proposal ruler and the exact capacity equation (TX-17, TX-19)', async () => {

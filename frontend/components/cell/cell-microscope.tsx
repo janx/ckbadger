@@ -21,6 +21,7 @@ import {
   type HexRowBytes,
 } from '@/lib/cell-byte-layout';
 import { TapOrHoverHint, tapOrHover } from '@/components/ui/tap-or-hover-hint';
+import { STICKY_RAIL } from '@/components/layout/sticky-header';
 
 export { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 
@@ -749,7 +750,10 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
         <aside
           aria-label="Field detail"
           aria-live="polite"
-          className="text-small min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3 lg:sticky lg:top-4"
+          className={cn(
+            'text-small min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3',
+            STICKY_RAIL
+          )}
         >
           {detail}
         </aside>

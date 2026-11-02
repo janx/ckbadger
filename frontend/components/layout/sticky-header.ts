@@ -12,6 +12,13 @@ export const STICKY_HEADER_VAR = '--sticky-header-h';
 export const BELOW_STICKY_HEADER = 'top-[var(--sticky-header-h)]';
 
 /**
+ * A side rail (a detail or readout panel beside a tall column) that sticks from lg up: it rests
+ * one gutter (1rem) below the sticky header, so the header never covers its top rows while the
+ * reader hovers far down the column (cell page hex dump, network map, fiber graph, asset facts).
+ */
+export const STICKY_RAIL = 'lg:sticky lg:top-[calc(var(--sticky-header-h)+1rem)]';
+
+/**
  * What sticks: from md up the wrapper around the header row and the vitals strip is the sticky
  * block; below md it is display: contents and only the header row sticks.
  */
