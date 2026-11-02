@@ -25,13 +25,15 @@ describe('RowTag (table-rows R3)', () => {
     expect(tag).not.toHaveClass('border-dashed');
   });
 
-  it('ghost marks what is set back (deprecated): ghost ink on a dashed border', () => {
+  it('ghost marks what is set back (deprecated): dim ink on a dashed border, legible as a warning', () => {
     render(<RowTag variant="ghost">deprecated</RowTag>);
     const tag = screen.getByText('deprecated');
     expect(tag).toHaveAttribute('data-row-tag', 'ghost');
     expect(tag).toHaveClass('text-meta', 'leading-4', 'border', 'border-base-border');
-    expect(tag).toHaveClass('border-dashed', 'text-[#4b5266]');
-    expect(tag).not.toHaveClass('text-text-dim');
+    // Lane F follow-up: the dashed border sets it apart; the ink is the readable dim (#7c849c,
+    // ≥ 4.5:1 on the page), not the faint #4b5266 it was, which the user could not read.
+    expect(tag).toHaveClass('border-dashed', 'text-text-dim');
+    expect(tag.className).not.toMatch(/#4b5266/);
   });
 
   it('accent marks a class (BTC+CKB, live · current): jade ink on a jade border', () => {

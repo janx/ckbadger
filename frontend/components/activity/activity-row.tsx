@@ -33,6 +33,7 @@ import type {
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import { CompositionBadge } from '@/components/ui/composition-mark';
+import { rowTagClass } from '@/components/ui/row-tag';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
@@ -615,8 +616,8 @@ function ParticipantLine({
         </span>
       )}
       {focus && (
-        // The board's ghost tag (#343c50), drawn in the readable ghost tone occupied uses.
-        <span data-role="this-address" className={cn(LOCK_TAG, 'text-text-dim/60')}>
+        // The board's ghost tag, as the row tag's ghost variant: dashed, in the readable dim ink.
+        <span data-role="this-address" data-row-tag="ghost" className={rowTagClass('ghost')}>
           this address
         </span>
       )}

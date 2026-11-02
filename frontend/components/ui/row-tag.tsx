@@ -2,8 +2,10 @@ import type { ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * `default`: a role, symbol, standard or lock kind. `ghost`: what is set back ("deprecated").
- * `accent`: a class mark ("BTC+CKB", "Pure CKB", "live · current").
+ * `default`: a role, symbol, standard or lock kind. `ghost`: what is set back ("deprecated") or
+ * said beside the row's own party ("this address") — the dashed border sets it apart, the ink is
+ * the readable dim (lane F follow-up: the faint #4b5266 could not be read). `accent`: a class mark
+ * ("BTC+CKB", "Pure CKB", "live · current", "immutable").
  */
 export type RowTagVariant = 'default' | 'ghost' | 'accent';
 
@@ -12,7 +14,7 @@ const BASE =
   'text-meta text-text-dim border-base-border inline-block whitespace-nowrap rounded-[3px] border px-[5px] align-middle leading-4';
 const VARIANT: Record<RowTagVariant, string> = {
   default: '',
-  ghost: 'border-dashed text-[#4b5266]',
+  ghost: 'border-dashed',
   accent: 'text-jade border-[#1f5a46]',
 };
 

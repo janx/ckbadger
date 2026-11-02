@@ -97,6 +97,11 @@ describe('focusLockHash: the participant the page is about', () => {
     const tag = within(focus).getByText('this address');
     expect(tag).toHaveAttribute('data-role', 'this-address');
     expect(tag).toHaveClass('text-meta', 'border', 'rounded-[3px]', 'whitespace-nowrap');
+    // Lane F follow-up: the row tag's ghost variant — dashed, in the readable dim ink (was a solid
+    // border in text-text-dim/60, as faint as the old ghost).
+    expect(tag).toHaveAttribute('data-row-tag', 'ghost');
+    expect(tag).toHaveClass('border-dashed', 'text-text-dim');
+    expect(tag).not.toHaveClass('text-text-dim/60');
     // Only the focused line carries it.
     expect(within(other).queryByText('this address')).toBeNull();
     expect(roles(other)).toEqual(['party', 'lock-kind', 'ckb', 'occupied']);
