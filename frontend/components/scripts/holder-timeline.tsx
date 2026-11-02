@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { ScriptCustodyApi, ScriptFamilyDetail, ScriptHistoryMarkerApi } from '@/lib/api';
 import { formatCount } from '@/lib/format-count';
@@ -281,7 +282,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
           {formatCount(holders.length, 'holder')} · {formatCount(family.versionsCount, 'version')} ·{' '}
           {formatCount(holders.length - 1, 'handover')}
         </span>
-        <span className="ml-auto">tap or hover</span>
+        <TapOrHoverHint className="ml-auto" />
       </div>
       <p data-role="caption" className="text-text text-body mt-3 max-w-[640px]">
         Whoever can spend the code cell can put new code in it; every {family.name} cell runs the
