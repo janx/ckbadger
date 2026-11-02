@@ -831,7 +831,7 @@ export function ScriptFamilyPage({
             </section>
           </div>
           <div id="evidence" className="scroll-mt-4">
-            <DetailTier2>
+            <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
               <DetailSection title="How to read this page">
                 <div className="space-y-3">
                   <ScriptSummarySentence family={family} lineage={lineage} />
@@ -846,10 +846,10 @@ export function ScriptFamilyPage({
                   <ScriptCustodyMechanism family={family} lineage={lineage} binaries={binaries} />
                 </div>
               </DetailSection>
-              <DetailSection title="Use it in a transaction">
+              <DetailSection title="Use it in a transaction" className="lg:col-span-2">
                 <ScriptUseInTransaction family={family} />
               </DetailSection>
-              <DetailSection title="Registered references">
+              <DetailSection title="Registered references" className="lg:col-span-2">
                 <ListTable
                   label="Registered references"
                   rows={family.references}

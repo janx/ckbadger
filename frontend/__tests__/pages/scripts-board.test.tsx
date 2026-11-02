@@ -307,7 +307,13 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // The search sits on the h1's row.
     const row = h1.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
-    expect(within(row).getByRole('textbox', { name: 'Search scripts' })).toBeInTheDocument();
+    const input = within(row).getByRole('textbox', { name: 'Search scripts' });
+    // One inline group of controls, as the DAO page's range buttons: one line on the title row.
+    const form = input.closest('form')!;
+    expect(form).toHaveClass('whitespace-nowrap');
+    expect(form).not.toHaveClass('flex');
+    expect(within(form).getByRole('button', { name: 'Search' })).toHaveClass('inline-flex', 'h-7');
+    expect(input).toHaveClass('h-7');
     const lede = hero().querySelector('[data-role="lede"]') as HTMLElement;
     // ≤ 90 (R13), and one line: 71 characters of 13 px mono (7.8 px each) fill the 560 px measure.
     expect(lede.textContent!.length).toBeLessThanOrEqual(71);
@@ -402,6 +408,11 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     // Tier 1 states no exact class amount (R12: they wait in tier 2).
     expect(tier1().textContent).not.toContain('1,727,000,000');
     expect(within(tier1()).queryByTestId('unspendable-note')).toBeNull();
+    // Tier 2's two sections side by side from lg, as the DAO page's evidence (page height).
+    expect(
+      within(tier2()).getByRole('heading', { name: 'How scripts work' }).closest('section')!
+        .parentElement
+    ).toHaveClass('grid', 'lg:grid-cols-2');
     expect(within(tier2()).getByTestId('unspendable-note')).toHaveTextContent(
       'secp256k1 lock over 20 zero bytes'
     );

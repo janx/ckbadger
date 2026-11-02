@@ -385,14 +385,15 @@ export default function ScriptsPage() {
         setSearch(searchInput.trim() || undefined);
         pagination.reset();
       }}
-      className="flex min-w-0 gap-2"
+      // One inline group (as the DAO page's range buttons): one line on the title row.
+      className="min-w-0 whitespace-nowrap"
     >
       <input
         value={searchInput}
         onChange={(event) => setSearchInput(event.target.value)}
         placeholder="Search by name or code hash"
         aria-label="Search scripts"
-        className="border-base-border bg-base-surface text-text-bright text-small min-w-0 rounded border px-3 py-1.5 sm:w-64"
+        className="border-base-border bg-base-surface text-text-bright text-small h-7 w-48 rounded border px-3 align-middle sm:w-64"
       />
       {search && (
         <button
@@ -403,14 +404,14 @@ export default function ScriptsPage() {
             pagination.reset();
           }}
           aria-label="Clear search"
-          className="text-text-dim"
+          className="text-text-dim ml-2 inline-flex h-7 items-center align-middle"
         >
           ×
         </button>
       )}
       <button
         type="submit"
-        className="border-base-border text-text-bright text-small rounded border px-3 py-1.5"
+        className="border-base-border text-text-bright text-small ml-2 inline-flex h-7 items-center rounded border px-3 align-middle"
       >
         Search
       </button>
@@ -556,7 +557,7 @@ export default function ScriptsPage() {
             </section>
           </div>
           <div id="evidence" className="scroll-mt-4">
-            <DetailTier2>
+            <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
               <DetailSection title="How scripts work">
                 <p className="text-body max-w-[640px]">{LEAD}</p>
               </DetailSection>

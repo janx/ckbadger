@@ -467,6 +467,13 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     expect(within(tier1()).queryByRole('heading', { name: 'Use it in a transaction' })).toBeNull();
     // The cells' summary line, with its exact totals, is tier 2's too (R14).
     expect(within(tier2()).getByTestId('script-cells-summary')).toBeInTheDocument();
+    // Tier 2: the two prose sections side by side from lg, the recipe and references full width.
+    const read = within(tier2()).getByRole('heading', { name: 'How to read this page' });
+    expect(read.closest('section')!.parentElement).toHaveClass('grid', 'lg:grid-cols-2');
+    for (const name of ['Use it in a transaction', 'Registered references'])
+      expect(within(tier2()).getByRole('heading', { name }).closest('section')).toHaveClass(
+        'lg:col-span-2'
+      );
   });
 
   it('spaces tier 1 like the DAO page: 64 px under the hero, then 72 px, h2 18 px above its evidence (R6)', async () => {
