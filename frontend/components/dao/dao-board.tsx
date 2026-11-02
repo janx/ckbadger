@@ -1201,7 +1201,8 @@ function HowItWorks({
           issuance and deposits; &ldquo;Compensation, last 365 days&rdquo; is on free capacity, from
           the header&apos;s AR. Statistics are exact to the shannon at block{' '}
           {formatBlockNumber(statistics.tipBlockNumber)}; the indexed epoch is{' '}
-          {evidence.tipEpoch.display}.
+          {evidence.tipEpoch.display}. &ldquo;Recent DAO activity&rdquo; lists deposits, withdrawal
+          requests and withdrawals, newest first.
         </p>
       </div>
       <Link

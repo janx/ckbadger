@@ -1133,6 +1133,10 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
       'paid out: (capacity − occupied) × AR(request) ÷ AR(deposit) + occupied'
     );
     expect(t2).toHaveTextContent('102 bytes occupied with a secp256k1 lock: 8 + 53 + 33 + 8');
+    // The feed's former note (hierarchy v3, V6).
+    expect(t2).toHaveTextContent(
+      '“Recent DAO activity” lists deposits, withdrawal requests and withdrawals, newest first.'
+    );
   });
 
   it('fails when the statistics row S is not still owed + burnt', () => {
