@@ -375,6 +375,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                       nextCursor={names.data.nextCursor}
                       currentCount={names.data.data.length}
                       total={names.data.total}
+                      pageSize={pageSize}
                       label="names"
                     />
                   </div>
@@ -578,6 +579,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         activities.data.data.filter((row) => row.poolStatus === undefined).length
                       }
                       total={activities.data.total}
+                      pageSize={pageSize}
                       label="activities"
                     />
                   </>
@@ -600,6 +602,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                         transactions.data.data.filter((row) => row.poolStatus === undefined).length
                       }
                       total={transactions.data.total}
+                      pageSize={pageSize}
                       label="transactions"
                     />
                   </>
@@ -624,6 +627,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           ? holdings.data.classes[cellClass].cellCount
                           : cells.data.total
                       }
+                      pageSize={pageSize}
                       label="live cells"
                     />
                   </>

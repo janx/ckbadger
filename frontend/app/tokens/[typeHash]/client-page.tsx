@@ -366,6 +366,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
                     totalLabel="supply changes"
                     pageSize={supplyPageSize}
                     page={supplyPages.page}
+                    currentCount={supplyEvents.data.data.length}
                     hasMore={supplyEvents.data.hasMore}
                     hasPrevious={supplyPages.hasPrevious}
                     onNext={() => supplyPages.goToNext(supplyEvents.data!.nextCursor)}

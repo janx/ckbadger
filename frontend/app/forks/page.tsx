@@ -502,6 +502,7 @@ export default function ForksPage() {
                       totalLabel="switches"
                       pageSize={limit}
                       page={page}
+                      currentCount={events.data.data.length}
                       hasMore={events.data.hasMore}
                       hasPrevious={hasPrevious}
                       onNext={() => goToNext(events.data!.nextCursor)}

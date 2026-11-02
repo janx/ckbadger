@@ -635,6 +635,7 @@ export default function TransactionsPage() {
                 totalLabel="transactions"
                 pageSize={limit}
                 page={committedPage.page}
+                currentCount={committed.data.data.length}
                 hasMore={committed.data.hasMore}
                 hasPrevious={committedPage.hasPrevious}
                 onNext={() => committedPage.goToNext(committed.data.nextCursor)}
@@ -698,6 +699,7 @@ export default function TransactionsPage() {
                 totalLabel="pool transactions"
                 pageSize={limit}
                 page={poolPage.page}
+                currentCount={pool.data.data.length}
                 hasMore={pool.data.nextCursor !== null}
                 hasPrevious={poolPage.hasPrevious}
                 onNext={() => poolPage.goToNext(pool.data.nextCursor)}

@@ -46,8 +46,21 @@ export function CursorPagination({
   const totalPages =
     known !== undefined && known > 0 && pageSize ? Math.ceil(known / pageSize) : undefined;
   const canShowRange = page !== undefined && pageSize !== undefined && currentCount !== undefined;
+  if (canShowRange && currentCount > pageSize)
+    throw new Error(
+      `${totalLabel} pager: ${currentCount} rows on a page of ${pageSize} (page ${page})`
+    );
   const rangeStart = canShowRange && currentCount > 0 ? (page - 1) * pageSize + 1 : 0;
   const rangeEnd = canShowRange && currentCount > 0 ? rangeStart + currentCount - 1 : 0;
+  const perPage = pageSize !== undefined ? ` · ${pageSize.toLocaleString('en-US')} per page` : '';
+  // Consistency round C11: one wording on every list, the range as one phrase (en dash).
+  const sentence = canShowRange
+    ? `Showing ${rangeStart.toLocaleString('en-US')}–${rangeEnd.toLocaleString('en-US')}${
+        known !== undefined ? ` of ${known.toLocaleString('en-US')}` : ''
+      } ${totalLabel}${perPage}`
+    : known !== undefined
+      ? `${known.toLocaleString('en-US')} ${totalLabel}${perPage}`
+      : null;
 
   // Below sm two rows: the count sentence, then Previous · Page x of y · Next on one line (four
   // items in one 358 px row broke "Page 1 of 10,419" over three lines). One row from sm up.
@@ -59,22 +72,7 @@ export function CursorPagination({
       )}
     >
       <span className="text-text-dim text-body font-mono">
-        {summary !== undefined ? (
-          summary
-        ) : canShowRange ? (
-          <>
-            Showing {rangeStart.toLocaleString()}-{rangeEnd.toLocaleString()}
-            {known !== undefined ? ` of ${known.toLocaleString()}` : ''} {totalLabel}
-            {pageSize !== undefined ? `, ${pageSize} per page` : ''}
-          </>
-        ) : known !== undefined ? (
-          <>
-            {known.toLocaleString()} {totalLabel}
-            {pageSize !== undefined ? `, ${pageSize} per page` : ''}
-          </>
-        ) : (
-          '\u00a0'
-        )}
+        {summary !== undefined ? summary : (sentence ?? '\u00a0')}
       </span>
       <div
         data-role="pager-controls"

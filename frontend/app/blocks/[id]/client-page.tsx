@@ -637,8 +637,10 @@ export default function BlockDetailPage() {
                       )}
                       {(activities.data.hasMore || activityPagination.hasPrevious) && (
                         <CursorPagination
+                          totalLabel="activities"
                           pageSize={pageSize}
                           page={activityPagination.page}
+                          currentCount={activities.data.data.length}
                           hasMore={activities.data.hasMore}
                           hasPrevious={activityPagination.hasPrevious}
                           onNext={() => activityPagination.goToNext(activities.data.nextCursor)}
@@ -663,8 +665,10 @@ export default function BlockDetailPage() {
                       {(transactions.data.hasMore || pagination.hasPrevious) && (
                         <CursorPagination
                           total={block.transactionsCount}
+                          totalLabel="transactions"
                           pageSize={pageSize}
                           page={pagination.page}
+                          currentCount={transactions.data.data.length}
                           hasMore={transactions.data.hasMore}
                           hasPrevious={pagination.hasPrevious}
                           onNext={() => pagination.goToNext(transactions.data.nextCursor)}

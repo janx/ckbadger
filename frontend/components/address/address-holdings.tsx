@@ -55,6 +55,11 @@ export function AddressStaleNotice({ error, label }: { error: Error | null; labe
     </p>
   ) : null;
 }
+/**
+ * An address list's pages (consistency C11): the one `CursorPagination` — "Showing a–b of N
+ * <label> · S per page" and "Page x of y" — in a nav named for the list. `pageSize` is the size
+ * the list asked the API for (twenty below md), so the range counts the rows a page really holds.
+ */
 export function AddressPagination({
   pagination,
   hasMore,
@@ -62,44 +67,29 @@ export function AddressPagination({
   currentCount,
   total,
   label,
+  pageSize,
 }: {
   pagination: ReturnType<typeof useCursorPagination>;
   hasMore: boolean;
   nextCursor?: string | null;
   currentCount: number;
-  total?: number;
+  total?: number | null;
   label: string;
+  pageSize: number;
 }) {
-  const start = currentCount === 0 ? 0 : (pagination.page - 1) * 50 + 1;
   return (
-    <nav
-      aria-label={`${label} pages`}
-      className="text-small mt-4 flex flex-wrap items-center justify-between gap-3"
-    >
-      <span className="text-text-dim">
-        Showing {start.toLocaleString('en-US')}-
-        {(currentCount ? start + currentCount - 1 : 0).toLocaleString('en-US')}
-        {total === undefined ? '' : ` of ${total.toLocaleString('en-US')}`} {label}
-      </span>
-      {(hasMore || pagination.hasPrevious) && (
-        <span className="flex flex-wrap items-center gap-3">
-          <button
-            className="border-base-border hover:text-jade rounded border px-3 py-2 disabled:opacity-40"
-            disabled={!pagination.hasPrevious}
-            onClick={pagination.goToPrevious}
-          >
-            Previous
-          </button>
-          <span className="text-text-dim">Page {pagination.page}</span>
-          <button
-            className="border-base-border hover:text-jade rounded border px-3 py-2 disabled:opacity-40"
-            disabled={!hasMore}
-            onClick={() => pagination.goToNext(nextCursor)}
-          >
-            Next
-          </button>
-        </span>
-      )}
+    <nav aria-label={`${label} pages`} className="mt-4">
+      <CursorPagination
+        total={total}
+        totalLabel={label}
+        pageSize={pageSize}
+        page={pagination.page}
+        currentCount={currentCount}
+        hasMore={hasMore}
+        hasPrevious={pagination.hasPrevious}
+        onNext={() => pagination.goToNext(nextCursor)}
+        onPrevious={pagination.goToPrevious}
+      />
     </nav>
   );
 }
@@ -529,6 +519,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                       nextCursor={deposits.data.nextCursor}
                       currentCount={deposits.data.data.length}
                       total={holdings.holdings.dao}
+                      pageSize={pageSize}
                       label="DAO cells"
                     />
                   </>
@@ -600,6 +591,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   nextCursor={tokens.data.nextCursor}
                   currentCount={tokens.data.data.length}
                   total={holdings.holdings.token}
+                  pageSize={pageSize}
                   label="token kinds"
                 />
               </>
@@ -663,6 +655,7 @@ export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings
                   nextCursor={identities.data.nextCursor}
                   currentCount={identities.data.data.length}
                   total={holdings.holdings.identity}
+                  pageSize={pageSize}
                   label="identities"
                 />
               </>

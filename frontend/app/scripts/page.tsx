@@ -716,6 +716,7 @@ export default function ScriptsPage() {
                     totalLabel="scripts"
                     pageSize={pageSize}
                     page={pagination.page}
+                    currentCount={data.data.length}
                     hasMore={data.hasMore}
                     hasPrevious={pagination.hasPrevious}
                     onNext={() => pagination.goToNext(data.nextCursor)}

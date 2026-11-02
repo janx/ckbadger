@@ -250,7 +250,7 @@ describe('Address v3', () => {
       '11 of 14 fully on-chain'
     );
     fireEvent.click(screen.getByRole('button', { name: 'Open 拯救民主' }));
-    expect(await screen.findByText(/Showing 1-2 of 6 objects/)).toBeInTheDocument();
+    expect(await screen.findByText('Showing 1–2 of 6 objects · 10 per page')).toBeInTheDocument();
     expect(screen.getAllByText('BTC+CKB').length).toBeGreaterThan(0);
   });
   it('links object tiles and exact collection identity', async () => {
@@ -308,7 +308,7 @@ describe('Address v3', () => {
         : { ...pageFixture(addressTokensFixture), hasMore: true, nextCursor: 'next-token' }
     );
     render(<AddressDetailPage />);
-    await screen.findByText('Showing 1-9 of 101 token kinds');
+    await screen.findByText('Showing 1–9 of 101 token kinds · 50 per page');
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
     fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('Last token')).toBeInTheDocument();
@@ -434,7 +434,7 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     const section = await screen.findByTestId('address-dotcell-names');
-    expect(within(section).getByText('Showing 1-1 names')).toBeInTheDocument();
+    expect(within(section).getByText('Showing 1–1 names · 50 per page')).toBeInTheDocument();
     fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('next.cell')).toBeInTheDocument();
     expect(api.getAddressDotCellNames).toHaveBeenLastCalledWith(addressHash, {
@@ -498,11 +498,13 @@ describe('Address v3', () => {
     const activitiesTab = () => screen.getByRole('button', { name: /^Activities/ });
     await waitFor(() => expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/));
     expect(activitiesTab()).not.toHaveTextContent('1,021');
-    expect(await screen.findByText('Showing 1-1 of 1,682 activities')).toBeInTheDocument();
+    expect(
+      await screen.findByText('Showing 1–1 of 1,682 activities · 50 per page')
+    ).toBeInTheDocument();
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
     fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
-    expect(screen.getByText('Showing 0-0 activities')).toBeInTheDocument();
+    expect(screen.getByText('Showing 0–0 activities · 50 per page')).toBeInTheDocument();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
@@ -694,7 +696,42 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('Showing 1-1 activities')).toBeInTheDocument();
+    expect(await screen.findByText('Showing 1–1 activities · 50 per page')).toBeInTheDocument();
+  });
+  // C11: the address lists page through the one CursorPagination; its range follows the page size
+  // the list asked for (twenty below md), where the old pager counted fifty a page everywhere.
+  it('pages the address lists with the shared pager at the phone page size (C11)', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 390 });
+    onTestFinished(() => {
+      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+    });
+    const rows = (from: number) =>
+      Array.from({ length: 20 }, (_, i) => ({
+        ...addressActivitiesFixture[0],
+        txHash: fixtureHash(500 + from + i),
+      }));
+    vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
+      p?.limit === 1
+        ? pageFixture([])
+        : p?.cursor
+          ? { ...pageFixture(rows(20), 45), hasMore: true, nextCursor: 'third' }
+          : { ...pageFixture(rows(0), 45), hasMore: true, nextCursor: 'second' }
+    );
+    render(<AddressDetailPage />);
+    await loaded();
+    const pages = await screen.findByRole('navigation', { name: 'activities pages' });
+    expect(within(pages).getByText('Showing 1–20 of 45 activities · 20 per page')).toBeVisible();
+    expect(within(pages).getByText('Page 1 of 3')).toBeVisible();
+    fireEvent.click(within(pages).getByRole('button', { name: 'Next' }));
+    expect(
+      await within(pages).findByText('Showing 21–40 of 45 activities · 20 per page')
+    ).toBeVisible();
+    expect(within(pages).getByText('Page 2 of 3')).toBeVisible();
+    expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
+      limit: 20,
+      cursor: 'second',
+      filter: 'all',
+    });
   });
   it.each([
     ['truncated', true, true, 'More unconfirmed transactions than shown.'],
