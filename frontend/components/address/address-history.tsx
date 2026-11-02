@@ -1,5 +1,6 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { ActivityRow, type ActivityRowData } from '@/components/activity/activity-row';
 import { ExactCkb, activityHeadline } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -27,6 +28,44 @@ interface AddressActivityProps {
   activity: Activity;
   address: Address;
 }
+
+const plural = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
+/**
+ * What this address's object changes were, as Address.dc.html → History heads them: "Received 9
+ * objects · Nervape Special", "Sent 2 objects", "Received 2, sent 1 objects" — counted from this
+ * participant's own deltas, never a transaction-wide mint or burn. The collection follows, dim, when
+ * every object shares one named collection.
+ */
+function objectHeadline(participant: ParticipantInfo, txHash: string): ReactNode {
+  const objects = participant.itemDeltas.flatMap((d) => (d.kind === 'object' ? [d] : []));
+  if (objects.length === 0)
+    throw new Error(`transaction ${txHash}: an object activity of this address moved no object`);
+  const arrived = objects.filter((o) => o.delta > 0).length;
+  const departed = objects.length - arrived;
+  const movement =
+    departed === 0
+      ? `Received ${plural(arrived, 'object')}`
+      : arrived === 0
+        ? `Sent ${plural(departed, 'object')}`
+        : `Received ${arrived}, sent ${plural(departed, 'object')}`;
+  const names = new Set(objects.map((o) => o.collection?.name?.trim() || null));
+  const [collection] = names;
+  return names.size === 1 && collection ? (
+    <>
+      {movement}
+      <span className="text-text-dim font-normal"> · {collection}</span>
+    </>
+  ) : (
+    movement
+  );
+}
+
+/**
+ * One activity of this address: the site's one activity row (consistency C3), its participant line
+ * this address's — first, as text, tagged "this address" (`focusLockHash`). The endpoint supplies
+ * this participant's deltas only; the other parties of the transaction are on its page.
+ */
 export function AddressActivity({ activity, address }: AddressActivityProps) {
   const participant: ParticipantInfo = {
     address: address.address ?? null,
@@ -46,38 +85,19 @@ export function AddressActivity({ activity, address }: AddressActivityProps) {
   const primary = classification.primaryItemDelta;
   const itemClass = classification.displayType;
   const headline =
-    (itemClass === 'token' || itemClass === 'object' || itemClass === 'identity') && primary
-      ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
-      : activityHeadline(row);
+    itemClass === 'object'
+      ? objectHeadline(participant, activity.txHash)
+      : (itemClass === 'token' || itemClass === 'identity') && primary
+        ? `${itemClass[0].toUpperCase()}${itemClass.slice(1)} ${BigInt(primary.delta) > BigInt(0) ? 'received' : BigInt(primary.delta) < BigInt(0) ? 'sent' : 'changed'}`
+        : activityHeadline(row);
   return (
-    <div>
-      <ActivityRow
-        headline={headline}
-        activity={row}
-        mode="participant"
-        participant={participant}
-        itemTone="sign"
-        evidence={
-          activity.blockNumber === null || activity.timestamp === null ? undefined : (
-            // F2 blocks (BA-35): the Address board dates a row; "ago" drifts as the page is read.
-            <>
-              <Link href={`/blocks/${activity.blockNumber}`} className="hover:text-text">
-                {formatBlockNumber(activity.blockNumber)}
-              </Link>
-              {' · '}
-              <Link href={`/tx/${activity.txHash}`} className="hover:text-jade text-text-dim">
-                {truncateHash(activity.txHash, 10, 6)}
-              </Link>
-              {' · '}
-              {formatUtc8Date(activity.timestamp)}
-            </>
-          )
-        }
-      />
-      {activity.roles.length > 0 && (
-        <p className="text-text-dim text-small pb-2">Roles: {activity.roles.join(', ')}</p>
-      )}
-    </div>
+    <ActivityRow
+      headline={headline}
+      activity={row}
+      focusLockHash={address.lockScriptHash}
+      foldObjects
+      itemTone="sign"
+    />
   );
 }
 function TxPosition({ tx }: { tx: AddressTransaction }) {
