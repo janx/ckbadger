@@ -22,7 +22,7 @@ export default function DaoPage() {
   const intro = (
     <div className="flex min-w-0 flex-col gap-2">
       <h1 className="text-text-bright text-index font-medium">Nervos DAO</h1>
-      <p className="text-text text-body max-w-[760px]">
+      <p className="text-text text-body max-w-[1040px]">
         CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance dilutes
         everything else.{' '}
         <a

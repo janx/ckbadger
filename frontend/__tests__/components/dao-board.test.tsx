@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { DaoBoard } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
@@ -299,7 +300,12 @@ describe('DaoBoard', () => {
     const [works, script, header] = headings.map((h) => h.closest('section')!);
     expect(works.parentElement).toBe(script.parentElement);
     expect(header.parentElement).not.toBe(works.parentElement);
-    expect(works.parentElement!.parentElement).toHaveClass('grid', 'lg:grid-cols-2');
+    // The explanation column is the wider one (body prose); the header field the narrower.
+    expect(works.parentElement!.parentElement).toHaveClass(
+      'grid',
+      'lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]',
+      'gap-x-14'
+    );
   });
 
   it('explains the DAO in tier 2: the former hero paragraph and the issuance explanation (D8)', () => {
@@ -317,6 +323,12 @@ describe('DaoBoard', () => {
       'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
     );
     expect(works).not.toHaveTextContent(/interest|earned/i);
+    // R1 roles: the explanation is prose (body 13 px); the protocol notes read as small.
+    const [concept, notes] = Array.from(works.querySelectorAll('p'));
+    expect(concept).toHaveTextContent(/^CKB locked in the Nervos DAO/);
+    expect(concept).toHaveClass('text-body', 'text-text-dim');
+    expect(notes).toHaveTextContent(/Epoch-lock readiness/);
+    expect(notes).toHaveClass('text-small');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {
@@ -757,7 +769,10 @@ describe('DaoBoard who deposits (DAO-12, DAO-22)', () => {
     stubCalculator();
     stubChartWidth(1248);
     const { unmount } = render(<DaoBoard statistics={stats} evidence={evidence} />);
-    expect(within(who()).getByRole('table', { name: 'Largest depositors' })).toBeInTheDocument();
+    const table = within(who()).getByRole('table', { name: 'Largest depositors' });
+    // Board v2: depositor rows read at body (13 px) under quieter column heads.
+    for (const cell of Array.from(table.querySelectorAll('tbody td')))
+      expect(cell).toHaveClass('text-body');
     unmount();
     vi.unstubAllGlobals();
     stubChartWidth(358);
@@ -942,17 +957,53 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
   });
 });
 
-describe('DaoBoard tier-1 rhythm (board V63)', () => {
-  it('keeps tier-1 sections 48 px apart with no rule between them', () => {
+describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
+  it('spaces sections 72 px apart, History 64 px under the hero, the two columns 56 px apart', () => {
     stubCalculator();
-    render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    // Explicit gaps, no space-y-* (its sibling selector would decide the margins instead).
+    expect(tier1.className).not.toMatch(/space-y-/);
+    const block = (name: string) => screen.getByRole('region', { name }).parentElement!;
+    expect(screen.getByRole('region', { name: 'Nervos DAO summary' }).parentElement).toBe(tier1);
+    expect(block('History')).toHaveClass('mt-16');
+    expect(block('Where secondary issuance goes')).toHaveClass('mt-[72px]');
+    const columns = block('How a deposit grows');
+    expect(columns).toBe(block('When deposits can leave'));
+    expect(columns).toHaveClass('mt-[72px]', 'lg:grid-cols-2', 'lg:gap-x-14', 'gap-y-[72px]');
+    expect(block('Who deposits')).toHaveClass('mt-[72px]');
+    expect(screen.getByTestId('sources').parentElement).toHaveClass('mt-[72px]');
+    for (const child of Array.from(tier1.children)) expect(child.parentElement).toBe(tier1);
+    // No rule between tier-1 sections; their headings are the section step.
     const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
     expect(issuance).not.toHaveClass('border-t');
-    expect(issuance.parentElement).toHaveClass('space-y-12');
     expect(within(issuance).getByRole('heading', { level: 2 })).toHaveClass(
       'text-section',
       'font-medium'
     );
+  });
+
+  it('keeps tier 1 within the prose budget: at most three caption-length blocks (§0, §4)', async () => {
+    stubChartWidth(1400);
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+        intro={
+          <p>
+            CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance
+            dilutes everything else. <a href="#evidence">How it works ↓</a>
+          </p>
+        }
+      />
+    );
+    await within(screen.getByRole('region', { name: 'How a deposit grows' })).findByRole('img', {
+      name: /^AR by date/,
+    });
+    expectTier1Budget(container);
   });
 });
 

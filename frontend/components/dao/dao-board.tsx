@@ -112,7 +112,7 @@ function Metric({
 function DepositedFigure({ shannons }: { shannons: string }) {
   const parts = splitCkbAmount(parseShannons(shannons, 'DAO deposited'));
   return (
-    <span
+    <div
       data-role="deposited"
       className="text-text-bright text-index sm:text-display mt-1.5 font-medium"
     >
@@ -125,7 +125,7 @@ function DepositedFigure({ shannons }: { shannons: string }) {
       </span>
       {/* The space takes the unit's size, so " CKB" ends inside a 358 px column at 390. */}
       <span className="text-body text-text-dim font-normal"> CKB</span>
-    </span>
+    </div>
   );
 }
 
@@ -182,13 +182,13 @@ function Hero({
     <section aria-label="Nervos DAO summary" className="min-w-0">
       {intro}
       <div
-        className={`grid gap-8 lg:grid-cols-[minmax(0,1fr)_520px] lg:items-end lg:gap-12 ${intro ? 'mt-9' : ''}`}
+        className={`grid gap-8 lg:grid-cols-[minmax(0,1fr)_560px] lg:items-end lg:gap-12 ${intro ? 'mt-9' : ''}`}
       >
         <div data-role="figure" className="flex min-w-0 flex-col">
-          <span className="text-text-dim text-meta uppercase tracking-[0.08em]">deposited</span>
+          <div className="text-text-dim text-meta uppercase tracking-[0.08em]">deposited</div>
           <DepositedFigure shannons={evidence.phase0.capacity} />
           {share && deposited && (
-            <span className="text-text text-body mt-3">
+            <p className="text-text text-body mt-3">
               <span className="text-gold font-medium">{ratioText(share.value)}%</span> of
               circulating CKB on <span className="whitespace-nowrap">{share.date}</span>
               {peak && (
@@ -200,9 +200,9 @@ function Hero({
                   CKB on <span className="whitespace-nowrap">{peak.date}</span>
                 </>
               )}
-            </span>
+            </p>
           )}
-          <span className="text-body mt-1.5">
+          <p className="text-body mt-1.5">
             {changeShannons === null ? (
               <span className="text-text-dim">—</span>
             ) : (
@@ -225,7 +225,7 @@ function Hero({
                 statistics.withdrawalRequests24h !== null &&
                 ` · ${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`}
             </span>
-          </span>
+          </p>
         </div>
         <dl className="m-0 grid grid-cols-2 gap-x-7 gap-y-[22px]">
           <Metric label="Estimated APC" detail="at today's issuance and deposits">
@@ -562,7 +562,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
             <span className="text-text-bright">{formatPercent(other, issued, 2)}%</span> → burnt
           </span>
         </div>
-        <p className="text-text text-body mt-3.5 max-w-[900px]">
+        <p className="text-text text-body mt-3.5 max-w-[1040px]">
           A deposit keeps its share of all CKB. Free CKB outside the DAO receives nothing: its share
           of every block&apos;s issuance is burnt.
         </p>
@@ -677,12 +677,12 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
         </ReadoutRow>
       </div>
       <div className="mt-5 flex flex-col">
-        <span className="text-text-dim text-meta">
+        <div className="text-text-dim text-meta">
           withdrawals already requested · {plural(evidence.phase1.count, 'cell')} ·{' '}
           <span className="text-text">
             <Amount value={evidence.phase1.capacity} /> CKB
           </span>
-        </span>
+        </div>
         {requested > BigInt(0) && (
           <div
             role="img"
@@ -699,7 +699,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
             />
           </div>
         )}
-        <span className="text-text-dim text-small mt-2">
+        <p className="text-text-dim text-small mt-2">
           <span className="text-text-bright">
             <Amount value={ready.capacity} /> CKB
           </span>{' '}
@@ -708,7 +708,7 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
             <Amount value={waiting.capacity} /> CKB
           </span>{' '}
           in {plural(waiting.count, 'cell')} waits for its window
-        </span>
+        </p>
       </div>
       <p className="text-text text-body mt-4">
         A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made. A
@@ -783,17 +783,22 @@ function lockLink(owner: Owner) {
   );
 }
 
+/** Board v2: depositor rows read at body (13 px) under 12 px column heads, as the board sets them. */
+const OWNER_CELL = 'text-body';
+
 const OWNER_COLUMNS: ListColumn<Owner>[] = [
   {
     key: 'rank',
+    className: OWNER_CELL,
     label: '#',
     minWidth: 40,
     render: (o) => <span className="text-text-dim">{o.rank}</span>,
   },
-  { key: 'depositor', label: 'Depositor', minWidth: 190, render: ownerLink },
-  { key: 'lock', label: 'Lock', minWidth: 170, render: lockLink },
+  { key: 'depositor', label: 'Depositor', minWidth: 190, className: OWNER_CELL, render: ownerLink },
+  { key: 'lock', label: 'Lock', minWidth: 170, className: OWNER_CELL, render: lockLink },
   {
     key: 'deposits',
+    className: OWNER_CELL,
     label: 'Deposits',
     minWidth: 80,
     numeric: true,
@@ -801,6 +806,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
   },
   {
     key: 'capacity',
+    className: OWNER_CELL,
     label: 'CKB deposited',
     minWidth: 210,
     numeric: true,
@@ -808,6 +814,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
   },
   {
     key: 'share',
+    className: OWNER_CELL,
     label: 'Share',
     minWidth: 70,
     numeric: true,
@@ -956,10 +963,11 @@ function RawEvidence({
         ))}
       </div>
       <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
-      <p className="text-text-dim text-small mt-3 leading-relaxed">
-        Since genesis, AR grew from {formatAr(evidence.ar.genesisAr)} at genesis to{' '}
-        {formatAr(evidence.ar.tipAr)} at block {formatBlockNumber(evidence.tipBlockNumber)}: free
-        capacity deposited in block 0 would have grown by +{evidence.ar.sinceGenesisGrowthPercent}
+      <p className="text-text-dim text-small mt-3">
+        AR, in every block header, is the DAO&apos;s growth index. Since genesis, AR grew from{' '}
+        {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)} at block{' '}
+        {formatBlockNumber(evidence.tipBlockNumber)}: free capacity deposited in block 0 would have
+        grown by +{evidence.ar.sinceGenesisGrowthPercent}
         %. Compensation freezes at the withdrawal request AR. At block{' '}
         <Link href={`/blocks/${anchor.blockNumber}`} className="hover:text-text-bright underline">
           {formatBlockNumber(anchor.blockNumber)}
@@ -993,7 +1001,8 @@ function RawEvidence({
   return (
     // "How it works ↓" in the hero lands on the evidence boundary (hierarchy D1, D8).
     <div id="evidence" className="scroll-mt-4">
-      <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
+      {/* The explanation column is the wider one, so its body prose keeps tier 2 short. */}
+      <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-8">
           <HowItWorks statistics={statistics} />
           <DetailSection title="The DAO script">
@@ -1050,29 +1059,27 @@ function RawEvidence({
 function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
   return (
     <DetailSection title="How the Nervos DAO works">
-      <div className="text-text-dim text-small flex flex-col gap-2.5 leading-relaxed">
-        <p>
+      {/* R1 roles: the explanation is prose (body); the protocol notes after it read as small. */}
+      <div className="flex flex-col gap-2.5">
+        <p className="text-text-dim text-body">
           CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
           billion CKB a year, is split by how CKB is used: depositors are compensated with the share
           their deposits make up, miners get the share that is occupied, and the rest is burnt.
           Every block splits its share the same way: the proportions are simply how all CKB issued
           by that block is used right then. So a deposit keeps its share of all CKB through
-          secondary issuance, while free CKB outside the DAO receives nothing.
+          secondary issuance, while free CKB outside the DAO receives nothing. The depositors&apos;
+          share counts phase-0 deposits, free capacity + compensation already accrued; withdrawal
+          requests take no share, since a request&apos;s compensation stopped growing at the
+          request.
         </p>
-        <p>
-          AR, in every block header, is the DAO&apos;s growth index. The depositors&apos; share
-          counts phase-0 deposits, free capacity + compensation already accrued; withdrawal requests
-          take no share, and a withdrawal request&apos;s compensation stopped growing at the
-          request. In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle
-          ends that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
-          calendar dates.
-        </p>
-        <p>
-          Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
-          occupied size of live cells. Epoch-lock readiness alone does not prove a complete withdraw
-          transaction; the required input, headers, witnesses and script execution still apply. No
-          cell can ever claim the burnt share. A hardfork could only put future secondary issuance
-          to use; what is burnt stays burnt.
+        <p className="text-text-dim text-small">
+          In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle ends
+          that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
+          calendar dates. Epoch-lock readiness alone does not prove a complete withdraw transaction;
+          the required input, headers, witnesses and script execution still apply. Protocol occupied
+          (U) includes the genesis virtual occupied baseline; it is not the real occupied size of
+          live cells. No cell can ever claim the burnt share. A hardfork could only put future
+          secondary issuance to use; what is burnt stays burnt.
         </p>
       </div>
       <Link
@@ -1103,7 +1110,8 @@ export function DaoBoard({
   }
   return (
     <div>
-      <div data-tier="1" className="min-w-0 space-y-12">
+      {/* Hierarchy R6 / D9: hero → History 64 px, sections 72 px apart, columns 56 px apart. */}
+      <div data-tier="1" className="min-w-0">
         <Hero
           statistics={statistics}
           evidence={evidence}
@@ -1111,14 +1119,22 @@ export function DaoBoard({
           ratio={circulationHistory}
           intro={intro}
         />
-        <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
-        <Issuance statistics={statistics} />
-        <div className="grid min-w-0 items-start gap-12 lg:grid-cols-2 lg:gap-14">
+        <div className="mt-16 min-w-0">
+          <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
+        </div>
+        <div className="mt-[72px] min-w-0">
+          <Issuance statistics={statistics} />
+        </div>
+        <div className="mt-[72px] grid min-w-0 items-start gap-y-[72px] lg:grid-cols-2 lg:gap-x-14">
           <DaoGrows evidence={evidence} />
           <Windows evidence={evidence} />
         </div>
-        <Owners evidence={evidence} />
-        <DaoSources />
+        <div className="mt-[72px] min-w-0">
+          <Owners evidence={evidence} />
+        </div>
+        <div className="mt-[72px] min-w-0">
+          <DaoSources />
+        </div>
       </div>
       <RawEvidence evidence={evidence} statistics={statistics} />
     </div>

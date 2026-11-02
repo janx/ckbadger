@@ -146,7 +146,7 @@ export function DaoHistory({
     <div
       aria-live="polite"
       aria-label="History reading"
-      className="border-base-border-subtle text-small text-text-dim mt-2.5 flex min-h-10 flex-wrap items-baseline gap-x-[26px] gap-y-1.5 border-t pt-2.5"
+      className="border-base-border-subtle text-small text-text-dim mt-2.5 flex flex-wrap items-baseline gap-x-[26px] gap-y-1.5 border-t pt-2.5"
     >
       <span className="text-text-bright">
         {day.date}

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import DaoPage from '@/app/dao/page';
 import { api } from '@/lib/api';
 import { daoStatistics } from '@/__tests__/msw/fixtures/home';
@@ -173,6 +174,8 @@ describe('DaoPage', () => {
     const charts = screen.getByRole('link', { name: 'Explore DAO charts →' });
     expect(charts).toHaveAttribute('href', '/mainnet/charts/total-deposit');
     expect(screen.getByRole('region', { name: 'History' })).toContainElement(charts);
+    // The whole page's tier 1: at most three caption-length prose blocks (§0, §4).
+    expectTier1Budget(container);
   });
 
   it('shows evidence API errors instead of fabricated zero values', async () => {
