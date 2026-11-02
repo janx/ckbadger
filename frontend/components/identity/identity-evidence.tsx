@@ -83,60 +83,159 @@ const Dim = ({ children }: { children: ReactNode }) => (
   <span className="text-text-dim">{children}</span>
 );
 
+/** One field of a witness row: its value, the witness's own field name as its hover. */
+function Field({ name, label, children }: { name: string; label?: string; children: ReactNode }) {
+  return (
+    <span title={name} className="whitespace-nowrap">
+      {label !== undefined && <Dim>{label} </Dim>}
+      {children}
+    </span>
+  );
+}
+
+/** Items of one row, a dim " · " between them. */
+function Items({ items }: { items: ReactNode[] }) {
+  return (
+    <>
+      {items.map((item, i) => (
+        <span key={i}>
+          {i > 0 && <Dim> · </Dim>}
+          {item}
+        </span>
+      ))}
+    </>
+  );
+}
+
+/** A key the witness stores, with the algorithm that verifies it as a tag (owner, manager). */
+function WitnessKey({ k, note }: { k: { algorithm: number; argsHex: string }; note?: ReactNode }) {
+  return (
+    <>
+      <span
+        data-role="algorithm"
+        className="text-meta text-text-dim border-base-border whitespace-nowrap rounded-[3px] border px-[5px] leading-4"
+      >
+        algorithm {k.algorithm}
+      </span>{' '}
+      <span className="[overflow-wrap:anywhere]">{k.argsHex}</span>
+      {note}
+    </>
+  );
+}
+
 /**
- * `.bit` account internals, decoded from the witness (ID-B1 / ID-B2): the raw status byte, the
- * witness version and the owner / manager keys as the lock stores them. The witness's
- * `last_*_at` times and the sub-account switch are not decoded by the API yet.
+ * `.bit` account internals, decoded from the witness (ID-B1 / ID-B2; lane P): one designed block
+ * of grouped 32 px rows — the term on one line, the witness's last changes, status and witness
+ * version, the owner and manager keys with their algorithm tags, records and sub-account flags,
+ * the account and the next one. Keys are `text-meta`, values `text-small`; the witness's own field
+ * names (`registered_at`, `last_edit_manager_at`, …) are each value's hover, nothing dropped.
  */
 export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
   const v = protocol.versions.at(-1);
   if (!v) throw new Error(`${protocol.itemId}: .bit has no versions`);
   const d = v.decoded;
   const same = d.owner.algorithm === d.manager.algorithm && d.owner.argsHex === d.manager.argsHex;
-  return (
-    <Tier2Section title="Account data, from the witness">
-      <Rows
-        rows={[
-          ['registered_at', formatUtc8DateTime(Number(d.registeredAt) * 1000)],
-          [
-            'expired_at',
-            d.expiredAt === null ? (
+  const changes = witnessChanges(d);
+  const flags = subAccountFlags(d);
+  const rows: { key: string; label: string; value: ReactNode }[] = [
+    {
+      key: 'term',
+      label: 'registered → expires',
+      value: (
+        <>
+          <Field name="registered_at" label="registered">
+            {formatUtc8DateTime(Number(d.registeredAt) * 1000)}
+          </Field>
+          <Dim> → </Dim>
+          <Field name="expired_at" label="expires">
+            {d.expiredAt === null ? (
               <Dim>not recorded</Dim>
             ) : (
               formatUtc8DateTime(Number(d.expiredAt) * 1000)
-            ),
-          ],
-          [
-            'status',
-            <>
-              0x{d.status.toString(16).padStart(2, '0')} <Dim>· raw byte, as stored</Dim>
-            </>,
-          ],
-          ['witness version', String(d.witnessVersion)],
-          // R2b-b-17: rows only for fields the API serves; "0" is a time never set.
-          ...witnessTimes(d),
-          ['records', `${d.records.length} ${d.records.length === 1 ? 'entry' : 'entries'}`],
-          ['owner', `algorithm ${d.owner.algorithm} · ${d.owner.argsHex}`],
-          [
-            'manager',
-            <>
-              algorithm {d.manager.algorithm} · {d.manager.argsHex}
-              {same && <Dim> (the same)</Dim>}
-            </>,
-          ],
-          ['account id', d.accountId],
-          [
-            'next',
-            d.nextAccountId === null ? (
+            )}
+          </Field>
+        </>
+      ),
+    },
+    ...(changes.length
+      ? [{ key: 'changes', label: 'last changes', value: <Items items={changes} /> }]
+      : []),
+    {
+      key: 'status',
+      label: 'status · witness',
+      value: (
+        <Items
+          items={[
+            <Field key="s" name="status">
+              0x{d.status.toString(16).padStart(2, '0')} <Dim>raw byte, as stored</Dim>
+            </Field>,
+            <Field key="w" name="witness version">
+              <Dim>witness version</Dim> {d.witnessVersion}
+            </Field>,
+          ]}
+        />
+      ),
+    },
+    { key: 'owner', label: 'owner key', value: <WitnessKey k={d.owner} /> },
+    {
+      key: 'manager',
+      label: 'manager key',
+      value: <WitnessKey k={d.manager} note={same && <Dim> · the same as the owner</Dim>} />,
+    },
+    {
+      key: 'records',
+      label: 'records · sub-accounts',
+      value: (
+        <Items
+          items={[
+            <Field key="r" name="records">
+              {d.records.length} {d.records.length === 1 ? 'entry' : 'entries'}
+            </Field>,
+            ...flags,
+          ]}
+        />
+      ),
+    },
+    {
+      key: 'account',
+      label: 'account → next',
+      value: (
+        <>
+          <Field name="account id">
+            <span className="[overflow-wrap:anywhere]">{d.accountId}</span>
+          </Field>
+          <Dim> → </Dim>
+          <Field name="next" label="next">
+            {d.nextAccountId === null ? (
               <Dim>none</Dim>
             ) : (
               <AppLink href={`/identities/dotbit/${d.nextAccountId}`}>
                 {d.nextAccountName ?? d.nextAccountId}
               </AppLink>
-            ),
-          ],
-        ]}
-      />
+            )}
+          </Field>
+        </>
+      ),
+    },
+  ];
+  return (
+    <Tier2Section title="Account data, from the witness">
+      <div className="min-w-0">
+        {rows.map((row) => (
+          <div
+            key={row.key}
+            data-row={row.key}
+            className="border-base-border-subtle grid min-h-8 min-w-0 grid-cols-1 items-center gap-x-4 border-t py-1.5 sm:grid-cols-[168px_minmax(0,1fr)]"
+          >
+            <span data-role="row-key" className="text-meta text-text-dim">
+              {row.label}
+            </span>
+            <span data-role="row-value" className="text-small text-text min-w-0">
+              {row.value}
+            </span>
+          </div>
+        ))}
+      </div>
       <p className="text-text-ghost text-meta">
         Decoded from the account data in the witness of tx{' '}
         <AppLink href={`/tx/${v.cell.txHash}`}>
@@ -149,40 +248,58 @@ export function DotbitAccountData({ protocol }: { protocol: Of<'dotbit'> }) {
 
 function witnessTime(value: string | null): ReactNode {
   if (value === null) return <Dim>not in this witness version</Dim>;
-  if (value === '0') return <Dim>never</Dim>;
+  if (value === '0') return 'never';
   return formatUtc8DateTime(Number(value) * 1000);
 }
 
-function witnessTimes(d: Of<'dotbit'>['versions'][number]['decoded']): [string, ReactNode][] {
-  const rows: [string, ReactNode][] = [];
-  if (typeof d.updatedAt === 'string') rows.push(['updated_at', witnessTime(d.updatedAt)]);
-  for (const [key, value] of [
-    ['last_transfer_account_at', d.lastTransferAccountAt],
-    ['last_edit_manager_at', d.lastEditManagerAt],
-    ['last_edit_records_at', d.lastEditRecordsAt],
+/** R2b-b-17: items only for the fields the API serves; "0" is a time never set. */
+function witnessChanges(d: Of<'dotbit'>['versions'][number]['decoded']): ReactNode[] {
+  const items: ReactNode[] = [];
+  for (const [name, label, value] of [
+    ['last_transfer_account_at', 'transfer', d.lastTransferAccountAt],
+    ['last_edit_manager_at', 'manager edit', d.lastEditManagerAt],
+    ['last_edit_records_at', 'records edit', d.lastEditRecordsAt],
   ] as const)
-    if (value !== undefined) rows.push([key, witnessTime(value)]);
+    if (value !== undefined)
+      items.push(
+        <Field key={name} name={name} label={label}>
+          {witnessTime(value)}
+        </Field>
+      );
+  if (typeof d.updatedAt === 'string')
+    items.push(
+      <Field key="updated_at" name="updated_at" label="updated">
+        {witnessTime(d.updatedAt)}
+      </Field>
+    );
+  return items;
+}
+
+function subAccountFlags(d: Of<'dotbit'>['versions'][number]['decoded']): ReactNode[] {
+  const items: ReactNode[] = [];
   if (d.enableSubAccount !== undefined)
-    rows.push([
-      'enable_sub_account',
-      d.enableSubAccount === null ? (
-        <Dim>not in this witness version</Dim>
-      ) : (
-        String(d.enableSubAccount)
-      ),
-    ]);
+    items.push(
+      <Field key="e" name="enable_sub_account" label="sub-accounts">
+        {d.enableSubAccount === null ? (
+          <Dim>not in this witness version</Dim>
+        ) : (
+          String(d.enableSubAccount)
+        )}
+      </Field>
+    );
   if (d.renewSubAccountPrice !== undefined)
-    rows.push([
-      'renew_sub_account_price',
-      d.renewSubAccountPrice === null ? (
-        <Dim>not in this witness version</Dim>
-      ) : (
-        <>
-          {BigInt(d.renewSubAccountPrice).toLocaleString('en-US')} <Dim>· raw</Dim>
-        </>
-      ),
-    ]);
-  return rows;
+    items.push(
+      <Field key="p" name="renew_sub_account_price" label="renew price">
+        {d.renewSubAccountPrice === null ? (
+          <Dim>not in this witness version</Dim>
+        ) : (
+          <>
+            {BigInt(d.renewSubAccountPrice).toLocaleString('en-US')} <Dim>raw</Dim>
+          </>
+        )}
+      </Field>
+    );
+  return items;
 }
 
 /** The `.bit` account a `.bit Cell` names, as it is now (ID-BC2: its state at minting is not served). */

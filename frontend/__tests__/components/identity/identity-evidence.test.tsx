@@ -37,7 +37,9 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     );
   });
 
-  it('keeps .bit account internals in tier 2 with owner and manager keys as stored', () => {
+  // Lane P (lane E's leftover): a designed block, not a 14-row dl — the fields grouped in 32 px
+  // rows (keys text-meta, values text-small), the witness's own field names as each item's hover.
+  it('keeps .bit account internals in tier 2 as grouped rows, keys as stored', () => {
     render(
       <DetailTier2>
         <DotbitAccountData protocol={dotbitV4ProtocolProducer as never} />
@@ -47,12 +49,35 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     expect(screen.getByRole('heading', { name: 'Account data, from the witness' })).toHaveClass(
       'text-body'
     );
-    expect(section).toHaveTextContent('status0x00 · raw byte, as stored');
-    expect(section).toHaveTextContent('witness version4');
-    expect(section).toHaveTextContent(
-      'owneralgorithm 3 · 0x6666666666666666666666666666666666666666'
+    expect(section.querySelector('dl')).toBeNull();
+    const rows = [...section.querySelectorAll<HTMLElement>('[data-row]')];
+    expect(rows.map((r) => r.dataset.row)).toEqual([
+      'term',
+      'status',
+      'owner',
+      'manager',
+      'records',
+      'account',
+    ]);
+    for (const row of rows) {
+      expect(row).toHaveClass('min-h-8');
+      expect(row.querySelector('[data-role="row-key"]')).toHaveClass('text-meta', 'text-text-dim');
+      expect(row.querySelector('[data-role="row-value"]')).toHaveClass('text-small');
+    }
+    const row = (key: string) => section.querySelector<HTMLElement>(`[data-row="${key}"]`)!;
+    // registered and expires on one line, the raw field names their hover
+    expect(row('term')).toHaveTextContent(/^registered → expiresregistered .+ UTC\+8 → expires/);
+    expect(row('term').querySelector('[title="registered_at"]')).not.toBeNull();
+    expect(row('status')).toHaveTextContent(
+      'status · witness0x00 raw byte, as stored · witness version 4'
     );
-    expect(section).toHaveTextContent('records1 entry');
+    expect(row('owner')).toHaveTextContent(
+      'owner keyalgorithm 3 0x6666666666666666666666666666666666666666'
+    );
+    expect(row('owner').querySelector('[data-role="algorithm"]')).toHaveTextContent('algorithm 3');
+    expect(row('manager').querySelector('[data-role="algorithm"]')).not.toBeNull();
+    expect(row('records')).toHaveTextContent('records · sub-accounts1 entry');
+    expect(row('account')).toHaveTextContent(/^account → next0x[0-9a-f]{40} → next /);
   });
 
   it('lists the witness timing and sub-account fields, "never" for a zero time (ID-B1)', () => {
@@ -70,12 +95,25 @@ describe('identity tier 2 (ID-C9 / ID-B1 / ID-B2 / ID-BC2 / ID-D4 / ID-DC6 / ID-
     });
     render(<DotbitAccountData protocol={p} />);
     const section = screen.getByRole('region', { name: 'Account data, from the witness' });
-    expect(section).toHaveTextContent('last_transfer_account_at2024-07-15');
-    expect(section).toHaveTextContent('last_edit_manager_atnever');
-    expect(section).toHaveTextContent('last_edit_records_at2024-06-04');
-    expect(section).toHaveTextContent('enable_sub_account1');
-    expect(section).toHaveTextContent('renew_sub_account_price100,000,000 · raw');
-    expect(section).not.toHaveTextContent('updated_at');
+    const changes = section.querySelector<HTMLElement>('[data-row="changes"]')!;
+    expect(changes).toHaveTextContent(
+      /^last changestransfer 2024-07-15 .+ · manager edit never · records edit 2024-06-04 /
+    );
+    for (const [name, title] of [
+      ['transfer', 'last_transfer_account_at'],
+      ['manager edit', 'last_edit_manager_at'],
+      ['records edit', 'last_edit_records_at'],
+    ])
+      expect(within(changes).getByText(name).closest('[title]')).toHaveAttribute('title', title);
+    const records = section.querySelector<HTMLElement>('[data-row="records"]')!;
+    expect(records).toHaveTextContent('1 entry · sub-accounts 1 · renew price 100,000,000 raw');
+    expect(
+      within(records)
+        .getByText(/^sub-accounts/)
+        .closest('[title]')
+    ).toHaveAttribute('title', 'enable_sub_account');
+    // a field the witness version lacks (null) has no item; updated_at is served only as text
+    expect(section).not.toHaveTextContent('updated');
   });
 
   it('names the .bit account a .bit Cell points to as it is now, not as at minting', () => {
