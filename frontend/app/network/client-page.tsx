@@ -10,7 +10,12 @@ import { HostingBar, NetworkDistributions, NetworkProtocols } from '@/app/networ
 import { NetworkShareHistory, NetworkTrends } from '@/app/network/trends';
 import { PeersTable } from '@/app/network/nodes-table';
 import { AdvertisementGraph } from '@/app/network/advertisement-graph';
-import { NetworkMapFootnotes, NetworkMapPicture, useNetworkMap } from '@/app/network/network-map';
+import {
+  NetworkMapFootnotes,
+  NetworkMapNotes,
+  NetworkMapPicture,
+  useNetworkMap,
+} from '@/app/network/network-map';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 
 const PAGE_TITLE = 'Where the nodes are';
@@ -269,6 +274,9 @@ function HowTheCrawlerSees() {
         knows. This crawler asks every node it can reach, then tries to connect to each one it hears
         about. A node it cannot reach may still be running, behind NAT or a firewall.
       </p>
+      <div className="mt-3.5">
+        <NetworkMapNotes />
+      </div>
     </DetailSection>
   );
 }

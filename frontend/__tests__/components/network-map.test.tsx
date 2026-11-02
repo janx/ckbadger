@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@/__tests__/msw/server';
-import { layoutMapPoints, NetworkMapView } from '@/app/network/network-map';
+import { layoutMapPoints, NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
 import type { NetworkMap } from '@/lib/api';
 import producerMap from '@/__tests__/fixtures/network-api-producer/network-map.json';
 
@@ -35,6 +35,7 @@ describe('NetworkMapView', () => {
     render(
       <QueryClientProvider client={client}>
         <NetworkMapView neverVerified={0} />
+        <NetworkMapNotes />
       </QueryClientProvider>
     );
     // F2 charts (CH-51): the panel starts as the legend; a peer's readout follows focus.
@@ -42,6 +43,7 @@ describe('NetworkMapView', () => {
     const detail = screen.getByRole('complementary', { name: 'Selected peer evidence' });
     expect(detail).toHaveTextContent('0.119.0');
     expect(detail).toHaveTextContent('US · AS65000 Ex');
+    // Hierarchy v3 (N2): the coverage note is tier 2's, in the map notes.
     expect(screen.getByText(/1 of 2 retained verified peers/)).toHaveTextContent(
       '1 locations are unavailable'
     );

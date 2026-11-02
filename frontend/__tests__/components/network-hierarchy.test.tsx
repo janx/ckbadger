@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { http, HttpResponse } from 'msw';
 import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { NetworkClientPage } from '@/app/network/client-page';
+import { NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
 import type { NetworkMap } from '@/lib/api';
 
 // Hierarchy v3 on /network (plan 2026-11-02 lane N, rulings R11–R16): the DAO page's anatomy —
@@ -261,5 +262,108 @@ describe('Network page hero (hierarchy v3 R11, R13; lane N, N1)', () => {
     for (const el of coloured) expect(figure.contains(el)).toBe(true);
     const active = within(hero).getByText(/round #98 crawling 40\/181/);
     expect(active).toHaveClass('text-text-dim');
+  });
+});
+
+describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const renderMap = async (width = 908, neverVerified = 115) => {
+    stubChartWidth(width);
+    server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
+    const view = render(
+      wrap(
+        <>
+          <NetworkMapView neverVerified={neverVerified} />
+          <div data-testid="notes">
+            <NetworkMapNotes />
+          </div>
+        </>
+      )
+    );
+    const svg = await screen.findByRole('img', { name: /Approximate GeoIP locations/ });
+    return { ...view, svg };
+  };
+
+  it('names the map inside its plot, above the clusters, and keeps it at least 280 px tall', async () => {
+    for (const width of [908, 358]) {
+      const { svg, unmount } = await renderMap(width);
+      const name = svg.querySelector('[data-role="chart-name"]')!;
+      expect(name).toHaveTextContent(/^verified nodes · approximate GeoIP place$/);
+      expect(name).toHaveAttribute('font-size', '11');
+      // The clusters are drawn below the name's band.
+      const band = Number(name.getAttribute('y'));
+      for (const dot of Array.from(svg.querySelectorAll('[data-dot]')))
+        expect(Number(dot.getAttribute('cy'))).toBeGreaterThan(band + 4);
+      expect(Number(svg.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+      unmount();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('keys the map in a drawn legend beside it, with no hint and no prose in the panel', async () => {
+    await renderMap();
+    const panel = screen.getByRole('complementary', { name: 'Selected peer evidence' });
+    const key = within(panel).getByRole('img', { name: /^Key:/ });
+    expect(key.tagName.toLowerCase()).toBe('svg');
+    expect(key).toHaveAccessibleName(
+      "Key: reachable now 3, verified before, not now 1, this node's 1 session peers, heard of, never verified 115"
+    );
+    for (const words of [
+      'reachable now · 3',
+      'verified before, not now · 1',
+      "this node's 1 session peers",
+      'heard of, never verified · 115',
+    ])
+      expect(within(key).getByText(words)).toBeInTheDocument();
+    expect(panel).not.toHaveTextContent(/tap or hover/i);
+    expect(panel.querySelectorAll('p')).toHaveLength(0);
+  });
+
+  it('reads the map in one row, keeps the never-verified strip, and ends with one caption', async () => {
+    const { container } = await renderMap();
+    const view = container.firstElementChild as HTMLElement;
+    const readout = screen.getByRole('status', { name: 'Node readout' });
+    // The idle reading is the map's own count; the hint is the row's, once (R14).
+    expect(readout).toHaveTextContent(/^4 verified nodes in 2 countriestap or hover$/);
+    expect(view.querySelectorAll('[data-hint="tap-or-hover"]')).toHaveLength(1);
+    const strip = screen.getByRole('img', { name: '115 peers only heard of' });
+    const caption = view.querySelector('[data-role="caption"]') as HTMLElement;
+    expect(caption.textContent).toBe(
+      'Every node this crawler verified, at its approximate GeoIP place; no links are drawn, because no one can see them from outside.'
+    );
+    expect(caption.textContent!.length).toBeLessThanOrEqual(160);
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    expect(follows(readout, strip)).toBe(true);
+    expect(follows(strip, caption)).toBe(true);
+    // Nothing else under the map: no line above it, no coverage or displacement notes.
+    expect(view).not.toHaveTextContent(/ringed: the/);
+    expect(view).not.toHaveTextContent(/approximate GeoIP coordinates/);
+    expect(view).not.toHaveTextContent(/displaced/);
+    expect(view.querySelector('figcaption')).toBeNull();
+  });
+
+  it('keeps every sentence that left the map in the developer notes', async () => {
+    await renderMap();
+    const notes = screen.getByTestId('notes');
+    await waitFor(() =>
+      expect(notes).toHaveTextContent(
+        '4 verified nodes in 2 countries · ringed: the 1 this node had a session with in the latest round.'
+      )
+    );
+    expect(notes).toHaveTextContent(
+      '4 of 4 retained verified peers have approximate GeoIP coordinates; 0 locations are unavailable. Dots with close coordinates are displaced to keep them selectable. There is no centre: every node keeps a handful of connections of its own, and that mesh cannot be observed from outside, so no links are drawn.'
+    );
+    expect(notes).toHaveTextContent(
+      "Each node keeps its own handful of connections to others. Those links cannot be seen from outside, so none are drawn: not even this node's, which would make it look like a centre."
+    );
+  });
+
+  it('puts the map notes in tier 2 of the page', async () => {
+    stubChartWidth(1248);
+    const { tier1, tier2 } = await renderPage();
+    await waitFor(() => expect(tier2).toHaveTextContent(/approximate GeoIP coordinates/));
+    expect(tier1).not.toHaveTextContent(/approximate GeoIP coordinates/);
+    expect(tier1).not.toHaveTextContent(/ringed: the/);
   });
 });

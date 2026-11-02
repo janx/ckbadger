@@ -155,12 +155,13 @@ describe('Network board (F2 charts)', () => {
     server.use(http.get(`${API_BASE}/network/map`, () => HttpResponse.json(map)));
     render(wrap(<NetworkMapView neverVerified={115} />));
     const panel = await screen.findByRole('complementary', { name: 'Selected peer evidence' });
-    expect(panel).toHaveTextContent('Tap or hover a node');
+    // Hierarchy v3: the key is drawn; the hint is the reading row's, the prose tier 2's.
+    expect(within(panel).getByRole('img', { name: /^Key:/ })).toBeInTheDocument();
     expect(panel).toHaveTextContent('reachable now · 3');
     expect(panel).toHaveTextContent('verified before, not now · 1');
     expect(panel).toHaveTextContent("this node's 1 session peers");
     expect(panel).toHaveTextContent('heard of, never verified · 115');
-    expect(panel).toHaveTextContent(/none are drawn/);
+    expect(panel).not.toHaveTextContent(/tap or hover|none are drawn/i);
     fireEvent.focus(screen.getByLabelText(/^US peer 12200fce0b…/));
     // R-13 (CH-57): titled by the alias the crawler last verified, the peer id beneath.
     expect(panel.querySelector('p')).toHaveTextContent('/ip4/203.0.113.7/tcp/8115');
@@ -182,7 +183,7 @@ describe('Network board (F2 charts)', () => {
     // the line opens the lines under the map (hierarchy v3: the picture, then its reading)
     expect(readout.parentElement!.firstElementChild).toBe(readout);
     expect(readout.parentElement!.previousElementSibling!.contains(svg)).toBe(true);
-    expect(readout).toHaveTextContent('Tap or hover a node.');
+    expect(readout).toHaveTextContent(/^4 verified nodes in 2 countriestap or hover$/);
     // a tap: the emulated hover and focus, then the click; the pin outlasts the pointer
     fireEvent.mouseEnter(dot);
     fireEvent.focus(dot);
@@ -196,8 +197,8 @@ describe('Network board (F2 charts)', () => {
     // a second tap on it lets go, though the emulated hover is still on it
     fireEvent.mouseEnter(dot);
     fireEvent.click(dot);
-    expect(readout).toHaveTextContent('Tap or hover a node.');
-    expect(panel).toHaveTextContent('Tap or hover a node');
+    expect(readout).toHaveTextContent(/^4 verified nodes in 2 countriestap or hover$/);
+    expect(within(panel).getByRole('img', { name: /^Key:/ })).toBeInTheDocument();
   });
 
   it('lets a pin go when a refetched map no longer has its node (R6)', async () => {
@@ -215,7 +216,7 @@ describe('Network board (F2 charts)', () => {
     act(() => {
       client.setQueryData(['network', 'map'], gone);
     });
-    await waitFor(() => expect(readout).toHaveTextContent('Tap or hover a node.'));
+    await waitFor(() => expect(readout).toHaveTextContent(/^4 verified nodes in 2 countries/));
   });
 
   it('says nothing of an alias or a session the API does not give (R-13)', async () => {
