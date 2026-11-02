@@ -90,7 +90,9 @@ it('keeps the script-call lines on a feed that does not ask for plain rows', asy
   const { container } = feed(false);
   expect(await screen.findAllByText(/0202…|object/)).not.toHaveLength(0);
   expect(container.querySelector('[data-role="detail"]')).not.toBeNull();
-  expect(container.querySelector('[data-role="lock-kind"]')).toBeNull();
+  // T7 (option A): every feed draws the lock kind as a tag on each participant line.
+  const kinds = container.querySelectorAll('[data-role="lock-kind"]');
+  expect([...kinds].map((k) => k.textContent)).toEqual(['UTXOSwap Intent Lock', 'PW Lock']);
 });
 
 it('folds a batch of objects behind "+N more objects", leading with this one (OB-M3)', async () => {
@@ -115,9 +117,10 @@ describe('phone form of a collection activity entry (L6)', () => {
     expect(chips[0].closest('[data-role="phone-items"]')).toHaveClass('md:hidden');
     expect(chips[0]).toHaveAttribute('aria-expanded', 'false');
     const first = container.querySelectorAll('[data-role="participant"]')[0];
-    // The objects' own lines are the md form only; the phone shows the chip.
-    const mdItems = first.querySelector('[data-role="phone-items"] ~ div:last-child')!;
-    expect(mdItems).toHaveClass('hidden', 'md:block');
+    // The objects' own facts are the md form only; the phone shows the chip.
+    const mdItems = [...first.querySelectorAll(':scope > [data-role="item"]')];
+    expect(mdItems.length).toBeGreaterThan(0);
+    for (const item of mdItems) expect(item).toHaveClass('hidden', 'md:inline-flex');
     expect(first.querySelector('[data-role="phone-objects"]')).toBeNull();
     fireEvent.click(chips[0]);
     expect(chips[0]).toHaveAttribute('aria-expanded', 'true');
@@ -207,10 +210,10 @@ describe('m-NFT mint row class cell (R-4)', () => {
     await screen.findAllByText(/more objects/);
     const notes = container.querySelectorAll('[data-role="participant-note"]');
     expect([...notes].map((n) => n.textContent)).toEqual(['holds the class cell']);
-    expect(notes[0].closest('[data-party]')).toHaveAttribute(
-      'data-party',
-      `0x${'02'.repeat(32)}:1`
-    );
+    // T7: the note sits on that participant's line, after its lock tag.
+    expect(
+      notes[0].closest('[data-role="participant"]')!.querySelector('[data-party]')
+    ).toHaveAttribute('data-party', `0x${'02'.repeat(32)}:1`);
   });
 
   it('says nothing when the mint outputs no cell of its class', async () => {

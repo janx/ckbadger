@@ -182,3 +182,89 @@ describe('option A: the headline line', () => {
     expect(container.querySelector('[data-role="evidence"]')).toHaveTextContent('#3 · 0x8a39e8e3');
   });
 });
+
+describe('option A: every participant, one line each (D1)', () => {
+  it.each([
+    ['1', scriptCall],
+    ['2', transfer],
+    ['5', swap],
+  ])('draws all %s participants, one line each, every address shown', (_n, activity) => {
+    const { container } = render(<ActivityRow activity={activity} />);
+    const shown = lines(container);
+    expect(shown).toHaveLength(activity.participants.length);
+    expect(container.querySelectorAll('[data-party]')).toHaveLength(activity.participants.length);
+    for (const p of activity.participants)
+      expect(container).toHaveTextContent(`${p.address!.slice(0, 8)}...${p.address!.slice(-6)}`);
+  });
+
+  it('puts CKB, every asset delta and occupied on the participant’s own line, in that order', () => {
+    const { container } = render(<ActivityRow activity={swap} />);
+    const joy = lines(container).find((l) => l.textContent?.includes('d8csr7')) as HTMLElement;
+    const order = [...joy.children].map((e) => e.getAttribute('data-role'));
+    expect(order).toEqual(['party', 'lock-kind', 'ckb', 'item', 'occupied']);
+    expect(joy.querySelector('[data-role="party"]')).toHaveAttribute('data-party');
+    expect(within(joy).getByText('JoyID')).toHaveAttribute('data-role', 'lock-kind');
+    expect(joy.querySelector('[data-ckb-amount]')).toHaveTextContent('+3,052.11026713 CKB');
+    expect(within(joy).getByRole('link', { name: '+13,000.19363874 RGB++' })).toBeInTheDocument();
+    expect(joy.querySelector('[data-role="occupied"]')).toHaveTextContent('occupied +207');
+    // No second line per asset: the intent lock's LP delta is on its own participant line.
+    const intent = lines(container).find((l) => l.textContent?.includes('s7p9j4')) as HTMLElement;
+    expect(
+      within(intent).getByRole('link', { name: `${MINUS}5,913.45087427 LP-UTXOSwap V1` })
+    ).toBeInTheDocument();
+    expect(intent.querySelector('[data-role="occupied"]')).toHaveTextContent(
+      `occupied ${MINUS}231`
+    );
+    // A party with no registered lock has no tag, and its zero is still its fact.
+    const zero = lines(container).find((l) => l.textContent?.includes('w8xxul')) as HTMLElement;
+    expect(zero.querySelector('[data-role="lock-kind"]')).toBeNull();
+    expect(zero.querySelector('[data-ckb-amount]')).toHaveTextContent('0.00000000 CKB');
+  });
+
+  it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind as a tag', () => {
+    const { container } = render(<ActivityRow activity={transfer} />);
+    for (const line of lines(container)) {
+      expect(line).toHaveClass('flex', 'flex-wrap', 'items-center', 'text-small');
+      expect(line).toHaveClass('leading-[18px]');
+      // 18 px indent for the address; a line that wraps (phone) hangs 12 px further in, so its
+      // continuation never reads as the next participant.
+      expect(line).toHaveClass('pl-[30px]');
+      expect(line.querySelector('[data-role="party"]')).toHaveClass('-ml-3');
+      expect([...line.classList].filter((c) => /^(sm|md|lg):/.test(c))).toEqual([]);
+      expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass(
+        'text-meta',
+        'text-text-dim',
+        'border',
+        'border-base-border',
+        'rounded-[3px]',
+        'px-[5px]',
+        'leading-4',
+        'whitespace-nowrap'
+      );
+    }
+    // Occupied last, in 11 px ghost ink.
+    expect(container.querySelector('[data-role="occupied"]')).toHaveClass(
+      'text-meta',
+      'text-text-ghost',
+      'whitespace-nowrap'
+    );
+    // The three/four/five-track participant grid is gone.
+    const box = container.querySelector('[data-role="participants"]') as HTMLElement;
+    expect(box.className).not.toMatch(/grid/);
+    expect(box).toHaveClass('flex', 'flex-col');
+  });
+
+  it('keeps the over-six fold: the five largest and "+N participants" that opens the rest', () => {
+    const { container } = render(<ActivityRow activity={feedSamples.eightParties} />);
+    expect(lines(container)).toHaveLength(5);
+    fireEvent.click(within(container).getByRole('button', { name: '+3 participants' }));
+    expect(lines(container)).toHaveLength(8);
+  });
+
+  it('pads the row 8 px and keeps the fresh tint', () => {
+    const { container } = render(<ActivityRow activity={transfer} fresh />);
+    const article = container.querySelector('article') as HTMLElement;
+    expect(article).toHaveClass('py-2', 'bg-jade/5');
+    expect(article).not.toHaveClass('py-3');
+  });
+});

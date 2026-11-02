@@ -92,7 +92,7 @@ describe('ActivityFeed', () => {
     );
     expect(first).toHaveAttribute('title', a.txHash);
     expect(evidence).not.toHaveTextContent('0x01ababab');
-    expect(evidence).toHaveTextContent(/^#20,819,142 · \ds ago$/);
+    expect(evidence).toHaveTextContent(/^#20,819,142 · \d+s ago$/);
     expect(first.querySelector('svg, img')).toBeNull();
     expect(document.querySelector('a a')).toBeNull();
   });
@@ -171,17 +171,22 @@ describe('ActivityFeed', () => {
     expect(row.querySelectorAll('[data-party]')).toHaveLength(3);
   });
 
-  it('ghosts trailing zeros and right-aligns every amount in one column, so decimals line up', async () => {
+  it("ghosts trailing zeros and keeps each exact amount on its participant's own line", async () => {
     server.use(
       http.get(`${API}/activities/latest`, () => HttpResponse.json([feedSamples.fiberClose]))
     );
     render(<ActivityFeed />);
     await waitFor(() => expect(rows()).toHaveLength(1));
     const row = rows()[0] as HTMLElement;
-    const cells = [
-      ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
-    ].map((e) => e.parentElement as HTMLElement);
-    for (const cell of cells) expect(cell).toHaveClass('col-start-2', 'text-right');
+    // T7 (option A): no amount column — each amount follows its party on that party's line.
+    const lines = [...row.querySelectorAll('[data-role="participant"]')];
+    expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      expect(line.querySelectorAll('[data-ckb-amount]')).toHaveLength(1);
+      expect(line.querySelector('[data-role="ckb"]')?.previousElementSibling).toHaveAttribute(
+        'data-party'
+      );
+    }
     const amounts = [
       ...row.querySelector('[data-role="participants"]')!.querySelectorAll('[data-ckb-amount]'),
     ];
@@ -190,9 +195,7 @@ describe('ActivityFeed', () => {
     expect(amounts[0].querySelector('[data-ghost]')).toHaveTextContent(/^\.00000000$/);
     expect(amounts[0].querySelector('[data-ghost]')).toHaveClass('text-text-ghost');
     expect(amounts[2].querySelector('[data-ghost]')).toHaveTextContent(/^$/);
-    expect(row.querySelector('[data-role="participants"]')?.className).toContain(
-      'minmax(150px,max-content)'
-    );
+    expect(row.querySelector('[data-role="participants"]')?.className).not.toMatch(/grid/);
   });
 
   it('reads a Fiber close: the action, its channel and capacity, and all three parties', async () => {
