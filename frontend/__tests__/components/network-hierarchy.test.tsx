@@ -6,6 +6,7 @@ import { server } from '../msw/server';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { NetworkClientPage } from '@/app/network/client-page';
 import { NetworkMapNotes, NetworkMapView } from '@/app/network/network-map';
+import { HostingBar } from '@/app/network/distributions';
 import type { NetworkMap } from '@/lib/api';
 
 // Hierarchy v3 on /network (plan 2026-11-02 lane N, rulings R11–R16): the DAO page's anatomy —
@@ -365,5 +366,67 @@ describe('Network map, under the picture (hierarchy v3 R12–R14; lane N, N2)', 
     await waitFor(() => expect(tier2).toHaveTextContent(/approximate GeoIP coordinates/));
     expect(tier1).not.toHaveTextContent(/approximate GeoIP coordinates/);
     expect(tier1).not.toHaveTextContent(/ringed: the/);
+  });
+});
+
+describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N, N3)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const renderHosting = async (width: number) => {
+    stubChartWidth(width);
+    server.use(
+      http.get(`${API_BASE}/network/distributions`, () => HttpResponse.json(distributions))
+    );
+    render(wrap(<HostingBar />));
+    return screen.findByRole('region', { name: 'Where they run' });
+  };
+
+  it('heads its own section and draws a 28 px bar with names and shares inside the segments', async () => {
+    const section = await renderHosting(1200);
+    const h2 = within(section).getByRole('heading', { level: 2, name: 'Where they run' });
+    expect(h2).toHaveClass('text-section', 'text-text-bright');
+    expect(h2.parentElement).toHaveClass('mb-[18px]');
+    const bar = within(section).getByRole('img', { name: 'Verified nodes by hosting network' });
+    expect(bar).toHaveClass('h-[28px]');
+    const words = Array.from(bar.querySelectorAll('[data-provider]')).map((s) => s.textContent);
+    expect(words).toEqual(['Amazon.com 54.55%', 'Hetzner Online GmbH 30.30%', 'Unknown 15.15%']);
+  });
+
+  it('writes a share alone, or nothing, where a segment cannot hold its words', async () => {
+    const section = await renderHosting(358);
+    const bar = within(section).getByRole('img', { name: 'Verified nodes by hosting network' });
+    const words = Array.from(bar.querySelectorAll('[data-provider]')).map((s) => s.textContent);
+    expect(words).toEqual(['Amazon.com 54.55%', '30.30%', '']);
+  });
+
+  it('gathers the exact counts in one quiet line and closes with one caption (R12, R15)', async () => {
+    const section = await renderHosting(1200);
+    const exact = section.querySelector('[data-role="exact-amounts"]') as HTMLElement;
+    expect(exact).toHaveTextContent(/^Amazon\.com 36 · Hetzner Online GmbH 20 · Unknown 10$/);
+    expect(exact).toHaveClass('text-small', 'text-text-dim');
+    for (const value of Array.from(exact.querySelectorAll('[data-role="count"]')))
+      expect(value).toHaveClass('text-text');
+    const caption = section.lastElementChild as HTMLElement;
+    expect(caption).toHaveAttribute('data-role', 'caption');
+    expect(caption).toHaveTextContent(
+      /^36 of the 66 verified nodes run on Amazon\.com, across 2 countries\.$/
+    );
+    expect(caption).toHaveClass('text-body', 'text-text', 'max-w-[640px]');
+    // heading, bar, exact line, caption: no legend row of its own.
+    expect(section.children).toHaveLength(4);
+  });
+
+  it('heads the software list alone; its scope note is tier 2', async () => {
+    stubChartWidth(1248);
+    const { tier1, tier2 } = await renderPage();
+    const h2 = await within(tier1).findByRole('heading', { name: 'Which software they run' });
+    expect(h2).toHaveClass('text-section');
+    expect(h2.parentElement).toHaveClass('mb-[18px]');
+    expect(tier1).not.toHaveTextContent('reachable now or verified before');
+    expect(tier2).toHaveTextContent(
+      '“Which software they run” counts every verified node, reachable now or verified before.'
+    );
+    // The list itself is unchanged: one row per version, its count beside it.
+    expect(tier1.querySelectorAll('[data-version-bar]')).toHaveLength(2);
   });
 });

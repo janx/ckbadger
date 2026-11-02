@@ -277,6 +277,9 @@ function HowTheCrawlerSees() {
       <div className="mt-3.5">
         <NetworkMapNotes />
       </div>
+      <p className="text-text-dim text-body mt-3.5">
+        “Which software they run” counts every verified node, reachable now or verified before.
+      </p>
     </DetailSection>
   );
 }

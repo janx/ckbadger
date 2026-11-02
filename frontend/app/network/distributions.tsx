@@ -1,12 +1,38 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, LabelCount } from '@/lib/api';
 import { DATA_COLOR } from '@/lib/design-tokens';
+import { formatPercent } from '@/lib/ckb-decimal';
+import { partitionSpans } from '@/lib/partition-geometry';
+import { useElementWidth } from '@/hooks/useElementWidth';
+import { cn } from '@/lib/utils';
 
 const TOP_N = 8;
 /** The hosting bar's segments: one hue, the largest strongest (Network board). */
 const PROVIDER_OPACITY = [0.9, 0.6, 0.5, 0.42, 0.34, 0.2] as const;
+/** The in-segment words (hierarchy v3 R15): 12 px monospace, 10 px padding each side. */
+const LABEL_ADVANCE = 7.2;
+const LABEL_PAD = 10;
+
+/** A tier-1 section of this page (R6): h2 at section size, 18 px to its evidence. */
+export function NetworkSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section aria-label={title} className="min-w-0">
+      <div className="mb-[18px]">
+        <h2 className="text-text-bright text-section font-medium">{title}</h2>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** The data hue at `alpha`, as a background, so a segment's words keep their full ink. */
+function dataHue(alpha: number): string {
+  const channel = (i: number) => parseInt(DATA_COLOR.slice(i, i + 2), 16);
+  return `rgba(${channel(1)}, ${channel(3)}, ${channel(5)}, ${alpha})`;
+}
 
 function useDistributions() {
   // Shares the ['network', 'distributions'] key with the MaxMind attribution: one fetch.
@@ -66,14 +92,11 @@ export function NetworkDistributions() {
         Failed to load distributions.
       </p>
     );
+  // Its scope ("reachable now or verified before") is said in tier 2 (R14: no note beside the h2).
   return (
-    <section className="flex min-w-0 flex-col gap-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h2 className="text-text-bright text-section font-medium">Which software they run</h2>
-        <span className="text-text-dim text-small">reachable now or verified before</span>
-      </div>
+    <NetworkSection title="Which software they run">
       <Bars items={data.versions} attr="data-version-bar" />
-    </section>
+    </NetworkSection>
   );
 }
 
@@ -100,7 +123,9 @@ function asnOrganisation(label: string): string {
 
 /**
  * "Where they run": verified nodes by hosting organisation, so one provider's several ASNs read
- * as one (Amazon's AS16509 and AS14618) — the real centralisation risk (CH-52).
+ * as one (Amazon's AS16509 and AS14618) — the real centralisation risk (CH-52). Hierarchy v3: a
+ * 28 px bar with each organisation's name and share inside its segment where they fit (else the
+ * share alone, else nothing), the exact counts in one quiet line under it, then one caption.
  */
 export function HostingBar() {
   const { data, isLoading, error } = useDistributions();
@@ -129,38 +154,84 @@ export function HostingBar() {
   const leader = ranked.find(([org]) => org !== 'Unknown');
   const countries = data.countries.filter((country) => country.label !== 'Unknown').length;
   return (
-    <div className="flex flex-col gap-2">
-      <span className="text-text-bright text-body">Where they run</span>
+    <HostingSection
+      segments={segments}
+      total={total}
+      caption={
+        leader &&
+        `${leader[1].toLocaleString()} of the ${total.toLocaleString()} verified nodes run on ${leader[0]}, across ${countries} countries.`
+      }
+    />
+  );
+}
+
+/** The section once its counts are known, so the bar measures its own width from mount. */
+function HostingSection({
+  segments,
+  total,
+  caption,
+}: {
+  segments: readonly (readonly [string, number])[];
+  total: number;
+  caption: string | undefined;
+}) {
+  const [ref, width] = useElementWidth<HTMLDivElement>();
+  const spans = partitionSpans(
+    segments.map(([, count]) => BigInt(count)),
+    BigInt(total),
+    0,
+    100,
+    'hosting networks'
+  );
+  const share = (count: number) => `${formatPercent(BigInt(count), BigInt(total))}%`;
+  /** The words a segment holds: name and share, else the share alone, else none. */
+  const inside = (org: string, count: number, i: number): string => {
+    if (width === null) return '';
+    const room = (width * spans[i].width) / 100;
+    const fits = (text: string) => text.length * LABEL_ADVANCE + 2 * LABEL_PAD <= room;
+    const full = `${org} ${share(count)}`;
+    return fits(full) ? full : fits(share(count)) ? share(count) : '';
+  };
+  return (
+    <NetworkSection title="Where they run">
       <div
+        ref={ref}
         role="img"
         aria-label="Verified nodes by hosting network"
-        className="flex h-3 gap-0.5 overflow-hidden rounded-md"
+        title={segments.map(([org, count]) => `${org} ${share(count)}`).join(' · ')}
+        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden rounded-[3px] tabular-nums"
       >
         {segments.map(([org, count], i) => (
           <span
             key={org}
             data-provider={org}
-            style={{
-              flex: `${count} 0 0`,
-              backgroundColor: DATA_COLOR,
-              opacity: PROVIDER_OPACITY[i],
-            }}
-          />
-        ))}
-      </div>
-      <div className="text-text-dim text-small flex flex-wrap gap-x-5 gap-y-1">
-        {segments.map(([org, count]) => (
-          <span key={org}>
-            {org} <span className="text-text-bright">{count.toLocaleString()}</span>
+            className={cn(
+              'flex items-center overflow-hidden whitespace-nowrap rounded-[3px] px-2.5',
+              PROVIDER_OPACITY[i] >= 0.6 ? 'text-base-bg' : 'text-text-bright'
+            )}
+            style={{ width: `${spans[i].width}%`, backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}
+          >
+            {inside(org, count, i)}
           </span>
         ))}
       </div>
-      {leader && (
-        <span className="text-text-dim text-small">
-          {leader[1].toLocaleString()} of the {total.toLocaleString()} verified nodes run on{' '}
-          {leader[0]}, across {countries} countries.
-        </span>
+      {/* R12: the exact counts leave the bar for one quiet line, which also names every segment. */}
+      <p data-role="exact-amounts" className="text-text-dim text-small mt-2.5">
+        {segments.map(([org, count], i) => (
+          <span key={org}>
+            {i > 0 && ' · '}
+            {org}{' '}
+            <span data-role="count" className="text-text tabular-nums">
+              {count.toLocaleString()}
+            </span>
+          </span>
+        ))}
+      </p>
+      {caption && (
+        <p data-role="caption" className="text-text text-body mt-3.5 max-w-[640px]">
+          {caption}
+        </p>
       )}
-    </div>
+    </NetworkSection>
   );
 }
