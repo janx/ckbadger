@@ -46,7 +46,12 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     const getForkAt = vi.spyOn(api, 'getForkAt');
     mount(STALE_FORK);
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'The road ends here.' })
+      await screen.findByRole(
+        'heading',
+        { level: 1, name: 'The road ends here.' },
+        // the route's page is a lazy chunk; under the full suite it can take over a second
+        { timeout: 5000 }
+      )
     ).toBeInTheDocument();
     expect(screen.getByText('Not found · 404')).toBeInTheDocument();
     expect(screen.queryByText(/The page fell/)).toBeNull();
@@ -60,7 +65,12 @@ describe('a route that names no page renders the 404 design (C2)', () => {
   it('an uncle index that is not a number is a 404 too (the same notFound() signal)', async () => {
     mount('/mainnet/blocks/20894834/uncles/first');
     expect(
-      await screen.findByRole('heading', { level: 1, name: 'The road ends here.' })
+      await screen.findByRole(
+        'heading',
+        { level: 1, name: 'The road ends here.' },
+        // the route's page is a lazy chunk; under the full suite it can take over a second
+        { timeout: 5000 }
+      )
     ).toBeInTheDocument();
     expect(screen.queryByText(/The page fell/)).toBeNull();
   });
