@@ -1311,7 +1311,9 @@ describe('Address · consistency round (C13, C14)', () => {
     expect(screen.queryByRole('table', { name: '拯救民主 objects held here' })).toBeNull();
   });
 
-  it('counts every activity filter chip from one one-row page each; an empty filter is dimmed 0', async () => {
+  // Lane P (exact or none): a filter chip shows a count only when its one-row page proves it — 0
+  // or 1 — and no number otherwise; "All" keeps the address's total; an empty filter is dimmed.
+  it('counts a filter chip from its one-row page only when the count is exact; an empty filter is dimmed 0', async () => {
     vi.mocked(api.getAddressActivities).mockImplementation(async (_a, p) =>
       p?.limit === 1 && p.filter && p.filter !== 'all'
         ? p.filter === 'token'
@@ -1328,15 +1330,22 @@ describe('Address · consistency round (C13, C14)', () => {
     await waitFor(() =>
       expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveTextContent('DAO 0')
     );
-    for (const chip of within(chips).getAllByRole('button')) expect(chip).toHaveTextContent(/\d/);
-    expect(within(chips).getByRole('button', { name: /^Token/ })).toHaveTextContent('Token 1');
-    // More than the one row asked for: the API counts no filtered total, so the chip says "2+".
-    const ckb = within(chips).getByRole('button', { name: /^CKB/ });
-    expect(ckb).toHaveTextContent('CKB 2+');
-    expect(ckb.querySelector('[data-chip-count]')).toHaveAttribute(
-      'title',
-      'at least 2; the API does not count filtered activity'
+    expect(within(chips).getByRole('button', { name: /^All/ })).toHaveTextContent(
+      `All ${addressActivitiesFixture.length}`
     );
+    expect(within(chips).getByRole('button', { name: /^Token/ })).toHaveTextContent(/^Token 1$/);
+    // More than the one row asked for: the API counts no filtered total, so the chip shows no
+    // number (never "2+"); what the page proved stays in the chip's title.
+    const ckb = within(chips).getByRole('button', { name: /^CKB/ });
+    expect(ckb).toHaveTextContent(/^CKB$/);
+    expect(ckb.querySelector('[data-chip-count]')).toBeNull();
+    expect(ckb).toHaveAttribute(
+      'title',
+      'more than one; the API keeps no count of filtered activity'
+    );
+    expect(chips).not.toHaveTextContent('2+');
+    for (const chip of within(chips).getAllByRole('button'))
+      if (chip !== ckb) expect(chip).toHaveTextContent(/\d$/);
     expect(within(chips).getByRole('button', { name: /^DAO/ })).toHaveClass('text-text-ghost');
     expect(api.getAddressActivities).toHaveBeenCalledWith(addressHash, {
       limit: 1,

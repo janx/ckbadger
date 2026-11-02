@@ -53,20 +53,23 @@ function shortName(value: string): string {
 }
 /**
  * C14: what a filter chip's one-row page says of its count. The API counts only the unfiltered
- * feed, so a filtered page tells 0 or 1 committed activities exactly, and otherwise that there
- * are at least 2. (Page one also carries the pool's unconfirmed rows; they are not counted, as
- * the unfiltered total does not count them.)
+ * feed, so a filtered page tells 0 or 1 committed activities exactly, and otherwise only that
+ * there are more than one — `'many'`, which a chip shows as no number at all (lane P: exact or
+ * none). (Page one also carries the pool's unconfirmed rows; they are not counted, as the
+ * unfiltered total does not count them.)
  */
-function chipCount(page: { data: readonly { poolStatus?: unknown }[]; hasMore: boolean }): {
-  text: string;
-  exact: boolean;
-} {
+function chipCount(page: {
+  data: readonly { poolStatus?: unknown }[];
+  hasMore: boolean;
+}): 0 | 1 | 'many' {
   const committed = page.data.filter((row) => row.poolStatus === undefined).length;
   if (committed > 1)
     throw new Error(`a filter chip's one-row page holds ${committed} committed activities`);
-  if (page.hasMore) return { text: '2+', exact: false };
-  return { text: String(committed), exact: true };
+  if (page.hasMore) return 'many';
+  return committed === 0 ? 0 : 1;
 }
+/** A chip's title when its count is not exact: what its one-row page proved. */
+const MANY_TITLE = 'more than one; the API keeps no count of filtered activity';
 /** One address activity page; the list and the tab count share it, so they share its cache entry. */
 const activityPageQuery = (
   lockHash: string | undefined,
@@ -476,16 +479,14 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                   >
                     {activityFilters.map(([value, label], i) => {
                       const page = value === 'all' ? undefined : chipPages[i - 1].data;
-                      const count =
-                        value === 'all'
-                          ? activitiesCount.data === undefined
-                            ? undefined
-                            : { text: activitiesCount.data.toLocaleString('en-US'), exact: true }
-                          : page && chipCount(page);
-                      const empty = count?.exact === true && count.text === '0';
+                      // Exact or none: "All" is the address's total, a filter 0 or 1, else no number.
+                      const count: number | 'many' | undefined =
+                        value === 'all' ? activitiesCount.data : page && chipCount(page);
+                      const empty = count === 0;
                       return (
                         <button
                           key={value}
+                          title={count === 'many' ? MANY_TITLE : undefined}
                           aria-pressed={filter === value}
                           onClick={() => {
                             setFilter(value);
@@ -501,19 +502,11 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
                           )}
                         >
                           {label}
-                          {count && (
+                          {typeof count === 'number' && (
                             <>
                               {' '}
-                              <span
-                                data-chip-count
-                                className="tabular-nums"
-                                title={
-                                  count.exact
-                                    ? undefined
-                                    : 'at least 2; the API does not count filtered activity'
-                                }
-                              >
-                                {count.text}
+                              <span data-chip-count className="tabular-nums">
+                                {count.toLocaleString('en-US')}
                               </span>
                             </>
                           )}
