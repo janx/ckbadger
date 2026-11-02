@@ -177,7 +177,7 @@ describe('DaoPage', () => {
     expect(charts).toHaveAttribute('href', '/mainnet/charts/total-deposit');
     expect(within(hero).getByRole('heading', { level: 1 }).parentElement).toContainElement(charts);
     // The whole page's tier 1: at most three caption-length prose blocks (§0, §4).
-    expectTier1Budget(container);
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 
   it('shows evidence API errors instead of fabricated zero values', async () => {

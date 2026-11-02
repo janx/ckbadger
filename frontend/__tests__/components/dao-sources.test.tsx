@@ -129,6 +129,11 @@ describe('DaoSources: Recent DAO activity (hierarchy D7, R7; v3 R15)', () => {
     for (const n of [1, 2, 3]) expect(article).toHaveTextContent(`party${n}`);
     // The lock kind sits in its own column (one line per party), as on the activities page.
     expect(article.querySelectorAll('[data-role="lock-kind"]')).toHaveLength(3);
+    // R11: no gold text in a DAO row; the vault ring is the graphic that carries the colour.
+    const gold = Array.from(article.querySelectorAll('[class]')).filter((el) =>
+      /(^|\s)text-gold/.test(el.getAttribute('class')!)
+    );
+    expect(gold).toHaveLength(0);
     // Raw milliseconds never reach the page (DAO-1).
     expect(screen.queryByText(/1793268770452/)).not.toBeInTheDocument();
     expect(screen.getByRole('link', { name: '#123' })).toHaveAttribute(

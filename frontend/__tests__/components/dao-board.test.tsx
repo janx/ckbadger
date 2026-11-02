@@ -1252,6 +1252,67 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     );
   });
 
+  it('keeps one gold text in tier 1: the deposited figure (R11, V8)', async () => {
+    stubChartWidth(1400);
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const grows = screen.getByRole('region', { name: 'How a deposit grows' });
+    await within(grows).findByRole('img', { name: /^AR by date/ });
+    await waitFor(() =>
+      expect(within(grows).getByText((_, el) => el?.getAttribute('data-role') === 'owed'))
+    );
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const deposited = tier1.querySelector('[data-role="deposited"]')!;
+    // HTML text: every gold ink class sits on the figure (its fraction is the dim gold).
+    const goldInk = Array.from(tier1.querySelectorAll('[class]')).filter((el) =>
+      el
+        .getAttribute('class')!
+        .split(/\s+/)
+        .some((c) => /^text-(gold|warning)(-dim|-bright)?(\/\d+)?$/.test(c))
+    );
+    expect(goldInk.length).toBeGreaterThan(0);
+    for (const el of goldInk) expect(deposited.contains(el)).toBe(true);
+    // SVG text: none drawn in gold (the plots' fills, strokes and bars may be gold).
+    for (const t of Array.from(tier1.querySelectorAll('svg text, svg tspan'))) {
+      expect(t.getAttribute('class') ?? '').not.toMatch(/fill-gold/);
+      expect((t.getAttribute('fill') ?? '').toLowerCase()).not.toMatch(/#f2c55c|#d0a840/);
+    }
+  });
+
+  it('names every tier-1 chart inside its plot and keeps captions and the lede within 640 px (R13, R14)', async () => {
+    stubChartWidth(1400);
+    stubCalculator();
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    await within(screen.getByRole('region', { name: 'How a deposit grows' })).findByRole('img', {
+      name: /^AR by date/,
+    });
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    expect(tier1.querySelector('figcaption')).toBeNull();
+    // Captions and the lede (the exact-amounts line is data, one line across the column).
+    const prose = Array.from(
+      tier1.querySelectorAll('section > p:not([data-role="exact-amounts"])')
+    );
+    expect(prose.length).toBeGreaterThanOrEqual(4);
+    for (const p of prose) expect(p.className).toMatch(/(^|\s)max-w-\[(640|560)px\](\s|$)/);
+    // "tap or hover" at most once per section (R14).
+    for (const section of Array.from(tier1.querySelectorAll('section')))
+      expect(section.querySelectorAll('[data-hint="tap-or-hover"]').length).toBeLessThanOrEqual(1);
+  });
+
   it('keeps tier 1 within the prose budget: at most three caption-length blocks (§0, §4)', async () => {
     stubChartWidth(1400);
     stubCalculator();
@@ -1266,7 +1327,7 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     await within(screen.getByRole('region', { name: 'How a deposit grows' })).findByRole('img', {
       name: /^AR by date/,
     });
-    expectTier1Budget(container);
+    expectTier1Budget(container, { maxProseBlocks: 3, maxChars: 160 });
   });
 });
 
