@@ -3,6 +3,9 @@ import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { InventoryRows, AssetAmount } from '@/components/asset/inventory-table';
 import type { Asset } from '@/lib/api';
+import { resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 const asset: Asset = {
   id: '0x' + 'ab'.repeat(32),
   assetType: 'token',
@@ -31,20 +34,40 @@ const asset: Asset = {
   onchainRatio: null,
   onchainCount: null,
 };
+/** A column head's name: its text, or the name over a bar column's scale ticks. */
+const headText = (h: HTMLElement) => h.firstChild?.firstChild?.textContent ?? h.textContent;
+/** The cell of `row` (1 = first body row) under the column head named `head`. */
+function cellUnder(table: HTMLElement, row: number, head: string): HTMLElement {
+  const heads = within(table).getAllByRole('columnheader');
+  const i = heads.findIndex((h) => headText(h) === head);
+  if (i < 0) throw new Error(`no column ${head}`);
+  return within(table).getAllByRole('row')[row].children[i] as HTMLElement;
+}
+const TRACK = 120;
+const barWidth = (value: number, scale: number) =>
+  `${Math.max(Math.round((value / scale) * TRACK * 100) / 100, value > 0 ? 2 : 0)}px`;
+
 describe('Inventory rows', () => {
-  it('preserves a long H-multiplier with a column that may wrap instead of overflow', () => {
-    render(<InventoryRows assetType="token" rows={[asset]} />);
-    const value = within(screen.getByRole('table', { name: 'Tokens' })).getByText('×1.6393442625');
-    expect(value.closest('td')).toHaveClass('!whitespace-normal', 'break-all');
-  });
-  it('keeps every token digit and uses the canonical standard name', () => {
+  it('rounds a long H-multiplier to 2 dp on its one line and keeps it exact in the hover (L2-1)', () => {
     render(<InventoryRows assetType="token" rows={[asset]} />);
     const table = screen.getByRole('table', { name: 'Tokens' });
-    expect(table).toHaveTextContent('1.000000000000000000000001');
-    expect(table).toHaveTextContent('100.00000001');
-    // F2 objects (IV-04): the standard sits under the full name, after the symbol.
-    expect(within(table).getByText(/xUDT$/)).toBeInTheDocument();
-    expect(table.querySelector('.truncate')).toBeNull();
+    const value = within(table).getByText('×1.64');
+    expect(value.closest('td')).not.toHaveClass('!whitespace-normal');
+    expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
+      'H-mult. ×1.6393442625'
+    );
+  });
+  it('keeps every token digit in the row title and uses the canonical standard name there', () => {
+    render(<InventoryRows assetType="token" rows={[asset]} />);
+    const table = screen.getByRole('table', { name: 'Tokens' });
+    const row = within(table).getAllByRole('row')[1];
+    // Table-rows L2-1: the row shows 2 dp; every digit and the standard are in its title.
+    expect(row).toHaveAttribute(
+      'title',
+      'Token · T · xUDT · 0 transfers in 24 h · 100.00000001 CKB held · 61 CKB occupied (61.0%) · supply 1.000000000000000000000001 T · H-mult. ×1.6393442625'
+    );
+    expect(within(table).getByTitle('1.000000000000000000000001')).toHaveTextContent('1.00');
+    expect(table).not.toHaveTextContent('xUDT');
   });
   it('breaks a long amount only after a thousands separator and ghosts trailing zeros (IV-28/IV-13/IV-05)', () => {
     const { container } = render(
@@ -120,6 +143,98 @@ describe('Inventory rows', () => {
       )
     ).toThrow(`${asset.id}: occupied capacity exceeds held capacity`);
     error.mockRestore();
+  });
+});
+
+// Table-rows round, lane L2-1 (board Lists.dc.html · tokens): one 40 px line of six fields — mark +
+// bright name + symbol tag (+ a set-back standard tag when not xUDT) · Holders · Transfers · Supply
+// (dim, 2 dp) · CKB held as an 8 px bar on the page's scale with its 2-dp amount · H-mult. "0 in
+// 24 h", Occupied, the standard and the exact digits are the row's title (and the token page's).
+describe('Tokens table on the row rules (table-rows L2-1)', () => {
+  const seal: Asset = {
+    ...asset,
+    id: '0x' + 'cd'.repeat(32),
+    standard: 'sudt',
+    name: null,
+    symbol: 'SEAL',
+    decimals: 8,
+    totalSupply: '1606360356572848',
+    transfers24h: 1,
+    ownedCapacity: '40000000000',
+    ownedKnowledge: '18300000000',
+    hMultiplier: '2.18',
+  };
+  const mount = () => {
+    render(<InventoryRows assetType="token" rows={[asset, seal]} />);
+    return screen.getByRole('table', { name: 'Tokens' });
+  };
+
+  it('draws one-line rows at the row density with the board’s six columns', () => {
+    const table = mount();
+    expect(within(table).getAllByRole('columnheader').map(headText)).toEqual([
+      'Token',
+      'Holders',
+      'Transfers',
+      'Supply',
+      'CKB held in its cells',
+      'H-mult.',
+    ]);
+    expect(within(table).queryByRole('columnheader', { name: 'Occupied' })).toBeNull();
+    for (const td of table.querySelectorAll('tbody td'))
+      expect(td).toHaveClass('py-[11px]', 'align-middle');
+    expect(table).not.toHaveTextContent('in 24 h');
+  });
+
+  it('leads with the bright name, the symbol as a tag and sUDT as a set-back tag', () => {
+    const table = mount();
+    const [, token, sealRow] = within(table).getAllByRole('row');
+    const name = within(token).getByRole('link', { name: 'Token' });
+    expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'truncate');
+    expect(name).toHaveAttribute('href', `/mainnet/tokens/${asset.id}`);
+    const tags = (row: HTMLElement) =>
+      Array.from(row.querySelectorAll('[data-row-tag]')).map((t) => t.textContent);
+    expect(tags(token)).toEqual(['T']);
+    // A token with only a symbol shows it once, as its name; sUDT is set back in ghost ink.
+    expect(within(sealRow).getByRole('link', { name: 'SEAL' })).toBeInTheDocument();
+    expect(tags(sealRow)).toEqual(['sUDT']);
+    expect(within(sealRow).getByText('sUDT')).toHaveClass('text-text-ghost', 'border-base-border');
+    expect(token.querySelector('svg[data-class="tokens"]')).not.toBeNull();
+  });
+
+  it('prints supply dim to 2 dp, exact in its hover', () => {
+    const table = mount();
+    const supply = cellUnder(table, 2, 'Supply');
+    expect(supply).toHaveClass('text-text-dim');
+    expect(supply).toHaveTextContent('16,063,603.57');
+    expect(within(supply).getByTitle('16,063,603.56572848')).toBeInTheDocument();
+  });
+
+  it('draws CKB held as an 8 px token-blue bar on the page’s scale with a 2-dp amount', () => {
+    const table = mount();
+    const scale = resourceScale([100, 400]);
+    const head = within(table).getByRole('columnheader', { name: 'CKB held in its cells' });
+    expect(
+      Array.from(head.querySelector('[data-scale-ticks]')!.children).map((t) => t.textContent)
+    ).toEqual(['0', formatTick(scale / 2, scale / 2), formatTick(scale, scale / 2)]);
+    const first = cellUnder(table, 1, 'CKB held in its cells');
+    const second = cellUnder(table, 2, 'CKB held in its cells');
+    expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px', width: '120px' });
+    expect(first.querySelector('[data-segment]')).toHaveStyle({
+      width: barWidth(100, scale),
+      backgroundColor: CLASS_COLORS.tokens,
+    });
+    expect(second.querySelector('[data-segment]')).toHaveStyle({ width: barWidth(400, scale) });
+    expect(first).toHaveTextContent('100.00');
+    expect(second).toHaveTextContent('400.00');
+    expect(cellUnder(table, 2, 'H-mult.')).toHaveTextContent('×2.18');
+  });
+
+  it('moves 24 h transfers, the standard, occupied and the exact digits into the row title', () => {
+    const table = mount();
+    expect(within(table).getAllByRole('row')[2]).toHaveAttribute(
+      'title',
+      'SEAL · sUDT · 1 transfer in 24 h · 400 CKB held · 183 CKB occupied (45.8%) · supply 16,063,603.56572848 SEAL · H-mult. ×2.18'
+    );
   });
 });
 

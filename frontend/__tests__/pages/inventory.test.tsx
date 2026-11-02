@@ -393,9 +393,11 @@ describe('Tokens Inventory Page', () => {
       expect(screen.getByTestId('header')).toBeInTheDocument();
       expect(screen.getByText('Tokens')).toBeInTheDocument();
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
-      // F2 objects (IV-04): the full name leads, symbol and standard below it.
+      // F2 objects (IV-04): the full name leads. Table-rows L2-1: the symbol is a tag beside it
+      // and the standard is in the row's title.
       expect(screen.getAllByText('Test Token').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('TEST · xUDT').length).toBeGreaterThan(0);
+      expect(screen.getByText('TEST')).toHaveAttribute('data-row-tag', 'default');
+      expect(screen.getByRole('table', { name: 'Tokens' })).toContainHTML(' · TEST · xUDT · ');
     });
   });
 
