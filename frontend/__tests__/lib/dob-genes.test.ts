@@ -6,6 +6,10 @@ import {
   isReadableTrait,
   sequencingGenes,
   traitDisplay,
+  laneRule,
+  droppedGenesCaption,
+  geneLabel,
+  geneUrlKey,
 } from '@/lib/dob-genes';
 import { BITCOIN_COLORS, GENE_COLORS } from '@/lib/design-tokens';
 import type { CurrentPattern } from '@/lib/api';
@@ -154,5 +158,69 @@ describe('dob-genes (F2 objects, OB-4/5/7/8, OB-C2)', () => {
     // With no readable pattern the page cannot tell genes apart: every trait keeps a lane.
     expect(alleleLanes(genetics, null, 'Nervape 3x').map((l) => l.gene)).toContain('IMAGE');
     expect(traitsOutsidePattern(genetics, null)).toEqual([]);
+  });
+});
+
+// Consistency round C9: a gene that cannot tell objects apart on a gel gets no lane — a `raw`
+// rule, one value for every object, or a variant for (nearly) every object — and the page names
+// those genes in one caption instead. Lanes keep the pattern's names; a known DOB/1 name reads
+// as a word with its key beside it.
+describe('the gel lane rule (C9)', () => {
+  const order = () => geneOrder(nervape3xInsights.currentPattern)!;
+  it('keeps the genes that vary and names the rest, in DNA order', () => {
+    const lanes = alleleLanes(nervape3xInsights.genetics, order(), 'Nervape 3x');
+    const ruled = laneRule(lanes, nervape3xInsights.currentPattern, 90);
+    expect(ruled.lanes.map((l) => l.gene)).toEqual(['prev.bg', 'Color', 'Serial']);
+    expect(ruled.dropped.map((d) => [d.gene, d.reason])).toEqual([
+      ['prev.type', 'single'],
+      ['relief', 'single'],
+      ['Note', 'single'],
+    ]);
+    expect(droppedGenesCaption(ruled.dropped, 90)).toBe(
+      'Type is image, relief is NERVAPE 3X and Note is empty for every object, so none of them gets a lane.'
+    );
+  });
+  it('drops a raw-rule gene and a gene that is (nearly) unique to each object', () => {
+    const pattern = structuredClone(nervape3xInsights.currentPattern);
+    if (pattern.status !== 'dob' || pattern.steps[0].description.status !== 'supported')
+      throw new Error('fixture');
+    const serial = pattern.steps[0].description.genes.find((g) => g.name === 'Serial')!;
+    serial.rule = 'raw';
+    const lanes = alleleLanes(nervape3xInsights.genetics, order(), 'Nervape 3x');
+    // Serial has 73 variants among 90 objects (81 %): only its raw rule removes it.
+    const raw = laneRule(lanes, pattern, 90);
+    expect(raw.lanes.map((l) => l.gene)).toEqual(['prev.bg', 'Color']);
+    expect(raw.dropped.find((d) => d.gene === 'Serial')).toMatchObject({ reason: 'raw' });
+    // Among 80 objects the same 73 variants are ≥ 90 %: unique enough to drop under any rule.
+    const unique = laneRule(lanes, nervape3xInsights.currentPattern, 80);
+    expect(unique.dropped.find((d) => d.gene === 'Serial')).toMatchObject({
+      reason: 'unique',
+      variants: 73,
+    });
+    expect(
+      droppedGenesCaption(
+        unique.dropped.filter((d) => d.gene === 'Serial'),
+        80
+      )
+    ).toBe('Serial differs for almost every object (73 variants among 80), so it gets no lane.');
+    expect(
+      droppedGenesCaption(
+        [
+          { gene: 'prev.type', label: 'Type', reason: 'single', variants: 1, value: 'image' },
+          { gene: 'Entity', label: 'Entity', reason: 'raw', variants: 1298, typeTag: 'number' },
+        ],
+        1298
+      )
+    ).toBe(
+      'Type is image for every object and Entity is a raw number unique to each, so neither gets a lane.'
+    );
+  });
+  it('reads a known DOB/1 name as a word and keeps every other name', () => {
+    expect(geneLabel('prev.bg')).toBe('Background');
+    expect(geneLabel('prev.view')).toBe('View');
+    expect(geneLabel('prev.type')).toBe('Type');
+    expect(geneLabel('Color')).toBe('Color');
+    expect(geneUrlKey('prev.bg')).toBe('background');
+    expect(geneUrlKey('Color')).toBe('Color');
   });
 });

@@ -1,7 +1,7 @@
 // F2 group `objects` (round 2): one reading of a DOB pattern for both gels — the Object page's
 // sequencing gel (one object's DNA, gene by gene) and the allele gel (a collection's variants per
 // gene). Everything here reads the API's pattern, byte map and trait counts; nothing is guessed.
-import type { CollectionInsights, CurrentPattern, ObjectGenetics } from '@/lib/api';
+import type { CollectionInsights, CurrentPattern, GeneDefinition, ObjectGenetics } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
 import { GENE_COLORS } from '@/lib/design-tokens';
 
@@ -250,4 +250,99 @@ export function genotypePoints(
     else points.push({ lane: i, band });
   });
   return { points, absent };
+}
+
+// ── Consistency round C9: which genes get a lane on a gel ──
+/** Known DOB/1 render-hint names read as words; every other gene keeps its pattern name. */
+const GENE_LABELS: Readonly<Record<string, string>> = {
+  'prev.type': 'Type',
+  'prev.bg': 'Background',
+  'prev.bgcolor': 'Background colour',
+  'prev.view': 'View',
+};
+/** A gene as people read it: a known DOB/1 name as a word, else the pattern's own name. */
+export function geneLabel(gene: string): string {
+  return GENE_LABELS[gene] ?? gene;
+}
+/** The URL key a gene's filter is written under (C15): the word when one is known. */
+export function geneUrlKey(gene: string): string {
+  const label = GENE_LABELS[gene];
+  return label ? label.toLowerCase().replace(/\s+/g, '-') : gene;
+}
+
+export interface DroppedGene {
+  gene: string;
+  label: string;
+  /** `raw`: a raw-rule gene; `single`: one value for every object; `unique`: ≥ 90 % variants. */
+  reason: 'raw' | 'single' | 'unique';
+  variants: number;
+  /** The one value every object carries (`single`). */
+  value?: string;
+  /** The pattern's type tag (`raw`: a raw `number` or a raw `string`). */
+  typeTag?: string;
+}
+
+/** Variants on at least this share of the objects make a gene too unique to draw as a lane. */
+const UNIQUE_SHARE = 0.9;
+
+/**
+ * C9: a gene with the `raw` rule, a single value, or variants on ≥ 90 % of the objects gets no
+ * lane (it cannot sort objects into bands); the others keep their lanes in DNA order.
+ */
+export function laneRule(
+  lanes: readonly AlleleLane[],
+  pattern: CurrentPattern,
+  objects: number
+): { lanes: AlleleLane[]; dropped: DroppedGene[] } {
+  if (!Number.isSafeInteger(objects) || objects <= 0)
+    throw new Error(`gel lane rule needs a positive object count, got ${objects}`);
+  const defs = new Map<string, GeneDefinition>();
+  if (pattern.status === 'dob')
+    for (const step of pattern.steps)
+      if (step.description.status === 'supported')
+        for (const g of step.description.genes) if (!defs.has(g.name)) defs.set(g.name, g);
+  const kept: AlleleLane[] = [];
+  const dropped: DroppedGene[] = [];
+  for (const lane of lanes) {
+    const def = defs.get(lane.gene);
+    const base = { gene: lane.gene, label: geneLabel(lane.gene), variants: lane.variants };
+    if (def?.rule === 'raw') dropped.push({ ...base, reason: 'raw', typeTag: def.typeTag });
+    else if (lane.variants === 1)
+      dropped.push({ ...base, reason: 'single', value: lane.bands[0].label });
+    else if (lane.variants >= UNIQUE_SHARE * objects) dropped.push({ ...base, reason: 'unique' });
+    else kept.push(lane);
+  }
+  return { lanes: kept, dropped };
+}
+
+const andList = (items: readonly string[]) =>
+  items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`;
+
+/** The one caption under a gel that names the genes without a lane, and why (C9). */
+export function droppedGenesCaption(dropped: readonly DroppedGene[], objects: number): string {
+  if (dropped.length === 0) return '';
+  const n = (v: number) => v.toLocaleString('en-US');
+  const singles = dropped.filter((d) => d.reason === 'single');
+  const clauses: string[] = [];
+  if (singles.length)
+    clauses.push(`${andList(singles.map((d) => `${d.label} is ${d.value}`))} for every object`);
+  for (const d of dropped) {
+    if (d.reason === 'raw')
+      clauses.push(
+        `${d.label} is a raw ${d.typeTag === 'string' ? 'string' : 'number'}${d.variants === objects ? ' unique to each' : ` with ${n(d.variants)} variants`}`
+      );
+    if (d.reason === 'unique')
+      clauses.push(
+        d.variants === objects
+          ? `${d.label} is unique to each object`
+          : `${d.label} differs for almost every object (${n(d.variants)} variants among ${n(objects)})`
+      );
+  }
+  const tail =
+    dropped.length === 1
+      ? 'so it gets no lane'
+      : dropped.length === 2
+        ? 'so neither gets a lane'
+        : 'so none of them gets a lane';
+  return `${andList(clauses)}, ${tail}.`;
 }
