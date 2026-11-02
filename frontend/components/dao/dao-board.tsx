@@ -83,7 +83,7 @@ function Section({
     <section className="min-w-0" aria-label={title}>
       <div className="mb-[18px] flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h2 className="text-text-bright text-section font-medium">{title}</h2>
-        {note && <span className="text-text-dim text-small">{note}</span>}
+        {note && <span className="text-text-dim text-meta">{note}</span>}
       </div>
       {children}
     </section>
@@ -828,7 +828,10 @@ function Owners({ evidence }: { evidence: DaoEvidence }) {
     <Section
       title="Who deposits"
       note={
-        <Link href="/dao/depositors" className="text-text hover:text-text-bright hover:underline">
+        <Link
+          href="/dao/depositors"
+          className="text-text hover:text-text-bright text-small hover:underline"
+        >
           All {evidence.concentration.currentDepositors.toLocaleString('en-US')} depositors →
         </Link>
       }

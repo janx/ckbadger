@@ -974,8 +974,17 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
     expect(block('Who deposits')).toHaveClass('mt-[72px]');
     expect(screen.getByTestId('sources').parentElement).toHaveClass('mt-[72px]');
     for (const child of Array.from(tier1.children)) expect(child.parentElement).toBe(tier1);
-    // No rule between tier-1 sections; their headings are the section step.
+    // No rule between tier-1 sections; their headings are the section step, notes meta (board).
     const issuance = screen.getByRole('region', { name: 'Where secondary issuance goes' });
+    expect(within(issuance).getByText(/^since genesis · exact to the shannon/)).toHaveClass(
+      'text-meta',
+      'text-text-dim'
+    );
+    expect(
+      within(screen.getByRole('region', { name: 'Who deposits' })).getByRole('link', {
+        name: /depositors →$/,
+      })
+    ).toHaveClass('text-small');
     expect(issuance).not.toHaveClass('border-t');
     expect(within(issuance).getByRole('heading', { level: 2 })).toHaveClass(
       'text-section',
