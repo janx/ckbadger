@@ -161,3 +161,31 @@ it('counts genes from the pattern and says a decoder output is not drawn as one 
     'Not drawn: IMAGE, an output of the decoder that the pattern does not declare as a gene.'
   );
 });
+
+// Table-rows round, lane L2-4: a Newest row is one line — the object's name bright at 13 px (no
+// second line of id: the Id column has it), owner, DNA gel, mint date; the rest in its title.
+it('writes each Newest row on one line with the name bright and the rest in its title (L2-4)', async () => {
+  const base = collectionGalleryFilteredProducer.data[0];
+  vi.mocked(api.getCollectionGallery).mockResolvedValue(
+    emptyPage([
+      { ...base, number: '7' },
+      { ...base, sporeId: `0x${'03'.repeat(32)}`, number: null, ownerAddress: null },
+    ])
+  );
+  render(<CollectionObjects id="collection" title="Genes" insights={collectionInsightsProducer} />);
+  const table = await screen.findByRole('table', { name: 'Newest objects' });
+  const [, numbered, plain] = within(table).getAllByRole('row');
+  const name = within(numbered).getByRole('link', { name: 'Genes #7' });
+  expect(name).toHaveClass('text-body', 'text-text-bright', 'leading-[18px]', 'block', 'truncate');
+  // Without a number the id is the Id column's, not a second line under the name.
+  const unnumbered = within(plain).getAllByRole('link')[0];
+  expect(unnumbered).toHaveTextContent('Genes');
+  expect(unnumbered).toHaveAccessibleName('Genes 0x03030303…0303');
+  expect(unnumbered.querySelector('.sr-only')).toHaveTextContent('0x03030303…0303');
+  expect(numbered).toHaveClass('py-1', 'min-h-11');
+  expect(numbered).toHaveAttribute(
+    'title',
+    `Genes #7 · ${base.sporeId} · owner ${base.ownerAddress} · SECP256K1/blake160 · minted 2023-11-15 06:13:20 UTC+8 in block #100`
+  );
+  expect(plain.getAttribute('title')).toContain(`owner ${base.ownerLockHash}`);
+});

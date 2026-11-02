@@ -3,6 +3,7 @@
 // (OB-C1 P0 page height, OB-C2, OB-C3), board section order (OB-C5), header (OB-C4), history line
 // (OB-C6), holder bars (OB-C7), rail (OB-C8), coverage out of tier 1 (OB-C11) and the blueprint
 // as a table (OB-C12).
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import ClusterPage from '@/app/clusters/[clusterId]/client-page';
 import { api, type GalleryObject } from '@/lib/api';
@@ -260,7 +261,11 @@ it('lays the decoder blueprint out as phone rows in a 358 px column, nothing scr
 it('draws holder bars in the objects colour (OB-C7)', async () => {
   await page();
   const holders = screen.getByRole('region', { name: 'Who holds it' });
-  expect(await within(holders).findAllByTestId('count-bar')).not.toHaveLength(0);
+  // Table-rows L2-4: the counts are 8 px AlignedBars in the objects colour.
+  const table = await within(holders).findByRole('table', { name: 'Top 10 collection holders' });
+  const bars = table.querySelectorAll('[data-segment]');
+  expect(bars).not.toHaveLength(0);
+  expect(bars[0]).toHaveStyle({ backgroundColor: CLASS_COLORS.objects });
 });
 
 it('still shows an empty Newest list honestly', async () => {

@@ -13,6 +13,10 @@ import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
+import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
+import { rowTagClass } from '@/components/ui/row-tag';
+import { resourceScale } from '@/components/blocks/block-visual';
+import { formatTick } from '@/lib/chart-ticks';
 import { HolderPhoneRow } from '@/components/asset/holder-phone-row';
 import { PhoneRow } from '@/components/ui/phone-row';
 
@@ -24,26 +28,68 @@ export interface CollectionHoldersProps {
   queryKey: string;
   distribution?: readonly { range: string; holders: number; items: number }[];
   /** F2 objects (OB-C7): draw the counts as bars in this class colour (Collection board). */
-  assetClass?: AssetClass;
+  assetClass?: BarClass;
 }
 
-/** F2 objects (OB-C7): a count with its bar, as long as its share of the largest in the list. */
-function CountBar({ value, max, color }: { value: number; max: number; color: string }) {
-  return (
-    <span className="inline-flex items-center justify-end gap-2">
-      <span
-        aria-hidden
-        data-testid="count-bar"
-        className="bg-base-elevated inline-block h-1.5 w-16 overflow-hidden rounded-sm"
-      >
-        <span
-          className="block h-full"
-          style={{ width: `${max ? (value / max) * 100 : 0}%`, backgroundColor: color }}
-        />
-      </span>
-      <AssetCount value={value} />
-    </span>
-  );
+/** The asset classes a row bar can be drawn in (`AlignedBar` tones). */
+type BarClass = Extract<AssetClass, 'tokens' | 'objects' | 'identities' | 'dao'>;
+
+/** The count bars' track; the exact count prints beside it (table-rows L2-4). */
+const TRACK = 48;
+const COUNT_WIDTH = 44;
+
+/**
+ * F2 objects (OB-C7) on the row rules: a count as an 8 px bar in the class colour on the column's
+ * round scale, its exact number beside it; a page that gives no class colour prints the count.
+ */
+function countColumn<T>(
+  key: string,
+  label: string,
+  rows: readonly T[],
+  value: (row: T) => number,
+  assetClass: BarClass | undefined
+): ListColumn<T> {
+  const scale = resourceScale(rows.map(value));
+  if (!assetClass)
+    return {
+      key,
+      label,
+      minWidth: 100,
+      numeric: true,
+      render: (row) => (
+        <span>
+          <AssetCount value={value(row)} />
+        </span>
+      ),
+    };
+  return {
+    key,
+    label,
+    minWidth: TRACK + 10 + COUNT_WIDTH + 16,
+    header: (
+      <ScaleHeader
+        label={label}
+        scale={scale}
+        trackWidth={TRACK}
+        format={(n) => formatTick(n, n)}
+      />
+    ),
+    render: (row) => (
+      <AlignedBar
+        label={label}
+        scale={scale}
+        trackWidth={TRACK}
+        minFill={2}
+        segments={[{ key, label, value: value(row), tone: assetClass }]}
+        display={
+          <span>
+            <AssetCount value={value(row)} />
+          </span>
+        }
+        displayWidth={COUNT_WIDTH}
+      />
+    ),
+  };
 }
 
 function count(value: number, label: string): bigint {
@@ -110,75 +156,68 @@ function ScopedCollectionHolders({
         address: holder.address,
       }}
       truncate
-      className="[&>span]:text-small max-w-full break-all"
+      // Table-rows L2-4: the holder is the row's bright key, on one 18 px line.
+      className="[&>span]:text-small [&_a]:text-text-bright max-w-full flex-nowrap whitespace-nowrap [&>span]:py-0 [&>span]:leading-[18px] [&_a]:leading-[18px]"
     />
   );
+  const holderTitle = (holder: CollectionHolder) =>
+    [
+      `#${rank(holder)}`,
+      holder.address ??
+        holder.lockScriptHash ??
+        `${holder.ownerHashPrefix ?? holderKey(holder)} (unresolved)`,
+      holder.lockCodeHash === null ? 'lock not indexed' : (holder.lockKind ?? holder.lockCodeHash),
+      `${holder.itemCount.toLocaleString('en-US')} ${holder.itemCount === 1 ? 'item' : 'items'}`,
+    ].join(' · ');
+  const listed = holders.data?.data ?? [];
   const columns: ListColumn<CollectionHolder>[] = [
     {
       key: 'rank',
       label: '#',
-      minWidth: 28,
+      minWidth: 32,
+      className: 'whitespace-nowrap',
       render: (holder) => <span className="text-text-dim">{rank(holder)}</span>,
     },
     {
       key: 'owner',
       label: 'Holder',
-      minWidth: 176,
+      minWidth: 196,
       render: party,
     },
     {
       key: 'lock',
       label: 'Lock',
-      minWidth: 104,
-      className: 'text-meta',
+      minWidth: 116,
       render: (holder) => (
-        <LockKind lockKind={holder.lockKind} lockCodeHash={holder.lockCodeHash} />
+        <span className="flex min-w-0">
+          <LockKind
+            lockKind={holder.lockKind}
+            lockCodeHash={holder.lockCodeHash}
+            className={rowTagClass('default', 'min-w-0 truncate')}
+          />
+        </span>
       ),
     },
-    {
-      key: 'items',
-      label: 'Items',
-      minWidth: 140,
-      numeric: true,
-      className: '!whitespace-normal break-all',
-      render: (holder) =>
-        assetClass ? (
-          <CountBar
-            value={holder.itemCount}
-            max={Math.max(...holders.data!.data.map((h) => h.itemCount))}
-            color={CLASS_COLORS[assetClass]}
-          />
-        ) : (
-          <AssetCount value={holder.itemCount} />
-        ),
-    },
+    countColumn('items', 'Items', listed, (holder) => holder.itemCount, assetClass),
   ];
   const bucketColumns: ListColumn<NonNullable<CollectionHoldersProps['distribution']>[number]>[] = [
-    { key: 'range', label: 'Holds', minWidth: 65, render: (bucket) => bucket.range },
     {
-      key: 'holders',
-      label: 'Holders',
-      minWidth: 100,
-      numeric: true,
-      className: '!whitespace-normal break-all',
-      render: (bucket) =>
-        assetClass ? (
-          <CountBar
-            value={bucket.holders}
-            max={Math.max(...(distribution ?? []).map((b) => b.holders))}
-            color={CLASS_COLORS[assetClass]}
-          />
-        ) : (
-          <AssetCount value={bucket.holders} />
-        ),
+      key: 'range',
+      label: 'Holds',
+      minWidth: 65,
+      render: (bucket) => <span>{bucket.range}</span>,
     },
+    countColumn('holders', 'Holders', distribution ?? [], (bucket) => bucket.holders, assetClass),
     {
       key: 'items',
       label: 'Items',
       minWidth: 100,
       numeric: true,
-      className: '!whitespace-normal break-all',
-      render: (bucket) => <AssetCount value={bucket.items} />,
+      render: (bucket) => (
+        <span>
+          <AssetCount value={bucket.items} />
+        </span>
+      ),
     },
   ];
   return (
@@ -212,6 +251,8 @@ function ScopedCollectionHolders({
                 rows={holders.data.data}
                 rowKey={holderKey}
                 empty="No current holders."
+                density="row"
+                rowTitle={holderTitle}
                 mobileRow={(holder, wide) => {
                   const max = Math.max(...holders.data!.data.map((h) => h.itemCount));
                   return (
@@ -279,6 +320,7 @@ function ScopedCollectionHolders({
               rows={distribution}
               rowKey={(bucket) => bucket.range}
               empty="No current holders."
+              density="row"
               mobileRow={(bucket) => (
                 <PhoneRow
                   testId="holder-bucket-row-mobile"
