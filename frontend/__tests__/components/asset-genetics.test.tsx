@@ -102,12 +102,58 @@ describe('Independent DOB evidence', () => {
     const pattern = structuredClone(objectGeneticsProducer.currentPattern);
     pattern.steps[0].description.genes[0].byteOffset = '18446744073709551615';
     render(<CurrentPatternEvidence pattern={pattern} />);
-    expect(screen.getByText(/byte offset 18446744073709551615/)).toBeInTheDocument();
+    // Table-rows L2-5: the exact offset is in the gene's one-line span and in the row title.
+    expect(screen.getByText('byte 18446744073709551615 · 1')).toBeInTheDocument();
+    expect(screen.getByRole('row', { name: /Face/ })).toHaveAttribute(
+      'title',
+      'Face · byte offset 18446744073709551615 · length 1 · byte 18446744073709551615 · options · String · 2 options: Red, Blue'
+    );
     // F2 objects (OB-C12): the blueprint table names the rule and its value domain.
     expect(screen.getAllByText(/options/).length).toBeGreaterThan(0);
     expect(screen.getByText('2 options: Red, Blue')).toBeInTheDocument();
   });
 });
+// Table-rows round, lane L2-5: the blueprint's genes on one line each — the gene bright at 13 px,
+// "bytes 0–39 · 40" (span · length) in one cell, rule and values one line; the declared offset and
+// length in words go to the row title.
+describe('DOB blueprint table on the row rules (table-rows L2-5)', () => {
+  it('writes each gene on one row-density line with the byte span and length together', () => {
+    const pattern = structuredClone(objectGeneticsProducer.currentPattern);
+    if (pattern.status !== 'dob' || pattern.steps[0].description.status !== 'supported')
+      throw new Error('fixture');
+    pattern.steps[0].description.genes.push({
+      ...pattern.steps[0].description.genes[0],
+      index: 1,
+      name: 'name',
+      byteOffset: '0',
+      byteLength: '40',
+      rule: 'utf8',
+      ruleArguments: [],
+    });
+    render(<CurrentPatternEvidence pattern={pattern} />);
+    const table = screen.getByRole('table', { name: 'DOB blueprint' });
+    // Every column head is its words in an inline box, never a bare text node filling the cell.
+    for (const th of table.querySelectorAll('thead th'))
+      expect(th.firstElementChild?.tagName).toBe('SPAN');
+    for (const td of table.querySelectorAll('tbody td'))
+      expect(td).toHaveClass('py-[11px]', 'align-middle');
+    const row = within(table).getByRole('row', { name: /^name/ });
+    expect(within(row).getByText('name')).toHaveClass(
+      'text-body',
+      'text-text-bright',
+      'leading-[18px]',
+      'truncate'
+    );
+    expect(row).toHaveTextContent('bytes 0–39 · 40');
+    expect(row).not.toHaveTextContent('byte offset');
+    expect(row).toHaveAttribute(
+      'title',
+      'name · byte offset 0 · length 40 · bytes 0–39 · utf8 · String · 0 arguments'
+    );
+    expect(within(row).getByText('0 arguments')).toHaveClass('block', 'truncate');
+  });
+});
+
 describe('Per-version raw protocol and item context', () => {
   it('switches canonical cell evidence while preserving lossless decoded integers', () => {
     const protocol: ItemProtocol = structuredClone(didProtocolProducer);

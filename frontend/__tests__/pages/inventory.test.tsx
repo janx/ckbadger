@@ -393,9 +393,11 @@ describe('Tokens Inventory Page', () => {
       expect(screen.getByTestId('header')).toBeInTheDocument();
       expect(screen.getByText('Tokens')).toBeInTheDocument();
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
-      // F2 objects (IV-04): the full name leads, symbol and standard below it.
+      // F2 objects (IV-04): the full name leads. Table-rows L2-1: the symbol is a tag beside it
+      // and the standard is in the row's title.
       expect(screen.getAllByText('Test Token').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('TEST · xUDT').length).toBeGreaterThan(0);
+      expect(screen.getByText('TEST')).toHaveAttribute('data-row-tag', 'default');
+      expect(screen.getByRole('table', { name: 'Tokens' })).toContainHTML(' · TEST · xUDT · ');
     });
   });
 
@@ -616,9 +618,10 @@ describe('Objects Inventory Page', () => {
     await waitFor(() => {
       expect(screen.getByText('Objects')).toBeInTheDocument();
       expect(screen.getAllByText('Test Collection').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByRole('columnheader', { name: 'Composition' })).toBeInTheDocument();
-      // F2 objects: no standard chips on Objects (board); the row names its standard.
-      expect(screen.getAllByText(/^Spore ·/).length).toBeGreaterThan(0);
+      // Table-rows L2-2: the composition is the row's second tag, not a column of its own.
+      expect(screen.queryByRole('columnheader', { name: 'Composition' })).toBeNull();
+      // F2 objects: no standard chips on Objects (board); the row names its standard (a tag).
+      expect(screen.getAllByText('Spore')[0]).toHaveAttribute('data-row-tag', 'default');
       const tierLabels = screen.getAllByText('BTC+CKB');
       expect(tierLabels.length).toBeGreaterThanOrEqual(1);
       const links = screen.getAllByRole('link', { name: /Test Collection/i });
@@ -827,7 +830,11 @@ describe('Inventory approved board regressions', () => {
     render(<ObjectsPage />);
     const table = await screen.findByRole('table', { name: 'Object collections' });
     expect(within(table).getByText('41')).toBeInTheDocument();
-    expect(within(table).getByText('of 50 minted')).toBeInTheDocument();
+    // Table-rows L2-2: minted ≠ live is a ghost "/ 50"; the words are in the row's title.
+    expect(within(table).getByText('/ 50', { exact: false })).toHaveClass('text-text-ghost');
+    expect(within(table).getAllByRole('row')[1].getAttribute('title')).toContain(
+      '41 live of 50 minted'
+    );
     expect(within(table).getByText('123')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Inventory', level: 1 })).toBeInTheDocument();
     expect(screen.getByRole('navigation', { name: 'Inventory classes' })).toHaveTextContent(

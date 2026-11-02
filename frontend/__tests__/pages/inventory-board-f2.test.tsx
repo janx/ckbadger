@@ -11,6 +11,7 @@ import ObjectsPage from '@/app/inventory/objects/page';
 import IdentitiesPage from '@/app/inventory/identities/page';
 import { api, type Asset, type InventorySummary } from '@/lib/api';
 import { CLASS_COLORS } from '@/lib/design-tokens';
+import { resourceScale } from '@/components/blocks/block-visual';
 
 vi.mock('@/src/navigation', () => ({
   useSearchParams: () => new URLSearchParams(window.location.search),
@@ -227,9 +228,14 @@ describe('Objects view: composition first (IV-09, IV-10, IV-11)', () => {
     expect(table.querySelector('[data-thumb-frame="btc_ckb"]')).not.toBeNull();
     expect(table.querySelector('[data-thumb-frame="centralized_mixture"]')).toBeNull();
     expect(within(table).getByText(/^m-NFT/)).toBeInTheDocument();
-    const bars = table.querySelectorAll('[data-held-bar]');
+    // Table-rows L2-2: an 8 px AlignedBar per row on the page's round scale.
+    const scale = resourceScale([983730, 322852]);
+    const bars = table.querySelectorAll('[data-segment]');
     expect(bars).toHaveLength(2);
-    expect(bars[0]).toHaveStyle({ width: '100%', backgroundColor: CLASS_COLORS.objects });
+    expect(bars[0]).toHaveStyle({
+      width: `${Math.round((983730 / scale) * 120 * 100) / 100}px`,
+      backgroundColor: CLASS_COLORS.objects,
+    });
   });
 });
 
@@ -242,8 +248,12 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
     render(<TokensPage />);
     const table = await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
     expect(within(table).getByText('RGB++ Protocol')).toBeInTheDocument();
-    expect(within(table).getByText('RGB++ · xUDT')).toBeInTheDocument();
-    expect(within(table).getByText('SEAL')).toBeInTheDocument();
+    // Table-rows L2-1: the symbol is a tag on the name's line; xUDT is in the row's title only.
+    expect(within(table).getByText('RGB++')).toHaveAttribute('data-row-tag', 'default');
+    const [, rgbpp, seal] = within(table).getAllByRole('row');
+    expect(rgbpp.getAttribute('title')).toMatch(/^RGB\+\+ Protocol · RGB\+\+ · xUDT · /);
+    expect(within(table).getByRole('link', { name: 'SEAL' })).toBeInTheDocument();
+    expect(within(seal).getByText('sUDT')).toHaveAttribute('data-row-tag', 'default');
     const chips = screen.getByRole('group', { name: 'Standard filters' });
     expect(
       within(chips)
@@ -272,14 +282,22 @@ describe('Tokens view (IV-02, IV-03, IV-04, IV-06, IV-07)', () => {
       ).toEqual(['All 723', 'xUDT 629', 'sUDT 94'])
     );
   });
-  it('draws CKB held as an azure bar relative to the largest, and occupied in whole CKB', async () => {
+  it('draws CKB held as an azure bar on the page’s scale, and occupied in whole CKB in the title', async () => {
     render(<TokensPage />);
     const table = await screen.findByRole('table', { name: 'Tokens' }, { timeout: 5000 });
-    const bars = table.querySelectorAll('[data-held-bar]');
-    expect(bars[0]).toHaveStyle({ width: '100%', backgroundColor: CLASS_COLORS.tokens });
-    expect(bars[1]).toHaveStyle({ width: '25%' });
-    expect(within(table).getByRole('columnheader', { name: 'Occupied' })).toBeInTheDocument();
-    expect(within(table).getByText('1,838')).toBeInTheDocument();
+    // Table-rows L2-1: an 8 px AlignedBar per row on one round page scale (30,670,103 and
+    // 7,667,525 whole CKB); Occupied leaves the row for its title.
+    const scale = resourceScale([30670103, 7667525]);
+    const bars = table.querySelectorAll('[data-segment]');
+    expect(bars[0]).toHaveStyle({
+      width: `${Math.round((30670103 / scale) * 120 * 100) / 100}px`,
+      backgroundColor: CLASS_COLORS.tokens,
+    });
+    expect(bars[1]).toHaveStyle({ width: `${Math.round((7667525 / scale) * 120 * 100) / 100}px` });
+    expect(within(table).queryByRole('columnheader', { name: 'Occupied' })).toBeNull();
+    expect(within(table).getAllByRole('row')[2].getAttribute('title')).toContain(
+      '7,667,525.75 CKB held · 1,838 CKB occupied'
+    );
   });
   it('searches as you type and keeps sorting in the board’s "sorted by" line', async () => {
     render(<TokensPage />);
@@ -311,7 +329,8 @@ describe('Identities view (IV-12, IV-02)', () => {
     expect(
       screen.getByText('4 naming systems · every identity’s record lives in its cell on CKB')
     ).toBeInTheDocument();
-    expect(table.querySelector('[data-held-bar]')).toHaveStyle({
+    // Table-rows L2-3: the 8 px AlignedBar segment carries the rose class colour.
+    expect(table.querySelector('[data-segment]')).toHaveStyle({
       backgroundColor: CLASS_COLORS.identities,
     });
   });

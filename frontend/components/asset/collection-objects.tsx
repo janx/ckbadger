@@ -182,10 +182,15 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
             {items.map((item) => {
               const name = objectNumber(item.number, item.sporeId);
               const lit = row === item.sporeId;
+              // Table-rows L2-4: one line per object; what does not fit it is the row's title.
+              const owner = item.ownerLockHash
+                ? `owner ${item.ownerAddress ?? item.ownerLockHash} · ${item.lockKind ?? item.lockCodeHash}`
+                : 'no live owner';
               return (
                 <div
                   key={item.sporeId}
                   role="row"
+                  title={`${title} ${name} · ${item.sporeId} · ${owner} · minted ${formatUtc8DateTime(item.chainTime)} in block ${formatBlockNumber(item.createdAtBlock)}`}
                   data-active={lit ? 'true' : undefined}
                   onMouseEnter={() => setRow(item.sporeId)}
                   onMouseLeave={() => setRow(null)}
@@ -193,13 +198,19 @@ function ScopedCollectionObjects({ id, title, insights, tier }: CollectionObject
                   onBlur={() => setRow(null)}
                   className={cn(
                     ROW_GRID,
-                    'border-base-elevated min-h-11 border-b py-1.5 transition-colors',
+                    'border-base-elevated min-h-11 border-b py-1 transition-colors',
                     lit && 'bg-base-surface'
                   )}
                 >
                   <span role="cell" className="min-w-0">
-                    <AppLink href={`/objects/${item.sporeId}`} className="text-text-bright">
-                      {title} {name}
+                    {/* The name is the row's bright key on one line; an object without a number
+                        is named by its collection, its id in the Id column beside it. */}
+                    <AppLink
+                      href={`/objects/${item.sporeId}`}
+                      className="text-body text-text-bright block truncate leading-[18px]"
+                    >
+                      {title}
+                      {item.number === null ? <span className="sr-only"> {name}</span> : ` ${name}`}
                     </AppLink>
                   </span>
                   <span role="cell" className="text-text-dim min-w-0 truncate">

@@ -11,6 +11,19 @@ import {
 } from '@/__tests__/utils/test-utils';
 import { CollectionHolders } from '@/components/asset/collection-holders';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
+import { resourceScale } from '@/components/blocks/block-visual';
+import { CLASS_COLORS } from '@/lib/design-tokens';
+
+const barWidth = (value: number, scale: number, track: number) =>
+  `${Math.max(Math.round((value / scale) * track * 100) / 100, value > 0 ? 2 : 0)}px`;
+
+/** Every column head is its words in an inline box, never a bare text node filling the cell. */
+function expectWordHeads(table: HTMLElement) {
+  for (const th of table.querySelectorAll('thead th')) {
+    expect(Array.from(th.childNodes).some((n) => n.nodeType === Node.TEXT_NODE)).toBe(false);
+    expect(th.firstElementChild?.tagName).toBe('SPAN');
+  }
+}
 
 const lock = '0x' + '12'.repeat(32);
 const prefix = '0x' + '34'.repeat(20);
@@ -206,6 +219,76 @@ describe('Collection holders', () => {
     const load = vi.fn().mockResolvedValue(page([], { total: 0 }));
     render(<CollectionHolders load={load} queryKey="none" distribution={[]} />);
     expect(await screen.findByText('Full collection: 0 holders · 0 items')).toBeInTheDocument();
+  });
+});
+
+// Table-rows round, lane L2-4: the collection holder tables on the row rules — one 41 px line,
+// the holder bright, the lock a chip, the item count as an 8 px bar on the table's scale.
+describe('Collection holders on the row rules (table-rows L2-4)', () => {
+  const joyid = {
+    ...resolved,
+    itemCount: 6,
+    lockKind: 'JoyID',
+    lockCodeHash: `0x${'9b'.repeat(32)}`,
+  };
+  it('draws one-line rows with the holder bright, the lock a chip and the count as a bar', async () => {
+    const load = vi.fn().mockResolvedValue(page([joyid, named]));
+    render(
+      <CollectionHolders
+        load={load}
+        queryKey="rows"
+        distribution={distribution}
+        assetClass="objects"
+      />
+    );
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    for (const td of table.querySelectorAll('tbody td'))
+      expect(td).toHaveClass('py-[11px]', 'align-middle');
+    expectWordHeads(table);
+    const [, first, second] = within(table).getAllByRole('row');
+    expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
+    // Rank and holder are the row's bright key, as on the token holders table.
+    const rankCell = within(first).getAllByRole('cell')[0];
+    expect(rankCell).toHaveTextContent(/^1$/);
+    expect(rankCell.firstElementChild).toHaveClass('text-text-bright');
+    expect(within(first).getByRole('link').parentElement).toHaveClass(
+      '[&_a]:text-text-bright',
+      '[&_a]:leading-[18px]',
+      'flex-nowrap'
+    );
+    expect(within(first).getByText('JoyID')).toHaveClass('border', 'rounded-[3px]', 'text-meta');
+    const scale = resourceScale([6, 6]);
+    expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
+    expect(first.querySelector('[data-segment]')).toHaveStyle({
+      width: barWidth(6, scale, 48),
+      backgroundColor: CLASS_COLORS.objects,
+    });
+    expect(
+      within(table).getByRole('columnheader', { name: 'Items' }).querySelector('[data-scale-ticks]')
+    ).not.toBeNull();
+    expect(first).toHaveAttribute('title', `#1 · ${lock} · JoyID · 6 items`);
+    expect(second).toHaveAttribute(
+      'title',
+      `#2 · ${prefix} (unresolved) · lock not indexed · 6 items`
+    );
+    const buckets = screen.getByRole('table', { name: 'Holders by how many items they hold' });
+    expectWordHeads(buckets);
+    expect(within(buckets).getByText('3–5')).toHaveClass(
+      'text-body',
+      'text-text-bright',
+      'leading-[18px]'
+    );
+    for (const td of buckets.querySelectorAll('tbody td'))
+      expect(td).toHaveClass('py-[11px]', 'align-middle');
+    const bucketBar = within(buckets).getAllByRole('row')[2].querySelector('[data-segment]');
+    expect(bucketBar).toHaveStyle({ width: barWidth(1, resourceScale([0, 1, 0, 1]), 48) });
+  });
+  it('keeps a plain count, without a bar, where the page gives no class colour', async () => {
+    const load = vi.fn().mockResolvedValue(page([joyid]));
+    render(<CollectionHolders load={load} queryKey="plain" />);
+    const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
+    expect(table.querySelector('[data-aligned-bar]')).toBeNull();
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent(/6$/);
   });
 });
 
