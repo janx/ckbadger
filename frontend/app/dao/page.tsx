@@ -2,7 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
-import { DaoBoard } from '@/components/dao/dao-board';
+import { DaoBoard, DaoHeading, DaoLede } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
 
 export default function DaoPage() {
@@ -17,21 +17,12 @@ export default function DaoPage() {
     queryFn: api.getDaoCirculationRatioChart,
   });
 
-  // Hierarchy D1: one sentence and a pointer to the evidence; the concept itself is tier 2
-  // ("How the Nervos DAO works"), and "Explore DAO charts →" sits beside History.
+  // Hierarchy v3 (R13): the board opens with the title row and one short sentence; while the DAO
+  // data loads the page shows the same title and sentence.
   const intro = (
-    <div className="flex min-w-0 flex-col gap-2">
-      <h1 className="text-text-bright text-index font-medium">Nervos DAO</h1>
-      <p className="text-text text-body max-w-[1040px]">
-        CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance dilutes
-        everything else.{' '}
-        <a
-          href="#evidence"
-          className="text-text-dim hover:text-text-bright whitespace-nowrap hover:underline"
-        >
-          How it works ↓
-        </a>
-      </p>
+    <div className="min-w-0">
+      <DaoHeading />
+      <DaoLede />
     </div>
   );
 
@@ -60,7 +51,6 @@ export default function DaoPage() {
             depositedHistory={deposited.data}
             circulationHistory={ratio.data}
             historyError={deposited.isError || ratio.isError}
-            intro={intro}
           />
         )}
       </main>

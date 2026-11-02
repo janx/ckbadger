@@ -2,7 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import { stubChartWidth, stubPointerEvents } from '@/__tests__/utils/chart-width';
-import { DaoHistory } from '@/components/dao/dao-history';
+import {
+  DaoHistoryFigure,
+  DaoHistoryReading,
+  MAIN_PLOT_H,
+  MULTIPLE_H,
+  cutShare,
+  historySeries,
+  type HistoryRange,
+} from '@/components/dao/dao-history';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
+import type { ChartResponse } from '@/lib/api';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -37,55 +47,129 @@ function series() {
   };
 }
 
-describe('DaoHistory (DAO-11, DAO-18)', () => {
-  afterEach(() => vi.restoreAllMocks());
+/** The hero's wiring (dao-board): one pin for the three panels and the reading under them. */
+function Picture({
+  deposited,
+  ratio,
+  range = 'All',
+}: {
+  deposited: ChartResponse & { peak?: { date: string; value: string } | null };
+  ratio: ChartResponse;
+  range?: HistoryRange;
+}) {
+  const pin = usePinnedReadout<number>();
+  const s = historySeries(deposited, ratio, range);
+  return (
+    <>
+      <DaoHistoryFigure series={s} pin={pin} />
+      <DaoHistoryReading series={s} pin={pin} peak={deposited.peak ?? null} />
+    </>
+  );
+}
 
-  it('draws one figure with three panels on one time axis and one reading', () => {
-    stubChartWidth(1200);
-    const { deposited, ratio } = series();
-    const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
-    const svgs = container.querySelectorAll('svg');
-    expect(svgs).toHaveLength(1);
-    expect(
-      screen.getByRole('img', {
-        name: /CKB deposited, its share of circulating CKB, and the net change each week/,
-      })
-    ).toBeInTheDocument();
-    expect(container.querySelectorAll('[data-panel]')).toHaveLength(3);
-    expect(screen.getByRole('heading', { name: 'History' })).toBeInTheDocument();
-    const reading = screen.getByLabelText('History reading');
-    // Board v2 (D2): one line under the figure — the day, deposited, share, depositors, the week.
-    expect(reading).toHaveTextContent(
-      `${date(154)} · last full daydeposited101,190.00000000share11.5400%depositors254week from ${date(148)}+10.00000000 CKB`
-    );
-    // Weeks are named by the day they start (board: "week from"), the last one ends today.
-    const svg = container.querySelector('svg')!;
-    expect(svg.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+/** jsdom has no SVG layout: every svg reports `width` px from x = 0. */
+function stubSvgWidth(width: number) {
+  vi.spyOn(SVGElement.prototype, 'getBoundingClientRect').mockReturnValue({
+    width,
+    height: 0,
+    top: 0,
+    left: 0,
+    right: width,
+    bottom: 0,
+    x: 0,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect);
+}
+
+describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('moves the one reading with the pointer across all panels', () => {
+  it('draws deposited large with its name and values inside the plot, the share and the weeks as two 72 px multiples under it', () => {
     stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const panels = Array.from(container.querySelectorAll('svg[data-panel]'));
+    expect(panels.map((p) => p.getAttribute('data-panel'))).toEqual([
+      'deposited',
+      'share',
+      'weekly',
+    ]);
+    const [main, share, weekly] = panels;
+    // R13: the main picture is at least 280 px tall; its time labels sit under the plot.
+    expect(MAIN_PLOT_H).toBeGreaterThanOrEqual(280);
+    expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(MAIN_PLOT_H);
+    expect(share).toHaveAttribute('height', String(MULTIPLE_H));
+    expect(weekly).toHaveAttribute('height', String(MULTIPLE_H));
+    expect(MULTIPLE_H).toBe(72);
+    // Names inside the plots, no caption, no separate heading.
+    expect(main.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      `CKB deposited · every complete day since ${date(0)}`
+    );
+    expect(share.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      'share of circulating CKB'
+    );
+    expect(weekly.querySelector('[data-role="chart-name"]')).toHaveTextContent(
+      /^net change per week/
+    );
+    expect(container.querySelector('figcaption')).toBeNull();
+    expect(screen.queryByRole('heading')).toBeNull();
+    // The latest values at the multiples' ends: the share cut to 2 dp, the week in its sign colour.
+    expect(share.querySelector('[data-role="end-label"]')).toHaveTextContent('11.54%');
+    const weekEnd = weekly.querySelector('[data-role="end-label"]')!;
+    expect(weekEnd).toHaveTextContent('+10.00');
+    expect(weekEnd).toHaveClass('fill-positive');
+    // The two multiples sit side by side from sm up and stack below it.
+    expect(share.parentElement!.parentElement).toHaveClass('grid-cols-1', 'sm:grid-cols-2');
+  });
+
+  it('reads the last complete day in one row under the picture: deposited, share, depositors, the week and the peak, exact', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(reading).toHaveTextContent(
+      `${date(154)} · deposited 101,190.00000000 · share 11.5400% · depositors 254 · week from ${date(148)} +10.00000000 · peak 101,190.00000000 on ${date(154)}tap or hover`
+    );
+    expect(reading).toHaveClass('border-t', 'text-small');
+    // Evidence first: the reading follows every panel.
+    for (const svg of Array.from(container.querySelectorAll('svg')))
+      expect(svg.compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('moves the one reading with the pointer across all panels; a tap pins the day, a second tap lets go (R6)', () => {
+    stubChartWidth(1200);
+    stubSvgWidth(1200);
     stubPointerEvents();
     const { deposited, ratio } = series();
-    const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
-    const overlay = container.querySelector('[data-hover-overlay]')!;
-    const plot = overlay.getBoundingClientRect();
-    // getBoundingClientRect is stubbed to width 1200 at left 0 for every element.
-    fireEvent.pointerMove(overlay, { clientX: plot.left + 0 });
-    const reading = screen.getByLabelText('History reading');
-    expect(reading).toHaveTextContent(`${date(0)}deposited100,000.00000000`);
-    expect(reading).not.toHaveTextContent('last full day');
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const share = container.querySelector('svg[data-panel="share"]')!;
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    fireEvent.pointerMove(share, { clientX: 0 });
+    expect(reading).toHaveTextContent(`${date(0)} · deposited 100,000.00000000`);
     // Before the first whole week there is no weekly figure to read.
     expect(reading).not.toHaveTextContent('week from');
-    expect(container.querySelectorAll('[data-cursor]')).toHaveLength(1);
-    fireEvent.pointerLeave(overlay);
-    expect(reading).toHaveTextContent('last full day');
+    // One cursor in each of the three panels.
+    expect(container.querySelectorAll('[data-cursor]')).toHaveLength(3);
+    fireEvent.pointerLeave(share);
+    expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
+    // A tap on the main plot pins the day it lands on; leaving keeps it.
+    const main = container.querySelector('svg[data-panel="deposited"]')!;
+    fireEvent.pointerMove(main, { clientX: 600 });
+    fireEvent.click(main, { clientX: 600 });
+    fireEvent.pointerLeave(main);
+    expect(reading).toHaveTextContent(new RegExp(`^tapped ${date(77)} · deposited`));
+    fireEvent.click(main, { clientX: 600 });
+    expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
   });
 
   it('colours falling weeks red and rising weeks jade (DAO-18)', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
-    const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     const bars = Array.from(container.querySelectorAll('[data-week]'));
     expect(bars).toHaveLength(22);
     const bar = (start: string) => container.querySelector(`[data-week="${start}"]`)!;
@@ -93,112 +177,133 @@ describe('DaoHistory (DAO-11, DAO-18)', () => {
     expect(bar(date(1))).toHaveClass('fill-positive');
   });
 
-  it('clips weeks beyond p95 × 1.25 at the cap and marks them (DAO-11)', () => {
+  it('clips weeks beyond p95 × 1.25 at the cap and names the scale inside the plot (DAO-11)', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
-    const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
     const weekly = container.querySelector('[data-panel="weekly"]')!;
-    expect(weekly).toHaveTextContent('1 week beyond the scale is cut and marked');
-    // Inline after the title; no-break spaces, since SVG drops a text node's leading space.
-    expect(container.querySelector('[data-role="clip-note"]')!.textContent).toBe(
-      '\u00a0·\u00a01 week beyond the scale is cut and marked'
-    );
-    // A tspan of the title itself, so it follows the title's real width (live pass: an estimated
-    // x put the dot against "week" in the site font).
-    const note = container.querySelector('[data-role="clip-note"]')!;
-    expect(note.tagName.toLowerCase()).toBe('tspan');
-    expect(note.parentElement!.textContent).toBe(
-      'Net change, per week\u00a0·\u00a01 week beyond the scale is cut and marked'
+    // The cap is a round number above p95 × 1.25 (10 × 1.25 → 15); the note follows the name.
+    expect(weekly.querySelector('[data-role="chart-name"]')!.textContent).toBe(
+      'net change per week\u00a0·\u00a0±15 scale, 1 week cut'
     );
     const clipped = container.querySelectorAll('[data-week][data-clipped="true"]');
     expect(clipped).toHaveLength(1);
     expect(clipped[0]).toHaveAttribute('data-week', date(1 + 5 * 7));
     expect(container.querySelectorAll('[data-clip-mark]')).toHaveLength(1);
-    // The cap is a round number above p95 × 1.25 (10 × 1.25 → 15), printed on the axis.
-    expect(within(weekly as HTMLElement).getByText('+15')).toBeInTheDocument();
-    expect(weekly).toHaveTextContent(`+1,000 · week of ${date(36)}`);
+    // The largest week is named in the plot's accessible name, not as a label over the bars.
+    expect(weekly).toHaveAccessibleName(
+      `Net change in deposited CKB in each whole week from ${date(0)} to ${date(154)}; the largest was +1,000 CKB in the week of ${date(36)}`
+    );
+    expect(container.querySelector('[data-role="largest-week"]')).toBeNull();
+  });
+
+  it('shows the latest week at the weekly end cut to two decimals, never rounded, in its sign colour', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    // The last week (from day 148) starts at 101,180 CKB and ends at 101,167.65432109: −12.34567891.
+    const data = deposited.data.map((p, i) => (i === 154 ? { ...p, value: '101167.65432109' } : p));
+    const { container } = render(<Picture deposited={{ ...deposited, data }} ratio={ratio} />);
+    const end = container.querySelector('[data-panel="weekly"] [data-role="end-label"]')!;
+    expect(end).toHaveTextContent('−12.34');
+    expect(end).toHaveClass('fill-negative');
+    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
+      'week from 2024-05-28 −12.34567891'
+    );
   });
 
   it('refuses a deposit history with a missing day', () => {
     const { deposited, ratio } = series();
     const gap = { ...deposited, data: deposited.data.filter((_, i) => i !== 9) };
-    expect(() => render(<DaoHistory deposited={gap} ratio={ratio} />)).toThrow(
+    expect(() => historySeries(gap, ratio, 'All')).toThrow(
       `DAO deposit history skips from ${date(8)} to ${date(10)}`
     );
+  });
+
+  it('draws only the days of the chosen range', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    expect(historySeries(deposited, ratio, '1M').days).toHaveLength(30);
+    expect(historySeries(deposited, ratio, '1Y').days).toHaveLength(155);
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} range="1M" />);
+    expect(
+      container.querySelector('[data-panel="deposited"] [data-role="chart-name"]')
+    ).toHaveTextContent(`since ${date(125)}`);
+  });
+
+  it('starts the deposited scale at a round top near the peak and writes its values inside the plot', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const ticks = Array.from(
+      container.querySelectorAll('[data-panel="deposited"] [data-role="y-tick"]')
+    );
+    // 101,190 CKB at most: round values up to 150k; 0 is the baseline and 150k the name's band.
+    expect(ticks.map((t) => t.textContent)).toEqual(['50k', '100k']);
+    for (const t of ticks) {
+      expect(t).toHaveAttribute('x', '8');
+      expect(t).not.toHaveAttribute('text-anchor', 'end');
+      expect(t).toHaveClass('fill-text-ghost');
+    }
   });
 });
 
 describe('DaoHistory at phone width (DAO-22)', () => {
-  afterEach(() => vi.restoreAllMocks());
-
-  it('puts the clipping note on its own line and keeps the largest-week label inside the plot', () => {
-    stubChartWidth(358);
-    const { deposited, ratio } = series();
-    // Move the outlier into the last week, next to the right edge.
-    const values = deposited.data.map((p, i) => ({
-      ...p,
-      value: i === 154 ? String(Number(p.value) + 5000) : p.value,
-    }));
-    const { container } = render(
-      <DaoHistory deposited={{ ...deposited, data: values }} ratio={ratio} />
-    );
-    const note = container.querySelector('[data-role="clip-note"]')!;
-    expect(note.tagName.toLowerCase()).toBe('text');
-    expect(note).toHaveTextContent('1 week beyond the scale is cut and marked');
-    // Its own line in 10 px, so 44 characters end inside a 358 px column in the site font.
-    expect(note).toHaveAttribute('font-size', '10');
-    const label = container.querySelector('[data-role="largest-week"]')!;
-    expect(label).toHaveAttribute('text-anchor', 'end');
-    expect(Number(label.getAttribute('x'))).toBeLessThanOrEqual(358 - 8);
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
-  it('keeps a long largest-week label clear of the axis when it fits on neither side', () => {
+  it('puts the weekly scale note and the deposited name on a second line inside the plot', () => {
     stubChartWidth(358);
     const { deposited, ratio } = series();
-    // +1,000,000,000 CKB in week 10: the label is ~35 characters, wider than either side of its bar.
-    const jump = BigInt(1_000_000_000) * BigInt(1e8);
-    const values = deposited.data.map((p, i) => ({
-      ...p,
-      value: i >= 77 ? String((BigInt(p.value) * BigInt(1e8) + jump) / BigInt(1e8)) : p.value,
-    }));
-    const { container } = render(
-      <DaoHistory deposited={{ ...deposited, data: values }} ratio={ratio} />
-    );
-    const label = container.querySelector('[data-role="largest-week"]')!;
-    expect(label.textContent).toMatch(/^\+1,000,000,010 · week of /);
-    const x = Number(label.getAttribute('x'));
-    expect(label).toHaveAttribute('text-anchor', 'end');
-    expect(x).toBeLessThanOrEqual(358 - 8);
-    // ends at the plot edge, so it starts right of the 64 px axis column
-    expect(x - label.textContent!.length * 6.3).toBeGreaterThanOrEqual(64);
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const note = container.querySelector('[data-panel="weekly"] [data-role="scale-note"]')!;
+    expect(note.tagName.toLowerCase()).toBe('tspan');
+    expect(note).toHaveTextContent('±15 scale, 1 week cut');
+    expect(note).toHaveAttribute('x', '8');
+    expect(note).toHaveAttribute('dy', '12');
+    const name = container.querySelector('[data-panel="deposited"] [data-role="chart-name"]')!;
+    expect(name.querySelector('tspan')).toHaveTextContent(`every complete day since ${date(0)}`);
   });
 
-  it('starts the deposited axis at a round top near the peak, not twice it', () => {
+  it('keeps the note on the name line where both fit', () => {
     stubChartWidth(1200);
     const { deposited, ratio } = series();
-    const { container } = render(<DaoHistory deposited={deposited} ratio={ratio} />);
-    const ticks = Array.from(
-      container.querySelectorAll('[data-panel="deposited"] text[text-anchor="end"]')
-    ).map((t) => t.textContent);
-    // 101,190 CKB at most: four round ticks up to 150k, not 0 / 100k / 200k.
-    expect(ticks).toEqual(['0', '50k', '100k', '150k']);
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const note = container.querySelector('[data-panel="weekly"] [data-role="scale-note"]')!;
+    expect(note).not.toHaveAttribute('dy');
+    expect(
+      container.querySelector('[data-panel="deposited"] [data-role="chart-name"] tspan')
+    ).toBeNull();
   });
 });
 
 // Responsive fix plan 2026-11-01 (A3, report A#14): at 390 the reading broke the week's date
-// ("2026-/10-25") and dropped "CKB" from its amount onto a line of its own.
+// ("2026-/10-25") and split an amount.
 describe('DaoHistory reading units', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
-  it('never breaks the week date or the amount from its unit', () => {
+  it('never breaks the week date or an amount', () => {
     stubChartWidth(358);
     const { deposited, ratio } = series();
-    render(<DaoHistory deposited={deposited} ratio={ratio} />);
-    const reading = screen.getByLabelText('History reading');
-    const day = within(reading).getByText(date(148));
-    expect(day).toHaveClass('whitespace-nowrap');
-    // The innermost element holding the whole "+10.00000000 CKB" is one unbreakable unit.
-    const holders = within(reading).getAllByText((_, el) => el?.textContent === '+10.00000000 CKB');
+    render(<Picture deposited={deposited} ratio={ratio} />);
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(within(reading).getByText(date(148))).toHaveClass('whitespace-nowrap');
+    const holders = within(reading).getAllByText((_, el) => el?.textContent === '+10.00000000');
     expect(holders[holders.length - 1]).toHaveClass('whitespace-nowrap');
+  });
+});
+
+describe('cutShare', () => {
+  it('cuts a share to two decimals without rounding', () => {
+    expect(cutShare('16.3507')).toBe('16.35');
+    expect(cutShare('16.3599')).toBe('16.35');
+    expect(cutShare('1.25')).toBe('1.25');
+    expect(cutShare('1,234.5')).toBe('1,234.5');
+    expect(cutShare('7')).toBe('7');
+    expect(() => cutShare('7%')).toThrow('is not a decimal');
   });
 });

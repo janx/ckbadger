@@ -143,9 +143,9 @@ describe('DaoBoard', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: '1M' }));
     // One History reading (DAO-11) carries the exact amounts of the last complete day.
-    const reading = screen.getByLabelText('History reading');
-    expect(reading).toHaveTextContent('deposited500.00000000');
-    expect(reading).toHaveTextContent('share1.25%');
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    expect(reading).toHaveTextContent('deposited 500.00000000');
+    expect(reading).toHaveTextContent('share 1.25%');
   });
 
   it('keeps the owner link bound to the source address', () => {
@@ -364,8 +364,19 @@ const peakHistory = {
   peak2: { date: '2024-01-14', value: '2' },
 };
 
-describe('DaoBoard hero (DAO-9, DAO-10)', () => {
-  it('leads with deposited, its share and peak, the 24 h change, and four metrics (D1)', () => {
+describe('DaoBoard hero (DAO-9, DAO-10; hierarchy v3 R11, R13)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  const hero = () => screen.getByRole('region', { name: 'Nervos DAO' });
+  /** The hero block's metric row: the terms after the hero section (tier 2 has its own list). */
+  const terms = () => within(hero().parentElement!).getAllByRole('term');
+  /** The metric row's value for a label (dt → its dd). */
+  const metric = (label: string) =>
+    terms().find((t) => t.textContent === label)!.nextElementSibling!;
+
+  it('leads with deposited as the one gold figure and its 24 h change on the same row (R11, R13)', () => {
     render(
       <DaoBoard
         statistics={stats}
@@ -374,53 +385,98 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
         circulationHistory={ratio}
       />
     );
-    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
-    expect(hero).toHaveTextContent('deposited500.00000000 CKB');
-    expect(hero).toHaveTextContent(
-      '1.25% of circulating CKB on 2024-01-15 · peak 600.50000000 CKB on 2024-01-14'
+    const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
+    expect(figure).toHaveTextContent('deposited500.00000000 CKB');
+    const amount = within(figure).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'deposited'
     );
-    // The 24 h change is the figure's second line now, signed and coloured by its sign; the
-    // window's own counts follow it (R2b-a 41, board v2).
-    const change = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'change24h');
+    expect(amount).toHaveClass('text-gold');
+    // The 24 h change sits right of the figure on its baseline row, signed and coloured by sign;
+    // the window's own counts follow it (R2b-a 41).
+    const change = within(hero()).getByText(
+      (_, el) => el?.getAttribute('data-role') === 'change24h'
+    );
     expect(change).toHaveTextContent('−2,578,825.48689593 CKB');
     expect(change).toHaveClass('text-negative');
-    const figure = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
-    expect(figure).toContainElement(change);
-    expect(figure).toHaveTextContent(
+    const row = amount.parentElement!;
+    expect(row).toContainElement(change);
+    expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
+    expect(change.parentElement).toHaveTextContent(
       '−2,578,825.48689593 CKB in 24 h · 12 deposits in, 9 withdrawal requests out'
     );
-    // Four metrics; "Change in 24 h" is no longer one of them.
-    const terms = within(hero).getAllByRole('term');
-    expect(terms.map((t) => t.textContent)).toEqual([
+    expect(change.parentElement).toHaveClass('text-body');
+    // The share and the peak moved into the picture's reading row (board v3).
+    expect(hero()).not.toHaveTextContent(/of circulating CKB on/);
+    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
+      'share 1.25% · depositors 2 · peak 600.50000000 on 2024-01-14'
+    );
+    // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
+    expect(hero()).not.toHaveTextContent(/anchor/i);
+    expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
+  });
+
+  it('collapses the metrics into one row: a label, a section-size value and an inline note, no sub-lines (R13)', () => {
+    const { container } = render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    expect(terms().map((t) => t.textContent)).toEqual([
       'Estimated APC',
       'Compensation, last 365 days',
       'Depositors',
       'Deposits',
     ]);
-    for (const t of terms) expect(t).toHaveClass('text-meta', 'text-text-dim');
-    expect(hero).toHaveTextContent("Estimated APC1.99%at today's issuance and deposits");
-    expect(hero).toHaveTextContent(
-      "Compensation, last 365 days2.0000%on free capacity, from the header's AR"
-    );
-    // depositorsChange24h, signed (−3 in the fixture).
-    expect(hero).toHaveTextContent('Depositors2−3 in 24 h');
-    expect(hero).toHaveTextContent('Deposits2+ 2 withdrawals requested');
-    // Each term's value: hero (22 px), bright.
-    for (const t of terms)
-      expect(t.nextElementSibling).toHaveClass('text-hero', 'text-text-bright');
-    // Developer evidence (AR anchors) is not in tier 1 (DAO-9).
-    expect(hero).not.toHaveTextContent(/anchor/i);
-    expect(screen.queryByText(/Observed AR growth/)).not.toBeInTheDocument();
+    const dl = terms()[0].closest('dl')!;
+    expect(dl).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
+    for (const t of terms()) {
+      expect(t).toHaveClass('text-meta', 'text-text-dim');
+      // One value per metric, no sub-line under it.
+      expect(t.parentElement!.children).toHaveLength(2);
+      expect(t.nextElementSibling!.tagName).toBe('DD');
+      expect(t.nextElementSibling).toHaveClass('text-section', 'text-text-bright');
+    }
+    expect(metric('Estimated APC')).toHaveTextContent(/^1\.99%$/);
+    expect(metric('Compensation, last 365 days')).toHaveTextContent(/^2\.0000%$/);
+    // depositorsChange24h, signed (−3 in the fixture), inline and quiet.
+    expect(metric('Depositors')).toHaveTextContent(/^2 · −3 in 24 h$/);
+    expect(metric('Deposits')).toHaveTextContent(/^2 · 2 withdrawals requested$/);
+    for (const label of ['Depositors', 'Deposits'])
+      expect(metric(label).querySelector('span')).toHaveClass('text-small', 'text-text-dim');
+    // The former sub-lines are explanation: they moved to tier 2.
+    const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
+    const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
+    for (const moved of [
+      /at today's issuance and deposits/,
+      /on free capacity, from the header's AR/,
+    ]) {
+      expect(tier1).not.toHaveTextContent(moved);
+      expect(tier2).toHaveTextContent(moved);
+    }
   });
 
   it('signs the depositor change and omits it without a 24 h window', () => {
     const { rerender } = render(
       <DaoBoard statistics={{ ...stats, depositorsChange24h: 9 }} evidence={evidence} />
     );
-    const hero = () => screen.getByRole('region', { name: 'Nervos DAO summary' });
-    expect(hero()).toHaveTextContent('Depositors2+9 in 24 h');
+    expect(metric('Depositors')).toHaveTextContent(/^2 · \+9 in 24 h$/);
     rerender(<DaoBoard statistics={{ ...stats, depositorsChange24h: null }} evidence={evidence} />);
-    expect(hero()).toHaveTextContent('Depositors2Deposits');
+    expect(metric('Depositors')).toHaveTextContent(/^2$/);
+  });
+
+  it('says the chain is younger than 365 days inline when there is no 365-day window', () => {
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={{ ...evidence, ar: { ...evidence.ar, year365: null } }}
+      />
+    );
+    expect(metric('Compensation, last 365 days')).toHaveTextContent(
+      /^— · the chain is younger than 365 days$/
+    );
   });
 
   it('fails when the deposit history arrives without its R8 peak', () => {
@@ -436,11 +492,44 @@ describe('DaoBoard hero (DAO-9, DAO-10)', () => {
       )
     ).toThrow('/dao/charts/total-deposit has no peak');
   });
-});
 
-describe('DaoBoard History (DAO-11)', () => {
-  afterEach(() => vi.restoreAllMocks());
-  it('draws History as one figure with one reading under it, not three charts (D2)', () => {
+  it('opens with the title row — h1, the charts link and the range buttons — and a short lede (R13)', () => {
+    render(
+      <DaoBoard
+        statistics={stats}
+        evidence={evidence}
+        depositedHistory={history}
+        circulationHistory={ratio}
+      />
+    );
+    const title = within(hero()).getByRole('heading', { level: 1, name: 'Nervos DAO' });
+    expect(title).toHaveClass('text-index');
+    const row = title.parentElement!;
+    expect(row).toContainElement(within(hero()).getByRole('group', { name: 'History range' }));
+    expect(row).toContainElement(
+      within(hero()).getByRole('link', { name: 'Explore DAO charts →' })
+    );
+    expect(within(hero()).getByRole('link', { name: 'Explore DAO charts →' })).toHaveAttribute(
+      'href',
+      '/mainnet/charts/total-deposit'
+    );
+    // No "History" section or heading: the hero is the history.
+    expect(screen.queryByRole('heading', { name: 'History' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'History' })).toBeNull();
+    const lede = within(hero()).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
+    expect(lede.textContent!.length).toBeLessThanOrEqual(90);
+    expect(lede).toHaveClass('text-body', 'text-text-dim', 'max-w-[560px]');
+    expect(within(lede).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
+      'href',
+      '#evidence'
+    );
+    // Title row, lede, figure: in that order.
+    const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
+    expect(title.compareDocumentPosition(lede) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(lede.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('draws the picture right under the figure, then its reading and the metric row (R13)', () => {
     stubChartWidth(1200);
     render(
       <DaoBoard
@@ -450,18 +539,30 @@ describe('DaoBoard History (DAO-11)', () => {
         circulationHistory={ratio}
       />
     );
-    const region = screen.getByRole('region', { name: 'History' });
-    expect(within(region).getByRole('heading', { level: 2 })).toHaveClass('text-section');
-    const svgs = region.querySelectorAll('svg');
-    expect(svgs).toHaveLength(1);
-    const readings = within(region).getAllByLabelText('History reading');
-    expect(readings).toHaveLength(1);
-    // Evidence first: the reading is the line under the charts, a hairline above it.
+    const figure = within(hero()).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
+    const main = hero().querySelector('svg[data-panel="deposited"]')!;
+    expect(Number(main.getAttribute('height'))).toBeGreaterThanOrEqual(280);
+    expect(figure.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(hero().querySelectorAll('svg[data-panel]')).toHaveLength(3);
+    expect(hero().querySelector('figcaption')).toBeNull();
+    // The hero section is the figure and its picture; the reading and the metrics follow it.
+    const reading = screen.getByRole('status', { name: 'History reading' });
+    const metrics = terms()[0].closest('dl')!;
+    expect(hero()).not.toContainElement(reading);
+    expect(hero().compareDocumentPosition(reading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(
-      svgs[0].compareDocumentPosition(readings[0]) & Node.DOCUMENT_POSITION_FOLLOWING
+      reading.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
-    expect(readings[0]).toHaveClass('border-t', 'text-small');
-    expect(readings[0]).not.toHaveClass('border-b');
+    expect(hero().parentElement).toBe(metrics.parentElement);
+  });
+
+  it('keeps the title row and says so when the daily history cannot be read', () => {
+    render(<DaoBoard statistics={stats} evidence={evidence} historyError />);
+    expect(within(hero()).getByRole('alert')).toHaveTextContent(
+      'DAO daily history could not be loaded from indexed snapshots.'
+    );
+    expect(within(hero()).getByRole('link', { name: 'Explore DAO charts →' })).toBeInTheDocument();
+    expect(within(hero()).queryByRole('group', { name: 'History range' })).toBeNull();
   });
 });
 
@@ -905,39 +1006,18 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
 describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('opens the hero with the page intro above the figure and the metrics (board v2)', () => {
-    stubCalculator();
-    render(
-      <DaoBoard
-        statistics={stats}
-        evidence={evidence}
-        intro={<h1>Nervos DAO</h1>}
-        depositedHistory={history}
-        circulationHistory={ratio}
-      />
-    );
-    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
-    const title = within(hero).getByRole('heading', { name: 'Nervos DAO' });
-    const figure = within(hero).getByText((_, el) => el?.getAttribute('data-role') === 'figure');
-    const metrics = within(hero).getAllByRole('term')[0];
-    expect(title.compareDocumentPosition(figure) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(title.compareDocumentPosition(metrics) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    // The figure and the metrics share the row under the intro, not the intro's column.
-    expect(figure.parentElement).toBe(metrics.closest('dl')!.parentElement);
-    expect(title.parentElement).not.toBe(figure.parentElement);
-  });
-
   it('sizes the deposited amount so 22 digits fit a 358 px column (390 px overflow)', () => {
     stubCalculator();
     render(<DaoBoard statistics={stats} evidence={evidence} />);
     const amount = screen.getByText((_, el) => el?.getAttribute('data-role') === 'deposited');
     // R4: the display step from 640 up, index (26 px) below it: 13 + 9 characters at 26 / 22 px
-    // are 322 px, and the unit's space is set at body, so " CKB" ends at 353 px.
-    expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-text-bright');
-    // The fraction (its trailing zeros quieter still) is one hero-sized, dim run.
+    // are 322 px, and the unit's space is set at body, so " CKB" ends at 353 px. R11: the page's
+    // one gold text, its fraction the dim gold.
+    expect(amount).toHaveClass('text-index', 'sm:text-display', 'text-gold');
+    // The fraction (its trailing zeros quieter still) is one hero-sized, dim-gold run.
     const fraction = amount.querySelector('.text-hero')!;
     expect(fraction).toHaveTextContent(/^\.00000000$/);
-    expect(fraction).toHaveClass('text-text-dim');
+    expect(fraction).toHaveClass('text-gold-dim');
     expect(within(amount).getByText(/CKB$/)).toHaveClass('text-body', 'text-text-dim');
   });
 
@@ -958,16 +1038,17 @@ describe('DaoBoard layout at 1440 and 390 (self-check findings)', () => {
 });
 
 describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
-  it('spaces sections 72 px apart, History 64 px under the hero, the two columns 56 px apart', () => {
+  it('spaces the first section 64 px under the hero, the rest 72 px apart, the two columns 56 px apart', () => {
     stubCalculator();
     const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
     const tier1 = container.querySelector('[data-tier="1"]') as HTMLElement;
     // Explicit gaps, no space-y-* (its sibling selector would decide the margins instead).
     expect(tier1.className).not.toMatch(/space-y-/);
     const block = (name: string) => screen.getByRole('region', { name }).parentElement!;
-    expect(screen.getByRole('region', { name: 'Nervos DAO summary' }).parentElement).toBe(tier1);
-    expect(block('History')).toHaveClass('mt-16');
-    expect(block('Where secondary issuance goes')).toHaveClass('mt-[72px]');
+    // The hero block (the hero section, its reading and the metric row) opens tier 1.
+    expect(block('Nervos DAO').parentElement).toBe(tier1);
+    expect(tier1.firstElementChild).toBe(block('Nervos DAO'));
+    expect(block('Where secondary issuance goes')).toHaveClass('mt-16');
     const columns = block('How a deposit grows');
     expect(columns).toBe(block('When deposits can leave'));
     expect(columns).toHaveClass('mt-[72px]', 'lg:grid-cols-2', 'lg:gap-x-14', 'gap-y-[72px]');
@@ -1001,12 +1082,6 @@ describe('DaoBoard tier-1 rhythm (hierarchy D9, R6)', () => {
         evidence={evidence}
         depositedHistory={history}
         circulationHistory={ratio}
-        intro={
-          <p>
-            CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance
-            dilutes everything else. <a href="#evidence">How it works ↓</a>
-          </p>
-        }
       />
     );
     await within(screen.getByRole('region', { name: 'How a deposit grows' })).findByRole('img', {
@@ -1025,7 +1100,7 @@ describe('DaoBoard 24 h counts (DAO-10, R2b-a 41)', () => {
         evidence={evidence}
       />
     );
-    const hero = () => screen.getByRole('region', { name: 'Nervos DAO summary' });
+    const hero = () => screen.getByRole('region', { name: 'Nervos DAO' });
     expect(hero()).toHaveTextContent('1 deposit in, 1 withdrawal request out');
     rerender(
       <DaoBoard

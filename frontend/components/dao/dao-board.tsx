@@ -6,10 +6,17 @@ import Link from '@/components/ui/link';
 import type { ChartResponse, DaoEvidence, DaoStatistics } from '@/lib/api';
 import { formatPercent, parseCkbDecimal, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { DaoSources } from '@/components/dao/dao-sources';
-import { DaoHistory } from '@/components/dao/dao-history';
+import {
+  DaoHistoryFigure,
+  DaoHistoryReading,
+  HistoryRangeToggle,
+  historySeries,
+  type HistoryRange,
+} from '@/components/dao/dao-history';
 import { DaoGrows } from '@/components/dao/dao-grows';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { formatAccumulatedRate } from '@/lib/dao-header';
-import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
@@ -34,26 +41,11 @@ interface Props {
   depositedHistory?: DaoDepositHistory;
   circulationHistory?: ChartResponse;
   historyError?: boolean;
-  /** The page's title and summary, set at the top of the hero's left column (board grid). */
-  intro?: ReactNode;
 }
 
 function Amount({ value, signed = false }: { value: string; signed?: boolean }) {
   const amount = parseShannons(value, 'DAO amount');
   const parts = splitCkbAmount(amount);
-  return (
-    <span className="whitespace-nowrap font-mono tabular-nums">
-      {signed ? parts.sign : null}
-      {parts.integer}
-      <span className="text-text-dim">{parts.fraction}</span>
-      <span className="text-text-dim/50">{parts.ghost}</span>
-    </span>
-  );
-}
-
-/** Chart / summary values arrive as CKB decimal strings, not shannons. */
-function CkbDecimal({ value, signed = false }: { value: string; signed?: boolean }) {
-  const parts = splitCkbAmount(parseCkbDecimal(value));
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {signed ? parts.sign : null}
@@ -90,35 +82,38 @@ function Section({
   );
 }
 
+/** One metric of the hero's row (R13): a meta label over a section-size value and its inline note. */
 function Metric({
   label,
   children,
-  detail,
+  note,
 }: {
   label: string;
   children: ReactNode;
-  detail?: ReactNode;
+  note?: ReactNode;
 }) {
   return (
     <div className="min-w-0">
       <dt className="text-text-dim text-meta">{label}</dt>
-      <dd className="text-text-bright text-hero mt-1">{children}</dd>
-      {detail && <dd className="text-text-dim text-meta mt-1">{detail}</dd>}
+      <dd className="text-text-bright text-section mt-0.5 tabular-nums">
+        {children}
+        {note && <span className="text-text-dim text-small"> · {note}</span>}
+      </dd>
     </div>
   );
 }
 
-/** The page's one figure (R4): display from 640 up, index below; the fraction hero, the unit body. */
+/**
+ * The page's one figure (R4, R11): display from 640 up, index below, in the DAO gold — the only
+ * gold text in tier 1; the fraction hero in the dim gold, the unit body.
+ */
 function DepositedFigure({ shannons }: { shannons: string }) {
   const parts = splitCkbAmount(parseShannons(shannons, 'DAO deposited'));
   return (
-    <div
-      data-role="deposited"
-      className="text-text-bright text-index sm:text-display mt-1.5 font-medium"
-    >
+    <div data-role="deposited" className="text-gold text-index sm:text-display font-medium">
       <span className="whitespace-nowrap font-mono tabular-nums">
         {parts.integer}
-        <span className="text-hero text-text-dim font-normal">
+        <span className="text-hero text-gold-dim font-normal">
           {parts.fraction}
           <span className="opacity-50">{parts.ghost}</span>
         </span>
@@ -129,14 +124,14 @@ function DepositedFigure({ shannons }: { shannons: string }) {
   );
 }
 
-/** A signed CKB decimal that keeps its sign's hue: the fraction quieter, not grey. */
-function SignedCkbDecimal({ value }: { value: string }) {
+/** A signed CKB decimal in its sign's hue: the fraction in the same hue's dim step. */
+function SignedCkbDecimal({ value, fractionClass }: { value: string; fractionClass: string }) {
   const parts = splitCkbAmount(parseCkbDecimal(value));
   return (
     <span className="whitespace-nowrap font-mono tabular-nums">
       {parts.sign}
       {parts.integer}
-      <span className="opacity-70">{parts.fraction}</span>
+      <span className={fractionClass}>{parts.fraction}</span>
       <span className="opacity-40">{parts.ghost}</span>
     </span>
   );
@@ -145,164 +140,167 @@ function SignedCkbDecimal({ value }: { value: string }) {
 /** A signed whole count: "+9", "−9" (U+2212), "0". */
 function signedCount(n: number): string {
   const abs = Math.abs(n).toLocaleString('en-US');
-  return n > 0 ? `+${abs}` : n < 0 ? `\u2212${abs}` : abs;
+  return n > 0 ? `+${abs}` : n < 0 ? `−${abs}` : abs;
+}
+
+/** The page title (index step), in the hero's title row and on the page while it loads. */
+export function DaoHeading() {
+  return <h1 className="text-text-bright text-index font-medium">Nervos DAO</h1>;
+}
+
+/** R13: one short sentence (≤ 90 characters) and the way down to the explanation in tier 2. */
+export function DaoLede() {
+  return (
+    <p className="text-text-dim text-body mt-1.5 max-w-[560px]">
+      CKB locked in the DAO keeps its share of the supply.{' '}
+      <a href="#evidence" className="hover:text-text-bright whitespace-nowrap hover:underline">
+        How it works ↓
+      </a>
+    </p>
+  );
 }
 
 /**
- * The hero (hierarchy board v2): the page intro, then deposited as the page's one display figure
- * with its share of circulation and peak and its 24 h change under it, beside four metrics.
- * Deposited, deposits and depositors are the evidence anchor's phase-0 facts; Estimated APC and the
- * 24 h figures are the statistics anchor's.
+ * The hero (hierarchy board v3, R13): the title row (h1, the DAO charts link, the range buttons),
+ * one sentence, then deposited as the page's one gold figure with its 24 h change on its baseline
+ * row, and the picture right under it. The picture's reading row and the four metrics in one row
+ * follow the hero section. Deposited, deposits and depositors are the evidence anchor's phase-0
+ * facts; Estimated APC and the 24 h figures are the statistics anchor's.
  */
 function Hero({
   statistics,
   evidence,
   deposited,
   ratio,
-  intro,
+  historyError,
 }: {
   statistics: DaoStatistics;
   evidence: DaoEvidence;
   deposited?: DaoDepositHistory;
   ratio?: ChartResponse;
-  intro?: ReactNode;
+  historyError?: boolean;
 }) {
+  const [range, setRange] = useState<HistoryRange>('All');
+  const pin = usePinnedReadout<number>();
   if (deposited && deposited.peak === undefined)
     throw new Error('/dao/charts/total-deposit has no peak (R8 chart contract)');
-  const share = ratio?.data.at(-1);
-  const peak = deposited?.peak ?? null;
   if ((statistics.deposits24h === null) !== (statistics.withdrawalRequests24h === null))
     throw new Error(
       `DAO statistics at ${formatBlockNumber(statistics.tipBlockNumber)}: 24 h deposits ${statistics.deposits24h} without its withdrawal-request count`
     );
+  const series =
+    !historyError && deposited && ratio ? historySeries(deposited, ratio, range) : null;
   const change = statistics.depositChange24h;
   const changeShannons = change === null ? null : parseCkbDecimal(change);
   const year = evidence.ar.year365;
   return (
-    <section aria-label="Nervos DAO summary" className="min-w-0">
-      {intro}
-      <div
-        className={`grid gap-8 lg:grid-cols-[minmax(0,1fr)_560px] lg:items-end lg:gap-12 ${intro ? 'mt-9' : ''}`}
-      >
-        <div data-role="figure" className="flex min-w-0 flex-col">
-          <div className="text-text-dim text-meta uppercase tracking-[0.08em]">deposited</div>
-          <DepositedFigure shannons={evidence.phase0.capacity} />
-          {share && deposited && (
-            <p className="text-text text-body mt-3">
-              <span className="text-gold font-medium">{ratioText(share.value)}%</span> of
-              circulating CKB on <span className="whitespace-nowrap">{share.date}</span>
-              {peak && (
-                <>
-                  {' · '}peak{' '}
-                  <span className="text-text-bright">
-                    <CkbDecimal value={peak.value} />
-                  </span>{' '}
-                  CKB on <span className="whitespace-nowrap">{peak.date}</span>
-                </>
-              )}
-            </p>
-          )}
-          <p className="text-body mt-1.5">
-            {changeShannons === null ? (
-              <span className="text-text-dim">—</span>
-            ) : (
-              <span
-                data-role="change24h"
-                className={
-                  changeShannons > BigInt(0)
-                    ? 'text-positive'
-                    : changeShannons < BigInt(0)
-                      ? 'text-negative'
-                      : 'text-text'
-                }
-              >
-                <SignedCkbDecimal value={change!} /> CKB
-              </span>
-            )}{' '}
-            <span className="text-text-dim">
-              in 24 h
-              {statistics.deposits24h !== null &&
-                statistics.withdrawalRequests24h !== null &&
-                ` · ${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`}
-            </span>
-          </p>
+    <div className="min-w-0">
+      <section aria-label="Nervos DAO" className="min-w-0">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
+          <DaoHeading />
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            {/* The hero's former "Explore DAO charts →", beside the range of the charts it continues. */}
+            <Link
+              href="/charts/total-deposit"
+              className="text-text hover:text-text-bright text-small font-mono hover:underline"
+            >
+              Explore DAO charts →
+            </Link>
+            {series && (
+              <HistoryRangeToggle
+                range={range}
+                onChange={(next) => {
+                  setRange(next);
+                  pin.clear();
+                }}
+              />
+            )}
+          </div>
         </div>
-        <dl className="m-0 grid grid-cols-2 gap-x-7 gap-y-[22px]">
-          <Metric label="Estimated APC" detail="at today's issuance and deposits">
-            {statistics.estimatedApc}%
-          </Metric>
-          <Metric
-            label="Compensation, last 365 days"
-            detail={
-              year ? "on free capacity, from the header's AR" : 'the chain is younger than 365 days'
-            }
-          >
-            {year ? `${year.observedGrowthPercent}%` : '—'}
-          </Metric>
-          <Metric
-            label="Depositors"
-            detail={
-              statistics.depositorsChange24h === null
-                ? undefined
-                : `${signedCount(statistics.depositorsChange24h)} in 24 h`
-            }
-          >
-            {evidence.concentration.currentDepositors.toLocaleString('en-US')}
-          </Metric>
-          <Metric
-            label="Deposits"
-            detail={`+ ${evidence.phase1.count.toLocaleString('en-US')} withdrawals requested`}
-          >
-            {evidence.phase0.count.toLocaleString('en-US')}
-          </Metric>
-        </dl>
-      </div>
-    </section>
-  );
-}
-
-function History({
-  deposited,
-  ratio,
-  error,
-}: {
-  deposited?: ChartResponse;
-  ratio?: ChartResponse;
-  error?: boolean;
-}) {
-  // The hero's former "Explore DAO charts →" sits beside the charts it continues (hierarchy D1).
-  const charts = (
-    <Link
-      href="/charts/total-deposit"
-      className="text-text hover:text-text-bright text-small font-mono hover:underline"
-    >
-      Explore DAO charts →
-    </Link>
-  );
-  const heading = (
-    <div className="mb-3 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-      <h2 className="text-text-bright text-section font-medium">History</h2>
-      {charts}
-    </div>
-  );
-  return (
-    <section aria-label="History" className="min-w-0">
-      {error ? (
-        <>
-          {heading}
-          <div role="alert" className="text-rouge text-small">
+        <DaoLede />
+        <div data-role="figure" className="mt-9 min-w-0">
+          <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
+            deposited
+          </div>
+          <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+            <DepositedFigure shannons={evidence.phase0.capacity} />
+            <p className="text-body">
+              {changeShannons === null ? (
+                <span className="text-text-dim">—</span>
+              ) : (
+                <span
+                  data-role="change24h"
+                  className={
+                    changeShannons > BigInt(0)
+                      ? 'text-positive'
+                      : changeShannons < BigInt(0)
+                        ? 'text-negative'
+                        : 'text-text'
+                  }
+                >
+                  <SignedCkbDecimal
+                    value={change!}
+                    fractionClass={
+                      changeShannons > BigInt(0)
+                        ? 'text-positive-dim'
+                        : changeShannons < BigInt(0)
+                          ? 'text-negative-dim'
+                          : 'text-text-dim'
+                    }
+                  />{' '}
+                  CKB
+                </span>
+              )}{' '}
+              <span className="text-text-dim">
+                in 24 h
+                {statistics.deposits24h !== null &&
+                  statistics.withdrawalRequests24h !== null &&
+                  ` · ${plural(statistics.deposits24h, 'deposit')} in, ${plural(statistics.withdrawalRequests24h, 'withdrawal request')} out`}
+              </span>
+            </p>
+          </div>
+        </div>
+        {historyError ? (
+          <div role="alert" className="text-rouge text-small mt-[18px]">
             DAO daily history could not be loaded from indexed snapshots.
           </div>
-        </>
-      ) : !deposited || !ratio ? (
-        <>
-          {heading}
-          <div className="text-text-dim text-small">Loading canonical daily history…</div>
-        </>
-      ) : (
-        <DaoHistory deposited={deposited} ratio={ratio} actions={charts} />
+        ) : series === null ? (
+          <div className="text-text-dim text-small mt-[18px]">Loading canonical daily history…</div>
+        ) : (
+          <DaoHistoryFigure series={series} pin={pin} />
+        )}
+      </section>
+      {series && (
+        <div className="mt-2.5">
+          <DaoHistoryReading series={series} pin={pin} peak={deposited?.peak ?? null} />
+        </div>
       )}
-    </section>
+      <dl className="mt-7 grid grid-cols-2 gap-x-8 gap-y-4 lg:grid-cols-4">
+        <Metric label="Estimated APC">{statistics.estimatedApc}%</Metric>
+        <Metric
+          label="Compensation, last 365 days"
+          note={year ? undefined : 'the chain is younger than 365 days'}
+        >
+          {year ? `${year.observedGrowthPercent}%` : '—'}
+        </Metric>
+        <Metric
+          label="Depositors"
+          note={
+            statistics.depositorsChange24h === null
+              ? undefined
+              : `${signedCount(statistics.depositorsChange24h)} in 24 h`
+          }
+        >
+          {evidence.concentration.currentDepositors.toLocaleString('en-US')}
+        </Metric>
+        <Metric
+          label="Deposits"
+          note={`${evidence.phase1.count.toLocaleString('en-US')} withdrawals requested`}
+        >
+          {evidence.phase0.count.toLocaleString('en-US')}
+        </Metric>
+      </dl>
+    </div>
   );
 }
 
@@ -312,11 +310,6 @@ function exactSafeMs(value: string, context: string): number {
   if (ms > BigInt(Number.MAX_SAFE_INTEGER))
     throw new Error(`${context}: ${value} ms is out of range`);
   return Number(ms);
-}
-
-/** The circulation ratio exactly as the API states it (a decimal percentage). */
-function ratioText(value: string): string {
-  return formatExactDecimal(value, 'DAO circulation ratio');
 }
 
 /** An exact CKB amount inside SVG text: whole part, then the significant decimals dimmed. */
@@ -1082,7 +1075,9 @@ function HowItWorks({ statistics }: { statistics: DaoStatistics }) {
           the required input, headers, witnesses and script execution still apply. Protocol occupied
           (U) includes the genesis virtual occupied baseline; it is not the real occupied size of
           live cells. No cell can ever claim the burnt share. A hardfork could only put future
-          secondary issuance to use; what is burnt stays burnt.
+          secondary issuance to use; what is burnt stays burnt. Estimated APC is at today&apos;s
+          issuance and deposits; &ldquo;Compensation, last 365 days&rdquo; is on free capacity, from
+          the header&apos;s AR.
         </p>
       </div>
       <Link
@@ -1101,7 +1096,6 @@ export function DaoBoard({
   depositedHistory,
   circulationHistory,
   historyError,
-  intro,
 }: Props) {
   if (
     evidence.phase0.capacity !== statistics.totalDeposited &&
@@ -1113,19 +1107,16 @@ export function DaoBoard({
   }
   return (
     <div>
-      {/* Hierarchy R6 / D9: hero → History 64 px, sections 72 px apart, columns 56 px apart. */}
+      {/* Hierarchy R6 / D9: hero → first section 64 px, sections 72 px apart, columns 56 px. */}
       <div data-tier="1" className="min-w-0">
         <Hero
           statistics={statistics}
           evidence={evidence}
           deposited={depositedHistory}
           ratio={circulationHistory}
-          intro={intro}
+          historyError={historyError}
         />
         <div className="mt-16 min-w-0">
-          <History deposited={depositedHistory} ratio={circulationHistory} error={historyError} />
-        </div>
-        <div className="mt-[72px] min-w-0">
           <Issuance statistics={statistics} />
         </div>
         <div className="mt-[72px] grid min-w-0 items-start gap-y-[72px] lg:grid-cols-2 lg:gap-x-14">

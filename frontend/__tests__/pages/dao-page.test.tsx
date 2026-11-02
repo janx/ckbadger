@@ -141,7 +141,9 @@ describe('DaoPage', () => {
     expect(screen.getByRole('region', { name: 'When deposits can leave' })).toHaveTextContent(
       '400.00000000 CKB in 1 cell is past its window and can be claimed now'
     );
-    expect(screen.getByLabelText('History reading')).toHaveTextContent('depositors2');
+    expect(screen.getByRole('status', { name: 'History reading' })).toHaveTextContent(
+      'depositors 2'
+    );
     expect(screen.getByRole('region', { name: 'Who deposits' })).toHaveTextContent('60.00%');
     expect(screen.getByText(evidence.header.daoHex)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open source block →' })).toHaveAttribute(
@@ -150,15 +152,15 @@ describe('DaoPage', () => {
     );
   });
 
-  it('opens with the title and one sentence that points to the evidence (D1, D8)', async () => {
+  it('opens with the title row and one short sentence that points to the evidence (D1, D8, R13)', async () => {
     const { container } = render(<DaoPage />);
     await screen.findByRole('heading', { name: 'When deposits can leave' });
-    const hero = screen.getByRole('region', { name: 'Nervos DAO summary' });
+    const hero = screen.getByRole('region', { name: 'Nervos DAO' });
     expect(within(hero).getByRole('heading', { level: 1 })).toHaveTextContent('Nervos DAO');
-    const intro = within(hero).getByText(
-      /^CKB locked in the Nervos DAO keeps its share of the supply while secondary issuance dilutes everything else\./
-    );
-    expect(intro.textContent!.length).toBeLessThanOrEqual(160);
+    // One h1 on the page: the hero's.
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    const intro = within(hero).getByText(/^CKB locked in the DAO keeps its share of the supply\./);
+    expect(intro.textContent!.length).toBeLessThanOrEqual(90);
     expect(within(intro).getByRole('link', { name: 'How it works ↓' })).toHaveAttribute(
       'href',
       '#evidence'
@@ -170,10 +172,10 @@ describe('DaoPage', () => {
     expect(former).toHaveLength(262);
     expect(container.querySelector('[data-tier="1"]')).not.toHaveTextContent(former);
     expect(container.querySelector('[data-tier="2"]')).toHaveTextContent(former);
-    // "Explore DAO charts →" is kept, beside the History charts it continues.
+    // "Explore DAO charts →" is kept, in the title row beside the range buttons (R13).
     const charts = screen.getByRole('link', { name: 'Explore DAO charts →' });
     expect(charts).toHaveAttribute('href', '/mainnet/charts/total-deposit');
-    expect(screen.getByRole('region', { name: 'History' })).toContainElement(charts);
+    expect(within(hero).getByRole('heading', { level: 1 }).parentElement).toContainElement(charts);
     // The whole page's tier 1: at most three caption-length prose blocks (§0, §4).
     expectTier1Budget(container);
   });
