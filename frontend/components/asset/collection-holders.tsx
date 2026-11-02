@@ -6,7 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { AssetCount } from '@/components/asset/inventory-table';
+import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
 import { DetailSection } from '@/components/ui/detail-layout';
@@ -176,7 +176,7 @@ function ScopedCollectionHolders({
       label: '#',
       minWidth: 32,
       className: 'whitespace-nowrap',
-      render: (holder) => <span className="text-text-dim">{rank(holder)}</span>,
+      render: (holder) => <span className="text-text-bright">{rank(holder)}</span>,
     },
     {
       key: 'owner',
@@ -205,7 +205,9 @@ function ScopedCollectionHolders({
       key: 'range',
       label: 'Holds',
       minWidth: 65,
-      render: (bucket) => <span>{bucket.range}</span>,
+      render: (bucket) => (
+        <span className="text-body text-text-bright leading-[18px]">{bucket.range}</span>
+      ),
     },
     countColumn('holders', 'Holders', distribution ?? [], (bucket) => bucket.holders, assetClass),
     {
@@ -247,7 +249,7 @@ function ScopedCollectionHolders({
               <AssetReadState error={holders.error} label="collection holders" retained />
               <ListTable
                 label={all ? 'All collection holders' : 'Top 10 collection holders'}
-                columns={columns}
+                columns={wordHeads(columns)}
                 rows={holders.data.data}
                 rowKey={holderKey}
                 empty="No current holders."
@@ -316,7 +318,7 @@ function ScopedCollectionHolders({
             )}
             <ListTable
               label="Holders by how many items they hold"
-              columns={bucketColumns}
+              columns={wordHeads(bucketColumns)}
               rows={distribution}
               rowKey={(bucket) => bucket.range}
               empty="No current holders."

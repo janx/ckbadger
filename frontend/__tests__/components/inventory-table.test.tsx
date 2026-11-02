@@ -44,6 +44,14 @@ function cellUnder(table: HTMLElement, row: number, head: string): HTMLElement {
   return within(table).getAllByRole('row')[row].children[i] as HTMLElement;
 }
 const TRACK = 120;
+
+/** Every column head is its words in an inline box, never a bare text node filling the cell. */
+function expectWordHeads(table: HTMLElement) {
+  for (const th of table.querySelectorAll('thead th')) {
+    expect(Array.from(th.childNodes).some((n) => n.nodeType === Node.TEXT_NODE)).toBe(false);
+    expect(th.firstElementChild?.tagName).toBe('SPAN');
+  }
+}
 const barWidth = (value: number, scale: number) =>
   `${Math.max(Math.round((value / scale) * TRACK * 100) / 100, value > 0 ? 2 : 0)}px`;
 
@@ -185,6 +193,7 @@ describe('Tokens table on the row rules (table-rows L2-1)', () => {
       'H-mult.',
     ]);
     expect(within(table).queryByRole('columnheader', { name: 'Occupied' })).toBeNull();
+    expectWordHeads(table);
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     expect(table).not.toHaveTextContent('in 24 h');
@@ -289,6 +298,7 @@ describe('Objects table on the row rules (table-rows L2-2)', () => {
       'CKB held in its cells',
       'H-mult.',
     ]);
+    expectWordHeads(table);
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     expect(table).not.toHaveTextContent(/minted|Spore ·|occupied/);
@@ -382,6 +392,7 @@ describe('Identity systems table on the row rules (table-rows L2-3)', () => {
       'CKB held in its cells',
       'Occupied',
     ]);
+    expectWordHeads(table);
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     const [, first, second] = within(table).getAllByRole('row');

@@ -4,7 +4,12 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
-import { AssetAmount, AssetCount, TokenTwoPlaces } from '@/components/asset/inventory-table';
+import {
+  AssetAmount,
+  AssetCount,
+  TokenTwoPlaces,
+  wordHeads,
+} from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -73,14 +78,14 @@ export function TokenDistributionView({
   const share = (amount: bigint) =>
     total === BigInt(0) ? '—' : `${formatScaledInteger(amount * BigInt(100), total, 2)}%`;
   const holderScale = resourceScale(d.buckets.map((b) => b.holdersCount));
-  const columns: ListColumn<TokenDistribution['buckets'][number]>[] = [
+  const columns: ListColumn<TokenDistribution['buckets'][number]>[] = wordHeads([
     {
       key: 'range',
       label: `Balance${d.unit === 'raw' ? ' · raw' : symbol ? `, ${symbol}` : ''}`,
-      // "10,000 – under 100,000" on one line.
-      minWidth: 176,
+      // "10,000 – under 100,000" on one 13 px line.
+      minWidth: 188,
       render: (b) => (
-        <span className="whitespace-nowrap">
+        <span className="text-body text-text-bright whitespace-nowrap leading-[18px]">
           {bucketRange(b.lowerBound, b.upperBound, d.decimals)}
         </span>
       ),
@@ -116,11 +121,11 @@ export function TokenDistributionView({
     {
       key: 'share',
       label: 'Of supply',
-      minWidth: 72,
+      minWidth: 64,
       numeric: true,
       render: (b) => <span>{share(BigInt(b.balance))}</span>,
     },
-  ];
+  ]);
   return (
     <div className="space-y-4">
       {total > BigInt(0) && (
@@ -334,7 +339,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
           <AssetReadState error={holders.error} label="holders" retained />
           <ListTable
             label={all ? 'All holders' : 'Top 10 holders'}
-            columns={holderColumns(holders.data.data)}
+            columns={wordHeads(holderColumns(holders.data.data))}
             rows={holders.data.data}
             rowKey={(h) => h.lockScriptHash}
             empty="No holders."

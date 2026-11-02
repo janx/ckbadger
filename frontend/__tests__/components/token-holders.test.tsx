@@ -10,6 +10,14 @@ import { CLASS_COLORS } from '@/lib/design-tokens';
 const headText = (h: HTMLElement) => h.firstChild?.firstChild?.textContent ?? h.textContent;
 const barWidth = (value: number, scale: number, track: number) =>
   `${Math.max(Math.round((value / scale) * track * 100) / 100, value > 0 ? 2 : 0)}px`;
+
+/** Every column head is its words in an inline box, never a bare text node filling the cell. */
+function expectWordHeads(table: HTMLElement) {
+  for (const th of table.querySelectorAll('thead th')) {
+    expect(Array.from(th.childNodes).some((n) => n.nodeType === Node.TEXT_NODE)).toBe(false);
+    expect(th.firstElementChild?.tagName).toBe('SPAN');
+  }
+}
 const distribution: TokenDistribution = {
   holdersCount: 2,
   totalSupply: '10000000001',
@@ -70,6 +78,13 @@ describe('Token distribution', () => {
       'Holders',
       'Of supply',
     ]);
+    expectWordHeads(table);
+    // The range is the bucket row's key: 13 px bright on its 18 px line (T5).
+    expect(within(table).getByText('Under 1')).toHaveClass(
+      'text-body',
+      'text-text-bright',
+      'leading-[18px]'
+    );
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     const scale = resourceScale([36, 5]);
@@ -186,6 +201,7 @@ describe('Token holders (board L5)', () => {
     atContainerWidth(1248);
     mount();
     const table = await screen.findByRole('table', { name: 'Top 10 holders' });
+    expectWordHeads(table);
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     const [, first, second] = within(table).getAllByRole('row');

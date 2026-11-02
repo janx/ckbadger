@@ -17,6 +17,14 @@ import { CLASS_COLORS } from '@/lib/design-tokens';
 const barWidth = (value: number, scale: number, track: number) =>
   `${Math.max(Math.round((value / scale) * track * 100) / 100, value > 0 ? 2 : 0)}px`;
 
+/** Every column head is its words in an inline box, never a bare text node filling the cell. */
+function expectWordHeads(table: HTMLElement) {
+  for (const th of table.querySelectorAll('thead th')) {
+    expect(Array.from(th.childNodes).some((n) => n.nodeType === Node.TEXT_NODE)).toBe(false);
+    expect(th.firstElementChild?.tagName).toBe('SPAN');
+  }
+}
+
 const lock = '0x' + '12'.repeat(32);
 const prefix = '0x' + '34'.repeat(20);
 const page = (
@@ -236,8 +244,13 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
     const table = await screen.findByRole('table', { name: 'Top 10 collection holders' });
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
+    expectWordHeads(table);
     const [, first, second] = within(table).getAllByRole('row');
     expect(within(first).getAllByRole('cell')[0]).toHaveClass('whitespace-nowrap');
+    // Rank and holder are the row's bright key, as on the token holders table.
+    const rankCell = within(first).getAllByRole('cell')[0];
+    expect(rankCell).toHaveTextContent(/^1$/);
+    expect(rankCell.firstElementChild).toHaveClass('text-text-bright');
     expect(within(first).getByRole('link').parentElement).toHaveClass(
       '[&_a]:text-text-bright',
       '[&_a]:leading-[18px]',
@@ -259,6 +272,12 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       `#2 · ${prefix} (unresolved) · lock not indexed · 6 items`
     );
     const buckets = screen.getByRole('table', { name: 'Holders by how many items they hold' });
+    expectWordHeads(buckets);
+    expect(within(buckets).getByText('3–5')).toHaveClass(
+      'text-body',
+      'text-text-bright',
+      'leading-[18px]'
+    );
     for (const td of buckets.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     const bucketBar = within(buckets).getAllByRole('row')[2].querySelector('[data-segment]');

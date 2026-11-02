@@ -132,6 +132,9 @@ describe('DOB blueprint table on the row rules (table-rows L2-5)', () => {
     });
     render(<CurrentPatternEvidence pattern={pattern} />);
     const table = screen.getByRole('table', { name: 'DOB blueprint' });
+    // Every column head is its words in an inline box, never a bare text node filling the cell.
+    for (const th of table.querySelectorAll('thead th'))
+      expect(th.firstElementChild?.tagName).toBe('SPAN');
     for (const td of table.querySelectorAll('tbody td'))
       expect(td).toHaveClass('py-[11px]', 'align-middle');
     const row = within(table).getByRole('row', { name: /^name/ });

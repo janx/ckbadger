@@ -311,6 +311,16 @@ function InventoryPhoneRow({ asset: a, wide }: { asset: Asset; wide: boolean }) 
   );
 }
 
+/**
+ * Each plain column head as its words in an inline box (a bar column keeps its scale head). The
+ * page is unchanged; the table survey then measures the words, not the whole head cell.
+ */
+export function wordHeads<T>(columns: readonly ListColumn<T>[]): ListColumn<T>[] {
+  return columns.map((c) =>
+    c.header === undefined ? { ...c, header: <span>{c.label}</span> } : c
+  );
+}
+
 // ── Table-rows round, lane L2 (board Lists.dc.html): one 40 px line per row, one bright name, one
 // 8 px CKB bar on the page's scale; what leaves the row is in its title and on the detail page. ──
 /** The bar track and the 2-dp amount beside it (the boards' 110 px amount column). */
@@ -739,7 +749,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
     return (
       <ListTable
         label="Tokens"
-        columns={tokenColumns(rows)}
+        columns={wordHeads(tokenColumns(rows))}
         rows={rows}
         rowKey={(a) => a.id}
         empty="No tokens found"
@@ -752,7 +762,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
     return (
       <ListTable
         label="Object collections"
-        columns={objectColumns(rows)}
+        columns={wordHeads(objectColumns(rows))}
         rows={rows}
         rowKey={(a) => a.id}
         empty="No objects found"
@@ -764,7 +774,7 @@ export function InventoryRows({ rows, assetType }: InventoryRowsProps) {
   return (
     <ListTable
       label="Identity systems"
-      columns={identityColumns(rows)}
+      columns={wordHeads(identityColumns(rows))}
       rows={rows}
       rowKey={(a) => a.id}
       empty="No identities found"

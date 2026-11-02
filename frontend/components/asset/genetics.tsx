@@ -15,6 +15,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { wordHeads } from '@/components/asset/inventory-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import {
@@ -475,7 +476,7 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
                   column too narrow for its columns, one phone row per gene (R1 / R7). */}
               <ListTable
                 label="DOB blueprint"
-                columns={BLUEPRINT_COLUMNS}
+                columns={wordHeads(BLUEPRINT_COLUMNS)}
                 rows={step.description.genes}
                 rowKey={(g) => String(g.index)}
                 density="row"
