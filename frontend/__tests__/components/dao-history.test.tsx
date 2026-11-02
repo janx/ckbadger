@@ -162,6 +162,10 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     fireEvent.click(main, { clientX: 600 });
     fireEvent.pointerLeave(main);
     expect(reading).toHaveTextContent(new RegExp(`^tapped ${date(77)} · deposited`));
+    // "tapped" opens the same row of items, so it shares their line.
+    const row = within(reading).getByText(date(77)).parentElement!;
+    expect(row).toHaveClass('flex', 'flex-wrap');
+    expect(row.firstElementChild).toHaveTextContent(/^tapped$/);
     fireEvent.click(main, { clientX: 600 });
     expect(reading).toHaveTextContent(new RegExp(`^${date(154)} · deposited`));
   });
@@ -217,6 +221,21 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(() => historySeries(gap, ratio, 'All')).toThrow(
       `DAO deposit history skips from ${date(8)} to ${date(10)}`
     );
+  });
+
+  it('ends a time label at the plot edge instead of running past it (1M)', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} range="1M" />);
+    const ticks = Array.from(
+      container.querySelectorAll('[data-panel="deposited"] [data-role="time-tick"]')
+    );
+    // 1M: a label every 7 days back from the last day, which sits on the right edge.
+    const last = ticks[ticks.length - 1];
+    expect(last).toHaveTextContent(date(154).slice(5));
+    expect(last).toHaveAttribute('text-anchor', 'end');
+    expect(Number(last.getAttribute('x'))).toBeLessThanOrEqual(1200);
+    expect(ticks[0]).not.toHaveAttribute('text-anchor', 'end');
   });
 
   it('draws only the days of the chosen range', () => {

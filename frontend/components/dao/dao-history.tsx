@@ -312,26 +312,31 @@ function DepositedPlot({
           </>
         )}
       </text>
-      {timeTicks(days, x).map((t) => (
-        <g key={t.i}>
-          <line
-            x1={x(t.i)}
-            x2={x(t.i)}
-            y1={MAIN_PLOT_H}
-            y2={MAIN_PLOT_H + 4}
-            className="stroke-text-ghost"
-          />
-          <text
-            data-role="time-tick"
-            x={x(t.i) + 3}
-            y={MAIN_PLOT_H + 14}
-            fontSize={NAME_PX}
-            className="fill-text-dim"
-          >
-            {t.label}
-          </text>
-        </g>
-      ))}
+      {timeTicks(days, x).map((t) => {
+        // A label that would run past the plot's right edge ends at its tick instead.
+        const atEnd = x(t.i) + 3 + textWidth(t.label.length, NAME_PX) > width;
+        return (
+          <g key={t.i}>
+            <line
+              x1={x(t.i)}
+              x2={x(t.i)}
+              y1={MAIN_PLOT_H}
+              y2={MAIN_PLOT_H + 4}
+              className="stroke-text-ghost"
+            />
+            <text
+              data-role="time-tick"
+              x={atEnd ? x(t.i) - 3 : x(t.i) + 3}
+              y={MAIN_PLOT_H + 14}
+              textAnchor={atEnd ? 'end' : undefined}
+              fontSize={NAME_PX}
+              className="fill-text-dim"
+            >
+              {t.label}
+            </text>
+          </g>
+        );
+      })}
       {active !== null && (
         <line
           data-cursor
@@ -581,9 +586,12 @@ export function DaoHistoryReading({
   const day = days[index];
   const week = weeks.find((w) => w.start <= index && index <= w.end);
   return (
-    <ReadoutRow label="History reading" pinned={pin.showingPin}>
+    // ReadoutRow's own "tapped " prefix would stand on a line of its own before this row of items,
+    // so the row opens with it itself (same word, same ink).
+    <ReadoutRow label="History reading" pinned={false}>
       {/* One row of facts, each its own item: a narrower column wraps between them. */}
       <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
+        {pin.showingPin && <span>tapped </span>}
         <span className="text-text-bright">{day.date}</span>
         <span>
           {' '}
