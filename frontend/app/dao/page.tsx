@@ -29,7 +29,7 @@ export default function DaoPage() {
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto max-w-[1440px] px-4 pb-16 pt-6">
+      <main className="container mx-auto px-4 pb-16 pt-6">
         {!(statistics.data && evidence.data) && <div className="mb-7">{intro}</div>}
         {statistics.isError && (
           <div role="alert" className="text-rouge text-body mb-4">

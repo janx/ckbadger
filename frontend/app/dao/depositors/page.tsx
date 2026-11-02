@@ -100,7 +100,7 @@ export default function DaoDepositorsPage() {
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
-      <main className="container mx-auto max-w-[1440px] px-4 pb-16 pt-6">
+      <main className="container mx-auto px-4 pb-16 pt-6">
         <DetailLayout
           kind="index"
           title="Nervos DAO depositors"
