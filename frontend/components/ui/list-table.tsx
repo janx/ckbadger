@@ -195,8 +195,9 @@ export function ListTable<T>({
                 <th
                   key={c.key}
                   scope="col"
+                  // Table-rows T5: column heads at meta (11 px), dim, in every table.
                   className={cn(
-                    'border-base-border-subtle text-text-dim border-b py-3 pr-4 font-normal last:pr-0',
+                    'border-base-border-subtle text-text-dim text-meta border-b py-3 pr-4 font-normal last:pr-0',
                     c.numeric ? 'text-right' : 'text-left'
                   )}
                 >

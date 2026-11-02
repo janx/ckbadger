@@ -149,7 +149,8 @@ export function ScaleHeader({
   const ticks = midpoint ? [0, scale / 2, scale] : [0, scale];
   return (
     <span className="flex flex-col" style={{ gap: `${tickGap}px` }}>
-      <span>{label}</span>
+      {/* A column head at meta (table-rows T5), whatever cell holds it. */}
+      <span className="text-meta">{label}</span>
       <span
         data-scale-ticks
         aria-hidden="true"
