@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import type { ItemProtocol, ItemFeedContext, ProtocolVersion, Transaction } from '@/lib/api';
 import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
+import { withFieldMeanings } from '@/lib/protocol-field-meanings';
 import { AppLink } from '@/components/ui/app-link';
 import { Hash } from '@/components/ui/hash';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -96,7 +97,7 @@ export function ItemEvidence({ protocol, title }: ItemEvidenceProps) {
             : `${protocol.kind} cell data · version ${protocol.versions.findIndex((v) => v.cell.txHash === cell.txHash && v.cell.outputIndex === cell.outputIndex) + 1}`
         }
         dataHex={version.dataHex}
-        fields={version.fields}
+        fields={withFieldMeanings(protocol.kind, version.fields)}
         decoded={version.decoded}
       />
     </section>

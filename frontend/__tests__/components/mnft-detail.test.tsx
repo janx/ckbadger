@@ -1,30 +1,28 @@
-import { fireEvent, render, screen } from '@/__tests__/utils/test-utils';
+import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { MnftRenderer, MnftTokenIdentity } from '@/components/asset/mnft-detail';
 
 const id = '0x' + 'ab'.repeat(20) + '00000014' + '00000063';
 
 describe('m-NFT identity evidence', () => {
-  it('maps issuer, class and token index bytes and leaves extension bytes unexplained', () => {
+  it('maps issuer, class and token index bytes and names the extension bytes no field describes', () => {
     const { container } = render(<MnftTokenIdentity id={id + 'ff'} />);
     expect(
-      screen.getByText('29 bytes · 3 described fields · 1 unexplained bytes')
+      screen.getByText('29 bytes · 3 described fields · 1 byte no field describes')
     ).toBeInTheDocument();
+    expect(
+      [...container.querySelectorAll('[data-segment]')].map((s) => s.getAttribute('data-target'))
+    ).toEqual(['field-0', 'field-1', 'field-2', 'gap:28-29']);
     // F2 objects (OB-M11): each index field carries its decoded value.
     fireEvent.focus(
-      screen.getByRole('button', { name: 'Token index · big-endian = 99 bytes 24–27' })
+      screen.getByRole('button', { name: /^Token index · big-endian = 99 · \[24\.\.28\)/ })
     );
-    expect(container.querySelector('[data-byte-offset="27"]')).toHaveAttribute(
-      'data-highlighted',
-      'true'
-    );
-    expect(container.querySelector('[data-byte-offset="23"]')).toHaveAttribute(
-      'data-highlighted',
-      'false'
-    );
-    expect(container.querySelector('[data-byte-offset="28"]')).toHaveAttribute(
-      'data-highlighted',
-      'false'
-    );
+    const detail = screen.getByRole('complementary', { name: 'm-NFT token ID field detail' });
+    expect(detail).toHaveAttribute('data-detail', 'field-2');
+    expect(within(detail).getByText('[24..28) · 4 B')).toBeInTheDocument();
+    expect(
+      within(detail).getByText('Which token of the class, a big-endian number. 4 bytes.')
+    ).toBeInTheDocument();
+    expect(within(detail).getByText('00000063')).toBeInTheDocument();
   });
   it('rejects malformed and undersized identity bytes', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});

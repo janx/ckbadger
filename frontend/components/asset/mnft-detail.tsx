@@ -39,19 +39,27 @@ export function MnftTokenIdentity({ id }: { id: string }) {
       title="m-NFT token ID"
       dataHex={id}
       fields={[
-        { name: 'Issuer ID', start: 0, end: 20, valueHex: bytes.slice(0, 20).join('') },
+        {
+          name: 'Issuer ID',
+          start: 0,
+          end: 20,
+          valueHex: bytes.slice(0, 20).join(''),
+          meaning: 'The issuer that created the class.',
+        },
         {
           // F2 objects (OB-M11): each index with its decoded value.
           name: `Class index · big-endian = ${parseInt(bytes.slice(20, 24).join(''), 16)}`,
           start: 20,
           end: 24,
           valueHex: bytes.slice(20, 24).join(''),
+          meaning: 'Which of the issuer’s classes, a big-endian number.',
         },
         {
           name: `Token index · big-endian = ${parseInt(bytes.slice(24, 28).join(''), 16)}`,
           start: 24,
           end: 28,
           valueHex: bytes.slice(24, 28).join(''),
+          meaning: 'Which token of the class, a big-endian number.',
         },
       ]}
     />

@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@/__tests__/utils/test-utils';
+import { render, screen, fireEvent, waitFor, within } from '@/__tests__/utils/test-utils';
 import Page from '@/app/identities/dotbit/[identityId]/client-page';
 import { api, ApiRequestError, type ItemCellVersions } from '@/lib/api';
 import { mockItemReads, identityItem, emptyPage } from '@/__tests__/utils/item-read-fixtures';
@@ -26,6 +26,14 @@ it('renders exact canonical protocol, whole cell history and raw bytes for dotbi
   expect(await screen.findByRole('heading', { level: 1 })).toHaveClass('text-entity');
   expect(await screen.findByLabelText('Raw item evidence')).toHaveTextContent(
     /[Cc]ell data · \d+ bytes/
+  );
+  // Lane E (C5): the cell data is a byte map whose detail box gives each field its meaning.
+  expect(
+    within(screen.getByLabelText('Raw item evidence')).getByRole('complementary', {
+      name: /field detail$/,
+    })
+  ).toHaveTextContent(
+    'accountDataHash[0..32) · 32 BHash of the account’s data, which the transaction’s witness carries. 32 bytes.'
   );
   expect(api.getDotbitItemDetail).toHaveBeenCalledWith(evidence.itemId);
   expect(api.getItemProtocol).toHaveBeenCalledWith('dotbit', evidence.itemId);
