@@ -944,6 +944,123 @@ async fn address_clusterless_spore_uses_no_fabricated_onchain_collection() {
     assert!(j["data"][0]["display"]["collectionId"].is_null());
 }
 
+/// Consistency round C14 (A6): the Holdings section opens one collection in place, so the
+/// object cells page filters by the collection the holdings summary grouped them under —
+/// before paging, read path only.
+#[tokio::test]
+async fn address_object_cells_filter_by_collection_before_paging() {
+    let f = fixture().await;
+    let cluster = format!("0x{}", hex::encode([0x40u8; 32]));
+    let class = format!("0x{}", hex::encode([0x45u8; 24]));
+    let (s, summary) = get(&f.app, &format!("/api/v1/addresses/{}/holdings", f.owner)).await;
+    assert_eq!(s, StatusCode::OK, "{summary}");
+    let ids: Vec<_> = summary["objectCollections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap().to_string())
+        .collect();
+    assert!(ids.contains(&cluster) && ids.contains(&class), "{summary}");
+
+    let path = |collection: &str| {
+        format!(
+            "/api/v1/addresses/{}/cells?class=object&collection={collection}&limit=1",
+            f.owner
+        )
+    };
+    let (s, spore) = get(&f.app, &path(&cluster)).await;
+    assert_eq!(s, StatusCode::OK, "{spore}");
+    let rows = spore["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{spore}");
+    assert_eq!(rows[0]["display"]["standard"], "spore");
+    assert_eq!(rows[0]["display"]["collectionId"], cluster.as_str());
+    // The class's only object is not the first object cell of the owner: the filter applies
+    // before the page is cut, so it is found on page one and nothing follows it.
+    let (s, mnft) = get(&f.app, &path(&class)).await;
+    assert_eq!(s, StatusCode::OK, "{mnft}");
+    let rows = mnft["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{mnft}");
+    assert_eq!(rows[0]["display"]["standard"], "m-nft");
+    assert_eq!(rows[0]["display"]["collectionId"], class.as_str());
+    assert!(mnft["nextCursor"].is_null(), "{mnft}");
+    assert!(spore["nextCursor"].is_null(), "{spore}");
+
+    // A collection nobody here holds is an empty page, not an error.
+    let (s, none_held) = get(&f.app, &path(&format!("0x{}", hex::encode([0x77u8; 32])))).await;
+    assert_eq!(s, StatusCode::OK, "{none_held}");
+    assert!(none_held["data"].as_array().unwrap().is_empty());
+
+    // The filter names a collection of objects: it needs class=object and a hex id (or none).
+    for bad in [
+        format!(
+            "/api/v1/addresses/{}/cells?collection={cluster}&limit=1",
+            f.owner
+        ),
+        format!(
+            "/api/v1/addresses/{}/cells?class=token&collection={cluster}",
+            f.owner
+        ),
+        format!(
+            "/api/v1/addresses/{}/cells?class=object&collection=0xzz",
+            f.owner
+        ),
+        format!(
+            "/api/v1/addresses/{}/cells?class=object&collection=",
+            f.owner
+        ),
+    ] {
+        let (s, j) = get(&f.app, &bad).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}: {j}");
+    }
+}
+
+#[tokio::test]
+async fn address_object_cells_collection_cursor_stays_in_its_collection() {
+    let f = fixture().await;
+    let cluster = format!("0x{}", hex::encode([0x40u8; 32]));
+    let class = format!("0x{}", hex::encode([0x45u8; 24]));
+    // A cursor from the unfiltered object page cannot continue a collection page, and one
+    // collection's cursor cannot continue another's.
+    let (s, all) = get(
+        &f.app,
+        &format!("/api/v1/addresses/{}/cells?class=object&limit=1", f.owner),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{all}");
+    let cursor = all["nextCursor"]
+        .as_str()
+        .expect("two objects, one per page");
+    for collection in [&cluster, &class] {
+        let (s, j) = get(
+            &f.app,
+            &format!(
+                "/api/v1/addresses/{}/cells?class=object&collection={collection}&cursor={cursor}",
+                f.owner
+            ),
+        )
+        .await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{j}");
+    }
+}
+
+#[tokio::test]
+async fn address_object_cells_collection_none_lists_clusterless_spores() {
+    let f = fixture_with_cluster(false).await;
+    let (s, j) = get(
+        &f.app,
+        &format!(
+            "/api/v1/addresses/{}/cells?class=object&collection=none",
+            f.owner
+        ),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    let rows = j["data"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{j}");
+    assert_eq!(rows[0]["display"]["standard"], "spore");
+    assert!(rows[0]["display"]["collectionId"].is_null());
+}
+
 /// A phase-0 DAO deposit cell `hash:index` of `capacity` under `owner`.
 fn put_dao_deposit_cell(
     batch: &mut StoreBatch,
