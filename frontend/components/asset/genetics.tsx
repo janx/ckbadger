@@ -344,22 +344,27 @@ type BlueprintGene = GeneDefinition;
 const ruleArgumentsTitle = (g: BlueprintGene) =>
   g.ruleArguments === null ? undefined : JSON.stringify(g.ruleArguments);
 
-/** The blueprint table (OB-C12): gene, bytes, rule, values; 560 px of column minimums. */
+/**
+ * The blueprint table (OB-C12): gene, bytes, rule, values; 560 px of column minimums. Table-rows
+ * L2-5: one 41 px line per gene — the gene bright, "bytes 0–39 · 40" (span · length) in one cell;
+ * the declared offset and length in words are the row's title (the phone row keeps them).
+ */
 const BLUEPRINT_COLUMNS: readonly ListColumn<BlueprintGene>[] = [
   {
     key: 'gene',
     label: 'Gene',
     minWidth: 120,
-    render: (g) => <span className="text-text-bright">{g.name}</span>,
+    render: (g) => (
+      <span className="text-body text-text-bright block truncate leading-[18px]">{g.name}</span>
+    ),
   },
   {
     key: 'bytes',
     label: 'Bytes',
     minWidth: 170,
     render: (g) => (
-      <span className="text-text-dim">
-        byte offset {g.byteOffset} · length {g.byteLength}
-        <span className="block">{byteSpan(g.byteOffset, g.byteLength)}</span>
+      <span className="text-text-dim whitespace-nowrap">
+        {byteSpan(g.byteOffset, g.byteLength)} · {g.byteLength}
       </span>
     ),
   },
@@ -368,9 +373,9 @@ const BLUEPRINT_COLUMNS: readonly ListColumn<BlueprintGene>[] = [
     label: 'Rule',
     minWidth: 120,
     render: (g) => (
-      <>
+      <span className="whitespace-nowrap">
         {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
-      </>
+      </span>
     ),
   },
   {
@@ -378,12 +383,24 @@ const BLUEPRINT_COLUMNS: readonly ListColumn<BlueprintGene>[] = [
     label: 'Values',
     minWidth: 150,
     render: (g) => (
-      <span className="[overflow-wrap:anywhere]" title={ruleArgumentsTitle(g)}>
+      <span className="block truncate" title={ruleArgumentsTitle(g)}>
         {valueDomain(g.rule, g.ruleArguments)}
       </span>
     ),
   },
 ];
+
+/** What left a gene's row: the declared offset and length in words, then the row's own fields. */
+const blueprintTitle = (g: BlueprintGene) =>
+  [
+    g.name,
+    `byte offset ${g.byteOffset}`,
+    `length ${g.byteLength}`,
+    byteSpan(g.byteOffset, g.byteLength),
+    g.rule,
+    g.typeTag,
+    valueDomain(g.rule, g.ruleArguments),
+  ].join(' · ');
 
 /** One gene of the blueprint in a column too narrow for the table: every column on three lines. */
 function BlueprintPhoneRow({ g }: { g: BlueprintGene }) {
@@ -461,6 +478,8 @@ export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps)
                 columns={BLUEPRINT_COLUMNS}
                 rows={step.description.genes}
                 rowKey={(g) => String(g.index)}
+                density="row"
+                rowTitle={blueprintTitle}
                 mobileRow={(g) => <BlueprintPhoneRow g={g} />}
               />
             </>
