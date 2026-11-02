@@ -68,9 +68,10 @@ it('retains collection evidence and reports a failed background refresh', async 
   expect(
     await screen.findByText(/Could not refresh collection: secondary failed/)
   ).toBeInTheDocument();
-  expect(
-    within(screen.getByRole('complementary', { name: 'Facts' })).getByText('4,000')
-  ).toBeInTheDocument();
+  // C7: the retained collection still shows its CKB held in the hero (no rail any more).
+  expect(document.querySelector('[data-role="hero"]')).toHaveTextContent(
+    '4,000.00000000 CKB held in their cells'
+  );
 });
 it('shows an m-NFT class its real holder buckets and no DOB blueprint line (#3)', async () => {
   vi.mocked(api.getCollectionInsights).mockResolvedValue(mnftCollectionInsightsProducer);
@@ -139,11 +140,17 @@ it('separates physical cell ownership from protocol-named .cell parties', async 
 });
 it("titles collection feed rows from the API's collectionContext, never the tx's first item (OB-C13)", async () => {
   render(<CollectionDetail id={clusterDetailProducer.clusterId} kind="spore" />);
+  // Main.dc.html: the cluster's "Recent activity" rows, then its full feed's Transactions tab.
+  const recent = await screen.findByRole('region', { name: 'Recent activity' });
+  expect(await within(recent).findByText('Transferred 1')).toBeInTheDocument();
+  expect(within(recent).queryByText(/^Object (mint|transfer|burn)$/)).toBeNull();
+  act(() =>
+    within(recent)
+      .getByRole('button', { name: /transactions →$/ })
+      .click()
+  );
   const feed = await screen.findByRole('region', { name: 'What happened' });
-  expect(await within(feed).findByText('Transferred 1')).toBeInTheDocument();
-  expect(within(feed).queryByText(/^Object (mint|transfer|burn)$/)).toBeNull();
   // The Transactions tab says the same thing per row.
-  act(() => within(feed).getByRole('tab', { name: 'Transactions' }).click());
   // Table and compact layouts both carry it.
   expect((await within(feed).findAllByText('Minted 1')).length).toBeGreaterThan(0);
 });

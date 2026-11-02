@@ -9,7 +9,7 @@
 // floor and wrap to further rows in DNA order (`lib/allele-gel-layout.ts`); more than 32 genes
 // below md become a ranked gene list that keeps every variant one tap away. In the gel a hovered
 // band reads in the line under it, and a tap pins it until a second tap or Escape (R6, board V2).
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import type { AlleleLane } from '@/lib/dob-genes';
 import { GEL_COLORS, GEL_INK } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
@@ -57,6 +57,17 @@ export interface AlleleGelProps {
   onOverlayHover?: (key: string | null) => void;
   onBandClick?: (gene: string, value: string) => void;
   selected?: Readonly<Record<string, string>>;
+  /**
+   * Consistency round C9: how a lane is named for people (a known DOB/1 key as a word); default
+   * the gene's pattern name.
+   */
+  labelOf?: (gene: string) => string;
+  /**
+   * Consistency round C10: what the readout says while nothing is hovered or pinned; default
+   * "Tap or hover a band.". A page whose readout row already carries the section's one hint
+   * passes words without it.
+   */
+  idle?: ReactNode;
 }
 
 interface Placed {
@@ -81,7 +92,7 @@ export function AlleleGel(props: AlleleGelProps) {
     width === null
       ? null
       : alleleGelLayout({
-          genes: lanes.map((lane) => lane.gene),
+          genes: lanes.map((lane) => (props.labelOf ? props.labelOf(lane.gene) : lane.gene)),
           width,
           subject,
           overlayLabels: overlays.map((o) => o.label),
@@ -107,6 +118,8 @@ function Gel({
   onOverlayHover,
   onBandClick,
   selected = {},
+  labelOf = (gene: string) => gene,
+  idle,
   width,
   layout,
 }: AlleleGelProps & { width: number; layout: Extract<AlleleGelLayout, { form: 'gel' }> }) {
@@ -188,7 +201,7 @@ function Gel({
                   onMouseLeave={() => onGeneHover?.(null)}
                   className="transition-opacity"
                 >
-                  <title>{lane.gene}</title>
+                  <title>{labelOf(lane.gene)}</title>
                   <rect
                     x={r(x + 1)}
                     y={rowTop(ri)}
@@ -206,7 +219,7 @@ function Gel({
                     fontSize="10"
                     fill={lane.gene === activeGene ? GEL_COLORS.well : GEL_COLORS.heading}
                   >
-                    {geneCaption(lane.gene)}
+                    {geneCaption(labelOf(lane.gene))}
                   </text>
                   <rect
                     x={r(x + inset - 1)}
@@ -249,7 +262,7 @@ function Gel({
                           }}
                           className="cursor-pointer"
                         >
-                          <title>{`${lane.gene} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${formatPercent(BigInt(b.count), BigInt(total))}%)`}</title>
+                          <title>{`${labelOf(lane.gene)} = ${b.label}: ${b.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} (${formatPercent(BigInt(b.count), BigInt(total))}%)`}</title>
                         </rect>
                         {p.h >= 13 && lw >= ALLELE_GEL.labelledLane && !b.isColour && (
                           <text
@@ -344,10 +357,10 @@ function Gel({
         <ReadoutRow
           label="Variant readout"
           pinned={readout.showingPin}
-          idle={tapOrHover('a band.', { capital: true })}
+          idle={idle ?? tapOrHover('a band.', { capital: true })}
         >
           {readLane && readBand
-            ? `${readLane.gene} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects`
+            ? `${labelOf(readLane.gene)} · ${readBand.label} · ${readBand.count.toLocaleString('en-US')} of ${total.toLocaleString('en-US')} objects`
             : null}
         </ReadoutRow>
       </div>

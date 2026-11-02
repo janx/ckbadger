@@ -73,10 +73,9 @@ it('reports read errors without generating a placeholder collection', async () =
 it('renders exact class counts and configured permissions, not legacy bit meanings', async () => {
   render(<Page classId={mockClassId} />);
   await screen.findByRole('heading', { name: 'Test mNFT Class' });
-  const facts = screen.getByRole('complementary', { name: 'Facts' });
-  // F2 objects (OB-C8 rail on class pages): live objects, and how many of the minted are burned.
-  expect(within(facts).getByText('Objects').nextElementSibling).toHaveTextContent(
-    '80live · 20 of 100 burned'
+  // C7 (Main.dc.html): the hero's figure — live objects, and how many of the minted are burned.
+  expect(document.querySelector('[data-role="figure"]')).toHaveTextContent(
+    'objects live80 of 100 minted · 20 burned'
   );
   expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent('Claim');
   expect(screen.getByRole('region', { name: 'mNFT permissions' })).toHaveTextContent('Forbidden');
@@ -87,7 +86,8 @@ it('retains class and issuer raw evidence and separate full transaction history'
   await screen.findByRole('heading', { name: 'Collection metadata' });
   expect(screen.getByText(/Test Issuer/)).toBeInTheDocument();
   expect(screen.getByText(/Issued 100 \/ planned 100/)).toBeInTheDocument();
-  fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
+  // Main.dc.html: "Recent activity" opens the full feed at its transactions.
+  fireEvent.click(screen.getByRole('button', { name: /transactions →$/ }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
 });
 it('does not invent permissions or issuer data when class metadata is absent', async () => {
