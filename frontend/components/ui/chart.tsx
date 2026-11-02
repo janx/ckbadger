@@ -119,8 +119,13 @@ export interface ChartProps {
   // --- hierarchy v3 (DAO page, R13): every one opt-in ---
   /** The chart's name written inside the plot, top left (meta, dim); no caption is drawn then. */
   plotName?: string;
-  /** Round values written inside the plot from its left edge (ghost ink), with no axis gutter. */
-  insideYTicks?: boolean;
+  /**
+   * Round values written inside the plot from its left edge (ghost ink), with no axis gutter.
+   * `'over'` (lane P, additive): the same, the labels written over the plotted series — for a
+   * filled chart (a stacked area is 60 % opaque) whose fill would bury a label drawn under it; the
+   * grid lines stay under the series either way.
+   */
+  insideYTicks?: boolean | 'over';
   /** The first series' latest value written at the line's end, from its exact decimal. */
   endLabel?: (value: string) => string;
 }
@@ -408,6 +413,20 @@ export function Chart({
   }, []);
   const yTick = (v: number) =>
     bottom - ((v - (lo as number)) / ((hi as number) - (lo as number))) * (bottom - top);
+  /** An in-plot value (hierarchy v3): ghost ink, from the plot's left edge, above its line. */
+  const insideTickLabel = (v: number) =>
+    ticks && (
+      <text
+        key={`y-tick:${v}`}
+        data-role="y-tick"
+        x={left + 8}
+        y={yTick(v) - 5}
+        fill="#343c50"
+        fontSize="11"
+      >
+        {tickLabel(v, ticks.step)}
+      </text>
+    );
   const xLabels =
     xTicks && right !== null && right > left && data.length
       ? placeXTicks(
@@ -532,15 +551,7 @@ export function Chart({
                         stroke="#1a1f30"
                         strokeDasharray="3 5"
                       />
-                      <text
-                        data-role="y-tick"
-                        x={left + 8}
-                        y={yTick(v) - 5}
-                        fill="#343c50"
-                        fontSize="11"
-                      >
-                        {tickLabel(v, ticks.step)}
-                      </text>
+                      {insideYTicks !== 'over' && insideTickLabel(v)}
                     </g>
                   )
                 ) : (
@@ -725,6 +736,8 @@ export function Chart({
                   </g>
                 );
               })}
+              {insideYTicks === 'over' &&
+                ticks.values.map((v, i) => i > 0 && yTick(v) >= top + 12 && insideTickLabel(v))}
               {endLabel && (
                 <text
                   data-role="end-label"

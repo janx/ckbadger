@@ -76,8 +76,12 @@ it.each([928, 358])(
         />
       );
       const plot = screen.getByRole('img', { name: 'CKB held in its cells, CKB' });
-      expect(plot).toHaveTextContent('0.0000005 CKB');
-      expect(plot).toHaveTextContent('0.0000015 CKB');
+      // Lane P (R13): the round values are ghost labels inside the plot; the baseline and the
+      // top line under the plot's name are not written. No value is written twice.
+      const ticks = [...plot.querySelectorAll('[data-role="y-tick"]')].map((t) => t.textContent);
+      expect(ticks).toContain('0.0000005 CKB');
+      expect(ticks).not.toContain('0 CKB');
+      expect(new Set(ticks).size).toBe(ticks.length);
       expect(plot.outerHTML).not.toMatch(/NaN|Infinity/);
       expect(errors).not.toHaveBeenCalled();
       expect(screen.getByLabelText('History readout')).toHaveTextContent('0.00000120');

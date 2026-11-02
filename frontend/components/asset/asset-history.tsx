@@ -2,7 +2,7 @@
 import { DATA_COLOR, CLASS_COLORS } from '@/lib/design-tokens';
 import { formatUtc8Date } from '@/lib/utils';
 import { useState, type ReactNode } from 'react';
-import { alignedPlotLeft, Chart, type ChartValueAxisInput } from '@/components/ui/chart';
+import { Chart, type ChartValueAxisInput } from '@/components/ui/chart';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -15,6 +15,8 @@ import { formatTokenBalance } from '@/lib/format-asset';
 import type { TokenSupplyEvent } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 const DAY = 86400000;
+/** The main history plot's height (R13: the hero picture is at least 280 px; Main.dc.html). */
+export const HISTORY_PLOT_HEIGHT = 280;
 export interface AssetHistoryProps {
   daily: readonly { date: string; capacity: string; occupiedCapacity: string; supply?: string }[];
   /** Completed weekly totals, or why this page has none to draw. */
@@ -166,9 +168,8 @@ export function AssetHistory({
           kind: 'bars',
         }
       : null;
-  const plotLeft = alignedPlotLeft(
-    [capacityAxis, supplyAxis, weeklyAxis].filter((a): a is ChartValueAxisInput => a !== null)
-  );
+  // Lane P (R13, Main.dc.html): every plot writes its round values inside itself from its left
+  // edge in ghost ink, so the three share the left edge 0 — no axis column, no shared gutter.
   const eventColumns: ListColumn<TokenSupplyEvent>[] = [
     {
       key: 'date',
@@ -319,9 +320,12 @@ export function AssetHistory({
           <Chart
             {...capacityAxis}
             subtitle="Occupied and free"
-            height={token ? 150 : 200}
+            // The page's picture (R13): at least 280 px, its name inside it.
+            height={HISTORY_PLOT_HEIGHT}
+            plotName="CKB held in its cells · occupied in jade, free above it"
+            // written over the stacked area, which would bury a label drawn under it
+            insideYTicks="over"
             formatValue={(value) => formatExactDecimal(value, 'asset CKB held')}
-            plotLeft={plotLeft}
             xDomain={domain}
             activeIndex={active}
             onActiveIndexChange={onDaily}
@@ -335,7 +339,7 @@ export function AssetHistory({
               subtitle="Exact total supply"
               formatValue={(value) => formatExactDecimal(value, 'token supply')}
               height={130}
-              plotLeft={plotLeft}
+              insideYTicks
               xDomain={domain}
               activeIndex={active}
               onActiveIndexChange={onDaily}
@@ -350,7 +354,7 @@ export function AssetHistory({
               subtitle="Completed UTC+8 weeks"
               formatValue={(value) => formatExactDecimal(value, `weekly ${weeklyNoun}`)}
               height={120}
-              plotLeft={plotLeft}
+              insideYTicks="over"
               xDomain={domain}
               activeIndex={selectedDate === null || weekActive < 0 ? null : weekActive}
               onActiveIndexChange={(i) => setSelectedDate(i === null ? null : weeks[i].weekStart)}
