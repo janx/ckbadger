@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
@@ -397,6 +397,25 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
       expect(t.parentElement!.children).toHaveLength(2);
     }
     expect(metrics).toHaveClass('grid-cols-2', 'lg:grid-cols-4');
+  });
+
+  it('reads the hovered day across the picture, and lets it go when the range changes', async () => {
+    await renderJoyid();
+    const reading = screen.getByTestId('script-history-reading');
+    expect(reading).toHaveTextContent('2026-10-29 · last full day');
+    const [main] = [
+      ...within(hero()).getByTestId('script-history').querySelectorAll('svg[role="img"]'),
+    ];
+    fireEvent.keyDown(main, { key: 'ArrowLeft' });
+    expect(reading).not.toHaveTextContent('last full day');
+    expect(reading).not.toHaveTextContent('2026-10-29');
+    fireEvent.click(within(hero()).getByRole('button', { name: '90D' }));
+    // The picture and its reading are drawn again for the new range.
+    await waitFor(() =>
+      expect(screen.getByTestId('script-history-reading')).toHaveTextContent(
+        '2026-10-29 · last full day'
+      )
+    );
   });
 
   it('moves the summary sentence, the chart notes and the peak to tier 2 (C2)', async () => {

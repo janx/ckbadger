@@ -498,7 +498,15 @@ export function ScriptFamilyPage({
                   <ScriptHeading family={family} />
                   {deprecated && <span className="text-text-dim text-small">· Deprecated</span>}
                 </div>
-                <CapacityRangeSelector value={capacityRange} onChange={onCapacityRange} quiet />
+                <CapacityRangeSelector
+                  value={capacityRange}
+                  onChange={(range) => {
+                    // Another range draws other days: a hovered day of the old one lets go.
+                    setActive(null);
+                    onCapacityRange(range);
+                  }}
+                  quiet
+                />
               </div>
               {(family.description || family.website) && (
                 <p
