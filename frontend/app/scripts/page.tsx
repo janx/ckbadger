@@ -1,7 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useInRouterContext } from 'react-router-dom';
+import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
 import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
@@ -303,6 +305,37 @@ function ckbBarScale(values: readonly number[]): number {
   return scale;
 }
 
+/** What the list's bar shows (ruling D2): the sort column's CKB, or the occupied share of it. */
+type BarField = 'ckb' | 'occupied';
+const BAR_FIELDS: readonly { value: BarField; label: string }[] = [
+  { value: 'ckb', label: 'CKB' },
+  { value: 'occupied', label: 'occupied' },
+];
+
+function barFromUrl(raw: string | null): BarField {
+  return raw === 'occupied' ? 'occupied' : 'ckb';
+}
+
+/** The occupied share's bar runs on parts per million of the CKB in the cells. */
+const SHARE_SCALE = 1_000_000;
+
+/**
+ * Occupied ÷ CKB in the cells, in ppm, for the bar's geometry: rounded up, so a nonzero share is
+ * never drawn empty (the printed share and the title stay exact).
+ */
+function occupiedPpm(script: KnownScript): number {
+  const { total, occupied } = heldCapacity(script);
+  if (total === BigInt(0)) return 0;
+  const scale = BigInt(SHARE_SCALE);
+  return Number((occupied * scale + total - BigInt(1)) / total);
+}
+
+/** "0 · 50 · 100 %": the occupied-share scale's ticks. */
+function shareTick(ppm: number): string {
+  const percent = (ppm / SHARE_SCALE) * 100;
+  return ppm === SHARE_SCALE ? `${percent} %` : String(percent);
+}
+
 /**
  * The row's hover (D3): every field that left the row — role, description, the code status with
  * holder and date, cells ever, the exact amount and the occupied CKB with its share.
@@ -351,6 +384,25 @@ function ScriptsHeroFigure({ summary }: { summary: ScriptsListApi }) {
 }
 
 export default function ScriptsPage() {
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
+  const router = useRouter();
+  const inRouter = useInRouterContext();
+  const urlBar = barFromUrl(searchParams.get('bar'));
+  const [bar, setBar] = useState<BarField>(urlBar);
+  // D2: the bar follows its URL, also when a link or history entry changes it under this page.
+  useEffect(() => setBar(urlBar), [urlBar]);
+  const chooseBar = (value: BarField) => {
+    setBar(value);
+    // Replace: a view choice is not a step of history. Outside a router there is no address to
+    // keep in step, and leaving the page would reload it.
+    if (inRouter) {
+      const query = new URLSearchParams(searchParams);
+      if (value === 'ckb') query.delete('bar');
+      else query.set('bar', value);
+      router.replace(query.size ? `${pathname}?${query}` : pathname, { scroll: false });
+    }
+  };
   const pagination = useCursorPagination();
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState<string | undefined>();
@@ -389,6 +441,7 @@ export default function ScriptsPage() {
 
   const rows = data?.data ?? [];
   const ckbScale = ckbBarScale(rows.map((s) => wholeCkb(heldCapacity(s).total)));
+  const barScale = bar === 'occupied' ? SHARE_SCALE : ckbScale;
   const columns: ListColumn<KnownScript>[] = [
     {
       key: 'script',
@@ -423,22 +476,26 @@ export default function ScriptsPage() {
       minWidth: CKB_TRACK + 10 + CKB_DISPLAY + 16,
       header: (
         <ScaleHeader
-          label="CKB in its cells"
-          scale={ckbScale}
+          label={bar === 'occupied' ? 'CKB in its cells · bar: occupied share' : 'CKB in its cells'}
+          scale={barScale}
           trackWidth={CKB_TRACK}
           midpoint
-          format={(n) => formatTick(n, ckbScale / 2)}
+          format={bar === 'occupied' ? shareTick : (n) => formatTick(n, ckbScale / 2)}
         />
       ),
       render: (s) => {
         const { total } = heldCapacity(s);
         return (
           <AlignedBar
-            label="CKB in its cells"
-            scale={ckbScale}
+            label={bar === 'occupied' ? 'Occupied share of CKB in its cells' : 'CKB in its cells'}
+            scale={barScale}
             trackWidth={CKB_TRACK}
             minFill={2}
-            segments={[{ key: 'ckb', label: 'CKB', value: wholeCkb(total), tone: 'data' }]}
+            segments={[
+              bar === 'occupied'
+                ? { key: 'occupied', label: 'occupied', value: occupiedPpm(s), tone: 'data' }
+                : { key: 'ckb', label: 'CKB', value: wholeCkb(total), tone: 'data' },
+            ]}
             display={<CkbTwoDp shannons={total} />}
             displayWidth={CKB_DISPLAY}
           />
@@ -595,6 +652,25 @@ export default function ScriptsPage() {
                 >
                   {sortDirection === 'asc' ? '↑' : '↓'}
                 </button>
+                {/* D2: what the bar shows, beside the sort it pictures; written to the URL. */}
+                <span
+                  role="group"
+                  aria-label="Bar shows"
+                  className="ml-3 inline-flex items-center whitespace-nowrap"
+                >
+                  <span className="mr-2">bar:</span>
+                  {BAR_FIELDS.map((field, i) => (
+                    <button
+                      key={field.value}
+                      type="button"
+                      aria-pressed={bar === field.value}
+                      onClick={() => chooseBar(field.value)}
+                      className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l-[4px]' : '-ml-px rounded-r-[4px]'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+                    >
+                      {field.label}
+                    </button>
+                  ))}
+                </span>
                 {data?.total !== undefined && data.total !== null && (
                   <span className="ml-auto">{formatCount(data.total, 'script')}</span>
                 )}
