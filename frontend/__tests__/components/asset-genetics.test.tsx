@@ -202,9 +202,11 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
     vi.unstubAllGlobals();
   });
 
-  it('fits 358 px: both gels drawn 1:1, the allele gel in two rows of three, nothing to scroll', () => {
+  // Consistency round: the allele gel is its own section beside the DNA (C10), and only the three
+  // genes that vary get a lane (C9), so at 358 px they fit one row.
+  it('fits 358 px: both gels drawn 1:1, the allele gel of the varying genes in one row, nothing to scroll', () => {
     stubChartWidth(358);
-    const { container } = render(
+    render(
       <ObjectGeneticsView
         evidence={nervape3xGenetics}
         subject="Nervape 3x #125"
@@ -214,10 +216,11 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
       />
     );
     const section = screen.getByRole('region', { name: 'DNA' });
+    const among = screen.getByRole('region', { name: 'Among Nervape 3x' });
     // no minimum width and no sideways scroller anywhere in the panel
-    for (const el of Array.from(section.querySelectorAll('[class]')))
+    for (const el of [section, among].flatMap((s) => Array.from(s.querySelectorAll('[class]'))))
       expect(el.getAttribute('class')).not.toMatch(/\bmin-w-\[|\boverflow-x-(auto|scroll)\b/);
-    const svgs = Array.from(section.querySelectorAll('svg[role="img"]'));
+    const svgs = [section, among].flatMap((s) => Array.from(s.querySelectorAll('svg[role="img"]')));
     expect(svgs).toHaveLength(2);
     for (const svg of svgs) {
       expect(svg).toHaveAttribute('width', '358');
@@ -225,13 +228,12 @@ describe('The object page DNA panel at phone width (R3, responsive V5)', () => {
     }
     // the sequencing gel: the map with the genes as rows under it
     expect(within(section).getByRole('list', { name: 'Genes' })).toBeInTheDocument();
-    // the allele gel: lanes wrapped in DNA order, "this one" kept on both rows
-    const rows = Array.from(section.querySelectorAll('[data-gel-row]'));
-    expect(rows.map((row) => row.querySelectorAll('[data-lane]').length)).toEqual([3, 3]);
-    const own = section.querySelector('[data-overlay="me"]')!;
-    expect(own.querySelectorAll('[data-tick]')).toHaveLength(6);
+    // the allele gel: the three lanes in DNA order, "this one" across them
+    const rows = Array.from(among.querySelectorAll('[data-gel-row]'));
+    expect(rows.map((row) => row.querySelectorAll('[data-lane]').length)).toEqual([3]);
+    const own = among.querySelector('[data-overlay="me"]')!;
+    expect(own.querySelectorAll('[data-tick]')).toHaveLength(3);
     expect(Array.from(own.querySelectorAll('text')).map((t) => t.textContent)).toEqual([
-      'this one',
       'this one',
     ]);
   });
