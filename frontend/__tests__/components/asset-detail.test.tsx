@@ -1,5 +1,6 @@
 import { render, screen, fireEvent } from '@/__tests__/utils/test-utils';
-import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
+import { ledeRestatements } from '@/__tests__/utils/lede-rule';
 import { CellVersions } from '@/components/asset/cell-versions';
 import type { ItemCellVersion } from '@/lib/api';
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
@@ -77,6 +78,86 @@ describe('Asset domain layout', () => {
     );
     expect(container.querySelector('section')).toBeNull();
     expect(screen.getByRole('banner')).toHaveTextContent('Intro');
+  });
+  // Consistency round C7: the rail's facts become one metrics row under the hero, and the page is
+  // one column (no 260 px rail track, so tier 1 and the feed share one right edge).
+  it('puts the metrics row under the hero in one column, without a facts rail (C7)', () => {
+    const { container } = render(
+      <AssetDetailShell
+        title="Nervape Headwear"
+        kind="objects"
+        breadcrumb={[{ label: 'Inventory', href: '/inventory/objects' }]}
+        lede={<p>Spore cluster · DOB/0.</p>}
+        hero={<p>1,298 objects live</p>}
+        metrics={
+          <AssetMetrics
+            items={[
+              { label: 'Holders', value: '893', note: '748 hold one' },
+              { label: 'Cluster cell held by', value: 'ckb1qzda…wgcjk9lz', size: 'body' },
+            ]}
+          />
+        }
+        feed={<p>Activities</p>}
+      >
+        <p>Objects</p>
+      </AssetDetailShell>
+    );
+    const hero = screen.getByRole('region', { name: 'Nervape Headwear' });
+    expect(hero).toHaveTextContent('1,298 objects live');
+    const lede = hero.querySelector('[data-role="lede"]')!;
+    expect(lede).toHaveTextContent('Spore cluster · DOB/0.');
+    expect(lede).not.toHaveTextContent('1,298');
+    const metrics = screen.getByRole('region', { name: 'Metrics' });
+    expect(metrics).toHaveAttribute('data-role', 'metrics');
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(screen.getByRole('banner'), metrics)).toBe(true);
+    expect(follows(metrics, screen.getByText('Objects'))).toBe(true);
+    // R13: meta label, section value, inline dim note; an address value stays at body size.
+    const [holders, owner] = [...metrics.querySelectorAll('dl > div')];
+    expect(holders.querySelector('dt')).toHaveClass('text-meta', 'text-text-dim');
+    expect(holders.querySelector('dd')).toHaveClass('text-section', 'text-text-bright');
+    expect(holders.querySelector('dd')).toHaveTextContent('893 · 748 hold one');
+    expect(holders.querySelector('[data-role="metric-note"]')).toHaveClass(
+      'text-small',
+      'text-text-dim'
+    );
+    expect(owner.querySelector('dd')).toHaveClass('text-body');
+    // One row from lg up: every metric in its own column of one grid row.
+    expect(metrics.querySelector('dl')).toHaveClass('lg:grid-flow-col');
+    expect(screen.queryByRole('complementary', { name: 'Facts' })).toBeNull();
+    const grid = container.querySelector('[data-tier="1"]')!;
+    expect(grid.className).not.toMatch(/grid-cols-\[minmax\(0,1fr\)_260px\]/);
+  });
+  it('keeps the facts rail and its track for a page that still passes facts (old default)', () => {
+    const { container } = render(
+      <AssetDetailShell
+        title="Object"
+        kind="objects"
+        breadcrumb={[]}
+        facts={[{ label: 'Owner', value: 'Alice' }]}
+      >
+        <p>Body</p>
+      </AssetDetailShell>
+    );
+    expect(screen.getByRole('complementary', { name: 'Facts' })).toHaveTextContent('Alice');
+    expect(container.querySelector('[data-tier="1"]')).toHaveClass(
+      'lg:grid-cols-[minmax(0,1fr)_260px]'
+    );
+  });
+  it('finds a metric restated in the lede (the C7 lede rule the page tests apply)', () => {
+    render(
+      <AssetDetailShell
+        title="RGB++"
+        kind="tokens"
+        breadcrumb={[]}
+        intro={<p>24,255,256.49 RGB++ exist, held by 11,866 addresses.</p>}
+        metrics={<AssetMetrics items={[{ label: 'Holders', value: '11,866' }]} />}
+      >
+        <p>Body</p>
+      </AssetDetailShell>
+    );
+    expect(ledeRestatements(document.body)).toEqual(['11,866']);
   });
   it('retains an explicit error when previously loaded data remains', () => {
     render(<AssetReadState error={new Error('read failed')} label="history" retained />);
