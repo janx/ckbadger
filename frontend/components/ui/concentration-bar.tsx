@@ -91,7 +91,7 @@ export function ConcentrationBar({
                 backgroundColor: withAlpha(CLASS_COLORS[assetClass], OPACITY[i]),
               }}
             >
-              {inside[i]}
+              {inside[i] && <span>{inside[i]}</span>}
             </span>
           ) : (
             <span

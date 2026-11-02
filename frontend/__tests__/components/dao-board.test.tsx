@@ -324,12 +324,12 @@ describe('DaoBoard', () => {
       'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
     );
     expect(works).not.toHaveTextContent(/interest|earned/i);
-    // R1 roles: the explanation is prose (body 13 px); the protocol notes read as small.
+    // R1 roles: the explanation and the protocol notes are prose (body 13 px, as the v3 board).
     const [concept, notes] = Array.from(works.querySelectorAll('p'));
     expect(concept).toHaveTextContent(/^CKB locked in the Nervos DAO/);
     expect(concept).toHaveClass('text-body', 'text-text-dim');
     expect(notes).toHaveTextContent(/Epoch-lock readiness/);
-    expect(notes).toHaveClass('text-small');
+    expect(notes).toHaveClass('text-body');
   });
 
   it('renders a zero secondary allocation without dividing by zero', () => {

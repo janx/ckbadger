@@ -514,21 +514,34 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
         </ul>
       )}
       {root !== null && width !== null && !narrow && (
-        <p data-role="exact-amounts" className="text-small text-text-dim mt-3">
-          to miners{' '}
-          <span className="text-text">
-            <Amount value={mining.toString()} />
-          </span>{' '}
-          · for depositors{' '}
-          <span className="text-text">
-            <Amount value={compensation.toString()} />
-          </span>{' '}
-          (paid out <Amount value={claimed.toString()} /> · still owed{' '}
-          <Amount value={unclaimed.toString()} /> to {liveCells} live cells) · burnt{' '}
-          <span className="text-text">
-            <Amount value={burnt.toString()} />
-          </span>{' '}
-          CKB
+        // One line of three facts (each its own item, so a narrower column wraps between them).
+        <p
+          data-role="exact-amounts"
+          className="text-small text-text-dim mt-3 flex flex-wrap gap-x-[0.6em]"
+        >
+          <span>
+            to miners{' '}
+            <span className="text-text">
+              <Amount value={mining.toString()} />
+            </span>
+          </span>
+          <span>
+            {' '}
+            · for depositors{' '}
+            <span className="text-text">
+              <Amount value={compensation.toString()} />
+            </span>{' '}
+            (paid out <Amount value={claimed.toString()} /> · still owed{' '}
+            <Amount value={unclaimed.toString()} /> to {liveCells} live cells)
+          </span>
+          <span>
+            {' '}
+            · burnt{' '}
+            <span className="text-text">
+              <Amount value={burnt.toString()} />
+            </span>{' '}
+            CKB
+          </span>
         </p>
       )}
       <p className="text-text text-body mt-3.5 max-w-[640px]">
@@ -884,20 +897,39 @@ function lockLink(owner: Owner) {
  */
 const OWNER_CELL = 'text-body py-1.5';
 
+/** Board v3: the column heads at meta (11 px), under which the rows read at body. */
+const ownerHead = (label: string) => <span className="text-meta">{label}</span>;
+
 const OWNER_COLUMNS: ListColumn<Owner>[] = [
   {
     key: 'rank',
     className: OWNER_CELL,
     label: '#',
+    header: ownerHead('#'),
     minWidth: 40,
     render: (o) => <span className="text-text-dim">{o.rank}</span>,
   },
-  { key: 'depositor', label: 'Depositor', minWidth: 190, className: OWNER_CELL, render: ownerLink },
-  { key: 'lock', label: 'Lock', minWidth: 170, className: OWNER_CELL, render: lockLink },
+  {
+    key: 'depositor',
+    label: 'Depositor',
+    header: ownerHead('Depositor'),
+    minWidth: 190,
+    className: OWNER_CELL,
+    render: ownerLink,
+  },
+  {
+    key: 'lock',
+    label: 'Lock',
+    header: ownerHead('Lock'),
+    minWidth: 170,
+    className: OWNER_CELL,
+    render: lockLink,
+  },
   {
     key: 'deposits',
     className: OWNER_CELL,
     label: 'Deposits',
+    header: ownerHead('Deposits'),
     minWidth: 80,
     numeric: true,
     render: (o) => o.depositCount.toLocaleString('en-US'),
@@ -906,6 +938,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     key: 'capacity',
     className: OWNER_CELL,
     label: 'CKB deposited',
+    header: ownerHead('CKB deposited'),
     minWidth: 210,
     numeric: true,
     render: (o) => <Amount value={o.capacity} />,
@@ -914,6 +947,7 @@ const OWNER_COLUMNS: ListColumn<Owner>[] = [
     key: 'share',
     className: OWNER_CELL,
     label: 'Share',
+    header: ownerHead('Share'),
     minWidth: 70,
     numeric: true,
     render: (o) => <span className="text-text-dim">{o.sharePercent}%</span>,
@@ -1066,7 +1100,8 @@ function RawEvidence({
         ))}
       </div>
       <div className="text-text-dim text-meta mt-3 break-all font-mono">{header.daoHex}</div>
-      <p className="text-text-dim text-small mt-3">
+      {/* Board v3: the explanation reads at body (13 px), as tier 2's other prose. */}
+      <p className="text-text-dim text-body mt-3">
         AR, in every block header, is the DAO&apos;s growth index. Since genesis, AR grew from{' '}
         {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)} at block{' '}
         {formatBlockNumber(evidence.tipBlockNumber)}: free capacity deposited in block 0 would have
@@ -1172,7 +1207,7 @@ function HowItWorks({
 }) {
   return (
     <DetailSection title="How the Nervos DAO works">
-      {/* R1 roles: the explanation is prose (body); the protocol notes after it read as small. */}
+      {/* R1 roles: the explanation and the protocol notes are prose (body, as the v3 board). */}
       <div className="flex flex-col">
         <p className="text-text-dim text-body">
           CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
@@ -1187,7 +1222,7 @@ function HowItWorks({
         </p>
         {/* Hierarchy v3 (V7): how every block splits its issuance, moved from tier 1. */}
         <CapacityUse statistics={statistics} />
-        <p className="text-text-dim text-small mt-3.5">
+        <p className="text-text-dim text-body mt-3.5">
           A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made.
           In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle ends
           that day: six exact epochs from the indexed tip, epoch ranges rather than predicted

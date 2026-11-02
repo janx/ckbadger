@@ -582,17 +582,28 @@ export function DaoHistoryReading({
   const week = weeks.find((w) => w.start <= index && index <= w.end);
   return (
     <ReadoutRow label="History reading" pinned={pin.showingPin}>
-      <span className="text-text-dim">
+      {/* One row of facts, each its own item: a narrower column wraps between them. */}
+      <span className="text-text-dim flex flex-wrap gap-x-[0.6em]">
         <span className="text-text-bright">{day.date}</span>
-        {' · '}deposited{' '}
-        <span className="text-text">
-          <ExactCkbText shannons={day.shannons} />
+        <span>
+          {' '}
+          · deposited{' '}
+          <span className="text-text">
+            <ExactCkbText shannons={day.shannons} />
+          </span>
         </span>
-        {' · '}share <span className="text-text">{day.ratio}%</span>
-        {' · '}depositors <span className="text-text">{day.depositors}</span>
+        <span>
+          {' '}
+          · share <span className="text-text">{day.ratio}%</span>
+        </span>
+        <span>
+          {' '}
+          · depositors <span className="text-text">{day.depositors}</span>
+        </span>
         {week && (
-          <>
-            {' · '}week from <span className="whitespace-nowrap">{days[week.start].date}</span>{' '}
+          <span>
+            {' '}
+            · week from <span className="whitespace-nowrap">{days[week.start].date}</span>{' '}
             <span
               data-role="week-net"
               className={
@@ -605,16 +616,17 @@ export function DaoHistoryReading({
             >
               <ExactCkbText shannons={week.net} signed />
             </span>
-          </>
+          </span>
         )}
         {peak && (
-          <>
-            {' · '}peak{' '}
+          <span>
+            {' '}
+            · peak{' '}
             <span className="text-text">
               <ExactCkbText shannons={parseCkbDecimal(peak.value)} />
             </span>{' '}
             on <span className="whitespace-nowrap">{peak.date}</span>
-          </>
+          </span>
         )}
       </span>
     </ReadoutRow>
