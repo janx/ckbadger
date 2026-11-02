@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import ForksPage from '@/app/forks/page';
@@ -230,6 +230,40 @@ describe('ForksPage', () => {
     expect(within(table()).getByText('1 of 1 tx committed later')).toBeInTheDocument();
     expect(within(table()).getAllByText('witness unavailable')).toHaveLength(2);
     expect(api.getForks).toHaveBeenCalledWith({ cursor: undefined, limit: 50 });
+  });
+
+  it('shows the first 5 branch switches, then every one in place under “Show all 18 branch switches ↓” (R15)', async () => {
+    const event = list().data[0];
+    const rows = Array.from({ length: 18 }, (_, i) => ({ ...event, id: i + 1 }));
+    vi.mocked(api.getForks).mockResolvedValue({ ...list(), data: rows, total: 18 });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    const bodyRows = () => table().querySelectorAll('tbody tr');
+    // collapsed by default: the first five rows, the expander, no pager yet
+    expect(bodyRows()).toHaveLength(5);
+    const more = screen.getByRole('button', { name: 'Show all 18 branch switches ↓' });
+    expect(more).toHaveClass('text-small');
+    expect(more).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByText(/18 switches/)).toBeNull();
+    // expanding is the link: every row, every column, in place, then the pager
+    fireEvent.click(more);
+    expect(bodyRows()).toHaveLength(18);
+    expect(within(table()).getAllByRole('columnheader')).toHaveLength(6);
+    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(screen.getByText(/18 switches/)).toBeInTheDocument();
+  });
+
+  it('needs no expander for five switches or fewer', async () => {
+    const event = list().data[0];
+    const rows = Array.from({ length: 5 }, (_, i) => ({ ...event, id: i + 1 }));
+    vi.mocked(api.getForks).mockResolvedValue({ ...list(), data: rows, total: 5 });
+    vi.mocked(api.getForkOverview).mockResolvedValue(overview());
+    render(<ForksPage />);
+    await waitFor(() => expect(table()).toBeInTheDocument());
+    expect(table().querySelectorAll('tbody tr')).toHaveLength(5);
+    expect(screen.queryByRole('button', { name: /^Show all/ })).toBeNull();
+    expect(screen.getByText(/5 switches/)).toBeInTheDocument();
   });
 
   it('names both miners by address tail and marks a fork one miner had against itself (FF-L3)', async () => {

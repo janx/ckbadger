@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
@@ -38,6 +38,9 @@ function spanHeads<T>(columns: ListColumn<T>[]): ListColumn<T>[] {
     header: column.header ?? <span>{column.label}</span>,
   }));
 }
+
+/** R15: a topic page shows a list's first rows; the rest expand in place (there is no list page). */
+const PREVIEW_ROWS = 5;
 
 /** R15, toward 32–34 px rows: rows at body (as the DAO page's depositor rows), 6 px above and
  * below the 44 px fork glyph. */
@@ -296,6 +299,7 @@ export default function ForksPage() {
   const { cursor, hasPrevious, page, goToNext, goToPrevious } = useCursorPagination();
   const limit = usePageSize(DEFAULT_PAGE_SIZE);
   const pin = useForkDaysPin();
+  const [expanded, setExpanded] = useState(false);
   const overview = useQuery({
     queryKey: ['forks-overview', 30],
     queryFn: () => api.getForkOverview(30),
@@ -312,6 +316,13 @@ export default function ForksPage() {
       `Fork overview: days hold ${switches} switches but the window says ${data.nodeSwitchesInWindow}`
     );
   const competing = data ? competingLine(data.nodeRecord) : null;
+  // Collapsed to the first rows until "Show all" (R15); a later page is always shown whole.
+  const collapsed =
+    !expanded &&
+    !hasPrevious &&
+    events.data !== undefined &&
+    events.data.data.length > PREVIEW_ROWS;
+  const total = events.data?.total;
   return (
     <div className="bg-base-bg min-h-screen">
       <Header />
@@ -379,7 +390,7 @@ export default function ForksPage() {
               <>
                 <ListTable
                   label="Branch switches on this node"
-                  rows={events.data.data}
+                  rows={collapsed ? events.data.data.slice(0, PREVIEW_ROWS) : events.data.data}
                   rowKey={(event) => String(event.id)}
                   empty="No branch switches observed by this node. Chain uncles above can still exist."
                   columns={spanHeads<ReorgEvent>([
@@ -441,18 +452,31 @@ export default function ForksPage() {
                     </div>
                   )}
                 />
-                <div className="mt-5">
-                  <CursorPagination
-                    total={events.data.total}
-                    totalLabel="switches"
-                    pageSize={limit}
-                    page={page}
-                    hasMore={events.data.hasMore}
-                    hasPrevious={hasPrevious}
-                    onNext={() => goToNext(events.data!.nextCursor)}
-                    onPrevious={goToPrevious}
-                  />
-                </div>
+                {collapsed ? (
+                  <button
+                    type="button"
+                    aria-expanded={false}
+                    onClick={() => setExpanded(true)}
+                    className="text-text hover:text-text-bright text-small mt-3 hover:underline"
+                  >
+                    {total === undefined
+                      ? 'Show all branch switches ↓'
+                      : `Show all ${total.toLocaleString('en-US')} branch switches ↓`}
+                  </button>
+                ) : (
+                  <div className="mt-5">
+                    <CursorPagination
+                      total={events.data.total}
+                      totalLabel="switches"
+                      pageSize={limit}
+                      page={page}
+                      hasMore={events.data.hasMore}
+                      hasPrevious={hasPrevious}
+                      onNext={() => goToNext(events.data!.nextCursor)}
+                      onPrevious={goToPrevious}
+                    />
+                  </div>
+                )}
               </>
             )}
           </section>
