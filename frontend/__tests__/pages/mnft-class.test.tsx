@@ -3,7 +3,8 @@ import Page from '@/app/classes/[classId]/client-page';
 import { api } from '@/lib/api';
 import { mockItemReads } from '@/__tests__/utils/item-read-fixtures';
 vi.mock('@/components/layout/header', () => ({ Header: () => <div>Header</div> }));
-const mockClassId = '0xabcdef1234567890abcdef1234567890abcdef1234567890';
+// An m-NFT class id is its issuer id (20 bytes) and a 4-byte class index (lane E draws it).
+const mockClassId = '0x1111111111111111111111111111111111111111' + '00000003';
 const mockCollection = {
   collectionId: mockClassId,
   standard: 'm-nft',
@@ -84,9 +85,14 @@ it('renders exact class counts and configured permissions, not legacy bit meanin
 });
 it('retains class and issuer raw evidence and separate full transaction history', async () => {
   render(<Page classId={mockClassId} />);
-  await screen.findByRole('heading', { name: 'Collection metadata' });
-  expect(screen.getByText(/Test Issuer/)).toBeInTheDocument();
-  expect(screen.getByText(/Issued 100 \/ planned 100/)).toBeInTheDocument();
+  // Lane E (C5): the class id byte by byte, the class's counts and its issuer's record.
+  const evidence = await screen.findByRole('region', { name: 'The class id, byte by byte' });
+  expect(
+    [...evidence.querySelectorAll('[data-segment]')].map((s) => s.getAttribute('data-target'))
+  ).toEqual(['field-0', 'field-1']);
+  expect(within(evidence).getByText('Test Issuer · 5 classes · 2 sets')).toBeInTheDocument();
+  expect(within(evidence).getByText('100 · planned 100')).toBeInTheDocument();
+  expect(within(evidence).getByText('not recorded')).toBeInTheDocument();
   fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
 });

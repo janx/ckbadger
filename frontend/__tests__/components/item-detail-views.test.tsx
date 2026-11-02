@@ -45,7 +45,9 @@ it('does not identify cluster metadata ownership as a current cell without canon
 it('links a canonically resolved cluster cell through the one-segment outpoint route', async () => {
   vi.mocked(api.getSporeClusterProtocol).mockResolvedValue(clusterProtocolProducer);
   render(<CollectionDetail id={clusterDetailProducer.clusterId} kind="spore" />);
-  const link = await screen.findByRole('link', { name: 'Current cluster cell →' });
+  // Lane E (C5): the out point in the cell's "live cell" row is the link (was "Current cluster cell →").
+  const cell = await screen.findByRole('region', { name: 'The cluster cell, byte by byte' });
+  const link = within(within(cell).getByLabelText('The cluster cell')).getAllByRole('link')[0];
   expect(link).toHaveAttribute(
     'href',
     `/mainnet/cell/${clusterProtocolProducer.current.cell.txHash}-${clusterProtocolProducer.current.cell.outputIndex}`

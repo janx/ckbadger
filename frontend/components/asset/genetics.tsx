@@ -1,9 +1,8 @@
 'use client';
-import { useState, type CSSProperties } from 'react';
+import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 import type {
   CollectionInsights,
   CurrentPattern,
-  GeneDefinition,
   ObjectGenetics,
   SporeDobDecoded,
 } from '@/lib/api';
@@ -13,11 +12,11 @@ import { SequencingGel } from '@/components/ui/sequencing-gel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
 import { useDetailTier } from '@/components/ui/detail-layout';
-import { Hash } from '@/components/ui/hash';
-import { ListTable, type ListColumn } from '@/components/ui/list-table';
-import { wordHeads } from '@/components/asset/inventory-table';
-import { PhoneRow } from '@/components/ui/phone-row';
-import { COMPOSITION_BADGES } from '@/lib/design-tokens';
+import { ByteScaleMap } from '@/components/ui/hex-map';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
+import { hexBytes } from '@/lib/hex-bytes';
+import { COMPOSITION_BADGES, GENE_COLORS } from '@/lib/design-tokens';
 import {
   alleleLanes,
   geneOrder,
@@ -26,6 +25,17 @@ import {
   traitDisplay,
   traitsOutsidePattern,
 } from '@/lib/dob-genes';
+import {
+  dnaRulerParts,
+  foundAcross,
+  foundAcrossRun,
+  geneRows,
+  geneSpan,
+  patternExtent,
+  ruleWords,
+  type GeneRow,
+  type PatternGene,
+} from '@/lib/dob-pattern';
 import type { CompositionTier } from '@/lib/asset-utils';
 import { cn, formatUnixSecondsUtc8 } from '@/lib/utils';
 
@@ -319,174 +329,399 @@ export function ObjectGeneticsEvidence({
 }
 // F2 objects (round 2, OB-C1/C2): the per-variant button lists were replaced by the allele gel
 // (`ui/allele-gel.tsx`, `collection-objects.tsx`); a band click is the filter.
-/** "bytes 0–31" from the exact declared offset and length (never converted to a float). */
-function byteSpan(offset: string, length: string): string {
-  if (!/^(0|[1-9]\d*)$/.test(offset) || !/^(0|[1-9]\d*)$/.test(length))
-    throw new Error(`DOB blueprint: invalid byte range ${offset} + ${length}`);
-  const o = BigInt(offset),
-    l = BigInt(length);
-  if (l === BigInt(0)) return 'no bytes';
-  return l === BigInt(1) ? `byte ${o}` : `bytes ${o}–${o + l - BigInt(1)}`;
-}
-/** A gene's value domain in words: its options, its range, or how many arguments it takes. */
-function valueDomain(rule: string, args: unknown): string {
-  if (args === null || args === undefined) return '—';
-  if (!Array.isArray(args)) return 'see raw';
-  if (rule === 'options') {
-    const shown = args.slice(0, 3).map((a) => traitDisplay(String(a)));
-    return `${args.length} option${args.length === 1 ? '' : 's'}: ${shown.join(', ')}${args.length > 3 ? ', …' : ''}`;
-  }
-  if (rule === 'range' && args.length === 2 && args.every((a) => typeof a !== 'object'))
-    return `${String(args[0])}–${String(args[1])}`;
-  return `${args.length} argument${args.length === 1 ? '' : 's'}`;
-}
-type BlueprintGene = GeneDefinition;
 
-const ruleArgumentsTitle = (g: BlueprintGene) =>
-  g.ruleArguments === null ? undefined : JSON.stringify(g.ruleArguments);
-
-/**
- * The blueprint table (OB-C12): gene, bytes, rule, values; 560 px of column minimums. Table-rows
- * L2-5: one 41 px line per gene — the gene bright, "bytes 0–39 · 40" (span · length) in one cell;
- * the declared offset and length in words are the row's title (the phone row keeps them).
- */
-const BLUEPRINT_COLUMNS: readonly ListColumn<BlueprintGene>[] = [
-  {
-    key: 'gene',
-    label: 'Gene',
-    minWidth: 120,
-    render: (g) => (
-      <span className="text-body text-text-bright block truncate leading-[18px]">{g.name}</span>
-    ),
-  },
-  {
-    key: 'bytes',
-    label: 'Bytes',
-    minWidth: 170,
-    render: (g) => (
-      <span className="text-text-dim whitespace-nowrap">
-        {byteSpan(g.byteOffset, g.byteLength)} · {g.byteLength}
-      </span>
-    ),
-  },
-  {
-    key: 'rule',
-    label: 'Rule',
-    minWidth: 120,
-    render: (g) => (
-      <span className="whitespace-nowrap">
-        {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
-      </span>
-    ),
-  },
-  {
-    key: 'values',
-    label: 'Values',
-    minWidth: 150,
-    render: (g) => (
-      <span className="block truncate" title={ruleArgumentsTitle(g)}>
-        {valueDomain(g.rule, g.ruleArguments)}
-      </span>
-    ),
-  },
-];
-
-/** What left a gene's row: the declared offset and length in words, then the row's own fields. */
-const blueprintTitle = (g: BlueprintGene) =>
-  [
-    g.name,
-    `byte offset ${g.byteOffset}`,
-    `length ${g.byteLength}`,
-    byteSpan(g.byteOffset, g.byteLength),
-    g.rule,
-    g.typeTag,
-    valueDomain(g.rule, g.ruleArguments),
-  ].join(' · ');
-
-/** One gene of the blueprint in a column too narrow for the table: every column on three lines. */
-function BlueprintPhoneRow({ g }: { g: BlueprintGene }) {
-  return (
-    <PhoneRow
-      lines={[
-        { key: 'gene', tone: 'head', left: g.name, right: byteSpan(g.byteOffset, g.byteLength) },
-        {
-          key: 'rule',
-          tone: 'body',
-          left: (
-            <>
-              {g.rule} <span className="text-text-dim">· {g.typeTag}</span>
-            </>
-          ),
-          right: `offset ${g.byteOffset} · length ${g.byteLength}`,
-        },
-        {
-          key: 'values',
-          tone: 'quiet',
-          left: (
-            <span className="[overflow-wrap:anywhere]" title={ruleArgumentsTitle(g)}>
-              {valueDomain(g.rule, g.ruleArguments)}
-            </span>
-          ),
-        },
-      ]}
-    />
-  );
+/** One real object read through the pattern (lane E, C5): the gallery's DNA and VM traits. */
+export interface PatternSample {
+  id: string;
+  href: string;
+  dnaHex: string | null;
+  traits: readonly { name: string; value: string }[];
+  decodeStatus: string;
 }
 
 export interface CurrentPatternEvidenceProps {
   pattern: CurrentPattern;
+  /** Lane E (C5), additive: the collection's decode counts, for "found across N". */
+  genetics?: CollectionInsights['genetics'];
+  /** Lane E (C5), additive: one real object, read through the pattern. */
+  sample?: PatternSample | null;
+  /** Lane E (C5), additive: the status line under the reading (decode coverage). */
+  status?: ReactNode;
 }
-export function CurrentPatternEvidence({ pattern }: CurrentPatternEvidenceProps) {
+
+const RULED_UNMAPPED = 'The decoder binary describes no byte mapping; the pattern alone is used.';
+const FORMAT_WORDS: Record<string, string> = {
+  moleculeDob0: 'molecule DOB/0',
+  jsonDob0: 'JSON DOB/0',
+  nervapeJsonDob0: 'Nervape JSON DOB/0',
+};
+const shortHash = (hash: string) => `${hash.slice(0, 6)}…${hash.slice(-4)}`;
+const count = (n: number) => n.toLocaleString('en-US');
+
+/**
+ * "How an object is read" (consistency C5, Main board tier 2): each object's DNA → the pattern in
+ * the cluster's description → the decoder, as three tiles; the DNA ruler with a part per gene; the
+ * gene table with what the decoded objects show; one real object read through it; the status line.
+ */
+export function CurrentPatternEvidence({
+  pattern,
+  genetics,
+  sample,
+  status,
+}: CurrentPatternEvidenceProps) {
+  const tier = useDetailTier();
+  const readout = usePinnedReadout<string>();
   if (pattern.status === 'notDob')
     return <p className="text-text-dim text-meta">No DOB blueprint in this collection.</p>;
+  const genes: PatternGene[] = pattern.steps.flatMap((step) =>
+    step.description.status === 'supported'
+      ? [...step.description.genes]
+          .sort((a, b) => a.index - b.index)
+          .map((gene) => ({ key: `${step.step}:${gene.index}`, gene }))
+      : []
+  );
+  const dna = sample?.dnaHex ? hexBytes(sample.dnaHex, `${sample.id} DNA`) : null;
+  const extent = dna ? dna.length : patternExtent(genes);
+  const ruler = genes.length && extent ? dnaRulerParts(genes, extent) : null;
+  const byKey = new Map(genes.map((g) => [g.key, g]));
+  const ink = new Map<string, string>();
+  ruler?.parts.forEach((part) => {
+    if (part.key === null || ink.has(part.key)) return;
+    const gene = byKey.get(part.key)!.gene;
+    ink.set(
+      part.key,
+      /^btcfs/i.test(gene.rule)
+        ? GENE_COLORS.bitcoin
+        : GENE_COLORS.cycle[ink.size % GENE_COLORS.cycle.length]
+    );
+  });
+  const inkOf = (key: string) => ink.get(key) ?? '#7c849c';
+  const rows = geneRows(genes);
+  const found = (row: GeneRow) =>
+    genetics
+      ? row.genes.length === 1
+        ? foundAcross(row.genes[0].gene.name, genetics)
+        : foundAcrossRun(
+            row.genes.map((g) => g.gene.name),
+            genetics
+          )
+      : null;
+  const activeGene = readout.active;
+  const rowTitle = (row: GeneRow) =>
+    [
+      row.genes.length > 1
+        ? `${row.label}: ${row.genes.map((g) => g.gene.name).join(', ')}`
+        : row.label,
+      row.span,
+      row.rule,
+      found(row),
+    ]
+      .filter(Boolean)
+      .join(' · ');
+  const steps = pattern.steps;
+  const geneTable = (shown: readonly GeneRow[], label: string) => (
+    <div role="table" aria-label={label} className="text-small min-w-0">
+      <div
+        role="row"
+        className="text-meta text-text-dim grid h-6 grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] items-center gap-x-3.5"
+      >
+        <span role="columnheader">gene</span>
+        <span role="columnheader">bytes</span>
+        <span role="columnheader">rule</span>
+        <span role="columnheader">
+          {genetics
+            ? genetics.complete
+              ? `found across ${count(genetics.eligibleItems)}`
+              : 'found'
+            : 'found'}
+        </span>
+      </div>
+      {shown.map((row) => (
+        <div
+          key={row.genes[0].key}
+          role="row"
+          title={rowTitle(row)}
+          data-active={activeGene !== null && row.genes.some((g) => g.key === activeGene)}
+          className="text-text-dim grid h-8 grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] items-center gap-x-3.5 border-t border-[#1a1f30] data-[active=true]:bg-[#10131c]"
+        >
+          <span role="cell" className="text-text-bright truncate">
+            {row.label}
+          </span>
+          <span role="cell" className="truncate tabular-nums">
+            {row.span}
+          </span>
+          <span role="cell" className="truncate">
+            {row.rule}
+          </span>
+          <span role="cell" className="truncate">
+            {found(row) ?? '—'}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+  const folded = rows.length < genes.length;
+  const sampleTraits = sample?.traits ?? [];
+  const valueOf = (row: GeneRow) => {
+    const values = row.genes.map((g) =>
+      sampleTraits
+        .filter((t) => t.name === g.gene.name)
+        .map((t) => traitDisplay(t.value))
+        .join(' · ')
+    );
+    if (row.genes.length === 1) return values[0] || '—';
+    return values.every((v) => [...v].length === 1)
+      ? values.join('')
+      : values.map((v) => v || '—').join(' · ');
+  };
+  const geneNames = new Set(genes.map((g) => g.gene.name));
+  const outside = sampleTraits.filter((t) => !geneNames.has(t.name));
   return (
-    <section aria-label="Current decoder blueprint" className="space-y-6">
-      <h2 className="text-text-bright text-section">Current decoder blueprint</h2>
-      <p className="text-text-dim text-meta">
-        {pattern.version === null ? 'DOB version not stated' : `DOB/${pattern.version}`}
-      </p>
-      {pattern.steps.map((step) => (
-        <article key={step.step} className="space-y-3">
-          <h3>
-            Step {step.step + 1} · {step.decoderReference.type}
-          </h3>
-          <div className="text-meta break-all">
-            Reference <Hash hash={step.decoderReference.hash} truncate={false} />
-          </div>
-          <div className="text-meta break-all">
-            Current binary{' '}
-            {step.decoderBinaryHash ? (
-              <AppLink href={`/script/${step.decoderBinaryHash}`}>
-                <Hash hash={step.decoderBinaryHash} truncate={false} copyable={false} />
-              </AppLink>
-            ) : (
-              'Unresolved'
+    <section aria-label="How an object is read" className="min-w-0 space-y-4">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h2
+          className={cn(
+            'font-medium',
+            tier === 2 ? 'text-body text-[#a0a8be]' : 'text-text-bright text-section'
+          )}
+        >
+          How an object is read
+        </h2>
+        <span className="text-text-dim text-meta">
+          {pattern.version === null ? 'DOB version not stated' : `DOB/${pattern.version}`}
+          {genetics
+            ? ` · ${count(genetics.decodedItems)} of ${count(genetics.eligibleItems)} decoded`
+            : ''}
+        </span>
+      </div>
+      <ol
+        aria-label="From DNA to traits"
+        className="flex flex-col gap-1.5 sm:flex-row sm:items-stretch"
+      >
+        {[
+          {
+            title: 'Each object',
+            body: dna
+              ? `${count(dna.length)} bytes of DNA in its cell data.`
+              : 'its DNA, in its cell data.',
+          },
+          {
+            title: 'The pattern',
+            body: `stored in this cluster’s description: ${count(genes.length)} gene${genes.length === 1 ? '' : 's'}, each a byte range and a rule.`,
+          },
+          { title: steps.length > 1 ? 'The decoders' : 'The decoder', body: null },
+        ].map((tile, i) => (
+          <li key={tile.title} className="flex min-w-0 flex-col gap-1.5 sm:flex-1 sm:flex-row">
+            {i > 0 && (
+              <span aria-hidden="true" className="text-center text-[#343c50] sm:w-5 sm:self-center">
+                <span className="sm:hidden">↓</span>
+                <span className="hidden sm:inline">→</span>
+              </span>
+            )}
+            <div className="text-small text-text-dim min-w-0 flex-1 rounded-md border border-[#1a1f30] px-3 py-2.5 [overflow-wrap:anywhere]">
+              <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
+              {tile.body ??
+                steps.map((step) => (
+                  <span key={step.step} className="block">
+                    {steps.length > 1 && <span className="text-text">{step.step + 1}. </span>}
+                    by {step.decoderReference.type}{' '}
+                    <span title={step.decoderReference.hash}>
+                      {shortHash(step.decoderReference.hash)}
+                    </span>
+                    {step.decoderBinaryHash ? (
+                      step.decoderBinaryHash === step.decoderReference.hash ? (
+                        <>
+                          {' '}
+                          <AppLink
+                            href={`/script/${step.decoderBinaryHash}`}
+                            title={step.decoderBinaryHash}
+                          >
+                            →
+                          </AppLink>
+                        </>
+                      ) : (
+                        <>
+                          {', binary '}
+                          <AppLink
+                            href={`/script/${step.decoderBinaryHash}`}
+                            title={step.decoderBinaryHash}
+                          >
+                            {shortHash(step.decoderBinaryHash)}
+                          </AppLink>
+                        </>
+                      )
+                    ) : (
+                      ', binary unresolved'
+                    )}
+                    {step.description.status === 'unsupported' ? (
+                      <span
+                        role="status"
+                        title={step.description.reason}
+                        className="block [overflow-wrap:anywhere]"
+                      >
+                        {RULED_UNMAPPED}
+                      </span>
+                    ) : (
+                      <span className="block">
+                        reads the genes ·{' '}
+                        {FORMAT_WORDS[step.description.format] ?? step.description.format}
+                        {step.description.rangePolicy === 'clipToDna'
+                          ? ' · clipped to the DNA'
+                          : ' · exact ranges'}
+                      </span>
+                    )}
+                  </span>
+                ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+      {ruler && extent !== null ? (
+        <div className="space-y-1.5">
+          <ByteScaleMap
+            label="DNA"
+            total={extent}
+            segments={ruler.parts.map((part) => {
+              const n = part.end - part.start;
+              const span = n === 1 ? `byte ${part.start}` : `bytes ${part.start}–${part.end - 1}`;
+              if (part.key === null)
+                return {
+                  key: `none@${part.start}`,
+                  start: part.start,
+                  end: part.end,
+                  label: count(n),
+                  short: count(n),
+                  color: '#4b5266',
+                  quiet: true,
+                  title: `${span} · no gene reads ${n === 1 ? 'it' : 'them'}`,
+                };
+              const gene = byKey.get(part.key)!.gene;
+              return {
+                key: `${part.key}@${part.start}`,
+                target: part.key,
+                start: part.start,
+                end: part.end,
+                label: `${gene.name} ${count(n)}`,
+                color: inkOf(part.key),
+                title: `${gene.name} · ${span}`,
+              };
+            })}
+            active={readout.active}
+            onHover={readout.hover}
+            onSelect={readout.toggle}
+            note={ruler.inside.length > 0 ? insideNote(ruler.inside) : undefined}
+          />
+          <ReadoutRow
+            label="DNA ruler readout"
+            pinned={readout.showingPin}
+            idle={`${count(extent)} bytes of DNA · ${count(genes.length)} gene${genes.length === 1 ? '' : 's'}`}
+          >
+            {readout.active === null
+              ? null
+              : (() => {
+                  const g = byKey.get(readout.active)!;
+                  const row = rows.find((r) => r.genes.includes(g))!;
+                  return (
+                    [
+                      g.gene.name,
+                      geneSpan(g.gene),
+                      ruleWords(g.gene),
+                      genetics ? foundAcross(g.gene.name, genetics) : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ') + (row.genes.length > 1 ? ` (in ${row.label})` : '')
+                  );
+                })()}
+          </ReadoutRow>
+        </div>
+      ) : (
+        genes.length > 0 && (
+          <p className="text-text-dim text-meta">
+            Its ranges run past what a ruler can draw; the table gives them exactly.
+          </p>
+        )
+      )}
+      {genes.length > 0 && geneTable(rows, 'DOB blueprint')}
+      {folded && (
+        <details className="min-w-0">
+          <summary className="text-text-dim text-small cursor-pointer">
+            All {count(genes.length)} genes, one row each
+          </summary>
+          <div className="mt-2">
+            {geneTable(
+              genes.map((g) => ({
+                label: g.gene.name,
+                genes: [g],
+                span: geneSpan(g.gene),
+                rule: ruleWords(g.gene),
+              })),
+              'DOB blueprint, every gene'
             )}
           </div>
-          {step.description.status === 'unsupported' ? (
-            <p role="status" className="[overflow-wrap:anywhere]">
-              Mapping unavailable: {step.description.reason}
+        </details>
+      )}
+      {sample && (
+        <div
+          role="group"
+          aria-label="One object, read this way"
+          className="min-w-0 rounded-md border border-[#1a1f30] px-3.5 py-3"
+        >
+          <div className="text-meta text-text-dim flex flex-wrap items-baseline justify-between gap-x-3">
+            <span>
+              one object, read this way ·{' '}
+              <AppLink href={sample.href} title={sample.id}>
+                {`${sample.id.slice(0, 10)}…${sample.id.slice(-4)}`}
+              </AppLink>
+            </span>
+            {dna && <span>{count(dna.length)} bytes</span>}
+          </div>
+          {sample.decodeStatus !== 'decoded' ? (
+            <p className="text-text-dim text-small mt-2">
+              Not decoded yet ({sample.decodeStatus}); its values appear once the decoder has run.
             </p>
           ) : (
-            <>
-              <p className="text-text-dim text-meta">
-                {step.description.format} · {step.description.rangePolicy}
-              </p>
-              {/* F2 objects (OB-C12): the blueprint as a table of genes and value domains; in a
-                  column too narrow for its columns, one phone row per gene (R1 / R7). */}
-              <ListTable
-                label="DOB blueprint"
-                columns={wordHeads(BLUEPRINT_COLUMNS)}
-                rows={step.description.genes}
-                rowKey={(g) => String(g.index)}
-                density="row"
-                rowTitle={blueprintTitle}
-                mobileRow={(g) => <BlueprintPhoneRow g={g} />}
-              />
-            </>
+            <dl className="text-small mt-2 grid grid-cols-[minmax(0,140px)_minmax(0,1fr)] gap-x-4 gap-y-1">
+              {rows.map((row) => (
+                <Fragment key={row.genes[0].key}>
+                  <dt
+                    className="truncate"
+                    style={{ color: inkOf(row.genes[0].key) }}
+                    title={row.label}
+                  >
+                    {row.label}
+                  </dt>
+                  <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+                    {valueOf(row)}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
           )}
-        </article>
-      ))}
+          {outside.length > 0 && (
+            <p className="text-text-dim text-meta mt-2 [overflow-wrap:anywhere]">
+              Also from the decoder, outside the pattern:{' '}
+              {outside.map((t) => `${t.name} (${traitDisplay(t.value)})`).join(' · ')}
+            </p>
+          )}
+        </div>
+      )}
+      {status}
     </section>
   );
+}
+
+/** "prev.type and relief read byte 0 too": genes whose bytes all sit inside a wider gene. */
+function insideNote(inside: readonly { name: string; start: number; end: number }[]): string {
+  const groups = new Map<string, string[]>();
+  for (const g of inside) {
+    const span = g.end - g.start === 1 ? `byte ${g.start}` : `bytes ${g.start}–${g.end - 1}`;
+    groups.set(span, [...(groups.get(span) ?? []), g.name]);
+  }
+  return [...groups]
+    .map(([span, names]) => {
+      const who =
+        names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+      return `${who} read${names.length === 1 ? 's' : ''} ${span} too`;
+    })
+    .join(' · ');
 }

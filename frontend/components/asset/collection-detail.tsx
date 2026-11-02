@@ -12,15 +12,19 @@ import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shel
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CollectionItems } from '@/components/asset/collection-gallery';
 import { CollectionHolders } from '@/components/asset/collection-holders';
-import { CurrentPatternEvidence } from '@/components/asset/genetics';
-import { CollectionObjects, DecodeCoverage } from '@/components/asset/collection-objects';
+import { CollectionObjects } from '@/components/asset/collection-objects';
+import {
+  ClusterCellEvidence,
+  ClusterPatternReading,
+  MnftClassEvidence,
+  StoredDescription,
+} from '@/components/asset/collection-evidence';
 import { MnftPermissions } from '@/components/asset/identity-document';
 import { CapacityHistory } from '@/components/asset/capacity-history';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
 import { Address } from '@/components/ui/address';
-import { ProtocolEvidence } from '@/components/asset/protocol-evidence';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { parseSporeClusterDescription } from '@/lib/spore-cluster-description';
 import { isDidCkbCollectionAlias } from '@/lib/detail-routes';
@@ -424,41 +428,28 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
       tier2={
         <>
           {kind === 'spore' && (
-            <section aria-label="Cluster cell evidence" className="space-y-4">
-              <AssetReadState
-                label="cluster cell"
-                error={protocol.error}
-                retained={!!protocol.data}
-                loading={protocol.isLoading}
-              />
-              {protocol.data?.current ? (
-                <>
-                  <AppLink
-                    href={`/cell/${protocol.data.current.cell.txHash}-${protocol.data.current.cell.outputIndex}`}
-                  >
-                    Current cluster cell →
-                  </AppLink>
-                  <ProtocolEvidence
-                    title="Raw cluster cell data"
-                    dataHex={protocol.data.current.dataHex}
-                    fields={protocol.data.current.fields}
-                    decoded={protocol.data.current.decoded}
-                  />
-                </>
-              ) : (
-                protocol.data && (
-                  <p className="text-text-dim text-meta">
-                    No current cell carries this cluster type.
-                  </p>
-                )
-              )}
-            </section>
-          )}
-          {kind === 'spore' && insights.data && (
-            <>
-              <DecodeCoverage genetics={insights.data.genetics} />
-              <CurrentPatternEvidence pattern={insights.data.currentPattern} />
-            </>
+            // Lane E (C5, Main board): the cluster cell byte by byte beside how an object is read.
+            <div className="grid min-w-0 items-start gap-x-16 gap-y-10 xl:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)]">
+              <section aria-label="Cluster cell evidence" className="min-w-0 space-y-4">
+                <AssetReadState
+                  label="cluster cell"
+                  error={protocol.error}
+                  retained={!!protocol.data}
+                  loading={protocol.isLoading}
+                />
+                {protocol.data?.current ? (
+                  <ClusterCellEvidence clusterId={id} current={protocol.data.current} />
+                ) : (
+                  protocol.data && (
+                    <p className="text-text-dim text-meta">
+                      No current cell carries this cluster type.
+                    </p>
+                  )
+                )}
+                {cluster.data && <StoredDescription description={cluster.data.description} />}
+              </section>
+              {insights.data && <ClusterPatternReading clusterId={id} insights={insights.data} />}
+            </div>
           )}
           {/* F2 objects (OB-K5): the configure decoding is developer evidence (Mnft board tier 2). */}
           {object?.classDetail && (
@@ -467,35 +458,12 @@ function ScopedCollectionDetail({ id, kind, initial }: CollectionDetailProps) {
               configure={object.classDetail.configure}
             />
           )}
-          <section className="space-y-4">
-            <h2 className="text-text-bright text-section">Collection metadata</h2>
-            {cluster.data && (
-              <pre className="text-meta whitespace-pre-wrap break-all">
-                {cluster.data.description ?? 'No description bytes recorded.'}
-              </pre>
-            )}
-            {object?.classDetail && (
-              <>
-                <div className="text-meta break-all">
-                  Class ID <Hash hash={object.classDetail.classId} truncate={false} />
-                </div>
-                <div className="text-meta break-all">
-                  Issuer ID <Hash hash={object.classDetail.issuerId} truncate={false} />
-                </div>
-                <p className="text-meta">
-                  Issued {object.classDetail.issued} / planned {object.classDetail.total}
-                </p>
-                <p className="text-meta break-all">
-                  Renderer {object.classDetail.renderer ?? 'not recorded'}
-                </p>
-                {object.issuerDetail && (
-                  <pre className="text-meta whitespace-pre-wrap break-all">
-                    {JSON.stringify(object.issuerDetail, null, 2)}
-                  </pre>
-                )}
-              </>
-            )}
-          </section>
+          {object?.classDetail && (
+            <MnftClassEvidence
+              classDetail={object.classDetail}
+              issuerDetail={object.issuerDetail}
+            />
+          )}
         </>
       }
     >
