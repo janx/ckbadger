@@ -399,6 +399,11 @@ describe('Where they run and which software (hierarchy v3 R12, R14, R15; lane N,
     expect(bar).toHaveClass('h-[28px]');
     const words = Array.from(bar.querySelectorAll('[data-provider]')).map((s) => s.textContent);
     expect(words).toEqual(['Amazon.com 54.55%', 'Hetzner Online GmbH 30.30%', 'Unknown 15.15%']);
+    // The words are their own box inside the coloured segment, as the DAO's concentration bar.
+    for (const segment of Array.from(bar.querySelectorAll('[data-provider]'))) {
+      expect(segment.childNodes).toHaveLength(1);
+      expect(segment.firstElementChild!.tagName).toBe('SPAN');
+    }
   });
 
   it('writes a share alone, or nothing, where a segment cannot hold its words', async () => {
@@ -458,7 +463,8 @@ describe('Network page rhythm, Over time and tier 2 (hierarchy v3 R6, R13, R14, 
     expect(tier1).not.toHaveClass('space-y-8');
     for (const h2 of Array.from(tier1.querySelectorAll('h2'))) {
       expect(h2).toHaveClass('text-section', 'text-text-bright');
-      expect(h2.parentElement).toHaveClass('mb-[18px]');
+      // The heading row of the DAO page's sections: a flex row, 18 px above the evidence.
+      expect(h2.parentElement).toHaveClass('mb-[18px]', 'flex', 'items-baseline');
     }
   });
 

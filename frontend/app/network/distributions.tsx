@@ -199,7 +199,7 @@ function HostingSection({
             )}
             style={{ width: `${spans[i].width}%`, backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}
           >
-            {inside(org, count, i)}
+            {inside(org, count, i) && <span>{inside(org, count, i)}</span>}
           </span>
         ))}
       </div>
