@@ -383,7 +383,9 @@ describe('Token board (F2 objects)', () => {
     vi.mocked(api.getTokenActivityFeed).mockResolvedValue({ ...empty, data: [activity] });
     render(<TokenDetailPage typeHash={hash} />);
     const line = await screen.findByText(/^It last moved/, undefined, { timeout: 5000 });
-    expect(line.textContent).toMatch(/^It last moved .+ ago: .+\.$/);
+    // Lane P: the day it moved, on the UTC+8 clock; how long ago is the date's hover.
+    expect(line.textContent).toMatch(/^It last moved on \d{4}-\d\d-\d\d: .+\.$/);
+    expect(line.querySelector('time')).toHaveAttribute('title', expect.stringMatching(/ ago$/));
     expect(line).not.toHaveTextContent('the feed names');
   });
 });

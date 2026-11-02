@@ -16,8 +16,12 @@ export type IdentityProtocol = Exclude<ItemProtocol, { kind: 'spore' } | { kind:
 function Sub({ children }: { children: ReactNode }) {
   return <span className="text-text-dim text-small mt-0.5 block font-normal">{children}</span>;
 }
-function B({ children }: { children: ReactNode }) {
-  return <span className="text-text-bright">{children}</span>;
+function B({ children, title }: { children: ReactNode; title?: string }) {
+  return (
+    <span className="text-text-bright" title={title}>
+      {children}
+    </span>
+  );
 }
 const times = (n: number) => (n === 1 ? 'once' : n === 2 ? 'twice' : `${n} times`);
 const plural = (n: number, one: string, many: string) =>
@@ -68,13 +72,16 @@ function expiryFact(term: IdentityTerm, now: number, grace?: number): AssetMetri
   const expired = now >= term.expiresAt,
     days = termDays(term.expiresAt, now),
     last = term.renewals.at(-1);
+  // Lane P: the date is the value; how long ago (or how far off) is the metric's hover.
   return {
     label: expired ? 'Expired' : 'Expires',
     value: formatUtc8Date(term.expiresAt),
+    title: expired
+      ? `expired ${plural(days, 'day', 'days')} ago`
+      : `expires in ${plural(days, 'day', 'days')}`,
     note: (
       <>
-        {expired ? `${plural(days, 'day', 'days')} ago` : `in ${plural(days, 'day', 'days')}`}
-        {last ? ` · renewed ${formatUtc8Date(last.at)}` : ' · never renewed'}
+        {last ? `renewed ${formatUtc8Date(last.at)}` : 'never renewed'}
         {grace !== undefined ? ` · grace to ${formatUtc8Date(grace)}` : ''}
       </>
     ),
@@ -350,14 +357,15 @@ export function IdentitySummary({
   const termClause = (lead: ReactNode, whose = 'its') => {
     if (term.kind !== 'term') return null;
     const days = plural(termDays(term.expiresAt, now), 'day', 'days');
+    // Lane P: the date in the sentence, how long ago (or how far off) its hover.
     return now >= term.expiresAt ? (
       <>
         {lead}
-        {whose} term ended on <B>{formatUtc8Date(term.expiresAt)}</B>, <B>{days}</B> ago
+        {whose} term ended on <B title={`${days} ago`}>{formatUtc8Date(term.expiresAt)}</B>
       </>
     ) : (
       <>
-        {lead}held until <B>{formatUtc8Date(term.expiresAt)}</B>, <B>{days}</B> from now
+        {lead}held until <B title={`${days} from now`}>{formatUtc8Date(term.expiresAt)}</B>
       </>
     );
   };

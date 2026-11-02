@@ -167,7 +167,9 @@ export function itemLifeSentence(
   const first = versions[0];
   const last = versions.at(-1);
   if (!first || !last) throw new Error('item life sentence needs at least one cell version');
-  const born = `${verb}${by ? ` by ${by}` : ''} ${spelledDuration(now - timeOf(first))} ago to ${lockPhrase(first.lockName)}`;
+  // Lane P: the sentence tells the path, not the time — the dates are the page's Minted and Last
+  // moved metrics (C7: the lede restates no metric), how long ago its hover (itemLifeAges).
+  const born = `${verb}${by ? ` by ${by}` : ''} to ${lockPhrase(first.lockName)}`;
   const moves = versions.length - 1;
   if (!last.isLive) {
     const gone = last.consumedAtBlock;
@@ -177,7 +179,25 @@ export function itemLifeSentence(
   const later = spelledDuration(timeOf(last) - timeOf(first));
   return moves === 1
     ? `${born}, then moved ${later} later to ${lockPhrase(last.lockName)}, where it sits now.`
-    : `${born}, then moved ${moves} times; the last move, ${spelledDuration(now - timeOf(last))} ago, put it under ${lockPhrase(last.lockName)}, where it sits now.`;
+    : `${born}, then moved ${moves} times; the last move put it under ${lockPhrase(last.lockName)}, where it sits now.`;
+}
+
+/**
+ * The life sentence's hover (lane P): how long ago the item was minted and, when its cell has
+ * moved, how long ago it last moved — the ages the sentence itself dates.
+ */
+export function itemLifeAges(
+  versions: readonly ItemCellVersion[],
+  now: number,
+  verb: 'Minted' | 'Issued' = 'Minted'
+): string {
+  const first = versions[0];
+  const last = versions.at(-1);
+  if (!first || !last) throw new Error('item life ages need at least one cell version');
+  const born = `${verb.toLowerCase()} ${spelledDuration(now - timeOf(first))} ago`;
+  return versions.length > 1
+    ? `${born} · last moved ${spelledDuration(now - timeOf(last))} ago`
+    : born;
 }
 
 // ── The cell over its life (OB-9, OB-M7) ──

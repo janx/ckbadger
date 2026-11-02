@@ -7,6 +7,7 @@ import { render } from '@/__tests__/utils/test-utils';
 import { dailyActivities, feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionsPage from '@/app/transactions/page';
 import { api } from '@/lib/api';
+import { formatUtc8DateTime } from '@/lib/utils';
 
 // D11: the real navigation (setup.ts stubs it with an empty URL), so a router's location reaches
 // the page; outside a router it reads window.location, as the stub's empty URL did.
@@ -216,6 +217,14 @@ describe('Transactions pool view', () => {
     expect(screen.getByTestId('pool-banner')).toHaveTextContent(
       '0 pending · 1 proposed · 0 awaiting index'
     );
+    // Lane P: when the newest pool tx was seen, on the UTC+8 clock; how long ago is its hover.
+    expect(screen.getByTestId('pool-banner')).toHaveTextContent(
+      `· newest seen ${formatUtc8DateTime(1792886400000)}`
+    );
+    expect(screen.getByTestId('pool-banner')).not.toHaveTextContent(/ ago/);
+    expect(
+      within(screen.getByTestId('pool-banner')).getByText(formatUtc8DateTime(1792886400000))
+    ).toHaveAttribute('title', expect.stringMatching(/ ago$/));
     const summary = screen.getByLabelText('Pool summary');
     expect(summary).toHaveTextContent('Pending · proposed0 · 1');
     expect(summary).toHaveTextContent('Total size226 B');

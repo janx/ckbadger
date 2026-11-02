@@ -25,6 +25,7 @@ import {
   cellLifeSentence,
   ckbText,
   itemLifeSentence,
+  itemLifeAges,
   lockFootnote,
 } from '@/components/asset/object-hero';
 import { CapacityPartition } from '@/components/ui/capacity-partition';
@@ -226,7 +227,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
       <div className="flex flex-col gap-3">
         {(history || coll) && (
           <p className="text-text-dim text-body">
-            {history && history.length > 0 && <span>{itemLifeSentence(history, now)}</span>}
+            {history && history.length > 0 && (
+              <span title={itemLifeAges(history, now)}>{itemLifeSentence(history, now)}</span>
+            )}
             {coll && collectionName && (
               <span>
                 {' '}

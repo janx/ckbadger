@@ -433,7 +433,10 @@ describe('TenureBar (ID-C7)', () => {
     expect(svg.getAttribute('viewBox')).toBe('0 0 900 92');
     expect(container.querySelectorAll('[data-elapsed]').length).toBe(3);
     expect(container.querySelectorAll('[data-remaining]').length).toBe(1);
-    expect(screen.getByText('now · 116 days left')).toBeInTheDocument();
+    // Lane P: the now mark is dated; the days left are its hover.
+    const nowMark = container.querySelector('[data-role="tenure-now"]')!;
+    expect(nowMark.lastChild!.textContent).toMatch(/^now · \d{4}-\d\d-\d\d$/);
+    expect(nowMark.querySelector('title')).toHaveTextContent('116 days left');
     expect(screen.getByRole('heading', { name: 'Held until 2027-02-19' })).toBeInTheDocument();
     expect(container.querySelector('[data-remaining]')).toHaveAttribute(
       'fill',
@@ -460,7 +463,10 @@ describe('TenureBar (ID-C7)', () => {
       />
     );
     expect(screen.getByRole('heading', { name: 'Expired on 2025-02-19' })).toBeInTheDocument();
-    expect(screen.getByText('expired 184 days ago')).toBeInTheDocument();
+    // Lane P: the now mark is dated; how long ago the term ended is its hover.
+    const nowMark = container.querySelector('[data-role="tenure-now"]')!;
+    expect(nowMark.lastChild!.textContent).toMatch(/^now · \d{4}-\d\d-\d\d$/);
+    expect(nowMark.querySelector('title')).toHaveTextContent('expired 184 days ago');
     expect(container.querySelector('[data-elapsed]')).not.toHaveAttribute(
       'fill',
       CLASS_COLORS.identities
@@ -509,7 +515,10 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
     expect(container.querySelector('svg')!.getAttribute('viewBox')).toBe('0 0 358 92');
     expect(screen.queryByText('renewed 2025-02-04')).not.toBeInTheDocument();
     expect(screen.getAllByText('renewed').length).toBe(2);
-    expect(screen.getByText('now · 116 days left')).toBeInTheDocument();
+    // Lane P: the now mark is dated; the days left are its hover.
+    const nowMark = container.querySelector('[data-role="tenure-now"]')!;
+    expect(nowMark.lastChild!.textContent).toMatch(/^now · \d{4}-\d\d-\d\d$/);
+    expect(nowMark.querySelector('title')).toHaveTextContent('116 days left');
   });
   it('keeps the now label inside at the right edge and draws the lapsed time dashed', () => {
     const { container } = render(
@@ -519,20 +528,26 @@ describe('TenureBar at any width (ID-C7, visual pass)', () => {
         now={reg + 549 * day}
       />
     );
-    expect(screen.getByText('expired 184 days ago')).toHaveAttribute('text-anchor', 'end');
+    expect(container.querySelector('[data-role="tenure-now"]')).toHaveAttribute(
+      'text-anchor',
+      'end'
+    );
     const lapsed = container.querySelector('[data-lapsed]')!;
     expect(lapsed).toHaveAttribute('stroke-dasharray', '3 3');
     expect(screen.getByText('lapsed · not renewed')).toBeInTheDocument();
   });
   it('writes day counts with thousands separators, as the rail does', () => {
-    render(
+    const { container } = render(
       <TenureBar
         name="alice.bit"
         periods={[{ label: 'paid at registration', start: reg, end: reg + 4000 * day }]}
         now={reg + 100 * day}
       />
     );
-    expect(screen.getByText('now · 3,900 days left')).toBeInTheDocument();
+    // Lane P: the days left are the now mark's hover.
+    expect(container.querySelector('[data-role="tenure-now"] title')).toHaveTextContent(
+      /^3,900 days left$/
+    );
   });
 });
 

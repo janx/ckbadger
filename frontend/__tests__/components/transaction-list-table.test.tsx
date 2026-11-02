@@ -84,7 +84,7 @@ describe('TransactionListTable (Transactions board, TX-25 / TX-26 / D5)', () => 
         .map((h) => h.textContent)
     ).toEqual([
       'Transaction',
-      'Block · age',
+      'Block · date',
       'What it did',
       'Value, CKB',
       'Fee, CKB',
@@ -240,7 +240,8 @@ describe('TransactionListTable phone row (board L2)', () => {
         key: 'identity',
         tone: 'head',
         left: '0x00de304b...25cbbc',
-        right: expect.stringMatching(/^#20,829,775 · .+ ago$/),
+        // Lane P: the block's UTC+8 date; its age is the date's hover.
+        right: expect.stringMatching(/^#20,829,775 · \d{4}-\d\d-\d\d$/),
       },
       {
         key: 'what',

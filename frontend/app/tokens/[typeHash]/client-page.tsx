@@ -13,7 +13,8 @@ import { TokenHolders } from '@/components/asset/token-holders';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
 import { AppLink } from '@/components/ui/app-link';
-import { formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { formatCkbAmount, truncateHash } from '@/lib/utils';
+import { Utc8Date } from '@/components/ui/utc8-date';
 import { ExactCkb, formatStandard, activityHeadline } from '@/components/activity-event-row';
 import { getScriptDetailHref } from '@/lib/detail-routes';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
@@ -176,9 +177,10 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
               <AssetReadState error={latest.error} label="last token movement" retained />
               {latest.data.data[0] ? (
                 <p>
-                  It last moved{' '}
+                  {/* Lane P: the day it moved; how long ago is the date's hover. */}
+                  It last moved on{' '}
                   <AppLink href={`/tx/${latest.data.data[0].txHash}`}>
-                    {formatTimeAgo(latest.data.data[0].timestamp)}
+                    <Utc8Date timestamp={latest.data.data[0].timestamp} />
                   </AppLink>
                   : {activityHeadline(latest.data.data[0])}.
                 </p>

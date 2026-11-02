@@ -18,7 +18,7 @@ import {
 } from '@/components/activity-event-row';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo } from '@/lib/utils';
+import { Utc8Date } from '@/components/ui/utc8-date';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import type { GlobalActivity, Transaction } from '@/lib/api';
@@ -162,7 +162,10 @@ function TransactionPhoneRow({ tx, wide }: { tx: Transaction; wide: boolean }) {
               <Link href={`/blocks/${tx.blockNumber}`} className="text-text-bright hover:text-jade">
                 {formatBlockNumber(tx.blockNumber)}
               </Link>
-              <span className="text-text"> · {formatTimeAgo(tx.timestamp)}</span>
+              <span className="text-text">
+                {' · '}
+                <Utc8Date timestamp={tx.timestamp} />
+              </span>
             </span>
           ),
         },
@@ -244,14 +247,17 @@ export function TransactionListTable({
     },
     {
       key: 'block',
-      label: 'Block · age',
+      label: 'Block · date',
       minWidth: 175,
       render: (tx) => (
         <span className="text-small whitespace-nowrap">
           <Link href={`/blocks/${tx.blockNumber}`} className="hover:text-jade">
             {formatBlockNumber(tx.blockNumber)}
           </Link>
-          <span className="text-text-dim"> · {formatTimeAgo(tx.timestamp)}</span>
+          <span className="text-text-dim">
+            {' · '}
+            <Utc8Date timestamp={tx.timestamp} />
+          </span>
         </span>
       ),
     },

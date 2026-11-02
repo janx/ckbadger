@@ -20,7 +20,7 @@ import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { parseShannons } from '@/lib/ckb-decimal';
-import { formatTimeAgo, cn } from '@/lib/utils';
+import { formatTimeAgo, formatUtc8DateTime, cn } from '@/lib/utils';
 import { ClassMark } from '@/components/ui/class-mark';
 import { CLASS_COLORS, type AssetClass } from '@/lib/design-tokens';
 import {
@@ -561,7 +561,14 @@ export default function TransactionsPage() {
                   {poolHead.data.totals.proposed.toLocaleString('en-US')} proposed ·{' '}
                   {poolHead.data.totals.awaitingIndex.toLocaleString('en-US')} awaiting index
                   {poolHead.data.summary.newestSeenAt !== null && (
-                    <> · newest {formatTimeAgo(poolHead.data.summary.newestSeenAt)}</>
+                    // Lane P: on the UTC+8 clock; how long ago is its hover.
+                    <>
+                      {' '}
+                      · newest seen{' '}
+                      <time title={formatTimeAgo(poolHead.data.summary.newestSeenAt)}>
+                        {formatUtc8DateTime(poolHead.data.summary.newestSeenAt)}
+                      </time>
+                    </>
                   )}
                 </span>
                 <button

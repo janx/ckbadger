@@ -1,5 +1,5 @@
 import { AssetMetrics } from '@/components/asset/detail-shell';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { render, screen, within } from '@/__tests__/utils/test-utils';
 import {
   identityFacts,
   IdentitySummary,
@@ -74,7 +74,10 @@ describe('identity facts rail (ID-C6)', () => {
     ]);
     expect(fact('Owner')).toHaveTextContent('.bit Lock · owner and manager are the same key');
     expect(fact('Expires')).toHaveTextContent('2027-02-19');
-    expect(fact('Expires')).toHaveTextContent('in 116 days · renewed 2025-02-18');
+    // Lane P: how far off is the metric's hover; the note keeps the last renewal.
+    expect(fact('Expires')).toHaveTextContent('renewed 2025-02-18');
+    expect(fact('Expires')).not.toHaveTextContent('in 116 days');
+    expect(fact('Expires')).toHaveAttribute('title', 'expires in 116 days');
     expect(fact('Registered')).toHaveTextContent('2024-02-20');
     expect(fact('Registered')).toHaveAttribute('title', 'registered 2024-02-20 08:56:57 UTC+8');
     expect(fact('Registered')).toHaveTextContent('#12,260,151');
@@ -106,7 +109,9 @@ describe('identity facts rail (ID-C6)', () => {
       />
     );
     expect(fact('Expired')).toHaveTextContent('2026-04-24');
-    expect(fact('Expired')).toHaveTextContent('184 days ago · never renewed');
+    // Lane P: the date is the value; how long ago is the metric's hover.
+    expect(fact('Expired')).toHaveTextContent(/^Expired2026-04-24 · never renewed$/);
+    expect(fact('Expired')).toHaveAttribute('title', 'expired 184 days ago');
     expect(fact('Minted')).toBeInTheDocument();
     expect(fact('.bit account')).toHaveTextContent('888899.bit · not live');
   });
@@ -161,7 +166,11 @@ describe('identity summary (ID-C5)', () => {
       />
     );
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
-      'Registered on 2024-02-20 and renewed twice, it is held until 2027-02-19, 116 days from now. Its owner has never changed. No records are set.'
+      'Registered on 2024-02-20 and renewed twice, it is held until 2027-02-19. Its owner has never changed. No records are set.'
+    );
+    expect(within(screen.getByTestId('identity-summary')).getByText('2027-02-19')).toHaveAttribute(
+      'title',
+      '116 days from now'
     );
   });
 
@@ -253,7 +262,12 @@ describe('.bit Cell summary when the term has ended', () => {
       />
     );
     expect(screen.getByTestId('identity-summary')).toHaveTextContent(
-      "The name's term ended on 2026-04-24, 184 days ago."
+      "The name's term ended on 2026-04-24."
+    );
+    // Lane P: how long ago is the date's hover.
+    expect(within(screen.getByTestId('identity-summary')).getByText('2026-04-24')).toHaveAttribute(
+      'title',
+      '184 days ago'
     );
   });
 });
