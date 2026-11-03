@@ -129,6 +129,11 @@ describe('Code versions rows (table-rows L1-4)', () => {
     expect(v4[4]).toHaveTextContent(/^multisig 0x07a2…68ca$/);
     expect(v4[5]).toHaveTextContent(/^replaced at #17,894,900$/);
     expect(v4[5].firstElementChild).toHaveClass('text-text-dim');
+    // Lane L: the block that replaced it is a link.
+    expect(within(v4[5]).getByRole('link', { name: '#17,894,900' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/17894900'
+    );
     expect(v4[5].querySelector('[data-row-tag]')).toBeNull();
     expect(cells(rows[4])[4]).toHaveTextContent(/^multisig 0xd1db…b95c$/);
     expect(cells(rows[4])[5]).toHaveTextContent(/^replaced at #11,133,523$/);

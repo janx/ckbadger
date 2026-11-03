@@ -172,6 +172,12 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(screen.getByTestId('ranking-moved')).toHaveTextContent(
       'The chain tip moved since the first page (ranked at block #20,879,205): this page continues the ranking at block #20,879,300, so a depositor whose rank changed may repeat or be missing.'
     );
+    // Lane L: both blocks are links.
+    expect(
+      within(screen.getByTestId('ranking-moved'))
+        .getAllByRole('link')
+        .map((a) => a.getAttribute('href'))
+    ).toEqual(['/mainnet/blocks/20879205', '/mainnet/blocks/20879300']);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Start again from rank 1' })).toBeNull();
   });

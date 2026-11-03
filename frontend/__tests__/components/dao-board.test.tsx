@@ -200,9 +200,13 @@ describe('DaoBoard', () => {
 
   it('writes AR as the exact rate and links anchors to real block routes (DAO-4, #7)', () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    expect(
-      screen.getByText(/AR grew from 1\.0000000000000000 at genesis to 1\.0200000000000000/)
-    ).toBeInTheDocument();
+    const grew = screen.getByText(
+      /AR grew from 1\.0000000000000000 at genesis to 1\.0200000000000000/
+    );
+    // Lane L: the block AR is read at is a link, beside the S proof's anchor (both #5 here).
+    const fives = within(grew).getAllByRole('link', { name: '#5' });
+    expect(fives).toHaveLength(2);
+    for (const a of fives) expect(a).toHaveAttribute('href', '/mainnet/blocks/5');
     const verify = screen.getByRole('link', { name: /Verify statistics anchor block #5/ });
     expect(verify).toHaveAttribute('href', '/mainnet/blocks/5');
     // Hierarchy D3/D8: the anchor link is developer evidence, under "How the Nervos DAO works".
@@ -1141,10 +1145,11 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent(
       'At block #5 (0xa5a5a5a5...a5a5a5a5), S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
     );
-    // Lane L: tier 2 names block #5 four times (the header field's heading, the capacity-use
-    // line, the S proof, the statistics note) and every one is a link to it (was exactly one).
+    // Lane L: tier 2 names block #5 five times (the header field's heading, the capacity-use
+    // line, AR's reading block, the S proof, the statistics note) and every one is a link to it
+    // (was exactly one).
     const fives = within(t2 as HTMLElement).getAllByRole('link', { name: '#5' });
-    expect(fives).toHaveLength(4);
+    expect(fives).toHaveLength(5);
     for (const a of fives) expect(a).toHaveAttribute('href', '/mainnet/blocks/5');
     expect(within(t2 as HTMLElement).getByTitle(ANCHOR_5.blockHash)).toHaveTextContent(
       '0xa5a5a5a5...a5a5a5a5'

@@ -1109,8 +1109,8 @@ function RawEvidence({
       <p className="text-text-dim text-body mt-3">
         AR, in every block header, is the DAO&apos;s growth index. Since genesis, AR grew from{' '}
         {formatAr(evidence.ar.genesisAr)} at genesis to {formatAr(evidence.ar.tipAr)} at block{' '}
-        {formatBlockNumber(evidence.tipBlockNumber)}: free capacity deposited in block 0 would have
-        grown by +{evidence.ar.sinceGenesisGrowthPercent}
+        <BlockLink number={evidence.tipBlockNumber} />: free capacity deposited in block 0 would
+        have grown by +{evidence.ar.sinceGenesisGrowthPercent}
         %. A deposit grows on the capacity it does not occupy; the curve flattens as more CKB
         exists. The deposit reading under &ldquo;How a deposit grows&rdquo; is the API
         calculator&apos;s for 10,000 CKB in a standard deposit cell: compensation accrues on its

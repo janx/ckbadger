@@ -144,9 +144,9 @@ export default function DaoDepositorsPage() {
                   className="text-text-dim text-small mb-3 max-w-[80ch]"
                 >
                   The chain tip moved since the first page (ranked at block{' '}
-                  {formatBlockNumber(moved.from)}): this page continues the ranking at block{' '}
-                  {formatBlockNumber(moved.to)}, so a depositor whose rank changed may repeat or be
-                  missing.
+                  <BlockLink number={moved.from} />
+                  ): this page continues the ranking at block <BlockLink number={moved.to} />, so a
+                  depositor whose rank changed may repeat or be missing.
                 </p>
               )}
               <ListTable

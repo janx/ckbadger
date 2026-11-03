@@ -34,6 +34,7 @@ import type { Cell, ScriptFamilyDetail, StackedAreaChartResponse } from '@/lib/a
 import type { CapacityRangeKey } from '@/lib/capacity-range';
 import { formatCapacity, formatCkbAmount, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -537,15 +538,19 @@ export function ScriptFamilyPage({
   /** The deployment a one-line version row writes: its first; the others are its title's. */
   const leadOf = (row: Row): Deployment | undefined =>
     [...row.version.deployments].sort((a, b) => a.deployedAt - b.deployedAt)[0];
-  /** "replaced at #17,894,900": what became of a version no live code cell holds. */
-  const replacedText = (d: Deployment | undefined): string =>
+  /**
+   * "replaced at #17,894,900": what became of a version no live code cell holds, as sentence parts
+   * (lane L: the row links the block; the title reads the same words as text).
+   */
+  const replacedParts = (d: Deployment | undefined): SentencePart[] =>
     !d
-      ? 'no code cell observed'
+      ? ['no code cell observed']
       : d.consumedAtBlock !== undefined && d.consumedAtBlock !== null
-        ? `replaced at ${formatBlockNumber(d.consumedAtBlock)}`
+        ? ['replaced at ', { block: d.consumedAtBlock }]
         : d.status === 'consumed'
-          ? deploymentStatus(d)
-          : 'status unavailable';
+          ? [deploymentStatus(d)]
+          : ['status unavailable'];
+  const replacedText = (d: Deployment | undefined): string => sentenceText(replacedParts(d));
   /** Who signed a deployment, for the title: "signed by X, hands it to Y" or "first deployed into Y". */
   const signerTitle = (d: Deployment): string => {
     const { who, note, marked } = signer(d);
@@ -693,7 +698,10 @@ export function ScriptFamilyPage({
         row.current ? (
           <RowTag variant="accent">live · current</RowTag>
         ) : (
-          <span className="text-text-dim">{replacedText(leadOf(row))}</span>
+          <span className="text-text-dim">
+            {/* Lane L: the replacing block is a link. */}
+            <SentenceNodes parts={replacedParts(leadOf(row))} />
+          </span>
         ),
     },
     {
