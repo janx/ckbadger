@@ -32,6 +32,7 @@ import { CapacityPartition } from '@/components/ui/capacity-partition';
 import { CompositionBadge } from '@/components/ui/composition-mark';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AppLink } from '@/components/ui/app-link';
+import { BlockLink } from '@/components/ui/block-link';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
@@ -548,8 +549,12 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
                   ) : (
                     'no live owner'
                   )}
-                  {cluster.data.createdAtBlock !== null &&
-                    ` · created at ${formatBlockNumber(cluster.data.createdAtBlock)}`}
+                  {cluster.data.createdAtBlock !== null && (
+                    <>
+                      {' '}
+                      · created at <BlockLink number={cluster.data.createdAtBlock} />
+                    </>
+                  )}
                 </p>
               )}
             </>
