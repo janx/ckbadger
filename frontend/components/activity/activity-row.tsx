@@ -349,24 +349,42 @@ function headIsOneLine(article: HTMLElement, txHash: string): boolean {
  * action's facts after the headline, the headline's own action unnamed, every other one led by its
  * label; lines that read the same are said once with their count ("×18").
  */
-function InlineProtocolRuns({ actions }: { actions: ProtocolActionView[] }) {
-  const lines: { key: string; parts: ReactNode[]; count: number }[] = [];
+/** Actions that read alike, in first-seen order: one line with its count ("×18"), inline or listed. */
+interface ProtocolLineGroup {
+  key: string;
+  first: ProtocolActionView;
+  count: number;
+}
+
+function groupProtocolLines(actions: ProtocolActionView[]): ProtocolLineGroup[] {
+  const groups: ProtocolLineGroup[] = [];
   for (const a of actions) {
-    const facts = a.facts.map((f) => f.node);
-    const parts = a.isPrimary ? facts : [a.label, ...facts];
-    if (parts.length === 0) continue;
-    const same = lines.find((l) => l.key === a.lineKey);
+    const same = groups.find((g) => g.key === a.lineKey);
     if (same) same.count += 1;
-    else lines.push({ key: a.lineKey, parts, count: 1 });
+    else groups.push({ key: a.lineKey, first: a, count: 1 });
   }
+  return groups;
+}
+
+/** A group's inline parts: its facts, led by its label unless it is the headline's own action. */
+function inlineParts(g: ProtocolLineGroup): ReactNode[] {
+  const facts = g.first.facts.map((f) => f.node);
+  return g.first.isPrimary ? facts : [g.first.label, ...facts];
+}
+
+function InlineProtocolRuns({ groups }: { groups: ProtocolLineGroup[] }) {
   return (
     <>
-      {lines.map((l) => (
-        <DetailRun key={l.key}>
-          <DotJoined parts={l.parts} />
-          {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
-        </DetailRun>
-      ))}
+      {groups.map((g) => {
+        const parts = inlineParts(g);
+        if (parts.length === 0) return null;
+        return (
+          <DetailRun key={g.key}>
+            <DotJoined parts={parts} />
+            {g.count > 1 && <span className="text-text-dim"> ×{g.count}</span>}
+          </DetailRun>
+        );
+      })}
     </>
   );
 }
@@ -421,16 +439,17 @@ function amountChars(shannons: bigint): number {
  * decimals line up), "deposited at #block" as a link to the block, then every other fact it carries.
  */
 function ProtocolActionLine({
-  action,
+  group,
   named,
   labelChars,
   amountWidth,
 }: {
-  action: ProtocolActionView;
+  group: ProtocolLineGroup;
   named: boolean;
   labelChars: number;
   amountWidth: number;
 }) {
+  const action = group.first;
   const parts: ReactNode[] = [];
   if (named)
     parts.push(
@@ -467,6 +486,7 @@ function ProtocolActionLine({
   return (
     <div data-role="protocol-line" className="text-text-dim text-small pl-[18px] leading-[18px]">
       <DotJoined parts={parts} />
+      {group.count > 1 && <span className="text-text-dim"> ×{group.count}</span>}
     </div>
   );
 }
@@ -474,9 +494,15 @@ function ProtocolActionLine({
 /**
  * A listed run's actions under the head (lane F follow-up 2): folded by default behind
  * "51 deposits ↓", opened to one action per line, folded back by "fewer ↑". Every action of the
- * transaction is one line here — nothing is dropped.
+ * transaction is here — actions that read alike are one line with their count ("×18"), as inline.
  */
-function ProtocolActionList({ actions }: { actions: ProtocolActionView[] }) {
+function ProtocolActionList({
+  actions,
+  groups,
+}: {
+  actions: ProtocolActionView[];
+  groups: ProtocolLineGroup[];
+}) {
   const [open, setOpen] = useState(false);
   const one = actions.every((a) => a.action === actions[0].action);
   const widths = actions.flatMap((a) =>
@@ -496,10 +522,10 @@ function ProtocolActionList({ actions }: { actions: ProtocolActionView[] }) {
         {open ? 'fewer ↑' : `${actions.length} ${runNoun(actions)} ↓`}
       </button>
       {open &&
-        actions.map((a, i) => (
+        groups.map((g) => (
           <ProtocolActionLine
-            key={i}
-            action={a}
+            key={g.key}
+            group={g}
             named={!one}
             labelChars={labelChars}
             amountWidth={amountWidth}
@@ -956,14 +982,17 @@ export function ActivityRow({
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
   const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails);
-  // Lane F follow-up 2: over PARTICIPANT_LIMIT actions the run is a list under the head; two to
-  // six stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
-  // transaction, before paint), else the same list. One action is always inline.
+  // Lane F follow-up 2: over PARTICIPANT_LIMIT lines the run is a list under the head; two to six
+  // stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
+  // transaction, before paint), else the same list. One line is always inline. Lines are the
+  // head's distinct readings: actions that read alike are one line ("×18", A12c).
+  const groups = groupProtocolLines(actions);
+  const lines = groups.filter((g) => inlineParts(g).length > 0).length;
   const articleRef = useRef<HTMLElement>(null);
   const [fit, setFit] = useState<{ tx: string; fits: boolean } | null>(null);
-  const measured = actions.length >= 2 && actions.length <= PARTICIPANT_LIMIT;
+  const measured = lines >= 2 && lines <= PARTICIPANT_LIMIT;
   const listed =
-    actions.length > PARTICIPANT_LIMIT || (measured && fit?.tx === activity.txHash && !fit.fits);
+    lines > PARTICIPANT_LIMIT || (measured && fit?.tx === activity.txHash && !fit.fits);
   useLayoutEffect(() => {
     if (!measured || fit?.tx === activity.txHash) return;
     const article = articleRef.current;
@@ -977,7 +1006,7 @@ export function ActivityRow({
         (listed ? (
           <ProtocolRunSummary actions={actions} primaryAction={primaryAction} />
         ) : (
-          <InlineProtocolRuns actions={actions} />
+          <InlineProtocolRuns groups={groups} />
         ))}
       {calls}
     </>
@@ -1011,7 +1040,7 @@ export function ActivityRow({
         poolStatus={activity.poolStatus}
         timeAddedToPool={activity.timeAddedToPool}
       />
-      {listed && <ProtocolActionList actions={actions} />}
+      {listed && <ProtocolActionList actions={actions} groups={groups} />}
       {errors}
       <PoolInterpretationNotice interpretation={activity.interpretation} />
       {showParticipants && (

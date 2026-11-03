@@ -491,6 +491,18 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     vi.restoreAllMocks();
   });
 
+  it('lists actions that read alike once with their count, as the inline head does (A12c)', () => {
+    const run = row([party('r43nr7')], {
+      protocolActions: [...Array.from({ length: 7 }, (_, n) => withdraw(n)), withdraw(6)],
+    });
+    const { container } = render(<ActivityRow activity={run} />);
+    expect(headMain(container)).toHaveTextContent(/^DAO Withdraw Request · 8 deposits · /);
+    fireEvent.click(toggle(container)!);
+    const rows = listRows(container).map((r) => r.textContent);
+    expect(rows).toHaveLength(7);
+    expect(rows[6]).toBe('700.00000000 CKB · deposited at #6,000,006 ×2');
+  });
+
   it('keeps one action inline, as before', () => {
     const { container } = render(
       <ActivityRow activity={row([party('r43nr7')], { protocolActions: [withdraw(0)] })} />
