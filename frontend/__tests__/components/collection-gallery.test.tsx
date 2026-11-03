@@ -33,7 +33,7 @@ it('resets server pagination when search or status changes and preserves item-sp
       limit: 24,
       cursor: undefined,
       search: 'alice',
-      status: 'all',
+      status: 'live',
     })
   );
   fireEvent.change(screen.getByRole('combobox', { name: 'Item status' }), {
@@ -46,6 +46,31 @@ it('resets server pagination when search or status changes and preserves item-sp
       search: 'alice',
       status: 'recycled',
     })
+  );
+});
+
+// Review 2026-11-03, item 3: a .bit collection is 97 % recycled names, so an 'all' default opened
+// on a screen of names with no live owner. Live cells are the state: the list opens on live items.
+it('opens on live items, and keeps All and Inactive one choice away', async () => {
+  vi.mocked(api.getIdentityCollectionItems).mockResolvedValue(emptyPage([identityItem('dotbit')]));
+  render(<CollectionItems id="dotbit" kind="identity" />);
+  await waitFor(() =>
+    expect(api.getIdentityCollectionItems).toHaveBeenCalledWith('dotbit', {
+      limit: 24,
+      cursor: undefined,
+      search: undefined,
+      status: 'live',
+    })
+  );
+  const status = screen.getByRole<HTMLSelectElement>('combobox', { name: 'Item status' });
+  expect(status.value).toBe('live');
+  expect(Array.from(status.options, (o) => o.textContent)).toEqual(['All', 'Live', 'Inactive']);
+  fireEvent.change(status, { target: { value: 'all' } });
+  await waitFor(() =>
+    expect(api.getIdentityCollectionItems).toHaveBeenLastCalledWith(
+      'dotbit',
+      expect.objectContaining({ status: 'all', cursor: undefined })
+    )
   );
 });
 

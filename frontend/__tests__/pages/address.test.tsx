@@ -308,12 +308,12 @@ describe('Address v3', () => {
         : { ...pageFixture(addressTokensFixture), hasMore: true, nextCursor: 'next-token' }
     );
     render(<AddressDetailPage />);
-    await screen.findByText('Showing 1–9 of 101 token kinds · 50 per page');
+    await screen.findByText('Showing 1–9 of 101 token kinds · 20 per page');
     const section = screen.getByRole('heading', { name: /Tokens/ }).closest('section')!;
     fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('Last token')).toBeInTheDocument();
     expect(api.getAddressTokens).toHaveBeenLastCalledWith(addressHash, {
-      limit: 50,
+      limit: 20,
       cursor: 'next-token',
     });
   });
@@ -435,11 +435,11 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     const section = await screen.findByTestId('address-dotcell-names');
-    expect(within(section).getByText('Showing 1–1 names · 50 per page')).toBeInTheDocument();
+    expect(within(section).getByText('Showing 1–1 names · 20 per page')).toBeInTheDocument();
     fireEvent.click(within(section).getByRole('button', { name: 'Next' }));
     expect(await screen.findByText('next.cell')).toBeInTheDocument();
     expect(api.getAddressDotCellNames).toHaveBeenLastCalledWith(addressHash, {
-      limit: 50,
+      limit: 20,
       cursor: 'next-name',
     });
   });
@@ -467,7 +467,7 @@ describe('Address v3', () => {
     fireEvent.click(await within(history).findByRole('button', { name: 'Next' }));
     await waitFor(() =>
       expect(api.getAddressCells).toHaveBeenCalledWith(addressHash, {
-        limit: 50,
+        limit: 20,
         cursor: 'next-cell',
         class: undefined,
       })
@@ -479,7 +479,7 @@ describe('Address v3', () => {
     );
     await waitFor(() =>
       expect(api.getAddressCells).toHaveBeenLastCalledWith(addressHash, {
-        limit: 50,
+        limit: 20,
         cursor: undefined,
         class: 'identity',
       })
@@ -500,12 +500,12 @@ describe('Address v3', () => {
     await waitFor(() => expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/));
     expect(activitiesTab()).not.toHaveTextContent('1,021');
     expect(
-      await screen.findByText('Showing 1–1 of 1,682 activities · 50 per page')
+      await screen.findByText('Showing 1–1 of 1,682 activities · 20 per page')
     ).toBeInTheDocument();
     // A filtered page declares no total; the tab keeps the address's count, the range has none.
     fireEvent.click(screen.getByRole('button', { name: /^DAO/ }));
     expect(await screen.findByText('No DAO activities on this page.')).toBeInTheDocument();
-    expect(screen.getByText('Showing 0–0 activities · 50 per page')).toBeInTheDocument();
+    expect(screen.getByText('Showing 0–0 activities · 20 per page')).toBeInTheDocument();
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
     await tab('Transactions');
     expect(activitiesTab()).toHaveTextContent(/^Activities1,682$/);
@@ -523,7 +523,7 @@ describe('Address v3', () => {
     fireEvent.click(await within(history).findByRole('button', { name: 'Next' }));
     await waitFor(() =>
       expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
-        limit: 50,
+        limit: 20,
         cursor: 'next-act',
         filter: 'all',
       })
@@ -536,7 +536,7 @@ describe('Address v3', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Script/ }));
     expect(await screen.findByText('No Script activities on this page.')).toBeInTheDocument();
     expect(api.getAddressActivities).toHaveBeenLastCalledWith(addressHash, {
-      limit: 50,
+      limit: 20,
       cursor: undefined,
       filter: 'script',
     });
@@ -554,7 +554,7 @@ describe('Address v3', () => {
     rerender(<AddressDetailPage />);
     await waitFor(() =>
       expect(api.getAddressActivities).toHaveBeenCalledWith(fixtureHash(999), {
-        limit: 50,
+        limit: 20,
         cursor: undefined,
         filter: 'all',
       })
@@ -697,7 +697,7 @@ describe('Address v3', () => {
     });
     render(<AddressDetailPage />);
     await loaded();
-    expect(await screen.findByText('Showing 1–1 activities · 50 per page')).toBeInTheDocument();
+    expect(await screen.findByText('Showing 1–1 activities · 20 per page')).toBeInTheDocument();
   });
   // C11: the address lists page through the one CursorPagination; its range follows the page size
   // the list asked for (twenty below md), where the old pager counted fifty a page everywhere.
@@ -1173,7 +1173,7 @@ describe('Address board · F2 blocks', () => {
     expect(api.getAddressCells).toHaveBeenCalledWith(addressHash, {
       class: 'dao',
       order: 'capacity',
-      limit: 50,
+      limit: 20,
       cursor: undefined,
     });
     expect(

@@ -2,6 +2,7 @@
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -58,7 +59,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
   });
   // F2 objects (IV-27): the supply events are paged at the source, 50 at a time.
   const supplyPages = useCursorPagination();
-  const supplyPageSize = usePageSize(50);
+  const supplyPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const supplyEvents = useQuery({
     queryKey: ['token-supply-events', typeHash, supplyPages.cursor, supplyPageSize],
     queryFn: () =>

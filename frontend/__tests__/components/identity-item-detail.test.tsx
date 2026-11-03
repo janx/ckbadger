@@ -95,14 +95,14 @@ it('resets the independent activity cursor when navigating to another identity',
   fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenLastCalledWith('dotbit', first.nftId, {
-      limit: 50,
+      limit: 20,
       cursor: 'older',
     })
   );
   view.rerender(<IdentityItemDetail config={dotbitConfig} identityId={second.nftId} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenLastCalledWith('dotbit', second.nftId, {
-      limit: 50,
+      limit: 20,
       cursor: undefined,
     })
   );

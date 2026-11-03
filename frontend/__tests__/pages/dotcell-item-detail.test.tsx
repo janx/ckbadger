@@ -176,7 +176,7 @@ it('appends every sub-name page and only reports the full child count after comp
   fireEvent.click(screen.getByRole('button', { name: 'Show more sub-names' }));
   await screen.findByRole('link', { name: 'three.alice.cell' });
   expect(api.getDotCellItemChildren).toHaveBeenLastCalledWith(item.identityId, {
-    limit: 50,
+    limit: 20,
     cursor: 'second',
   });
   expect(screen.getByText('Sub-names · 3')).toBeInTheDocument();
@@ -235,7 +235,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotcell', evidence.itemId, {
-      limit: 50,
+      limit: 20,
       cursor: '90:0',
     })
   );
@@ -248,7 +248,7 @@ it('resets item paging on name navigation and reports an unknown name', async ()
   rerender(<Page identityId="bob" />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('dotcell', next, {
-      limit: 50,
+      limit: 20,
       cursor: undefined,
     })
   );

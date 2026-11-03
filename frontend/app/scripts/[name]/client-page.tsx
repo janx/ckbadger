@@ -20,7 +20,7 @@ import type { NewestCellsState } from '@/components/scripts/script-newest-cells'
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
-import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import {
   encodeCellsByScriptCursor,
@@ -826,7 +826,7 @@ export default function ScriptDetailPage({
   });
   const cellsKind = isCodeHashMode ? selectedScriptKindForChart : cellsScriptKind;
   // The board pages a family's cells 12 at a time; a raw reference page keeps the list size.
-  const listPageSize = usePageSize(DEFAULT_PAGE_SIZE);
+  const listPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const cellsPageSize = isCodeHashMode ? listPageSize : FAMILY_CELLS_PAGE_SIZE;
   const selectedVersionCellsQueries = useQueries({
     queries: cellReferences.map((reference) => ({

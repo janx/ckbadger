@@ -114,11 +114,11 @@ describe('Collection holders', () => {
     const { rerender } = render(<CollectionHolders load={load} queryKey="first" />);
     await screen.findByRole('table', { name: 'Top 10 collection holders' });
     fireEvent.click(screen.getByRole('button', { name: 'All holders →' }));
-    await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 50, cursor: undefined }));
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: undefined }));
     fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
-    await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 50, cursor: 'next-50' }));
+    await waitFor(() => expect(load).toHaveBeenLastCalledWith({ limit: 20, cursor: 'next-50' }));
     const table = await screen.findByRole('table', { name: 'All collection holders' });
-    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('51');
+    expect(within(table).getAllByRole('row')[1]).toHaveTextContent('21');
     expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
     await waitFor(() => expect(screen.getByRole('button', { name: 'Previous' })).toBeDisabled());

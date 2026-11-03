@@ -65,7 +65,9 @@ function mnftRowTitle(item: CollectionItem): ReactNode {
 
 export function CollectionItems({ id, kind }: CollectionItemsProps) {
   const [search, setSearch] = useState(''),
-    [status, setStatus] = useState<ItemStatusFilter>('all');
+    // Live first: live cells are the state (DATA_DESIGN); a .bit collection is 97 % recycled names,
+    // so 'all' opened on a screen of names with no live owner (review 2026-11-03, item 3).
+    [status, setStatus] = useState<ItemStatusFilter>('live');
   const pages = useCursorPagination();
   const pageSize = usePageSize(24);
   const query = useQuery({

@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { CollectionHolder, CursorPaginatedResponse } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { AssetCount, wordHeads } from '@/components/asset/inventory-table';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { DotCellParty } from '@/components/identity/dotcell-party';
@@ -118,7 +119,7 @@ function ScopedCollectionHolders({
   const [all, setAll] = useState(false);
   const pagination = useCursorPagination();
   // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
-  const allPageSize = usePageSize(50);
+  const allPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const limit = all ? allPageSize : 10;
   const holders = useQuery({
     queryKey: ['collection-holders', queryKey, all, pagination.cursor, limit],
