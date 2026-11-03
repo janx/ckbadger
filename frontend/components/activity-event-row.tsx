@@ -1061,7 +1061,19 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
     facts.push({
       kind: 'depositBlock',
       block: meta.depositBlock,
-      node: `deposited at ${formatBlockNumber(meta.depositBlock)}`,
+      // Lane L: the deposit block is a link wherever the note is read.
+      node: (
+        <>
+          deposited at{' '}
+          <Link
+            href={`/blocks/${meta.depositBlock}`}
+            className="hover:text-jade transition-colors"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {formatBlockNumber(meta.depositBlock)}
+          </Link>
+        </>
+      ),
     });
   }
   if (meta.compensation !== null) {

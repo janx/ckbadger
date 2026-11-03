@@ -471,15 +471,7 @@ function ProtocolActionLine({
           {f.suffix}
         </>
       );
-    else if (f.kind === 'depositBlock')
-      parts.push(
-        <>
-          deposited at{' '}
-          <Link href={`/blocks/${f.block}`} className="hover:text-jade transition-colors">
-            {formatBlockNumber(f.block)}
-          </Link>
-        </>
-      );
+    // The deposit block's fact carries its own link (one rendering, in protocolActionNoteFacts).
     else parts.push(f.node);
   }
   if (parts.length === 0) parts.push(action.label);
