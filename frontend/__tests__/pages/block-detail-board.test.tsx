@@ -343,11 +343,20 @@ describe('Block board · second tier', () => {
 
   it('places the block among its neighbours with times, contents and the uncle forking off #930 (BA-15)', async () => {
     render(<BlockDetailPage />);
-    expect(
-      await screen.findByText(
-        'committed what #20,827,930 proposed, proposed what #20,827,934 committed, and included 1 uncle'
-      )
-    ).toBeInTheDocument();
+    // Lane L: the sentence's heights are links to their blocks, so it is one paragraph of text
+    // and links (was one text node).
+    const sentence = await screen.findByTestId('block-position-sentence');
+    expect(sentence).toHaveTextContent(
+      /^committed what #20,827,930 proposed, proposed what #20,827,934 committed, and included 1 uncle$/
+    );
+    expect(within(sentence).getByRole('link', { name: '#20,827,930' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20827930'
+    );
+    expect(within(sentence).getByRole('link', { name: '#20,827,934' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20827934'
+    );
     const diagram = await screen.findByRole('region', { name: 'Chain position diagram' });
     await within(diagram).findByLabelText('Block #20,827,934');
     expect(diagram.querySelector(`[data-uncle-fork-from="${N - 2}"]`)).not.toBeNull();
@@ -405,6 +414,11 @@ describe('Block board · R2b-a fields', () => {
         'of 0.00031647 in fees of the 2 transactions it proposed, committed in #20,827,934'
       )
     );
+    // Lane L: the committing block is a link.
+    expect(within(section).getByRole('link', { name: '#20,827,934' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20827934'
+    );
     expect(api.getBlockProposalFees).toHaveBeenCalledWith(N);
   });
 
@@ -428,6 +442,37 @@ describe('Block board · R2b-a fields', () => {
         'of 0.0003 in fees of the 1 transaction it proposed, committed in #20,827,934 so far; its window runs to #20,827,942'
       )
     );
+    expect(within(section).getByRole('link', { name: '#20,827,942' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20827942'
+    );
+  });
+
+  it('links both ends of a closed commit window that committed nothing it proposed (lane L)', async () => {
+    vi.mocked(api.getBlockProposalFees).mockResolvedValue({
+      number: N,
+      hash: block.hash,
+      commitWindow: { from: N + 2, to: N + 10 },
+      complete: true,
+      fees: '0',
+      transactionsCount: 0,
+      committedIn: [],
+      transactions: [],
+    });
+    render(<BlockDetailPage />);
+    const section = (await screen.findByRole('heading', { name: 'Reward breakdown' })).closest(
+      'section'
+    )!;
+    await waitFor(() =>
+      expect(section).toHaveTextContent(
+        'no transaction it proposed first was committed in its window, #20,827,934 to #20,827,942'
+      )
+    );
+    for (const name of ['#20,827,934', '#20,827,942'])
+      expect(within(section).getByRole('link', { name })).toHaveAttribute(
+        'href',
+        `/mainnet/blocks/${name.slice(1).replace(/,/g, '')}`
+      );
   });
 
   it('asks the API for the block in tx order and keeps that order (BA-14)', async () => {

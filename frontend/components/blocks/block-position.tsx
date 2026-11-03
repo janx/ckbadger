@@ -3,6 +3,12 @@
 import { useEffect, useRef } from 'react';
 import Link from '@/components/ui/link';
 import { BlockContents } from '@/components/blocks/block-visual';
+import {
+  SentenceNodes,
+  heightListParts,
+  sentenceText,
+  type SentencePart,
+} from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
@@ -15,31 +21,34 @@ export type BlockNeighbour = Pick<
   'number' | 'hash' | 'timestamp' | 'transactionSizes' | 'proposalsCount' | 'unclesCount'
 >;
 
-const heightList = (heights: readonly number[]) => {
-  const names = heights.map(formatBlockNumber);
-  return names.length < 3
-    ? names.join(' and ')
-    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
-};
-
 /** "committed what #930 proposed, proposed what #934 committed, and included 1 uncle". */
+export function positionParts(
+  block: Pick<Block, 'number' | 'proposalsCount' | 'unclesCount'>,
+  links: readonly { from: number; to: number }[]
+): SentencePart[] {
+  const origins = [...new Set(links.filter((l) => l.to === block.number).map((l) => l.from))];
+  const targets = [...new Set(links.filter((l) => l.from === block.number).map((l) => l.to))];
+  return [
+    ...(origins.length
+      ? ['committed what ', ...heightListParts(origins.sort((a, b) => a - b)), ' proposed']
+      : ['committed no proposed transactions']),
+    ', ',
+    ...(block.proposalsCount === 0
+      ? ['proposed nothing']
+      : targets.length
+        ? ['proposed what ', ...heightListParts(targets.sort((a, b) => a - b)), ' committed']
+        : [`proposed ${formatCount(block.proposalsCount, 'transaction')}, none committed yet`]),
+    ', ',
+    `and included ${block.unclesCount ? formatCount(block.unclesCount, 'uncle') : 'no uncle'}`,
+  ];
+}
+
+/** The position sentence as text (lane L: computed once, as parts; the page renders the parts). */
 export function positionSentence(
   block: Pick<Block, 'number' | 'proposalsCount' | 'unclesCount'>,
   links: readonly { from: number; to: number }[]
 ): string {
-  const origins = [...new Set(links.filter((l) => l.to === block.number).map((l) => l.from))];
-  const targets = [...new Set(links.filter((l) => l.from === block.number).map((l) => l.to))];
-  return [
-    origins.length
-      ? `committed what ${heightList(origins.sort((a, b) => a - b))} proposed`
-      : 'committed no proposed transactions',
-    block.proposalsCount === 0
-      ? 'proposed nothing'
-      : targets.length
-        ? `proposed what ${heightList(targets.sort((a, b) => a - b))} committed`
-        : `proposed ${formatCount(block.proposalsCount, 'transaction')}, none committed yet`,
-    `and included ${block.unclesCount ? formatCount(block.unclesCount, 'uncle') : 'no uncle'}`,
-  ].join(', ');
+  return sentenceText(positionParts(block, links));
 }
 
 interface BlockPositionProps {
@@ -160,8 +169,8 @@ export function BlockPosition({
   }, [currentX, block.number]);
   return (
     <div className="min-w-0 space-y-3">
-      <p className="text-text-dim text-small">
-        {positionSentence(block, links)}
+      <p data-testid="block-position-sentence" className="text-text-dim text-small">
+        <SentenceNodes parts={positionParts(block, links)} />
         {(page > 1 || hasMore) && `. Incoming relationships cover transaction page ${page} only.`}
       </p>
       {transactionsError ? (
