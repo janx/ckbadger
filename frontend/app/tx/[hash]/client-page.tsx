@@ -26,6 +26,8 @@ import { txContinuity } from '@/lib/tx-continuity';
 import { cellTiles, kindOf } from '@/components/transaction/transaction-cell-tiles';
 import { ScriptGroupMatrix, type MatrixGroup } from '@/components/transaction/script-group-matrix';
 import { BalanceChanges, lockCodeHashesByAddress } from '@/components/transaction/balance-changes';
+import { WhatMoved, type WhatMovedHover } from '@/components/transaction/what-moved';
+import { txFlows } from '@/lib/tx-flows';
 import { ProposalRuler } from '@/components/transaction/proposal-ruler';
 import { DotCellRecordsTable } from '@/components/identity/dotcell-records-table';
 import { poolStatusLabel } from '@/components/ui/pool-status';
@@ -774,6 +776,35 @@ export default function TransactionDetailPage() {
     scriptHashes: [...d.scriptHashes, ...d.outputLockScriptHashes],
   }));
   const feePaidBy = required(tx.feePaidBy, hash, 'feePaidBy');
+  const lockCodeHashes = lockCodeHashesByAddress([...(tx.inputs ?? []), ...(tx.outputs ?? [])]);
+  // What moved (review 2026-11-03 v2): a hovered party lights its cells, a hovered asset the cells
+  // that carry it; CKB, the ground, lights the cells that carry nothing else.
+  const flowCells = (h: WhatMovedHover): string[] => {
+    const cells = [
+      ...(tx.inputs ?? []).map((c, i) => ({ c, id: `in:${i}` })),
+      ...(tx.outputs ?? []).map((c, i) => ({ c, id: `out:${i}` })),
+    ];
+    if (h.t === 'party')
+      return h.party.address === null
+        ? []
+        : cells.filter(({ c }) => c.address === h.party.address).map((x) => x.id);
+    const a = h.asset;
+    const id =
+      a.kind === 'token'
+        ? a.item.typeScriptHash
+        : a.kind === 'object'
+          ? a.item.objectId
+          : a.kind === 'identity'
+            ? a.item.identityId
+            : null;
+    return cells
+      .filter(({ c }) =>
+        id === null
+          ? c.display === null && c.type === undefined
+          : c.display?.kind === a.kind && c.display.id === id
+      )
+      .map((x) => x.id);
+  };
   const focus: TxHover | null =
     hover ??
     (selectedGroup !== null
@@ -1270,15 +1301,41 @@ export default function TransactionDetailPage() {
         </aside>
         {activity && (
           <div className="min-w-0 lg:col-start-1">
+            {/* What moved (review 2026-11-03 v2): the asset flows, from the left to the right,
+                before the ledger; an activity whose flows do not conserve reads as an error here
+                instead of taking the page down. */}
+            <DetailSection title="What moved">
+              {readable(hash, () => {
+                txFlows({
+                  hash,
+                  activity,
+                  fee: tx.fee,
+                  compensation: compensation ?? null,
+                  genesis,
+                });
+                return (
+                  <WhatMoved
+                    hash={hash}
+                    activity={activity}
+                    fee={tx.fee}
+                    compensation={compensation ?? null}
+                    genesis={genesis}
+                    lockCodeHashes={lockCodeHashes}
+                    onHover={(h) => setHover(h ? { t: 'cells', ids: flowCells(h) } : null)}
+                  />
+                );
+              })}
+            </DetailSection>
+          </div>
+        )}
+        {activity && (
+          <div className="min-w-0 lg:col-start-1">
             <BalanceChanges
               activity={activity}
               fee={tx.fee}
               compensation={compensation ?? null}
               genesis={genesis}
-              lockCodeHashes={lockCodeHashesByAddress([
-                ...(tx.inputs ?? []),
-                ...(tx.outputs ?? []),
-              ])}
+              lockCodeHashes={lockCodeHashes}
             />
           </div>
         )}

@@ -496,6 +496,12 @@ describe('Transaction variants (D4)', () => {
     const inflow = await screen.findByTestId('tx-inflow', {}, SLOW);
     expect(inflow).toHaveAttribute('data-inflow', 'dao');
     expect(inflow).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
+    // What moved (v2): the compensation enters the CKB flow first, from the left, in gold
+    const first = screen
+      .getByTestId('tx-what-moved')
+      .querySelector('[data-flow="ckb"] [data-flow-side="from"] [data-flow-end]');
+    expect(first).toHaveAttribute('data-flow-end', 'compensation');
+    expect(first).toHaveTextContent('Nervos DAO compensation175.30634165 CKB');
     await screen.findByTestId('tx-capacity-equation', {}, SLOW);
     expect(screen.getByTestId('tx-capacity-equation')).toHaveTextContent(
       '26,050.00000000 CKB in + 175.30634165 CKB compensation = 26,225.30633229 CKB out + 0.00000936 CKB fee'
@@ -744,5 +750,51 @@ describe('Transaction board, R2b-a fields', () => {
     expect(await screen.findByTestId('tx-summary', {}, SLOW)).toHaveTextContent(
       'It ran .bit Time Index State and .bit Time Info. ckb1qzda...cjk9lz paid a 0.00064119 CKB fee.'
     );
+  });
+});
+
+describe('What moved (the asset flows, review 2026-11-03 v2)', () => {
+  it('draws the object flow and the CKB flow, from the left to the right, before the ledger', async () => {
+    render(<TransactionDetailPage />);
+    const frame = await screen.findByTestId('tx-what-moved', {}, SLOW);
+    const groups = within(frame).getAllByRole('group');
+    expect(groups.map((g) => g.getAttribute('data-flow'))).toEqual([
+      `object:0x51c75a${'00'.repeat(26)}96f2`,
+      'ckb',
+    ]);
+    const [object, ckb] = groups;
+    expect(object.querySelector('[data-flow-side="from"]')).toHaveTextContent('ckb1qzda...cjk9lz');
+    expect(object.querySelector('[data-flow-side="to"]')).toHaveTextContent('ckb1qzda...shp3hr');
+    expect(object.querySelector('[data-flow-plate]')).toHaveTextContent('Nervape 3x');
+    expect(object.querySelector('[data-composition="btc_ckb"]')).not.toBeNull();
+    // the CKB flow: cjk9lz gave 528.00064119; shp3hr and 204m4g received; the miner the fee
+    expect(ckb.querySelector('[data-flow-side="from"]')).toHaveTextContent('528.00064119 CKB');
+    expect(
+      Array.from(ckb.querySelectorAll('[data-flow-side="to"] [data-flow-end]')).map((e) =>
+        e.getAttribute('data-flow-end')
+      )
+    ).toEqual(['party', 'party', 'miner']);
+    expect(ckb.querySelector('[data-flow-end="miner"]')).toHaveTextContent('0.00064119 CKB');
+    // its place: under its own heading, before the Balance changes ledger
+    const heading = screen.getByRole('heading', { name: 'What moved' });
+    const table = screen.getByRole('table', { name: 'Balance changes by participant' });
+    expect(Boolean(heading.compareDocumentPosition(table) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(
+      true
+    );
+  });
+
+  it('lights a hovered party’s cells in the cells diagram and dims the rest', async () => {
+    const tx = committed();
+    tx.inputs![0].address = feedSamples.objectTransfer.participants[0].address!;
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx);
+    render(<TransactionDetailPage />);
+    const frame = await screen.findByTestId('tx-what-moved', {}, SLOW);
+    const [object] = within(frame).getAllByRole('group');
+    const giver = object.querySelector('[data-flow-side="from"] [data-flow-end="party"]')!;
+    fireEvent.mouseEnter(giver);
+    expect(screen.getByTestId('tx-io-input-0')).toHaveAttribute('data-highlighted', 'true');
+    expect(screen.getByTestId('tx-io-output-0')).toHaveClass('opacity-30');
+    fireEvent.mouseLeave(giver);
+    expect(screen.getByTestId('tx-io-output-0')).not.toHaveClass('opacity-30');
   });
 });

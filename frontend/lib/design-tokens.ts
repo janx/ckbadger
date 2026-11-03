@@ -21,6 +21,19 @@ export const BITCOIN_COLORS = {
   inner: '#1a110d',
 } as const;
 export const DATA_COLOR = '#2edba3';
+/**
+ * The ribbons of the tx page's "What moved" flows (review 2026-11-03 v2): the class colours for
+ * items; CKB a neutral grey bright enough for a stroke on the night sky (CLASS_COLORS.ckb is the
+ * dim slate of a mark); the fee to the miner dimmer still; DAO compensation the one gold.
+ */
+export const FLOW_COLORS = {
+  tokens: CLASS_COLORS.tokens,
+  objects: CLASS_COLORS.objects,
+  identities: CLASS_COLORS.identities,
+  ckb: '#8e97ad',
+  fee: '#5a6378',
+  compensation: CLASS_COLORS.dao,
+} as const;
 /** Ended states (an expired identity term): neutral grey, never gold or the class colour. */
 export const EXPIRED_COLOR = '#7c849c';
 export const HUE_RAMP = ['#2edba3', '#24b68a', '#259775', '#287b64', '#2b6054', '#344e48'] as const;
