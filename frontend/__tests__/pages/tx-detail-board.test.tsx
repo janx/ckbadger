@@ -590,6 +590,20 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByText('Witnesses · 2')).toBeInTheDocument();
     expect(screen.getByText('Pending since')).toBeInTheDocument();
   });
+
+  // Lane U follow-up (user report "two Script groups"): the pool view names its script groups once,
+  // the designed matrix in tier 2; no second list from the tier-1 tiles.
+  it('shows one Script groups section for a pending transaction', async () => {
+    const tx = { ...committed(), status: 'pending', pendingSince: '2026-10-30T08:14:17Z' };
+    for (const key of ['blockNumber', 'blockHash', 'index', 'timestamp', 'confirmations'] as const)
+      delete (tx as Partial<TransactionDetail>)[key];
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(tx as TransactionDetail);
+    render(<TransactionDetailPage />);
+    await screen.findByTestId('tx-groups-ran', {}, SLOW);
+    expect(screen.getAllByRole('heading', { name: /script groups/i })).toHaveLength(1);
+    expect(screen.getByRole('heading', { name: 'Script groups' })).toBeInTheDocument();
+    expect(screen.queryByText(/Capacity entering the pool/)).toBeNull();
+  });
 });
 
 describe('Transaction board, R2b-a fields', () => {

@@ -48,6 +48,12 @@ export interface TxStructureProps {
   witnesses?: ReactNode;
   dependencies?: ReactNode;
   hideGroups?: boolean;
+  /**
+   * Lane U follow-up: the groups list's heading. Default "Script groups"; a page showing several
+   * transactions names each list by its transaction (the cell page: "… of the transaction that
+   * created it"), so it never reads as two bare "Script groups" sections.
+   */
+  groupsTitle?: string;
   focusedCellIds?: readonly string[];
   onClearFocus?: () => void;
   onCellHover?: (id: string | null) => void;
@@ -93,6 +99,7 @@ export function TxStructure({
   witnesses,
   dependencies,
   hideGroups = false,
+  groupsTitle = 'Script groups',
   focusedCellIds = [],
   onClearFocus,
   onCellHover,
@@ -361,7 +368,7 @@ export function TxStructure({
       )}
       {!hideGroups && groups.length > 0 && (
         <section>
-          <h3 className="text-text-bright text-body mb-3 font-medium">Script groups</h3>
+          <h3 className="text-text-bright text-body mb-3 font-medium">{groupsTitle}</h3>
           <div className="divide-base-elevated divide-y">
             {groups.map((g) => (
               <div
