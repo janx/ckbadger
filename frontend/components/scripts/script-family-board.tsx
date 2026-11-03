@@ -22,7 +22,13 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { scriptShare } from '@/components/scripts/script-code-evidence';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
-import { deploymentOnDay, holderName, signingText, type CodeHolder } from '@/lib/script-lineage';
+import {
+  deploymentOnDay,
+  holderName,
+  shortHex,
+  signingText,
+  type CodeHolder,
+} from '@/lib/script-lineage';
 import { HeroFigure, HeroMetric } from '@/components/scripts/script-hero';
 
 const NUMBER_WORDS = ['No', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine'];
@@ -138,11 +144,19 @@ export function ScriptSummarySentence({
   );
 }
 
+type FamilyDeployment = ScriptFamilyDetail['versions'][number]['deployments'][number];
+
+/** The first deployment of any version (lane L: its transaction is the script's deployer tx). */
+function firstDeployment(family: ScriptFamilyDetail): FamilyDeployment | null {
+  let first: FamilyDeployment | null = null;
+  for (const version of family.versions)
+    for (const d of version.deployments) if (!first || d.deployedAt < first.deployedAt) first = d;
+  return first;
+}
+
 /** First deployment of any version, ms (Infinity when none is observed). */
 function firstDeployedAt(family: ScriptFamilyDetail): number {
-  return Math.min(
-    ...family.versions.flatMap((version) => version.deployments.map((d) => d.deployedAt))
-  );
+  return firstDeployment(family)?.deployedAt ?? Infinity;
 }
 
 /**
@@ -185,7 +199,7 @@ export function ScriptHeroMetrics({
 }) {
   const code = scriptCodeWord(family);
   const last = lineage?.at(-1);
-  const first = firstDeployedAt(family);
+  const deployment = firstDeployment(family);
   return (
     <dl
       aria-label="Script figures"
@@ -218,8 +232,24 @@ export function ScriptHeroMetrics({
           </Link>
         </HeroMetric>
       )}
-      {Number.isFinite(first) && (
-        <HeroMetric label="In use since">{formatUtc8Date(first)}</HeroMetric>
+      {deployment && (
+        <HeroMetric
+          label="In use since"
+          note={
+            <>
+              deployed in{' '}
+              <Link
+                href={`/tx/${deployment.codeCellTxHash}`}
+                title={deployment.codeCellTxHash}
+                className="hover:text-jade"
+              >
+                {shortHex(deployment.codeCellTxHash, 6, 6)}
+              </Link>
+            </>
+          }
+        >
+          {formatUtc8Date(deployment.deployedAt)}
+        </HeroMetric>
       )}
       <HeroMetric label="Ever used">{formatCount(family.cellsCount, 'cell')}</HeroMetric>
     </dl>

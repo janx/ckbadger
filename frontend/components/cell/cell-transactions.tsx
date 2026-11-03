@@ -8,7 +8,6 @@ import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
 import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
-import { formatBlockNumber } from '@/lib/format-block';
 import { CELL_COLORS } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
