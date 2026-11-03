@@ -3,7 +3,7 @@ import { useState, useCallback, type ReactNode } from 'react';
 import { useSearchParams, usePathname, useRouter } from '@/src/navigation';
 import { parseActivityCursor } from '@/lib/asset-utils';
 import { useQuery } from '@tanstack/react-query';
-import { api, type DotbitBitCellRef, type DotCellItem, type ItemKind } from '@/lib/api';
+import { api, type DotbitBitCellRef, type DotCellItem } from '@/lib/api';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { AssetFeed } from '@/components/asset/asset-feed';
@@ -17,7 +17,6 @@ import {
   IdentityName,
   IdentityPositioning,
   IdentityStatusBadge,
-  identityNameParts,
   type IdentityStandard,
   type IdentityState,
 } from '@/components/identity/identity-header';
@@ -40,11 +39,11 @@ import { getIdentityCollectionHref } from '@/lib/detail-routes';
 import { IDENTITY_ACTION_WORDS, type ItemFeedSubject } from '@/lib/feed-headlines';
 import { identityTerm, termDays, type IdentityTerm } from '@/lib/identity-term';
 import { cn, formatUtc8Date } from '@/lib/utils';
-import { readDidDocument, splitHandle } from '@/lib/did-document';
+import { identityTitleParts, type IdentityItemKind } from '@/lib/identity-title';
 import { formatStandard } from '@/components/activity-event-row';
 import { retryTransientOnly } from '@/lib/query-client';
 
-type IdentityKind = Extract<ItemKind, 'dotbit' | 'bit-cell' | 'did' | 'dotcell'>;
+type IdentityKind = IdentityItemKind;
 export interface CanonicalIdentityDetailProps {
   kind: IdentityKind;
   id: string;
@@ -91,22 +90,6 @@ const CELL_AFTER_COLUMN: Record<IdentityKind, string> = {
   did: 'Its cell after it',
   dotcell: "This name's cell after it",
 };
-
-/** The title's parts: the name, and the standard's suffix set in rose (ID-C10, ID-D1). */
-function titleParts(kind: IdentityKind, title: string, protocol: IdentityProtocol | undefined) {
-  if (kind === 'did') {
-    const last = protocol?.kind === 'did_ckb' ? protocol.versions.at(-1)!.decoded : undefined;
-    const handle = last ? readDidDocument(last.document).handles[0] : undefined;
-    if (handle) return { ...splitHandle(handle), full: handle };
-    return { name: last?.did ?? title, suffix: '', full: last?.did ?? title };
-  }
-  const account =
-    protocol?.kind === 'dotbit' || protocol?.kind === 'bit_cell'
-      ? protocol.versions.at(-1)!.decoded.account
-      : title;
-  const parts = identityNameParts(account, kind === 'dotcell' ? '.cell' : '.bit');
-  return { ...parts, full: account };
-}
 
 function identityState(
   kind: IdentityKind,
@@ -189,7 +172,7 @@ export function CanonicalIdentityDetail({
   const p = protocol.data as IdentityProtocol | undefined;
   const term = p ? identityTerm(p, { graceEndsAt: dotcell?.graceEndsAt }) : null;
   const state = identityState(kind, isLive, term, now, dotcell);
-  const parts = titleParts(kind, title, p);
+  const parts = identityTitleParts(kind, title, p);
   const subject = parts.full;
   const current = versions.data?.data.at(-1);
   const held = current ? (current.isLive ? current.capacity : '0') : null,
