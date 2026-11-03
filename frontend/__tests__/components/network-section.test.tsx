@@ -57,6 +57,30 @@ describe('NetworkSection', () => {
     );
   });
 
+  // Lane U follow-up (user report): hovering a chart made "CKBytes in circulation" below jump — the
+  // readout line under the four figures was an empty box until a hover filled it. Hover never moves
+  // layout: each row holds its text line idle, and a hover only changes the words in it.
+  it('keeps every readout line the same shape before and after a hover', async () => {
+    render(<NetworkSection />);
+    await waitFor(() => expect(screen.getAllByRole('status', { name: /readout$/ }).length).toBe(4));
+    const shape = () =>
+      screen.getAllByRole('status', { name: /readout$/ }).map((row) => ({
+        label: row.getAttribute('aria-label'),
+        className: row.className,
+        lines: [...row.children].map((child) => [child.tagName, child.className]),
+        // the reading always has text: the words, or a no-break space holding the line
+        text: (row.firstElementChild!.textContent ?? '').length > 0,
+      }));
+    const idle = shape();
+    expect(idle.every((row) => row.text)).toBe(true);
+    const svg = within(figure('home-uncle-rate')).getByRole('img');
+    fireEvent.pointerMove(svg, { clientX: 268 });
+    expect(screen.getByRole('status', { name: 'Uncle rate readout' })).toHaveTextContent('·');
+    expect(shape()).toEqual(idle);
+    fireEvent.pointerLeave(svg);
+    expect(shape()).toEqual(idle);
+  });
+
   it('uses exact daily decimals in the headline, caption, and accessible range', async () => {
     server.use(
       http.get(`${API}/charts/average-block-time`, () =>

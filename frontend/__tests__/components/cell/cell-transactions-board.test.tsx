@@ -298,7 +298,10 @@ describe('Its transactions · visual pass', () => {
 
   it('puts the "Not spent yet" box right after the onward bridge, before the groups table', async () => {
     view(cell, { lockName: 'Nervape Shadow Lock', typeName: 'Spore' });
-    const groups = await screen.findByRole('heading', { name: 'Script groups' });
+    // Lane U follow-up: the list is named by its transaction.
+    const groups = await screen.findByRole('heading', {
+      name: 'Script groups of the transaction that created it',
+    });
     const box = screen.getByTestId('not-spent-yet');
     expect(box.compareDocumentPosition(groups) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const onward = screen.getByText('this cell, onward: not spent yet');

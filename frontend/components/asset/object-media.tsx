@@ -5,15 +5,39 @@ import { detectPreview } from '@/lib/preview-utils';
 import { hexBytes } from '@/lib/hex-bytes';
 import { bitcoinTxHref, omigaDobHref, parseBtcfsUri } from '@/lib/btcfs';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
+import { ClassMark } from '@/components/ui/class-mark';
 export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
   decoded?: SporeDobDecoded;
   /**
-   * Lane U (U5): the quiet "View on Omiga ↗" text link under the media. The object page carries
-   * Omiga as a button in its h1 row instead and passes false; default true (as before).
+   * Whether the media column carries the object's link to Omiga — the "View image ↗" button (lane
+   * U follow-up). Default true; false leaves it out.
    */
   omigaLink?: boolean;
+}
+
+/**
+ * CKBadger does not render a DOB's picture itself (local first), so the way to see it sits where
+ * the eye looks for the picture: one filled jade button centred in the media frame, its off-site
+ * source said beneath (lane U follow-up; user: "'Omiga' should read 'Image View' or so, and be far
+ * more visible").
+ */
+function ViewImage({ href }: { href: string }) {
+  return (
+    <div data-role="view-image" className="flex flex-col items-center gap-1.5">
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Opens the object's picture on Omiga in a new tab"
+        className="bg-jade text-base-bg text-body focus-visible:outline-jade inline-flex h-9 items-center rounded-md px-4 font-mono font-medium transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+      >
+        View image ↗
+      </a>
+      <span className="text-text-dim text-meta">rendered off-site by Omiga</span>
+    </div>
+  );
 }
 export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: ObjectMediaProps) {
   const network = useActiveNetwork();
@@ -65,34 +89,37 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
               </div>
             );
           })}
+          {omigaLink && omiga && <ViewImage href={omiga} />}
           <figcaption className="text-text-dim text-meta">
             CKBadger reads CKB only. This object points to Bitcoin; its inscription is not fetched
             here.
           </figcaption>
         </figure>
       ) : preview ? (
-        <div className="mx-auto max-w-[360px]">
-          <SporePreview
-            preview={preview}
-            physicality={profile?.tier === 'pure_ckb' ? 'onchain' : 'default'}
-          />
+        <div className="space-y-4">
+          <div className="mx-auto max-w-[360px]">
+            <SporePreview
+              preview={preview}
+              physicality={profile?.tier === 'pure_ckb' ? 'onchain' : 'default'}
+            />
+          </div>
+          {omigaLink && omiga && <ViewImage href={omiga} />}
         </div>
       ) : (
-        <p className="text-text-dim text-meta">
-          {profile?.tier === 'decode_pending'
-            ? 'Decode pending · awaiting DOB execution.'
-            : 'No renderable media available.'}
-        </p>
-      )}
-      {omigaLink && omiga && (
-        <a
-          href={omiga}
-          className="text-text-dim hover:text-jade text-meta inline-block"
-          target="_blank"
-          rel="noopener noreferrer"
+        // Nothing renders here: a square placeholder with the class mark holds the place of the
+        // picture, and the way to see it is its centre.
+        <figure
+          aria-label="No picture shown here"
+          className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 rounded-md border p-6 text-center"
         >
-          View on Omiga ↗
-        </a>
+          <ClassMark kind="objects" size={24} />
+          <p className="text-text-dim text-meta">
+            {profile?.tier === 'decode_pending'
+              ? 'Decode pending · awaiting DOB execution.'
+              : 'No renderable media available.'}
+          </p>
+          {omigaLink && omiga && <ViewImage href={omiga} />}
+        </figure>
       )}
       {profile && (
         <details className="text-meta min-w-0">

@@ -152,20 +152,20 @@ it('presents BTCFS as link-only media even when a decoded image URL exists', asy
   expect(
     await screen.findByRole('link', { name: 'Bitcoin tx 0bfb…5719 · inscription i0 ↗' })
   ).toHaveAttribute('href', `https://mempool.space/tx/${'0bfb'.padEnd(60, '0')}5719`);
-  // Lane U (U5): Omiga is an outlined button-link at the right of the h1 row, 28 px like the
-  // range buttons, external; the media column no longer carries the quiet text link.
-  const omiga = screen.getByRole('link', { name: 'Omiga ↗' });
+  // Lane U follow-up: the one Omiga link is the media frame's "View image ↗" button; the outlined
+  // h1-row button (U5) is gone, so the page has exactly one link to Omiga.
+  const omiga = screen.getByRole('link', { name: 'View image ↗' });
   expect(omiga).toHaveAttribute(
     'href',
     `https://omiga.io/info/dobs/${sporeDetailProducer.typeScriptHash}`
   );
-  expect(omiga).toHaveAttribute('target', '_blank');
-  expect(omiga.getAttribute('rel')).toMatch(/\bnoopener\b/);
-  expect(omiga).toHaveClass('h-7', 'border', 'border-base-border', 'text-small');
-  const row = omiga.closest('[data-role="page-actions"]')!.parentElement!;
-  expect(row).toContainElement(screen.getByRole('heading', { level: 1 }));
-  expect(screen.queryByRole('link', { name: 'View on Omiga ↗' })).toBeNull();
-  expect(screen.getAllByRole('link', { name: /Omiga/ })).toHaveLength(1);
+  expect(omiga).toHaveClass('bg-jade', 'text-base-bg');
+  expect(omiga.closest('[data-hero-media]')).not.toBeNull();
+  expect(container.querySelector('[data-role="page-actions"]')).toBeNull();
+  expect(screen.queryByRole('link', { name: 'Omiga ↗' })).toBeNull();
+  expect(
+    screen.getAllByRole('link').filter((a) => a.getAttribute('href')?.includes('omiga.io'))
+  ).toHaveLength(1);
   expect(container.querySelector('img')).toBeNull();
 });
 it('does not repair unavailable raw data with transaction/getCell or client-side protocol parsing', async () => {

@@ -24,7 +24,7 @@ export function TransactionEvidence({
   afterOnward,
 }: {
   hash: string;
-  label: string;
+  label: 'Created' | 'Spent';
   focus?: string;
   /** Drawn under the onward bridge (the dashed "Not spent yet" box). */
   afterOnward?: ReactNode;
@@ -160,6 +160,8 @@ export function TransactionEvidence({
         fee={tx.fee}
         poolCapacity={tx.isCellbase ? undefined : (tx.inputsCapacity ?? undefined)}
         groups={groups}
+        // One page, two transactions: each list says whose groups it is (Cell board).
+        groupsTitle={`Script groups of the transaction that ${label === 'Created' ? 'created' : 'spent'} it`}
         continuity={txContinuity(tx, tiles.inputs)}
         focusedCellIds={focus ? [focus] : []}
         meOut={onward !== undefined ? focus : undefined}

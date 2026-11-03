@@ -63,14 +63,61 @@ it('presents Bitcoin media as a copper link plate without fetching an image', ()
   expect(inscription).toHaveAttribute('target', '_blank');
   expect(inscription).toHaveAttribute('rel', 'noopener noreferrer');
   expect(screen.getByText(/CKBadger reads CKB only/)).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: 'View on Omiga ↗' })).toHaveAttribute(
+  // Lane U follow-up (user: "'Omiga' should be called 'Image View' or so, and far more visible"):
+  // ckbadger does not render the picture, so the way to see it sits where the eye looks for it —
+  // a filled jade button centred in the media frame, its off-site source said beneath.
+  const view = screen.getByRole('link', { name: 'View image ↗' });
+  expect(view).toHaveAttribute(
     'href',
     'https://omiga.io/info/dobs/0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998'
   );
+  expectViewImageButton(view);
+  expect(view.closest('figure')).toBe(
+    screen.getByText(/Its image lives on Bitcoin/).closest('figure')
+  );
+  expect(screen.queryByRole('link', { name: /View on Omiga/ })).toBeNull();
   expect(container.querySelector('img')).toBeNull();
   expect(screen.getByText(/Its image lives on Bitcoin/)).toHaveClass('text-copper');
 });
-it('leaves the Omiga text link out when the page carries it as a button (U5)', () => {
+/** The one "View image" button: filled jade, 36 px, 13 px text, external, its source beneath. */
+function expectViewImageButton(view: HTMLElement) {
+  expect(view).toHaveClass('bg-jade', 'text-base-bg', 'h-9', 'text-body');
+  expect(view).toHaveAttribute('target', '_blank');
+  expect(view).toHaveAttribute('rel', 'noopener noreferrer');
+  expect(view).toHaveAttribute('title', "Opens the object's picture on Omiga in a new tab");
+  const block = view.closest('[data-role="view-image"]')!;
+  expect(block).toHaveClass('items-center');
+  expect(block).toHaveTextContent(/^View image ↗rendered off-site by Omiga$/);
+  expect(view.nextElementSibling).toHaveTextContent('rendered off-site by Omiga');
+  expect(view.nextElementSibling).toHaveClass('text-meta', 'text-text-dim');
+}
+it('centres the button in a square placeholder with the cube mark when nothing renders here', () => {
+  render(
+    <ObjectMedia object={{ ...object, mediaProfile: undefined } as never} contentHex={null} />
+  );
+  const frame = screen.getByRole('figure', { name: 'No picture shown here' });
+  expect(frame).toHaveClass('aspect-square', 'justify-center', 'items-center');
+  expect(frame.querySelector('[data-class="objects"]')).not.toBeNull();
+  expect(frame).toHaveTextContent('No renderable media available.');
+  const view = screen.getByRole('link', { name: 'View image ↗' });
+  expect(frame).toContainElement(view);
+  expectViewImageButton(view);
+});
+it('keeps the button under a picture that renders here', () => {
+  const { container } = render(
+    <ObjectMedia
+      object={{ ...object, mediaProfile: { tier: 'pure_ckb', sources: [], issues: [] } }}
+      contentHex="0x89504e47"
+    />
+  );
+  expect(container.querySelector('img')).not.toBeNull();
+  const view = screen.getByRole('link', { name: 'View image ↗' });
+  expectViewImageButton(view);
+  expect(container.querySelector('img')!.compareDocumentPosition(view)).toBe(
+    Node.DOCUMENT_POSITION_FOLLOWING
+  );
+});
+it('leaves the Omiga link out when asked (omigaLink={false})', () => {
   render(
     <ObjectMedia
       object={{ ...object, mediaProfile: undefined } as never}
@@ -163,7 +210,7 @@ it('follows the page network: no mainnet links from a testnet object (#8)', () =
   expect(
     screen.getByText(/Bitcoin network of testnet inscriptions is not established/)
   ).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: 'View on Omiga ↗' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'View image ↗' })).toHaveAttribute(
     'href',
     `https://test.omiga.io/info/dobs/${object.typeScriptHash}`
   );

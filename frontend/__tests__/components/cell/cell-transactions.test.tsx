@@ -127,6 +127,24 @@ describe('CellTransactions', () => {
     expect(screen.getByText(/Cellbase group: no script execution/)).toBeInTheDocument();
     expect(getTransactionDetail).toHaveBeenCalledWith(cell.consumedByTx);
   });
+  // Lane U follow-up (user report: "two Script groups sections"): a spent cell shows its creating
+  // and its spending transaction, and each listed its groups under the same bare "Script groups".
+  // Each list is named by its transaction (the Cell board: "Script groups of that transaction"),
+  // beside that transaction's cells; nothing in either list is dropped.
+  it('names each transaction’s script groups by that transaction, never two bare "Script groups"', async () => {
+    const cell = spentFixture as unknown as Cell;
+    view(cell);
+    await screen.findAllByText(/in:0/);
+    const headings = screen.getAllByRole('heading', { name: /script groups/i });
+    expect(headings.map((h) => h.textContent)).toEqual([
+      'Script groups of the transaction that created it',
+      'Script groups of the transaction that spent it',
+    ]);
+    expect(screen.queryByRole('heading', { name: 'Script groups' })).toBeNull();
+    // both transactions keep their group rows: witness, code and cycles
+    expect(screen.getAllByText(/Witness #0 · 42 bytes/)).toHaveLength(2);
+    expect(screen.getAllByText('123 cycles')).toHaveLength(2);
+  });
   it('keeps executed and attached lock groups with the same script hash distinct', async () => {
     const hash = `0x${'77'.repeat(32)}`;
     getTransactionDetail.mockImplementation(async () => {
