@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { CHART_BY_SLUG } from '@/components/charts/chart-catalogue';
@@ -144,6 +144,11 @@ describe('ChartSmallMultiple', () => {
     expect(list).toHaveTextContent('ckb1qzda0c…93hhsj60.0000%');
     expect(screen.queryByText(new RegExp(address))).not.toBeInTheDocument();
     expect(list).toHaveTextContent('Others40.0000%');
+    // Lane L: the miner's short address links to its address page; "Others" is no entity.
+    const miner = within(list).getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    expect(miner).toHaveAttribute('href', `/mainnet/address/${address}`);
+    expect(miner).toHaveAttribute('title', address);
+    expect(within(list).queryByRole('link', { name: 'Others' })).toBeNull();
     // The board's headline: the top miner's share under "top", grouped like any rate (CH-31).
     const readout = screen.getByRole('group', { name: 'Miners current readout' });
     expect(readout).toHaveTextContent('60.00%');

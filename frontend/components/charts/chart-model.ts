@@ -22,6 +22,8 @@ export interface RankedPreviewRow {
   share: string;
   /** The asset class the API's label names (Assets ranking), drawn as its mark (CH-06). */
   assetClass?: AssetClass;
+  /** Lane L: the entity's page (the same link as the full ranking's row); none for "Others". */
+  href?: string;
 }
 
 // --- F2 charts group ---
@@ -729,7 +731,13 @@ const PREVIEW_RANKS = 5;
  * from rounded shares; a zero remainder (or zero total) has no "Others" row.
  */
 function rankedPreviewRows(
-  ranked: readonly { label: string; shortLabel: string; amount: bigint; share: string }[],
+  ranked: readonly {
+    label: string;
+    shortLabel: string;
+    amount: bigint;
+    share: string;
+    href?: string;
+  }[],
   total: bigint,
   remainderShare: (remainder: bigint) => string,
   context: string
@@ -740,7 +748,12 @@ function rankedPreviewRows(
   if (remainder < BigInt(0))
     throw new Error(`${context}: top ${top.length} ranks exceed the returned total`);
   return [
-    ...top.map((entry) => ({ label: entry.shortLabel, title: entry.label, share: entry.share })),
+    ...top.map((entry) => ({
+      label: entry.shortLabel,
+      title: entry.label,
+      share: entry.share,
+      ...(entry.href ? { href: entry.href } : {}),
+    })),
     ...(remainder > BigInt(0)
       ? [{ label: 'Others', title: 'Others', share: remainderShare(remainder) }]
       : []),
@@ -886,6 +899,7 @@ function shareRows(
           shortLabel: distinctLabel(entry),
           amount: entry.shannons,
           share: share(entry.shannons),
+          ...(entry.id ? { href: rankedSeriesHref(entry.id, entry.label) } : {}),
         })),
         total,
         share,
@@ -1017,6 +1031,7 @@ function minerRows(
           shortLabel: miner.shortLabel,
           amount: miner.blocks,
           share: miner.row.share,
+          href: miner.row.href,
         })),
         BigInt(payload.totalBlocks),
         floorPercent4,

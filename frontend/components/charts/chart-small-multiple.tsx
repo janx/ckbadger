@@ -37,7 +37,17 @@ function RankedPreview({ model }: { model: ChartModel }) {
             <span className="flex min-w-0 items-center gap-1.5" title={row.title}>
               {/* The Assets ranking shows each entry's class by its mark (CH-06). */}
               {row.assetClass && <ClassMark kind={row.assetClass} size={12} />}
-              <span className="truncate font-mono">{row.label}</span>
+              {row.href ? (
+                <Link
+                  href={row.href}
+                  title={row.title}
+                  className="hover:text-jade truncate font-mono"
+                >
+                  {row.label}
+                </Link>
+              ) : (
+                <span className="truncate font-mono">{row.label}</span>
+              )}
             </span>
             <span className="shrink-0 tabular-nums">{row.share}</span>
           </div>
