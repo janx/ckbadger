@@ -16,7 +16,9 @@ function releaseOf(buildVersion: string): string {
 
 /**
  * The site footer (Main.dc.html, TX-04): "CKBadger <release>" as plain text, then Hardforks ·
- * Fiber dashboard · cknerv · Web5 · Keyboard shortcuts. No always-on pulse: whether updates are
+ * Network · Fiber channels · Fiber dashboard · cknerv · Web5 · Keyboard shortcuts. Network and
+ * Fiber channels (review 2026-11-03, item 4) are the chain's surroundings, not a section, so they
+ * live here beside Hardforks rather than in the header. No always-on pulse: whether updates are
  * live is said only by the vitals strip, on a page that holds the realtime socket (TX-01).
  */
 export function SiteFooter() {
@@ -31,6 +33,12 @@ export function SiteFooter() {
         <nav aria-label="Footer" className="flex flex-wrap items-center gap-x-5 gap-y-1">
           <Link href="/hardforks" className={LINK}>
             Hardforks
+          </Link>
+          <Link href="/network" className={LINK}>
+            Network
+          </Link>
+          <Link href="/fiber/channels" className={LINK}>
+            Fiber channels
           </Link>
           <a
             href="https://dashboard.fiber.channel/"

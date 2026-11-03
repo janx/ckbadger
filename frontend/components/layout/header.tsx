@@ -43,7 +43,18 @@ function isDropdown(item: NavItem): item is NavDropdown {
 
 const navItems: NavItem[] = [
   { href: '/dao', label: 'DAO' },
-  { href: '/activities', label: 'Activities' },
+  // Review 2026-11-03, item 4 (Nav.dc.html): Activities opens as Inventory does — what happened,
+  // the transactions that carry it, the blocks that order them, and the blocks that lost.
+  {
+    href: '/activities',
+    label: 'Activities',
+    indexLabel: 'Activities',
+    children: [
+      { href: '/transactions', label: 'Transactions' },
+      { href: '/blocks', label: 'Blocks' },
+      { href: '/forks', label: 'Forks' },
+    ],
+  },
   {
     href: '/inventory',
     label: 'Inventory',
@@ -87,9 +98,11 @@ export function Header() {
   // and the strip scrolls away with the content.
   return (
     <div ref={wrapperRef} className="contents md:sticky md:top-0 md:z-40 md:mb-4 md:block">
+      {/* The header's bottom edge is a tube (Midnight, continued, move 2): `.hairline-tube-header`
+          paints the 1 px `border-b` jade at the left, fading into the subtle border. */}
       <header
         ref={headerRef}
-        className="border-base-border-subtle bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"
+        className="border-base-border-subtle hairline-tube-header bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"
       >
         <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 px-4 md:gap-8 lg:min-h-[60px]">
           <Logo />
@@ -101,7 +114,8 @@ export function Header() {
           >
             <NetworkSwitcher />
             {/* TX-02 (Main.dc.html): five entries; the current one bright and aria-current.
-                U4: Inventory opens a menu of its index and its three views. */}
+                U4: Inventory opens a menu of its index and its three views; review 2026-11-03
+                item 4: so does Activities (Activities · Transactions · Blocks · Forks). */}
             {navItems.map((item) => {
               if (isDropdown(item))
                 return (

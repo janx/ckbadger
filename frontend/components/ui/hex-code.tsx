@@ -51,7 +51,8 @@ export function HexCode({
       className={cn(
         'font-mono',
         variantClasses[variant],
-        copyable && 'hover:text-interactive-hover cursor-pointer transition-colors',
+        // Midnight, continued (move 1c): a hovered hash glows jade, as a hovered link does.
+        copyable && 'hover-lit cursor-pointer transition-colors',
         className
       )}
       onClick={handleCopy}

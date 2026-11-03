@@ -1,18 +1,23 @@
 'use client';
 
-import { type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
+import { type HTMLAttributes, type ReactNode } from 'react';
 import { cn } from '@/lib/utils';
 
 type IndicatorStatus = 'active' | 'warning' | 'inactive' | 'none';
 type AccentColor = 'jade' | 'aqua' | 'gold' | 'rouge' | 'lavender' | 'amber';
 
-const accentColorValues: Record<AccentColor, string> = {
-  jade: 'rgba(46, 219, 163, 0.4)',
-  aqua: 'rgba(104, 204, 240, 0.4)',
-  gold: 'rgba(242, 197, 92, 0.4)',
-  rouge: 'rgba(232, 85, 90, 0.4)',
-  lavender: 'rgba(184, 169, 232, 0.4)',
-  amber: 'rgba(212, 136, 58, 0.4)',
+/**
+ * The frame's top edge colour (`--neon-color`, read by `.neon-edge-top::after`), as a class rather
+ * than an inline style: the frame then carries no inline ink, which the pages' "no coloured text
+ * outside the graphics" checks count. Jade is the approved .45; the others keep their .4.
+ */
+const accentClass: Record<AccentColor, string> = {
+  jade: '[--neon-color:rgba(46,219,163,0.45)]',
+  aqua: '[--neon-color:rgba(104,204,240,0.4)]',
+  gold: '[--neon-color:rgba(242,197,92,0.4)]',
+  rouge: '[--neon-color:rgba(232,85,90,0.4)]',
+  lavender: '[--neon-color:rgba(184,169,232,0.4)]',
+  amber: '[--neon-color:rgba(212,136,58,0.4)]',
 };
 
 interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
@@ -22,6 +27,13 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
   accentColor?: AccentColor;
 }
 
+/**
+ * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"):
+ * a #222840 hairline, a 6 px radius, the surface colour, a jade edge along the top
+ * (`.neon-edge-top`) and inset scanlines. The transaction pipeline, the tx page's cells diagram,
+ * the cell page's byte dump, the DNA gel and the network map sit in it; prose, tables and charts
+ * stay unframed.
+ */
 export function TerminalPanel({
   children,
   className,
@@ -40,18 +52,15 @@ export function TerminalPanel({
   return (
     <div
       {...props}
+      data-instrument-frame=""
       className={cn(
-        'neon-edge-top relative overflow-hidden rounded-lg border transition-shadow duration-300',
+        'neon-edge-top relative overflow-hidden rounded-md border transition-shadow duration-300',
+        accentClass[accentColor],
         variantClasses[variant],
         glow && 'hover:shadow-glow',
         className
       )}
-      style={
-        {
-          '--neon-color': accentColorValues[accentColor],
-          ...style,
-        } as CSSProperties
-      }
+      style={style}
     >
       <div className="pointer-events-none absolute inset-0">
         <div
@@ -75,37 +84,39 @@ interface TerminalPanelHeaderProps {
   actions?: ReactNode;
 }
 
+/** The frame's eyebrow: the section mark, then the instrument's name in upper case (12 px). */
+const MARK_CLASS: Record<IndicatorStatus, string> = {
+  // the mark as it is on a tier-1 h2
+  none: 'section-mark',
+  // a realtime feed: the mark breathes
+  active: 'section-mark section-mark-live',
+  warning: 'section-mark section-mark-gold',
+  inactive: 'section-mark opacity-30',
+};
+
 export function TerminalPanelHeader({
   children,
   className,
   indicator = 'none',
   actions,
 }: TerminalPanelHeaderProps) {
-  const renderIndicator = () => {
-    switch (indicator) {
-      case 'active':
-        return <span className="live-dot" />;
-      case 'warning':
-        return <div className="indicator-light indicator-light-gold" />;
-      case 'inactive':
-        return <div className="indicator-light indicator-light-static opacity-30" />;
-      case 'none':
-        return null;
-    }
-  };
-
   return (
     <div
       className={cn(
         'flex flex-wrap items-start justify-between gap-3 px-3 py-2 sm:items-center',
         'border-base-border border-b',
-        'from-base-elevated/50 bg-gradient-to-r to-transparent',
+        'from-base-elevated/60 bg-gradient-to-r to-transparent',
         className
       )}
     >
-      <div className="flex min-w-0 items-center gap-3">
-        {renderIndicator()}
-        <div className="text-text-dim text-body min-w-0 break-words font-mono uppercase tracking-wider">
+      <div className="flex min-w-0 items-center gap-2.5">
+        <span
+          aria-hidden="true"
+          data-indicator={indicator}
+          data-testid="terminal-panel-mark"
+          className={MARK_CLASS[indicator]}
+        />
+        <div className="text-text-dim text-small min-w-0 break-words font-mono uppercase tracking-[0.08em]">
           {children}
         </div>
       </div>

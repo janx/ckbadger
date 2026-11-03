@@ -17,12 +17,17 @@ export function useDetailTier(): 1 | 2 {
 /**
  * The developer-evidence tier (hierarchy plan R6): one visible boundary — 96 px, a hairline and the
  * "Evidence · for developers" eyebrow — and every section heading inside is quiet. `className`
- * lays out the tier's content (its sections), under the eyebrow.
+ * lays out the tier's content (its sections), under the eyebrow. The hairline is a tube (Midnight,
+ * continued, move 2): `.hairline-tube-border` paints the 1 px `border-t` as a jade line lit from
+ * the left.
  */
 export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <DetailTierContext.Provider value={2}>
-      <div data-tier="2" className="border-base-border mt-24 min-w-0 border-t pt-7">
+      <div
+        data-tier="2"
+        className="border-base-border hairline-tube-border mt-24 min-w-0 border-t pt-7"
+      >
         <p className="text-meta text-text-dim uppercase tracking-[0.12em]">
           Evidence · for developers
         </p>
@@ -73,7 +78,9 @@ export function DetailLayout({
   useDocumentTitle(documentTitleParts(title, documentTitle));
   return (
     <div className={cn('text-body min-w-0 font-mono', className)}>
-      <header className="mb-8">
+      {/* An index page's title row closes on a tube (Midnight, continued, move 2; BlocksAfter):
+          h1 and legend, 14 px, the lit hairline, then the list. */}
+      <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <h1
@@ -107,6 +114,7 @@ export function DetailLayout({
             ))}
           </dl>
         )}
+        {kind === 'index' && <div aria-hidden="true" className="hairline-tube mt-3.5" />}
       </header>
       <div data-tier="1" className="min-w-0 space-y-8">
         {children}

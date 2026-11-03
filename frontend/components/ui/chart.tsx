@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type ReactNode } from 'react';
+import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -129,6 +129,26 @@ export interface ChartProps {
   /** The first series' latest value written at the line's end, from its exact decimal. */
   endLabel?: (value: string) => string;
 }
+/**
+ * Midnight, continued (move 5): the attributes that give a chart's primary data line its halo —
+ * `.chart-line-halo`, in the line's own colour when that is not jade (`--halo-color`, 55 %). Only
+ * the first series of a line chart (`kind` line) is primary; every other mark is bare.
+ */
+export function lineHalo(
+  kind: NonNullable<ChartProps['kind']>,
+  seriesIndex: number,
+  color: string
+): { className: string; style?: CSSProperties } {
+  if (kind !== 'line' || seriesIndex !== 0) return { className: '' };
+  return color === JADE
+    ? { className: 'chart-line-halo' }
+    : {
+        className: 'chart-line-halo',
+        style: { '--halo-color': `color-mix(in srgb, ${color} 55%, transparent)` } as CSSProperties,
+      };
+}
+/** The theme's jade, the halo's own colour; `jadeRamp(1)[0]` is the chart default. */
+const JADE = '#2edba3';
 /** hierarchy v3: the band above the data that holds an in-plot name. */
 const PLOT_NAME_BAND = 28;
 /** The height of each extra row of x labels a categorical axis stacks under the plot. */
@@ -356,6 +376,9 @@ export function Chart({
   const ramp = jadeRamp(series.length);
   const color = (i: number) =>
     series[i].color ?? (series[i].assetClass ? CLASS_COLORS[series[i].assetClass!] : ramp[i]);
+  // Midnight, continued (move 5): the primary data line of a line chart carries a 2.5 px halo
+  // in its own colour; bars and areas (and a model's dashed projection) have none.
+  const halo = (i: number) => lineHalo(kind, i, color(i));
   const activeIndex = active !== null && active < data.length ? active : null;
   const selected =
     activeIndex !== null
@@ -676,6 +699,7 @@ export function Chart({
                         stroke={color(si)}
                         strokeWidth="1.5"
                         strokeDasharray={s.dashed ? '4 3' : undefined}
+                        {...(s.dashed ? {} : halo(si))}
                       />
                     ) : (
                       <>
@@ -687,6 +711,7 @@ export function Chart({
                           fill="none"
                           stroke={color(si)}
                           strokeWidth="1.5"
+                          {...halo(si)}
                         />
                         <path
                           data-projected

@@ -70,9 +70,12 @@ describe('SearchBar', () => {
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
   });
 
-  // TX-03 (Main.dc.html header): the compact search is a plain rounded field with one "/" key —
-  // no ">" prompt, no simulated command line or caret, no "?" key (that lives in the footer).
-  it('draws the compact search as the board field: a box, the typed text itself and one "/" key', () => {
+  // TX-03 (Main.dc.html header): the compact search is a 36 px rounded field with one "/" key,
+  // and the typed text is the input's own (no simulated command line). Review 2026-11-03, item 5,
+  // move 4 ("the terminal speaks") gives the field its prompt back by design: a jade ">" before
+  // the text, and — only while focused — a block cursor after the typed text with a jade-tinted
+  // border; the earlier "no prompt, no caret" reading of TX-03 is superseded by that approval.
+  it('draws the compact search as a prompt: ">", the typed text itself, a block cursor on focus and one "/" key', () => {
     render(<SearchBar variant="compact" />);
     const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
     expect(input).toHaveClass(
@@ -80,17 +83,59 @@ describe('SearchBar', () => {
       'border',
       'bg-base-surface',
       'border-base-border',
-      'h-9'
+      'h-9',
+      // the jade-tinted focus border and its soft ring
+      'focus:border-jade/50',
+      'focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
     );
     expect(input).not.toHaveClass('text-transparent');
-    expect(screen.queryByTestId('compact-search-prompt')).toBeNull();
-    expect(screen.queryByTestId('compact-search-command-line')).toBeNull();
+    // the prompt glyph is decoration, before the text (the field's padding makes room for it)
+    const prompt = screen.getByTestId('search-prompt');
+    expect(prompt).toHaveTextContent('>');
+    expect(prompt).toHaveAttribute('aria-hidden', 'true');
+    expect(prompt).toHaveClass('text-jade', 'pointer-events-none');
+    expect(input).toHaveClass('pl-7');
+    // no cursor while the field is idle, and the native caret is the browser's
+    expect(screen.queryByTestId('search-cursor')).toBeNull();
+    expect(input).not.toHaveClass('caret-transparent');
     fireEvent.focus(input);
     fireEvent.change(input, { target: { value: '0xabc123' } });
     expect(input).toHaveValue('0xabc123');
-    expect(screen.queryByTestId('compact-search-cursor')).toBeNull();
+    // focused: the block cursor stands after the typed text, in place of the native caret
+    const cursor = screen.getByTestId('search-cursor');
+    expect(cursor).toHaveClass('cursor');
+    expect(input).toHaveClass('caret-transparent');
+    const track = screen.getByTestId('search-cursor-track');
+    expect(track).toHaveAttribute('aria-hidden', 'true');
+    expect(track.firstElementChild).toHaveClass('invisible');
+    expect(track.firstElementChild).toHaveTextContent('0xabc123');
+    expect(track.lastElementChild).toBe(cursor);
+    // the cursor follows the caret: with the caret after "0xab" the mirror holds "0xab"
+    (input as HTMLInputElement).setSelectionRange(4, 4);
+    fireEvent.select(input);
+    expect(track.firstElementChild).toHaveTextContent(/^0xab$/);
+    // the "/" key stays; the "?" key lives in the footer
     expect(screen.getByTestId('search-shortcut-key-slash')).toHaveTextContent('/');
     expect(screen.queryByTestId('search-shortcut-key-question')).toBeNull();
+    // blurred: the cursor goes, the native caret comes back
+    fireEvent.blur(input);
+    expect(screen.queryByTestId('search-cursor')).toBeNull();
+    expect(input).not.toHaveClass('caret-transparent');
+  });
+
+  it('gives the default and home fields the same prompt and cursor (move 4)', () => {
+    const { rerender } = render(<SearchBar />);
+    expect(screen.getByTestId('search-prompt')).toHaveTextContent('>');
+    let input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    expect(input).toHaveClass('pl-7', 'focus:border-jade/50');
+    fireEvent.focus(input);
+    expect(screen.getByTestId('search-cursor')).toHaveClass('cursor');
+    rerender(<SearchBar variant="home" />);
+    expect(screen.getByTestId('search-prompt')).toHaveTextContent('>');
+    input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    expect(input).toHaveClass('pl-8');
+    fireEvent.focus(input);
+    expect(screen.getByTestId('search-cursor')).toHaveClass('cursor');
   });
 
   it('renders semantic icons for different search result types', async () => {

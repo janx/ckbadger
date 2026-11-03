@@ -28,6 +28,30 @@ describe('Independent DOB evidence', () => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
+  // Midnight, continued (review 2026-11-03, item 5, move 3): the DNA gel is an instrument. An
+  // object that is not BTC+CKB or pure CKB has no copper, so its gel sits in the one frame; a
+  // BTC+CKB or pure-CKB object keeps its copper plate untouched.
+  it('puts the gel in the instrument frame, unless the object has its copper plate (move 3)', () => {
+    const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
+    const { container, rerender } = render(
+      <ObjectGeneticsView evidence={data} subject="Spore" tier="decentralized_mixture" />
+    );
+    const plate = container.querySelector('[data-gel-plate]') as HTMLElement;
+    expect(plate).toHaveAttribute('data-gel-plate', 'frame');
+    expect(plate).toHaveAttribute('data-instrument-frame');
+    expect(plate).toHaveClass('neon-edge-top', 'rounded-md', 'border-base-border');
+    expect(plate).toContainElement(container.querySelector('[data-gene]') as HTMLElement);
+    expect(plate.querySelector('.space-y-4')).toHaveClass('px-4', 'py-4', 'sm:px-5');
+    rerender(<ObjectGeneticsView evidence={data} subject="Spore" tier="btc_ckb" />);
+    const copper = container.querySelector('[data-gel-plate]') as HTMLElement;
+    expect(copper).toHaveAttribute('data-gel-plate', 'copper');
+    expect(copper).not.toHaveAttribute('data-instrument-frame');
+    expect(copper).toHaveClass('rounded-[10px]', 'p-[5px]');
+    expect(copper.style.border).toBe('1px solid transparent');
+    expect(copper.style.backgroundImage).not.toBe('');
+    expect(container.querySelector('[data-instrument-frame]')).toBeNull();
+  });
+
   it('keeps the full object number, VM provenance and actual-byte hover association', () => {
     const data: ObjectGenetics = structuredClone(objectGeneticsProducer);
     data.dnaHex = '0x0102';

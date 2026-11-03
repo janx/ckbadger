@@ -1,6 +1,7 @@
 'use client';
 import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { CellTile, type CellTileData } from '@/components/ui/cell-tile';
+import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { ExactCkb } from '@/components/activity-event-row';
 import Link from '@/components/ui/link';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
@@ -200,107 +201,114 @@ export function TxStructure({
   );
   return (
     <div className="min-w-0 space-y-6" aria-label={`Transaction ${txHash} structure`}>
-      <div
-        ref={canvas}
-        data-tx-canvas
-        className={cn(
-          'relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:gap-0',
-          meOut === undefined
-            ? 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)]'
-            : 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)_96px]'
-        )}
-      >
-        {column(inputs, 'consumed')}
-        <div className="text-text-dim text-meta relative flex flex-wrap items-center justify-center gap-2 py-3 text-center lg:block lg:min-h-[180px] lg:p-0">
-          <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
-          <span aria-hidden="true" className="lg:hidden">
-            ↓
-          </span>
-          <svg
-            aria-label="Cells flow through the capacity pool"
-            className="pointer-events-none absolute inset-0 hidden h-full w-full overflow-visible lg:block"
-          >
-            {ys.length > 0 && (
-              <>
-                {inputs.map((cell) => (
-                  <path
-                    key={cell.id}
-                    d={`M0 ${centers[cell.id]}H46`}
-                    stroke={linked.has(cell.id) ? '#dee2ec' : '#4b5266'}
-                    strokeWidth="1.5"
-                  />
-                ))}
-                {inflow && centers[INFLOW_ID] !== undefined && (
-                  <path
-                    data-inflow-path={inflow.tone}
-                    d={`M0 ${centers[INFLOW_ID]}H46`}
-                    className={inflow.tone === 'dao' ? 'stroke-gold' : 'stroke-text-dim'}
-                    strokeWidth="1.5"
-                    strokeDasharray="4 3"
-                  />
-                )}
-                {outputs.map((cell) => (
-                  <path
-                    key={cell.id}
-                    d={`M66 ${centers[cell.id]}H112`}
-                    stroke={linked.has(cell.id) || cell.id === meOut ? '#dee2ec' : '#4b5266'}
-                    strokeWidth="1.5"
-                  />
-                ))}
-                <rect
-                  x="46"
-                  y={poolTop}
-                  width="20"
-                  height={poolBottom - poolTop}
-                  rx="4"
-                  fill="#181d2b"
-                  stroke="#4b5266"
-                />
-                <path d={`M56 ${poolBottom}v16`} stroke="#4b5266" />
-                {continuity.map((link) => (
-                  <path
-                    key={`${link.from}:${link.to}`}
-                    data-continuity-kind={link.kind}
-                    d={`M0 ${centers[link.from]}C44 ${centers[link.from]} 68 ${centers[link.to]} 112 ${centers[link.to]}`}
-                    fill="none"
-                    stroke={continuityColor(link.kind)}
-                    strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
-                    strokeDasharray="4 3"
-                  />
-                ))}
-              </>
-            )}
-          </svg>
-          <div className="space-y-1 lg:absolute lg:inset-x-0" style={{ top: poolBottom + 20 }}>
-            <span className="block">fee</span>
-            <ExactCkb
-              shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
-              signed={false}
-              tone="plain"
-            />
-          </div>
-        </div>
-        {column(outputs, 'created')}
-        {meOut !== undefined && (
+      {/* Midnight, continued (move 3): the cells diagram is an instrument, so it sits in the one
+          frame; the column heads inside it are its eyebrows. The prose and lists under it stay
+          flat. */}
+      <TerminalPanel aria-label="Cells consumed and created" data-testid="tx-cells-frame">
+        <TerminalPanelContent padding="md">
           <div
-            data-onward-bridge
-            data-onward-from={meOut}
-            aria-hidden="true"
-            className="relative hidden lg:block"
+            ref={canvas}
+            data-tx-canvas
+            className={cn(
+              'relative grid min-w-0 grid-cols-1 items-stretch gap-4 pb-8 lg:gap-0',
+              meOut === undefined
+                ? 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)]'
+                : 'lg:grid-cols-[minmax(0,1fr)_112px_minmax(0,1fr)_96px]'
+            )}
           >
-            <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
-              {centers[meOut] !== undefined && (
-                <path
-                  d={`M0 ${centers[meOut]}H96`}
-                  className="stroke-text-bright"
-                  strokeWidth="1.2"
-                  strokeDasharray="3 3"
+            {column(inputs, 'consumed')}
+            <div className="text-text-dim text-meta relative flex flex-wrap items-center justify-center gap-2 py-3 text-center lg:block lg:min-h-[180px] lg:p-0">
+              <span className="lg:absolute lg:inset-x-0 lg:top-0">Capacity pool</span>
+              <span aria-hidden="true" className="lg:hidden">
+                ↓
+              </span>
+              <svg
+                aria-label="Cells flow through the capacity pool"
+                className="pointer-events-none absolute inset-0 hidden h-full w-full overflow-visible lg:block"
+              >
+                {ys.length > 0 && (
+                  <>
+                    {inputs.map((cell) => (
+                      <path
+                        key={cell.id}
+                        d={`M0 ${centers[cell.id]}H46`}
+                        stroke={linked.has(cell.id) ? '#dee2ec' : '#4b5266'}
+                        strokeWidth="1.5"
+                      />
+                    ))}
+                    {inflow && centers[INFLOW_ID] !== undefined && (
+                      <path
+                        data-inflow-path={inflow.tone}
+                        d={`M0 ${centers[INFLOW_ID]}H46`}
+                        className={inflow.tone === 'dao' ? 'stroke-gold' : 'stroke-text-dim'}
+                        strokeWidth="1.5"
+                        strokeDasharray="4 3"
+                      />
+                    )}
+                    {outputs.map((cell) => (
+                      <path
+                        key={cell.id}
+                        d={`M66 ${centers[cell.id]}H112`}
+                        stroke={linked.has(cell.id) || cell.id === meOut ? '#dee2ec' : '#4b5266'}
+                        strokeWidth="1.5"
+                      />
+                    ))}
+                    <rect
+                      x="46"
+                      y={poolTop}
+                      width="20"
+                      height={poolBottom - poolTop}
+                      rx="4"
+                      fill="#181d2b"
+                      stroke="#4b5266"
+                    />
+                    <path d={`M56 ${poolBottom}v16`} stroke="#4b5266" />
+                    {continuity.map((link) => (
+                      <path
+                        key={`${link.from}:${link.to}`}
+                        data-continuity-kind={link.kind}
+                        d={`M0 ${centers[link.from]}C44 ${centers[link.from]} 68 ${centers[link.to]} 112 ${centers[link.to]}`}
+                        fill="none"
+                        stroke={continuityColor(link.kind)}
+                        strokeWidth={linked.has(link.from) || linked.has(link.to) ? 2 : 1.3}
+                        strokeDasharray="4 3"
+                      />
+                    ))}
+                  </>
+                )}
+              </svg>
+              <div className="space-y-1 lg:absolute lg:inset-x-0" style={{ top: poolBottom + 20 }}>
+                <span className="block">fee</span>
+                <ExactCkb
+                  shannons={exactUnsignedInteger(fee, `${txHash}: fee`)}
+                  signed={false}
+                  tone="plain"
                 />
-              )}
-            </svg>
+              </div>
+            </div>
+            {column(outputs, 'created')}
+            {meOut !== undefined && (
+              <div
+                data-onward-bridge
+                data-onward-from={meOut}
+                aria-hidden="true"
+                className="relative hidden lg:block"
+              >
+                <svg className="pointer-events-none absolute inset-0 h-full w-full overflow-visible">
+                  {centers[meOut] !== undefined && (
+                    <path
+                      d={`M0 ${centers[meOut]}H96`}
+                      className="stroke-text-bright"
+                      strokeWidth="1.2"
+                      strokeDasharray="3 3"
+                    />
+                  )}
+                </svg>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </TerminalPanelContent>
+      </TerminalPanel>
       {meOut !== undefined && (
         <p className="text-text-dim text-meta flex items-center gap-1.5">
           <svg aria-hidden="true" width="22" height="6">

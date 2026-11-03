@@ -213,7 +213,8 @@ export function ListTable<T>({
                 title={titleOf(row)}
                 onMouseEnter={() => onRowHover?.(row)}
                 onMouseLeave={() => onRowHover?.(null)}
-                className={cn('border-base-elevated border-b', rowClassName?.(row))}
+                // Midnight, continued (move 4): a hovered row gets the row-scan sweep.
+                className={cn('row-scan border-base-elevated border-b', rowClassName?.(row))}
               >
                 {shown.map((c) => (
                   <td

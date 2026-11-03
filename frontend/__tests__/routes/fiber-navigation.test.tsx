@@ -1,6 +1,6 @@
 import { MemoryRouter, useLocation, useRoutes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
+import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { Header } from '@/components/layout/header';
 import { createAppRouter } from '@/src/routes/router';
 
@@ -73,9 +73,14 @@ describe('fiber navigation', () => {
     await waitFor(() => {
       expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     });
-    expect(screen.getByRole('link', { name: 'Activities' })).toHaveAttribute(
-      'href',
-      '/mainnet/activities'
+    // Review 2026-11-03, item 4 (Nav.dc.html): Activities is a menu button in the header row (its
+    // index link is the menu's first item), so the nav still names the section without a plain
+    // Activities link.
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    expect(within(nav).getByRole('button', { name: 'Activities' })).toHaveAttribute(
+      'aria-haspopup',
+      'menu'
     );
+    expect(within(nav).queryByRole('link', { name: 'Activities' })).not.toBeInTheDocument();
   });
 });

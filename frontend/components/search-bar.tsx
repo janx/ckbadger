@@ -15,10 +15,23 @@ interface SearchBarProps {
 
 const SEARCH_PLACEHOLDER = 'Search block / tx / address / cell ...';
 
+/**
+ * Where the field's block cursor sits (Midnight, continued, move 4): the caret's index in the
+ * typed text, and how far the field has scrolled, so the cursor drawn over the field lands where
+ * the native caret is while the field has focus.
+ */
+interface CaretPosition {
+  at: number;
+  scrollLeft: number;
+}
+
 export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const [query, setQuery] = useState('');
   const [isOpen, setIsOpen] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
+  const [caret, setCaret] = useState<CaretPosition>({ at: 0, scrollLeft: 0 });
+  const syncCaret = (el: HTMLInputElement) =>
+    setCaret({ at: el.selectionStart ?? el.value.length, scrollLeft: el.scrollLeft });
   const [selectedIndex, setSelectedIndex] = useState(-1);
   const [submitFeedback, setSubmitFeedback] = useState<string | null>(null);
   const router = useRouter();
@@ -136,6 +149,12 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
   const isCompact = variant === 'compact';
   const isHome = variant === 'home';
   const showShortcutHints = isHome || isCompact;
+  // The typed text starts after the ">" prompt; the cursor track spans the same text box.
+  const textInset = isHome
+    ? 'left-8 right-20 sm:right-28'
+    : isCompact
+      ? 'left-7 right-9'
+      : 'left-7 right-3 sm:left-8 sm:right-4';
 
   return (
     <div className={cn('relative', className)}>
@@ -156,24 +175,57 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               setQuery(e.target.value);
               setSelectedIndex(-1);
               setIsOpen(true);
+              syncCaret(e.target);
             }}
-            onFocus={() => {
+            onSelect={(e) => syncCaret(e.currentTarget)}
+            onScroll={(e) => syncCaret(e.currentTarget)}
+            onFocus={(e) => {
               setIsOpen(true);
               setIsInputFocused(true);
+              syncCaret(e.currentTarget);
             }}
             onBlur={() => setIsInputFocused(false)}
             onKeyDown={handleKeyDown}
             placeholder={SEARCH_PLACEHOLDER}
             className={cn(
+              // Midnight, continued (move 4): the field is a prompt — a jade ">" before the text,
+              // a block cursor after it while focused (the native caret is hidden under it), and
+              // a jade-tinted border with a soft ring on focus. The "/" key hint stays.
               'text-text-bright w-full font-mono transition-colors focus:outline-none',
+              isInputFocused && 'caret-transparent',
               isHome
-                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-xl border pl-4 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-xl border pl-8 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
-                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/60 text-body h-9 rounded-md border pl-3 pr-9'
-                  : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade focus:ring-jade text-body rounded-lg border px-3 py-2.5 pr-3 focus:ring-1 sm:px-4 sm:py-3'
+                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/50 text-body h-9 rounded-md border pl-7 pr-9 focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
+                  : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade/50 text-body rounded-lg border py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)] sm:py-3 sm:pl-8 sm:pr-4'
             )}
           />
+          <span
+            aria-hidden="true"
+            data-testid="search-prompt"
+            className={cn(
+              'text-jade pointer-events-none absolute inset-y-0 flex items-center font-mono',
+              isHome ? 'left-4' : isCompact ? 'left-3' : 'left-3 sm:left-4'
+            )}
+          >
+            &gt;
+          </span>
+          {isInputFocused && (
+            <span
+              aria-hidden="true"
+              data-testid="search-cursor-track"
+              className={cn(
+                'text-body pointer-events-none absolute inset-y-0 flex items-center overflow-hidden whitespace-pre font-mono',
+                textInset
+              )}
+            >
+              <span className="invisible" style={{ marginLeft: -caret.scrollLeft }}>
+                {query.slice(0, caret.at)}
+              </span>
+              <span className="cursor shrink-0" data-testid="search-cursor" />
+            </span>
+          )}
           {showShortcutHints && <SearchShortcutHints variant={isCompact ? 'compact' : 'home'} />}
           {isHome && isInputFocused && (
             <>
