@@ -346,6 +346,78 @@ describe('DaoBoard', () => {
     expect(notes).toHaveClass('text-body');
   });
 
+  // Material pass v2 (7): the explanation is four one-topic paragraphs with the two mechanisms
+  // drawn between them as tiles; every sentence of the former two paragraphs is kept, in order.
+  it('explains the DAO in four short paragraphs and draws both mechanisms, dropping no sentence', () => {
+    const { container } = render(<DaoBoard statistics={stats} evidence={evidence} />);
+    const works = within(container.querySelector('[data-tier="2"]') as HTMLElement)
+      .getByRole('heading', { name: 'How the Nervos DAO works' })
+      .closest('section')!;
+    const paragraphs = Array.from(works.querySelectorAll('p'));
+    expect(paragraphs).toHaveLength(4);
+    for (const p of paragraphs) expect(p).toHaveClass('text-body', 'text-text-dim', 'max-w-[64ch]');
+    expect(paragraphs.map((p) => p.textContent!.slice(0, 24))).toEqual([
+      'CKB locked in the Nervos',
+      'A deposit runs in cycles',
+      'Protocol occupied (U) in',
+      'Estimated APC is at toda',
+    ]);
+    // The first mechanism: a block's issuance fans out three ways, in the explanation's words.
+    const split = within(works).getByRole('group', {
+      name: "How each block's secondary issuance is split",
+    });
+    expect(split).toHaveTextContent(/^secondary issuance s/);
+    expect(
+      within(split)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+    ).toEqual([
+      'minersthe occupied share, s × U ÷ C, paid in the cellbase',
+      "depositorsthe deposits' share, compensation accrued via AR, paid out at withdrawal",
+      'burnteverything else; no cell can ever claim it',
+    ]);
+    expect(split).not.toHaveTextContent(/interest|earned/i);
+    // The second mechanism: a deposit's life, from the cell to where it can leave.
+    const life = within(works).getByRole('list', { name: "A deposit's life" });
+    expect(
+      within(life)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent)
+    ).toEqual([
+      'deposita DAO cell; its 180-epoch cycle is counted from the epoch it was made',
+      '↓→withdrawal requestspends the deposit; its compensation stops growing here, at this AR',
+      '↓→withdrawalat the end of the current cycle, about 30 days: the deposit and its compensation leave the DAO',
+    ]);
+    // Order: concept, split, capacity use, cycles, life, what the numbers mean, how to read them.
+    const order = [
+      paragraphs[0],
+      split,
+      within(works).getByLabelText('Current capacity use partition'),
+      paragraphs[1],
+      life,
+      paragraphs[2],
+      paragraphs[3],
+    ];
+    for (let i = 1; i < order.length; i++)
+      expect(
+        order[i - 1].compareDocumentPosition(order[i]) & Node.DOCUMENT_POSITION_FOLLOWING
+      ).toBeTruthy();
+    // Nothing dropped: every sentence of the former two paragraphs is still here.
+    for (const sentence of [
+      'miners get the share that is occupied, and the rest is burnt.',
+      'while free CKB outside the DAO receives nothing.',
+      "since a request's compensation stopped growing at the request.",
+      'epoch ranges rather than predicted calendar dates.',
+      'the required input, headers, witnesses and script execution still apply.',
+      'it is not the real occupied size of live cells.',
+      "the depositors' share accrues via AR and is paid out at withdrawals.",
+      'what is burnt stays burnt.',
+      "“Compensation, last 365 days” is on free capacity, from the header's AR.",
+      'lists deposits, withdrawal requests and withdrawals, newest first.',
+    ])
+      expect(works).toHaveTextContent(sentence);
+  });
+
   it('renders a zero secondary allocation without dividing by zero', () => {
     render(
       <DaoBoard
