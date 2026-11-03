@@ -866,6 +866,32 @@ impl CkbadgerStore {
         self.list_cells_by_code_hash_cf(
             self.cf_cell_by_lock_code(),
             CodeIndexSide::Lock,
+            rocksdb::Direction::Forward,
+            code_hash,
+            hash_type,
+            limit,
+            after_key,
+            cells_store,
+        )
+    }
+
+    /// [`Self::list_cells_by_lock_code_hash`] newest block first: the same
+    /// `cell_by_lock_code` rows read backwards (block desc, then tx hash and
+    /// output index desc — the exact reverse of the key order). `after_key`
+    /// is the 75-byte key of the last returned entry; the next page starts
+    /// strictly below it.
+    pub fn list_cells_by_lock_code_hash_desc(
+        &self,
+        code_hash: &[u8],
+        hash_type: u8,
+        limit: usize,
+        after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
+        self.list_cells_by_code_hash_cf(
+            self.cf_cell_by_lock_code(),
+            CodeIndexSide::Lock,
+            rocksdb::Direction::Reverse,
             code_hash,
             hash_type,
             limit,
@@ -889,6 +915,7 @@ impl CkbadgerStore {
         self.list_cells_by_code_hash_cf(
             self.cf_cell_by_type_code(),
             CodeIndexSide::Type,
+            rocksdb::Direction::Forward,
             code_hash,
             hash_type,
             limit,
@@ -897,11 +924,40 @@ impl CkbadgerStore {
         )
     }
 
+    /// [`Self::list_cells_by_type_code_hash`] newest block first (the
+    /// `cell_by_type_code` rows read backwards; see
+    /// [`Self::list_cells_by_lock_code_hash_desc`]).
+    pub fn list_cells_by_type_code_hash_desc(
+        &self,
+        code_hash: &[u8],
+        hash_type: u8,
+        limit: usize,
+        after_key: Option<&[u8]>,
+        cells_store: &CkbadgerStore,
+    ) -> anyhow::Result<Vec<(Vec<u8>, i16, PositionedCellInfo)>> {
+        self.list_cells_by_code_hash_cf(
+            self.cf_cell_by_type_code(),
+            CodeIndexSide::Type,
+            rocksdb::Direction::Reverse,
+            code_hash,
+            hash_type,
+            limit,
+            after_key,
+            cells_store,
+        )
+    }
+
+    /// One scan of one reference form's contiguous key range, in either
+    /// direction. Forward starts at the form's prefix; Reverse seeks to the
+    /// last key at or below the form's upper bound (`prefix ‖ 0xFF…`, which
+    /// every 75-byte key of the form sorts at or below). With a cursor both
+    /// seek to the cursor key and skip it if it is still there.
     #[allow(clippy::too_many_arguments)]
     fn list_cells_by_code_hash_cf(
         &self,
         cf: &rocksdb::ColumnFamily,
         side: CodeIndexSide,
+        direction: rocksdb::Direction,
         code_hash: &[u8],
         hash_type: u8,
         limit: usize,
@@ -911,14 +967,17 @@ impl CkbadgerStore {
         let mut results = Vec::new();
 
         let prefix = keys::encode_cell_code_index_prefix(code_hash, hash_type);
-        let start_key = after_key
-            .map(|k| k.to_vec())
-            .unwrap_or_else(|| prefix.clone());
+        let start_key = match (after_key, direction) {
+            (Some(k), _) => k.to_vec(),
+            (None, rocksdb::Direction::Forward) => prefix.clone(),
+            (None, rocksdb::Direction::Reverse) => {
+                let mut upper = prefix.clone();
+                upper.resize(keys::CELL_CODE_INDEX_KEY_SIZE, 0xFF);
+                upper
+            }
+        };
 
-        let iter = self.iterator_cf(
-            cf,
-            rocksdb::IteratorMode::From(&start_key, rocksdb::Direction::Forward),
-        );
+        let iter = self.iterator_cf(cf, rocksdb::IteratorMode::From(&start_key, direction));
 
         let mut first = after_key.is_some();
         for item in iter {
@@ -1294,6 +1353,217 @@ mod tests {
         }
 
         assert_eq!(seen, expected, "each type-form row appears exactly once");
+    }
+
+    /// Seed one `type` lock form (hash_type 1) between two sibling forms of the
+    /// same code hash: `data` (0, sorts before it) and `data1` (2, sorts after
+    /// it). Several rows share a block and a tx, so the key's block, tx hash
+    /// and output index all decide the order.
+    fn seed_three_lock_forms(store: &CkbadgerStore, code_hash: &[u8]) {
+        let rows: [(u8, i16, i64); 7] = [
+            (0x20, 0, 300),
+            (0x21, 0, 301),
+            (0x21, 1, 301),
+            (0x22, 0, 301),
+            (0x23, 4, 302),
+            (0x10, 0, 305),
+            (0x30, 2, 305),
+        ];
+        for (tx_byte, output_index, block) in rows {
+            insert_code_indexed_cell(
+                store,
+                &[tx_byte; 32],
+                output_index,
+                block,
+                &code_form_cell(code_hash, 1),
+            );
+        }
+        insert_code_indexed_cell(store, &[0xe0; 32], 0, 900, &code_form_cell(code_hash, 0));
+        insert_code_indexed_cell(store, &[0x01; 32], 0, 1, &code_form_cell(code_hash, 2));
+    }
+
+    fn outpoints(rows: &[(Vec<u8>, i16, PositionedCellInfo)]) -> Vec<(Vec<u8>, i16, i64)> {
+        rows.iter()
+            .map(|(tx_hash, output_index, info)| {
+                (tx_hash.clone(), *output_index, info.created_at_block)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_desc_is_the_exact_reverse_of_asc() {
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+        seed_three_lock_forms(&store, &code_hash);
+
+        let asc = store
+            .list_cells_by_lock_code_hash(&code_hash, 1, 100, None, &store)
+            .unwrap();
+        let desc = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 1, 100, None, &store)
+            .unwrap();
+        assert_eq!(asc.len(), 7, "the type form has seven live cells");
+        let mut reversed = outpoints(&asc);
+        reversed.reverse();
+        assert_eq!(
+            outpoints(&desc),
+            reversed,
+            "desc = asc reversed, key by key"
+        );
+        assert_eq!(
+            desc[0].2.created_at_block, 305,
+            "the newest block comes first"
+        );
+        assert!(
+            desc.iter()
+                .all(|(_, _, info)| info.cell.lock_hash_type == 1),
+            "neither sibling form (data before, data1 after) leaks into the page"
+        );
+
+        // The sibling forms read on their own, newest first too.
+        let data = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 0, 100, None, &store)
+            .unwrap();
+        assert_eq!(outpoints(&data), vec![(vec![0xe0; 32], 0, 900)]);
+        let data1 = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 2, 100, None, &store)
+            .unwrap();
+        assert_eq!(outpoints(&data1), vec![(vec![0x01; 32], 0, 1)]);
+        let data2 = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 3, 100, None, &store)
+            .unwrap();
+        assert!(data2.is_empty(), "an unobserved form is empty");
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_desc_cursor_continues_below_the_last_key() {
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+        seed_three_lock_forms(&store, &code_hash);
+
+        let mut expected = outpoints(
+            &store
+                .list_cells_by_lock_code_hash(&code_hash, 1, 100, None, &store)
+                .unwrap(),
+        );
+        expected.reverse();
+
+        let mut seen = Vec::new();
+        let mut cursor: Option<Vec<u8>> = None;
+        let mut pages = 0;
+        loop {
+            let page = store
+                .list_cells_by_lock_code_hash_desc(&code_hash, 1, 2, cursor.as_deref(), &store)
+                .unwrap();
+            pages += 1;
+            assert!(page.len() <= 2);
+            if let Some((tx_hash, output_index, info)) = page.last() {
+                cursor = Some(keys::encode_cell_code_index_key(
+                    &code_hash,
+                    1,
+                    info.created_at_block,
+                    tx_hash,
+                    *output_index,
+                ));
+            }
+            seen.extend(outpoints(&page));
+            if page.len() < 2 {
+                break;
+            }
+        }
+        assert_eq!(seen, expected, "every row once, newest first, across pages");
+        assert_eq!(pages, 4, "7 rows at 2 a page: 2 + 2 + 2 + 1");
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_desc_cursor_survives_its_row_being_spent() {
+        // The cursor's own row is consumed between two pages: the reverse seek
+        // lands on the next lower key, which must be returned, not skipped.
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+        seed_three_lock_forms(&store, &code_hash);
+        let first = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 1, 2, None, &store)
+            .unwrap();
+        let (tx_hash, output_index, info) = first.last().unwrap();
+        let cursor = keys::encode_cell_code_index_key(
+            &code_hash,
+            1,
+            info.created_at_block,
+            tx_hash,
+            *output_index,
+        );
+        let mut batch = StoreBatch::new(&store);
+        batch.delete_cell(tx_hash, *output_index);
+        batch.delete_cell_by_lock_code(
+            &code_hash,
+            1,
+            info.created_at_block,
+            tx_hash,
+            *output_index,
+        );
+        batch.commit().unwrap();
+
+        let next = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 1, 2, Some(&cursor), &store)
+            .unwrap();
+        // Seeded type-form keys, newest first: 305/0x30:2, 305/0x10:0, 302/0x23:4, 301/0x22:0, …
+        assert_eq!(
+            outpoints(&next),
+            vec![(vec![0x23; 32], 4, 302), (vec![0x22; 32], 0, 301)]
+        );
+    }
+
+    #[test]
+    fn test_list_cells_by_type_code_hash_desc_is_the_exact_reverse_of_asc() {
+        let (_dir, store) = test_store();
+        let type_code_hash = [0x77; 32];
+        for (tx_byte, block) in [(0x31u8, 400i64), (0x32, 402), (0x33, 401)] {
+            let mut typed = code_form_cell(&[0xBB; 32], 1);
+            typed.type_script_hash = Some(vec![0x55; 32]);
+            typed.type_code_hash = Some(type_code_hash.to_vec());
+            typed.type_hash_type = Some(1);
+            typed.type_args = Some(vec![]);
+            insert_code_indexed_cell(&store, &[tx_byte; 32], 0, block, &typed);
+        }
+        let asc = store
+            .list_cells_by_type_code_hash(&type_code_hash, 1, 100, None, &store)
+            .unwrap();
+        let desc = store
+            .list_cells_by_type_code_hash_desc(&type_code_hash, 1, 100, None, &store)
+            .unwrap();
+        let mut reversed = outpoints(&asc);
+        reversed.reverse();
+        assert_eq!(outpoints(&desc), reversed);
+        assert_eq!(
+            desc.iter()
+                .map(|(_, _, info)| info.created_at_block)
+                .collect::<Vec<_>>(),
+            vec![402, 401, 400]
+        );
+    }
+
+    #[test]
+    fn test_list_cells_by_lock_code_hash_desc_rejects_index_payload_disagreement() {
+        let (_dir, store) = test_store();
+        let code_hash = [0x9b; 32];
+        let tx_hash = [0x41; 32];
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cell(&tx_hash, 0, &code_form_cell(&code_hash, 1), 500);
+        batch.commit().unwrap();
+        store
+            .put_cf(
+                store.cf_cell_by_lock_code(),
+                &keys::encode_cell_code_index_key(&code_hash, 0, 500, &tx_hash, 0),
+                &[],
+            )
+            .unwrap();
+        let err = store
+            .list_cells_by_lock_code_hash_desc(&code_hash, 0, 10, None, &store)
+            .expect_err("index/payload disagreement must fail fast in either direction");
+        assert!(err
+            .to_string()
+            .contains("index row disagrees with cell payload"));
     }
 
     #[test]

@@ -3,9 +3,10 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
-import { api } from '@/lib/api';
+import { api, type Cell } from '@/lib/api';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
+import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 
 vi.mock('@/lib/api', () => ({
   api: {
@@ -317,6 +318,24 @@ function setViewportWidth(width: number): void {
   window.dispatchEvent(new Event('resize'));
 }
 
+/**
+ * One genesis burn cell as the type reference's only live cell (one cell has one lock script, so
+ * no other reference lists it), and its detail for lane S's "Newest cells" row.
+ */
+function serveBurnCell(cell: Cell) {
+  const page = { data: [cell], total: 1, limit: 50, hasMore: false, nextCursor: null };
+  vi.mocked(api.getCellsByScriptRef).mockImplementation(
+    byScript(({ codeHash, hashType }) =>
+      codeHash === sharedVersionCodeHash && hashType === 'type' ? page : emptyCells
+    )
+  );
+  const codeCells = vi.mocked(api.getCell).getMockImplementation()!;
+  vi.mocked(api.getCell).mockImplementation(
+    async (txHash, outputIndex) =>
+      rowDetail([cell], txHash, outputIndex) ?? codeCells(txHash, outputIndex)
+  );
+}
+
 describe('ScriptDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -326,6 +345,13 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(mockCapacityChart);
     vi.mocked(api.getScriptCapacityChartByCodeHash).mockResolvedValue(mockCapacityChart);
     vi.mocked(api.getCell).mockImplementation(async (txHash, outputIndex) => {
+      // Lane S: a "Newest cells" row reads its cell's detail.
+      const detail = rowDetail(
+        Object.values(sharedVersionUsageCellsByRef).flatMap((page) => page.data),
+        txHash,
+        outputIndex
+      );
+      if (detail) return detail;
       if (txHash === firstDeploymentTxHash && outputIndex === 0) {
         return {
           txHash,
@@ -383,25 +409,27 @@ describe('ScriptDetailPage', () => {
 
       throw new Error(`unexpected outpoint ${txHash}:${outputIndex}`);
     });
-    vi.mocked(api.getCellsByScriptRef).mockImplementation(async ({ codeHash, hashType }) => {
-      if (codeHash === sharedVersionCodeHash && hashType === 'type') {
-        return sharedVersionUsageCellsByRef.type;
-      }
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(
+      byScript(({ codeHash, hashType }) => {
+        if (codeHash === sharedVersionCodeHash && hashType === 'type') {
+          return sharedVersionUsageCellsByRef.type;
+        }
 
-      if (codeHash === firstDeploymentDataHash && hashType === 'data') {
-        return sharedVersionUsageCellsByRef.firstData;
-      }
+        if (codeHash === firstDeploymentDataHash && hashType === 'data') {
+          return sharedVersionUsageCellsByRef.firstData;
+        }
 
-      if (codeHash === secondDeploymentDataHash && hashType === 'data') {
-        return sharedVersionUsageCellsByRef.secondData;
-      }
+        if (codeHash === secondDeploymentDataHash && hashType === 'data') {
+          return sharedVersionUsageCellsByRef.secondData;
+        }
 
-      if (codeHash === sharedObservedData1Reference && hashType === 'data1') {
+        if (codeHash === sharedObservedData1Reference && hashType === 'data1') {
+          return emptyCells;
+        }
+
         return emptyCells;
-      }
-
-      return emptyCells;
-    });
+      })
+    );
     vi.mocked(api.lookupScripts).mockResolvedValue({
       [sharedVersionCodeHash]: {
         codeHash: sharedVersionCodeHash,
@@ -724,23 +752,15 @@ describe('ScriptDetailPage', () => {
   });
 
   it('shows missing virtual occupied size of a genesis burn cell as an error', async () => {
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
-      data: [
-        {
-          txHash: `0x${'77'.repeat(32)}`,
-          outputIndex: 0,
-          capacity: '840000000000000000',
-          commonKnowledgeSize: '0',
-          lockScriptHash: '0xburn',
-          dataSize: 0,
-          createdAtBlock: 0,
-          cellType: 'genesis_special_burn',
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
+    serveBurnCell({
+      txHash: `0x${'77'.repeat(32)}`,
+      outputIndex: 0,
+      capacity: '840000000000000000',
+      commonKnowledgeSize: '0',
+      lockScriptHash: '0xburn',
+      dataSize: 0,
+      createdAtBlock: 0,
+      cellType: 'genesis_special_burn',
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect((await screen.findAllByTestId('burn-cell-virtual-size-error')).length).toBeGreaterThan(
@@ -750,24 +770,16 @@ describe('ScriptDetailPage', () => {
   });
 
   it('reads the genesis burn virtual size from the API value', async () => {
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue({
-      data: [
-        {
-          txHash: `0x${'77'.repeat(32)}`,
-          outputIndex: 0,
-          capacity: '840000000000000000',
-          commonKnowledgeSize: '0',
-          lockScriptHash: '0xburn',
-          dataSize: 0,
-          createdAtBlock: 0,
-          cellType: 'genesis_special_burn',
-          virtualCommonKnowledgeSize: '504000000000000000',
-        },
-      ],
-      total: 1,
-      limit: 50,
-      hasMore: false,
-      nextCursor: null,
+    serveBurnCell({
+      txHash: `0x${'77'.repeat(32)}`,
+      outputIndex: 0,
+      capacity: '840000000000000000',
+      commonKnowledgeSize: '0',
+      lockScriptHash: '0xburn',
+      dataSize: 0,
+      createdAtBlock: 0,
+      cellType: 'genesis_special_burn',
+      virtualCommonKnowledgeSize: '504000000000000000',
     });
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
     expect(

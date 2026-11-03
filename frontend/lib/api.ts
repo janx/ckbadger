@@ -4514,6 +4514,11 @@ export const api = {
     scriptKind?: 'lock' | 'type' | 'both';
     limit?: number;
     cursor?: string;
+    /**
+     * Lane S: `desc` lists newest block first (needs `scriptKind` lock or type; the API answers
+     * 400 for `both`). Unset = the API's default, oldest block first.
+     */
+    order?: 'asc' | 'desc';
   }): Promise<CursorPaginatedResponse<Cell>> => {
     const query = new URLSearchParams();
     query.set('code_hash', params.codeHash);
@@ -4521,6 +4526,7 @@ export const api = {
     if (params.scriptKind) query.set('script_kind', params.scriptKind);
     if (params.limit) query.set('limit', String(params.limit));
     if (params.cursor) query.set('cursor', params.cursor);
+    if (params.order) query.set('order', params.order);
     return fetchApi(`/cells/by-script?${query}`);
   },
 

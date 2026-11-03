@@ -17,6 +17,7 @@ import {
 } from '@/components/scripts/script-code-evidence';
 import { ScriptByteMap } from '@/components/ui/script-byte-map';
 import { HolderTimeline } from '@/components/scripts/holder-timeline';
+import { ScriptNewestCells, type NewestCellsState } from '@/components/scripts/script-newest-cells';
 import {
   ScriptCellsSummary,
   ScriptCustodyFigure,
@@ -67,6 +68,8 @@ export interface ScriptFamilyPageProps {
   /** `versionHash → live cells using it` cell, as the usage endpoint answered. */
   versionUsage: (versionHash: string) => ReactNode;
   codeCells: ReadonlyMap<string, CodeCellState>;
+  /** Lane S: the newest live cells, from `/cells/by-script?order=desc` (one index). */
+  newest: NewestCellsState;
   cells: {
     pageSize: number;
     rows: readonly Cell[];
@@ -433,6 +436,7 @@ export function ScriptFamilyPage({
   onCapacityRange,
   versionUsage,
   codeCells,
+  newest,
   cells,
 }: ScriptFamilyPageProps) {
   // C1: the page's own header (not DetailLayout) names the tab.
@@ -953,7 +957,9 @@ export function ScriptFamilyPage({
               />
             ) : null}
             <ScriptHeroMetrics family={family} lineage={lineage} />
-            <Section title="Who can change its code" className="mt-16">
+            {/* Lane S: what the script holds now, before how its code can change. */}
+            <ScriptNewestCells family={family} newest={newest} className="mt-16" />
+            <Section title="Who can change its code" className="mt-[72px]">
               {lineage && holders.length && !immutable ? (
                 // T8: one Type ID lineage is a holder timeline.
                 <HolderTimeline

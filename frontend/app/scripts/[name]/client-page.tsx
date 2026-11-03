@@ -16,6 +16,7 @@ import {
   ScriptCapacityEvidenceChart,
 } from '@/components/scripts/script-code-evidence';
 import { ScriptFamilyPage } from '@/components/scripts/script-family-page';
+import type { NewestCellsState } from '@/components/scripts/script-newest-cells';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { getCapacityRangeParams, CapacityRangeKey } from '@/lib/capacity-range';
@@ -31,6 +32,7 @@ import { formatCapacity, formatCkbCompact, formatNumber } from '@/lib/utils';
 import type { Cell, KnownScript, ScriptFamilyDetail, ScriptLookupInfo } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { NEWEST_CELLS_COUNT, mergeNewestFirst, newestCellsKind } from '@/lib/script-newest-cells';
 
 function CellOccupiedValue({ cell }: { cell: Cell }) {
   if (cell.cellType === 'genesis_special_burn') {
@@ -849,6 +851,49 @@ export default function ScriptDetailPage({
       placeholderData: keepPreviousData,
     })),
   });
+  // Lane S: the family's newest live cells — one index (ruling 2), each registered reference read
+  // newest block first by the API, the pages merged on its key order.
+  const newestKind = namedScriptDetail ? newestCellsKind(namedScriptDetail.scriptKind) : null;
+  const newestQueries = useQueries({
+    queries: cellReferences.map((reference) => ({
+      queryKey: [
+        'script-newest-cells',
+        name,
+        reference.referenceHash,
+        reference.hashType,
+        newestKind,
+      ],
+      queryFn: () =>
+        api.getCellsByScriptRef({
+          codeHash: reference.referenceHash,
+          hashType: reference.hashType,
+          scriptKind: newestKind!,
+          limit: NEWEST_CELLS_COUNT,
+          order: 'desc',
+        }),
+      enabled: !isCodeHashMode && Boolean(namedScriptDetail) && newestKind !== null,
+    })),
+  });
+  const newest = ((): NewestCellsState => {
+    const failed = newestQueries.find((query) => query.error)?.error ?? null;
+    if (failed || newestKind === null || newestQueries.some((query) => !query.data))
+      return { kind: newestKind, rows: [], loading: !failed && newestKind !== null, error: failed };
+    try {
+      const rows = mergeNewestFirst(
+        newestKind,
+        newestQueries.map((query, i) => ({
+          reference: `${cellReferences[i].referenceHash} ${cellReferences[i].hashType}`,
+          cells: query.data!.data,
+        })),
+        NEWEST_CELLS_COUNT
+      );
+      return { kind: newestKind, rows, loading: false, error: null };
+    } catch (error) {
+      // An invariant the API broke (a page out of order, a row from the other index): said in
+      // the section, never shown as if it were the newest cells.
+      return { kind: newestKind, rows: [], loading: false, error: error as Error };
+    }
+  })();
   const usageByCodeHash = new Map(
     versionUsageEntries.map((deployment) => [deployment.codeHash, deployment])
   );
@@ -1219,6 +1264,7 @@ export default function ScriptDetailPage({
           />
         )}
         codeCells={codeCells}
+        newest={newest}
         cells={{
           pageSize: cellsPageSize,
           rows: selectedVersionCellsData.data,

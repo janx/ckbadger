@@ -242,6 +242,35 @@ describe('api', () => {
       await api.getLiveCells({ lockScriptHash: '0xabc123', typeScriptHash: '0xdef456' });
     });
 
+    // Lane S: the script page's "Newest cells" asks the API for one index newest block first.
+    it('passes order to cells/by-script only when the caller sets it', async () => {
+      const seen: Array<Record<string, string>> = [];
+      server.use(
+        http.get('/api/:network/v1/cells/by-script', ({ request }) => {
+          seen.push(Object.fromEntries(new URL(request.url).searchParams));
+          return HttpResponse.json({
+            data: [],
+            total: 0,
+            limit: 5,
+            hasMore: false,
+            nextCursor: null,
+          });
+        })
+      );
+      await api.getCellsByScriptRef({
+        codeHash: '0xabc',
+        hashType: 'type',
+        scriptKind: 'lock',
+        limit: 5,
+        order: 'desc',
+      });
+      await api.getCellsByScriptRef({ codeHash: '0xabc', hashType: 'type', scriptKind: 'lock' });
+      expect(seen).toEqual([
+        { code_hash: '0xabc', hash_type: 'type', script_kind: 'lock', limit: '5', order: 'desc' },
+        { code_hash: '0xabc', hash_type: 'type', script_kind: 'lock' },
+      ]);
+    });
+
     it('getLiveCellSummary reads the fixed-size summary endpoint', async () => {
       server.use(
         http.get('/api/:network/v1/cells/live-summary', () => {
