@@ -1,0 +1,64 @@
+{
+  "txHash": "0xcad471ef912d24004589f32db5e91a760bb50d08ebb9cadaeb6af59556f26002",
+  "outputIndex": 16,
+  "capacity": "13400000000",
+  "commonKnowledgeSize": "13300000000",
+  "lockScriptHash": "0x6ef91284e8fe099950e736f8e96bd417827cb4464faa25d1fee349b79f560988",
+  "address": "ckb1qzl58smqy32hnrq6vxjedcxe2fugvnz497h7yvwqvwel40uh4rltcqwj7x9xcwldkh5uhx6y7sp3up52xz4cakg9aagjh",
+  "typeScriptHash": "0x42b89d9c02628401a418ad43fef0076811fca04042d9a2dbfa433d28c0604a13",
+  "dataSize": 11,
+  "createdAtBlock": 13889070,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0xbf43c3602455798c1a61a596e0d95278864c552fafe231c063b3fabf97a8febc",
+    "hashType": "type",
+    "args": "0xd2f18a6c3bedb5e9cb9b44f4031e068a30ab8ed9"
+  },
+  "type": {
+    "codeHash": "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+    "hashType": "type",
+    "args": "0x8f67efedd50c61c9dd332defd4051f08a02d79770000001400000000"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "m-nft"
+  },
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "mnft_token_cell",
+      "summary": "mNFT token layout detected",
+      "segments": [
+        {
+          "label": "version",
+          "start": 0,
+          "end": 1,
+          "meaning": "mNFT token schema version",
+          "humanValue": "0"
+        },
+        {
+          "label": "characteristic",
+          "start": 1,
+          "end": 9,
+          "meaning": "8-byte token characteristic field",
+          "humanValue": "0x0000000000000000"
+        },
+        {
+          "label": "configure",
+          "start": 9,
+          "end": 10,
+          "meaning": "Token configure flags",
+          "humanValue": "0xc0"
+        },
+        {
+          "label": "state",
+          "start": 10,
+          "end": 11,
+          "meaning": "Token state flags",
+          "humanValue": "0x00"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "txHash": "0xe63e9cd5b0ec506e0757f4855a9a7f74fee57428440db6e2591f3223d6c87a9c",
+  "outputIndex": 0,
+  "capacity": "22300000000",
+  "commonKnowledgeSize": "21200000000",
+  "lockScriptHash": "0x141395902245b367702325c49a5a0da1fe3c31dd4f9ca7ae4f3b1f9ba8e74f3e",
+  "address": "ckb1qzfhdsa4syv599s2s3nfrctwga70g0tu07n9gpnun9ydlngf5vsnwqg9a6s4ngeqxmlas29qk6r9hvg8gq0u8a65qhh2zkdryqm0lkpg5zmgvka3qaqplslh2suk45ef",
+  "typeScriptHash": "0xd55881fe43eadcc8cc373e2e66473000c7ba7e5c8b546d457e710f310e7bf451",
+  "dataSize": 96,
+  "createdAtBlock": 16612588,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0x9376c3b5811942960a846691e16e477cf43d7c7fa654067c9948dfcd09a32137",
+    "hashType": "type",
+    "args": "0x05eea159a32036ffd828a0b6865bb107401fc3f75405eea159a32036ffd828a0b6865bb107401fc3f754"
+  },
+  "type": {
+    "codeHash": "0x4f170a048198408f4f4d36bdbcddcebe7a0ae85244d3ab08fd40a80cbfc70918",
+    "hashType": "type",
+    "args": "0x"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "bit-account"
+  },
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "dotbit_account",
+      "summary": "DAS account cell layout detected from type script",
+      "segments": [
+        {
+          "label": "account_hash",
+          "start": 0,
+          "end": 32,
+          "meaning": "DAS account hash prefix",
+          "humanValue": "0xca73d8ebb1886b7572a91a5822ae0e5edf967f5e322317354691eab7e1c8352c"
+        },
+        {
+          "label": "account_id",
+          "start": 32,
+          "end": 52,
+          "meaning": "Unique 20-byte DAS account id",
+          "humanValue": "0x000063c0e5d40b236bb9b6b7b5831d87e4429d5c"
+        },
+        {
+          "label": "next_account_id",
+          "start": 52,
+          "end": 72,
+          "meaning": "Linked-list pointer to next account",
+          "humanValue": "0x00122de3e1363ed88be24af1bf97fb23624a830c"
+        },
+        {
+          "label": "expired_at",
+          "start": 72,
+          "end": 80,
+          "meaning": "Account expiration timestamp (seconds)",
+          "humanValue": "2041-11-28T07:23:20+00:00"
+        },
+        {
+          "label": "account",
+          "start": 80,
+          "end": 96,
+          "meaning": "DAS account name (UTF-8, includes .bit suffix)",
+          "humanValue": "conaservices.bit"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  }
+}

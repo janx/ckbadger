@@ -23,9 +23,29 @@ vi.mock('@/components/cell/cell-transactions', () => ({
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/lib/api', () => ({
-  api: { getCell: vi.fn(), lookupScripts: vi.fn() },
+  api: {
+    getCell: vi.fn(),
+    lookupScripts: vi.fn(),
+    // Lane U (U6): the hero's inventory line reads the object and its cluster.
+    getSporeObject: vi.fn(),
+    getSporeCluster: vi.fn(),
+  },
   isNotFoundApiError: () => false,
 }));
+
+const CLUSTER_ID = '0x26a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c';
+/** The local API's answers for this object and its cluster (2026-11-03). */
+function mockObjectReads() {
+  vi.mocked(api.getSporeObject).mockResolvedValue({
+    sporeId: cell.type!.args,
+    clusterId: CLUSTER_ID,
+    mediaProfile: { tier: 'btc_ckb' },
+  } as never);
+  vi.mocked(api.getSporeCluster).mockResolvedValue({
+    clusterId: CLUSTER_ID,
+    name: 'Nervape 3x',
+  } as never);
+}
 
 function view() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -45,21 +65,57 @@ describe('Cell page against the Cell board', () => {
       [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
+    mockObjectReads();
   });
 
-  it('names the cell by its out point, with breadcrumb, copy and the "only name" note (SC-C9)', async () => {
+  it('says what inventory item the cell is, in one line right under the h1 (lane U, U6)', async () => {
+    view();
+    const line = await screen.findByTestId('cell-inventory', undefined, { timeout: 5000 });
+    expect(await within(line).findByText(/Nervape 3x/)).toBeInTheDocument();
+    expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6…2796f2 BTC\+CKB$/);
+    expect(within(line).getByRole('link')).toHaveAttribute(
+      'href',
+      `/mainnet/objects/${cell.type!.args}`
+    );
+    // first under the h1 row: before the full out point and its copy
+    const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+    expect(header).toContainElement(line);
+    const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
+    expect(line.compareDocumentPosition(outpointLine)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
     view();
     await screen.findByText('The cell, byte by byte', undefined, { timeout: 5000 });
-    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
-      'Transaction 0xbe1b9761…936cd8 / output 1'
-    );
+    // Lane U (U3): the page presents a CELL, not a transaction output — no "Transaction … /
+    // output 1" breadcrumb; the transaction and the index are one line under the full out point.
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
+    expect(screen.queryByText(/^Transaction 0x/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Copy out point' })).toBeInTheDocument();
-    // Consistency round C13: the h1 is the short out point (entity), not the word "Cell"; the
-    // full out point and its copy are the line beneath.
+    // Consistency round C13 + U3: the h1 is "Cell" (dim) before the bright short out point.
     const h1 = screen.getByRole('heading', { level: 1 });
-    expect(h1).toHaveTextContent(`${cell.txHash.slice(0, 12)}…${cell.txHash.slice(-8)}:1`);
+    expect(h1).toHaveTextContent(/^Cell 0xbe1b9761…936cd8:1$/);
+    expect(within(h1).getByText('Cell')).toHaveClass('text-text-dim');
+    // the out point is one box: a phone wraps "Cell" away before breaking it
+    expect(within(h1).getByText('0xbe1b9761…936cd8:1')).toHaveClass('inline-block');
     expect(h1).toHaveClass('text-entity');
+    expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger');
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
+    const origin = screen.getByTestId('cell-origin');
+    expect(origin).toHaveTextContent(
+      /^output 1 of transaction 0xbe1b9761…936cd8 · live since #20,801,533$/
+    );
+    expect(within(origin).getByRole('link', { name: '0xbe1b9761…936cd8' })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/${cell.txHash}`
+    );
+    expect(within(origin).getByRole('link', { name: '#20,801,533' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20801533'
+    );
+    // the origin line sits under the full out point, before the "only name" sentence
+    const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
+    expect(outpointLine.compareDocumentPosition(origin)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(screen.getByText(/The out point is the cell's only name/)).toHaveTextContent(
       'exists from block #20,801,533 until a transaction spends it.'
     );
@@ -189,6 +245,7 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
       [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
+    mockObjectReads();
   });
 
   it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {

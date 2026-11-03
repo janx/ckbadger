@@ -41,6 +41,8 @@ import { sequencingGenes } from '@/lib/dob-genes';
 import { COMPOSITION_BADGES } from '@/lib/design-tokens';
 import { formatPercent } from '@/lib/ckb-decimal';
 import { retryTransientOnly } from '@/lib/query-client';
+import { omigaDobHref } from '@/lib/btcfs';
+import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 
 export interface SporeDetailViewProps {
   object: SporeDetail;
@@ -50,6 +52,8 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   const id = object.sporeId,
     isDob = object.contentType === 'dob/0' || object.contentType === 'dob/1';
   const client = useQueryClient();
+  const network = useActiveNetwork();
+  const omiga = omigaDobHref(object.typeScriptHash, network);
   // F2 objects (OB-5): one gene lit across the trait list, the sequencing gel and the allele gel.
   const [activeGene, setActiveGene] = useState<string | null>(null);
   const [now] = useState(() => Date.now());
@@ -265,6 +269,21 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           : []),
       ]}
       status={<LiveBadge live={object.isLive} gone="Burned" />}
+      // Lane U (U5): Omiga as the page's one action, an outlined button-link right of the h1 row,
+      // as tall as the range buttons (28 px); the media column's quiet text link gives way to it.
+      actions={
+        omiga && (
+          <a
+            href={omiga}
+            target="_blank"
+            rel="noopener noreferrer"
+            title="This object on Omiga, a DOB marketplace (opens a new tab)"
+            className="border-base-border text-text hover:text-text-bright hover:border-text-dim text-small inline-flex h-7 items-center rounded-[4px] border px-2.5 font-mono transition-colors"
+          >
+            Omiga ↗
+          </a>
+        )
+      }
       identity={<Hash hash={id} truncate={false} className="text-meta" />}
       // Hierarchy v3 (F4, R13): the composition sentence is the page's one lede; its life story
       // moved to tier 2 ("This object, in words").
@@ -312,6 +331,7 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
           object={object}
           contentHex={data?.versions.at(-1)?.decoded.contentHex ?? null}
           decoded={decoded.data}
+          omigaLink={false}
         />
       }
       tier2={

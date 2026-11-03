@@ -52,6 +52,12 @@ interface AssetDetailShellBaseProps {
    * rail. A page that passes `metrics` and no `facts` is one column: no 260 px rail track.
    */
   metrics?: ReactNode;
+  /**
+   * Lane U (U5): the page's actions (an external "Omiga ↗" button-link), at the right end of the
+   * h1 row, where the boards put page actions (R13: h1 and range buttons share one row). Omitted,
+   * the row is as before.
+   */
+  actions?: ReactNode;
 }
 /**
  * `title` is the h1; `documentTitle` (C1) names the browser tab — asset pages give
@@ -76,22 +82,35 @@ export function AssetDetailShell({
   railAfterHeader = false,
   hero,
   metrics,
+  actions,
 }: AssetDetailShellProps) {
   if (hero && !lede) throw new Error('AssetDetailShell: a hero figure needs the lede it follows');
   useDocumentTitle(documentTitleParts(title, documentTitle));
   const titleId = useId();
+  const titleRow = (
+    <div className="flex min-w-0 flex-wrap items-center gap-3">
+      <ClassMark kind={kind} size={24} />
+      <h1
+        id={lede ? titleId : undefined}
+        className="text-text-bright text-entity min-w-0 break-words font-medium"
+      >
+        {title}
+      </h1>
+      {status}
+    </div>
+  );
   const named = (
     <>
-      <div className="flex min-w-0 flex-wrap items-center gap-3">
-        <ClassMark kind={kind} size={24} />
-        <h1
-          id={lede ? titleId : undefined}
-          className="text-text-bright text-entity min-w-0 break-words font-medium"
-        >
-          {title}
-        </h1>
-        {status}
-      </div>
+      {actions ? (
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          {titleRow}
+          <div data-role="page-actions" className="flex shrink-0 items-center gap-2">
+            {actions}
+          </div>
+        </div>
+      ) : (
+        titleRow
+      )}
       {identity && <div className="text-text-dim text-meta min-w-0 break-words">{identity}</div>}
     </>
   );

@@ -65,13 +65,14 @@ describe('Header', () => {
       'href',
       '/mainnet/activities'
     );
-    // TX-02 (Main.dc.html): Inventory is a plain link like the others, not a hover-only button.
+    // Lane U (U4, after TX-02): Inventory opens a menu (hover, click, keyboard) with the index and
+    // its three views; closed, the menu is not in the page.
     const nav = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(nav).getByRole('link', { name: 'Inventory' })).toHaveAttribute(
-      'href',
-      '/mainnet/inventory'
-    );
-    expect(within(nav).queryByRole('button', { name: /Inventory/ })).toBeNull();
+    const inventory = within(nav).getByRole('button', { name: 'Inventory' });
+    expect(inventory).toHaveAttribute('aria-haspopup', 'menu');
+    expect(inventory).toHaveAttribute('aria-expanded', 'false');
+    expect(within(nav).queryByRole('link', { name: 'Inventory' })).toBeNull();
+    expect(within(nav).queryByRole('menu')).toBeNull();
     expect(within(nav).queryByRole('link', { name: 'Tokens' })).toBeNull();
     expect(screen.getAllByRole('link', { name: 'Scripts' }).at(0)).toHaveAttribute(
       'href',
@@ -144,14 +145,108 @@ describe('Header', () => {
     expect(charts).not.toHaveAttribute('aria-current');
   });
 
-  it('marks Inventory current on every inventory view (TX-02)', () => {
+  it('marks Inventory current on every inventory view, and the view itself in its menu (TX-02, U4)', () => {
     usePathnameMock.mockReturnValue('/inventory/objects');
     render(<Header />);
     const nav = screen.getByRole('navigation', { name: 'Main' });
-    expect(within(nav).getByRole('link', { name: 'Inventory' })).toHaveAttribute(
+    const inventory = within(nav).getByRole('button', { name: 'Inventory' });
+    // the section is current (bright, as a current link reads); the page is the view in the menu
+    expect(inventory).toHaveAttribute('aria-current', 'true');
+    expect(inventory).toHaveClass('text-text-bright');
+    fireEvent.click(inventory);
+    const menu = within(nav).getByRole('menu', { name: 'Inventory' });
+    expect(within(menu).getByRole('menuitem', { name: 'Objects' })).toHaveAttribute(
       'aria-current',
       'page'
     );
+    expect(within(menu).getByRole('menuitem', { name: 'Tokens' })).not.toHaveAttribute(
+      'aria-current'
+    );
+  });
+
+  it('opens the Inventory menu on click: the index, then Tokens · Objects · Identities (U4)', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    const inventory = within(nav).getByRole('button', { name: 'Inventory' });
+    fireEvent.click(inventory);
+    expect(inventory).toHaveAttribute('aria-expanded', 'true');
+    const menu = within(nav).getByRole('menu', { name: 'Inventory' });
+    expect(inventory).toHaveAttribute('aria-controls', menu.id);
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items.map((i) => [i.textContent, i.getAttribute('href')])).toEqual([
+      ['Inventory index', '/mainnet/inventory'],
+      ['Tokens', '/mainnet/inventory/tokens'],
+      ['Objects', '/mainnet/inventory/objects'],
+      ['Identities', '/mainnet/inventory/identities'],
+    ]);
+    // the header's look: the nav's mono body text and link inks, no new colours
+    for (const item of items) expect(item).toHaveClass('font-mono', 'text-body');
+    expect(items[1]).toHaveClass('text-text', 'hover:text-jade');
+    // a second click closes it; so does a click outside, and choosing an item
+    fireEvent.click(inventory);
+    expect(inventory).toHaveAttribute('aria-expanded', 'false');
+    expect(within(nav).queryByRole('menu')).toBeNull();
+    fireEvent.click(inventory);
+    fireEvent.pointerDown(document.body);
+    expect(within(nav).queryByRole('menu')).toBeNull();
+    fireEvent.click(inventory);
+    const tokens = within(nav).getByRole('menuitem', { name: 'Tokens' });
+    // no router here: keep jsdom from attempting a real navigation
+    tokens.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(tokens);
+    expect(within(nav).queryByRole('menu')).toBeNull();
+  });
+
+  it('opens the Inventory menu on hover; a click while hovered keeps it open (U4)', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    const inventory = within(nav).getByRole('button', { name: 'Inventory' });
+    const wrapper = inventory.parentElement!;
+    fireEvent.mouseEnter(wrapper);
+    expect(within(nav).getByRole('menu', { name: 'Inventory' })).toBeInTheDocument();
+    expect(inventory).toHaveAttribute('aria-expanded', 'true');
+    fireEvent.mouseLeave(wrapper);
+    expect(within(nav).queryByRole('menu')).toBeNull();
+    // hover opens, the click pins it: leaving no longer closes it
+    fireEvent.mouseEnter(wrapper);
+    fireEvent.click(inventory);
+    fireEvent.mouseLeave(wrapper);
+    expect(within(nav).getByRole('menu', { name: 'Inventory' })).toBeInTheDocument();
+  });
+
+  it('works from the keyboard: arrows open and move, Escape closes back to the button (U4)', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    const inventory = within(nav).getByRole('button', { name: 'Inventory' });
+    inventory.focus();
+    fireEvent.keyDown(inventory, { key: 'ArrowDown' });
+    const item = (name: string) => within(nav).getByRole('menuitem', { name });
+    expect(item('Inventory index')).toHaveFocus();
+    fireEvent.keyDown(item('Inventory index'), { key: 'ArrowDown' });
+    expect(item('Tokens')).toHaveFocus();
+    fireEvent.keyDown(item('Tokens'), { key: 'End' });
+    expect(item('Identities')).toHaveFocus();
+    fireEvent.keyDown(item('Identities'), { key: 'ArrowDown' });
+    expect(item('Inventory index')).toHaveFocus();
+    fireEvent.keyDown(item('Inventory index'), { key: 'ArrowUp' });
+    expect(item('Identities')).toHaveFocus();
+    fireEvent.keyDown(item('Identities'), { key: 'Home' });
+    expect(item('Inventory index')).toHaveFocus();
+    fireEvent.keyDown(item('Inventory index'), { key: 'Escape' });
+    expect(within(nav).queryByRole('menu')).toBeNull();
+    expect(inventory).toHaveFocus();
+    // ArrowUp opens on the last view; Tab away closes it
+    fireEvent.keyDown(inventory, { key: 'ArrowUp' });
+    expect(item('Identities')).toHaveFocus();
+    fireEvent.blur(item('Identities'), { relatedTarget: document.body });
+    expect(within(nav).queryByRole('menu')).toBeNull();
+    // Enter / Space on the button (its click) open it with the first item focused
+    fireEvent.keyDown(inventory, { key: 'Enter' });
+    fireEvent.click(inventory, { detail: 0 });
+    expect(item('Inventory index')).toHaveFocus();
   });
 
   it('opens and closes the mobile menu with navigation links', () => {
@@ -164,10 +259,20 @@ describe('Header', () => {
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(2);
     expect(screen.getAllByRole('link', { name: 'Activities' })).toHaveLength(2);
-    // The phone menu keeps the three inventory views under Inventory.
+    // The phone menu lists the same four as the desktop Inventory menu: the index (the Inventory
+    // row itself, now a link — U4) and its three views under it.
+    expect(screen.getAllByRole('link', { name: 'Inventory' })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Inventory' })).toHaveAttribute(
+      'href',
+      '/mainnet/inventory'
+    );
     expect(screen.getAllByRole('link', { name: 'Tokens' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Objects' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Identities' })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Tokens' })).toHaveAttribute(
+      'href',
+      '/mainnet/inventory/tokens'
+    );
     expect(screen.queryByRole('link', { name: 'Fiber' })).not.toBeInTheDocument();
     expect(searchBarMock.mock.calls.every(([props]) => props.variant === 'compact')).toBe(true);
 

@@ -70,6 +70,16 @@ it('presents Bitcoin media as a copper link plate without fetching an image', ()
   expect(container.querySelector('img')).toBeNull();
   expect(screen.getByText(/Its image lives on Bitcoin/)).toHaveClass('text-copper');
 });
+it('leaves the Omiga text link out when the page carries it as a button (U5)', () => {
+  render(
+    <ObjectMedia
+      object={{ ...object, mediaProfile: undefined } as never}
+      contentHex={null}
+      omigaLink={false}
+    />
+  );
+  expect(screen.queryByRole('link', { name: /Omiga/ })).toBeNull();
+});
 it('does not label pending composition as pure CKB', () => {
   render(
     <ObjectMedia

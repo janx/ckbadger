@@ -7,6 +7,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
+import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { ExactCkb } from '@/components/activity-event-row';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
@@ -287,22 +288,67 @@ function CodeCellOf({ cell }: { cell: Cell }) {
   );
 }
 
+/**
+ * Lane U (U3): the transaction and the output index as one line under the full out point —
+ * "output 0 of transaction 0x0361eb40…b6518a · live since #14,965,803", the hash linking to the
+ * transaction page and the block to its page.
+ */
+function CellOrigin({ cell }: { cell: Cell }) {
+  return (
+    <p data-testid="cell-origin">
+      output {cell.outputIndex} of transaction{' '}
+      <Link href={`/tx/${cell.txHash}`} className="text-text hover:text-text-bright">
+        {short(cell.txHash)}
+      </Link>{' '}
+      ·{' '}
+      {cell.status === 'dead' ? (
+        cell.consumedAtBlock != null ? (
+          <span className="whitespace-nowrap">
+            spent at{' '}
+            <Link
+              href={`/blocks/${cell.consumedAtBlock}`}
+              className="text-text hover:text-text-bright"
+            >
+              {formatBlockNumber(cell.consumedAtBlock)}
+            </Link>
+          </span>
+        ) : (
+          'spent, block unavailable'
+        )
+      ) : (
+        <span className="whitespace-nowrap">
+          live since{' '}
+          <Link
+            href={`/blocks/${cell.createdAtBlock}`}
+            className="text-text hover:text-text-bright"
+          >
+            {formatBlockNumber(cell.createdAtBlock)}
+          </Link>
+        </span>
+      )}
+    </p>
+  );
+}
+
 function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | null }) {
   const names = useScriptNames(cell);
   const outpoint = `${cell.txHash}:${cell.outputIndex}`;
   return (
     <>
-      <nav aria-label="Breadcrumb" className="text-text-dim text-small mb-2">
-        <Link href={`/tx/${cell.txHash}`} className="hover:text-text-bright">
-          Transaction {short(cell.txHash)}
-        </Link>{' '}
-        <span className="text-[#343c50]">/</span> output {cell.outputIndex}
-      </nav>
       <DetailLayout
-        // Consistency round C13: the cell is named by its short out point; the full one and its
-        // copy are the identity line beneath.
-        title={`${cell.txHash.slice(0, 12)}…${cell.txHash.slice(-8)}:${cell.outputIndex}`}
-        documentTitle={[`${titleHash(cell.txHash)}:${cell.outputIndex}`, 'cell']}
+        // Consistency round C13 + lane U (U3): the page presents a cell — "Cell" in dim before
+        // its short out point; the full out point, its copy and the transaction it is an output
+        // of are the identity lines beneath (no "Transaction … / output N" breadcrumb).
+        title={
+          <>
+            {/* An inline-block, so a phone wraps "Cell" away before it breaks the out point. */}
+            <span className="text-text-dim">Cell</span>{' '}
+            <span className="inline-block">
+              {short(cell.txHash)}:{cell.outputIndex}
+            </span>
+          </>
+        }
+        documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
         status={
           <span className="flex flex-wrap items-center gap-3">
             <span
@@ -321,6 +367,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         }
         identity={
           <div className="space-y-1.5">
+            {/* Lane U (U6): the inventory item this cell is, first under the h1. */}
+            <CellInventoryLine cell={cell} />
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-text-bright text-body [overflow-wrap:anywhere]">
                 {cell.txHash}
@@ -329,6 +377,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
               </span>
               <CopyOutpoint value={outpoint} />
             </div>
+            <CellOrigin cell={cell} />
             <p>
               The out point is the cell&apos;s only name: transaction hash and output index. No
               other cell has it, and this one{' '}

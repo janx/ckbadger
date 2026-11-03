@@ -9,8 +9,13 @@ export interface ObjectMediaProps {
   object: SporeDetail;
   contentHex: string | null;
   decoded?: SporeDobDecoded;
+  /**
+   * Lane U (U5): the quiet "View on Omiga ↗" text link under the media. The object page carries
+   * Omiga as a button in its h1 row instead and passes false; default true (as before).
+   */
+  omigaLink?: boolean;
 }
-export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
+export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: ObjectMediaProps) {
   const network = useActiveNetwork();
   const omiga = omigaDobHref(object.typeScriptHash, network);
   const profile = object.mediaProfile;
@@ -79,7 +84,7 @@ export function ObjectMedia({ object, contentHex, decoded }: ObjectMediaProps) {
             : 'No renderable media available.'}
         </p>
       )}
-      {omiga && (
+      {omigaLink && omiga && (
         <a
           href={omiga}
           className="text-text-dim hover:text-jade text-meta inline-block"
