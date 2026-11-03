@@ -1,5 +1,5 @@
 'use client';
-import { useState, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -12,7 +12,8 @@ import {
   activityHeadline,
   globalTxEvents,
   protocolActionLabel,
-  protocolActionNoteParts,
+  protocolActionNoteFacts,
+  type ProtocolNoteFact,
 } from '@/components/activity-event-row';
 import { ParticipantRefView } from '@/components/participant-ref';
 import { classifyActivity } from '@/lib/activity-classify';
@@ -37,7 +38,7 @@ import { rowTagClass } from '@/components/ui/row-tag';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn, formatTimeAgo, truncateHash } from '@/lib/utils';
+import { cn, formatCkbAmount, formatTimeAgo, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { Utc8Date } from '@/components/ui/utc8-date';
 export type ActivityParticipant = ParticipantInfo & { lockKind?: string | null };
@@ -111,7 +112,7 @@ export function ActivityRowHead({
       )}
     >
       {line ? (
-        <span className="min-w-0">
+        <span data-role="head-main" className="min-w-0">
           {linked ? (
             <Link
               data-role="headline"
@@ -184,7 +185,7 @@ export function ActivityRowHead({
 
 /**
  * What a protocol-action line draws, as a key: the label and every metadata field the line reads
- * (`protocolActionNoteParts` reads `protocolActionMeta`, the protocol and the action). Two actions
+ * (`protocolActionNoteFacts` reads `protocolActionMeta`, the protocol and the action). Two actions
  * with one key read the same, whatever else their metadata carries.
  */
 function protocolLineKey(pa: ActivityProtocolAction, isPrimary: boolean): string {
@@ -299,15 +300,15 @@ function DetailRun({ children }: { children: ReactNode }) {
   );
 }
 
-/** One protocol action's line: its label (null for the headline's own action) and its facts. */
-interface ProtocolLineView {
-  key: string;
+/** One protocol action as a row reads it: its name, whether the headline names it, its facts. */
+interface ProtocolActionView {
+  /** What reads alike inline (`protocolLineKey`): identical lines are said once with "×k". */
+  lineKey: string;
   /** `protocol:action`, what "the same action" compares. */
   action: string;
-  label: string | null;
-  parts: ReactNode[];
-  /** Actions that read exactly this line ("×18"). */
-  count: number;
+  label: string;
+  isPrimary: boolean;
+  facts: ProtocolNoteFact[];
 }
 
 /** What a run of one action counts: a DAO action is one per deposit cell; any other, an action. */
@@ -318,88 +319,211 @@ function actionNoun(action: string, count: number): string {
   return count === 1 ? noun : `${noun}s`;
 }
 
+/** "51 deposits" for a run of one action, "7 actions" for a mixed one. */
+function runNoun(actions: ProtocolActionView[]): string {
+  const one = actions.every((a) => a.action === actions[0].action);
+  if (one) return actionNoun(actions[0].action, actions.length);
+  return actions.length === 1 ? 'action' : 'actions';
+}
+
 /**
- * The protocol-action lines of a head (lane F follow-up, the PARTICIPANT_LIMIT pattern of
- * `FoldedCalls`): up to PARTICIPANT_LIMIT lines are all said as before. Over it, the first five
- * and "+N more" that opens the rest in place; when every line is one action (a dCKB batch withdraw:
- * 51 DAO withdraw requests), the head names it once with its count ("51 deposits") and the lines
- * carry only their facts. Nothing is dropped — the expand shows every line.
+ * What one 1440-wide head line holds beside its evidence, in characters of its rendered text
+ * (measured on the dCKB batch-withdraw row: 164 characters fill the line without the evidence,
+ * whose "#20,267,368 · 2026-08-26" takes about 26).
  */
-function FoldedProtocolLines({
-  lines,
-  primaryAction,
-}: {
-  lines: ProtocolLineView[];
-  /** The headline's action (`protocol:action`): a run of it needs no name. */
-  primaryAction: string | null;
-}) {
-  const [open, setOpen] = useState(false);
-  const over = lines.length > PARTICIPANT_LIMIT;
-  const one = over && lines.every((l) => l.action === lines[0].action);
-  const shown = over && !open ? lines.slice(0, PARTICIPANT_LIMIT - 1) : lines;
-  const actions = (ls: ProtocolLineView[]) => ls.reduce((n, l) => n + l.count, 0);
-  const hidden = actions(lines) - actions(shown);
-  const nounOf = (count: number) =>
-    one ? actionNoun(lines[0].action, count) : count === 1 ? 'action' : 'actions';
-  const label = lines.find((l) => l.label !== null)?.label ?? null;
+const HEAD_LINE_CHARS = 130;
+
+/**
+ * The head's protocol facts inline (T7, unchanged for one action and for a short run): each
+ * action's facts after the headline, the headline's own action unnamed, every other one led by its
+ * label; lines that read the same are said once with their count ("×18").
+ */
+function InlineProtocolRuns({ actions }: { actions: ProtocolActionView[] }) {
+  const lines: { key: string; parts: ReactNode[]; count: number }[] = [];
+  for (const a of actions) {
+    const facts = a.facts.map((f) => f.node);
+    const parts = a.isPrimary ? facts : [a.label, ...facts];
+    if (parts.length === 0) continue;
+    const same = lines.find((l) => l.key === a.lineKey);
+    if (same) same.count += 1;
+    else lines.push({ key: a.lineKey, parts, count: 1 });
+  }
   return (
     <>
-      {one && (
-        <DetailRun>
-          {lines[0].action !== primaryAction && label !== null ? `${label} · ` : ''}
-          {actions(lines)} {nounOf(actions(lines))}
+      {lines.map((l) => (
+        <DetailRun key={l.key}>
+          <DotJoined parts={l.parts} />
+          {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
         </DetailRun>
-      )}
-      {shown.map((l) => {
-        const parts = one || l.label === null ? l.parts : [l.label, ...l.parts];
-        if (parts.length === 0) return null;
-        return (
-          <DetailRun key={l.key}>
-            <DotJoined parts={parts} />
-            {l.count > 1 && <span className="text-text-dim"> ×{l.count}</span>}
-          </DetailRun>
-        );
-      })}
-      {over && !open && (
-        <>
-          {' '}
-          <button
-            type="button"
-            aria-expanded={false}
-            onClick={() => setOpen(true)}
-            className="text-interactive hover:text-jade text-small whitespace-nowrap bg-transparent font-normal transition-colors"
-          >
-            +{hidden} more {nounOf(hidden)}
-          </button>
-        </>
-      )}
+      ))}
     </>
   );
 }
 
 /**
- * The tx-level facts of an activity, from the one event classification, as inline runs after the
- * headline (T7): each protocol action's metadata (the headline's own action needs no name; another
- * one leads with its label), then the type calls and the lock calls by name ("lock …"), their args
- * in each name's hover. Action runs that read the same are said once with their count ("×18"); a
- * long call run, and a long run of protocol lines (`FoldedProtocolLines`), folds behind "+N more".
- * A protocol action that cannot be read is an error line under the headline (`errors`).
+ * The head of a listed run (lane F follow-up 2, T7 "one thing per line"): the action named once
+ * — the headline names its own — with the count, and for a run of one action whose every member
+ * carries an amount, the exact total (its title says what it sums). Nothing of the list inline.
+ */
+function ProtocolRunSummary({
+  actions,
+  primaryAction,
+}: {
+  actions: ProtocolActionView[];
+  primaryAction: string | null;
+}) {
+  const one = actions.every((a) => a.action === actions[0].action);
+  const amounts = actions.map((a) => a.facts.find((f) => f.kind === 'capacity'));
+  const total =
+    one && amounts.every((f) => f !== undefined)
+      ? amounts.reduce((sum, f) => sum + (f as { shannons: bigint }).shannons, BigInt(0))
+      : null;
+  const noun = runNoun(actions);
+  return (
+    <>
+      <DetailRun>
+        {one && actions[0].action !== primaryAction ? `${actions[0].label} · ` : ''}
+        {actions.length} {noun}
+      </DetailRun>
+      {total !== null && (
+        <DetailRun>
+          <span
+            data-role="protocol-total"
+            title={`${formatCkbAmount(total).full} CKB, the sum of ${actions.length} ${noun}`}
+          >
+            <ExactCkb shannons={total} signed={false} tone="plain" />
+          </span>
+        </DetailRun>
+      )}
+    </>
+  );
+}
+
+/** Characters an exact amount takes ("5,100.00000000 CKB"): the width of the amount column. */
+function amountChars(shannons: bigint): number {
+  return `${formatCkbAmount(shannons).full} CKB`.length;
+}
+
+/**
+ * One action per 18 px line, as participant lines are drawn: its name when the run is mixed (a
+ * column as wide as the longest name), its amount in one right-aligned tabular column (the
+ * decimals line up), "deposited at #block" as a link to the block, then every other fact it carries.
+ */
+function ProtocolActionLine({
+  action,
+  named,
+  labelChars,
+  amountWidth,
+}: {
+  action: ProtocolActionView;
+  named: boolean;
+  labelChars: number;
+  amountWidth: number;
+}) {
+  const parts: ReactNode[] = [];
+  if (named)
+    parts.push(
+      <span className="text-text inline-block" style={{ minWidth: `${labelChars}ch` }}>
+        {action.label}
+      </span>
+    );
+  for (const f of action.facts) {
+    if (f.kind === 'capacity')
+      parts.push(
+        <>
+          <span
+            data-role="protocol-amount"
+            className="inline-block text-right tabular-nums"
+            style={{ minWidth: `${amountWidth}ch` }}
+          >
+            <ExactCkb shannons={f.shannons} signed={false} tone="plain" />
+          </span>
+          {f.suffix}
+        </>
+      );
+    else if (f.kind === 'depositBlock')
+      parts.push(
+        <>
+          deposited at{' '}
+          <Link href={`/blocks/${f.block}`} className="hover:text-jade transition-colors">
+            {formatBlockNumber(f.block)}
+          </Link>
+        </>
+      );
+    else parts.push(f.node);
+  }
+  if (parts.length === 0) parts.push(action.label);
+  return (
+    <div data-role="protocol-line" className="text-text-dim text-small pl-[18px] leading-[18px]">
+      <DotJoined parts={parts} />
+    </div>
+  );
+}
+
+/**
+ * A listed run's actions under the head (lane F follow-up 2): folded by default behind
+ * "51 deposits ↓", opened to one action per line, folded back by "fewer ↑". Every action of the
+ * transaction is one line here — nothing is dropped.
+ */
+function ProtocolActionList({ actions }: { actions: ProtocolActionView[] }) {
+  const [open, setOpen] = useState(false);
+  const one = actions.every((a) => a.action === actions[0].action);
+  const widths = actions.flatMap((a) =>
+    a.facts.flatMap((f) => (f.kind === 'capacity' ? [amountChars(f.shannons)] : []))
+  );
+  const amountWidth = widths.length ? Math.max(...widths) : 0;
+  const labelChars = Math.max(...actions.map((a) => a.label.length));
+  return (
+    <div data-role="protocol-list" className="flex min-w-0 flex-col">
+      <button
+        type="button"
+        data-role="protocol-list-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="text-interactive hover:text-jade text-small self-start bg-transparent pl-[18px] leading-[18px] transition-colors"
+      >
+        {open ? 'fewer ↑' : `${actions.length} ${runNoun(actions)} ↓`}
+      </button>
+      {open &&
+        actions.map((a, i) => (
+          <ProtocolActionLine
+            key={i}
+            action={a}
+            named={!one}
+            labelChars={labelChars}
+            amountWidth={amountWidth}
+          />
+        ))}
+    </div>
+  );
+}
+
+/**
+ * The tx-level facts of an activity, from the one event classification (T7): the protocol actions
+ * (`actions`, drawn inline or as a list by `ActivityRow`), then the type calls and the lock calls by
+ * name ("lock …"), their args in each name's hover, a long call run folded behind "+N more"
+ * (`calls`). A protocol action that cannot be read is an error line under the headline (`errors`).
  */
 function activityDetails(
   activity: ActivityBody & { txHash: string },
   showScriptDetails: boolean
-): { runs: ReactNode; errors: ReactNode } {
+): {
+  actions: ProtocolActionView[];
+  primaryAction: string | null;
+  calls: ReactNode;
+  errors: ReactNode;
+} {
   const primary = classifyActivity(activity).primaryProtocolAction;
   const events = globalTxEvents(activity);
   const types = events.flatMap((e) => (e.kind === 'type' ? [e.call] : []));
   const locks = events.flatMap((e) => (e.kind === 'lock' ? [e.call] : []));
-  const lines: ProtocolLineView[] = [];
+  const actions: ProtocolActionView[] = [];
   const errors: ReactNode[] = [];
   events.forEach((e, i) => {
     if (e.kind !== 'protocol') return;
-    let parts: ReactNode[];
+    let facts: ProtocolNoteFact[];
     try {
-      parts = protocolActionNoteParts(e.action);
+      facts = protocolActionNoteFacts(e.action);
     } catch (error) {
       errors.push(
         <div key={`p${i}`} data-role="detail-error" className="text-small pl-[18px]">
@@ -408,43 +532,34 @@ function activityDetails(
       );
       return;
     }
-    const label = e.action === primary ? null : protocolActionLabel(e.action);
-    if (label === null && parts.length === 0) return;
-    const key = protocolLineKey(e.action, e.action === primary);
-    const same = lines.find((l) => l.key === key);
-    if (same) same.count += 1;
-    else
-      lines.push({
-        key,
-        action: `${e.action.protocol}:${e.action.action}`,
-        label,
-        parts,
-        count: 1,
-      });
+    actions.push({
+      lineKey: protocolLineKey(e.action, e.action === primary),
+      action: `${e.action.protocol}:${e.action.action}`,
+      label: protocolActionLabel(e.action),
+      isPrimary: e.action === primary,
+      facts,
+    });
   });
-  const runs: ReactNode[] = [];
-  if (lines.length > 0)
-    runs.push(
-      <FoldedProtocolLines
-        key="protocol"
-        lines={lines}
-        primaryAction={primary ? `${primary.protocol}:${primary.action}` : null}
-      />
-    );
+  const calls: ReactNode[] = [];
   if (showScriptDetails && types.length > 0)
-    runs.push(
+    calls.push(
       <DetailRun key="type">
         <FoldedCalls noun="types" parts={callNames(types.map(typeCallRef))} />
       </DetailRun>
     );
   if (showScriptDetails && locks.length > 0)
-    runs.push(
+    calls.push(
       <DetailRun key="lock">
         {'lock '}
         <FoldedCalls noun="locks" parts={callNames(locks.map(lockCallRef))} />
       </DetailRun>
     );
-  return { runs: <>{runs}</>, errors: <>{errors}</> };
+  return {
+    actions,
+    primaryAction: primary ? `${primary.protocol}:${primary.action}` : null,
+    calls: <>{calls}</>,
+    errors: <>{errors}</>,
+  };
 }
 
 /** The change in occupied capacity, whole CKB (it is bytes), exact otherwise. */
@@ -829,9 +944,36 @@ export function ActivityRow({
   const shown =
     mode === 'participant' && participant ? { ...activity, participants: [participant] } : activity;
   const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
-  const { runs, errors } = activityDetails(activity, showScriptDetails);
+  const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails);
+  // Lane F follow-up 2: over PARTICIPANT_LIMIT actions the run is a list under the head; two to
+  // six stay inline while the rendered head fits one 1440 line (measured once per transaction,
+  // before paint), else the same list. One action is always inline.
+  const articleRef = useRef<HTMLElement>(null);
+  const [fit, setFit] = useState<{ tx: string; fits: boolean } | null>(null);
+  const measured = actions.length >= 2 && actions.length <= PARTICIPANT_LIMIT;
+  const listed =
+    actions.length > PARTICIPANT_LIMIT || (measured && fit?.tx === activity.txHash && !fit.fits);
+  useLayoutEffect(() => {
+    if (!measured || fit?.tx === activity.txHash) return;
+    const main = articleRef.current?.querySelector('[data-role="head-main"]');
+    if (!main)
+      throw new Error(`transaction ${activity.txHash}: the activity head has no main line`);
+    setFit({ tx: activity.txHash, fits: (main.textContent ?? '').length <= HEAD_LINE_CHARS });
+  }, [measured, fit, activity.txHash]);
+  const runs = (
+    <>
+      {actions.length > 0 &&
+        (listed ? (
+          <ProtocolRunSummary actions={actions} primaryAction={primaryAction} />
+        ) : (
+          <InlineProtocolRuns actions={actions} />
+        ))}
+      {calls}
+    </>
+  );
   return (
     <article
+      ref={articleRef}
       data-feed-row={activity.txHash}
       // T7: the hash leaves the visible row; it is the row's hover (and the headline's link).
       // Consistency C3: so is the age, beside it; the row shows the date.
@@ -858,6 +1000,7 @@ export function ActivityRow({
         poolStatus={activity.poolStatus}
         timeAddedToPool={activity.timeAddedToPool}
       />
+      {listed && <ProtocolActionList actions={actions} />}
       {errors}
       <PoolInterpretationNotice interpretation={activity.interpretation} />
       {showParticipants && (

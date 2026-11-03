@@ -312,12 +312,15 @@ describe('option A: every participant, one line each (D1)', () => {
   });
 });
 
-// Lane F follow-up (2026-11-03): a dCKB batch withdraw carries ~50 DAO withdraw requests, one per
-// deposit; the head ran on for 20 lines ("DAO Withdraw Request · 5,000 CKB · deposited at #… · DAO
-// Withdraw Request · …"). Protocol lines fold as call runs do: over PARTICIPANT_LIMIT the first five
-// and "+N more" that opens the rest in place; when every line is the same action, the head names
-// it once with the count. Nothing is dropped: every line is reachable by the expand.
-describe('option A: a long run of protocol actions folds', () => {
+// Lane F follow-up 2 (2026-11-03, user: "展开了还是很丑"): a dCKB batch withdraw carries 51 DAO
+// withdraw requests, one per deposit. T7's "one thing per line": the head names the action once
+// with its count and exact total, nothing of the list inline; below it a folded list control
+// "51 deposits ↓" opens ONE DEPOSIT PER 18 px LINE (amount decimal-aligned · deposited at #block
+// as a link · other facts), "fewer ↑" folds it back. 2–6 actions keep the inline form while the
+// head stays one line at 1440 (a character budget on the rendered head), else the same list.
+// Mixed actions name each action per line. Every action stays reachable.
+// (Was, follow-up 1: five lines inline and "+46 more deposits" opening the rest inline.)
+describe('option A: a run of protocol actions becomes a list, one action per line', () => {
   const withdraw = (n: number) => ({
     protocol: 'dao',
     protocolName: 'Nervos DAO',
@@ -333,32 +336,62 @@ describe('option A: a long run of protocol actions folds', () => {
   const batch = row([party('r43nr7', { ckbDelta: '-1000' })], {
     protocolActions: Array.from({ length: 51 }, (_, n) => withdraw(n)),
   });
-  const detailsText = (c: HTMLElement) =>
-    [...head(c).querySelectorAll('[data-role="detail"]')].map((d) => d.textContent).join(' | ');
+  const headMain = (c: HTMLElement) =>
+    c.querySelector('[data-role="row-head"] [data-role="head-main"]') as HTMLElement;
+  const listRows = (c: HTMLElement) => [
+    ...c.querySelectorAll<HTMLElement>('[data-role="protocol-line"]'),
+  ];
+  const toggle = (c: HTMLElement) =>
+    c.querySelector('[data-role="protocol-list-toggle"]') as HTMLElement | null;
 
-  it('names one repeated action once with its count, shows five, and folds the rest', () => {
+  it('heads 51 deposits as the action once, its count and exact total; nothing of the list inline', () => {
     const { container } = render(<ActivityRow activity={batch} />);
-    const line = head(container);
-    // The label once: the headline. No line repeats it.
-    expect(line.textContent!.match(/DAO Withdraw Request/g)).toHaveLength(1);
-    const details = [...line.querySelectorAll('[data-role="detail"]')];
-    expect(details[0]).toHaveTextContent(/^51 deposits$/);
-    expect(details).toHaveLength(1 + 5);
-    expect(details[1]).toHaveTextContent('100.00000000 CKB · deposited at #6,000,000');
-    expect(details[5]).toHaveTextContent('deposited at #6,000,004');
-    expect(line).not.toHaveTextContent('#6,000,005');
-    const more = within(line).getByRole('button', { name: '+46 more deposits' });
-    expect(more).toHaveAttribute('aria-expanded', 'false');
-    fireEvent.click(more);
-    // Every line is reachable: all 51 deposit blocks, still without the repeated label.
-    for (let n = 0; n < 51; n++)
-      expect(line).toHaveTextContent(`deposited at #${(6_000_000 + n).toLocaleString('en-US')}`);
-    expect(line.textContent!.match(/DAO Withdraw Request/g)).toHaveLength(1);
-    expect(within(line).queryByRole('button')).toBeNull();
-    expect(detailsText(container)).toMatch(/^51 deposits \| /);
+    // Σ (n + 1) × 100 CKB for n = 0…50 = 132,600 CKB, exact.
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Withdraw Request · 51 deposits · 132,600\.00000000 CKB$/
+    );
+    expect(head(container)).not.toHaveTextContent('deposited at');
+    expect(within(head(container)).queryByRole('button')).toBeNull();
+    const total = head(container).querySelector('[data-role="protocol-total"]') as HTMLElement;
+    expect(total).toHaveAttribute('title', '132,600.00000000 CKB, the sum of 51 deposits');
   });
 
-  it('folds a mixed run over the limit after five lines, each still naming its action', () => {
+  it('folds the list by default and opens one deposit per 18 px line, folding back with "fewer ↑"', () => {
+    const { container } = render(<ActivityRow activity={batch} />);
+    expect(listRows(container)).toHaveLength(0);
+    const control = toggle(container)!;
+    expect(control).toHaveTextContent('51 deposits ↓');
+    expect(control).toHaveAttribute('aria-expanded', 'false');
+    // The list sits under the head, with the participants, never inside the head line.
+    expect(head(container).contains(control)).toBe(false);
+    fireEvent.click(control);
+    const rows = listRows(container);
+    expect(rows).toHaveLength(51);
+    expect(toggle(container)).toHaveTextContent('fewer ↑');
+    expect(toggle(container)).toHaveAttribute('aria-expanded', 'true');
+    expect(rows[0]).toHaveTextContent(/^100\.00000000 CKB · deposited at #6,000,000$/);
+    expect(rows[50]).toHaveTextContent(/^5,100\.00000000 CKB · deposited at #6,000,050$/);
+    for (const [n, r] of rows.entries()) {
+      expect(r).toHaveClass('leading-[18px]', 'text-small');
+      const block = within(r).getByRole('link', {
+        name: `#${(6_000_000 + n).toLocaleString('en-US')}`,
+      });
+      expect(block).toHaveAttribute('href', `/mainnet/blocks/${6_000_000 + n}`);
+      // One action of one kind: no line repeats its name.
+      expect(r).not.toHaveTextContent('DAO Withdraw Request');
+    }
+    // Decimal-aligned: every amount sits in one right-aligned, tabular column of one width.
+    const amounts = rows.map(
+      (r) => r.querySelector('[data-role="protocol-amount"]') as HTMLElement
+    );
+    expect(new Set(amounts.map((a) => a.style.minWidth))).toEqual(new Set(['18ch']));
+    for (const a of amounts) expect(a).toHaveClass('text-right', 'tabular-nums', 'inline-block');
+    fireEvent.click(toggle(container)!);
+    expect(listRows(container)).toHaveLength(0);
+    expect(toggle(container)).toHaveTextContent('51 deposits ↓');
+  });
+
+  it('names each action on its line when the run is mixed, and heads the count without a total', () => {
     const mixed = row([party('r43nr7')], {
       protocolActions: [
         withdraw(0),
@@ -371,25 +404,48 @@ describe('option A: a long run of protocol actions folds', () => {
       ],
     });
     const { container } = render(<ActivityRow activity={mixed} />);
-    const line = head(container);
-    const details = [...line.querySelectorAll('[data-role="detail"]')].map((d) => d.textContent);
-    expect(details).toHaveLength(5);
-    expect(details[0]).toBe('100.00000000 CKB · deposited at #6,000,000');
-    expect(details[1]).toBe('DAO Withdraw Request · 200.00000000 CKB · deposited at #6,000,001');
-    expect(details[3]).toBe('DAO Deposit · 1,000.00000000 CKB locked');
-    fireEvent.click(within(line).getByRole('button', { name: '+2 more actions' }));
-    expect(line.querySelectorAll('[data-role="detail"]')).toHaveLength(7);
-    expect(line).toHaveTextContent('DAO Deposit · 4,000.00000000 CKB locked');
+    expect(headMain(container)).toHaveTextContent(/^DAO Withdraw Request · 7 actions$/);
+    fireEvent.click(toggle(container)!);
+    const rows = listRows(container).map((r) => r.textContent);
+    expect(rows).toHaveLength(7);
+    expect(rows[0]).toBe('DAO Withdraw Request · 100.00000000 CKB · deposited at #6,000,000');
+    expect(rows[3]).toBe('DAO Deposit · 1,000.00000000 CKB locked');
+    expect(rows[6]).toBe('DAO Deposit · 4,000.00000000 CKB locked');
   });
 
-  it('reads as before for one to three actions: no count, no fold', () => {
+  it('keeps two actions inline while the head stays one line at 1440', () => {
+    const two = row([party('r43nr7')], { protocolActions: [deposit(0), deposit(1)] });
+    const { container } = render(<ActivityRow activity={two} />);
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Deposit · 1,000\.00000000 CKB locked · DAO Deposit · 2,000\.00000000 CKB locked$/
+    );
+    expect(toggle(container)).toBeNull();
+    expect(listRows(container)).toHaveLength(0);
+  });
+
+  it('lists three actions whose inline head would wrap at 1440 (was: three runs inline)', () => {
     const three = row([party('r43nr7')], {
       protocolActions: [withdraw(0), withdraw(1), withdraw(2)],
     });
     const { container } = render(<ActivityRow activity={three} />);
-    expect(detailsText(container)).toBe(
-      '100.00000000 CKB · deposited at #6,000,000 | DAO Withdraw Request · 200.00000000 CKB · deposited at #6,000,001 | DAO Withdraw Request · 300.00000000 CKB · deposited at #6,000,002'
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Withdraw Request · 3 deposits · 600\.00000000 CKB$/
     );
-    expect(within(head(container)).queryByRole('button')).toBeNull();
+    fireEvent.click(toggle(container)!);
+    expect(listRows(container).map((r) => r.textContent)).toEqual([
+      '100.00000000 CKB · deposited at #6,000,000',
+      '200.00000000 CKB · deposited at #6,000,001',
+      '300.00000000 CKB · deposited at #6,000,002',
+    ]);
+  });
+
+  it('keeps one action inline, as before', () => {
+    const { container } = render(
+      <ActivityRow activity={row([party('r43nr7')], { protocolActions: [withdraw(0)] })} />
+    );
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Withdraw Request · 100\.00000000 CKB · deposited at #6,000,000$/
+    );
+    expect(toggle(container)).toBeNull();
   });
 });

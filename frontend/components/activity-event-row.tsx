@@ -1004,50 +1004,75 @@ export function ItemDeltaFact({
 }
 
 /**
+ * One fact of a protocol action's note, with what a list lays out (lane F follow-up 2): the
+ * capacity as shannons (its column is decimal-aligned) and the deposit block as a height (a link
+ * there); every other fact is its node. `protocolActionNoteParts` is these nodes, in this order.
+ */
+export type ProtocolNoteFact =
+  | { kind: 'capacity'; shannons: bigint; suffix: string; node: React.ReactNode }
+  | { kind: 'depositBlock'; block: bigint; node: React.ReactNode }
+  | { kind: 'other'; node: React.ReactNode };
+
+/**
  * What a protocol action's metadata says, as quiet parts of one line: DAO amounts and the deposit
  * block, a Fiber channel and its capacity, an RGB++ BTC txid. Empty when the action carries none.
  */
-export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
+export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNoteFact[] {
   const meta = protocolActionMeta(pa);
-  const parts: React.ReactNode[] = [];
+  const facts: ProtocolNoteFact[] = [];
   if (meta.channelOutpoint) {
     // `0x<funding tx hash>:<index>`: shorten the hash, keep the index whole. The out point names
     // the channel's funding cell, so it opens that cell's page.
     const [hash, index] = meta.channelOutpoint.split(':');
-    parts.push(
-      index === undefined ? (
-        `channel ${truncateHash(hash, 10, 4)}`
-      ) : (
-        <>
-          channel{' '}
-          <Link
-            href={`/cell/${hash}-${index}`}
-            className="hover:text-jade transition-colors"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {truncateHash(hash, 10, 4)}:{index}
-          </Link>
-        </>
-      )
-    );
+    facts.push({
+      kind: 'other',
+      node:
+        index === undefined ? (
+          `channel ${truncateHash(hash, 10, 4)}`
+        ) : (
+          <>
+            channel{' '}
+            <Link
+              href={`/cell/${hash}-${index}`}
+              className="hover:text-jade transition-colors"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {truncateHash(hash, 10, 4)}:{index}
+            </Link>
+          </>
+        ),
+    });
   }
   if (meta.capacity !== null) {
-    parts.push(
-      <>
-        <ExactCkb shannons={meta.capacity} signed={false} tone="plain" />
-        {pa.protocol === 'dao' && pa.action === 'deposit' ? ' locked' : ''}
-      </>
-    );
+    const suffix = pa.protocol === 'dao' && pa.action === 'deposit' ? ' locked' : '';
+    facts.push({
+      kind: 'capacity',
+      shannons: meta.capacity,
+      suffix,
+      node: (
+        <>
+          <ExactCkb shannons={meta.capacity} signed={false} tone="plain" />
+          {suffix}
+        </>
+      ),
+    });
   }
   if (meta.depositBlock !== null) {
-    parts.push(`deposited at ${formatBlockNumber(meta.depositBlock)}`);
+    facts.push({
+      kind: 'depositBlock',
+      block: meta.depositBlock,
+      node: `deposited at ${formatBlockNumber(meta.depositBlock)}`,
+    });
   }
   if (meta.compensation !== null) {
-    parts.push(
-      <>
-        +<ExactCkb shannons={meta.compensation} signed={false} tone="plain" /> compensation
-      </>
-    );
+    facts.push({
+      kind: 'other',
+      node: (
+        <>
+          +<ExactCkb shannons={meta.compensation} signed={false} tone="plain" /> compensation
+        </>
+      ),
+    });
   }
   if (pa.protocol === 'rgbpp') {
     const transitions: Record<string, string> = {
@@ -1057,16 +1082,23 @@ export function protocolActionNoteParts(pa: ActivityProtocolAction): React.React
       transfer: 'Bitcoin-controlled cells change ownership',
       receive: 'New Bitcoin-controlled cells',
     };
-    if (transitions[pa.action]) parts.push(transitions[pa.action]);
+    if (transitions[pa.action]) facts.push({ kind: 'other', node: transitions[pa.action] });
   }
   if (meta.btcTxid)
-    parts.push(
-      <span className="text-[#dc8a5a]" title={meta.btcTxid}>
-        Bitcoin tx {truncateHash(meta.btcTxid, 8, 6)}
-        {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
-      </span>
-    );
-  return parts;
+    facts.push({
+      kind: 'other',
+      node: (
+        <span className="text-[#dc8a5a]" title={meta.btcTxid}>
+          Bitcoin tx {truncateHash(meta.btcTxid, 8, 6)}
+          {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
+        </span>
+      ),
+    });
+  return facts;
+}
+
+export function protocolActionNoteParts(pa: ActivityProtocolAction): React.ReactNode[] {
+  return protocolActionNoteFacts(pa).map((f) => f.node);
 }
 
 /** Parts joined with a dim middle dot. */
