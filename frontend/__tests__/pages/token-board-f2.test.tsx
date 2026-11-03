@@ -376,6 +376,11 @@ describe('Token board (F2 objects)', () => {
     });
     expect(note).toHaveTextContent(address);
     expect(note).toHaveClass('[overflow-wrap:anywhere]');
+    // Lane L: the issuer's address is a link to its page.
+    expect(within(note).getByRole('link', { name: address })).toHaveAttribute(
+      'href',
+      `/mainnet/address/${address}`
+    );
   });
 
   // Visual pass: the last movement reads as one plain clause.

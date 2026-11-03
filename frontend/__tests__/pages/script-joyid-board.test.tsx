@@ -98,6 +98,12 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     expect(metrics).toHaveTextContent('Upgradable · 5 versions · last replaced 2025-11-21');
     expect(metrics).toHaveTextContent('multisig 0x6598…d696 · has never signed');
     expect(metrics).toHaveTextContent('In use since2023-10-07');
+    // Lane L: the first deployment's transaction is named, and links to its page.
+    const DEPLOY = '0xbac0f6f0a177a03974870df47ab0c3e761c5dd19e9ca165358d0b72bd7f433f5';
+    expect(metrics).toHaveTextContent('In use since2023-10-07 · deployed in 0xbac0f6…f433f5');
+    const deployer = within(metrics).getByRole('link', { name: '0xbac0f6…f433f5' });
+    expect(deployer).toHaveAttribute('href', `/mainnet/tx/${DEPLOY}`);
+    expect(deployer).toHaveAttribute('title', DEPLOY);
   });
 
   it('draws History with occupied in jade, a separate occupied panel and the version days in the plot (SC-S2, SC-S3, L1-3 ruling)', async () => {

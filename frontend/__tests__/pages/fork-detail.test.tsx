@@ -76,6 +76,11 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     );
     expect(story).toHaveTextContent('#12 included the dropped block as an uncle.');
     expect(story).toHaveTextContent('1 of its 1 transaction was committed later.');
+    // Lane L: the canonical block that took the uncle is a link.
+    expect(within(story).getByRole('link', { name: '#12' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12'
+    );
   });
 
   it('draws the two branches with the dropped block dashed, the uncle link and ① ② tip marks (FF-D4)', async () => {
@@ -87,7 +92,14 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     expect(tree.querySelectorAll('[data-tile][data-dropped]')).toHaveLength(1);
     expect(tree.querySelectorAll('[data-uncle-link]')).toHaveLength(1);
     expect(tree.querySelectorAll('[data-tip-mark]')).toHaveLength(2);
-    expect(screen.getByText(/the node switches to #12/)).toBeInTheDocument();
+    const switches = screen.getByText(/the node switches to/);
+    expect(switches).toHaveTextContent(/the node switches to #12/);
+    // Lane L: the new tip is on the main chain, so it links to its block; the dropped one does not.
+    expect(within(switches).getByRole('link', { name: '#12' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12'
+    );
+    expect(within(switches).queryByRole('link', { name: /#11/ })).toBeNull();
     // the legend's times fit their column: the date is in the header (visual pass)
     expect(screen.getByText('before 06:13:20 UTC+8')).toBeInTheDocument();
     // drawn to the width at every size: no sideways scroller and no "scroll sideways" caption (V4)
@@ -149,7 +161,18 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(tier2).toContainElement(heading);
     expect(heading).toHaveClass('text-body');
-    expect(within(tier2).getByRole('heading', { name: 'Uncles in #12' })).toBeInTheDocument();
+    const uncles = within(tier2).getByRole('heading', { name: 'Uncles in #12' });
+    // Lane L: the including block in the heading, and the new tip as stored, are links.
+    expect(within(uncles).getByRole('link', { name: '#12' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12'
+    );
+    const stored = heading.closest('section')!;
+    expect(stored).toHaveTextContent(`new tip#12 ${uncleFixture.event.newTipHash}`);
+    expect(within(stored).getByRole('link', { name: '#12' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/12'
+    );
     expect(
       within(tier2).getByText(`${uncleFixture.orphanedBlocks[0].hash} · #11`)
     ).toBeInTheDocument();

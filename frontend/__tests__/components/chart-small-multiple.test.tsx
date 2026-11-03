@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { CHART_BY_SLUG } from '@/components/charts/chart-catalogue';
@@ -144,6 +144,11 @@ describe('ChartSmallMultiple', () => {
     expect(list).toHaveTextContent('ckb1qzda0c…93hhsj60.0000%');
     expect(screen.queryByText(new RegExp(address))).not.toBeInTheDocument();
     expect(list).toHaveTextContent('Others40.0000%');
+    // Lane L: the miner's short address links to its address page; "Others" is no entity.
+    const miner = within(list).getByRole('link', { name: 'ckb1qzda0c…93hhsj' });
+    expect(miner).toHaveAttribute('href', `/mainnet/address/${address}`);
+    expect(miner).toHaveAttribute('title', address);
+    expect(within(list).queryByRole('link', { name: 'Others' })).toBeNull();
     // The board's headline: the top miner's share under "top", grouped like any rate (CH-31).
     const readout = screen.getByRole('group', { name: 'Miners current readout' });
     expect(readout).toHaveTextContent('60.00%');
@@ -194,6 +199,35 @@ describe('ChartSmallMultiple', () => {
     });
     const readout = screen.getByRole('group', { name: 'Knowledge by kind current readout' });
     expect(readout.parentElement).toHaveTextContent(/^nervos dao/);
+  });
+
+  // Lane L: two assets that share a name are told apart by a short id; the link to each keeps
+  // the full id in its hover title.
+  it('links a same-named asset by its page, the full id in the title (lane L)', async () => {
+    const assets = CHART_BY_SLUG.get('most-utilized-assets')!;
+    const a = `0x5cb3322a${'00'.repeat(23)}d76ab4fa`;
+    const b = `0x7d4e1f0b${'11'.repeat(23)}aa01cc02`;
+    const share = {
+      title: 'Used',
+      series: [
+        { key: 'top0', label: 'MEMES (token)', color: '#000', id: `token:${a}` },
+        { key: 'top1', label: 'MEMES (token)', color: '#000', id: `token:${b}` },
+        { key: 'others', label: 'Others', color: '#000' },
+      ],
+      data: [{ date: '2026-10-29', values: { top0: '300', top1: '200', others: '500' } }],
+    };
+    render(
+      <ChartSmallMultiple
+        definition={{
+          ...assets,
+          fetch: async () => ({ title: 'Assets', usedShare: share, capacityShare: share }),
+        }}
+      />
+    );
+    const list = await screen.findByRole('list', { name: 'Assets ranked preview' });
+    const link = within(list).getByRole('link', { name: 'MEMES · 0x5cb3…b4fa' });
+    expect(link).toHaveAttribute('href', `/mainnet/tokens/${a}`);
+    expect(link.getAttribute('title')).toContain(a);
   });
 
   it('marks each Assets row with its class instead of a "(token)" suffix (CH-06)', async () => {

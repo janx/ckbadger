@@ -869,6 +869,11 @@ describe('ProtocolActionNote — the action metadata in one quiet line', () => {
       />
     );
     expect(document.body).toHaveTextContent('26,050.00000000 CKB · deposited at #19,695,550');
+    // Lane L: the deposit block is a link wherever the note is read (tx summary, feeds).
+    expect(screen.getByRole('link', { name: '#19,695,550' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/19695550'
+    );
   });
 
   it('reads a Fiber close: the channel and its capacity', () => {

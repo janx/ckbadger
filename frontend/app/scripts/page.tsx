@@ -1,5 +1,6 @@
 'use client';
 
+import { TopicCharts } from '@/components/charts/topic-charts';
 import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useInRouterContext } from 'react-router-dom';
@@ -760,6 +761,7 @@ export default function ScriptsPage() {
             </DetailTier2>
           </div>
         </div>
+        <TopicCharts topic="/scripts" />
       </main>
     </div>
   );

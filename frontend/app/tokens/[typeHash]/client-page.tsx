@@ -323,9 +323,21 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
             codeNote="the token’s type script; its code decides what a valid transfer is"
             argsNote={
               <span className="[overflow-wrap:anywhere]">
-                {t.issuer
-                  ? `the lock hash of the owner that can mint (${t.issuer.address ?? t.issuer.lockHash}), proven by the token script`
-                  : NOT_ESTABLISHED_ISSUER}
+                {t.issuer ? (
+                  <>
+                    the lock hash of the owner that can mint (
+                    {t.issuer.address ? (
+                      <AppLink href={`/address/${t.issuer.address}`} className="hover:text-jade">
+                        {t.issuer.address}
+                      </AppLink>
+                    ) : (
+                      t.issuer.lockHash
+                    )}
+                    ), proven by the token script
+                  </>
+                ) : (
+                  NOT_ESTABLISHED_ISSUER
+                )}
               </span>
             }
           />

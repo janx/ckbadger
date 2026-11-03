@@ -1,5 +1,6 @@
 'use client';
 
+import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery } from '@tanstack/react-query';
 import { Header } from '@/components/layout/header';
 import { DaoBoard, DaoHeading, DaoLede } from '@/components/dao/dao-board';
@@ -57,6 +58,7 @@ export default function DaoPage() {
             historyError={deposited.isError || ratio.isError}
           />
         )}
+        <TopicCharts topic="/dao" />
       </main>
     </div>
   );

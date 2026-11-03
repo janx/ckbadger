@@ -22,6 +22,7 @@ import { ListTable } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
 import { ForkTree, TIP_MARKS } from '@/components/forks/fork-tree';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink, SentenceNodes, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import {
   blockClock,
@@ -215,9 +216,11 @@ function StoredFork({ event }: { event: ReorgEvent }) {
 }
 
 /** The story of one switch, sentence by sentence, from the API's facts only. */
-function narrative(data: ReorgDetail): string[] {
+function narrative(data: ReorgDetail): SentencePart[][] {
   const { event, orphanedBlocks, orphanedTransactions } = data;
-  const parts: string[] = [];
+  // Lane L: sentences as parts, so a canonical block they name renders as a link.
+  const parts: SentencePart[][] = [];
+  const push = (...sentence: SentencePart[]) => parts.push(sentence);
   orphanedBlocks
     .filter((block) => block.competingBlock && block.timestampGapMs !== null)
     .forEach((block, i) => {
@@ -229,7 +232,7 @@ function narrative(data: ReorgDetail): string[] {
           ? `, both by the same miner (${minerName(minerAddressOf(block), block.minerPool)})`
           : ', again both by it'
         : '';
-      parts.push(
+      push(
         i === 0
           ? `On ${formatUtc8Date(block.timestamp)} two blocks were found at ${formatBlockNumber(block.number)}, ${gap}${miner}.`
           : `At ${formatBlockNumber(block.number)} two more, ${gap}${miner}.`
@@ -237,15 +240,13 @@ function narrative(data: ReorgDetail): string[] {
     });
   const back = orphanedBlocks.filter((block) => block.fate === 'canonical_now');
   for (const block of back)
-    parts.push(
-      `The block this node dropped at ${formatBlockNumber(block.number)} is back on the main chain.`
-    );
+    push('The block this node dropped at ', { block: block.number }, ' is back on the main chain.');
   const lost = orphanedBlocks.length - back.length;
   if (lost > 0)
-    parts.push(
+    push(
       `This node had followed ${lost === 1 ? 'the block' : 'the blocks'} that lost and switched to the other branch.`
     );
-  if (event.revertedByEvent) parts.push('A later switch on this node reversed it.');
+  if (event.revertedByEvent) push('A later switch on this node reversed it.');
   const byInclusion = new Map<number, OrphanedBlock[]>();
   for (const block of orphanedBlocks)
     if (block.fate === 'included_as_uncle' && block.uncleIn)
@@ -262,15 +263,16 @@ function narrative(data: ReorgDetail): string[] {
         : blocks.length === 2 && lost === 2
           ? 'both dropped blocks'
           : `${blocks.length} dropped blocks`;
-    parts.push(
-      `${formatBlockNumber(number)} included ${which} as ${blocks.length === 1 ? 'an uncle' : 'uncles'}.`
+    push(
+      { block: number },
+      ` included ${which} as ${blocks.length === 1 ? 'an uncle' : 'uncles'}.`
     );
   }
   for (const block of orphanedBlocks) {
     if (block.fate === 'not_included_as_uncle')
-      parts.push(`${formatBlockNumber(block.number)}′ was not taken as an uncle.`);
+      push(`${formatBlockNumber(block.number)}′ was not taken as an uncle.`);
     if (block.fate === 'uncle_fate_pending')
-      parts.push(`${formatBlockNumber(block.number)}′ can still be taken as an uncle.`);
+      push(`${formatBlockNumber(block.number)}′ can still be taken as an uncle.`);
   }
   const droppedHashes = new Set(
     orphanedBlocks.filter((block) => block.fate !== 'canonical_now').map((block) => block.hash)
@@ -280,7 +282,7 @@ function narrative(data: ReorgDetail): string[] {
       (tx) => tx.txIndex > 0 && droppedHashes.has(tx.blockHash)
     );
     if (txs.length === 0)
-      parts.push(
+      push(
         droppedHashes.size === 1
           ? 'The dropped block held only its cellbase, so no transaction was undone.'
           : 'The dropped blocks held only their cellbases, so no transaction was undone.'
@@ -290,7 +292,7 @@ function narrative(data: ReorgDetail): string[] {
         (tx) => tx.fate === 'committed_later' || tx.fate === 'committed_on_canonical_branch'
       ).length;
       const waiting = txs.filter((tx) => tx.fate === 'not_committed_as_of_tip').length;
-      parts.push(
+      push(
         `${committed} of its ${formatCount(txs.length, 'transaction')} ${committed === 1 ? 'was' : 'were'} committed later.` +
           (waiting
             ? ` ${waiting} ${waiting === 1 ? 'is' : 'are'} not committed as of the tip.`
@@ -376,7 +378,14 @@ function EventRef({ target, text }: { target: ForkEventRef; text: string }) {
 }
 
 /** Tier 2: this node's fork event exactly as the store keeps it. */
-function StoredEvent({ event }: { event: ReorgEvent }) {
+function StoredEvent({
+  event,
+  onMain,
+}: {
+  event: ReorgEvent;
+  /** Lane L: whether a block is on the main chain today; unknown without branch evidence. */
+  onMain?: (hash: string) => boolean;
+}) {
   return (
     <DetailSection title="This node’s fork event, as stored">
       <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
@@ -398,7 +407,12 @@ function StoredEvent({ event }: { event: ReorgEvent }) {
         </span>
         <span className="text-text-dim">new tip</span>
         <span className="break-all">
-          {formatBlockNumber(event.newTipNumber)} {event.newTipHash}
+          {onMain?.(event.newTipHash) ? (
+            <BlockLink number={event.newTipNumber} />
+          ) : (
+            formatBlockNumber(event.newTipNumber)
+          )}{' '}
+          {event.newTipHash}
         </span>
         {event.supersededByTipHash && (
           <>
@@ -441,10 +455,9 @@ function StoredEvent({ event }: { event: ReorgEvent }) {
 function ForkEvidence({ data }: { data: ReorgDetail }) {
   const { event, orphanedBlocks, orphanedTransactions } = data;
   const model = forkTreeModel(data);
+  const onMain = (hash: string) => model.main.some((tile) => tile.hash === hash);
   const where = (hash: string) =>
-    model.main.some((tile) => tile.hash === hash)
-      ? 'on what is the main chain today'
-      : 'on a branch that lost';
+    onMain(hash) ? 'on what is the main chain today' : 'on a branch that lost';
   const rows = blockRows(data);
   const inclusions = [
     ...new Set(
@@ -459,7 +472,7 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
         data-testid="fork-narrative"
         className="text-text text-body mt-3 max-w-[900px] leading-relaxed"
       >
-        {narrative(data).join(' ')}
+        <SentenceNodes parts={narrative(data).flatMap((p, i) => (i ? [' ', ...p] : p))} />
       </p>
 
       <div className="mt-11 flex flex-col gap-11">
@@ -490,7 +503,12 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
             <span className="text-text-bright">{TIP_MARKS[2]}</span>
             <span className="text-text-dim">{formatUtc8Time(event.detectedAt)}</span>
             <span className="text-text col-span-2 sm:col-span-1">
-              the node switches to {formatBlockNumber(event.newTipNumber)}{' '}
+              the node switches to{' '}
+              {onMain(event.newTipHash) ? (
+                <BlockLink number={event.newTipNumber} />
+              ) : (
+                formatBlockNumber(event.newTipNumber)
+              )}{' '}
               <span className="text-text-dim">{hashShort(event.newTipHash)}</span> and drops{' '}
               {orphanedBlocks.map((block) => `${formatBlockNumber(block.number)}′`).join(' and ')}
               <span className="text-text-dim"> · depth {event.depth}</span>
@@ -717,12 +735,19 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
 
       <DetailTier2>
         <div className="grid min-w-0 items-start gap-x-14 gap-y-10 lg:grid-cols-2">
-          <StoredEvent event={event} />
+          <StoredEvent event={event} onMain={onMain} />
           {inclusions.map((number) => {
             const uncles = orphanedBlocks.filter((block) => block.uncleIn?.blockNumber === number);
             const includer = data.canonicalBranch.find((block) => block.number === number);
             return (
-              <DetailSection key={number} title={`Uncles in ${formatBlockNumber(number)}`}>
+              <DetailSection
+                key={number}
+                title={
+                  <>
+                    Uncles in <BlockLink number={number} />
+                  </>
+                }
+              >
                 <div className="text-small grid grid-cols-1 gap-x-3 gap-y-1.5 sm:grid-cols-[110px_minmax(0,1fr)]">
                   {uncles.map((block, i) => (
                     <span key={block.hash} className="contents">

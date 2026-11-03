@@ -1,3 +1,4 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { afterEach, describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { atContainerWidth, phoneLines } from '@/__tests__/utils/phone-row';
@@ -55,6 +56,20 @@ describe('TransactionsPage', () => {
     vi.clearAllMocks();
   });
 
+  // Lane L (charts ↔ topics).
+  it('links the chart drawn from transactions (lane L)', async () => {
+    render(<TransactionsPage />);
+    const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+    const hrefs = within(charts)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(
+      CHARTS.filter((c) => c.evidenceHref === '/transactions').map(
+        (c) => `/mainnet/charts/${c.slug}`
+      )
+    );
+  });
+
   it('renders neutral transaction hashes and block links from fetched transactions', async () => {
     vi.mocked(api.getTransactions).mockResolvedValue({
       data: [
@@ -84,7 +99,8 @@ describe('TransactionsPage', () => {
     render(<TransactionsPage />);
 
     expect(screen.getByTestId('header')).toBeInTheDocument();
-    expect(screen.getByText('Transactions')).toBeInTheDocument();
+    // Lane L: the "Transactions" chart link now shares the h1's word, so the h1 is named by role.
+    expect(screen.getByRole('heading', { level: 1, name: 'Transactions' })).toBeInTheDocument();
     expect(
       screen.queryByText('Browse all transactions on the CKB network')
     ).not.toBeInTheDocument();

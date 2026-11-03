@@ -1,4 +1,5 @@
 'use client';
+import { TopicCharts } from '@/components/charts/topic-charts';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -320,6 +321,7 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
             <AddressLoadState error={assets.error} loading={assets.isLoading} label="inventory" />
           )}
         </DetailLayout>
+        <TopicCharts topic="/inventory" />
       </main>
     </div>
   );

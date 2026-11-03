@@ -1,7 +1,7 @@
 'use client';
 import Link from '@/components/ui/link';
 import type { Cell, CellElfAnalysis } from '@/lib/api';
-import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { CELL_COLORS } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 
@@ -135,7 +135,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
                   {item.codeCellTxHash}
                   <OutpointIndex index={item.codeCellOutputIndex} />
                 </Link>{' '}
-                · observed block {formatBlockNumber(item.observedAtBlock)}
+                · observed block <BlockLink number={item.observedAtBlock} />
               </p>
             ))
           ) : (

@@ -137,7 +137,14 @@ describe('code cell page against the CellCode board', () => {
       expect(
         (within(map).getByTitle(new RegExp(`^${part} · `)) as HTMLElement).style.minWidth
       ).toBe('28px');
-    expect(screen.getByText(/observed block #11,132,140/)).toBeInTheDocument();
+    // Lane L: the observed block is a link (was one text node 'observed block #11,132,140').
+    const observed = screen
+      .getAllByText(/observed block/)
+      .find((p) => p.textContent!.includes('observed block #11,132,140'))!;
+    expect(within(observed).getByRole('link', { name: '#11,132,140' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/11132140'
+    );
   });
 });
 

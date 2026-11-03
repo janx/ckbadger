@@ -205,6 +205,11 @@ describe('Its transactions against the Cell board', () => {
     const box = screen.getByTestId('not-spent-yet');
     expect(box).toHaveTextContent('Not spent yet');
     expect(box).toHaveTextContent('3 d 10 h · as of #20,834,844');
+    // Lane L: the block it is measured at is a link.
+    expect(within(box).getByRole('link', { name: '#20,834,844' })).toHaveAttribute(
+      'href',
+      expect.stringMatching(/\/blocks\/20834844$/)
+    );
     expect(box).toHaveTextContent('The transaction that spends it will run:');
     expect(box).toHaveTextContent('lock groupNervape Shadow Lock');
     expect(box).toHaveTextContent('type groupSpore');

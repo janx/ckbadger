@@ -41,6 +41,7 @@ import {
 import { dailyDeltas, dayLabel } from '@/lib/daily-series';
 import { cn, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 
 /** Both change charts show the last 30 complete days. */
 const CHANGE_DAYS = 30;
@@ -224,7 +225,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
           data-testid="ckbytes-block"
           className="text-text-dim text-small ml-3 align-middle font-normal"
         >
-          at {formatBlockNumber(view.blockNumber)}
+          at <BlockLink number={view.blockNumber} />
         </span>
       </div>
       <div

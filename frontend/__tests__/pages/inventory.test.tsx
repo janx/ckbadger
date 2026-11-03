@@ -1,3 +1,4 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
@@ -381,6 +382,19 @@ describe('Tokens Inventory Page', () => {
       expect(api.getAssets).toHaveBeenLastCalledWith(
         expect.objectContaining({ standard: 'sudt', limit: 20 })
       )
+    );
+  });
+
+  // Lane L (charts ↔ topics): every inventory view links the charts drawn from the inventory.
+  it('links every chart drawn from the inventory (lane L)', async () => {
+    vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
+    render(<TokensPage />);
+    const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+    const hrefs = within(charts)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(
+      CHARTS.filter((c) => c.evidenceHref === '/inventory').map((c) => `/mainnet/charts/${c.slug}`)
     );
   });
 

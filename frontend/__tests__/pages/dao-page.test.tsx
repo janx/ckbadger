@@ -1,3 +1,4 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
@@ -131,6 +132,18 @@ describe('DaoPage', () => {
     expect(screen.queryByText(/DAO chain evidence could not be loaded/)).toBeNull();
   });
 
+  // Lane L (charts ↔ topics).
+  it('links every chart drawn from the Nervos DAO (lane L)', async () => {
+    render(<DaoPage />);
+    const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+    const hrefs = within(charts)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(
+      CHARTS.filter((c) => c.evidenceHref === '/dao').map((c) => `/mainnet/charts/${c.slug}`)
+    );
+  });
+
   it('renders the API-produced epoch, owner, AR and raw DAO evidence', async () => {
     render(<DaoPage />);
     expect(screen.getByTestId('header')).toBeInTheDocument();
@@ -200,9 +213,13 @@ describe('DaoPage', () => {
       anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
     });
     render(<DaoPage />);
-    expect(
-      await screen.findByText(/is used at block #4 · every block splits its issuance/)
-    ).toBeInTheDocument();
+    // Lane L: '#4' is a link inside the line (was one text node).
+    const used = await screen.findByText(/is used at block/);
+    expect(used).toHaveTextContent(/is used at block #4 · every block splits its issuance/);
+    expect(within(used).getByRole('link', { name: '#4' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/4'
+    );
     expect(
       screen.getByText(/Protocol occupied \(U\) includes the genesis virtual occupied baseline/)
     ).toBeInTheDocument();

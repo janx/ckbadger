@@ -52,7 +52,10 @@ describe('activities navigation', () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByText('Activities')).toBeInTheDocument();
+    // Lane L: the page's "Activities" chart link shares the h1's word, so the h1 is named by role.
+    expect(
+      await screen.findByRole('heading', { level: 1, name: 'Activities' })
+    ).toBeInTheDocument();
     expect(screen.getByTestId('pathname')).toHaveTextContent('/mainnet/activities');
     expect(screen.queryByText('not found page')).not.toBeInTheDocument();
   });

@@ -200,9 +200,13 @@ describe('DaoBoard', () => {
 
   it('writes AR as the exact rate and links anchors to real block routes (DAO-4, #7)', () => {
     render(<DaoBoard statistics={stats} evidence={evidence} />);
-    expect(
-      screen.getByText(/AR grew from 1\.0000000000000000 at genesis to 1\.0200000000000000/)
-    ).toBeInTheDocument();
+    const grew = screen.getByText(
+      /AR grew from 1\.0000000000000000 at genesis to 1\.0200000000000000/
+    );
+    // Lane L: the block AR is read at is a link, beside the S proof's anchor (both #5 here).
+    const fives = within(grew).getAllByRole('link', { name: '#5' });
+    expect(fives).toHaveLength(2);
+    for (const a of fives) expect(a).toHaveAttribute('href', '/mainnet/blocks/5');
     const verify = screen.getByRole('link', { name: /Verify statistics anchor block #5/ });
     expect(verify).toHaveAttribute('href', '/mainnet/blocks/5');
     // Hierarchy D3/D8: the anchor link is developer evidence, under "How the Nervos DAO works".
@@ -254,6 +258,11 @@ describe('DaoBoard', () => {
       '365-day anchor: block #3 · chain time 2025-10-29 18:32:50 UTC+8 · AR 1.0100000000000000 · observed span 365 d'
     );
     expect(line).not.toHaveTextContent(/ ms|10100000000000000/);
+    // Lane L: the anchor block is a link.
+    expect(within(line).getByRole('link', { name: '#3' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/3'
+    );
   });
 
   it('fails fast when a complete deposit day lacks its depositor count (#17)', () => {
@@ -297,6 +306,11 @@ describe('DaoBoard', () => {
       'The DAO field in every block header · #5',
     ]);
     for (const h of headings) expect(h).toHaveClass('text-body', 'text-[#a0a8be]');
+    // Lane L: the header's block is a link.
+    expect(within(headings[2]).getByRole('link', { name: '#5' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/5'
+    );
     // Left column: the concept and the script; right column: the header field (board D8).
     const [works, script, header] = headings.map((h) => h.closest('section')!);
     expect(works.parentElement).toBe(script.parentElement);
@@ -644,6 +658,10 @@ describe('DaoBoard secondary issuance (DAO-7; hierarchy v3 R12)', () => {
     expect(works).toHaveTextContent(
       'How all 10,000.00000000 CKB issued so far is used at block #5 · every block splits its issuance in these proportions'
     );
+    // Lane L: the capacity-use line's block (and the section note's) link to it.
+    const fives = within(works).getAllByRole('link', { name: '#5' });
+    expect(fives).toHaveLength(2);
+    for (const a of fives) expect(a).toHaveAttribute('href', '/mainnet/blocks/5');
     expect(works).toHaveTextContent('occupied by cells 0.01% → miners');
     expect(works).toHaveTextContent(
       'DAO deposits, free capacity + compensation accrued 4.50% → depositors'
@@ -743,6 +761,11 @@ describe('DaoBoard how a deposit grows (DAO-8, DAO-9)', () => {
     // Board v3: one line, the owed amount white (R11: the figure is the page's one gold text).
     expect(reading).toHaveTextContent(
       '10,000 CKB deposited 2019-11-16 → +200.00000000 CKB compensation by #5tap or hover'
+    );
+    // Lane L: the tip it is measured to is a link.
+    expect(within(reading).getByRole('link', { name: '#5' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/5'
     );
     expect(
       within(reading).getByText((_, el) => el?.getAttribute('data-role') === 'owed')
@@ -1122,10 +1145,12 @@ describe('DaoBoard tier 2 (DAO-15, DAO-16)', () => {
     expect(t2).toHaveTextContent(
       'At block #5 (0xa5a5a5a5...a5a5a5a5), S (5.00000000 CKB) equals the compensation still owed (2.00000000) plus the burnt share (3.00000000) to the shannon: S only counts the burnt share, it does not hold it for anyone. Compensation paid + still owed equals the depositors’ share.'
     );
-    expect(within(t2 as HTMLElement).getByRole('link', { name: '#5' })).toHaveAttribute(
-      'href',
-      '/mainnet/blocks/5'
-    );
+    // Lane L: tier 2 names block #5 five times (the header field's heading, the capacity-use
+    // line, AR's reading block, the S proof, the statistics note) and every one is a link to it
+    // (was exactly one).
+    const fives = within(t2 as HTMLElement).getAllByRole('link', { name: '#5' });
+    expect(fives).toHaveLength(5);
+    for (const a of fives) expect(a).toHaveAttribute('href', '/mainnet/blocks/5');
     expect(within(t2 as HTMLElement).getByTitle(ANCHOR_5.blockHash)).toHaveTextContent(
       '0xa5a5a5a5...a5a5a5a5'
     );

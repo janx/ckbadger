@@ -45,9 +45,13 @@ describe('DAO depositors page (DAO-12)', () => {
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
     expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
     expect(table.querySelector('tbody tr')).toHaveTextContent('999.00000000');
-    expect(
-      screen.getByText((_, el) => el?.getAttribute('data-role') === 'ranked-at')
-    ).toHaveTextContent('3 depositors ranked by CKB deposited at block #20,879,205');
+    const rankedAt = screen.getByText((_, el) => el?.getAttribute('data-role') === 'ranked-at');
+    expect(rankedAt).toHaveTextContent('3 depositors ranked by CKB deposited at block #20,879,205');
+    // Lane L: the block the ranking is taken at is a link.
+    expect(within(rankedAt).getByRole('link', { name: '#20,879,205' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20879205'
+    );
     expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 50, cursor: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Next 50 →' }));
     await waitFor(() =>
@@ -168,6 +172,12 @@ describe('DAO depositors page (DAO-12)', () => {
     expect(screen.getByTestId('ranking-moved')).toHaveTextContent(
       'The chain tip moved since the first page (ranked at block #20,879,205): this page continues the ranking at block #20,879,300, so a depositor whose rank changed may repeat or be missing.'
     );
+    // Lane L: both blocks are links.
+    expect(
+      within(screen.getByTestId('ranking-moved'))
+        .getAllByRole('link')
+        .map((a) => a.getAttribute('href'))
+    ).toEqual(['/mainnet/blocks/20879205', '/mainnet/blocks/20879300']);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Start again from rank 1' })).toBeNull();
   });

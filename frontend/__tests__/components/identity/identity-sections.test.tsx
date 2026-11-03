@@ -148,6 +148,16 @@ describe('DotcellRoles (ID-DC4)', () => {
     expect(steps.map((s) => s.getAttribute('data-owner-step'))).toEqual(['registered', '', 'now']);
     expect(steps[0]).toHaveTextContent('2026-09-20');
     expect(steps[0]).toHaveTextContent('secp256k1');
+    // Lane L: an owner with an address links to it (full address in the title); an unresolved
+    // prefix stays text.
+    const registrarLink = within(steps[0]).getByRole('link', { name: 'ckb1registrar' });
+    expect(registrarLink).toHaveAttribute('href', '/mainnet/address/ckb1registrar');
+    expect(registrarLink).toHaveAttribute('title', 'ckb1registrar');
+    expect(within(steps[1]).getByRole('link', { name: 'ckb1joyid' })).toHaveAttribute(
+      'href',
+      '/mainnet/address/ckb1joyid'
+    );
+    expect(within(steps[2]).queryByRole('link')).toBeNull();
   });
 });
 

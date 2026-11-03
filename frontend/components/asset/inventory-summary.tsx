@@ -2,7 +2,7 @@ import type { InventorySummary } from '@/lib/api';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { CompositionSet } from '@/components/ui/composition-set';
 import { COMPOSITION_TIER_LABELS, type CompositionTier } from '@/lib/asset-utils';
-import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 
 export interface InventorySummaryNoticeProps {
   summary: InventorySummary;
@@ -21,9 +21,14 @@ export function InventorySummaryNotice({ summary, assetType }: InventorySummaryN
       )}
       <p className="text-meta">
         Canonical asset totals
-        {summary.anchor
-          ? ` at block ${formatBlockNumber(summary.anchor.blockNumber)}`
-          : ' · empty index'}
+        {summary.anchor ? (
+          <>
+            {' '}
+            at block <BlockLink number={summary.anchor.blockNumber} />
+          </>
+        ) : (
+          ' · empty index'
+        )}
         . The list refreshes separately from a cached snapshot and can lag behind these totals.
       </p>
     </section>

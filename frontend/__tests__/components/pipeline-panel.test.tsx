@@ -518,6 +518,11 @@ describe('PipelinePanel static render', () => {
     await renderPanel();
     const stats = screen.getByTestId('pipeline-stats');
     expect(stats).toHaveTextContent(`Tip#${fmt(T)}`);
+    // Lane L: the tip is a block, so it links to it.
+    expect(within(stats).getByRole('link', { name: `#${fmt(T)}` })).toHaveAttribute(
+      'href',
+      `/mainnet/blocks/${T}`
+    );
     for (const gone of ['Mempool', 'Proposed', 'Next']) expect(stats).not.toHaveTextContent(gone);
   });
 

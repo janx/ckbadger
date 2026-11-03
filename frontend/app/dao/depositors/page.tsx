@@ -12,7 +12,7 @@ import { shareBarWidthFromPercent } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
 
@@ -124,7 +124,7 @@ export default function DaoDepositorsPage() {
             page ? (
               <span data-role="ranked-at">
                 {page.total.toLocaleString('en-US')} depositors ranked by CKB deposited at block{' '}
-                {formatBlockNumber(page.anchor.blockNumber)}
+                <BlockLink number={page.anchor.blockNumber} />
               </span>
             ) : undefined
           }
@@ -143,9 +143,9 @@ export default function DaoDepositorsPage() {
                   className="text-text-dim text-small mb-3 max-w-[80ch]"
                 >
                   The chain tip moved since the first page (ranked at block{' '}
-                  {formatBlockNumber(moved.from)}): this page continues the ranking at block{' '}
-                  {formatBlockNumber(moved.to)}, so a depositor whose rank changed may repeat or be
-                  missing.
+                  <BlockLink number={moved.from} />
+                  ): this page continues the ranking at block <BlockLink number={moved.to} />, so a
+                  depositor whose rank changed may repeat or be missing.
                 </p>
               )}
               <ListTable

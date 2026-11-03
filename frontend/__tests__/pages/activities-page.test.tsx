@@ -1,5 +1,6 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { vi, it, expect, beforeEach, afterEach } from 'vitest';
-import { screen } from '@testing-library/react';
+import { screen, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
 import ActivitiesPage from '@/app/activities/page';
 import { api } from '@/lib/api';
@@ -28,6 +29,18 @@ beforeEach(() => {
   });
 });
 afterEach(() => vi.useRealTimers());
+// Lane L (charts ↔ topics).
+it('links every chart drawn from activities (lane L)', async () => {
+  render(<ActivitiesPage />);
+  const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+  const hrefs = within(charts)
+    .getAllByRole('link')
+    .map((a) => a.getAttribute('href'));
+  expect(hrefs).toEqual(
+    CHARTS.filter((c) => c.evidenceHref === '/activities').map((c) => `/mainnet/charts/${c.slug}`)
+  );
+});
+
 it('uses the exact non-cellbase count instead of overlapping kind occurrences', async () => {
   vi.mocked(api.getDailyActivityStats).mockResolvedValue([
     {

@@ -118,7 +118,10 @@ describe('shared chart detail', () => {
     expect(day).toHaveTextContent(
       `Blocks of ${response.data.at(-1)!.date} (UTC+8): #20,000,000 – #20,008,000 · 8,001 blocks`
     );
-    expect(screen.queryByRole('link', { name: 'Explore Blocks →' })).toBeNull();
+    // Lane L: the chart still links its topic page, after the day's blocks (was: no topic link).
+    const topic = screen.getByRole('link', { name: 'Explore Blocks →' });
+    expect(topic).toHaveAttribute('href', '/mainnet/blocks');
+    expect(day.compareDocumentPosition(topic)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     fireEvent.click(screen.getByRole('button', { name: '30 d' }));
     expect(screen.getByRole('img', { name: 'Hash rate: 1 points, linear' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Log scale' }));

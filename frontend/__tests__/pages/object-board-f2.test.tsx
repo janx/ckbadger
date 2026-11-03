@@ -291,6 +291,11 @@ it('places it in its collection with the composition count and cluster cell (OB-
   expect(within(coll).getByText('BTC+CKB')).toBeInTheDocument();
   expect(coll).toHaveTextContent('28,920 CKB held in their cells');
   expect(coll).toHaveTextContent('created at #17,222,190');
+  // Lane L: the block the cluster was created in is a link.
+  expect(within(coll).getByRole('link', { name: '#17,222,190' })).toHaveAttribute(
+    'href',
+    '/mainnet/blocks/17222190'
+  );
 });
 
 it('lists the board facts as the metrics row and one Live style (OB-11, OB-15, C7)', async () => {

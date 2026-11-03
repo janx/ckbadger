@@ -65,6 +65,7 @@ import {
 import dynamic from '@/lib/dynamic-client';
 import { isFieldLayoutLock, lockArgsLine } from '@/lib/lock-args';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 
@@ -494,7 +495,15 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
               >
                 {name.name}
               </Link>{' '}
-              (output #{name.outputIndex})
+              (
+              <Link
+                href={`/cell/${tx.hash}-${name.outputIndex}`}
+                title={`${tx.hash}:${name.outputIndex}`}
+                className="hover:text-jade"
+              >
+                output #{name.outputIndex}
+              </Link>
+              )
             </p>
             <DotCellRecordsTable records={name.records} />
           </div>
@@ -805,10 +814,24 @@ export default function TransactionDetailPage() {
           : cell.type
             ? (registeredName(lookup, cell.type.codeHash) ?? 'typed')
             : 'plain';
+    // Lane L (L1): the column names a cell; it links to the cell's page. An input is the cell it
+    // spends; an output is a cell only once the transaction is committed.
+    const outPoint =
+      side === 'in'
+        ? required(cell.previousOutput, hash, `input ${i} outpoint`)
+        : isProvisional
+          ? null
+          : { txHash: hash, index: i };
     return {
       id: `${side}:${i}`,
       top,
       label: `${side} #${i}`,
+      ...(outPoint
+        ? {
+            href: `/cell/${outPoint.txHash}-${outPoint.index}`,
+            title: `${outPoint.txHash}:${outPoint.index}`,
+          }
+        : { title: 'not a cell until the transaction is committed' }),
       cap:
         cell.capacity === undefined
           ? null
@@ -919,7 +942,11 @@ export default function TransactionDetailPage() {
   ) : tx.isCellbase ? (
     <p data-testid="tx-summary" className="text-text text-body max-w-[80ch]">
       The first transaction of block{' '}
-      {formatBlockNumber(required(tx.blockNumber, hash, 'blockNumber'))}. It consumes no cell and{' '}
+      <BlockLink
+        number={required(tx.blockNumber, hash, 'blockNumber')}
+        className="text-text-bright"
+      />
+      . It consumes no cell and{' '}
       {tx.pays === undefined ? (
         <ActivityReadError txHash={hash} error={new Error('cellbase has no "pays" field')} />
       ) : tx.pays === null ? (
