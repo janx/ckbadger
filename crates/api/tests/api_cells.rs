@@ -1228,6 +1228,132 @@ async fn test_cells_by_script_rejects_cursors_from_another_form() {
     assert_eq!(status, StatusCode::OK);
 }
 
+/// Five type-form lock cells (two share block 102) plus a sibling data-form
+/// row, with the per-form counter the route checks its first page against.
+async fn by_script_order_app() -> (axum::Router, Vec<u8>) {
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let code_hash = vec![0x9b; 32];
+    for (tx_byte, block) in [
+        (0x51u8, 100i64),
+        (0x52, 101),
+        (0x53, 102),
+        (0x54, 102),
+        (0x55, 103),
+    ] {
+        insert_by_script_cell(&store, &[tx_byte; 32], block, &code_hash, 1, None, None);
+    }
+    insert_by_script_cell(&store, &[0x61; 32], 900, &code_hash, 0, None, None);
+    store
+        .put_script_reference_info_direct(
+            1,
+            &code_hash,
+            &ScriptReferenceInfo {
+                reference_hash: code_hash.clone(),
+                hash_type: 1,
+                lock_cells_count: 5,
+                lock_live_cells_count: 5,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let app = create_router(test_config(store)).await;
+    (app, code_hash)
+}
+
+fn by_script_rows(json: &serde_json::Value) -> Vec<(String, i64)> {
+    json["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|cell| {
+            (
+                cell["txHash"].as_str().unwrap().to_string(),
+                cell["createdAtBlock"].as_i64().unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn test_cells_by_script_order_desc_pages_newest_block_first() {
+    // Lane S (script page "Newest cells"): order=desc reads the same form's
+    // rows backwards — newest block first, cursor continuing below the last
+    // key, every row once, the same total as asc.
+    let (app, code_hash) = by_script_order_app().await;
+    let base = format!(
+        "/cells/by-script?code_hash=0x{}&hash_type=type&script_kind=lock",
+        hex::encode(&code_hash)
+    );
+
+    let (status, asc) = get_json(&app, &format!("{base}&limit=10")).await;
+    assert_eq!(status, StatusCode::OK, "{asc}");
+    let (status, explicit_asc) = get_json(&app, &format!("{base}&limit=10&order=asc")).await;
+    assert_eq!(status, StatusCode::OK, "{explicit_asc}");
+    assert_eq!(asc, explicit_asc, "order=asc is today's default, unchanged");
+
+    let mut expected = by_script_rows(&asc);
+    expected.reverse();
+    assert_eq!(expected[0].1, 103);
+
+    let mut seen = Vec::new();
+    let mut cursor: Option<String> = None;
+    for _ in 0..10 {
+        let uri = match &cursor {
+            Some(c) => format!("{base}&limit=2&order=desc&cursor={c}"),
+            None => format!("{base}&limit=2&order=desc"),
+        };
+        let (status, page) = get_json(&app, &uri).await;
+        assert_eq!(status, StatusCode::OK, "{page}");
+        assert_eq!(
+            page["total"], 5,
+            "the per-form total does not depend on order"
+        );
+        for cell in page["data"].as_array().unwrap() {
+            assert_eq!(cell["matchedScriptKind"], "lock");
+        }
+        seen.extend(by_script_rows(&page));
+        match page["nextCursor"].as_str() {
+            Some(next) => cursor = Some(next.to_string()),
+            None => break,
+        }
+    }
+    assert_eq!(seen, expected, "desc pages = asc reversed, no row twice");
+    assert!(
+        seen.iter()
+            .all(|(tx, _)| tx != &format!("0x{}", hex::encode([0x61; 32]))),
+        "the sibling data form never leaks in"
+    );
+}
+
+#[tokio::test]
+async fn test_cells_by_script_rejects_an_unknown_order_and_desc_over_both() {
+    let (app, code_hash) = by_script_order_app().await;
+    let base = format!(
+        "/cells/by-script?code_hash=0x{}&hash_type=type",
+        hex::encode(&code_hash)
+    );
+    for bad in ["newest", "DESC", ""] {
+        let (status, json) = get_json(&app, &format!("{base}&script_kind=lock&order={bad}")).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "order={bad:?} → {json}");
+        assert!(
+            json.to_string().contains("asc or desc"),
+            "order={bad:?} names the two values: {json}"
+        );
+    }
+    // `both` is enumerated lock phase, then type phase: not by block, so a
+    // newest-first `both` list would be a lie.
+    let (status, json) = get_json(&app, &format!("{base}&script_kind=both&order=desc")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{json}");
+    assert!(
+        json.to_string().contains("script_kind=lock or type"),
+        "{json}"
+    );
+    // ...while asc over both keeps working as before.
+    let (status, json) = get_json(&app, &format!("{base}&script_kind=both&order=asc")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+}
+
 // ---------------------------------------------------------------------------
 // R4-E bug 2: /addresses/{lock_hash} must resolve its lock script through
 // CF_LOCK_SCRIPTS (`get_lock_script`), the same single path every other handler

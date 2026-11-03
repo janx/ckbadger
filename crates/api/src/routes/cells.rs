@@ -1894,6 +1894,10 @@ pub struct ListCellsByScriptParams {
     #[serde(default = "default_script_kind")]
     script_kind: String,
     cursor: Option<String>,
+    /// `asc` (default: oldest block first, the index's key order) or `desc`
+    /// (newest block first: the same rows read backwards). Anything else is a
+    /// 400, never silently read as the default.
+    order: Option<String>,
 }
 
 fn default_script_kind() -> String {
@@ -3088,42 +3092,66 @@ fn parse_by_script_cursor(
 /// mode the lock index is enumerated to exhaustion first, then the type index;
 /// type-phase rows whose lock script also uses this exact form are skipped
 /// because the lock phase already emitted them.
+#[allow(clippy::too_many_arguments)]
 fn collect_by_script_rows(
     store: &ckbadger_store::CkbadgerStore,
     append_only_store: &ckbadger_store::CkbadgerStore,
     script_kind: &str,
+    order: ByScriptOrder,
     code_hash: &[u8],
     hash_type: u8,
     fetch_limit: usize,
     cursor: Option<(ByScriptPhase, Vec<u8>)>,
 ) -> anyhow::Result<Vec<ByScriptRow>> {
     let mut rows: Vec<ByScriptRow> = Vec::new();
-    match script_kind {
-        "lock" => {
-            let after = cursor.as_ref().map(|(_, key)| key.as_slice());
-            for (tx_hash, output_index, info) in store.list_cells_by_lock_code_hash(
-                code_hash,
-                hash_type,
-                fetch_limit,
-                after,
-                append_only_store,
-            )? {
+    let after = cursor.as_ref().map(|(_, key)| key.as_slice());
+    match (script_kind, order) {
+        ("lock", _) => {
+            let page = match order {
+                ByScriptOrder::Asc => store.list_cells_by_lock_code_hash(
+                    code_hash,
+                    hash_type,
+                    fetch_limit,
+                    after,
+                    append_only_store,
+                )?,
+                ByScriptOrder::Desc => store.list_cells_by_lock_code_hash_desc(
+                    code_hash,
+                    hash_type,
+                    fetch_limit,
+                    after,
+                    append_only_store,
+                )?,
+            };
+            for (tx_hash, output_index, info) in page {
                 rows.push((ByScriptPhase::Lock, tx_hash, output_index, info));
             }
         }
-        "type" => {
-            let after = cursor.as_ref().map(|(_, key)| key.as_slice());
-            for (tx_hash, output_index, info) in store.list_cells_by_type_code_hash(
-                code_hash,
-                hash_type,
-                fetch_limit,
-                after,
-                append_only_store,
-            )? {
+        ("type", _) => {
+            let page = match order {
+                ByScriptOrder::Asc => store.list_cells_by_type_code_hash(
+                    code_hash,
+                    hash_type,
+                    fetch_limit,
+                    after,
+                    append_only_store,
+                )?,
+                ByScriptOrder::Desc => store.list_cells_by_type_code_hash_desc(
+                    code_hash,
+                    hash_type,
+                    fetch_limit,
+                    after,
+                    append_only_store,
+                )?,
+            };
+            for (tx_hash, output_index, info) in page {
                 rows.push((ByScriptPhase::Type, tx_hash, output_index, info));
             }
         }
-        "both" => {
+        ("both", ByScriptOrder::Desc) => {
+            anyhow::bail!("collect_by_script_rows: script_kind=both has no block order to reverse")
+        }
+        ("both", ByScriptOrder::Asc) => {
             let (start_phase, after_key) = match cursor {
                 Some((phase, key)) => (phase, Some(key)),
                 None => (ByScriptPhase::Lock, None),
@@ -3178,9 +3206,40 @@ fn collect_by_script_rows(
                 }
             }
         }
-        other => anyhow::bail!("unsupported script_kind in collect_by_script_rows: {other}"),
+        (other, _) => anyhow::bail!("unsupported script_kind in collect_by_script_rows: {other}"),
     }
     Ok(rows)
+}
+
+/// The key order a `cells/by-script` page is read in.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ByScriptOrder {
+    /// Oldest block first (the index's key order; the default).
+    Asc,
+    /// Newest block first: the same rows read backwards. Inside one block the
+    /// rows come in descending tx hash / output index (key) order, not in the
+    /// block's transaction order.
+    Desc,
+}
+
+/// Parse `order` for `cells/by-script`. Unknown values are a client error, and
+/// `desc` needs one index: `script_kind=both` reads the lock index to
+/// exhaustion and then the type index, so its rows have no block order.
+fn parse_by_script_order(
+    order: Option<&str>,
+    script_kind: &str,
+) -> Result<ByScriptOrder, ApiRouteError> {
+    match order {
+        None | Some("asc") => Ok(ByScriptOrder::Asc),
+        Some("desc") if script_kind == "both" => Err(ApiError::bad_request(
+            "order=desc needs script_kind=lock or type: script_kind=both lists the lock index, \
+             then the type index, so its rows are not in block order",
+        )),
+        Some("desc") => Ok(ByScriptOrder::Desc),
+        Some(other) => Err(ApiError::bad_request(format!(
+            "invalid order '{other}'; expected asc or desc"
+        ))),
+    }
 }
 
 async fn list_cells_by_script(
@@ -3202,6 +3261,7 @@ async fn list_cells_by_script(
         ));
     }
     let is_both = script_kind == "both";
+    let order = parse_by_script_order(params.order.as_deref(), script_kind)?;
     // The caller selected an exact reference form. A binary can have several
     // Type ID anchors; metadata aliases cannot change the index prefix.
     let resolved_code_hash = code_hash_bytes;
@@ -3245,6 +3305,7 @@ async fn list_cells_by_script(
             &store,
             &append_only_store,
             &script_kind_owned,
+            order,
             &resolved_code_hash_blocking,
             hash_type_num,
             fetch_limit,

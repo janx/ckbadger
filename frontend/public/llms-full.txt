@@ -80,7 +80,8 @@ API:
   reference, binary data hash and outpoint are different identities. `/scripts/lookup` is POST,
   while `/scripts/code-cells` reads exact-reference deployments. Current cells are separately
   available at `/cells/by-script?code_hash=0x…&hash_type=data|type|data1|data2&script_kind=lock|type|both`
-  with cursor pagination. Unregistered copies do not acquire registered-family provenance.
+  with cursor pagination, oldest block first; `&order=desc` (with `script_kind=lock|type`) lists
+  them newest block first. Unregistered copies do not acquire registered-family provenance.
 - DAO evidence: `/dao/statistics` is the current indexed view; `/dao/evidence` separates phase-0
   deposits, phase-1 withdrawal requests, readiness windows, concentration and header/AR proof.
   `/dao/charts/*` and `/charts/*` are historical chart endpoints; complete-day chart points do not
