@@ -15,6 +15,10 @@ export interface MatrixColumn {
   label: string;
   /** Short capacity; null while the cell's capacity is not known (a pending input). */
   cap: string | null;
+  /** Lane L (L1): the cell's page; the label links to it. Absent: the label is text. */
+  href?: string;
+  /** The label's hover title: the full out point, or why the label is not a link. */
+  title?: string;
 }
 /** The witness a group reads (the witness at its first cell's index). */
 export interface MatrixWitness {
@@ -161,7 +165,13 @@ export function ScriptGroupMatrix({
                   <span title={c.top} className="text-text-ghost text-meta max-w-[68px] truncate">
                     {c.top}
                   </span>
-                  <span>{c.label}</span>
+                  {c.href ? (
+                    <Link href={c.href} title={c.title} className="hover:text-jade">
+                      {c.label}
+                    </Link>
+                  ) : (
+                    <span title={c.title}>{c.label}</span>
+                  )}
                   <span className="text-text-dim text-meta">{c.cap ?? ''}</span>
                 </span>
               ) : (

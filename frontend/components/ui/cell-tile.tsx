@@ -6,7 +6,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { SHANNONS_PER_CKB } from '@/lib/ckb-decimal';
 import type { AssetClass } from '@/lib/design-tokens';
-import { cn } from '@/lib/utils';
+import { cn, truncateHash } from '@/lib/utils';
 
 export interface CellTileData {
   id: string;
@@ -21,6 +21,12 @@ export interface CellTileData {
   state: string;
   anatomy?: CellAnatomy;
   testId?: string;
+  /**
+   * Lane L (L1): the cell's out point. When given, the out point is the tile's link to the cell
+   * page (its hover title the full out point) and `label` ("input 0") stays as text beside it;
+   * without it the label is the link, as before.
+   */
+  outPoint?: { txHash: string; index: number };
 }
 export interface CellTileProps {
   cell: CellTileData;
@@ -56,9 +62,22 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <span className="min-w-0 break-all">
-          <Link href={cell.href} className="text-text-dim hover:text-jade">
-            {cell.label}
-          </Link>{' '}
+          {cell.outPoint ? (
+            <>
+              <span className="text-text-dim">{cell.label}</span>{' '}
+              <Link
+                href={cell.href}
+                title={`${cell.outPoint.txHash}:${cell.outPoint.index}`}
+                className="text-text-dim hover:text-jade"
+              >
+                {truncateHash(cell.outPoint.txHash, 6, 4)}:{cell.outPoint.index}
+              </Link>
+            </>
+          ) : (
+            <Link href={cell.href} className="text-text-dim hover:text-jade">
+              {cell.label}
+            </Link>
+          )}{' '}
           {cell.owner}
         </span>
         {cell.lockKind && <span className="text-text-dim">{cell.lockKind}</span>}

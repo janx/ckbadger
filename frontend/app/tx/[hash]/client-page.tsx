@@ -805,10 +805,24 @@ export default function TransactionDetailPage() {
           : cell.type
             ? (registeredName(lookup, cell.type.codeHash) ?? 'typed')
             : 'plain';
+    // Lane L (L1): the column names a cell; it links to the cell's page. An input is the cell it
+    // spends; an output is a cell only once the transaction is committed.
+    const outPoint =
+      side === 'in'
+        ? required(cell.previousOutput, hash, `input ${i} outpoint`)
+        : isProvisional
+          ? null
+          : { txHash: hash, index: i };
     return {
       id: `${side}:${i}`,
       top,
       label: `${side} #${i}`,
+      ...(outPoint
+        ? {
+            href: `/cell/${outPoint.txHash}-${outPoint.index}`,
+            title: `${outPoint.txHash}:${outPoint.index}`,
+          }
+        : { title: 'not a cell until the transaction is committed' }),
       cap:
         cell.capacity === undefined
           ? null

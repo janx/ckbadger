@@ -87,6 +87,7 @@ export function cellTiles(
             id: `in:${i}`,
             testId: `tx-io-input-${i}`,
             href: `/cell/${out.txHash}-${out.index}`,
+            outPoint: { txHash: out.txHash, index: out.index },
             label: `input ${i}`,
             owner: owner(cell.address, `input ${i}`),
             lockKind: lockKind(cell.lock?.codeHash),
@@ -113,6 +114,7 @@ export function cellTiles(
       id: `out:${i}`,
       testId: `tx-io-output-${i}`,
       href: `/cell/${tx.hash}-${i}`,
+      outPoint: { txHash: tx.hash, index: i },
       label: `output ${i}`,
       owner: owner(cell.address, `output ${i}`),
       // F2-tx (R2b-a 40, TX-22): the API marks change outputs; the tile says so beside the lock.

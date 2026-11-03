@@ -541,6 +541,43 @@ describe('TransactionDetailPage', () => {
     expect(screen.queryByText(fallbackLabel)).toBeNull();
   });
 
+  // Lane L (L1): every cell of the transaction links to its cell page by its out point.
+  it('links every input and output tile to its cell page by its out point (L1)', async () => {
+    render(<TransactionDetailPage />);
+    const input = await screen.findByTestId('tx-io-input-0');
+    const inputLink = within(input).getByRole('link', { name: '0xbbbb...bbbb:0' });
+    expect(inputLink).toHaveAttribute('href', `/mainnet/cell/0x${'b'.repeat(64)}-0`);
+    expect(inputLink).toHaveAttribute('title', `0x${'b'.repeat(64)}:0`);
+    const output = screen.getByTestId('tx-io-output-0');
+    const outputLink = within(output).getByRole('link', { name: '0x57a5...8e0f:0' });
+    expect(outputLink).toHaveAttribute('href', `/mainnet/cell/${TX_HASH}-0`);
+    expect(outputLink).toHaveAttribute('title', `${TX_HASH}:0`);
+    // the script matrix names the same cells, and links them too
+    const matrix = screen.getByRole('table', { name: 'Script groups' });
+    expect(within(matrix).getByRole('link', { name: 'in #0' })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/0x${'b'.repeat(64)}-0`
+    );
+    expect(within(matrix).getByRole('link', { name: 'out #0' })).toHaveAttribute(
+      'href',
+      `/mainnet/cell/${TX_HASH}-0`
+    );
+  });
+
+  it('links a pool transaction’s inputs to the cells it spends; its outputs are not cells yet (L1)', async () => {
+    vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
+    render(<TransactionDetailPage />);
+    const matrix = await screen.findByRole('table', { name: 'Script groups' });
+    const input = within(matrix).getByRole('link', { name: 'in #0' });
+    expect(input).toHaveAttribute('href', `/mainnet/cell/0x${'b'.repeat(64)}-0`);
+    expect(input).toHaveAttribute('title', `0x${'b'.repeat(64)}:0`);
+    expect(within(matrix).queryByRole('link', { name: 'out #0' })).toBeNull();
+    expect(within(matrix).getByText('out #0')).toHaveAttribute(
+      'title',
+      'not a cell until the transaction is committed'
+    );
+  });
+
   it('shows canonical cell structure first and loads the raw cell graph only when opened', async () => {
     render(<TransactionDetailPage />);
     expect(await screen.findByTestId('tx-io-input-0')).toBeInTheDocument();
