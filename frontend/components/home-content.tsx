@@ -26,7 +26,7 @@ export function HomeContent() {
 
   return (
     <main className="pb-14 pt-3 font-mono">
-      <div className="container mx-auto flex flex-col gap-[52px] px-4">
+      <div className="container mx-auto flex flex-col gap-[52px]">
         {stats && <SyncBanner stats={stats} />}
         <PipelinePanel />
         <NetworkSection />

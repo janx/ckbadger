@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
-import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
+import { QueryClientProvider } from '@tanstack/react-query';
+import {
+  act,
+  createTestQueryClient,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
 import { server } from '@/__tests__/msw/server';
 import {
@@ -28,6 +36,28 @@ describe('ActivityStats', () => {
       'href',
       '/mainnet/charts'
     );
+  });
+
+  // Material pass v2 (move 4): a count flares (`.phosphor-flare`) when its served value changes.
+  it('flares the count that changed, and no other', async () => {
+    const client = createTestQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <ActivityStats />
+      </QueryClientProvider>
+    );
+    const stats = screen.getByTestId('home-activity-stats');
+    await waitFor(() => expect(stats).toHaveTextContent('Activities7,115'));
+    expect(screen.getByText('7,115')).not.toHaveClass('phosphor-flare');
+    act(() => {
+      client.setQueryData(['activity-summary-24h'], {
+        ...activitySummary24h,
+        activityCount: 7116,
+      });
+    });
+    // react-query notifies its observers on the next tick
+    await waitFor(() => expect(screen.getByText('7,116')).toHaveClass('phosphor-flare'));
+    expect(screen.getByText('1,497')).not.toHaveClass('phosphor-flare');
   });
 
   it('shows three KPIs: activities, addresses and CKB moved', async () => {

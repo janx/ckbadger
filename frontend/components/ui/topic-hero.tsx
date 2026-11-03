@@ -64,7 +64,7 @@ function GridHero({ title, lede, figures, breadcrumb }: TopicHeroProps) {
     <div className="grid min-w-0 items-end gap-x-12 gap-y-6 lg:grid-cols-[minmax(0,1fr)_440px]">
       <div className="flex min-w-0 flex-col gap-2.5">
         {breadcrumb}
-        <h1 className="text-text-bright text-index font-medium">{title}</h1>
+        <h1 className="text-text-bright text-index">{title}</h1>
         <p className="text-text text-body max-w-[720px] leading-relaxed">{lede}</p>
       </div>
       {figures && (
@@ -111,20 +111,19 @@ function FigureHero({
         {breadcrumb}
         {/* The title row, as the DAO page's (the h1 a flex item, its box the size of its words). */}
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-2">
-          <h1 id={titleId} className="text-text-bright text-index font-medium">
+          <h1 id={titleId} className="text-text-bright text-index">
             {title}
           </h1>
         </div>
         <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{lede}</p>
         {figure && (
           <div data-role="figure" className="mt-9 min-w-0">
-            <div className="text-text-dim text-meta mb-1.5 w-fit uppercase tracking-[0.08em]">
-              {figure.label}
-            </div>
+            <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">{figure.label}</div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
               <div
                 className={cn(
-                  'text-index sm:text-display whitespace-nowrap font-medium tabular-nums',
+                  // 300 from 640 up (.sm\:text-display in globals.css, move 3)
+                  'text-index sm:text-display whitespace-nowrap tabular-nums',
                   figure.tone === 'jade' ? 'text-jade' : 'text-text-bright'
                 )}
               >

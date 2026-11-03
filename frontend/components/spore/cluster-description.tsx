@@ -113,7 +113,7 @@ export function ClusterDescription({
           <summary className="text-text-dim text-small cursor-pointer px-3 py-2 text-left font-mono uppercase tracking-wider">
             View Raw Cluster Metadata JSON
           </summary>
-          <pre className="border-base-border bg-base-bg/90 text-text-bright text-small max-h-64 overflow-auto whitespace-pre-wrap break-all border-t px-3 py-2 text-left font-mono">
+          <pre className="well text-text-bright text-small m-2 max-h-64 overflow-auto whitespace-pre-wrap break-all px-3 py-2 text-left font-mono">
             {parsed.rawJson}
           </pre>
         </details>

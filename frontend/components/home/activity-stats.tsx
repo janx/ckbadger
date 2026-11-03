@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, type ReactNode } from 'react';
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { BarChart, ChartFigure, type Bar } from '@/components/home/mini-chart';
@@ -21,7 +21,8 @@ import {
 import { dayLabel } from '@/lib/daily-series';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { getScriptDetailHref } from '@/lib/detail-routes';
-import { formatCkbCompact } from '@/lib/utils';
+import { usePhosphor } from '@/hooks/usePhosphor';
+import { cn, formatCkbCompact } from '@/lib/utils';
 
 const TYPE_BREAKDOWN = '/charts/activity-type-breakdown';
 
@@ -101,11 +102,15 @@ function summaryView(s: ActivitySummary24h): SummaryView {
   };
 }
 
-function Kpi({ label, children }: { label: string; children: ReactNode }) {
+/** A 24 h count; it flares when the served figure changes (material pass v2, move 4). */
+function Kpi({ label, children }: { label: string; children: string }) {
+  const flare = usePhosphor(children);
   return (
     <div className="flex flex-col gap-0.5">
       <dt className="text-text-dim text-small">{label}</dt>
-      <dd className="text-text-bright text-hero m-0 font-medium tabular-nums">{children}</dd>
+      <dd className={cn('text-text-bright text-hero m-0 font-medium tabular-nums', flare)}>
+        {children}
+      </dd>
     </div>
   );
 }

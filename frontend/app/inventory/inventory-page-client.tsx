@@ -132,9 +132,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
     ['hMultiplier', 'H-mult.'],
   ];
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto min-w-0 px-4 py-8">
+      <main className="container mx-auto min-w-0 py-8">
         <DetailLayout
           kind="index"
           title="Inventory"
@@ -328,9 +328,9 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
 }
 export function InventoryPageFallback() {
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto py-8">
         <p role="status" className="text-text-dim text-small">
           Loading inventory…
         </p>

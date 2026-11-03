@@ -129,7 +129,8 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
   // Report C#8: the Activities page dropped each participant's lock kind at 390 (its column was
   // `hidden` below the grid breakpoint). On the T7 line the tag is the item right after the
   // party, with no breakpoint class, so no width can hide it.
-  it('shows the lock kind as a tag right after the address, at every width', () => {
+  // Material pass v2 (move 5): the lock kind is dim small caps after the address, not a chip.
+  it('shows the lock kind in small caps right after the address, at every width', () => {
     const { container } = render(
       <ActivityRow lockColumn activity={activity([party({ lockKind: 'JoyID' })])} />
     );
@@ -139,7 +140,8 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     expect(kind).toHaveTextContent('JoyID');
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
     expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
-    expect(kind).toHaveClass('whitespace-nowrap', 'rounded-[3px]', 'border');
+    expect(kind).toHaveClass('whitespace-nowrap', 'small-caps', 'text-text-dim');
+    expect(kind).not.toHaveClass('rounded-[3px]', 'border');
     // Not repeated in the party cell.
     expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
   });

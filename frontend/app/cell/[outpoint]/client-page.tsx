@@ -535,9 +535,9 @@ export default function CellDetailPage() {
     <CellBody cell={query.data} refreshError={query.error} />
   );
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">{body}</main>
+      <main className="container mx-auto py-8">{body}</main>
     </div>
   );
 }

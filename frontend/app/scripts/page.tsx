@@ -585,9 +585,9 @@ export default function ScriptsPage() {
   );
 
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto py-8">
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13, R6): hero → the list 64 px; tier 2 after the 96 px boundary. */}
           <div data-tier="1" className="min-w-0">

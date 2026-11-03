@@ -266,7 +266,9 @@ describe('option A: every participant, one line each (D1)', () => {
     expect(zero.querySelector('[data-ckb-amount]')).toHaveTextContent(/^0 CKB$/);
   });
 
-  it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind as a tag', () => {
+  // Material pass v2 (move 5): the lock kind is dim small caps after the address, not a chip —
+  // boxes stay on controls.
+  it('draws one 18 px wrapping line per participant, indented 18 px (hanging when it wraps), with the lock kind in small caps', () => {
     const { container } = render(<ActivityRow activity={transfer} />);
     for (const line of lines(container)) {
       expect(line).toHaveClass('flex', 'flex-wrap', 'items-center', 'text-small');
@@ -277,14 +279,15 @@ describe('option A: every participant, one line each (D1)', () => {
       expect(line.querySelector('[data-role="party"]')).toHaveClass('-ml-3');
       expect([...line.classList].filter((c) => /^(sm|md|lg):/.test(c))).toEqual([]);
       expect(line.querySelector('[data-role="lock-kind"]')).toHaveClass(
-        'text-meta',
         'text-text-dim',
-        'border',
-        'border-base-border',
-        'rounded-[3px]',
-        'px-[5px]',
-        'leading-4',
+        'small-caps',
+        'lowercase',
         'whitespace-nowrap'
+      );
+      expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass(
+        'border',
+        'rounded-[3px]',
+        'text-meta'
       );
     }
     // Occupied last, 11 px, in the board's ghost tone (≈ #4a5268), readable — not the 1.7:1 token.

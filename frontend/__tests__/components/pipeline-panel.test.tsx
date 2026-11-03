@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { act, fireEvent, render as renderPlain } from '@testing-library/react';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { QueryClientProvider } from '@tanstack/react-query';
+import {
+  createTestQueryClient,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@/__tests__/utils/test-utils';
 import { server } from '@/__tests__/msw/server';
 import {
   FIXTURE_TIP,
@@ -119,6 +126,30 @@ async function renderPanel(snapshot: PipelineSnapshot = buildPipelineSnapshot())
   render(<PipelinePanel />);
   return screen.findByTestId('pipeline-svg');
 }
+
+describe('the tip flares (material pass v2, move 4)', () => {
+  it('lights the tip for a new block, not on mount', async () => {
+    const s1 = buildPipelineSnapshot();
+    server.use(http.get('/api/:network/v1/pipeline', () => HttpResponse.json(s1)));
+    const client = createTestQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <PipelinePanel />
+      </QueryClientProvider>
+    );
+    await screen.findByTestId('pipeline-svg');
+    const stats = screen.getByTestId('pipeline-stats');
+    expect(stats).toHaveTextContent(`Tip#${fmt(FIXTURE_TIP)}`);
+    expect(stats.querySelector('.phosphor-flare')).toBeNull();
+    const s2 = mineNext(s1, { commit: [poolTxHash('w0')], propose: [] });
+    act(() => {
+      client.setQueryData(['pipeline'], s2);
+    });
+    // react-query notifies its observers on the next tick
+    await waitFor(() => expect(stats).toHaveTextContent(`Tip#${fmt(FIXTURE_TIP + 1)}`));
+    expect(stats.querySelector('.phosphor-flare')).toHaveTextContent(`#${fmt(FIXTURE_TIP + 1)}`);
+  });
+});
 
 const card = (svg: Element, n: number) =>
   svg.querySelector(`[data-card="${blockHash(n)}"]`) as SVGGElement;

@@ -39,9 +39,9 @@ export default function FiberChannelDetailPage() {
     );
   }
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto max-w-[1280px] px-4 pb-[72px] pt-7">
+      <main className="container mx-auto max-w-[1280px] pb-[72px] pt-7">
         <DocumentTitle
           parts={
             channel.data ? [titleHash(channel.data.channelId), 'Fiber channel'] : ['Fiber channel']

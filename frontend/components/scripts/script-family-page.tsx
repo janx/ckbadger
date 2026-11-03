@@ -868,9 +868,9 @@ export function ScriptFamilyPage({
     ? `one type id, ${shortHex(typeReference, 8, 6)}, ${rows.length} binaries`
     : `${rows.length} binaries`;
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto py-8">
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13, R6): the hero, its reading and figures; sections 64 / 72 px apart. */}
           <div data-tier="1" className="min-w-0">

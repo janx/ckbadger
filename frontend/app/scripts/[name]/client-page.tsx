@@ -1019,9 +1019,9 @@ export default function ScriptDetailPage({
     : isNamedScriptDetailLoading || isUsageLoading;
   if (isLoading) {
     return (
-      <div className="bg-base-bg min-h-screen">
+      <div className="min-h-screen">
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <div className="animate-pulse space-y-8">
             <div className="bg-base-surface h-20 w-full rounded" />
             <div className="bg-base-surface h-64 rounded" />
@@ -1044,9 +1044,9 @@ export default function ScriptDetailPage({
       : null;
   if (failedRequest) {
     return (
-      <div className="bg-base-bg min-h-screen">
+      <div className="min-h-screen">
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <DetailLayout title="Script data unavailable" identity={normalizedCodeHash ?? name}>
             <p role="alert" className="text-negative text-small break-words py-8">
               Failed to load {failedRequest.source}: {failedRequest.error.message}
@@ -1062,9 +1062,9 @@ export default function ScriptDetailPage({
       : (codeHashCodeCells?.ambiguity ?? null);
   if (isCodeHashMode && codeHashAmbiguity) {
     return (
-      <div className="bg-base-bg min-h-screen">
+      <div className="min-h-screen">
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <DetailLayout title="Ambiguous script reference" identity={normalizedCodeHash}>
             <DetailSection title="Conflicting live bytecode">
               <p className="text-text-dim text-small mb-4">
@@ -1118,9 +1118,9 @@ export default function ScriptDetailPage({
     (isCodeHashMode && (!deployments || deployments.length === 0))
   ) {
     return (
-      <div className="bg-base-bg min-h-screen">
+      <div className="min-h-screen">
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <DetailLayout title="No script deployments">
             <p className="text-text-dim text-small py-8">
               The script request returned no code-cell deployments.
@@ -1289,9 +1289,9 @@ export default function ScriptDetailPage({
     ]) ?? []
   );
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto py-8">
         <DetailLayout
           title={pageTitle}
           documentTitle={[pageTitle, 'script']}

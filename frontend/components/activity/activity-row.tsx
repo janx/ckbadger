@@ -34,7 +34,6 @@ import type {
 import { protocolActionMeta } from '@/lib/protocol-action-meta';
 import { PoolStatusBadge, TimeInPool, PoolInterpretationNotice } from '@/components/ui/pool-status';
 import { CompositionBadge } from '@/components/ui/composition-mark';
-import { rowTagClass } from '@/components/ui/row-tag';
 import type { ActivityBody } from '@/lib/activity-classify';
 import type { CompositionTier } from '@/lib/asset-utils';
 import type { AssetClass } from '@/lib/design-tokens';
@@ -604,11 +603,10 @@ function partyKey(p: ParticipantInfo, i: number): string {
 }
 
 /**
- * The lock kind as an 11 px bordered tag (T5/T7; the classes of lane R's `RowTag`, built here
- * until the row primitives land — swapping it for `RowTag` is lane M's).
+ * The lock kind as dim small caps after the address (material pass v2, move 5: boxes stay on
+ * controls; the words are LockKind's default form, `.small-caps`), never a chip.
  */
-const LOCK_TAG =
-  'text-meta text-text-dim border border-base-border rounded-[3px] px-[5px] leading-4 whitespace-nowrap';
+const LOCK_KIND = 'text-text-dim small-caps lowercase whitespace-nowrap';
 /** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
 const LINE_BUTTON =
   'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap rounded-[3px] border bg-transparent px-[5px] leading-4';
@@ -711,14 +709,15 @@ export function objectCountLabel(items: ParticipantInfo['itemDeltas']): string {
 
 /**
  * One participant, one 18 px line (T7 · option A, Feed.dc.html column A): the address (and any
- * roles), the lock kind as a tag, a note the API attaches, the signed exact CKB, each item change
+ * roles), the lock kind in small caps, a note the API attaches, the signed exact CKB, each item change
  * with its mark (signed, by sign; symbol dim), and the occupied change last in the board's 11 px
  * ghost tone (≈ #4a5268). The line wraps between those items, in that order, when it cannot hold
  * them — never inside one.
  *
  * Consistency C3: the participant a page is about (`focus`) writes its address as text, not a link
- * to the page it is on, and carries a "this address" tag after its lock tag (Address.dc.html →
- * History). When every item on it is an object of one composition tier, the line says it once
+ * to the page it is on, underlined jade (`.this-address`, material pass v2 move 5 — the words
+ * "this address" stay for a screen reader, the dotted tag is gone). When every item on it is an
+ * object of one composition tier, the line says it once
  * after its items (`lineCompositionTier`); otherwise each object keeps its own badge.
  *
  * The asset boards' phone form (`foldObjects`, B#12) stays: below md the objects are one count
@@ -751,18 +750,18 @@ function ParticipantLine({
       // indent, so the continuation never reads as the next participant.
       className="text-small flex flex-wrap items-center gap-x-2.5 gap-y-0 pl-[30px] leading-[18px]"
     >
-      <span data-role="party" data-party={p.key} className="-ml-3 max-w-full">
+      <span
+        data-role="party"
+        data-party={p.key}
+        data-this-address={focus || undefined}
+        className="-ml-3 max-w-full"
+      >
         <ParticipantRefView participant={p} compact quiet linked={!focus} />
+        {focus && <span className="sr-only">this address</span>}
       </span>
       {p.lockKind && (
-        <span data-role="lock-kind" className={LOCK_TAG}>
+        <span data-role="lock-kind" className={LOCK_KIND}>
           {p.lockKind}
-        </span>
-      )}
-      {focus && (
-        // The board's ghost tag, as the row tag's ghost variant: dashed, in the readable dim ink.
-        <span data-role="this-address" data-row-tag="ghost" className={rowTagClass('ghost')}>
-          this address
         </span>
       )}
       {p.lockHash !== null && notes?.has(p.lockHash) && (

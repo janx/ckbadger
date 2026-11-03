@@ -83,9 +83,12 @@ describe('the rules in globals.css', () => {
   });
 
   it('move 5: brighter pools, one CRT pair at the combined strength, the chart halo', () => {
-    expect(css).toContain('rgba(46, 219, 163, 0.1) 0%, transparent 70%');
-    expect(css).toContain('rgba(104, 204, 240, 0.07) 0%, transparent 70%');
-    expect(css).toContain('rgba(242, 197, 92, 0.07) 0%, transparent 70%');
+    // material pass v2 (move 1): the pools are painted from --pool-1/2/3 (so a page's class hue
+    // can replace jade); the approved .10 / .07 / .07 are the variables' :root values
+    expect(css).toContain('--pool-1: rgba(46, 219, 163, 0.1);');
+    expect(css).toContain('--pool-2: rgba(104, 204, 240, 0.07);');
+    expect(css).toContain('--pool-3: rgba(242, 197, 92, 0.07);');
+    expect(css).toContain('var(--pool-1) 0%, transparent 70%');
     // the doubled atmosphere is gone: no body::before / body::after
     expect(css).not.toMatch(/\nbody::after\s*\{/);
     expect(css).not.toMatch(/\nbody::before\s*\{/);
@@ -273,7 +276,8 @@ describe('move 3 on the tx page’s cells diagram', () => {
     const frame = screen.getByTestId('tx-cells-frame');
     expect(frame).toHaveAttribute('data-instrument-frame');
     expect(frame).toHaveAttribute('aria-label', 'Cells consumed and created');
-    expect(frame).toHaveClass('neon-edge-top', 'rounded-md', 'border', 'bg-base-surface');
+    // material pass v2 (move 2): the frame's surface is glass (`.glass`), not the flat colour
+    expect(frame).toHaveClass('neon-edge-top', 'rounded-md', 'border', 'glass');
     expect(frame).toContainElement(container.querySelector('[data-tx-canvas]') as HTMLElement);
     // the column heads are the frame's eyebrows
     expect(frame).toHaveTextContent('1 cell consumed');

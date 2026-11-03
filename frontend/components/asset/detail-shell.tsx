@@ -180,9 +180,9 @@ export function AssetDetailShell({
     </aside>
   );
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="text-body container mx-auto min-w-0 px-4 py-8 font-mono">
+      <main className="text-body container mx-auto min-w-0 py-8 font-mono">
         <div
           data-tier="1"
           className={cn(

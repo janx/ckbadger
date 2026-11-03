@@ -141,9 +141,9 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
   }
   if (!detail.data) {
     return (
-      <div className="bg-base-bg min-h-screen">
+      <div className="min-h-screen">
         <Header />
-        <main className="container mx-auto min-w-0 px-4 py-8">
+        <main className="container mx-auto min-w-0 py-8">
           <h1 className="text-text-bright text-entity">m-NFT</h1>
           <AssetReadState label="m-NFT" error={detail.error} loading={detail.isLoading} />
         </main>

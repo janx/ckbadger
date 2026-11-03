@@ -16,6 +16,29 @@
   font-display: swap;
   src: url('/fonts/jetbrains-mono-medium.woff2') format('woff2');
 }
+/* Material pass v2 (move 3): one family, five weights — the thin display figure, the 600 h1 / h2
+   and the true italic for emphasis, as latin subsets (Google Fonts css2, ~22 KB each). */
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 300;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-light.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-semibold.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/jetbrains-mono-italic.woff2') format('woff2');
+}
 @font-face {
   font-family: 'Noto Serif Display';
   font-style: normal;
@@ -47,6 +70,12 @@
   --color-interactive-hover: #2edba3;
   --font-mono: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
   --font-display: 'JetBrains Mono', 'SFMono-Regular', 'Roboto Mono', ui-monospace, monospace;
+
+  /* Material pass v2 (move 1): the three ambient pools, jade by default (the approved .10 / .07 /
+     .07); a page root's data-tint gives the first pool the page's class hue (below). */
+  --pool-1: rgba(46, 219, 163, 0.1);
+  --pool-2: rgba(104, 204, 240, 0.07);
+  --pool-3: rgba(242, 197, 92, 0.07);
 
   /* Transaction pipeline (components/pipeline): painted through lib/pipeline/encoding.ts. */
   --pipeline-surface: var(--color-surface);
@@ -500,10 +529,14 @@ body * {
 }
 
 /*
- * === Atmosphere (Midnight, continued: move 5) ===
- * One pair of CRT layers, mounted once in app/layout.tsx (.crt-scanlines, .crt-vignette), at the
- * combined strength the doubled pair had (body::before / body::after painted a second scanline
- * and vignette over them; those are gone).
+ * === Atmosphere (Midnight, continued: move 5; material pass v2: move 1) ===
+ * The fixed layers of components/layout/atmosphere.tsx, mounted once at the route root (AppFrame
+ * in src/routes/router.tsx — app/layout.tsx is the Next-era shell the SPA never renders): the
+ * night sky (.ambient-glow: a vertical gradient under three pools in the page's hue), the grain
+ * (.crt-grain), then one pair of CRT layers (.crt-scanlines, .crt-vignette) at the combined
+ * strength the doubled pair had (body::before / body::after painted a second scanline and
+ * vignette over them; those are gone). The pools are read by the page root's data-tint: the
+ * variables are declared on :root and redefined per tint below.
  */
 
 .crt-scanlines {
@@ -528,20 +561,59 @@ body * {
   z-index: 9998;
 }
 
+/* The night sky (material pass v2, move 1): the ground is a gradient — #0b0d17 at the top,
+   #08090e past the middle, a hair warmer at the foot — not one hex; body keeps #08090e behind it.
+   A page paints no opaque ground of its own over it. */
 .ambient-glow {
   position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: -1;
+  background: linear-gradient(180deg, #0b0d17 0%, #08090e 55%, #09090d 100%);
 }
 .ambient-glow::before {
   content: '';
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 350px 250px at 25% 15%, rgba(46, 219, 163, 0.1) 0%, transparent 70%),
-    radial-gradient(ellipse 300px 200px at 75% 50%, rgba(104, 204, 240, 0.07) 0%, transparent 70%),
-    radial-gradient(ellipse 200px 200px at 50% 85%, rgba(242, 197, 92, 0.07) 0%, transparent 70%);
+    radial-gradient(ellipse 350px 250px at 25% 15%, var(--pool-1) 0%, transparent 70%),
+    radial-gradient(ellipse 300px 200px at 75% 50%, var(--pool-2) 0%, transparent 70%),
+    radial-gradient(ellipse 200px 200px at 50% 85%, var(--pool-3) 0%, transparent 70%);
+}
+/* The pools take the page's class hue (the page root's data-tint, set from the route): the DAO
+   pages gold, token pages azure, object / cluster / class pages violet, identity pages rose; the
+   other two pools keep jade's companions, jade itself stepping in where its hue moved. */
+[data-tint='gold'] {
+  --pool-1: color-mix(in srgb, var(--color-class-dao) 10%, transparent);
+  --pool-2: rgba(104, 204, 240, 0.07);
+  --pool-3: rgba(46, 219, 163, 0.07);
+}
+[data-tint='azure'] {
+  --pool-1: color-mix(in srgb, var(--color-class-token) 10%, transparent);
+  --pool-2: rgba(46, 219, 163, 0.07);
+  --pool-3: rgba(242, 197, 92, 0.07);
+}
+[data-tint='violet'] {
+  --pool-1: color-mix(in srgb, var(--color-class-object) 10%, transparent);
+  --pool-2: rgba(104, 204, 240, 0.07);
+  --pool-3: rgba(46, 219, 163, 0.07);
+}
+[data-tint='rose'] {
+  --pool-1: color-mix(in srgb, var(--color-class-identity) 10%, transparent);
+  --pool-2: rgba(104, 204, 240, 0.07);
+  --pool-3: rgba(46, 219, 163, 0.07);
+}
+/* The grain of a CRT: a 256 px fractal-noise tile (public/noise.png) screened over the page at
+   3.5 %, under the scanlines. */
+.crt-grain {
+  position: fixed;
+  inset: 0;
+  background-image: url('/noise.png');
+  background-repeat: repeat;
+  opacity: 0.035;
+  mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 9997;
 }
 
 /*
@@ -909,5 +981,107 @@ svg a:hover {
   .pipeline-svg [data-dim],
   .pipeline-svg [data-age] {
     transition: none;
+  }
+}
+
+/*
+ * === Material pass v2, citypop edition (review 2026-11-03) ===
+ * Finish from contrast of materials, all the theme's own: glass over the night sky, wells for what
+ * is typed into or read as bytes, phosphor that flares and decays, five weights of the one family.
+ * Nothing here adds a colour token.
+ */
+
+/* Move 2a — the instrument frame's glass: 72 % opaque over the sky (the pool shows through), a
+   1 px white highlight on the top edge and a dark line on the bottom edge, the way a bezel
+   catches light. No backdrop-filter: nothing behind a frame has detail to blur (the ground is a
+   gradient, the pools 300 px soft, the grain 3.5 %), so a blur would buy a compositing layer and
+   a re-blur on every scroll for no visible gain. */
+.glass {
+  background: rgba(16, 19, 28, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+}
+
+/* Move 2b — a well: dark glass, inset, for what is typed into (the search field, a filter, the
+   command palette) and what is read as bytes (a hex dump, raw JSON). 3 px corners, the row-rule
+   ink; `--well-radius` lets the header's search field keep the board's 6 px. */
+.well {
+  background: #0a0c12;
+  border: 1px solid #1a1f30;
+  border-radius: var(--well-radius, 3px);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.65);
+}
+
+/* Move 2c — tier-2 ground: the evidence tier sits one step deeper, its ground bleeding through
+   the page gutters (the container's 16 px, 24 px from lg) under the tube. */
+.tier2-ground {
+  background: rgba(6, 7, 11, 0.9);
+  margin-left: -1rem;
+  margin-right: -1rem;
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+@media (min-width: 1024px) {
+  .tier2-ground {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/* Move 3 — the weights. The display figure is thin under its halo (a neon tube is thin); an h1
+   and a tier-1 h2 are 600; an eyebrow (an uppercase meta label: the tier boundary's, a frame's, a
+   hero figure's) is 500 at .12 em; text stays 400 and `em` renders the true italic. */
+.text-display {
+  font-weight: 300;
+}
+@media (min-width: 640px) {
+  .sm\:text-display {
+    font-weight: 300;
+  }
+}
+h1.text-entity,
+h1.text-index,
+h2.text-section {
+  font-weight: 600;
+}
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 500;
+}
+
+/* Move 4 — phosphor: a figure that updates live jumps to the neon white and settles back to its
+   own idle colour over 1.2 s (only the `from` keyframe is written, so the end state is the
+   element's own). `usePhosphor` sets the class for 1.2 s after a change, never on mount. */
+@keyframes phosphor-flare {
+  from {
+    color: #e9fff6;
+    text-shadow:
+      0 0 2px rgba(233, 255, 246, 0.9),
+      0 0 10px rgba(46, 219, 163, 0.55),
+      0 0 28px rgba(46, 219, 163, 0.3);
+  }
+}
+.phosphor-flare {
+  animation: phosphor-flare 1.2s ease-out;
+}
+
+/* Move 5 — the small scale: a feed line's lock kind is dim small caps, not a chip; the party a
+   page is about is underlined jade, not tagged. Boxes stay on controls. */
+.small-caps {
+  font-variant: small-caps;
+  letter-spacing: 0.04em;
+}
+.this-address {
+  border-bottom: 1px solid rgba(46, 219, 163, 0.6);
+}
+
+/* Reduced motion: no flare (the hook is a no-op too; the figure still updates). */
+@media (prefers-reduced-motion: reduce) {
+  .phosphor-flare {
+    animation: none;
   }
 }

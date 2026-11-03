@@ -97,6 +97,8 @@ describe('cell microscope', () => {
     expect(box).not.toHaveClass('border-[#1a1f30]');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
     expect(dump).toHaveClass('px-4', 'py-3');
+    // material pass v2 (move 2): the dump itself is a well inside the glass
+    expect(dump).toHaveClass('well', 'm-2');
     expect(dump).toContainElement(box.querySelector('[data-byte="data:2"]') as HTMLElement);
     // the hover still lights the part through the frame's data-active
     fireEvent.mouseOver(box.querySelector('[data-byte="data:2"]')!);

@@ -20,6 +20,7 @@ import {
   niceTicks,
   signedAxisCap,
 } from '@/lib/chart-ticks';
+import { usePhosphor } from '@/hooks/usePhosphor';
 import { cn } from '@/lib/utils';
 
 /**
@@ -115,6 +116,9 @@ export function ChartFigure({
   hint = true,
 }: ChartFigureProps) {
   const [readout, setReadout] = useState<FigureReadout | null>(null);
+  // The headline flares when its served value changes (material pass v2, move 4); a hover's
+  // readout, which replaces it, is not a change.
+  const flare = usePhosphor(headline);
   const tid = (part: string) => (testId ? `${testId}-${part}` : undefined);
   return (
     <figure data-testid={testId} className={cn('m-0 flex min-w-0 flex-col gap-1.5', className)}>
@@ -138,7 +142,10 @@ export function ChartFigure({
           {(readout || headline !== undefined) && (
             <span
               data-testid={tid('headline')}
-              className="text-text-bright text-hero font-medium tabular-nums leading-tight"
+              className={cn(
+                'text-text-bright text-hero font-medium tabular-nums leading-tight',
+                !readout && flare
+              )}
             >
               {readout ? readout.value : headline}
             </span>

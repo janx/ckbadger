@@ -190,15 +190,18 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             className={cn(
               // Midnight, continued (move 4): the field is a prompt — a jade ">" before the text,
               // a block cursor after it while focused (the native caret is hidden under it), and
-              // a jade-tinted border with a soft ring on focus. The "/" key hint stays.
+              // a jade-tinted border with a soft ring on focus. The "/" key hint stays. The
+              // compact and default fields are wells (material pass v2, move 2: `.well`, dark
+              // glass inset, the board's 6 px corners); the home hero field keeps its approved
+              // jade border and glow.
               'text-text-bright w-full font-mono transition-colors focus:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
                 ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-xl border pl-8 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
-                    'bg-base-surface border-base-border placeholder:text-text-dim focus:border-jade/50 text-body h-9 rounded-md border pl-7 pr-9 focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
-                  : 'border-base-border bg-base-surface placeholder:text-text-dim focus:border-jade/50 text-body rounded-lg border py-2.5 pl-7 pr-3 focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)] sm:py-3 sm:pl-8 sm:pr-4'
+                    'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-9 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
+                  : 'well placeholder:text-text-dim focus:border-jade/50 text-body py-2.5 pl-7 pr-3 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)] sm:py-3 sm:pl-8 sm:pr-4'
             )}
           />
           <span

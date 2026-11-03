@@ -139,7 +139,7 @@ export default function BlockDetailPage() {
     return (
       <div>
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <p role="status">Loading block…</p>
         </main>
       </div>
@@ -159,7 +159,7 @@ export default function BlockDetailPage() {
     return (
       <div>
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <p role="alert">Unable to read block: {error.message}</p>
         </main>
       </div>
@@ -215,9 +215,9 @@ export default function BlockDetailPage() {
   const cycles = block.cycles === null ? null : Number(block.cycles);
   const paidIn = block.rewardFinalizesAt === null ? null : block.rewardFinalizesAt - block.number;
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto min-w-0 px-4 py-8">
+      <main className="container mx-auto min-w-0 py-8">
         {error && (
           <p role="alert">
             Unable to refresh block: {error.message}. Showing previously loaded data.

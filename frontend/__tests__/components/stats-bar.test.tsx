@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '../utils/test-utils';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { act, createTestQueryClient, render, screen, waitFor } from '../utils/test-utils';
 import { api, type NetworkStats } from '@/lib/api';
 import { VitalsStrip } from '@/components/stats-bar';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
@@ -53,6 +54,36 @@ function stats(overrides: Partial<NetworkStats> = {}): NetworkStats {
 }
 
 describe('VitalsStrip', () => {
+  // Material pass v2 (move 4): a vital flares (`.phosphor-flare`, 1.2 s) when its served value
+  // changes — never on mount, and only the value that changed.
+  it('flares the value that changed, and no other', async () => {
+    vi.mocked(api.getNetworkStats).mockResolvedValue(stats());
+    const client = createTestQueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <VitalsStrip />
+      </QueryClientProvider>
+    );
+    const block = await screen.findByText('#20,819,143');
+    expect(block).not.toHaveClass('phosphor-flare');
+    // react-query notifies its observers on the next tick
+    act(() => {
+      client.setQueryData(['network-stats'], stats({ latestBlock: 20819144 }));
+    });
+    await waitFor(() => expect(screen.getByText('#20,819,144')).toHaveClass('phosphor-flare'));
+    expect(screen.getByText('850.46 P')).not.toHaveClass('phosphor-flare');
+    expect(screen.getByText('15,168')).not.toHaveClass('phosphor-flare');
+    act(() => {
+      client.setQueryData(
+        ['network-stats'],
+        stats({ latestBlock: 20819144, epoch: '15169(0/1590)', avgBlockTime: '8.50s' })
+      );
+    });
+    await waitFor(() => expect(screen.getByText('15,169')).toHaveClass('phosphor-flare'));
+    expect(screen.getByText('8.50 s')).toHaveClass('phosphor-flare');
+    expect(screen.getByText('850.46 P')).not.toHaveClass('phosphor-flare');
+  });
+
   it('shows unavailable block time and epoch estimate explicitly', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(
       stats({ avgBlockTime: null, estimatedEpochTime: null })

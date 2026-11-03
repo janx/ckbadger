@@ -540,9 +540,9 @@ export function ChartDetail({ slug }: { slug: string }) {
     }
   }
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto min-w-0 px-4 py-8">
+      <main className="container mx-auto min-w-0 py-8">
         {sync.data?.syncStatus?.chartDataMayBeIncomplete && (
           <p
             role="status"

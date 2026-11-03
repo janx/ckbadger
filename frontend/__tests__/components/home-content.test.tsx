@@ -52,7 +52,10 @@ describe('HomeContent layout', () => {
     const main = renderHome();
     const column = screen.getByTestId('pipeline-panel').parentElement as HTMLElement;
     expect(main).toContainElement(column);
-    expect(column).toHaveClass('container', 'mx-auto', 'px-4', 'flex-col', 'gap-[52px]');
+    // material pass v2 (move 6): the gutter (16 px, 24 px from lg) is the container's own
+    // padding, from tailwind.config.ts — no page carries a px-* for it
+    expect(column).toHaveClass('container', 'mx-auto', 'flex-col', 'gap-[52px]');
+    expect(column).not.toHaveClass('px-4');
     expect([...column.children].map((c) => c.getAttribute('data-testid'))).toEqual([
       'pipeline-panel',
       'network-section',

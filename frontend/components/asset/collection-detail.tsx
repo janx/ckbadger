@@ -137,10 +137,8 @@ function CollectionFigure({
   return (
     <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
       <div data-role="figure" className="min-w-0">
-        <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
-          objects live
-        </div>
-        <div className="text-index sm:text-display text-text-bright font-medium tabular-nums">
+        <div className="eyebrow text-text-dim text-meta mb-1.5">objects live</div>
+        <div className="text-index sm:text-display text-text-bright tabular-nums">
           {live.toLocaleString('en-US')}{' '}
           {/* C12: the feed's word, "burned", for every kind; Spore's own word stays in the title. */}
           <span

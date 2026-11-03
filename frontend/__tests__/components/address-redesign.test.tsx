@@ -61,7 +61,8 @@ describe('Address v3 components', () => {
       stubChartWidth(1248);
       render(<AddressBalance holdings={board} />);
       const hero = screen.getByRole('region', { name: 'Balance' });
-      expect(within(hero).getByText('balance')).toHaveClass('text-meta', 'uppercase');
+      // material pass v2 (move 3): the hero label is an eyebrow (`.eyebrow`: upper case, .12 em, 500)
+      expect(within(hero).getByText('balance')).toHaveClass('text-meta', 'eyebrow');
       const figure = hero.querySelector('[data-role="balance-figure"]')!;
       expect(figure).toHaveTextContent(/^319,742\.66879443 CKB$/);
       // 40 px from sm (30 px, one step smaller, on a phone); the fraction 22 px (17 px), dim.

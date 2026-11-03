@@ -689,9 +689,9 @@ export default function TransactionDetailPage() {
     router.replace(next.size ? `${pathname}?${next}` : pathname, { scroll: false });
   };
   const shell = (children: ReactNode) => (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">{children}</main>
+      <main className="container mx-auto py-8">{children}</main>
     </div>
   );
   if (isLoading) return shell(<div className="bg-base-surface h-72 animate-pulse" />);

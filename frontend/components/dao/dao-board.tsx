@@ -112,7 +112,7 @@ function Metric({
 function DepositedFigure({ shannons }: { shannons: string }) {
   const parts = splitCkbAmount(parseShannons(shannons, 'DAO deposited'));
   return (
-    <div data-role="deposited" className="text-gold text-index sm:text-display font-medium">
+    <div data-role="deposited" className="text-gold text-index sm:text-display">
       <span className="whitespace-nowrap font-mono tabular-nums">
         {parts.integer}
         <span className="text-hero text-gold-dim font-normal">
@@ -221,9 +221,7 @@ function Hero({
         </div>
         <DaoLede />
         <div data-role="figure" className="mt-9 min-w-0">
-          <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">
-            deposited
-          </div>
+          <div className="eyebrow text-text-dim text-meta mb-1.5">deposited</div>
           <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
             <DepositedFigure shannons={evidence.phase0.capacity} />
             <p className="text-body">

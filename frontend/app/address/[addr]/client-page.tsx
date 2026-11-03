@@ -230,9 +230,9 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
     );
   }
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto py-8">
         {!a ? (
           <AddressLoadState label="address" error={address.error} loading={address.isLoading} />
         ) : (
