@@ -36,6 +36,16 @@ describe('RowTag (table-rows R3)', () => {
     expect(tag.className).not.toMatch(/#4b5266/);
   });
 
+  // Lane F follow-up 2 (user: the dim "deprecated" did not warn): red is reserved for negative
+  // deltas; a deprecated script is the one status that earns it — a user must not pick it.
+  it('warn marks the one status a user must not pick (deprecated): rouge ink on a solid rouge border', () => {
+    render(<RowTag variant="warn">deprecated</RowTag>);
+    const tag = screen.getByText('deprecated');
+    expect(tag).toHaveAttribute('data-row-tag', 'warn');
+    expect(tag).toHaveClass('text-meta', 'leading-4', 'border', 'text-rouge', 'border-rouge');
+    expect(tag).not.toHaveClass('text-text-dim', 'border-base-border', 'border-dashed');
+  });
+
   it('accent marks a class (BTC+CKB, live · current): jade ink on a jade border', () => {
     render(<RowTag variant="accent">BTC+CKB</RowTag>);
     const tag = screen.getByText('BTC+CKB');
@@ -56,7 +66,7 @@ describe('RowTag (table-rows R3)', () => {
   });
 
   it('gives the same class string to a caller that draws the chip on its own element', () => {
-    for (const variant of ['default', 'ghost', 'accent'] as const) {
+    for (const variant of ['default', 'ghost', 'accent', 'warn'] as const) {
       const { unmount } = render(<RowTag variant={variant}>x</RowTag>);
       expect(screen.getByText('x').className).toBe(rowTagClass(variant));
       unmount();

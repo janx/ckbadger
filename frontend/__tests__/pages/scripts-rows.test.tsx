@@ -178,7 +178,7 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
     }
   });
 
-  it('leads each row with the name at 13 px bright, its role and a ghost "deprecated" as tags (T5)', async () => {
+  it('leads each row with the name at 13 px bright, its role and a warn "deprecated" as tags (T5)', async () => {
     render(<ScriptsPage />);
     const t = await table();
     const name = within(t).getByRole('link', { name: 'JoyID' });
@@ -201,7 +201,8 @@ describe('Scripts table rows (table-rows L1-1, board Scripts)', () => {
       )
     ).toEqual([
       ['default', 'lock'],
-      ['ghost', 'deprecated'],
+      // Lane F follow-up 2: the warning (was ['ghost', 'deprecated']).
+      ['warn', 'deprecated'],
     ]);
     // The description is the row's hover, not a second line.
     expect(script).not.toHaveTextContent('An universal Account Protocol');

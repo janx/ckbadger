@@ -52,6 +52,13 @@ export function isImmutableClass(value: ScriptCodeClassTotalApi['class']): boole
 }
 
 /**
+ * What "deprecated" means for a script, the title of its warn tag on /scripts and the script page:
+ * the registry the labels come from marks it superseded.
+ */
+export const DEPRECATED_TITLE =
+  'Deprecated: the script registry marks this script as superseded. Cells that already use it still run; do not use it for new cells.';
+
+/**
  * Why a script's code cannot change, in the Code column's words ("code cell unspendable · pinned
  * by data hash"), the unspendable code cell first: the "immutable" tag's title on the scripts
  * list and the script page.

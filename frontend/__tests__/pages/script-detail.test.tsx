@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
+import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
 import { api } from '@/lib/api';
 import { atContainerWidth } from '@/__tests__/utils/phone-row';
 import { formatCapacity } from '@/lib/utils';
@@ -599,7 +600,14 @@ describe('ScriptDetailPage', () => {
     vi.mocked(api.getScriptUsage).mockResolvedValue({ ...mockUsage, name: 'PW Lock' });
     render(<ScriptDetailPage name="PW Lock" />);
     expect(await screen.findByRole('heading', { name: 'PW Lock' })).toBeInTheDocument();
-    expect(screen.getByText(/Deprecated/)).toBeInTheDocument();
+    // Lane F follow-up 2: the hero line's "deprecated" is the warn row tag with what it means in
+    // its title (was the dim text "· Deprecated").
+    const hero = screen.getByRole('region', { name: 'PW Lock' });
+    const mark = within(hero).getByText('deprecated');
+    expect(mark).toHaveAttribute('data-row-tag', 'warn');
+    expect(mark).toHaveClass('text-rouge', 'border-rouge');
+    expect(mark).toHaveAttribute('title', DEPRECATED_TITLE);
+    expect(hero).not.toHaveTextContent('· Deprecated');
     expect(screen.queryByText('Unlabeled Script')).toBeNull();
   });
 

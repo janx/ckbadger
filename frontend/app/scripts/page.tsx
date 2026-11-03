@@ -17,6 +17,7 @@ import {
   ScriptCodeClassLegend,
   ScriptCodeClassSummary,
   codeClassTotals,
+  DEPRECATED_TITLE,
   immutableHow,
   isImmutableClass,
   scriptClassLabel,
@@ -183,7 +184,11 @@ function ScriptPhoneRow({ script: s, wide }: { script: KnownScript; wide: boolea
       >
         {hasName(s) ? s.name!.trim() : 'Unlabeled'}
       </AppLink>
-      {s.deprecated && <span className="text-text-dim text-meta ml-2">deprecated</span>}
+      {s.deprecated && (
+        <RowTag variant="warn" title={DEPRECATED_TITLE} className="ml-2">
+          deprecated
+        </RowTag>
+      )}
     </>
   );
   const description = hasName(s)
@@ -253,8 +258,8 @@ function refText(script: KnownScript): string {
 }
 
 /**
- * The Script column on one line (T5): the name at 13 px bright, its role and a ghost "deprecated"
- * as row tags. An unlabeled family keeps its short reference beside the tag (it is its identity);
+ * The Script column on one line (T5): the name at 13 px bright, its role and a warn "deprecated"
+ * (lane F follow-up 2) as row tags. An unlabeled family keeps its short reference beside the tag (it is its identity);
  * a description is the row's title.
  */
 function ScriptName({ script }: { script: KnownScript }) {
@@ -269,7 +274,11 @@ function ScriptName({ script }: { script: KnownScript }) {
         {name}
       </AppLink>
       <RowTag>{roleText(script)}</RowTag>
-      {script.deprecated && <RowTag variant="ghost">deprecated</RowTag>}
+      {script.deprecated && (
+        <RowTag variant="warn" title={DEPRECATED_TITLE}>
+          deprecated
+        </RowTag>
+      )}
       {!hasName(script) && (
         <span className="text-text-dim text-meta truncate">{refText(script)}</span>
       )}
