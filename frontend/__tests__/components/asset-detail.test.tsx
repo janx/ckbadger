@@ -79,6 +79,36 @@ describe('Asset domain layout', () => {
     expect(container.querySelector('section')).toBeNull();
     expect(screen.getByRole('banner')).toHaveTextContent('Intro');
   });
+  // Lane U (U5): page actions sit where the boards put them — right of the h1 row (R13).
+  it('puts page actions at the right of the h1 row, and adds nothing without them (U5)', () => {
+    const { rerender } = render(
+      <AssetDetailShell
+        title="Nervape Mask"
+        kind="objects"
+        breadcrumb={[]}
+        lede={<p>Lede</p>}
+        actions={<a href="https://omiga.io/x">Omiga ↗</a>}
+      >
+        <p>Body</p>
+      </AssetDetailShell>
+    );
+    const h1 = screen.getByRole('heading', { level: 1, name: 'Nervape Mask' });
+    const actions = screen
+      .getByRole('link', { name: 'Omiga ↗' })
+      .closest('[data-role="page-actions"]')!;
+    expect(actions).not.toBeNull();
+    // one row: the title's row and the actions are the two ends of the same flex line
+    const row = actions.parentElement!;
+    expect(row).toContainElement(h1);
+    expect(row).toHaveClass('flex', 'justify-between');
+    expect(row.lastElementChild).toBe(actions);
+    rerender(
+      <AssetDetailShell title="Nervape Mask" kind="objects" breadcrumb={[]} lede={<p>Lede</p>}>
+        <p>Body</p>
+      </AssetDetailShell>
+    );
+    expect(document.querySelector('[data-role="page-actions"]')).toBeNull();
+  });
   // Consistency round C7: the rail's facts become one metrics row under the hero, and the page is
   // one column (no 260 px rail track, so tier 1 and the feed share one right edge).
   it('puts the metrics row under the hero in one column, without a facts rail (C7)', () => {
