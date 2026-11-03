@@ -1,0 +1,58 @@
+{
+  "txHash": "0xc0aee100d49f6d2b7f961ff27054c5e67c5e94824208bcbf87d0591a213f83ee",
+  "outputIndex": 0,
+  "capacity": "920000000000",
+  "commonKnowledgeSize": "10200000000",
+  "lockScriptHash": "0xd0f6bf44afd42ef4ec292bfb31e4a76d935eee8649c8c650c7c952289284738f",
+  "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqgdljlfnfg00wykyu3f66qs56x4965dp8su82huc",
+  "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+  "dataSize": 8,
+  "createdAtBlock": 20894903,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hashType": "type",
+    "args": "0x0dfcbe99a50f7b89627229d6810a68d52ea8d09e"
+  },
+  "type": {
+    "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+    "hashType": "type",
+    "args": "0x"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "nervos-dao"
+  },
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "dao_withdraw_request_cell",
+      "summary": "DAO withdraw-request cell detected (deposit_block_number=20888889)",
+      "segments": [
+        {
+          "label": "dao_state",
+          "start": 0,
+          "end": 8,
+          "meaning": "DAO state marker",
+          "humanValue": "withdraw_request"
+        },
+        {
+          "label": "deposit_block_number",
+          "start": 0,
+          "end": 8,
+          "meaning": "Original deposit block number (u64 LE)",
+          "humanValue": "20888889"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  },
+  "daoInfo": {
+    "isDaoCell": true,
+    "daoStatus": "withdrawing",
+    "depositBlockNumber": 20888889,
+    "depositTimestamp": "2026-10-31T18:33:59.301+00:00",
+    "withdrawRequestBlock": 20894903,
+    "withdrawRequestTimestamp": "2026-11-01T10:28:17.437+00:00"
+  }
+}

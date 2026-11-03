@@ -1,0 +1,38 @@
+{
+  "txHash": "0xe9ddcac2cb24ee5f8bd2252d8d2d819cf97a551f3b149ec8feec8d033790da7f",
+  "outputIndex": 0,
+  "capacity": "36000000000",
+  "commonKnowledgeSize": "36000000000",
+  "lockScriptHash": "0x75e92dee31b16a03bc0c3ace1a6f7ade811f79245a35cb14d98cd18a8446466c",
+  "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqx6wwld7rq0yyjvv69t8y6gyrmf8vz5h0qecsknh",
+  "typeScriptHash": "0x196de0a437de81ead848c6108d5464c1bb715681bb30155dc8d49ee59775e439",
+  "dataSize": 232,
+  "createdAtBlock": 17980722,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+    "hashType": "type",
+    "args": "0x0001b4e77dbe181e42498cd1567269041ed2760a9778"
+  },
+  "type": {
+    "codeHash": "0x4a06164dc34dccade5afe3e847a97b6db743e79f5477fa3295acf02849c5984a",
+    "hashType": "type",
+    "args": "0x02d945cd1a3ea7fe8448d53d27b5b25d415dfa5fe8b873117133001ec9759a93"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "did-ckb"
+  },
+  "dataAnalysis": {
+    "heuristicGuesses": [
+      {
+        "kind": "binary_fallback",
+        "confidence": "low",
+        "reason": "No known signature matched; treated as opaque binary",
+        "mimeType": "application/octet-stream",
+        "humanValue": "232 bytes"
+      }
+    ]
+  }
+}

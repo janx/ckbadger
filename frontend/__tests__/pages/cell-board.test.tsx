@@ -23,9 +23,29 @@ vi.mock('@/components/cell/cell-transactions', () => ({
 }));
 vi.mock('@/components/layout/header', () => ({ Header: () => <div /> }));
 vi.mock('@/lib/api', () => ({
-  api: { getCell: vi.fn(), lookupScripts: vi.fn() },
+  api: {
+    getCell: vi.fn(),
+    lookupScripts: vi.fn(),
+    // Lane U (U6): the hero's inventory line reads the object and its cluster.
+    getSporeObject: vi.fn(),
+    getSporeCluster: vi.fn(),
+  },
   isNotFoundApiError: () => false,
 }));
+
+const CLUSTER_ID = '0x26a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c';
+/** The local API's answers for this object and its cluster (2026-11-03). */
+function mockObjectReads() {
+  vi.mocked(api.getSporeObject).mockResolvedValue({
+    sporeId: cell.type!.args,
+    clusterId: CLUSTER_ID,
+    mediaProfile: { tier: 'btc_ckb' },
+  } as never);
+  vi.mocked(api.getSporeCluster).mockResolvedValue({
+    clusterId: CLUSTER_ID,
+    name: 'Nervape 3x',
+  } as never);
+}
 
 function view() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -45,6 +65,23 @@ describe('Cell page against the Cell board', () => {
       [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
+    mockObjectReads();
+  });
+
+  it('says what inventory item the cell is, in one line right under the h1 (lane U, U6)', async () => {
+    view();
+    const line = await screen.findByTestId('cell-inventory', undefined, { timeout: 5000 });
+    expect(await within(line).findByText(/Nervape 3x/)).toBeInTheDocument();
+    expect(line).toHaveTextContent(/^This cell is Nervape 3x 0x51c75ad6…2796f2 BTC\+CKB$/);
+    expect(within(line).getByRole('link')).toHaveAttribute(
+      'href',
+      `/mainnet/objects/${cell.type!.args}`
+    );
+    // first under the h1 row: before the full out point and its copy
+    const header = screen.getByRole('heading', { level: 1 }).closest('header')!;
+    expect(header).toContainElement(line);
+    const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
+    expect(line.compareDocumentPosition(outpointLine)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
@@ -206,6 +243,7 @@ describe('Cell page · visual pass (R2b-b createdEpoch, dataHash)', () => {
       [cell.lock!.codeHash]: { name: 'Nervape Shadow Lock' },
       [cell.type!.codeHash]: { name: 'Spore' },
     } as never);
+    mockObjectReads();
   });
 
   it('keeps the board facts on one strip: epoch under Created, "0 free", no Owner (SC-C9)', async () => {

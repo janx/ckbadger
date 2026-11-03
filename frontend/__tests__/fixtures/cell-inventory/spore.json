@@ -1,0 +1,106 @@
+{
+  "txHash": "0x0361eb40512ede959eecf4a0fc2e14cea834b647f5f91e48eacf08539db6518a",
+  "outputIndex": 0,
+  "capacity": "36200000000",
+  "commonKnowledgeSize": "36100000000",
+  "lockScriptHash": "0x337310aa25e9fbf24f256aa4d87f15af2f893702b6e59957577a7b3ed9b37d18",
+  "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq9ef4udwfyuwywlsqwy08wpapagss8ej8yxj50cr",
+  "typeScriptHash": "0x1ff192c6ec1a84f10278cf1dbb1b3587a0be63726609c86f6f68fe76b3e32cb7",
+  "dataSize": 233,
+  "createdAtBlock": 14965803,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+    "hashType": "type",
+    "args": "0x0001729af1ae4938e23bf00388f3b83d0f51081f3239"
+  },
+  "type": {
+    "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+    "hashType": "data1",
+    "args": "0x7e3bc1bce9aa1f5d085911dee7673fe54ece2d205f6a796a773d9e6f15216539"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "spore"
+  },
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "spore_cell",
+      "summary": "Spore molecule layout detected (content_type=dob/0, content_bytes=168)",
+      "segments": [
+        {
+          "label": "total_size",
+          "start": 0,
+          "end": 4,
+          "meaning": "Molecule table total size (u32 LE)",
+          "humanValue": "233"
+        },
+        {
+          "label": "offset_content_type",
+          "start": 4,
+          "end": 8,
+          "meaning": "Offset to content_type bytes field",
+          "humanValue": "16"
+        },
+        {
+          "label": "offset_content",
+          "start": 8,
+          "end": 12,
+          "meaning": "Offset to content bytes field",
+          "humanValue": "25"
+        },
+        {
+          "label": "offset_cluster_id",
+          "start": 12,
+          "end": 16,
+          "meaning": "Offset to optional cluster_id bytes field",
+          "humanValue": "197"
+        },
+        {
+          "label": "content_type_length",
+          "start": 16,
+          "end": 20,
+          "meaning": "Molecule Bytes length word (u32 LE)",
+          "humanValue": "5"
+        },
+        {
+          "label": "content_type",
+          "start": 20,
+          "end": 25,
+          "meaning": "Spore content MIME type",
+          "humanValue": "dob/0"
+        },
+        {
+          "label": "content_length",
+          "start": 25,
+          "end": 29,
+          "meaning": "Molecule Bytes length word (u32 LE)",
+          "humanValue": "168"
+        },
+        {
+          "label": "content",
+          "start": 29,
+          "end": 197,
+          "meaning": "Spore binary payload",
+          "humanValue": "\"62746366733a2f2f36633134666461323766636… (168 bytes)"
+        },
+        {
+          "label": "cluster_id_length",
+          "start": 197,
+          "end": 201,
+          "meaning": "Molecule optional Bytes length word (u32 LE)",
+          "humanValue": "32"
+        },
+        {
+          "label": "cluster_id",
+          "start": 201,
+          "end": 233,
+          "meaning": "Cluster id bytes",
+          "humanValue": "0x95a56c18700cbc3f4e98895fe7063094f592fd89964d49ba5a5c1da1f66b7169"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  }
+}

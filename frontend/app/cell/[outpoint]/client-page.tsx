@@ -7,6 +7,7 @@ import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
+import { CellInventoryLine } from '@/components/cell/inventory-line';
 import { ExactCkb } from '@/components/activity-event-row';
 import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
@@ -362,6 +363,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         }
         identity={
           <div className="space-y-1.5">
+            {/* Lane U (U6): the inventory item this cell is, first under the h1. */}
+            <CellInventoryLine cell={cell} />
             <div className="flex flex-wrap items-center gap-2.5">
               <span className="text-text-bright text-body [overflow-wrap:anywhere]">
                 {cell.txHash}

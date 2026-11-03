@@ -1,0 +1,85 @@
+{
+  "txHash": "0x246afca6a869473b60cbf00259377d645fa3c7a22faf1bfe3ee1bb4e2983ffae",
+  "outputIndex": 0,
+  "capacity": "24000000000",
+  "commonKnowledgeSize": "20400000000",
+  "lockScriptHash": "0x6cf33130c5dd1a67afea06273180e54cb70c26066435c316d34f0f7462737aa9",
+  "address": "ckb1qz0s7zapg26cew30upr4gm8asjqatvtkjsmu6dfnuezckgdkrpc6kqg4ekfss",
+  "typeScriptHash": "0x3da1e4a418767574d4d7528ae58761b72818385bfe5804b2edff75b937a9c267",
+  "dataSize": 110,
+  "createdAtBlock": 20518589,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0x9f0f0ba142b58cba2fe047546cfd8481d5b1769437cd3533e6458b21b61871ab",
+    "hashType": "type",
+    "args": "0x"
+  },
+  "type": {
+    "codeHash": "0xd96cee56727a2bb9a21408c154d278df5095fb4b4dcfd50516156424479bfe54",
+    "hashType": "type",
+    "args": "0xb4f4302965b7d6421481a520ee7eb5971a5e808c"
+  },
+  "protocolScript": {
+    "lock": "dotcell-account-lock",
+    "type": "dotcell-account"
+  },
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "dotcell_name",
+      "summary": "verification.cell name cell (layout v3); owner 0xac55d7dab2e9a4b85775a811bb4063e94cc98182; expires 2027-09-21T07:10:04+00:00; records are in the creating transaction's witness at this output index",
+      "segments": [
+        {
+          "label": "layout_version",
+          "start": 0,
+          "end": 1,
+          "meaning": "Layout version (u8)",
+          "humanValue": "3"
+        },
+        {
+          "label": "records_hash",
+          "start": 1,
+          "end": 33,
+          "meaning": "blake2b of the records payload, carried in WitnessArgs.output_type of the creating transaction's witness at this output index",
+          "humanValue": "0x72ad09e23868d88a8e85519ebeee56f60eda6c5a564e8a369a4c9d8ea29087e2"
+        },
+        {
+          "label": "next_id",
+          "start": 33,
+          "end": 53,
+          "meaning": "Next name id in the ordered uniqueness ring (zero = end of ring)",
+          "humanValue": "0x0da0163d682c176f98995b631e0a63c38d98351a"
+        },
+        {
+          "label": "expired_at",
+          "start": 53,
+          "end": 58,
+          "meaning": "Expiry, unix seconds (u40 little-endian)",
+          "humanValue": "2027-09-21T07:10:04+00:00 (unix 1821510604)"
+        },
+        {
+          "label": "owner_hash20",
+          "start": 58,
+          "end": 78,
+          "meaning": "Owner: first 20 bytes of the owner's lock script hash",
+          "humanValue": "0xac55d7dab2e9a4b85775a811bb4063e94cc98182"
+        },
+        {
+          "label": "manager_hash20",
+          "start": 78,
+          "end": 98,
+          "meaning": "Manager: first 20 bytes of the manager's lock script hash",
+          "humanValue": "0xac55d7dab2e9a4b85775a811bb4063e94cc98182 (same as owner)"
+        },
+        {
+          "label": "label",
+          "start": 98,
+          "end": 110,
+          "meaning": "Name label, UTF-8 (empty only on the ring root); id = blake2b(label)[..20]",
+          "humanValue": "verification.cell · id 0x0b340d49874bf09f050bf079b862d61a3e485ce4"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  }
+}

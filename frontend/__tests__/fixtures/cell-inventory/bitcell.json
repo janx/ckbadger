@@ -1,0 +1,38 @@
+{
+  "txHash": "0x2264ce327956dc5f9cf76bda0aff1b6939e1cdb6962193d6f5f646e9edea54ee",
+  "outputIndex": 0,
+  "capacity": "22899997627",
+  "commonKnowledgeSize": "22800000000",
+  "lockScriptHash": "0x2fe02790f4dcf1b9800633dffb7d6d3b58bfd62164063a3ba43d4bf2c357be75",
+  "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq9gv3m7vkl3k4dm6vlchr3elynd7ptgz5gremret",
+  "typeScriptHash": "0xe02b54bf9600b867496aafe6bde42db05852a80740c6514f1cf0fd06cfa23488",
+  "dataSize": 100,
+  "createdAtBlock": 15997532,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+    "hashType": "type",
+    "args": "0x000150c8efccb7e36ab77a67f171c73f24dbe0ad02a2"
+  },
+  "type": {
+    "codeHash": "0xcfba73b58b6f30e70caed8a999748781b164ef9a1e218424a6fb55ebf641cb33",
+    "hashType": "type",
+    "args": "0x006d5680998ef5d153b1f07f1c13f5f0d910ceaa28f8954906476551f61ff026"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "bit-cell"
+  },
+  "dataAnalysis": {
+    "heuristicGuesses": [
+      {
+        "kind": "structure_pattern",
+        "confidence": "medium",
+        "reason": "Looks like Molecule table layout (LE total size + monotonic offsets)",
+        "mimeType": "application/x-molecule-table",
+        "humanValue": "total_size=100 bytes, fields=4"
+      }
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "txHash": "0x0648f71f9dda86a4930ce820c3c9b0d4cef14e8f74a7638be3d25b9e0132c107",
+  "outputIndex": 0,
+  "capacity": "1250000000000",
+  "commonKnowledgeSize": "10200000000",
+  "lockScriptHash": "0x1d8490cbc1f3e30896fdd870087327c25e009fa54d17c26059fe7a04e74dec36",
+  "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdks3s3jj2rjjvjat3gdq5p8739d2ens6c0g7r0u",
+  "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+  "dataSize": 8,
+  "createdAtBlock": 20906522,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+    "hashType": "type",
+    "args": "0xb6846119494394992eae28682813fa256ab3386b"
+  },
+  "type": {
+    "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+    "hashType": "type",
+    "args": "0x"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "nervos-dao"
+  },
+  "dataAnalysis": {
+    "deterministic": {
+      "kind": "dao_deposit_cell",
+      "summary": "DAO deposit cell detected (8-byte zero data)",
+      "segments": [
+        {
+          "label": "dao_state",
+          "start": 0,
+          "end": 8,
+          "meaning": "DAO state marker",
+          "humanValue": "deposit"
+        }
+      ]
+    },
+    "heuristicGuesses": []
+  },
+  "daoInfo": {
+    "isDaoCell": true,
+    "daoStatus": "deposited",
+    "depositBlockNumber": 20906522,
+    "depositTimestamp": "2026-11-02T15:34:37.615+00:00"
+  }
+}
