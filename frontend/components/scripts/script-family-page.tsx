@@ -11,6 +11,7 @@ import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import {
   ScriptCustodyEvidence,
+  DEPRECATED_TITLE,
   isImmutableClass,
   scriptClassLabel,
 } from '@/components/scripts/script-code-evidence';
@@ -879,7 +880,12 @@ export function ScriptFamilyPage({
                     {family.name}
                   </h1>
                   <ScriptHeading family={family} />
-                  {deprecated && <span className="text-text-dim text-small">· Deprecated</span>}
+                  {deprecated && (
+                    // Lane F follow-up 2: the warning a user must not miss (was "· Deprecated", dim).
+                    <RowTag variant="warn" title={DEPRECATED_TITLE}>
+                      deprecated
+                    </RowTag>
+                  )}
                 </div>
                 <CapacityRangeSelector
                   value={capacityRange}

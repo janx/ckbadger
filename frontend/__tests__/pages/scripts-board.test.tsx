@@ -5,6 +5,7 @@ import { expectTier1Budget } from '@/__tests__/utils/hierarchy';
 import { screen, waitFor, within, fireEvent } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import ScriptsPage from '@/app/scripts/page';
+import { DEPRECATED_TITLE } from '@/components/scripts/script-code-evidence';
 import { api, type KnownScript } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -169,15 +170,16 @@ describe('Scripts list against the Scripts board', () => {
     expect(godRow.textContent).not.toContain('0.00%');
   });
 
-  it('marks deprecated in grey, not red: a ghost row tag (SC-L8, L1-1)', async () => {
+  // Lane F follow-up 2: old "marks deprecated in grey, not red: a ghost row tag" → the warning
+  // (user: the dim dashed tag read as a footnote and did not warn).
+  it('marks deprecated as the warning: a rouge warn row tag that says what it means (SC-L8, L1-1)', async () => {
     render(<ScriptsPage />);
     const table = await screen.findByRole('table', { name: 'Scripts' });
     const mark = within(table).getByText('deprecated');
-    expect(mark.className).not.toMatch(/negative|rouge/);
-    expect(mark).toHaveAttribute('data-row-tag', 'ghost');
-    // Lane F follow-up: legible — the dashed border in the readable dim ink (was text-[#4b5266]).
-    expect(mark).toHaveClass('text-text-dim', 'border-dashed');
-    expect(mark.className).not.toMatch(/#4b5266/);
+    expect(mark).toHaveAttribute('data-row-tag', 'warn');
+    expect(mark).toHaveClass('text-rouge', 'border-rouge');
+    expect(mark).not.toHaveClass('border-dashed');
+    expect(mark).toHaveAttribute('title', DEPRECATED_TITLE);
   });
 
   it('uses underline role tabs and one "sorted by" control in board words (SC-L8)', async () => {
@@ -462,9 +464,12 @@ describe('Scripts index hero (hierarchy v3, C0 / C1 / C3)', () => {
     const accents = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="accent"]')];
     expect(accents.length).toBeGreaterThan(0);
     expect(new Set(accents.map((el) => el.textContent))).toEqual(new Set(['immutable']));
+    // Lane F follow-up 2: and "deprecated" is the warn row tag, the one red status of the page.
+    const warns = [...tier1().querySelectorAll<HTMLElement>('[data-row-tag="warn"]')];
+    expect(new Set(warns.map((el) => el.textContent))).toEqual(new Set(['deprecated']));
     const coloured = [...tier1().querySelectorAll('[class]')].filter(
       (el) =>
-        !el.matches('[data-row-tag="accent"]') &&
+        !el.matches('[data-row-tag="accent"], [data-row-tag="warn"]') &&
         el
           .getAttribute('class')!
           .split(/\s+/)
@@ -521,6 +526,8 @@ describe('Scripts list phone row (board L6)', () => {
       'text-text-bright'
     );
     expect(rows[2]).toHaveTextContent('Godwoken Custodian Lockdeprecated');
+    // Lane F follow-up 2: the phone row's "deprecated" is the warn tag too (was dim text).
+    expect(within(rows[2]).getByText('deprecated')).toHaveAttribute('data-row-tag', 'warn');
   });
 
   it('is two lines at 608 px: role and code beside the name, counts beside the description', async () => {
