@@ -553,6 +553,91 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
   );
 }
 
+/** A mechanism tile (the "Two names for the same script" chain's tile, `script-byte-map.tsx`). */
+function MechanismTile({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <div className="text-small text-text-dim min-w-0 flex-1 rounded-md border border-[#1a1f30] px-3 py-2.5">
+      <b className="text-text-bright mb-0.5 block font-medium">{title}</b>
+      {children}
+    </div>
+  );
+}
+
+function MechanismArrow() {
+  return (
+    <span aria-hidden="true" className="text-center text-[#343c50] sm:w-5 sm:self-center">
+      <span className="sm:hidden">↓</span>
+      <span className="hidden sm:inline">→</span>
+    </span>
+  );
+}
+
+/**
+ * Material pass v2 (7): the first mechanism, drawn. Each block's secondary issuance s fans out
+ * three ways, by how all CKB is used at that block; the words are the explanation's own.
+ */
+function IssuanceSplit() {
+  return (
+    <div
+      role="group"
+      aria-label="How each block's secondary issuance is split"
+      className="mt-3.5 flex flex-col gap-1.5 sm:flex-row sm:items-stretch"
+    >
+      <MechanismTile title="secondary issuance s">
+        of each block: 1.344 billion CKB a year, split by how all CKB issued is used at that block
+      </MechanismTile>
+      <MechanismArrow />
+      <ul className="flex min-w-0 flex-col gap-1.5 sm:flex-[2]">
+        <li className="flex">
+          <MechanismTile title="miners">
+            the occupied share, s × U ÷ C, paid in the cellbase
+          </MechanismTile>
+        </li>
+        <li className="flex">
+          <MechanismTile title="depositors">
+            the deposits&apos; share, compensation accrued via AR, paid out at withdrawal
+          </MechanismTile>
+        </li>
+        <li className="flex">
+          <MechanismTile title="burnt">everything else; no cell can ever claim it</MechanismTile>
+        </li>
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * Material pass v2 (7): the second mechanism, drawn. A deposit's life in three cells, with where
+ * its compensation stops and when it can leave; the words are the explanation's own.
+ */
+function DepositLife() {
+  return (
+    <ol
+      aria-label="A deposit's life"
+      className="mt-3.5 flex flex-col gap-1.5 sm:flex-row sm:items-stretch"
+    >
+      <li className="flex min-w-0 sm:flex-1">
+        <MechanismTile title="deposit">
+          a DAO cell; its 180-epoch cycle is counted from the epoch it was made
+        </MechanismTile>
+      </li>
+      <li className="flex min-w-0 flex-col gap-1.5 sm:flex-1 sm:flex-row">
+        <MechanismArrow />
+        <MechanismTile title="withdrawal request">
+          spends the deposit; its compensation stops growing here, at this AR
+        </MechanismTile>
+      </li>
+      <li className="flex min-w-0 flex-col gap-1.5 sm:flex-1 sm:flex-row">
+        <MechanismArrow />
+        <MechanismTile title="withdrawal">
+          at the end of the current cycle, about 30 days: the deposit and its compensation leave the
+          DAO
+        </MechanismTile>
+      </li>
+    </ol>
+  );
+}
+
 /**
  * Capacity use at the statistics block (tier 2 since hierarchy v3): how all CKB issued so far is
  * used, the proportions every block splits its secondary issuance by — an 18 px bar with each share
@@ -1212,9 +1297,11 @@ function HowItWorks({
 }) {
   return (
     <DetailSection title="How the Nervos DAO works">
-      {/* R1 roles: the explanation and the protocol notes are prose (body, as the v3 board). */}
+      {/* R1 roles: the explanation and the protocol notes are prose (body, as the v3 board).
+          Material pass v2 (7): the former two paragraphs are four, one topic each, and the two
+          mechanisms are drawn as tiles between them; every sentence is kept, in its order. */}
       <div className="flex flex-col">
-        <p className="text-text-dim text-body">
+        <p className="text-text-dim text-body max-w-[64ch]">
           CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
           billion CKB a year, is split by how CKB is used: depositors are compensated with the share
           their deposits make up, miners get the share that is occupied, and the rest is burnt.
@@ -1225,22 +1312,28 @@ function HowItWorks({
           requests take no share, since a request&apos;s compensation stopped growing at the
           request.
         </p>
+        <IssuanceSplit />
         {/* Hierarchy v3 (V7): how every block splits its issuance, moved from tier 1. */}
         <CapacityUse statistics={statistics} />
-        <p className="text-text-dim text-body mt-3.5">
+        <p className="text-text-dim text-body mt-3.5 max-w-[64ch]">
           A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made.
           In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle ends
           that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
           calendar dates. Epoch-lock readiness alone does not prove a complete withdraw transaction;
-          the required input, headers, witnesses and script execution still apply. Protocol occupied
-          (U) includes the genesis virtual occupied baseline; it is not the real occupied size of
-          live cells. The miners&apos; share is s × U ÷ C of each block&apos;s secondary issuance s,
-          paid in cellbases; the depositors&apos; share accrues via AR and is paid out at
-          withdrawals. No cell can ever claim the burnt share. A hardfork could only put future
-          secondary issuance to use; what is burnt stays burnt. Estimated APC is at today&apos;s
-          issuance and deposits; &ldquo;Compensation, last 365 days&rdquo; is on free capacity, from
-          the header&apos;s AR. Statistics are exact to the shannon at block{' '}
-          <BlockLink number={statistics.tipBlockNumber} />; the indexed epoch is{' '}
+          the required input, headers, witnesses and script execution still apply.
+        </p>
+        <DepositLife />
+        <p className="text-text-dim text-body mt-3.5 max-w-[64ch]">
+          Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
+          occupied size of live cells. The miners&apos; share is s × U ÷ C of each block&apos;s
+          secondary issuance s, paid in cellbases; the depositors&apos; share accrues via AR and is
+          paid out at withdrawals. No cell can ever claim the burnt share. A hardfork could only put
+          future secondary issuance to use; what is burnt stays burnt.
+        </p>
+        <p className="text-text-dim text-body mt-3.5 max-w-[64ch]">
+          Estimated APC is at today&apos;s issuance and deposits; &ldquo;Compensation, last 365
+          days&rdquo; is on free capacity, from the header&apos;s AR. Statistics are exact to the
+          shannon at block <BlockLink number={statistics.tipBlockNumber} />; the indexed epoch is{' '}
           {evidence.tipEpoch.display}. &ldquo;Recent DAO activity&rdquo; lists deposits, withdrawal
           requests and withdrawals, newest first.
         </p>
