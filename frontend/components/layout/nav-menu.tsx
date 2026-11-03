@@ -20,7 +20,7 @@ export interface NavMenuEntry {
 
 /**
  * Lane U (U4): a header nav entry that opens a menu of its section's pages — the section's index
- * first, a hairline, then its views. It opens on hover, on click (which also keeps a hovered menu
+ * first (when the section has a page of its own), a hairline, then its views. It opens on hover, on click (which also keeps a hovered menu
  * open), and from the keyboard (the WAI-ARIA menu button: Enter / Space / ↓ open on the first item,
  * ↑ on the last; ↑ ↓ Home End move; Escape closes back to the button; Tab or a click outside
  * closes). Closed, the menu is not rendered. The button reads as the nav's links do: bright with
@@ -34,8 +34,12 @@ export function NavMenu({
   pathname,
 }: {
   label: string;
-  /** The section's own page, first in the menu. */
-  index: NavMenuEntry;
+  /**
+   * The section's own page, first in the menu. Absent when the section has none of its own
+   * (review 2026-11-03: `/inventory` only redirects to Tokens, so an "Inventory index" entry
+   * repeated the Tokens view): the menu is then the views alone, with no hairline.
+   */
+  index?: NavMenuEntry;
   items: readonly NavMenuEntry[];
   /** The page is in this section. */
   current: boolean;
@@ -49,7 +53,7 @@ export function NavMenu({
   const buttonRef = useRef<HTMLButtonElement>(null);
   const itemRefs = useRef<(HTMLAnchorElement | null)[]>([]);
   const menuId = useId();
-  const entries = [index, ...items];
+  const entries = index ? [index, ...items] : [...items];
 
   const close = (returnFocus: boolean) => {
     setOpen(false);
@@ -162,7 +166,7 @@ export function NavMenu({
               const here = pathname === entry.href;
               return (
                 <div key={entry.href} role="none">
-                  {i === 1 && (
+                  {index && i === 1 && (
                     <div role="separator" className="border-base-border/70 mx-1 my-1 border-t" />
                   )}
                   <Link

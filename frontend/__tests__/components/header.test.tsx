@@ -168,7 +168,9 @@ describe('Header', () => {
     );
   });
 
-  it('opens the Inventory menu on click: the index, then Tokens · Objects · Identities (U4)', () => {
+  // Review 2026-11-03: no "Inventory index" entry — /inventory only redirects to Tokens, so the
+  // entry repeated the Tokens view. The menu is the three views, with no hairline.
+  it('opens the Inventory menu on click: Tokens · Objects · Identities, no index entry (U4)', () => {
     usePathnameMock.mockReturnValue('/blocks');
     render(<Header />);
     const nav = screen.getByRole('navigation', { name: 'Main' });
@@ -179,14 +181,15 @@ describe('Header', () => {
     expect(inventory).toHaveAttribute('aria-controls', menu.id);
     const items = within(menu).getAllByRole('menuitem');
     expect(items.map((i) => [i.textContent, i.getAttribute('href')])).toEqual([
-      ['Inventory index', '/mainnet/inventory'],
       ['Tokens', '/mainnet/inventory/tokens'],
       ['Objects', '/mainnet/inventory/objects'],
       ['Identities', '/mainnet/inventory/identities'],
     ]);
+    expect(within(menu).queryByRole('menuitem', { name: /index/i })).toBeNull();
+    expect(within(menu).queryByRole('separator')).toBeNull();
     // the header's look: the nav's mono body text and link inks, no new colours
     for (const item of items) expect(item).toHaveClass('font-mono', 'text-body');
-    expect(items[1]).toHaveClass('text-text', 'hover:text-jade');
+    expect(items[0]).toHaveClass('text-text', 'hover:text-jade');
     // a second click closes it; so does a click outside, and choosing an item
     fireEvent.click(inventory);
     expect(inventory).toHaveAttribute('aria-expanded', 'false');
@@ -228,18 +231,18 @@ describe('Header', () => {
     inventory.focus();
     fireEvent.keyDown(inventory, { key: 'ArrowDown' });
     const item = (name: string) => within(nav).getByRole('menuitem', { name });
-    expect(item('Inventory index')).toHaveFocus();
-    fireEvent.keyDown(item('Inventory index'), { key: 'ArrowDown' });
     expect(item('Tokens')).toHaveFocus();
-    fireEvent.keyDown(item('Tokens'), { key: 'End' });
+    fireEvent.keyDown(item('Tokens'), { key: 'ArrowDown' });
+    expect(item('Objects')).toHaveFocus();
+    fireEvent.keyDown(item('Objects'), { key: 'End' });
     expect(item('Identities')).toHaveFocus();
     fireEvent.keyDown(item('Identities'), { key: 'ArrowDown' });
-    expect(item('Inventory index')).toHaveFocus();
-    fireEvent.keyDown(item('Inventory index'), { key: 'ArrowUp' });
+    expect(item('Tokens')).toHaveFocus();
+    fireEvent.keyDown(item('Tokens'), { key: 'ArrowUp' });
     expect(item('Identities')).toHaveFocus();
     fireEvent.keyDown(item('Identities'), { key: 'Home' });
-    expect(item('Inventory index')).toHaveFocus();
-    fireEvent.keyDown(item('Inventory index'), { key: 'Escape' });
+    expect(item('Tokens')).toHaveFocus();
+    fireEvent.keyDown(item('Tokens'), { key: 'Escape' });
     expect(within(nav).queryByRole('menu')).toBeNull();
     expect(inventory).toHaveFocus();
     // ArrowUp opens on the last view; Tab away closes it
@@ -250,7 +253,7 @@ describe('Header', () => {
     // Enter / Space on the button (its click) open it with the first item focused
     fireEvent.keyDown(inventory, { key: 'Enter' });
     fireEvent.click(inventory, { detail: 0 });
-    expect(item('Inventory index')).toHaveFocus();
+    expect(item('Tokens')).toHaveFocus();
   });
 
   it('opens and closes the mobile menu with navigation links', () => {
@@ -276,13 +279,13 @@ describe('Header', () => {
     );
     expect(screen.getByRole('link', { name: 'Blocks' })).toHaveAttribute('href', '/mainnet/blocks');
     expect(screen.getByRole('link', { name: 'Forks' })).toHaveAttribute('href', '/mainnet/forks');
-    // The phone menu lists the same four as the desktop Inventory menu: the index (the Inventory
-    // row itself, now a link — U4) and its three views under it.
-    expect(screen.getAllByRole('link', { name: 'Inventory' })).toHaveLength(1);
-    expect(screen.getByRole('link', { name: 'Inventory' })).toHaveAttribute(
-      'href',
-      '/mainnet/inventory'
-    );
+    // The phone menu lists the same three as the desktop Inventory menu under an Inventory
+    // heading: no index page, so the row is text, not a link (review 2026-11-03).
+    expect(screen.queryByRole('link', { name: 'Inventory' })).toBeNull();
+    const phoneNav = screen
+      .getAllByRole('navigation')
+      .find((n) => n.getAttribute('aria-label') !== 'Main')!;
+    expect(within(phoneNav).getByText('Inventory').tagName).toBe('SPAN');
     expect(screen.getAllByRole('link', { name: 'Tokens' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Objects' })).toHaveLength(1);
     expect(screen.getAllByRole('link', { name: 'Identities' })).toHaveLength(1);

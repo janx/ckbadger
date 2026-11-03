@@ -26,12 +26,13 @@ interface NavLink {
 /**
  * A section with views (TX-02, U4): on the desktop row one entry that opens a menu — the section's
  * index (`href`, named `indexLabel`) then its views; the phone menu lists the same, the section row
- * itself linking to the index.
+ * itself linking to the index. A section without a page of its own (`indexLabel` absent) lists
+ * its views alone, and its phone row is a heading, not a link.
  */
 interface NavDropdown {
   href: string;
   label: string;
-  indexLabel: string;
+  indexLabel?: string;
   children: NavLink[];
 }
 
@@ -55,10 +56,11 @@ const navItems: NavItem[] = [
       { href: '/forks', label: 'Forks' },
     ],
   },
+  // Review 2026-11-03: `/inventory` is only a redirect to Tokens, so the menu has no index entry
+  // (an "Inventory index" item repeated the Tokens view); the three views alone.
   {
     href: '/inventory',
     label: 'Inventory',
-    indexLabel: 'Inventory index',
     children: [
       { href: '/inventory/tokens', label: 'Tokens' },
       { href: '/inventory/objects', label: 'Objects' },
@@ -122,7 +124,11 @@ export function Header() {
                   <NavMenu
                     key={item.href}
                     label={item.label}
-                    index={{ href: item.href, label: item.indexLabel }}
+                    index={
+                      item.indexLabel === undefined
+                        ? undefined
+                        : { href: item.href, label: item.indexLabel }
+                    }
                     items={item.children}
                     current={isDropdownActive(item)}
                     pathname={pathname}
@@ -203,18 +209,29 @@ export function Header() {
                 {navItems.map((item) =>
                   isDropdown(item) ? (
                     <div key={item.label} className="flex flex-col">
-                      {/* U4: the section row is the index's link, as the desktop menu's first item. */}
-                      <Link
-                        href={item.href}
-                        onClick={() => setIsMenuOpen(false)}
-                        className={`text-body block rounded-md border px-3 py-2.5 font-mono transition ${
-                          isDropdownActive(item)
-                            ? 'border-jade/40 bg-jade/8 text-jade'
-                            : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
-                        }`}
-                      >
-                        {item.label}
-                      </Link>
+                      {/* U4: the section row is the index's link, as the desktop menu's first item;
+                          a section with no index (Inventory) heads its views as text. */}
+                      {item.indexLabel === undefined ? (
+                        <span
+                          className={`text-body block px-3 py-2.5 font-mono ${
+                            isDropdownActive(item) ? 'text-jade' : 'text-text-dim'
+                          }`}
+                        >
+                          {item.label}
+                        </span>
+                      ) : (
+                        <Link
+                          href={item.href}
+                          onClick={() => setIsMenuOpen(false)}
+                          className={`text-body block rounded-md border px-3 py-2.5 font-mono transition ${
+                            isDropdownActive(item)
+                              ? 'border-jade/40 bg-jade/8 text-jade'
+                              : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
+                          }`}
+                        >
+                          {item.label}
+                        </Link>
+                      )}
                       <div className="border-base-border/40 ml-3 flex flex-col gap-1 border-l pl-3 pt-1">
                         {item.children.map((child) => (
                           <Link
