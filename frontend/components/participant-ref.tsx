@@ -28,8 +28,9 @@ function compactLabel(value: string): string {
  * the standalone form. `quiet` draws a compact address in the plain ink instead
  * of jade, for rows where colour is kept for the amounts (the homepage feed).
  * `linked={false}` (consistency C3, compact only) writes the address or lock hash
- * as dim text with the whole value in its hover: the party a page is about is
- * never a link to that same page.
+ * as dim text with the whole value in its hover, underlined jade (`.this-address`,
+ * material pass v2 move 5): the party a page is about is never a link to that
+ * same page.
  * In a column too narrow for the address and its roles, the roles wrap under the
  * address rather than being clipped ("ow" for owner_from in a 136 px track).
  */
@@ -57,7 +58,10 @@ export function ParticipantRefView({
     return (
       <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
         {!linked ? (
-          <span className="text-text-dim text-small shrink-0 font-mono" title={address}>
+          <span
+            className="this-address text-text-dim text-small shrink-0 font-mono"
+            title={address}
+          >
             {compactLabel(address)}
           </span>
         ) : compact ? (
@@ -89,7 +93,10 @@ export function ParticipantRefView({
     if (!linked)
       return (
         <span className={cn('inline-flex flex-wrap items-center gap-x-1.5', className)}>
-          <span className="text-text-dim text-small shrink-0 font-mono" title={lockHash}>
+          <span
+            className="this-address text-text-dim text-small shrink-0 font-mono"
+            title={lockHash}
+          >
             {compactLabel(lockHash)}
           </span>
           {roles && <span className="text-text-dim text-meta font-mono">{roles}</span>}

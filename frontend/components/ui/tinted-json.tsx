@@ -40,7 +40,8 @@ export function TintedJson({ text, className }: { text: string; className?: stri
   return (
     <pre
       className={cn(
-        'text-meta text-text-dim max-w-full whitespace-pre-wrap break-all rounded-md bg-[#10131c] px-3 py-2.5 leading-relaxed',
+        // a well (material pass v2, move 2): raw bytes are read from dark inset glass
+        'well text-meta text-text-dim max-w-full whitespace-pre-wrap break-all px-3 py-2.5 leading-relaxed',
         className
       )}
     >

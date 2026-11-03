@@ -15,7 +15,7 @@ export default function Home() {
   });
 
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
       {stats && stats.deepForkStatus && <DeepForkAlert status={stats.deepForkStatus} />}
       <HomeContent />

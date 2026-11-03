@@ -60,7 +60,7 @@ export function PageHeader({
             <div className="flex min-w-0 flex-wrap items-center gap-3">
               <h1
                 className={cn(
-                  'text-text-bright break-words font-mono font-medium',
+                  'text-text-bright break-words font-mono',
                   kind === 'entity' ? 'text-entity' : 'text-index'
                 )}
               >

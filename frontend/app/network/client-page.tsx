@@ -23,9 +23,9 @@ const PAGE_TITLE = 'Where the nodes are';
 
 function PageShell({ children }: { children: ReactNode }) {
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 py-4">{children}</main>
+      <main className="container mx-auto py-4">{children}</main>
     </div>
   );
 }
@@ -255,7 +255,7 @@ function Hero({
             <span className="text-index sm:text-display whitespace-nowrap">
               <span
                 data-role="reachable"
-                className="text-jade text-index sm:text-display font-medium tabular-nums"
+                className="text-jade text-index sm:text-display tabular-nums"
               >
                 {lastRound.reachablePeers.toLocaleString()}
               </span>

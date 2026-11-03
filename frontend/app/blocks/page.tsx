@@ -155,9 +155,9 @@ export default function BlocksPage() {
     },
   ];
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto min-w-0 px-4 py-8">
+      <main className="container mx-auto min-w-0 py-8">
         <DetailLayout title="Blocks" kind="index" actions={<BlocksLegend />}>
           {isLoading && (
             <p role="status" className="text-text-dim">

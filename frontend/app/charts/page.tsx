@@ -11,9 +11,9 @@ import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 export default function ChartsPage() {
   const network = useQuery({ queryKey: ['network-stats'], queryFn: api.getNetworkStats });
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto min-w-0 px-4 py-8">
+      <main className="container mx-auto min-w-0 py-8">
         <DetailLayout
           title="Charts"
           kind="index"

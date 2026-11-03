@@ -19,18 +19,18 @@ export function useDetailTier(): 1 | 2 {
  * "Evidence · for developers" eyebrow — and every section heading inside is quiet. `className`
  * lays out the tier's content (its sections), under the eyebrow. The hairline is a tube (Midnight,
  * continued, move 2): `.hairline-tube-border` paints the 1 px `border-t` as a jade line lit from
- * the left.
+ * the left. The tier sits one step deeper (material pass v2, move 2): `.tier2-ground` bleeds
+ * rgba(6,7,11,.9) through the page gutters under the tube, and the eyebrow is `.eyebrow` (500 at
+ * .12 em, move 3).
  */
 export function DetailTier2({ children, className }: { children: ReactNode; className?: string }) {
   return (
     <DetailTierContext.Provider value={2}>
       <div
         data-tier="2"
-        className="border-base-border hairline-tube-border mt-24 min-w-0 border-t pt-7"
+        className="border-base-border hairline-tube-border tier2-ground mt-24 min-w-0 border-t pb-10 pt-7"
       >
-        <p className="text-meta text-text-dim uppercase tracking-[0.12em]">
-          Evidence · for developers
-        </p>
+        <p className="eyebrow text-meta text-text-dim">Evidence · for developers</p>
         <div className={cn('mt-7 min-w-0 space-y-8', className)}>{children}</div>
       </div>
     </DetailTierContext.Provider>
@@ -84,8 +84,9 @@ export function DetailLayout({
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <div className="flex min-w-0 flex-wrap items-baseline gap-3">
             <h1
+              // the weight (600) is h1.text-entity / h1.text-index in globals.css (move 3)
               className={cn(
-                'text-text-bright break-words font-medium',
+                'text-text-bright break-words',
                 kind === 'entity' ? 'text-entity' : 'text-index'
               )}
             >
@@ -151,11 +152,12 @@ export function DetailSection({
   return (
     <section className={cn('min-w-0', className)}>
       <div className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
+        {/* A tier-1 h2 is 600 through h2.text-section (globals.css, move 3); a tier-2 h2 stays
+            the quiet 500. */}
         <h2
-          className={cn(
-            'font-medium',
-            tier === 2 ? 'text-body text-[#a0a8be]' : 'text-text-bright text-section'
-          )}
+          className={
+            tier === 2 ? 'text-body font-medium text-[#a0a8be]' : 'text-text-bright text-section'
+          }
         >
           {title}
         </h2>

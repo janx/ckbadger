@@ -8,10 +8,11 @@ import {
 
 // Midnight, continued (review 2026-11-03, item 5, move 3): "instruments are framed, text is
 // flat". TerminalPanel is the one instrument frame — a #222840 hairline (`border-base-border`),
-// a 6 px radius, the surface colour, the jade top edge (`.neon-edge-top`) and inset scanlines —
-// with an uppercase 12 px eyebrow led by the section mark.
+// a 6 px radius, glass (material pass v2, move 2: `.glass` replaces the flat surface colour, so
+// the sky's pool shows through), the jade top edge (`.neon-edge-top`) and inset scanlines — with
+// an uppercase 12 px eyebrow led by the section mark.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
-  it('frames its content: hairline, 6 px radius, surface, jade top edge, scanlines', () => {
+  it('frames its content: hairline, 6 px radius, glass, jade top edge, scanlines', () => {
     const { container } = render(
       <TerminalPanel aria-label="An instrument" data-testid="frame">
         <TerminalPanelContent>inside</TerminalPanelContent>
@@ -27,9 +28,9 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
       'rounded-md',
       'border',
       'border-base-border',
-      'bg-base-surface'
+      'glass'
     );
-    expect(frame).not.toHaveClass('rounded-lg');
+    expect(frame).not.toHaveClass('rounded-lg', 'bg-base-surface');
     // the jade edge's colour, at the approved .45, as a class: the frame carries no inline ink
     expect(frame).toHaveClass('[--neon-color:rgba(46,219,163,0.45)]');
     expect(frame).not.toHaveAttribute('style');
@@ -62,8 +63,10 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
     expect(mark).toHaveAttribute('data-indicator', 'none');
     expect(mark).not.toHaveClass('section-mark-live', 'section-mark-gold', 'opacity-30');
     const eyebrow = screen.getByText('Cells');
-    expect(eyebrow).toHaveClass('text-small', 'uppercase', 'tracking-[0.08em]', 'text-text-dim');
-    expect(eyebrow).not.toHaveClass('text-body', 'tracking-wider');
+    // material pass v2 (move 3): the eyebrow's case, tracking (.12 em) and weight (500) are one
+    // rule, `.eyebrow`, shared with the tier boundary and the hero labels
+    expect(eyebrow).toHaveClass('text-small', 'eyebrow', 'text-text-dim');
+    expect(eyebrow).not.toHaveClass('text-body', 'tracking-wider', 'tracking-[0.08em]');
     // the mark precedes the words, in one row with the actions at the right
     expect(mark.compareDocumentPosition(eyebrow)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     const row = mark.parentElement!.parentElement!;

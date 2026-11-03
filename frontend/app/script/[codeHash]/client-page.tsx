@@ -90,9 +90,9 @@ export default function ScriptByCodeHashPage({
 
   if (!isCodeHashIdentifier || (knownScript && hasKnownScriptName(knownScript.name))) {
     return (
-      <div className="bg-base-bg min-h-screen">
+      <div className="min-h-screen">
         <Header />
-        <main className="container mx-auto px-4 py-8">
+        <main className="container mx-auto py-8">
           <div className="text-text-dim text-body">Resolving script page...</div>
         </main>
       </div>

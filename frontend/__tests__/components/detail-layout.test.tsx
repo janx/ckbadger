@@ -83,7 +83,8 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
     expect(tier2).toHaveClass('hairline-tube-border');
     const eyebrow = tier2.firstElementChild as HTMLElement;
     expect(eyebrow).toHaveTextContent(/^Evidence · for developers$/);
-    expect(eyebrow).toHaveClass('text-meta', 'text-text-dim', 'uppercase', 'tracking-[0.12em]');
+    // material pass v2 (move 3): case, tracking and weight are the shared `.eyebrow` rule
+    expect(eyebrow).toHaveClass('text-meta', 'text-text-dim', 'eyebrow');
     const heading = screen.getByRole('heading', { name: 'The DAO script' });
     expect(
       eyebrow.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING

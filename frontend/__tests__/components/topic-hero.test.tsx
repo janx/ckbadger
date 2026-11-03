@@ -86,7 +86,8 @@ describe('TopicHero figure layout (hierarchy v3, R11, R13)', () => {
     const row = companion.parentElement!;
     expect(row).toHaveClass('flex', 'items-baseline', 'justify-between');
     expect(row.contains(value)).toBe(true);
-    expect(within(section).getByText('open now')).toHaveClass('text-meta', 'uppercase', 'w-fit');
+    // material pass v2 (move 3): the figure label is an eyebrow (`.eyebrow`: upper case, .12 em, 500)
+    expect(within(section).getByText('open now')).toHaveClass('text-meta', 'eyebrow', 'w-fit');
     // the picture directly under the figure, inside the hero section
     const picture = within(section).getByTestId('picture');
     expect(row.compareDocumentPosition(picture) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();

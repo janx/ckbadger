@@ -1,6 +1,7 @@
 // Consistency round 2026-11-02, lane F (C3): one activity row site-wide. `focusLockHash` draws the
 // participant a page is about first, its address as text (the page is already its page), with its
-// lock tag and a "this address" tag; every other participant is drawn as before. A participant
+// lock kind and, since material pass v2 (move 5), a jade underline instead of a "this address"
+// tag; every other participant is drawn as before. A participant
 // line whose items are all objects of one composition tier says it once, at the end of its items;
 // mixed tiers, or a token / identity on the line, keep one badge per object. jsdom does not lay
 // out, so these assert structure and order.
@@ -88,22 +89,24 @@ describe('focusLockHash: the participant the page is about', () => {
     ).toHaveAttribute('href', `/mainnet/address/${sender.address}`);
   });
 
-  it('tags it with its lock kind and "this address", in the line order of the board', () => {
+  // Material pass v2 (move 5): the "this address" tag is gone — the party a page is about is
+  // underlined jade (`.this-address` on its address text) and says "this address" to a screen
+  // reader only; the lock kind follows as dim small caps, in the line order of the board.
+  it('underlines it jade with its lock kind after it, saying "this address" to a reader only', () => {
     const { container } = render(
       <ActivityRow activity={transfer} focusLockHash={receiver.lockHash!} />
     );
     const [focus, other] = lines(container);
-    expect(roles(focus)).toEqual(['party', 'lock-kind', 'this-address', 'ckb', 'occupied']);
-    const tag = within(focus).getByText('this address');
-    expect(tag).toHaveAttribute('data-role', 'this-address');
-    expect(tag).toHaveClass('text-meta', 'border', 'rounded-[3px]', 'whitespace-nowrap');
-    // Lane F follow-up: the row tag's ghost variant — dashed, in the readable dim ink (was a solid
-    // border in text-text-dim/60, as faint as the old ghost).
-    expect(tag).toHaveAttribute('data-row-tag', 'ghost');
-    expect(tag).toHaveClass('border-dashed', 'text-text-dim');
-    expect(tag).not.toHaveClass('text-text-dim/60');
+    expect(roles(focus)).toEqual(['party', 'lock-kind', 'ckb', 'occupied']);
+    const party = focus.querySelector('[data-role="party"]') as HTMLElement;
+    expect(party).toHaveAttribute('data-this-address', 'true');
+    expect(within(party).getByTitle(receiver.address!)).toHaveClass('this-address');
+    expect(within(party).getByText('this address')).toHaveClass('sr-only');
+    expect(container.querySelector('[data-role="this-address"]')).toBeNull();
+    expect(container.querySelector('[data-row-tag]')).toBeNull();
     // Only the focused line carries it.
     expect(within(other).queryByText('this address')).toBeNull();
+    expect(other.querySelector('[data-role="party"]')).not.toHaveAttribute('data-this-address');
     expect(roles(other)).toEqual(['party', 'lock-kind', 'ckb', 'occupied']);
     expect(within(container).getAllByText('this address')).toHaveLength(1);
   });

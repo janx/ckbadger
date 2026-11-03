@@ -29,10 +29,11 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
 
 /**
  * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"):
- * a #222840 hairline, a 6 px radius, the surface colour, a jade edge along the top
- * (`.neon-edge-top`) and inset scanlines. The transaction pipeline, the tx page's cells diagram,
- * the cell page's byte dump, the DNA gel and the network map sit in it; prose, tables and charts
- * stay unframed.
+ * a #222840 hairline, a 6 px radius, glass (material pass v2, move 2: `.glass` — 72 % opaque over
+ * the night sky, a 1 px highlight on the top edge, a dark line on the bottom edge; no
+ * backdrop-filter, see globals.css), a jade edge along the top (`.neon-edge-top`) and inset
+ * scanlines. The transaction pipeline, the tx page's cells diagram, the cell page's byte dump,
+ * the DNA gel and the network map sit in it; prose, tables and charts stay unframed.
  */
 export function TerminalPanel({
   children,
@@ -44,7 +45,7 @@ export function TerminalPanel({
   ...props
 }: TerminalPanelProps) {
   const variantClasses = {
-    default: 'bg-base-surface border-base-border',
+    default: 'glass border-base-border',
     elevated: 'bg-base-elevated border-base-border',
     inset: 'bg-base-bg border-base-border shadow-glow-inset',
   };
@@ -84,7 +85,8 @@ interface TerminalPanelHeaderProps {
   actions?: ReactNode;
 }
 
-/** The frame's eyebrow: the section mark, then the instrument's name in upper case (12 px). */
+/** The frame's eyebrow: the section mark, then the instrument's name in upper case (12 px,
+ * `.eyebrow`: 500 at .12 em — material pass v2, move 3). */
 const MARK_CLASS: Record<IndicatorStatus, string> = {
   // the mark as it is on a tier-1 h2
   none: 'section-mark',
@@ -116,7 +118,7 @@ export function TerminalPanelHeader({
           data-testid="terminal-panel-mark"
           className={MARK_CLASS[indicator]}
         />
-        <div className="text-text-dim text-small min-w-0 break-words font-mono uppercase tracking-[0.08em]">
+        <div className="eyebrow text-text-dim text-small min-w-0 break-words font-mono">
           {children}
         </div>
       </div>
@@ -178,9 +180,7 @@ export function TerminalDivider({ className, label }: TerminalDividerProps) {
     return (
       <div className={cn('flex items-center gap-3 py-2', className)}>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
-        <span className="text-text-dim text-small font-mono uppercase tracking-widest">
-          {label}
-        </span>
+        <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
         <div className="via-base-border h-px flex-1 bg-gradient-to-r from-transparent to-transparent" />
       </div>
     );
@@ -207,7 +207,8 @@ export function TerminalRow({ children, className, hoverable = true, ...props }:
     <div
       {...props}
       className={cn(
-        'border-base-border/50 border-b px-3 py-2 last:border-b-0',
+        // a row rule is the subtle ink, #1a1f30 (material pass v2, move 6)
+        'border-base-border-subtle border-b px-3 py-2 last:border-b-0',
         hoverable && 'row-scan hover:bg-base-elevated/50 transition-colors',
         className
       )}

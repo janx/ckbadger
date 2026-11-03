@@ -1,7 +1,10 @@
 import type { ComponentType, ReactElement } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
+import { Atmosphere } from '@/components/layout/atmosphere';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { TapOrHoverHintProvider } from '@/components/ui/tap-or-hover-hint';
+import { tintOfPath } from '@/lib/page-tint';
 import { NetworkQueryScope } from '@/components/network-query-scope';
 import { NotFoundPage } from '@/components/not-found-page';
 import { RouteErrorBoundary } from '@/components/route-error-boundary';
@@ -14,15 +17,29 @@ type PageModule<TProps extends object = object> = {
 
 type ParamRecord = Record<string, string | undefined>;
 
+/**
+ * The page root (material pass v2): `data-tint` names the page's class hue for the ambient pools
+ * (lib/page-tint, from the path after the network segment), the atmosphere paints the night sky,
+ * the grain and the CRT layers once for every route, and the tap-or-hover registry lets one hint
+ * per page render; then the network-scoped page and the footer.
+ */
 function AppFrame() {
+  const { network } = useParams();
+  const { pathname } = useLocation();
+  if (network === undefined || !pathname.startsWith(`/${network}`))
+    throw new Error(`AppFrame: ${pathname} is not under the /:network route (${network})`);
+  const path = pathname.slice(network.length + 1) || '/';
   return (
-    <div className="flex min-h-screen flex-col">
-      <div className="flex-1">
-        <NetworkQueryScope>
-          <Outlet />
-        </NetworkQueryScope>
-      </div>
-      <SiteFooter />
+    <div data-tint={tintOfPath(path)} className="flex min-h-screen flex-col">
+      <Atmosphere />
+      <TapOrHoverHintProvider>
+        <div className="flex-1">
+          <NetworkQueryScope>
+            <Outlet />
+          </NetworkQueryScope>
+        </div>
+        <SiteFooter />
+      </TapOrHoverHintProvider>
     </div>
   );
 }

@@ -187,7 +187,9 @@ describe('ListTable row scan (Midnight, continued, move 4)', () => {
     const t = screen.getByRole('table', { name: 'Holdings' });
     const body = Array.from(t.querySelectorAll('tbody tr'));
     expect(body).toHaveLength(2);
-    for (const tr of body) expect(tr).toHaveClass('row-scan', 'border-b', 'border-base-elevated');
+    // material pass v2 (move 6): a row rule is the row-rule ink, #1a1f30 (border-subtle)
+    for (const tr of body)
+      expect(tr).toHaveClass('row-scan', 'border-b', 'border-base-border-subtle');
     expect(t.querySelector('thead tr')).not.toHaveClass('row-scan');
     unmount();
     vi.restoreAllMocks();

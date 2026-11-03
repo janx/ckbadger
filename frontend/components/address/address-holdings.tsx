@@ -209,21 +209,17 @@ export function AddressBalance({ holdings }: { holdings: AddressHoldings }) {
     <section aria-label="Balance" className="min-w-0">
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
         <div className="min-w-0">
-          <span className="text-text-dim text-meta block w-fit uppercase tracking-[0.08em]">
-            balance
-          </span>
+          <span className="eyebrow text-text-dim text-meta block w-fit">balance</span>
           <div data-role="balance-figure" className="mt-1.5 tabular-nums leading-[1.05]">
             {zero ? (
-              <span data-ghost className="text-text-ghost text-entity sm:text-display font-medium">
+              <span data-ghost className="text-text-ghost text-entity sm:text-display">
                 0
               </span>
             ) : (
               // One step smaller below sm (RESPONSIVE_LAYOUT 5), and the fraction may take the
               // next line on a phone rather than push the page wide.
               <>
-                <span className="text-text-bright text-entity sm:text-display font-medium">
-                  {integer}
-                </span>
+                <span className="text-text-bright text-entity sm:text-display">{integer}</span>
                 <wbr />
                 <span className="text-text-dim text-section sm:text-hero">.{decimal}</span>
               </>

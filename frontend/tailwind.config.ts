@@ -10,6 +10,12 @@ export default {
     fontSize: TYPE_SCALE,
     container: {
       center: true,
+      // The page gutter (material pass v2, move 6): 16 px, 24 px from lg. Every `container`
+      // takes it from here; a page adds no `px-*` of its own.
+      padding: {
+        DEFAULT: '1rem',
+        lg: '1.5rem',
+      },
       screens: {
         sm: '640px',
         md: '768px',

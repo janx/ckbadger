@@ -25,6 +25,7 @@ import {
   viewOf,
 } from '@/components/home/section';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
+import { usePhosphor } from '@/hooks/usePhosphor';
 import { api, type ChartResponse, type CkbytesAllocation, type DaoStatistics } from '@/lib/api';
 import { formatCompactSigned } from '@/lib/chart-ticks';
 import {
@@ -197,6 +198,8 @@ function useHighlight() {
 function AllocationReady({ view }: { view: AllocationView }) {
   const { circulating, knowledge, free, daoFree, daoCapacity } = view;
   const { active, handlers, focusHandlers } = useHighlight();
+  // The page's lit figure flares when the served total changes (material pass v2, move 4).
+  const flare = usePhosphor(circulating);
   const pct = (part: bigint) => formatPercent(part, circulating, 2);
   // Geometry follows the unrounded served amounts; Number is used only for CSS layout.
   const width = (part: bigint) => `${(Number(part) / Number(circulating)) * 100}%`;
@@ -216,7 +219,11 @@ function AllocationReady({ view }: { view: AllocationView }) {
     <div className="flex flex-col gap-3.5">
       <div
         data-testid="ckbytes-circulating"
-        className="text-text-bright text-index sm:text-display font-medium tabular-nums tracking-[-0.01em] [overflow-wrap:anywhere]"
+        // 300 from 640 up (.sm\:text-display, globals.css move 3); the halo is move 1b's
+        className={cn(
+          'text-text-bright text-index sm:text-display tabular-nums tracking-[-0.01em] [overflow-wrap:anywhere]',
+          flare
+        )}
       >
         {total.integer}
         <span className="text-text-dim">.{total.decimal}</span>
@@ -481,6 +488,7 @@ function DaoBlock() {
 
 function DaoFigures({ view }: { view: DaoView }) {
   const deposited = formatCkbAmount(view.deposited);
+  const flare = usePhosphor(view.deposited);
   const change = view.change;
   const changeTone =
     change === null || change === BigInt(0)
@@ -492,7 +500,10 @@ function DaoFigures({ view }: { view: DaoView }) {
     <>
       <div
         data-testid="home-dao-deposited"
-        className="text-text-bright text-hero font-medium tabular-nums [overflow-wrap:anywhere]"
+        className={cn(
+          'text-text-bright text-hero font-medium tabular-nums [overflow-wrap:anywhere]',
+          flare
+        )}
       >
         {deposited.integer}
         <span className="text-text-dim">.{deposited.decimal}</span>

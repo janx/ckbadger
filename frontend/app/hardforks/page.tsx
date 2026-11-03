@@ -278,9 +278,9 @@ export default function HardforksPage() {
       ? { data, span, mirana, meepo, lanes: lanes! }
       : null;
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 pb-16 pt-6">
+      <main className="container mx-auto pb-16 pt-6">
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13): the hero is tier 1's first section — the title row, one sentence,
               then the VM timeline as the page's display element (it has no defining number). */}

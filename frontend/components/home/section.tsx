@@ -3,8 +3,8 @@
 import type { ReactNode } from 'react';
 import type { ChartBody } from '@/components/home/mini-chart';
 
-/** A homepage section heading: unframed, 15 px / 500, sentence case. */
-export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-section font-medium';
+/** A homepage section heading: unframed, 17 px / 600 (h2.text-section), sentence case. */
+export const SECTION_HEADING_CLASS = 'text-text-bright m-0 text-section';
 
 /** A heading row that states the section's one hint at its right (consistency C10). */
 export const SECTION_HEAD_CLASS = 'flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1';

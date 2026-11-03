@@ -9,8 +9,7 @@ import { getDerivePendingQueryError, getStoreCatchingUpQueryMessage } from '@/li
 // Round 3 lane F: the two transient store states the API reports as 503 (contracts.md S, L0).
 // Pages keep their loading state while these retry; these banners say what is being waited for.
 
-const BANNER_CLASS =
-  'border-emphasis-dim/60 bg-base-surface/95 text-text-bright border-b px-4 py-2';
+const BANNER_CLASS = 'border-emphasis-dim/60 bg-base-surface/95 text-text-bright border-b py-2';
 
 /** What each indexer-derived aggregate is, in the page's words. */
 const AGGREGATE_NAMES: Record<DeriveProgress['aggregate'], string> = {

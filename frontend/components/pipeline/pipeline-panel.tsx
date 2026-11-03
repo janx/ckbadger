@@ -17,10 +17,12 @@ import {
   TerminalPanelFooter,
   TerminalPanelHeader,
 } from '@/components/ui/terminal-panel';
+import { usePhosphor } from '@/hooks/usePhosphor';
 import { usePipelineSnapshot } from '@/hooks/usePipelineSnapshot';
 import { usePipelineHoverStore } from '@/hooks/usePipelineHoverStore';
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion';
 import type { PipelineSnapshot } from '@/lib/api';
+import { cn } from '@/lib/utils';
 import type { MotionCtx, MotionView } from '@/lib/pipeline/motion';
 import { diffSnapshots, type Transition } from '@/lib/pipeline/transitions';
 import { STAGE_BASE, mixColor, tok } from '@/lib/pipeline/encoding';
@@ -99,23 +101,36 @@ function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null 
   return width;
 }
 
-function Stat({ label, value, tone }: { label: string; value: ReactNode; tone: string }) {
+function Stat({
+  label,
+  value,
+  tone,
+  className,
+}: {
+  label: string;
+  value: ReactNode;
+  tone: string;
+  className?: string;
+}) {
   return (
     <span className="flex items-baseline gap-1.5 font-mono">
-      <span className="text-text-dim text-small uppercase tracking-wider">{label}</span>
-      <span className={`text-body font-semibold tabular-nums ${tone}`}>{value}</span>
+      <span className="eyebrow text-text-dim text-small">{label}</span>
+      <span className={cn(`text-body font-semibold tabular-nums ${tone}`, className)}>{value}</span>
     </span>
   );
 }
 
 function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined }) {
-  // The pool and NEXT counts are on the canvas itself; the header keeps only the tip.
+  // The pool and NEXT counts are on the canvas itself; the header keeps only the tip, which
+  // flares when a block lands (material pass v2, move 4).
+  const flare = usePhosphor(snapshot?.tip.number);
   return (
     <div data-testid="pipeline-stats" className="flex flex-wrap gap-x-[18px] gap-y-1">
       <Stat
         label="Tip"
         value={snapshot ? <BlockLink number={snapshot.tip.number} /> : '—'}
         tone="text-text-bright"
+        className={flare}
       />
     </div>
   );

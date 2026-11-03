@@ -106,9 +106,9 @@ export default function DaoDepositorsPage() {
       ? { from: first.anchor.blockNumber, to: page.anchor.blockNumber }
       : null;
   return (
-    <div className="bg-base-bg min-h-screen">
+    <div className="min-h-screen">
       <Header />
-      <main className="container mx-auto px-4 pb-16 pt-6">
+      <main className="container mx-auto pb-16 pt-6">
         <DetailLayout
           kind="index"
           title="Nervos DAO depositors"

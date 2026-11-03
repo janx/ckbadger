@@ -696,7 +696,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
-              <TerminalPanelContent padding="none" className="overflow-x-auto px-4 py-3">
+              {/* The dump itself is a well inside the glass (material pass v2, move 2). */}
+              <TerminalPanelContent padding="none" className="well m-2 overflow-x-auto px-4 py-3">
                 {molecule && (
                   <div aria-label="CellOutput byte map">
                     <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">

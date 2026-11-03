@@ -12,10 +12,7 @@ export function CkbFigure({ shannons }: { shannons: bigint }) {
   if (shannons < BigInt(0)) throw new Error(`Script hero figure: negative amount ${shannons}`);
   const parts = splitCkbAmount(shannons);
   return (
-    <div
-      data-role="figure-amount"
-      className="text-text-bright text-index sm:text-display font-medium"
-    >
+    <div data-role="figure-amount" className="text-text-bright text-index sm:text-display">
       <span className="whitespace-nowrap font-mono tabular-nums">
         {parts.integer}
         <span className="text-hero text-text font-normal">
@@ -44,7 +41,7 @@ export function HeroFigure({
 }) {
   return (
     <div data-role="figure" className="mt-9 min-w-0">
-      <div className="text-text-dim text-meta mb-1.5 uppercase tracking-[0.08em]">{label}</div>
+      <div className="eyebrow text-text-dim text-meta mb-1.5">{label}</div>
       <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
         <CkbFigure shannons={shannons} />
         <p className="text-body text-text-dim">{companion}</p>

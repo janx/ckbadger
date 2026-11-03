@@ -1,12 +1,13 @@
 'use client';
 
-import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import { usePhosphor } from '@/hooks/usePhosphor';
 import { useRealtimeStore } from '@/hooks/useRealtimeStore';
 import { api, type NetworkStats } from '@/lib/api';
 import { parseEpoch, type EpochInfo } from '@/lib/epoch';
 import { formatBlockNumber } from '@/lib/format-block';
+import { cn } from '@/lib/utils';
 
 /**
  * The chain vitals strip under the header, on every page: block, epoch progress, block time, hash
@@ -67,22 +68,24 @@ const LABEL = 'text-text-dim text-meta md:text-small';
 const VALUE =
   'text-text-bright group-hover:text-jade text-body font-medium tabular-nums transition-colors';
 
+/** A vital: its label and its value, which flares when it changes (material pass v2, move 4). */
 function Vital({
   label,
   href,
   layout,
-  children,
+  value,
 }: {
   label: string;
   href?: string;
   /** `block` is line 1's inline pair; a mining figure stacks below 640 px. */
   layout: 'block' | 'mining';
-  children: ReactNode;
+  value: string;
 }) {
+  const flare = usePhosphor(value);
   const body = (
     <>
       <span className={LABEL}>{label}</span>
-      <span className={VALUE}>{children}</span>
+      <span className={cn(VALUE, flare)}>{value}</span>
     </>
   );
   const cls = `group ${layout === 'block' ? `${INLINE} ${PLACE.block}` : STACKED}`;
@@ -102,12 +105,7 @@ const DOT_BOX = 'h-[7px] w-[7px] shrink-0 self-center rounded-full';
  * ("8.43 s", TX-05). Anything else is refused, not reshaped.
  */
 function BlockTime({ value }: { value: string | null }) {
-  if (value === null)
-    return (
-      <Vital label="Block time" layout="mining">
-        —
-      </Vital>
-    );
+  if (value === null) return <Vital label="Block time" layout="mining" value="—" />;
   const seconds = /^(\d+(?:\.\d+)?)s$/.exec(value);
   if (!seconds)
     return (
@@ -116,27 +114,32 @@ function BlockTime({ value }: { value: string | null }) {
         <span className="text-rouge text-small">{`block time ${JSON.stringify(value)} is not <seconds>s`}</span>
       </div>
     );
-  return (
-    <Vital label="Block time" layout="mining">
-      {seconds[1]} s
-    </Vital>
-  );
+  return <Vital label="Block time" layout="mining" value={`${seconds[1]} s`} />;
 }
 
 function Vitals({ stats }: { stats: NetworkStats }) {
   return (
     <>
-      <Vital label="Block" href={`/blocks/${stats.latestBlock}`} layout="block">
-        {formatBlockNumber(stats.latestBlock)}
-      </Vital>
+      <Vital
+        label="Block"
+        href={`/blocks/${stats.latestBlock}`}
+        layout="block"
+        value={formatBlockNumber(stats.latestBlock)}
+      />
       <EpochVital raw={stats.epoch} estimatedLeft={stats.estimatedEpochTime} />
       <BlockTime value={stats.avgBlockTime} />
-      <Vital label="Hash rate" href="/charts/hash-rate" layout="mining">
-        {stats.hashRate ?? '—'}
-      </Vital>
-      <Vital label="Difficulty" href="/charts/difficulty" layout="mining">
-        {stats.difficulty}
-      </Vital>
+      <Vital
+        label="Hash rate"
+        href="/charts/hash-rate"
+        layout="mining"
+        value={stats.hashRate ?? '—'}
+      />
+      <Vital
+        label="Difficulty"
+        href="/charts/difficulty"
+        layout="mining"
+        value={stats.difficulty}
+      />
     </>
   );
 }
@@ -156,6 +159,7 @@ function readEpoch(raw: string): { epoch: EpochInfo } | { error: string } {
  */
 function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string | null }) {
   const read = readEpoch(raw);
+  const flare = usePhosphor('error' in read ? null : read.epoch.number);
   if ('error' in read) {
     return (
       <div
@@ -180,7 +184,7 @@ function EpochVital({ raw, estimatedLeft }: { raw: string; estimatedLeft: string
       className={`group flex items-center gap-x-1.5 whitespace-nowrap md:gap-x-2 ${PLACE.line}`}
     >
       <span className={LABEL}>Epoch</span>
-      <span className={VALUE}>{epoch.number.toLocaleString('en-US')}</span>
+      <span className={cn(VALUE, flare)}>{epoch.number.toLocaleString('en-US')}</span>
       <span
         aria-hidden="true"
         className="bg-base-border flex h-1 min-w-12 flex-[1_1_48px] overflow-hidden rounded-sm md:w-14 md:flex-none"

@@ -104,7 +104,7 @@ export function Header() {
         ref={headerRef}
         className="border-base-border-subtle hairline-tube-header bg-base-bg/95 sticky top-0 z-40 overflow-visible border-b backdrop-blur-sm md:static md:z-auto"
       >
-        <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 px-4 md:gap-8 lg:min-h-[60px]">
+        <div className="container relative mx-auto flex min-h-[52px] items-center gap-2 md:gap-8 lg:min-h-[60px]">
           <Logo />
           <div data-testid="header-logo-notch" aria-hidden="true" className={LOGO_NOTCH_CLASS} />
 
@@ -186,7 +186,7 @@ export function Header() {
 
         {isMenuOpen && (
           <div className="border-base-border bg-base-bg/95 absolute z-50 w-full border-t shadow-xl backdrop-blur-sm md:hidden">
-            <nav className="container mx-auto px-4 py-4">
+            <nav className="container mx-auto py-4">
               <div className="flex flex-col gap-1">
                 <Link
                   href="/"
@@ -254,8 +254,11 @@ export function Header() {
 
         <CommandPalette />
       </header>
-      <div ref={stripRef} className="border-base-border-subtle mb-4 border-b bg-[#0a0c12] md:mb-0">
-        <div className="container mx-auto flex px-4">
+      <div
+        ref={stripRef}
+        className="border-base-border-subtle mb-4 border-b bg-[rgba(10,12,18,0.8)] md:mb-0"
+      >
+        <div className="container mx-auto flex">
           <div
             data-testid="vitals-logo-notch"
             aria-hidden="true"

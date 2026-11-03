@@ -178,7 +178,7 @@ function ledeSentence(channel: FiberChannelDetail): string {
 function CapacityFigure({ channel }: { channel: FiberChannelDetail }) {
   const parts = splitCkbAmount(parseShannons(channel.capacity, `${channel.channelId} capacity`));
   return (
-    <div data-role="capacity" className="text-text-bright text-index sm:text-display font-medium">
+    <div data-role="capacity" className="text-text-bright text-index sm:text-display">
       <span className="whitespace-nowrap tabular-nums">
         {parts.integer}
         <span className="text-hero text-text-dim font-normal">
@@ -454,9 +454,7 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           </p>
           <p className="text-text-dim text-body mt-1.5 max-w-[560px]">{ledeSentence(channel)}</p>
           <div data-role="figure" className="mt-9 min-w-0">
-            <div className="text-text-dim text-meta mb-1.5 w-fit uppercase tracking-[0.08em]">
-              capacity
-            </div>
+            <div className="eyebrow text-text-dim text-meta mb-1.5 w-fit">capacity</div>
             <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
               <CapacityFigure channel={channel} />
               <p data-testid="channel-pair" className="text-body min-w-0">
