@@ -136,7 +136,7 @@ export function ParticipantRefView({
       </span>
       <span
         className={cn(
-          'text-text-dim/70 text-meta font-mono uppercase',
+          'eyebrow text-text-dim/70 text-meta font-mono',
           !compact && 'border-border rounded border px-1'
         )}
       >

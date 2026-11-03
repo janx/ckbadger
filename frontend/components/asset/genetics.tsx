@@ -132,8 +132,9 @@ export function DnaParagraph({
 }) {
   if (evidence.dnaHex === null) return null;
   const { bytes, pointer } = dnaWords(evidence, subject, tier, description);
+  // Set in the object page's "in words" Prose: the paragraph carries no classes of its own.
   return (
-    <p className="text-text-dim text-body">
+    <p>
       The object’s traits are not stored as text. It carries {bytes} bytes of DNA, and the
       collection’s decoder reads each gene to express a trait.
       {pointer

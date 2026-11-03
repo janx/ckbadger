@@ -9,6 +9,7 @@ import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { AlignedBar, ScaleHeader } from '@/components/ui/aligned-bar';
@@ -749,7 +750,9 @@ export default function ScriptsPage() {
           <div id="evidence" className="scroll-mt-4">
             <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
               <DetailSection title="How scripts work">
-                <p className="text-body max-w-[640px]">{LEAD}</p>
+                <Prose>
+                  <p>{LEAD}</p>
+                </Prose>
               </DetailSection>
               {summary.data?.classSummary && summary.data.roleCounts && (
                 <ScriptCodeClassSummary

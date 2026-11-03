@@ -338,12 +338,16 @@ describe('DaoBoard', () => {
       'So a deposit keeps its share of all CKB through secondary issuance, while free CKB outside the DAO receives nothing.'
     );
     expect(works).not.toHaveTextContent(/interest|earned/i);
-    // R1 roles: the explanation and the protocol notes are prose (body 13 px, as the v3 board).
+    // R1 roles: the explanation and the protocol notes are prose. Material pass v2 leftovers: set
+    // in the shared tier-2 Prose piece (14 px on a 1.7 line, 64 characters, dim; .prose-tier2 in
+    // globals.css) instead of each paragraph's own body / dim classes.
     const [concept, notes] = Array.from(works.querySelectorAll('p'));
     expect(concept).toHaveTextContent(/^CKB locked in the Nervos DAO/);
-    expect(concept).toHaveClass('text-body', 'text-text-dim');
+    expect(concept.closest('[data-prose]')).toHaveClass('prose-tier2');
+    expect(concept).not.toHaveClass('text-body', 'text-text-dim');
     expect(notes).toHaveTextContent(/Epoch-lock readiness/);
-    expect(notes).toHaveClass('text-body');
+    expect(notes.closest('[data-prose]')).toBe(concept.closest('[data-prose]'));
+    expect(notes).not.toHaveClass('text-body');
   });
 
   // Material pass v2 (7): the explanation is four one-topic paragraphs with the two mechanisms
@@ -355,7 +359,14 @@ describe('DaoBoard', () => {
       .closest('section')!;
     const paragraphs = Array.from(works.querySelectorAll('p'));
     expect(paragraphs).toHaveLength(4);
-    for (const p of paragraphs) expect(p).toHaveClass('text-body', 'text-text-dim', 'max-w-[64ch]');
+    // Material pass v2 leftovers: the 64-character measure, the size and the ink come from the one
+    // tier-2 Prose piece the four sit in, not from classes on each paragraph.
+    const prose = works.querySelector('[data-prose]')!;
+    expect(prose).toHaveClass('prose-tier2');
+    for (const p of paragraphs) {
+      expect(prose.contains(p)).toBe(true);
+      expect(p).not.toHaveClass('text-body', 'text-text-dim', 'max-w-[64ch]');
+    }
     expect(paragraphs.map((p) => p.textContent!.slice(0, 24))).toEqual([
       'CKB locked in the Nervos',
       'A deposit runs in cycles',

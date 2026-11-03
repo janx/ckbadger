@@ -16,6 +16,7 @@ import {
   ObjectGeneticsEvidence,
   ObjectGeneticsView,
 } from '@/components/asset/genetics';
+import { Prose } from '@/components/ui/prose';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { ObjectMedia } from '@/components/asset/object-media';
 import {
@@ -225,9 +226,9 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
   // Hierarchy v3 (F4): every sentence that left tier 1, in full; it heads the DNA column.
   const words = (history || coll || genetics.data) && (
     <DetailSection title="This object, in words">
-      <div className="flex flex-col gap-3">
+      <Prose>
         {(history || coll) && (
-          <p className="text-text-dim text-body">
+          <p>
             {history && history.length > 0 && (
               <span title={itemLifeAges(history, now)}>{itemLifeSentence(history, now)}</span>
             )}
@@ -247,10 +248,8 @@ export function SporeDetailView({ object, error }: SporeDetailViewProps) {
             description={cluster.data?.description}
           />
         )}
-        {history && lockFootnote(history, 'object') && (
-          <p className="text-text-dim text-body">{lockFootnote(history, 'object')}</p>
-        )}
-      </div>
+        {history && lockFootnote(history, 'object') && <p>{lockFootnote(history, 'object')}</p>}
+      </Prose>
     </DetailSection>
   );
   return (

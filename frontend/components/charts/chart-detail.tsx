@@ -6,6 +6,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { Chart, type ChartMarker, type ChartPoint } from '@/components/ui/chart';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -210,7 +211,9 @@ function DetailBody({
       <div className="text-small grid min-w-0 gap-4 md:grid-cols-2">
         <div className="border-base-border min-w-0 border-t pt-3">
           <div className="text-text-dim mb-2">Calculation scope</div>
-          <p className="text-text-bright max-w-[62ch] leading-6">{description.overview}</p>
+          <Prose>
+            <p>{description.overview}</p>
+          </Prose>
           <ul className="text-text-dim mt-3 space-y-2">
             {description.legendItems.map((item) => (
               <li key={item.label}>
@@ -221,10 +224,12 @@ function DetailBody({
         </div>
         <div className="border-base-border min-w-0 border-t pt-3">
           <div className="text-text-dim mb-2">Evidence path</div>
-          <p className="leading-6">
-            Values come from the local index of canonical chain {definition.source}. The chart
-            returns observations at its own recorded dates or buckets; gaps are not interpolated.
-          </p>
+          <Prose>
+            <p>
+              Values come from the local index of canonical chain {definition.source}. The chart
+              returns observations at its own recorded dates or buckets; gaps are not interpolated.
+            </p>
+          </Prose>
           <div className="mt-3 flex flex-col gap-1">
             {/* R-10 (CH-27): a dated block chart names the blocks of its latest day exactly. */}
             {definition.source === 'blocks' &&

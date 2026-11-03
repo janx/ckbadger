@@ -30,9 +30,7 @@ export function ObjectCollectionStatCards({
     <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <TerminalPanel variant="inset">
         <TerminalPanelContent className="space-y-2">
-          <div className="text-text-dim text-small font-mono uppercase tracking-wider">
-            {totalLabel}
-          </div>
+          <div className="eyebrow text-text-dim text-small font-mono">{totalLabel}</div>
           <div className="text-warning text-index font-semibold tabular-nums">
             {formatNumber(totalCount)}
           </div>
@@ -43,9 +41,7 @@ export function ObjectCollectionStatCards({
       {showLiveCount && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-dim text-small font-mono uppercase tracking-wider">
-              Live Items
-            </div>
+            <div className="eyebrow text-text-dim text-small font-mono">Live Items</div>
             <div className="text-gold text-index font-semibold tabular-nums">
               {formatNumber(liveCount)}
             </div>
@@ -57,9 +53,7 @@ export function ObjectCollectionStatCards({
       {compositionTier && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-dim text-small font-mono uppercase tracking-wider">
-              Storage Integrity
-            </div>
+            <div className="eyebrow text-text-dim text-small font-mono">Storage Integrity</div>
             <div className="text-body flex items-center gap-1 font-semibold">
               <span className={compositionTierCardStyle(compositionTier).text}>
                 {formatCompositionTier(compositionTier)}
@@ -78,9 +72,7 @@ export function ObjectCollectionStatCards({
       {createdAtBlock !== undefined && (
         <TerminalPanel variant="inset">
           <TerminalPanelContent className="space-y-2">
-            <div className="text-text-dim text-small font-mono uppercase tracking-wider">
-              Created At
-            </div>
+            <div className="eyebrow text-text-dim text-small font-mono">Created At</div>
             <Link
               href={`/blocks/${createdAtBlock}`}
               className="text-gold text-hero font-mono hover:underline"

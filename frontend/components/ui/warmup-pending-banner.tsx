@@ -19,7 +19,7 @@ export function WarmupPendingBanner() {
   return (
     <div className="border-emphasis-dim/60 bg-base-surface/95 text-text-bright border-b py-2">
       <div className="text-small container mx-auto flex items-center gap-3 font-mono">
-        <span className="text-emphasis uppercase tracking-wider">Warmup</span>
+        <span className="eyebrow text-emphasis">Warmup</span>
         <span>{WARMUP_PENDING_BANNER_TEXT}</span>
         <span className="text-text-dim truncate">{detail}</span>
       </div>

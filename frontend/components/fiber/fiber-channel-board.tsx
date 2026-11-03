@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { ExactCkb } from '@/components/activity-event-row';
 import { AssetAmount } from '@/components/asset/inventory-table';
+import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { FiberSplitBar } from '@/components/fiber/fiber-split-bar';
 import { FiberChannelTimeline } from '@/components/fiber/fiber-channel-timeline';
@@ -131,7 +132,7 @@ function Summary({
           ? `${lifetime} later one side closed it without a joint signature: the commitment carries the last agreed split, and it can be paid out after a wait of ${delay}.`
           : `${lifetime} later the channel was closed without a joint signature: the commitment carried the last agreed split, and after a wait of ${delay} the settlement paid it out.`;
   return (
-    <p data-testid="channel-summary" className="text-text-dim text-body">
+    <p data-testid="channel-summary">
       {putIn.length > 0 && (
         <>
           <PartyLink party={putIn[0].party} /> put {ckb(putIn[0].net)} net into the opening
@@ -415,10 +416,10 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
   // Tier 2 (F2): every sentence that left tier 1, beside the lock evidence when it has loaded.
   const words = (
     <DetailSection title="The channel, in words">
-      <div className="flex flex-col gap-3">
+      <Prose>
         <Summary channel={channel} evidence={evidence} />
         {(channel.state === 'forceClosed' || channel.state === 'settled') && (
-          <p className="text-text-dim text-body">
+          <p>
             A force close moves the funding cell to a commitment lock with a wait of{' '}
             {epochDelayWords(
               required(channel.delayEpochDecoded, 'a decoded delay', channel.channelId)
@@ -427,14 +428,14 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
           </p>
         )}
         {atOpen && (
-          <p className="text-text-dim text-body">
+          <p>
             The chain never sees a Fiber payment, only the split when the channel opens and the
             split when it closes.
             {atClose &&
               ' Both splits include fees, and the chain does not say which side paid them, so the amount that changed sides is not shown.'}
           </p>
         )}
-      </div>
+      </Prose>
     </DetailSection>
   );
   return (

@@ -389,9 +389,7 @@ export function CommandPalette() {
         ) : (
           <>
             <div className="border-base-border border-b px-4 py-3">
-              <h2 className="text-text-bright text-body font-mono uppercase tracking-wide">
-                Keyboard Shortcuts
-              </h2>
+              <h2 className="eyebrow text-text-bright text-body font-mono">Keyboard Shortcuts</h2>
             </div>
 
             <div className="max-h-[360px] overflow-auto p-2">

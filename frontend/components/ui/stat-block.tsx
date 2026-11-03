@@ -119,13 +119,7 @@ export function StatBlock({
 
   return (
     <div className={cn('flex min-w-0 flex-col', config.gap, className)}>
-      <div
-        className={cn(
-          'text-text-dim font-mono uppercase tracking-wider',
-          config.label,
-          labelClassName
-        )}
-      >
+      <div className={cn('eyebrow text-text-dim font-mono', config.label, labelClassName)}>
         {label}
       </div>
 
@@ -223,7 +217,7 @@ export function MiniStat({ label, value, color = 'dim', className }: MiniStatPro
 
   return (
     <div className={cn('flex items-center justify-between gap-4', className)}>
-      <span className="text-text-dim text-small font-mono uppercase tracking-wide">{label}</span>
+      <span className="eyebrow text-text-dim text-small font-mono">{label}</span>
       <span className={cn('text-body font-mono tabular-nums', miniColorClasses[color])}>
         {value}
       </span>

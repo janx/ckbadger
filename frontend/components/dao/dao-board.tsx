@@ -25,6 +25,7 @@ import { useElementWidth } from '@/hooks/useElementWidth';
 import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
 import { ConcentrationBar } from '@/components/ui/concentration-bar';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
+import { Prose } from '@/components/ui/prose';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { ReadoutRow } from '@/components/ui/readout-row';
 
@@ -1297,9 +1298,10 @@ function HowItWorks({
     <DetailSection title="How the Nervos DAO works">
       {/* R1 roles: the explanation and the protocol notes are prose (body, as the v3 board).
           Material pass v2 (7): the former two paragraphs are four, one topic each, and the two
-          mechanisms are drawn as tiles between them; every sentence is kept, in its order. */}
-      <div className="flex flex-col">
-        <p className="text-text-dim text-body max-w-[64ch]">
+          mechanisms are drawn as tiles between them; every sentence is kept, in its order. Set in
+          the tier-2 Prose piece (material pass v2 leftovers): 14 px on a 1.7 line, 64 characters. */}
+      <Prose className="flex flex-col">
+        <p>
           CKB locked in the Nervos DAO keeps its share of the supply. Secondary issuance, 1.344
           billion CKB a year, is split by how CKB is used: depositors are compensated with the share
           their deposits make up, miners get the share that is occupied, and the rest is burnt.
@@ -1313,7 +1315,7 @@ function HowItWorks({
         <IssuanceSplit />
         {/* Hierarchy v3 (V7): how every block splits its issuance, moved from tier 1. */}
         <CapacityUse statistics={statistics} />
-        <p className="text-text-dim text-body mt-3.5 max-w-[64ch]">
+        <p className="mt-3.5">
           A deposit runs in cycles of 180 epochs, about 30 days, counted from the epoch it was made.
           In &ldquo;When deposits can leave&rdquo;, each bar is the CKB whose current cycle ends
           that day: six exact epochs from the indexed tip, epoch ranges rather than predicted
@@ -1321,21 +1323,21 @@ function HowItWorks({
           the required input, headers, witnesses and script execution still apply.
         </p>
         <DepositLife />
-        <p className="text-text-dim text-body mt-3.5 max-w-[64ch]">
+        <p className="mt-3.5">
           Protocol occupied (U) includes the genesis virtual occupied baseline; it is not the real
           occupied size of live cells. The miners&apos; share is s × U ÷ C of each block&apos;s
           secondary issuance s, paid in cellbases; the depositors&apos; share accrues via AR and is
           paid out at withdrawals. No cell can ever claim the burnt share. A hardfork could only put
           future secondary issuance to use; what is burnt stays burnt.
         </p>
-        <p className="text-text-dim text-body mt-3.5 max-w-[64ch]">
+        <p>
           Estimated APC is at today&apos;s issuance and deposits; &ldquo;Compensation, last 365
           days&rdquo; is on free capacity, from the header&apos;s AR. Statistics are exact to the
           shannon at block <BlockLink number={statistics.tipBlockNumber} />; the indexed epoch is{' '}
           {evidence.tipEpoch.display}. &ldquo;Recent DAO activity&rdquo; lists deposits, withdrawal
           requests and withdrawals, newest first.
         </p>
-      </div>
+      </Prose>
       <Link
         href={`/blocks/${statistics.tipBlockNumber}`}
         className="text-text hover:text-text-bright text-small mt-2.5 inline-block hover:underline"

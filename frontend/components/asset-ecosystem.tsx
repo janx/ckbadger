@@ -45,7 +45,7 @@ export function AssetEcosystem() {
       <TerminalPanelContent padding="md">
         {/* Top Tokens */}
         <div className="mb-4">
-          <div className="text-text-dim text-meta mb-2 uppercase tracking-wider">Top Tokens</div>
+          <div className="eyebrow text-text-dim text-meta mb-2">Top Tokens</div>
           {isLoading ? (
             <div className="space-y-2">
               {Array.from({ length: 3 }, (_, i) => (
@@ -73,9 +73,7 @@ export function AssetEcosystem() {
 
         {/* Capacity Breakdown */}
         <div>
-          <div className="text-text-dim text-meta mb-2 uppercase tracking-wider">
-            Capacity Breakdown
-          </div>
+          <div className="eyebrow text-text-dim text-meta mb-2">Capacity Breakdown</div>
           {isLoading ? (
             <div className="bg-base-elevated h-3 w-full animate-pulse rounded-full" />
           ) : (

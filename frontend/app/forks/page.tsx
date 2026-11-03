@@ -5,6 +5,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
@@ -518,15 +519,15 @@ export default function ForksPage() {
           <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
             <div className="min-w-0">
               <DetailSection title="How forks are counted">
-                <div className="flex flex-col gap-3">
-                  <p className="text-text-dim text-body">
+                <Prose>
+                  <p>
                     Two miners sometimes find a block at the same height, a fraction of a second
                     apart. The chain keeps one. The other is not lost: a later block includes it as
                     an uncle, and CKB counts uncles to measure how often this happens and set the
                     difficulty, aiming at one in 40 blocks.
                   </p>
                   {data && data.days.length > 0 && (
-                    <p className="text-text-dim text-body">
+                    <p>
                       The chain recorded {formatCount(data.unclesInWindow, 'uncle')} in these{' '}
                       {formatCount(data.days.length, 'day')}; this node switched branches{' '}
                       {formatCount(data.nodeSwitchesInWindow, 'time')} in the same days. It only
@@ -535,23 +536,25 @@ export default function ForksPage() {
                       recount.
                     </p>
                   )}
-                </div>
+                </Prose>
               </DetailSection>
             </div>
             <div className="min-w-0 space-y-8">
               <DetailSection title="How the chart is drawn">
-                <div className="flex flex-col gap-3">
-                  <p className="text-text-dim text-body">
+                <Prose>
+                  <p>
                     In the chart each grey bar is a day&apos;s uncles on chain and the jade inside
                     it this node&apos;s branch switches that day; point at a day, or focus the chart
                     and use ← → to step through the days.
                   </p>
-                  {data && <p className="text-text-dim text-body">Days: {data.scope}.</p>}
-                </div>
+                  {data && <p>Days: {data.scope}.</p>}
+                </Prose>
               </DetailSection>
               {competing && (
                 <DetailSection title="This node’s branch switches, compared">
-                  <p className="text-text-dim text-body">{competing}</p>
+                  <Prose>
+                    <p>{competing}</p>
+                  </Prose>
                 </DetailSection>
               )}
             </div>

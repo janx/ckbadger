@@ -40,10 +40,9 @@ describe('every #N block height goes through formatBlockNumber', () => {
   const blockish =
     /block|uncle\w*\.number|tip\w*\.number|includedBy\.number|canonicalAtHeight\.number|pays\.number|arc\.(from|to)|\bdbTip|\bchainTip|\bforkPoint|toLocaleString|fmtInt|formatNumber/i;
 
-  // `#8,234` on the (unused) hero stat row is an epoch number, not a block height.
-  const notBlockHeights = new Set([
-    'components/hero-stat-row.tsx #{BigInt(match[1]).toLocaleString()}',
-  ]);
+  // Material pass v2 leftovers: the unused hero stat row (whose `#8,234` was an epoch number) is
+  // deleted, so nothing is excepted; a new exception must say which non-height it is.
+  const notBlockHeights = new Set<string>([]);
 
   it('finds no raw or ad-hoc formatted block height after a "#"', () => {
     const offenders: string[] = [];

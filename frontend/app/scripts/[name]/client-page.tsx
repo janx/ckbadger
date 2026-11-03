@@ -6,7 +6,7 @@ import Link from '@/components/ui/link';
 import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
-import { Capacity } from '@/components/ui/capacity';
+import { ExactCkb } from '@/components/activity-event-row';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
@@ -49,11 +49,16 @@ function CellOccupiedValue({ cell }: { cell: Cell }) {
       <span
         title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
       >
-        <Capacity value={cell.virtualCommonKnowledgeSize} />
+        <ExactCkb
+          shannons={BigInt(cell.virtualCommonKnowledgeSize)}
+          signed={false}
+          tone="plain"
+          wrap
+        />
       </span>
     );
   }
-  return <Capacity value={cell.commonKnowledgeSize} />;
+  return <ExactCkb shannons={BigInt(cell.commonKnowledgeSize)} signed={false} tone="plain" wrap />;
 }
 
 function CellOwner({ cell }: { cell: Cell }) {
@@ -1558,7 +1563,15 @@ export default function ScriptDetailPage({
                           minWidth: 120,
                           width: '11%',
                           numeric: true,
-                          render: (cell) => <Capacity value={cell.capacity} />,
+                          // Material pass v2 leftovers: the shared exact figure (ink, dim unit), not gold.
+                          render: (cell) => (
+                            <ExactCkb
+                              shannons={BigInt(cell.capacity)}
+                              signed={false}
+                              tone="plain"
+                              wrap
+                            />
+                          ),
                         },
                         {
                           key: 'knowledge',
@@ -1604,8 +1617,12 @@ export default function ScriptDetailPage({
                             Type: <CellTypeReference cell={cell} />
                           </div>
                           <div>
-                            <Capacity value={cell.capacity} /> · occupied{' '}
-                            <CellOccupiedValue cell={cell} />
+                            <ExactCkb
+                              shannons={BigInt(cell.capacity)}
+                              signed={false}
+                              tone="plain"
+                            />{' '}
+                            · occupied <CellOccupiedValue cell={cell} />
                           </div>
                           <div>
                             Created{' '}

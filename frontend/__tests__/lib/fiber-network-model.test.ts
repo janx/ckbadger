@@ -126,6 +126,80 @@ describe('fiberGraphModel laid out at the measured width (R4, responsive V1)', (
     }
   });
 
+  // Material pass v2 leftovers: the picture is framed and clipped to its svg, so the layout's
+  // contract — nothing reaches past the width, islands included — is pinned at the desktop
+  // column too, and on islands laid out by their parties' reach.
+  it('keeps every party, ring and label inside a 1200 px canvas, the islands strip included', () => {
+    const model = fiberGraphModel(mainnet as FiberNetwork, 1200);
+    expect(model.width).toBe(1200);
+    expect(model.sideX).toBe(1200 - FIBER_GRAPH.side);
+    for (const n of model.nodes) {
+      expect(n.x - reach(n)).toBeGreaterThanOrEqual(0);
+      expect(n.x + reach(n)).toBeLessThanOrEqual(1200);
+      expect(n.y - n.r - 4).toBeGreaterThanOrEqual(0);
+      expect(n.y + n.r + 18).toBeLessThanOrEqual(model.height);
+    }
+    const islands = model.nodes.filter((n) => n.side);
+    expect(islands.length).toBeGreaterThan(0);
+    for (const n of islands) expect(n.x - reach(n)).toBeGreaterThanOrEqual(model.sideX!);
+  });
+
+  it('keeps an island of three parties inside the strip by their reach, not a fixed 20 px', () => {
+    // four small parties in a chain are the main component; three big ones, linked apart from
+    // them, are an island laid out in a box inside the strip
+    const party = (tail: string, channels: number) => ({
+      ...(mainnet as FiberNetwork).parties[0],
+      address: `ckb1${tail}`,
+      lockScriptHash: `0x${tail.padStart(64, '0')}`,
+      channels,
+      openChannels: 0,
+      openCapacity: '0',
+    });
+    const pair = (a: string, b: string, channels: number) => ({
+      ...(mainnet as FiberNetwork).pairs[0],
+      firstLockScriptHash: `0x${a.padStart(64, '0')}`,
+      secondLockScriptHash: `0x${b.padStart(64, '0')}`,
+      channels,
+      openChannels: 0,
+      openCapacity: '0',
+    });
+    const parties = [
+      party('aaaaaa', 2),
+      party('bbbbbb', 2),
+      party('ffffff', 2),
+      party('gggggg', 2),
+      party('cccccc', 400),
+      party('dddddd', 500),
+      party('eeeeee', 300),
+    ];
+    const pairs = [
+      pair('aaaaaa', 'bbbbbb', 2),
+      pair('bbbbbb', 'ffffff', 2),
+      pair('ffffff', 'gggggg', 2),
+      pair('cccccc', 'dddddd', 400),
+      pair('dddddd', 'eeeeee', 300),
+    ];
+    const network = {
+      ...(mainnet as FiberNetwork),
+      parties,
+      pairs,
+      summary: {
+        ...(mainnet as FiberNetwork).summary,
+        observedParties: 7,
+        observedPairs: 5,
+        totalChannels: 706,
+      },
+    } as FiberNetwork;
+    const model = fiberGraphModel(network, 1200);
+    expect(model.sideX).toBe(1200 - FIBER_GRAPH.side);
+    const island = model.nodes.filter((n) => n.side);
+    expect(island.map((n) => n.label).sort()).toEqual(['cccccc', 'dddddd', 'eeeeee']);
+    for (const n of model.nodes) {
+      expect(n.x - reach(n)).toBeGreaterThanOrEqual(0);
+      expect(n.x + reach(n)).toBeLessThanOrEqual(1200);
+    }
+  });
+
   it('keeps the islands in a strip on the right where the column is wide enough', () => {
     const model = fiberGraphModel(network, 880);
     expect(model.width).toBe(880);

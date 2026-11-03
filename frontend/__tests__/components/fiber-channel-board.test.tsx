@@ -144,7 +144,10 @@ describe('FiberChannelBoard', () => {
     const tier2 = container.querySelector('[data-tier="2"]') as HTMLElement;
     expect(container.querySelector('#evidence')!.contains(tier2)).toBe(true);
     const summary = within(tier2).getByTestId('channel-summary');
-    expect(summary).toHaveClass('text-body');
+    // Material pass v2 leftovers: the story is set in the shared tier-2 Prose piece (.prose-tier2:
+    // 14 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph.
+    expect(summary.closest('[data-prose]')).toHaveClass('prose-tier2');
+    expect(summary).not.toHaveClass('text-body', 'text-text-dim');
     expect(summary).toHaveTextContent(
       'ckb1qzda0c…ppedrr put 1,000.00000569 CKB net into the opening transaction and ckb1qzda0c…5eyy6y 62.00000351 CKB.'
     );

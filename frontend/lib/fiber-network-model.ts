@@ -157,6 +157,15 @@ const reachX = (r: number) => Math.max(r + RING, FIBER_GRAPH.labelHalf);
 const reachUp = (r: number) => r + RING;
 const reachDown = (r: number) => r + FIBER_GRAPH.labelDrop + 4;
 
+/**
+ * How far a party of radius `r` reaches from its centre: its ring or half its label across, its
+ * ring up, its label's baseline and descenders down. The picture derives its box from these, so
+ * nothing it draws lies outside its viewBox (material pass v2 leftovers: the graph is framed).
+ */
+export function fiberNodeReach(r: number): { x: number; up: number; down: number } {
+  return { x: reachX(r), up: reachUp(r), down: reachDown(r) };
+}
+
 /** Space kept between two parties' footprints (ring and label) after separation. */
 const FOOTPRINT_GAP = 3;
 
@@ -267,13 +276,21 @@ export function fiberGraphLayout(data: FiberGraphData, width: number): FiberGrap
     rest.forEach((members, i) => {
       const y0 = pad + 40 + i * SIDE_SLOT;
       const ordered = [...members].sort((a, b) => byId.get(b)!.channels - byId.get(a)!.channels);
+      // An island keeps inside the canvas by its parties' reach (ring or label), like the main
+      // component: the contract is that nothing reaches past the width.
       if (ordered.length <= 2) {
-        ordered.forEach((id, j) => positions.set(id, { x: sideX! + 30 + j * 80, y: y0 + j * 30 }));
+        ordered.forEach((id, j) =>
+          positions.set(id, {
+            x: Math.min(sideX! + 30 + j * 80, width - reachX(r(id))),
+            y: y0 + j * 30,
+          })
+        );
         return;
       }
+      const mx = Math.max(...ordered.map((id) => reachX(r(id))));
       for (const [id, p] of fit(layoutComponent(members, links), {
-        x0: sideX! + 20,
-        x1: width - 20,
+        x0: sideX! + mx,
+        x1: width - mx,
         y0,
         y1: y0 + 80,
       }))

@@ -165,7 +165,7 @@ export function HelpPopover({
             }}
           >
             {title && (
-              <div className="text-text-dim border-base-border/50 text-meta mb-2 border-b pb-2 font-mono uppercase tracking-wider">
+              <div className="eyebrow text-text-dim border-base-border/50 text-meta mb-2 border-b pb-2 font-mono">
                 {title}
               </div>
             )}

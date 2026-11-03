@@ -20,7 +20,7 @@ export function DotCellRecordsTable({ records }: Props) {
     <div className="overflow-x-auto">
       <table className="text-body w-full text-left font-mono">
         <thead>
-          <tr className="border-base-border text-text-dim text-small border-b uppercase tracking-wider">
+          <tr className="eyebrow border-base-border text-text-dim text-small border-b">
             <th className="px-4 py-2 font-normal">Key</th>
             <th className="px-4 py-2 font-normal">Label</th>
             <th className="px-4 py-2 font-normal">Value</th>

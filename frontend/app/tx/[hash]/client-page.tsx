@@ -6,6 +6,7 @@ import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
 import {
@@ -1372,9 +1373,9 @@ export default function TransactionDetailPage() {
             </span>
           }
         >
-          <p className="text-text-dim -mt-2 mb-3">
-            Cells with the same script form a group, and each group runs once.
-          </p>
+          <Prose className="-mt-2 mb-3">
+            <p>Cells with the same script form a group, and each group runs once.</p>
+          </Prose>
           <ScriptGroupMatrix
             txHash={hash}
             inputs={matrixInputs}

@@ -138,9 +138,78 @@ describe('FiberNetworkGraph', () => {
         /^Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not which node ran it\. 1 channel with more or fewer than two parties is not drawn\.$/
       )
     ).toBeInTheDocument();
-    // tier-2 prose at body (R1 roles, as the DAO page's tier 2)
-    for (const p of Array.from(document.querySelectorAll('p'))) expect(p).toHaveClass('text-body');
+    // Material pass v2 leftovers: tier-2 prose is set by the shared Prose piece (.prose-tier2:
+    // 14 px on a 1.7 line, 64 characters, dim), not by a body class on each paragraph. The
+    // explainer carries its own Prose; the parties note is one paragraph set in the page's.
+    const notes = screen.getByText(/^Each circle is a party: the address that funded/);
+    expect(notes.closest('[data-prose]')).toHaveClass('prose-tier2');
+    for (const p of Array.from(document.querySelectorAll('p'))) {
+      expect(p).not.toHaveClass('text-body', 'text-text-dim');
+    }
   });
+
+  // Material pass v2 leftovers: the graph sits in the instrument frame, and the svg it is drawn in
+  // holds everything it draws — so the frame can clip the svg and nothing is lost.
+  for (const width of [1200, 358]) {
+    it(`sits in the instrument frame and draws nothing outside its box at ${width} px`, () => {
+      stubChartWidth(width);
+      const { container } = render(<Graph network={mainnet as FiberNetwork} />);
+      const svg = container.querySelector('svg[data-fiber-graph]')!;
+      const frame = svg.closest('[data-instrument-frame]') as HTMLElement;
+      expect(frame).not.toBeNull();
+      expect(frame).toHaveAttribute('aria-label', 'The Fiber network on chain');
+      expect(frame).toHaveClass('glass', 'neon-edge-top', 'rounded-md');
+      // the detail column stays outside the frame
+      expect(frame.contains(panel())).toBe(false);
+      // drawn 1:1 at the measured width, clipped to its box (no overflow-visible)
+      expect(svg).toHaveAttribute('width', String(width));
+      expect(svg.getAttribute('class')).not.toMatch(/overflow-visible/);
+      const [, , vw, vh] = svg.getAttribute('viewBox')!.split(' ').map(Number);
+      expect(vw).toBe(width);
+      expect(String(vh)).toBe(svg.getAttribute('height'));
+      const drawing = svg.querySelector('[data-role="drawing"]')!;
+      const shift = Number(
+        /translate\(0[ ,]+([\d.]+)\)/.exec(drawing.getAttribute('transform')!)![1]
+      );
+      const nodes = Array.from(svg.querySelectorAll('[data-node]'));
+      expect(nodes).toHaveLength(25);
+      for (const g of nodes) {
+        const hit = g.querySelector('circle[fill="transparent"]')!;
+        const r = Number(hit.getAttribute('r')) - 8;
+        const cx = Number(hit.getAttribute('cx'));
+        const cy = Number(hit.getAttribute('cy')) + shift;
+        // its ring (r + 4) and its label (half of six 11 px characters with the halo: 23 px)
+        const across = Math.max(r + 4, 23);
+        expect(cx - across).toBeGreaterThanOrEqual(0);
+        expect(cx + across).toBeLessThanOrEqual(vw);
+        expect(cy - r - 4).toBeGreaterThanOrEqual(0);
+        // the label's baseline 14 px under the circle and its 4 px of descenders
+        expect(cy + r + 18).toBeLessThanOrEqual(vh);
+        for (const text of Array.from(g.querySelectorAll('text'))) {
+          const x = Number(text.getAttribute('x'));
+          const y = Number(text.getAttribute('y')) + shift;
+          expect(x - 23).toBeGreaterThanOrEqual(0);
+          expect(x + 23).toBeLessThanOrEqual(vw);
+          expect(y - 11).toBeGreaterThanOrEqual(0);
+          expect(y + 4).toBeLessThanOrEqual(vh);
+        }
+      }
+      // the plot's name and the islands' note are inside too
+      const name = svg.querySelector('[data-role="chart-name"]')!;
+      expect(Number(name.getAttribute('y'))).toBeLessThanOrEqual(vh);
+      const note = screen.getByText('not linked to the rest');
+      const noteX = Number(note.getAttribute('x'));
+      const noteY = Number(note.getAttribute('y')) + shift;
+      expect(noteX).toBeGreaterThanOrEqual(0);
+      expect(noteX).toBeLessThanOrEqual(vw);
+      expect(noteY + 3).toBeLessThanOrEqual(vh);
+      // hover linking still works inside the frame
+      fireEvent.mouseEnter(node('ppedrr'));
+      expect(node('kdeakp')).toHaveAttribute('data-lit', 'false');
+      expect(within(panel()).getByRole('link', { name: /ppedrr$/ })).toBeInTheDocument();
+      fireEvent.mouseLeave(node('ppedrr'));
+    });
+  }
 
   it('draws the graph 1:1 at its measured width, islands below, with 11 px labels (R4, FF-F8)', () => {
     stubChartWidth(358);
