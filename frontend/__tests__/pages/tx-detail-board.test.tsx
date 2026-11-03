@@ -597,6 +597,19 @@ describe('Transaction variants (D4)', () => {
     expect(screen.getByText('Pending since')).toBeInTheDocument();
   });
 
+  // Review 2026-11-03: the evidence tier reads the witnesses and the cell deps first, then the
+  // script groups that read them.
+  it('sets Witnesses and Cell deps above Script groups in the evidence tier', async () => {
+    render(<TransactionDetailPage />);
+    const witnesses = await screen.findByRole('heading', { name: 'Witnesses · 2' }, SLOW);
+    const deps = screen.getByRole('heading', { name: 'Cell deps' });
+    const groups = screen.getByRole('heading', { name: 'Script groups' });
+    const before = (a: Element, b: Element) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(before(witnesses, groups)).toBe(true);
+    expect(before(deps, groups)).toBe(true);
+  });
+
   // Lane U follow-up (user report "two Script groups"): the pool view names its script groups once,
   // the designed matrix in tier 2; no second list from the tier-1 tiles.
   it('shows one Script groups section for a pending transaction', async () => {

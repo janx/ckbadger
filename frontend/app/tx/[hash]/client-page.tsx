@@ -1394,7 +1394,14 @@ export default function TransactionDetailPage() {
                 focusedCellIds={lit ? [...lit.cells] : []}
                 onCellHover={(id) => setHover(id ? { t: 'cell', id } : null)}
                 continuity={continuity}
-                onClearFocus={() => select(null, null)}
+                // A lit tile clears the selection on click only while there is one: a tile lit
+                // by hover alone has no clearing click (review 2026-11-03 — the clearing replace
+                // used to cancel the out point link's navigation to the cell page).
+                onClearFocus={
+                  selectedGroup !== null || selectedWitness !== null
+                    ? () => select(null, null)
+                    : undefined
+                }
               />
             </DetailSection>
           </div>
@@ -1403,46 +1410,6 @@ export default function TransactionDetailPage() {
 
       {/* Tier 2, set quieter: the evidence behind tier 1, linked to it by hover. */}
       <DetailTier2 className="text-small">
-        <DetailSection
-          title="Script groups"
-          actions={
-            <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
-              <span data-testid="tx-groups-ran">
-                {isProvisional
-                  ? 'will run when committed'
-                  : tx.isCellbase
-                    ? 'a cellbase runs no script'
-                    : hasCycles && cycles !== null
-                      ? `${ran} ran, ${cycles.toLocaleString('en-US')} cycles`
-                      : `${ran} ran`}
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span aria-hidden="true" className="bg-jade h-[9px] w-[9px] rounded-full" />
-                runs here
-              </span>
-              <span className="flex items-center gap-1.5">
-                <span
-                  aria-hidden="true"
-                  className="border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]"
-                />
-                attached, runs when spent
-              </span>
-            </span>
-          }
-        >
-          <Prose className="-mt-2 mb-3">
-            <p>Cells with the same script form a group, and each group runs once.</p>
-          </Prose>
-          <ScriptGroupMatrix
-            txHash={hash}
-            inputs={matrixInputs}
-            outputs={matrixOutputs}
-            groups={matrixGroups}
-            lit={lit}
-            onHover={setHover}
-          />
-        </DetailSection>
-
         <section className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,560px),1fr))] gap-x-12 gap-y-7">
           <div className="min-w-0">
             <EvidenceHeading
@@ -1578,6 +1545,46 @@ export default function TransactionDetailPage() {
             )}
           </div>
         </section>
+
+        <DetailSection
+          title="Script groups"
+          actions={
+            <span className="text-text-dim text-meta flex flex-wrap items-center gap-x-4 gap-y-1">
+              <span data-testid="tx-groups-ran">
+                {isProvisional
+                  ? 'will run when committed'
+                  : tx.isCellbase
+                    ? 'a cellbase runs no script'
+                    : hasCycles && cycles !== null
+                      ? `${ran} ran, ${cycles.toLocaleString('en-US')} cycles`
+                      : `${ran} ran`}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span aria-hidden="true" className="bg-jade h-[9px] w-[9px] rounded-full" />
+                runs here
+              </span>
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden="true"
+                  className="border-text-dim h-[9px] w-[9px] rounded-full border-[1.2px]"
+                />
+                attached, runs when spent
+              </span>
+            </span>
+          }
+        >
+          <Prose className="-mt-2 mb-3">
+            <p>Cells with the same script form a group, and each group runs once.</p>
+          </Prose>
+          <ScriptGroupMatrix
+            txHash={hash}
+            inputs={matrixInputs}
+            outputs={matrixOutputs}
+            groups={matrixGroups}
+            lit={lit}
+            onHover={setHover}
+          />
+        </DetailSection>
 
         <dl className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,260px),1fr))] gap-x-10 gap-y-5">
           <div className="flex flex-col gap-1">

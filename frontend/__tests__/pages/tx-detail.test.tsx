@@ -564,6 +564,31 @@ describe('TransactionDetailPage', () => {
     );
   });
 
+  it('lets the out point of a lit tile open its cell page (review 2026-11-03)', async () => {
+    // Hovering a tile lights it; that used to arm the tile's clear-focus click, whose URL replace
+    // landed right after the link's navigation and cancelled it. A lit tile with nothing
+    // selected has no clearing click, and a click inside the out point link is the link's alone.
+    render(<TransactionDetailPage />);
+    const output = await screen.findByTestId('tx-io-output-0');
+    // outside a router the anchor would ask jsdom to navigate, which it cannot
+    output.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.mouseEnter(output);
+    expect(output).toHaveAttribute('data-highlighted', 'true');
+    const replaces = mockReplace.mock.calls.length;
+    fireEvent.click(within(output).getByRole('link', { name: '0x57a5...8e0f:0' }));
+    fireEvent.click(output);
+    expect(mockReplace.mock.calls.length).toBe(replaces);
+    // with a witness selected, the tile body still clears the selection; the link still does not
+    fireEvent.click(screen.getByTestId('tx-witness-item-0'));
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).toContain('witness=0');
+    const selected = mockReplace.mock.calls.length;
+    fireEvent.click(within(output).getByRole('link', { name: '0x57a5...8e0f:0' }));
+    expect(mockReplace.mock.calls.length).toBe(selected);
+    fireEvent.click(output);
+    expect(mockReplace.mock.calls.length).toBe(selected + 1);
+    expect(String(mockReplace.mock.calls.at(-1)?.[0])).not.toContain('witness=');
+  });
+
   it('links a pool transaction’s inputs to the cells it spends; its outputs are not cells yet (L1)', async () => {
     vi.mocked(api.getTransactionDetail).mockResolvedValue(createPendingTransactionDetail());
     render(<TransactionDetailPage />);

@@ -1,8 +1,8 @@
 // Lane L (L1): every input and output tile of a transaction names its cell by its out point, and
 // the out point is the link to the cell page (the position label "input 0" / "output 0" stays,
 // as text; the owner and the content keep their own links). The hover title is the full out point.
-import { describe, expect, it } from 'vitest';
-import { render, screen, within } from '@/__tests__/utils/test-utils';
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@/__tests__/utils/test-utils';
 import { CellTile } from '@/components/ui/cell-tile';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import type { TransactionDetail } from '@/lib/api';
@@ -50,6 +50,23 @@ describe('transaction cell tiles name their cell by its out point (L1)', () => {
     expect(link).toHaveAttribute('href', `/mainnet/cell/${HASH}-0`);
     expect(link).toHaveAttribute('title', `${HASH}:0`);
     expect(tile).toHaveTextContent(/^output 0 0xdcd1\.\.\.334d:0/);
+  });
+
+  it('leaves a click on a link inside the tile to the link: the tile’s own click does not fire', () => {
+    // Review 2026-11-03: on the tx page a hovered tile is lit, which armed its clear-focus click;
+    // that click replaced the URL right after the out point link had navigated, so the cell page
+    // never opened. A click inside a link is the link's; the tile's click is for the tile itself.
+    const onClick = vi.fn();
+    const { outputs } = cellTiles(tx, undefined);
+    render(<CellTile cell={outputs[0]} onClick={onClick} />);
+    const tile = screen.getByTestId('tx-io-output-0');
+    // outside a router the anchors would ask jsdom to navigate, which it cannot
+    tile.addEventListener('click', (event) => event.preventDefault());
+    fireEvent.click(within(tile).getByRole('link', { name: '0xdcd1...334d:0' }));
+    fireEvent.click(within(tile).getByRole('link', { name: /^ckb1qzda0c/ }));
+    expect(onClick).not.toHaveBeenCalled();
+    fireEvent.click(tile);
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the label as the link for a tile without an out point (old default)', () => {

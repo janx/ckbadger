@@ -46,7 +46,17 @@ export function CellTile({ cell, highlighted, dimmed, onHover, onClick }: CellTi
     <article
       data-cell-id={cell.id}
       data-testid={cell.testId}
-      onClick={onClick}
+      onClick={
+        onClick &&
+        ((event) => {
+          // A click inside a link (the out point, the owner, the content) is the link's: the
+          // tile's own click never follows it, so it cannot cancel the navigation (review
+          // 2026-11-03: a lit tile's clear-focus click replaced the URL right after the out point
+          // link had pushed the cell page).
+          if ((event.target as Element).closest('a')) return;
+          onClick();
+        })
+      }
       data-highlighted={Boolean(highlighted)}
       onMouseEnter={() => onHover?.(cell.id)}
       onMouseLeave={() => onHover?.(null)}
