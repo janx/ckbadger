@@ -737,6 +737,8 @@ function rankedPreviewRows(
     amount: bigint;
     share: string;
     href?: string;
+    /** The full id a shortened label stands for; it joins the hover title (lane L). */
+    fullId?: string;
   }[],
   total: bigint,
   remainderShare: (remainder: bigint) => string,
@@ -750,7 +752,7 @@ function rankedPreviewRows(
   return [
     ...top.map((entry) => ({
       label: entry.shortLabel,
-      title: entry.label,
+      title: entry.fullId ? `${entry.label} · ${entry.fullId}` : entry.label,
       share: entry.share,
       ...(entry.href ? { href: entry.href } : {}),
     })),
@@ -899,7 +901,13 @@ function shareRows(
           shortLabel: distinctLabel(entry),
           amount: entry.shannons,
           share: share(entry.shannons),
-          ...(entry.id ? { href: rankedSeriesHref(entry.id, entry.label) } : {}),
+          ...(entry.id
+            ? {
+                href: rankedSeriesHref(entry.id, entry.label),
+                // a hash id joins the hover title; a family id is its name, already the label
+                ...(/^0x/.test(fullSeriesId(entry.id)) ? { fullId: fullSeriesId(entry.id) } : {}),
+              }
+            : {}),
         })),
         total,
         share,
@@ -939,8 +947,13 @@ function rankedSeriesHref(id: string, label: string): string {
 }
 
 /** The hash part of a series id, head…tail: "0x5cb3…b4fa". */
+/** The hash a series id names (`token:0x…` → `0x…`); `shortSeriesId` is its short form. */
+function fullSeriesId(id: string): string {
+  return id.split(':')[1] ?? id;
+}
+
 function shortSeriesId(id: string): string {
-  const hash = id.split(':')[1] ?? id;
+  const hash = fullSeriesId(id);
   return hash.length > 12 ? `${hash.slice(0, 6)}…${hash.slice(-4)}` : hash;
 }
 
