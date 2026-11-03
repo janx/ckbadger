@@ -326,12 +326,23 @@ function runNoun(actions: ProtocolActionView[]): string {
   return actions.length === 1 ? 'action' : 'actions';
 }
 
+/** The head's one line (T7): 18 px. */
+const HEAD_LINE_PX = 18;
+
 /**
- * What one 1440-wide head line holds beside its evidence, in characters of its rendered text
- * (measured on the dCKB batch-withdraw row: 164 characters fill the line without the evidence,
- * whose "#20,267,368 · 2026-08-26" takes about 26).
+ * Whether the rendered head holds the inline run on its one line: the headline and its facts in
+ * one line box, and the evidence beside them, not fallen to a line of its own. Read from layout,
+ * not a character count — a head mixes 13, 12 and 11 px text (a ~145-character head of two DAO
+ * withdraw requests fits a 1440 line; a count of 130 had listed it).
  */
-const HEAD_LINE_CHARS = 130;
+function headIsOneLine(article: HTMLElement, txHash: string): boolean {
+  const main = article.querySelector('[data-role="head-main"]');
+  if (!main) throw new Error(`transaction ${txHash}: the activity head has no main line`);
+  const m = main.getBoundingClientRect();
+  if (m.height > HEAD_LINE_PX * 1.5) return false;
+  const evidence = article.querySelector('[data-role="evidence"]');
+  return !evidence || evidence.getBoundingClientRect().top - m.top < HEAD_LINE_PX / 2;
+}
 
 /**
  * The head's protocol facts inline (T7, unchanged for one action and for a short run): each
@@ -946,8 +957,8 @@ export function ActivityRow({
   const mark = markOverride === undefined ? activityClassMark(activity) : markOverride;
   const { actions, primaryAction, calls, errors } = activityDetails(activity, showScriptDetails);
   // Lane F follow-up 2: over PARTICIPANT_LIMIT actions the run is a list under the head; two to
-  // six stay inline while the rendered head fits one 1440 line (measured once per transaction,
-  // before paint), else the same list. One action is always inline.
+  // six stay inline while the rendered head stays one line (`headIsOneLine`, measured once per
+  // transaction, before paint), else the same list. One action is always inline.
   const articleRef = useRef<HTMLElement>(null);
   const [fit, setFit] = useState<{ tx: string; fits: boolean } | null>(null);
   const measured = actions.length >= 2 && actions.length <= PARTICIPANT_LIMIT;
@@ -955,10 +966,10 @@ export function ActivityRow({
     actions.length > PARTICIPANT_LIMIT || (measured && fit?.tx === activity.txHash && !fit.fits);
   useLayoutEffect(() => {
     if (!measured || fit?.tx === activity.txHash) return;
-    const main = articleRef.current?.querySelector('[data-role="head-main"]');
-    if (!main)
-      throw new Error(`transaction ${activity.txHash}: the activity head has no main line`);
-    setFit({ tx: activity.txHash, fits: (main.textContent ?? '').length <= HEAD_LINE_CHARS });
+    const article = articleRef.current;
+    if (!article)
+      throw new Error(`transaction ${activity.txHash}: the activity row is not mounted`);
+    setFit({ tx: activity.txHash, fits: headIsOneLine(article, activity.txHash) });
   }, [measured, fit, activity.txHash]);
   const runs = (
     <>

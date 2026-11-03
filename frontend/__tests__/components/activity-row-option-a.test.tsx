@@ -317,7 +317,7 @@ describe('option A: every participant, one line each (D1)', () => {
 // with its count and exact total, nothing of the list inline; below it a folded list control
 // "51 deposits ↓" opens ONE DEPOSIT PER 18 px LINE (amount decimal-aligned · deposited at #block
 // as a link · other facts), "fewer ↑" folds it back. 2–6 actions keep the inline form while the
-// head stays one line at 1440 (a character budget on the rendered head), else the same list.
+// rendered head stays one line (headline, facts and evidence on one 18 px line), else the list.
 // Mixed actions name each action per line. Every action stays reachable.
 // (Was, follow-up 1: five lines inline and "+46 more deposits" opening the rest inline.)
 describe('option A: a run of protocol actions becomes a list, one action per line', () => {
@@ -423,7 +423,47 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
     expect(listRows(container)).toHaveLength(0);
   });
 
-  it('lists three actions whose inline head would wrap at 1440 (was: three runs inline)', () => {
+  // The rule is the rendered line itself (jsdom lays nothing out: these stub the head's boxes).
+  const layOut = (wraps: { main?: boolean; evidence?: boolean }) =>
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      const role = this.getAttribute('data-role');
+      const height = role === 'head-main' && wraps.main ? 36 : 18;
+      const top = role === 'evidence' && wraps.evidence ? 18 : 0;
+      return {
+        x: 0,
+        y: top,
+        top,
+        left: 0,
+        right: 0,
+        bottom: top + height,
+        width: 0,
+        height,
+        toJSON: () => ({}),
+      } as DOMRect;
+    });
+
+  it('keeps a ~145-character head inline when it lays out on one line (live: two withdraw requests)', () => {
+    // Regression (dCKB 0xfe6f0cd0): a character budget of 130 listed a head that fit one line.
+    layOut({});
+    const two = row([party('r43nr7')], {
+      protocolActions: [
+        { ...withdraw(0), metadata: { capacity: '54500000000000', depositBlock: '6012189' } },
+        { ...withdraw(1), metadata: { capacity: '54512000000000', depositBlock: '6193839' } },
+      ],
+    });
+    const { container } = render(<ActivityRow activity={two} />);
+    expect(headMain(container).textContent!.length).toBeGreaterThan(130);
+    expect(toggle(container)).toBeNull();
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Withdraw Request · 545,000\.00000000 CKB · deposited at #6,012,189 · DAO Withdraw Request · /
+    );
+    vi.restoreAllMocks();
+  });
+
+  it('lists three actions whose inline head wraps (was: three runs inline)', () => {
+    layOut({ main: true });
     const three = row([party('r43nr7')], {
       protocolActions: [withdraw(0), withdraw(1), withdraw(2)],
     });
@@ -437,6 +477,18 @@ describe('option A: a run of protocol actions becomes a list, one action per lin
       '200.00000000 CKB · deposited at #6,000,001',
       '300.00000000 CKB · deposited at #6,000,002',
     ]);
+    vi.restoreAllMocks();
+  });
+
+  it('lists a short run whose evidence the line can no longer hold', () => {
+    layOut({ evidence: true });
+    const two = row([party('r43nr7')], { protocolActions: [deposit(0), deposit(1)] });
+    const { container } = render(<ActivityRow activity={two} />);
+    expect(headMain(container)).toHaveTextContent(
+      /^DAO Deposit · 2 deposits · 3,000\.00000000 CKB$/
+    );
+    expect(toggle(container)).toHaveTextContent('2 deposits ↓');
+    vi.restoreAllMocks();
   });
 
   it('keeps one action inline, as before', () => {
