@@ -5,6 +5,7 @@ import { api, type Cell } from '@/lib/api';
 import { CellInventoryLine } from '@/components/cell/inventory-line';
 import spore from '@/__tests__/fixtures/cell-inventory/spore.json';
 import xudt from '@/__tests__/fixtures/cell-inventory/xudt.json';
+import xudtNoAmount from '@/__tests__/fixtures/cell-inventory/xudt-no-amount.json';
 import dao from '@/__tests__/fixtures/cell-inventory/dao.json';
 import daoWithdraw from '@/__tests__/fixtures/cell-inventory/dao-withdraw.json';
 import dotbit from '@/__tests__/fixtures/cell-inventory/dotbit.json';
@@ -88,6 +89,20 @@ describe('CellInventoryLine (lane U, U6)', () => {
     );
     // a token has no composition
     expect(line.querySelector('[data-composition]')).toBeNull();
+  });
+
+  // Lane B (B3): was the rouge "xudt cell without its decoded token amount" alert.
+  it('says an xUDT cell with no amount holds no readable amount of its token, and why', () => {
+    view(xudtNoAmount);
+    const line = screen.getByTestId('cell-inventory');
+    expect(line).toHaveTextContent(
+      'This cell holds no readable amount of RGB++ · xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)'
+    );
+    expect(within(line).getByRole('link', { name: 'RGB++' })).toHaveAttribute(
+      'href',
+      '/mainnet/tokens/0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d'
+    );
+    expect(screen.queryByTestId('cell-inventory-error')).toBeNull();
   });
 
   it('names a DAO deposit and a withdrawal request with their exact CKB', () => {

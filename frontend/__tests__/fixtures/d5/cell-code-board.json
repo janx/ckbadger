@@ -169,6 +169,7 @@
     "typeScriptHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323"
   },
   "elf": {
+    "status": "parsed",
     "header": {
       "class": "ELF64",
       "endian": "little",
@@ -386,8 +387,11 @@
         "end": 99008
       }
     ],
-    "comment": "rustc version 1.76.0-nightly (9fad68599 2023-12-03) \u00b7 GCC: () 12.2.0 \u00b7 Linker: LLD 17.0.5",
-    "riscvAttributes": "rv64i2p1_m2p0_a2p1_c2p0"
+    "comment": "rustc version 1.76.0-nightly (9fad68599 2023-12-03) · GCC: () 12.2.0 · Linker: LLD 17.0.5",
+    "riscvAttributes": {
+      "status": "parsed",
+      "arch": "rv64i2p1_m2p0_a2p1_c2p0"
+    }
   },
   "codeCell": {
     "versionHash": "0x4af7d832e7c328aa4ad6f2deb669743446aea7b9a2f0c25646897501ac4f1ebe",

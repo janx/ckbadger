@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@/__tests__/utils/test-utils';
 import { TransactionCellContent } from '@/components/transaction/transaction-cell-content';
 import type { TransactionCellDisplay } from '@/lib/api';
@@ -14,6 +14,7 @@ const object: TransactionCellDisplay = {
   symbol: null,
   decimals: null,
   amount: null,
+  noAmountReason: null,
   compositionTier: null,
 };
 
@@ -66,9 +67,26 @@ describe('transaction cell semantics', () => {
     };
     const { rerender } = render(<TransactionCellContent display={token} cellHref="/cell/x-0" />);
     expect(screen.getByText(/9,007,199,254,740,993,123 \(raw\) USDI/)).toBeInTheDocument();
-    rerender(<TransactionCellContent display={{ ...token, amount: null }} cellHref="/cell/x-0" />);
-    expect(screen.getByText(/Amount unavailable/)).toBeInTheDocument();
+    // Lane B (B3): a token cell whose data holds no amount (mainnet 0xfbe2…c11c output 11, 0
+    // bytes) says so, with the API's reason in the title — never an invented 0.
+    const reason = 'xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)';
+    rerender(
+      <TransactionCellContent
+        display={{ ...token, amount: null, noAmountReason: reason }}
+        cellHref="/cell/x-0"
+      />
+    );
+    expect(screen.getByText('no readable amount of')).toHaveAttribute('title', reason);
+    expect(screen.getByRole('link')).toHaveTextContent('no readable amount of USDI');
     expect(screen.queryByText(/0 USDI/)).not.toBeInTheDocument();
+  });
+
+  it('fails fast on a token cell with neither an amount nor a reason for none', () => {
+    const broken: TransactionCellDisplay = { ...object, kind: 'token', standard: 'xudt' };
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => render(<TransactionCellContent display={broken} cellHref="/cell/x-0" />)).toThrow(
+      `Token cell ${object.id}: no amount and no reason for none`
+    );
   });
 
   it('links mNFT item identifiers to the mNFT item route', () => {

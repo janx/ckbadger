@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
+import daoDeposit from '@/__tests__/fixtures/cell-inventory/dao.json';
+import daoWithdraw from '@/__tests__/fixtures/cell-inventory/dao-withdraw.json';
 import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 import { CELL_COLORS } from '@/lib/design-tokens';
 
@@ -40,5 +42,36 @@ describe('cell parts (Cell board: every byte named once)', () => {
     ]);
     expect(parts.every((p) => p.occupied)).toBe(true);
     expect(parts.find((p) => p.label === 'content type')!.value).toBe('dob/0');
+  });
+
+  // Lane B (B2): the API described a withdraw request's 8 bytes twice (`dao_state` [0..8) and
+  // `deposit_block_number` [0..8)), and this map threw "overlaps" — the cell page crashed. The
+  // decode is one field now, for both DAO cells.
+  it("names a DAO cell's 8 data bytes once: the deposit block number", () => {
+    const request = cellDataParts({
+      ...daoWithdraw,
+      data: '0x39bd3e0100000000',
+    } as unknown as Cell);
+    expect(request.map((p) => [p.label, p.start, p.end, p.value])).toEqual([
+      ['deposit block number', 0, 8, '20888889'],
+    ]);
+    const deposit = cellDataParts({ ...daoDeposit, data: '0x0000000000000000' } as unknown as Cell);
+    expect(deposit.map((p) => [p.label, p.start, p.end, p.value])).toEqual([
+      ['deposit block number', 0, 8, '0 = still deposited'],
+    ]);
+  });
+
+  // Lane B (B1): an ELF the API cannot parse has no layout; its bytes are unclassified, never a
+  // made-up map.
+  it('leaves the bytes of an ELF that does not parse unclassified', () => {
+    const data = `0x7f454c46020101${'00'.repeat(57)}`;
+    const parts = cellDataParts({
+      ...daoDeposit,
+      type: undefined,
+      dataAnalysis: undefined,
+      data,
+      elf: { status: 'unparsed', reason: 'ELF machine 0 is not RISC-V' },
+    } as unknown as Cell);
+    expect(parts.map((p) => [p.label, p.start, p.end])).toEqual([['unclassified bytes', 0, 64]]);
   });
 });

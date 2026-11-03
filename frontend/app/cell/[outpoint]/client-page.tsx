@@ -181,7 +181,16 @@ function CellFacts({
       </Fact>
       <ScriptFact label="Lock" script={cell.lock} name={lockName} color={CELL_COLORS.lock} />
       <ScriptFact label="Type" script={cell.type} name={typeName} color={CELL_COLORS.type} />
-      <Fact label="Data" sub={cell.elf ? 'RISC-V ELF' : undefined}>
+      <Fact
+        label="Data"
+        sub={
+          cell.elf?.status === 'parsed'
+            ? 'RISC-V ELF'
+            : cell.elf
+              ? 'ELF, does not parse'
+              : undefined
+        }
+      >
         <span style={{ color: CELL_COLORS.data }}>{cell.dataSize.toLocaleString('en-US')} B</span>
       </Fact>
       <Fact

@@ -13,6 +13,7 @@ const cell = {
   txHash: txB,
   outputIndex: 1,
   elf: {
+    status: 'parsed',
     header: {
       class: 'ELF64',
       endian: 'little',
@@ -55,7 +56,7 @@ const cell = {
     ],
     unassignedFileRanges: [{ start: 120, end: 128 }],
     comment: 'rustc 1.99',
-    riscvAttributes: 'rv64imac',
+    riscvAttributes: { status: 'parsed', arch: 'rv64imac' },
   },
   codeCell: {
     versionHash: binaryB,
@@ -177,5 +178,25 @@ describe('CodeCellBoard', () => {
   it('does not label non-ELF payloads as code cells', () => {
     const { container } = render(<CodeCellBoard cell={{ ...cell, elf: undefined } as Cell} />);
     expect(container).toBeEmptyDOMElement();
+  });
+  // Lane B (B1): the API serves a binary that does not parse as chain data, with the reason.
+  it('says why an ELF does not parse and still shows how scripts name these bytes', () => {
+    const reason = 'ELF machine 0 is not RISC-V';
+    render(<CodeCellBoard cell={{ ...cell, elf: { status: 'unparsed', reason } } as Cell} />);
+    expect(screen.getByTestId('code-elf-unparsed')).toHaveTextContent(
+      `does not parse, so what built it is unknown: ${reason}`
+    );
+    expect(screen.getByTestId('code-by-data-hash')).toHaveTextContent(binaryB);
+  });
+  it('names an unreadable .riscv.attributes section instead of a target, the reason in its title', () => {
+    // The .bit Time Info binary (0x3ba4c4b6…c905a5:0): LLD 11 concatenated 47 attribute sections.
+    const reason =
+      'RISC-V attribute vendor subsection truncated: at section byte 43 it declares 10817 bytes (length field 41 2a 00 00), 1974 remain';
+    const elf = { ...cell.elf!, riscvAttributes: { status: 'unparsed', reason } };
+    render(<CodeCellBoard cell={{ ...cell, elf } as Cell} />);
+    expect(screen.getByTestId('code-built-with')).toHaveTextContent(
+      'target unknown: .riscv.attributes does not parse · entry 0x20000000000001'
+    );
+    expect(screen.getByTestId('code-target-unread')).toHaveAttribute('title', reason);
   });
 });

@@ -718,8 +718,13 @@ interface TransactionCellDisplay {
   collectionName: string | null;
   symbol: string | null;
   decimals: number | null;
-  /** Exact token base units; null for non-token cells. */
+  /**
+   * Exact token base units; null for non-token cells, and for a token cell whose data is too
+   * short for an amount — then `noAmountReason` says so.
+   */
   amount: string | null;
+  /** A token cell with no readable amount: why (its data length vs the 16-byte amount). */
+  noAmountReason: string | null;
   compositionTier: NonNullable<SporeNft['mediaProfile']>['tier'] | null;
 }
 
@@ -947,8 +952,10 @@ interface CellDataAnalysis {
     name: string | null;
     symbol: string | null;
     decimals: number | null;
-    rawAmount: string;
+    /** null exactly when the cell's data holds no amount; `noAmountReason` says why. */
+    rawAmount: string | null;
     formattedAmount: string | null;
+    noAmountReason: string | null;
   };
   deterministic?: CellDeterministicDecode;
   heuristicGuesses: CellDataGuess[];
@@ -961,7 +968,17 @@ interface CellOutputMolecule {
   typeScriptHash: string | null;
 }
 
-interface CellElf {
+/**
+ * `.riscv.attributes`, read by the RISC-V psABI framing: `arch` is Tag_RISCV_arch (null when the
+ * section names none); a section that does not follow the framing says why (real binaries carry
+ * such sections — e.g. LLD 11 concatenated every object's section).
+ */
+type CellRiscvAttributes =
+  | { status: 'parsed'; arch: string | null }
+  | { status: 'unparsed'; reason: string };
+
+/** The layout of an ELF the API parsed. */
+interface CellElfAnalysis {
   header: {
     class: string;
     endian: string;
@@ -1000,8 +1017,15 @@ interface CellElf {
   }>;
   unassignedFileRanges: Array<{ start: number; end: number }>;
   comment: string | null;
-  riscvAttributes: string | null;
+  /** null when the file has no `.riscv.attributes` section. */
+  riscvAttributes: CellRiscvAttributes | null;
 }
+
+/**
+ * A cell's data read as an ELF file (present only when it starts with the ELF magic). A binary
+ * that does not parse is chain data: the API says why and still serves the cell.
+ */
+type CellElf = ({ status: 'parsed' } & CellElfAnalysis) | { status: 'unparsed'; reason: string };
 
 interface Cell {
   txHash: string;
@@ -3724,6 +3748,9 @@ export type {
   GraphLink,
   GraphResponse,
   Cell,
+  CellElf,
+  CellElfAnalysis,
+  CellRiscvAttributes,
   LiveCellSummary,
   CellDataAnalysis,
   CellDeterministicDecode,

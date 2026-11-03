@@ -41,6 +41,11 @@ export type CellInventoryItem =
   /** A token cell: `amount` exact (trailing fraction zeros dropped), `unit` its symbol or name. */
   | { kind: 'token'; typeHash: string; amount: string; unit: string; href: string }
   /**
+   * A cell of a token type whose data is too short for an amount (owner-mode / non-standard cells
+   * the type script admits; the indexer counts no holding for them): `reason` is the API's.
+   */
+  | { kind: 'token-without-amount'; typeHash: string; unit: string; reason: string; href: string }
+  /**
    * An identity: `name` from the cell's decoded data (`.bit`, `.cell`); null where the cell
    * endpoint decodes none (`.bit Cell`, did:ckb) — the line then reads it as their pages do.
    */
@@ -116,7 +121,18 @@ export function cellInventoryItem(cell: Cell): CellInventoryItem | null {
       if (!typeHash || !BYTES32.test(typeHash))
         throw new Error(`${at}: ${slug} cell without a type script hash`);
       const token = cell.dataAnalysis?.token;
-      if (!token || !/^(0|[1-9][0-9]*)$/.test(token.rawAmount))
+      if (token && token.rawAmount === null) {
+        if (!token.noAmountReason)
+          throw new Error(`${at}: ${slug} cell with no token amount and no reason for none`);
+        return {
+          kind: 'token-without-amount',
+          typeHash,
+          unit: token.symbol || token.name || `token ${shortHash(typeHash)}`,
+          reason: token.noAmountReason,
+          href: getTokenDetailHref(typeHash),
+        };
+      }
+      if (!token || token.rawAmount === null || !/^(0|[1-9][0-9]*)$/.test(token.rawAmount))
         throw new Error(`${at}: ${slug} cell without its decoded token amount`);
       return {
         kind: 'token',

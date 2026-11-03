@@ -30,7 +30,8 @@
       "symbol": "RGB++",
       "decimals": 8,
       "rawAmount": "100000000000",
-      "formattedAmount": "1000.00000000"
+      "formattedAmount": "1000.00000000",
+      "noAmountReason": null
     },
     "deterministic": {
       "kind": "udt_amount",

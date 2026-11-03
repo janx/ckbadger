@@ -9,6 +9,7 @@ import {
   cellDataParts,
   cellOutputParts,
   elfRegions,
+  parsedElf,
   type CellGroup,
   type CellPart,
 } from '@/lib/cell-parts';
@@ -52,7 +53,7 @@ const alignUp = (n: number, max: number) => Math.min(max, n % ROW ? n + ROW - (n
 /** Which data rows are drawn at first: all of small data; for code, the headers and metadata. */
 function initialRanges(cell: Cell, parts: readonly CellPart[], length: number): [number, number][] {
   if (length <= FULL_DATA_LIMIT) return [[0, length]];
-  if (cell.elf) {
+  if (parsedElf(cell)) {
     const headers = parts.filter((p) => p.id.startsWith('elf:eh') || p.id.startsWith('elf:ph'));
     const headEnd = alignUp(Math.max(...headers.map((p) => p.end)), length);
     const meta = parts.filter(
@@ -258,7 +259,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
       </p>
     );
   const parts = [...outParts, ...dataParts];
-  const regions = cell.elf ? elfRegions(dataParts) : [];
+  const elf = parsedElf(cell);
+  const regions = elf ? elfRegions(dataParts) : [];
   const activeRegion = active?.kind === 'region' ? regions.find((r) => r.id === active.id) : null;
   const litIds =
     active === null
@@ -507,8 +509,8 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           </span>
         </div>
         <p className="text-small mt-1.5 leading-relaxed text-[#a0a8be]">
-          Each byte belongs to exactly one {cell.elf ? 'part' : 'field'}. Colours follow the four
-          parts of the cell; grey bytes are CellOutput framing that the cell does not pay for.
+          Each byte belongs to exactly one {elf ? 'part' : 'field'}. Colours follow the four parts
+          of the cell; grey bytes are CellOutput framing that the cell does not pay for.
         </p>
         <DetailRows
           rows={[
@@ -646,7 +648,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                   className="text-meta w-full sm:absolute sm:left-0 sm:top-1 sm:w-[74px]"
                   style={{ color: CELL_COLORS[group] }}
                 >
-                  {group === 'data' && cell.elf ? 'data · ELF' : group}
+                  {group === 'data' && elf ? 'data · ELF' : group}
                 </span>
                 {own.map((part) => (
                   <button
@@ -719,11 +721,13 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
                   <span>
                     outputs_data[{cell.outputIndex}]
-                    {cell.elf
+                    {elf
                       ? ' · ELF64 RISC-V'
-                      : typeName
-                        ? ` · decoded by its type script, ${typeName}`
-                        : ''}
+                      : cell.elf?.status === 'unparsed'
+                        ? ` · an ELF file that does not parse: ${cell.elf.reason}`
+                        : typeName
+                          ? ` · decoded by its type script, ${typeName}`
+                          : ''}
                   </span>
                   <span>
                     {fmt(dataBytes.length)} B · all occupied

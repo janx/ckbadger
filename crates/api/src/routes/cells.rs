@@ -163,21 +163,25 @@ pub struct CellTokenDecode {
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub decimals: Option<u8>,
-    pub raw_amount: String,
+    /// Exact base units; `None` exactly when `no_amount_reason` is set.
+    pub raw_amount: Option<String>,
     pub formatted_amount: Option<String>,
+    /// Why a cell of this token type holds no readable amount
+    /// ([`super::transaction_cells::read_udt_amount`]); `None` for an amount.
+    pub no_amount_reason: Option<String>,
 }
 
 fn enrich_token_decode(
     analysis: &mut CellDataAnalysis,
     token: &ckbadger_store::TokenInfo,
 ) -> anyhow::Result<()> {
-    let Some(decode) = analysis
+    // Called for a token cell whose data holds an amount, which the UDT
+    // decode always reads (same `UdtParser::parse_amount` rule).
+    let decode = analysis
         .deterministic
         .as_mut()
         .filter(|d| d.kind == "udt_amount")
-    else {
-        return Ok(());
-    };
+        .ok_or_else(|| anyhow::anyhow!("token cell with an amount lacks its udt_amount decode"))?;
     let amount = decode
         .segments
         .iter_mut()
@@ -212,10 +216,35 @@ fn enrich_token_decode(
         name: token.name.clone(),
         symbol: token.symbol.clone(),
         decimals,
-        raw_amount: raw,
+        raw_amount: Some(raw),
         formatted_amount: formatted,
+        no_amount_reason: None,
     });
     Ok(())
+}
+
+/// The token reading of a token-typed cell whose data holds no amount: its
+/// token's names when the token is indexed (the indexer writes a token row
+/// from amount-bearing cells only, so a type no amount ever moved in has
+/// none), no amount, and why.
+fn no_amount_token_decode(
+    token: Option<&ckbadger_store::TokenInfo>,
+    reason: String,
+) -> anyhow::Result<CellTokenDecode> {
+    Ok(CellTokenDecode {
+        name: token.and_then(|token| token.name.clone()),
+        symbol: token.and_then(|token| token.symbol.clone()),
+        decimals: token
+            .and_then(|token| token.decimals)
+            .map(u8::try_from)
+            .transpose()
+            .map_err(|_| {
+                anyhow::anyhow!("invalid token decimals {:?}", token.map(|t| t.decimals))
+            })?,
+        raw_amount: None,
+        formatted_amount: None,
+        no_amount_reason: Some(reason),
+    })
 }
 
 /// The registry protocol each of a cell's scripts belongs to, as the
@@ -877,48 +906,42 @@ fn maybe_parse_dao_decode(
     if !is_dao_type_code_hash(type_code_hash) {
         return None;
     }
-    if data.len() != 8 {
-        return None;
-    }
-
-    if data == [0u8; 8] {
-        return Some(CellDeterministicDecode {
+    // The indexer's one rule (`DaoParser`): 8 zero bytes are a deposit, any
+    // other 8 bytes a withdraw request naming its deposit's block. The data is
+    // ONE field either way, so it is one segment: the deposit block number,
+    // which a deposit cell holds as 0.
+    use ckbadger_indexer::parser::dao::{DaoParser, DaoState};
+    let deposit_block_number = |meaning: &str, human_value: String| CellDataSegment {
+        label: "deposit_block_number".to_string(),
+        start: 0,
+        end: 8,
+        meaning: meaning.to_string(),
+        human_value,
+    };
+    match DaoParser::parse_dao_state(data)? {
+        DaoState::Deposit => Some(CellDeterministicDecode {
             kind: "dao_deposit_cell".to_string(),
             summary: "DAO deposit cell detected (8-byte zero data)".to_string(),
-            segments: vec![CellDataSegment {
-                label: "dao_state".to_string(),
-                start: 0,
-                end: 8,
-                meaning: "DAO state marker".to_string(),
-                human_value: "deposit".to_string(),
-            }],
-        });
+            segments: vec![deposit_block_number(
+                "The block of the deposit a withdraw request withdraws (u64 LE); a deposit cell holds 0",
+                "0 = still deposited".to_string(),
+            )],
+        }),
+        DaoState::WithdrawRequest => {
+            let block = DaoParser::parse_deposit_block_number(data)
+                .expect("a withdraw request's 8 bytes are a nonzero u64");
+            Some(CellDeterministicDecode {
+                kind: "dao_withdraw_request_cell".to_string(),
+                summary: format!(
+                    "DAO withdraw-request cell detected (deposit_block_number={block})"
+                ),
+                segments: vec![deposit_block_number(
+                    "The block of the deposit this request withdraws (u64 LE)",
+                    block.to_string(),
+                )],
+            })
+        }
     }
-
-    let deposit_block_number = u64::from_le_bytes(data.try_into().ok()?);
-    Some(CellDeterministicDecode {
-        kind: "dao_withdraw_request_cell".to_string(),
-        summary: format!(
-            "DAO withdraw-request cell detected (deposit_block_number={})",
-            deposit_block_number
-        ),
-        segments: vec![
-            CellDataSegment {
-                label: "dao_state".to_string(),
-                start: 0,
-                end: 8,
-                meaning: "DAO state marker".to_string(),
-                human_value: "withdraw_request".to_string(),
-            },
-            CellDataSegment {
-                label: "deposit_block_number".to_string(),
-                start: 0,
-                end: 8,
-                meaning: "Original deposit block number (u64 LE)".to_string(),
-                human_value: deposit_block_number.to_string(),
-            },
-        ],
-    })
 }
 
 fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
@@ -932,12 +955,9 @@ fn maybe_parse_udt_decode(
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
     let standard = detect_udt_standard_from_code_hash(type_code_hash)?;
-
-    if data.len() < 16 {
-        return None;
-    }
-
-    let amount = u128::from_le_bytes(data[0..16].try_into().ok()?);
+    // The one amount rule; data too short for it has no decode here and is
+    // described as `dataAnalysis.token.noAmountReason` (lane B, B3).
+    let amount = ckbadger_indexer::parser::udt::UdtParser::parse_amount(data)?;
     let mut segments = vec![CellDataSegment {
         label: "amount".to_string(),
         start: 0,
@@ -2085,8 +2105,10 @@ pub struct CellDetailResponse {
     pub code_cell_of: Option<Vec<CodeCellScript>>,
     /// Canonical serialized CellOutput, with a nonoverlapping field map.
     pub cell_output_molecule: cell_anatomy::MoleculeCellOutput,
+    /// The data read as an ELF file (absent when it has no ELF magic):
+    /// `{status: "parsed", …layout}` or `{status: "unparsed", reason}`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub elf: Option<cell_elf::ElfAnalysis>,
+    pub elf: Option<cell_elf::CellElf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_cell: Option<CodeCellEvidence>,
     pub current_spend_requirements: Vec<CellSpendRequirement>,
@@ -2597,14 +2619,12 @@ fn code_cell_upgrade_cohort(
         {
             continue;
         }
-        let Some(_) = cell_elf::parse(&data.raw_data()).map_err(|error| {
-            ApiError::internal(format!(
-                "cell {outpoint} upgrade cohort output {index} ELF parse: {error:#}"
-            ))
-        })?
-        else {
+        // Code by the one rule the cell page uses: the ELF magic. Whether the
+        // binary parses is what its own cell page describes, not a condition
+        // of being an upgrade.
+        if !cell_elf::has_elf_magic(&data.raw_data()) {
             continue;
-        };
+        }
         let type_hash = type_script.calc_script_hash();
         let matches: Vec<_> = inputs
             .iter()
@@ -3843,14 +3863,9 @@ async fn get_cell(
     } else {
         None
     };
-    let elf = cell_data
-        .as_ref()
-        .map(|data| cell_elf::parse(data))
-        .transpose()
-        .map_err(|error| {
-            ApiError::internal(format!("ELF parse failed: outpoint={outpoint}: {error:#}"))
-        })?
-        .flatten();
+    // A binary that does not parse is chain data: described in `elf`, the
+    // cell still served (lane B, B1).
+    let elf = cell_data.as_deref().and_then(cell_elf::read);
     let code_cell = if elf.is_some() {
         let hash = data_hash.as_ref().expect("ELF bytes were hashed");
         let mut current_references = Vec::new();
@@ -3925,22 +3940,35 @@ async fn get_cell(
             ))
         })?;
 
-    if let (Some(analysis), Some(type_hash)) = (&mut data_analysis, &info.type_script_hash) {
-        if analysis
-            .deterministic
-            .as_ref()
-            .is_some_and(|decode| decode.kind == "udt_amount")
-        {
-            let token = state
-                .store
-                .get_token(type_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
+    let udt_standard = info.type_code_hash.as_deref().and_then(|code_hash| {
+        ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, 0)
+    });
+    if let (Some(analysis), Some(type_hash), Some(standard), Some(data)) = (
+        &mut data_analysis,
+        &info.type_script_hash,
+        udt_standard,
+        cell_data.as_deref(),
+    ) {
+        let token = state
+            .store
+            .get_token(type_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        match super::transaction_cells::read_udt_amount(&standard, data) {
+            super::transaction_cells::UdtAmountReading::Amount(_) => {
+                let token = token.ok_or_else(|| {
                     ApiError::internal(format!(
                         "recognized token cell {outpoint} lacks indexed TokenInfo"
                     ))
                 })?;
-            enrich_token_decode(analysis, &token).map_err(|e| ApiError::internal(e.to_string()))?;
+                enrich_token_decode(analysis, &token)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+            }
+            super::transaction_cells::UdtAmountReading::NoAmount { reason } => {
+                analysis.token = Some(
+                    no_amount_token_decode(token.as_ref(), reason)
+                        .map_err(|e| ApiError::internal(format!("cell {outpoint}: {e:#}")))?,
+                );
+            }
         }
     }
 
@@ -5561,10 +5589,20 @@ mod tests {
             analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao deposit decode");
         assert_eq!(deterministic.kind, "dao_deposit_cell");
-        assert!(deterministic
-            .segments
-            .iter()
-            .any(|s| s.label == "dao_state" && s.human_value == "deposit"));
+        // The DAO data is one 8-byte field — the deposit block number a
+        // withdraw request writes — and a deposit carries 0 there. One segment,
+        // so every byte belongs to exactly one field (the cell microscope's rule).
+        assert_eq!(
+            deterministic.segments.len(),
+            1,
+            "{:?}",
+            deterministic.segments
+        );
+        let field = &deterministic.segments[0];
+        assert_eq!(field.label, "deposit_block_number");
+        assert_eq!((field.start, field.end), (0, 8));
+        assert_eq!(field.human_value, "0 = still deposited");
+        assert!(field.meaning.contains("u64 LE"), "{}", field.meaning);
     }
 
     #[test]
@@ -5582,13 +5620,45 @@ mod tests {
             analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao withdraw decode");
         assert_eq!(deterministic.kind, "dao_withdraw_request_cell");
-        assert!(deterministic
+        // Regression (mainnet 0xc0aee100…3f83ee:0): `dao_state` [0..8) and
+        // `deposit_block_number` [0..8) described the same 8 bytes twice, and
+        // the cell microscope rejected the overlap. One field, one segment.
+        assert_eq!(
+            deterministic.segments.len(),
+            1,
+            "{:?}",
+            deterministic.segments
+        );
+        let field = &deterministic.segments[0];
+        assert_eq!(field.label, "deposit_block_number");
+        assert_eq!((field.start, field.end), (0, 8));
+        assert_eq!(field.human_value, block_number.to_string());
+        assert_eq!(
+            field.meaning,
+            "The block of the deposit this request withdraws (u64 LE)"
+        );
+    }
+
+    /// The live cell of the report: mainnet 0xc0aee100…3f83ee:0 carries
+    /// `39bd3e0100000000`, the request for the deposit at #20,888,889.
+    #[test]
+    fn test_dao_withdraw_request_mainnet_bytes_are_one_field() {
+        let info = positioned(LiveCellInfo {
+            type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x35; 32]),
+            ..make_payload()
+        });
+        let data = hex::decode("39bd3e0100000000").unwrap();
+        let decode = analyze_cell_data(&info, &data, 8)
+            .expect("cell data analysis")
+            .deterministic
+            .expect("dao withdraw decode");
+        let labels: Vec<_> = decode
             .segments
             .iter()
-            .any(|s| s.label == "dao_state" && s.human_value == "withdraw_request"));
-        assert!(deterministic.segments.iter().any(
-            |s| s.label == "deposit_block_number" && s.human_value == block_number.to_string()
-        ));
+            .map(|s| (s.label.as_str(), s.start, s.end, s.human_value.as_str()))
+            .collect();
+        assert_eq!(labels, [("deposit_block_number", 0, 8, "20888889")]);
     }
 
     #[test]
