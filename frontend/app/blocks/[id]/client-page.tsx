@@ -873,10 +873,19 @@ function UncleRow({
         ) : !detail ? (
           'reading its sibling…'
         ) : detail.sameParentAs === null ? (
-          <>the canonical {formatBlockNumber(detail.canonicalAtHeight.number)} has another parent</>
+          <>
+            the canonical{' '}
+            <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              {formatBlockNumber(detail.canonicalAtHeight.number)}
+            </Link>{' '}
+            has another parent
+          </>
         ) : (
           <>
-            sibling of {formatBlockNumber(detail.sameParentAs)}{' '}
+            sibling of{' '}
+            <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
+              {formatBlockNumber(detail.sameParentAs)}
+            </Link>{' '}
             <Link href={`/blocks/${detail.canonicalAtHeight.hash}`}>
               <Hash
                 hash={detail.canonicalAtHeight.hash}

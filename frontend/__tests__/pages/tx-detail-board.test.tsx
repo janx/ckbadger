@@ -558,6 +558,10 @@ describe('Transaction variants (D4)', () => {
     expect(
       within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#89' })
     ).toHaveAttribute('href', `/mainnet/blocks/0x${'89'.repeat(32)}`);
+    // Lane L: the block the cellbase is in is a link too.
+    expect(
+      within(screen.getByTestId('tx-summary')).getByRole('link', { name: '#101' })
+    ).toHaveAttribute('href', '/mainnet/blocks/101');
     expect(screen.getByTestId('tx-inflow')).toHaveTextContent('block reward559.61739927 CKB');
     expect(screen.getByText(/never proposed/)).toBeInTheDocument();
     await waitFor(

@@ -65,6 +65,7 @@ import {
 import dynamic from '@/lib/dynamic-client';
 import { isFieldLayoutLock, lockArgsLine } from '@/lib/lock-args';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { DocumentTitle, titleHash } from '@/lib/use-document-title';
 
@@ -941,7 +942,11 @@ export default function TransactionDetailPage() {
   ) : tx.isCellbase ? (
     <p data-testid="tx-summary" className="text-text text-body max-w-[80ch]">
       The first transaction of block{' '}
-      {formatBlockNumber(required(tx.blockNumber, hash, 'blockNumber'))}. It consumes no cell and{' '}
+      <BlockLink
+        number={required(tx.blockNumber, hash, 'blockNumber')}
+        className="text-text-bright"
+      />
+      . It consumes no cell and{' '}
       {tx.pays === undefined ? (
         <ActivityReadError txHash={hash} error={new Error('cellbase has no "pays" field')} />
       ) : tx.pays === null ? (

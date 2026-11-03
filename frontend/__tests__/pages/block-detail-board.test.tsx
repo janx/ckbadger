@@ -323,6 +323,13 @@ describe('Block board · second tier', () => {
     await waitFor(() =>
       expect(uncles).toHaveTextContent(/sibling of #20,827,931 0x.+, same parent #20,827,930/)
     );
+    // Lane L: the uncle and its sibling share the height; the uncle's links to the uncle page,
+    // the sibling's to the canonical block (as its hash beside it does).
+    expect(
+      within(uncles)
+        .getAllByRole('link', { name: '#20,827,931' })
+        .map((a) => a.getAttribute('href'))
+    ).toEqual(['/mainnet/blocks/20827932/uncles/0', `/mainnet/blocks/0x${'95'.repeat(32)}`]);
     expect(uncles).toHaveTextContent('92 ms after its sibling · 0 proposals');
     const proposals = screen.getByRole('heading', { name: 'Proposals' }).closest('section')!;
     expect(await within(proposals).findByText('2 · both committed')).toBeInTheDocument();
