@@ -2377,3 +2377,185 @@ async fn test_cells_by_script_rows_name_registered_type_and_lock_references() {
     assert_eq!(row(0x41)["lockScriptName"], "JoyID", "{json}");
     assert!(row(0x42)["typeScriptName"].is_null(), "{json}");
 }
+
+/// Seed a CKB-node-format chain holding one transaction whose output 0 has
+/// `lock` / `type_` / `data` and `capacity`, plus the matching live-cell row
+/// (exact occupied capacity, data hash) in the domain store. Lane B (B1/B3):
+/// the cell detail reads a cell's bytes from the node store, so the bugs of
+/// what those bytes say can only be reached this way.
+async fn one_output_cell_app(
+    lock: ckb_types::packed::Script,
+    type_: Option<ckb_types::packed::Script>,
+    data: Vec<u8>,
+    capacity: u64,
+    seed: impl FnOnce(&mut StoreBatch),
+) -> (axum::Router, [u8; 32], TestCkbChain) {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::core::{Capacity, TransactionBuilder};
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+
+    let output = packed::CellOutput::new_builder()
+        .capacity(Capacity::shannons(capacity).pack())
+        .lock(lock.clone())
+        .type_(type_.clone().pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .output(output)
+        .output_data(Bytes::from(data.clone()).pack())
+        .build();
+    let tx_hash: [u8; 32] = tx.hash().unpack();
+    let block = ckb_types::core::BlockBuilder::default()
+        .number(123u64.pack())
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(1, 0, 1800).pack())
+        .transaction(tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+
+    let hash_type = |script: &packed::Script| -> i16 {
+        let byte: u8 = script.hash_type().into();
+        i16::from(byte)
+    };
+    let lock_args = lock.args().raw_data().to_vec();
+    let type_args = type_.as_ref().map(|t| t.args().raw_data().to_vec());
+    let occupied_bytes = 8
+        + 33
+        + lock_args.len() as i64
+        + type_args.as_ref().map_or(0, |args| 33 + args.len() as i64)
+        + data.len() as i64;
+    let store = test_store();
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &tx_hash,
+        0,
+        &LiveCellInfo {
+            capacity: capacity as i64,
+            lock_script_hash: lock.calc_script_hash().as_slice().to_vec(),
+            lock_code_hash: lock.code_hash().as_slice().to_vec(),
+            lock_hash_type: hash_type(&lock),
+            lock_args,
+            type_script_hash: type_
+                .as_ref()
+                .map(|t| t.calc_script_hash().as_slice().to_vec()),
+            type_code_hash: type_.as_ref().map(|t| t.code_hash().as_slice().to_vec()),
+            type_hash_type: type_.as_ref().map(hash_type),
+            type_args,
+            data_size: data.len() as i32,
+            occupied_capacity: occupied_bytes * 100_000_000,
+            udt_amount: None,
+            data_hash: Some(fixture_data_hash(&data)),
+        },
+        123,
+    );
+    seed(&mut batch);
+    batch.commit().unwrap();
+    seed_cell_transaction(&store, &tx_hash, 123, 1);
+    seed_block_headers_at(&store, &[(123, 1_700_000_000_000)]);
+
+    let config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    (create_router(config).await, tx_hash, chain)
+}
+
+fn fixture_script(
+    code_hash: &str,
+    hash_type: ckb_types::core::ScriptHashType,
+    args: &[u8],
+) -> ckb_types::packed::Script {
+    use ckb_types::bytes::Bytes;
+    use ckb_types::packed;
+    use ckb_types::prelude::*;
+    let code_hash: [u8; 32] = hex::decode(code_hash.trim_start_matches("0x"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    packed::Script::new_builder()
+        .code_hash(packed::Byte32::new(code_hash))
+        .hash_type(hash_type.into())
+        .args(Bytes::from(args.to_vec()).pack())
+        .build()
+}
+
+/// The `.bit` Time Info binary, mainnet 0x3ba4c4b6…c905a5:0 (23,328 bytes,
+/// "Linker: LLD 11.0.0"), as its cell carries it.
+fn bit_time_info_code_cell() -> Vec<u8> {
+    hex::decode(include_str!("fixtures/bit-time-info-code-cell.hex").trim()).unwrap()
+}
+
+/// Lane B (B1), regression: this cell answered 500 "ELF parse failed: …
+/// RISC-V attribute vendor subsection truncated". Its `.riscv.attributes`
+/// section is 47 whole format-A attribute sections back to back (LLD 11
+/// concatenated each object's section), which the RISC-V psABI framing does
+/// not admit — chain data to describe, not a ckbadger invariant. The cell is
+/// served; the ELF layout is parsed; only the attributes say why they do not
+/// read.
+#[tokio::test]
+async fn test_code_cell_with_non_psabi_riscv_attributes_is_served() {
+    use ckb_types::core::ScriptHashType;
+    let data = bit_time_info_code_cell();
+    assert_eq!(data.len(), 23_328);
+    let lock = fixture_script(
+        "0x5c5069eb0857efc65e1bca0c07df34c31663b3622fd3876c876320fc9634e2a8",
+        ScriptHashType::Type,
+        &hex::decode("0e65e63058c5b76b44ab13c15e9245fb8c301e04").unwrap(),
+    );
+    let type_id = fixture_script(
+        ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH,
+        ScriptHashType::Type,
+        &hex::decode("4b673f820a6278ece8515bc358ccf5bf6ef385736d30bc2a990f923fe7f33b95").unwrap(),
+    );
+    let (app, tx_hash, _chain) =
+        one_output_cell_app(lock, Some(type_id), data, 2_354_000_000_000, |_| {}).await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    let elf = &json["elf"];
+    assert_eq!(elf["status"], "parsed", "got {elf}");
+    assert_eq!(elf["header"]["entry"], "69694");
+    assert_eq!(elf["sections"].as_array().unwrap().len(), 9);
+    assert!(
+        elf["comment"].as_str().unwrap().contains("LLD 11.0.0"),
+        "got {}",
+        elf["comment"]
+    );
+    let attributes = &elf["riscvAttributes"];
+    assert_eq!(attributes["status"], "unparsed", "got {attributes}");
+    let reason = attributes["reason"].as_str().unwrap();
+    assert!(reason.contains("section byte 43"), "got {reason}");
+    assert!(reason.contains("10817"), "got {reason}");
+    assert!(reason.contains("1974"), "got {reason}");
+    // Still code: the code-cell evidence does not depend on the attributes.
+    assert_eq!(json["codeCell"]["versionHash"], json["dataHash"]);
+}
+
+/// Lane B (B1): an ELF whose own headers do not parse is chain data too. The
+/// cell is served with `elf: { status: "unparsed", reason }` and its code-cell
+/// evidence (scripts name bytes, not parse results), never a 500.
+#[tokio::test]
+async fn test_code_cell_whose_elf_does_not_parse_is_served_with_the_reason() {
+    use ckb_types::core::ScriptHashType;
+    let mut data = b"\x7fELF\x02\x01\x01".to_vec();
+    data.resize(64, 0); // a whole ELF64 header naming machine 0, not RISC-V
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &[0x31; 20],
+    );
+    let (app, tx_hash, _chain) =
+        one_output_cell_app(lock, None, data, 200_000_000_000, |_| {}).await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(
+        json["elf"],
+        serde_json::json!({
+            "status": "unparsed",
+            "reason": "ELF machine 0 is not RISC-V",
+        })
+    );
+    assert_eq!(json["codeCell"]["versionHash"], json["dataHash"]);
+}

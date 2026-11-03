@@ -60,4 +60,18 @@ describe('cell parts (Cell board: every byte named once)', () => {
       ['deposit block number', 0, 8, '0 = still deposited'],
     ]);
   });
+
+  // Lane B (B1): an ELF the API cannot parse has no layout; its bytes are unclassified, never a
+  // made-up map.
+  it('leaves the bytes of an ELF that does not parse unclassified', () => {
+    const data = `0x7f454c46020101${'00'.repeat(57)}`;
+    const parts = cellDataParts({
+      ...daoDeposit,
+      type: undefined,
+      dataAnalysis: undefined,
+      data,
+      elf: { status: 'unparsed', reason: 'ELF machine 0 is not RISC-V' },
+    } as unknown as Cell);
+    expect(parts.map((p) => [p.label, p.start, p.end])).toEqual([['unclassified bytes', 0, 64]]);
+  });
 });

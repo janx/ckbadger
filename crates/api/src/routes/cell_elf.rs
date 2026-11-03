@@ -96,13 +96,63 @@ pub struct ElfAnalysis {
     /// is unspecified; they are not necessarily padding.
     pub unassigned_file_ranges: Vec<ElfFileGap>,
     pub comment: Option<String>,
-    pub riscv_attributes: Option<String>,
+    /// `None` when the file has no `.riscv.attributes` section.
+    pub riscv_attributes: Option<RiscvAttributes>,
+}
+
+/// A code cell's data read as an ELF file. Its bytes are chain data: a file
+/// that starts with the ELF magic but does not parse is described with the
+/// reason, never an error of the cell that carries it.
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum CellElf {
+    Parsed(ElfAnalysis),
+    Unparsed { reason: String },
+}
+
+/// What the `.riscv.attributes` section says, read by the RISC-V psABI
+/// format-A framing (one `'A'`, then length-prefixed vendor subsections).
+/// A section that does not follow the framing is described, not fatal: it is
+/// tool metadata CKB-VM never reads, and real binaries carry such sections
+/// (mainnet 0x3ba4c4b6…c905a5:0, linked by LLD 11.0.0, holds 47 whole
+/// format-A sections back to back — one per input object, concatenated).
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum RiscvAttributes {
+    /// `arch` is Tag_RISCV_arch; `None` when the section carries no such tag.
+    Parsed {
+        arch: Option<String>,
+    },
+    Unparsed {
+        reason: String,
+    },
+}
+
+/// Whether `data` is an ELF file by its magic: the one rule for "this cell's
+/// data is code" (the cell page and the Type ID upgrade cohort both use it).
+pub fn has_elf_magic(data: &[u8]) -> bool {
+    data.starts_with(b"\x7fELF")
+}
+
+/// Read a cell's data as an ELF file: `None` when it is not one (no magic).
+pub fn read(data: &[u8]) -> Option<CellElf> {
+    if !has_elf_magic(data) {
+        return None;
+    }
+    Some(match parse(data) {
+        Ok(Some(analysis)) => CellElf::Parsed(analysis),
+        Ok(None) => unreachable!("parse reads every file with the ELF magic"),
+        Err(error) => CellElf::Unparsed {
+            reason: format!("{error:#}"),
+        },
+    })
 }
 
 /// Decode the RISC-V psABI format-A attribute framing; only Tag_RISCV_arch
 /// (5) is presented as an ISA string. Other tags are skipped by their
 /// specified odd-string/even-integer encoding, never searched for text.
-fn riscv_arch_attribute(payload: &[u8]) -> Result<String> {
+/// Errors name the section-relative byte where the framing breaks.
+fn riscv_arch_attribute(payload: &[u8]) -> Result<Option<String>> {
     ensure!(
         payload.first() == Some(&b'A'),
         "RISC-V attributes missing format A marker"
@@ -113,13 +163,20 @@ fn riscv_arch_attribute(payload: &[u8]) -> Result<String> {
     while at < payload.len() {
         let start = at;
         let length = u32_at(payload, at, "attribute vendor length")? as usize;
-        ensure!(length >= 5, "RISC-V attribute vendor subsection too short");
+        let length_bytes = hex_bytes(&payload[at..at + 4]);
+        ensure!(
+            length >= 5,
+            "RISC-V attribute vendor subsection too short: at section byte {start} it declares \
+             {length} bytes (length field {length_bytes}), less than its length and a vendor name"
+        );
         let end = start
             .checked_add(length)
             .context("attribute vendor length overflow")?;
         ensure!(
             end <= payload.len(),
-            "RISC-V attribute vendor subsection truncated"
+            "RISC-V attribute vendor subsection truncated: at section byte {start} it declares \
+             {length} bytes (length field {length_bytes}), {} remain",
+            payload.len() - start
         );
         at += 4;
         let vendor = attribute_ntbs(payload, &mut at, end, "vendor")?;
@@ -136,7 +193,9 @@ fn riscv_arch_attribute(payload: &[u8]) -> Result<String> {
                 .context("attribute file length overflow")?;
             ensure!(
                 subsection_end <= end && subsection_end >= at,
-                "RISC-V attribute file subsection truncated"
+                "RISC-V attribute file subsection truncated: at section byte \
+                 {subsection_start} it declares {subsection_length} bytes, its vendor \
+                 subsection ends at byte {end}"
             );
             if vendor == "riscv" && subsection_tag == 1 {
                 while at < subsection_end {
@@ -161,7 +220,14 @@ fn riscv_arch_attribute(payload: &[u8]) -> Result<String> {
         saw_riscv_vendor,
         "RISC-V attributes missing riscv vendor subsection"
     );
-    Ok(arch.unwrap_or_else(|| "Tag_RISCV_arch absent".into()))
+    Ok(arch)
+}
+fn hex_bytes(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 fn attribute_ntbs(data: &[u8], at: &mut usize, end: usize, label: &str) -> Result<String> {
     let tail = data
@@ -228,7 +294,7 @@ fn file_range(data: &[u8], offset: u64, size: u64, label: &str) -> Result<(usize
 }
 
 pub fn parse(data: &[u8]) -> Result<Option<ElfAnalysis>> {
-    if !data.starts_with(b"\x7fELF") {
+    if !has_elf_magic(data) {
         return Ok(None);
     }
     ensure!(
@@ -396,21 +462,23 @@ pub fn parse(data: &[u8]) -> Result<Option<ElfAnalysis>> {
         if name == ".comment" || name == ".riscv.attributes" {
             ensure!(kind != 8, "{name} has no file bytes");
             let (start, end) = file_range(data, file_offset, size, &name)?;
-            let value = if name == ".riscv.attributes" {
-                riscv_arch_attribute(&data[start..end])?
+            if name == ".riscv.attributes" {
+                riscv_attributes = Some(match riscv_arch_attribute(&data[start..end]) {
+                    Ok(arch) => RiscvAttributes::Parsed { arch },
+                    Err(error) => RiscvAttributes::Unparsed {
+                        reason: format!("{error:#}"),
+                    },
+                });
             } else {
-                data[start..end]
-                    .split(|&byte| byte == 0)
-                    .filter(|piece| !piece.is_empty())
-                    .map(String::from_utf8_lossy)
-                    .map(|piece| piece.into_owned())
-                    .collect::<Vec<_>>()
-                    .join(" · ")
-            };
-            if name == ".comment" {
-                comment = Some(value);
-            } else {
-                riscv_attributes = Some(value);
+                comment = Some(
+                    data[start..end]
+                        .split(|&byte| byte == 0)
+                        .filter(|piece| !piece.is_empty())
+                        .map(String::from_utf8_lossy)
+                        .map(|piece| piece.into_owned())
+                        .collect::<Vec<_>>()
+                        .join(" · "),
+                );
             }
         }
         sections.push(ElfSection {
@@ -540,11 +608,85 @@ mod tests {
         data.push(1);
         data.extend_from_slice(&(file_length as u32).to_le_bytes());
         data.extend_from_slice(&attributes);
-        assert_eq!(riscv_arch_attribute(&data).unwrap(), "rv32i2p1");
+        assert_eq!(
+            riscv_arch_attribute(&data).unwrap().as_deref(),
+            Some("rv32i2p1")
+        );
         data.pop();
         assert!(riscv_arch_attribute(&data)
             .unwrap_err()
             .to_string()
             .contains("truncated"));
+    }
+
+    /// The `.bit` Time Info binary, mainnet 0x3ba4c4b6…c905a5:0.
+    fn bit_time_info() -> Vec<u8> {
+        hex::decode(include_str!("../../tests/fixtures/bit-time-info-code-cell.hex").trim())
+            .unwrap()
+    }
+
+    /// Lane B (B1), regression: the whole ELF failed to parse ("vendor
+    /// subsection truncated") because of its `.riscv.attributes` section.
+    /// The section is 47 format-A sections back to back: the first vendor
+    /// subsection [1..43) reads, then byte 43 is `'A'` again and the psABI
+    /// framing reads `41 2a 00 00` as a 10,817-byte subsection length. The
+    /// reader keeps the psABI framing (it is right; readelf and LLVM's parser
+    /// reject this section the same way) and describes the section instead of
+    /// failing the file.
+    #[test]
+    fn bit_time_info_attributes_are_described_not_fatal() {
+        let data = bit_time_info();
+        let parsed = parse(&data).unwrap().unwrap();
+        assert_eq!(parsed.header.entry, 0x1103e);
+        assert_eq!(parsed.sections.len(), 9);
+        let attributes = parsed
+            .sections
+            .iter()
+            .find(|section| section.name == ".riscv.attributes")
+            .unwrap();
+        assert_eq!(
+            (attributes.file_offset, attributes.file_size),
+            (Some(0x5090), Some(2017))
+        );
+        assert_eq!(
+            parsed.comment.as_deref(),
+            Some("Linker: LLD 11.0.0 · GCC: (GNU) 8.3.0")
+        );
+        match parsed.riscv_attributes {
+            Some(RiscvAttributes::Unparsed { reason }) => assert_eq!(
+                reason,
+                "RISC-V attribute vendor subsection truncated: at section byte 43 it declares \
+                 10817 bytes (length field 41 2a 00 00), 1974 remain"
+            ),
+            other => panic!("expected unparsed attributes, got {other:?}"),
+        }
+        // Its first block alone is a conforming section naming the ISA.
+        let section = &data[0x5090..0x5090 + 43];
+        assert_eq!(
+            riscv_arch_attribute(section).unwrap().as_deref(),
+            Some("rv64i2p0_m2p0_a2p0_c2p0")
+        );
+    }
+
+    #[test]
+    fn read_describes_an_elf_it_cannot_parse() {
+        assert!(read(b"ordinary cell data").is_none());
+        let mut header = b"\x7fELF\x02\x01\x01".to_vec();
+        header.resize(64, 0);
+        let json = serde_json::to_value(read(&header).unwrap()).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"status": "unparsed", "reason": "ELF machine 0 is not RISC-V"})
+        );
+        let truncated = serde_json::to_value(read(b"\x7fELF\x02\x01\x01").unwrap()).unwrap();
+        assert_eq!(truncated["status"], "unparsed");
+        assert!(truncated["reason"].as_str().unwrap().contains("truncated"));
+        let json = serde_json::to_value(read(&bit_time_info()).unwrap()).unwrap();
+        assert_eq!(json["status"], "parsed");
+        assert_eq!(json["header"]["entry"], "69694");
+        assert_eq!(json["riscvAttributes"]["status"], "unparsed");
+        let fixture = serde_json::to_value(read(&fixture()).unwrap()).unwrap();
+        assert_eq!(fixture["status"], "parsed");
+        assert_eq!(fixture["riscvAttributes"], serde_json::Value::Null);
     }
 }

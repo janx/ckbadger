@@ -1,4 +1,4 @@
-import type { Cell } from '@/lib/api';
+import type { Cell, CellElfAnalysis, CellRiscvAttributes } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
 import { elfMachineLabel, elfProgramTypeLabel, elfTypeLabel } from '@/lib/elf-labels';
 import { CELL_COLORS, ELF_REGION_COLORS } from '@/lib/design-tokens';
@@ -210,7 +210,7 @@ export function elfSectionTone(name: string, flags: string): string {
  * header table. Throws unless they cover the file exactly once.
  */
 export function elfParts(cell: Cell): CellPart[] {
-  const elf = cell.elf;
+  const elf = parsedElf(cell);
   if (!elf) return [];
   const bytes = hexBytes(cell.data ?? '0x', 'CellData');
   const { header } = elf;
@@ -289,7 +289,7 @@ export function elfParts(cell: Cell): CellPart[] {
         section.name === '.comment' && elf.comment
           ? elf.comment
           : section.name === '.riscv.attributes' && elf.riscvAttributes
-            ? elf.riscvAttributes
+            ? riscvAttributesValue(elf.riscvAttributes)
             : `${size.toLocaleString('en-US')} B${BigInt(section.address) ? ` → 0x${BigInt(section.address).toString(16)}` : ''}`,
       meaning:
         (BigInt(section.flags) & BigInt(2)) === BigInt(0)
@@ -378,9 +378,23 @@ export function elfParts(cell: Cell): CellPart[] {
   return parts;
 }
 
+/**
+ * The ELF layout of a code cell whose binary the API parsed; null for a cell that is not an ELF
+ * and for one whose ELF does not parse (`cell.elf.reason` says why; its bytes are unclassified).
+ */
+export function parsedElf(cell: Cell): CellElfAnalysis | null {
+  return cell.elf?.status === 'parsed' ? cell.elf : null;
+}
+
+/** What `.riscv.attributes` says: the ISA it targets, or why the section does not read. */
+export function riscvAttributesValue(attributes: CellRiscvAttributes): string {
+  if (attributes.status === 'unparsed') return `not read: ${attributes.reason}`;
+  return attributes.arch ?? 'Tag_RISCV_arch absent';
+}
+
 /** The data block's parts: the ELF layout for code, else the API's deterministic decode. */
 export function cellDataParts(cell: Cell): CellPart[] {
-  if (cell.elf) return elfParts(cell);
+  if (parsedElf(cell)) return elfParts(cell);
   const length = hexBytes(cell.data ?? '0x', 'CellData').length;
   return length ? decodedDataParts(cell, length) : [];
 }

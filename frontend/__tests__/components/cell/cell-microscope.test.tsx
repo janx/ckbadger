@@ -68,6 +68,22 @@ describe('cell microscope', () => {
     expect(screen.getByLabelText('CellData byte map')).toBeInTheDocument();
   });
 
+  // Lane B (B1): the API describes an ELF it cannot parse; the map says so and draws no layout.
+  it('says a data ELF does not parse and leaves its bytes unclassified', () => {
+    const elfCell = {
+      ...cell,
+      data: '0x7f454c46',
+      dataAnalysis: undefined,
+      elf: { status: 'unparsed', reason: 'ELF header truncated: 4 bytes' },
+    } as Cell;
+    render(<CellMicroscope cell={elfCell} />);
+    const data = screen.getByLabelText('CellData byte map');
+    expect(data).toHaveTextContent(
+      'outputs_data[0] · an ELF file that does not parse: ELF header truncated: 4 bytes'
+    );
+    expect(cellDataParts(elfCell).map((part) => part.label)).toEqual(['unclassified bytes']);
+  });
+
   it('a tap pins a byte, a field or a map part in the line under the bytes; a second tap clears it (R6)', () => {
     render(<CellMicroscope cell={cell} />);
     const box = screen.getByLabelText('Cell bytes');
@@ -139,6 +155,7 @@ it('shows NOBITS as memory only and current references as current evidence', () 
   const codeCell = {
     ...cell,
     elf: {
+      status: 'parsed',
       header: {
         class: 'ELF64',
         endian: 'little',
@@ -181,7 +198,7 @@ it('shows NOBITS as memory only and current references as current evidence', () 
       ],
       unassignedFileRanges: [{ start: 192, end: 256 }],
       comment: 'rustc',
-      riscvAttributes: 'rv64imac',
+      riscvAttributes: { status: 'parsed', arch: 'rv64imac' },
     },
     codeCell: {
       versionHash: `0x${'22'.repeat(32)}`,
@@ -234,6 +251,7 @@ it('links actual same-transaction Type ID upgrades without treating unchanged by
   const codeCell = {
     ...cell,
     elf: {
+      status: 'parsed',
       header: {
         class: 'ELF64',
         endian: 'little',

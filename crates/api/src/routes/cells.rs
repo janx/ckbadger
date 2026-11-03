@@ -2079,8 +2079,10 @@ pub struct CellDetailResponse {
     pub code_cell_of: Option<Vec<CodeCellScript>>,
     /// Canonical serialized CellOutput, with a nonoverlapping field map.
     pub cell_output_molecule: cell_anatomy::MoleculeCellOutput,
+    /// The data read as an ELF file (absent when it has no ELF magic):
+    /// `{status: "parsed", …layout}` or `{status: "unparsed", reason}`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub elf: Option<cell_elf::ElfAnalysis>,
+    pub elf: Option<cell_elf::CellElf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_cell: Option<CodeCellEvidence>,
     pub current_spend_requirements: Vec<CellSpendRequirement>,
@@ -2591,14 +2593,12 @@ fn code_cell_upgrade_cohort(
         {
             continue;
         }
-        let Some(_) = cell_elf::parse(&data.raw_data()).map_err(|error| {
-            ApiError::internal(format!(
-                "cell {outpoint} upgrade cohort output {index} ELF parse: {error:#}"
-            ))
-        })?
-        else {
+        // Code by the one rule the cell page uses: the ELF magic. Whether the
+        // binary parses is what its own cell page describes, not a condition
+        // of being an upgrade.
+        if !cell_elf::has_elf_magic(&data.raw_data()) {
             continue;
-        };
+        }
         let type_hash = type_script.calc_script_hash();
         let matches: Vec<_> = inputs
             .iter()
@@ -3837,14 +3837,9 @@ async fn get_cell(
     } else {
         None
     };
-    let elf = cell_data
-        .as_ref()
-        .map(|data| cell_elf::parse(data))
-        .transpose()
-        .map_err(|error| {
-            ApiError::internal(format!("ELF parse failed: outpoint={outpoint}: {error:#}"))
-        })?
-        .flatten();
+    // A binary that does not parse is chain data: described in `elf`, the
+    // cell still served (lane B, B1).
+    let elf = cell_data.as_deref().and_then(cell_elf::read);
     let code_cell = if elf.is_some() {
         let hash = data_hash.as_ref().expect("ELF bytes were hashed");
         let mut current_references = Vec::new();

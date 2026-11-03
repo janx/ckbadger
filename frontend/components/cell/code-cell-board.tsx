@@ -1,6 +1,6 @@
 'use client';
 import Link from '@/components/ui/link';
-import type { Cell } from '@/lib/api';
+import type { Cell, CellElfAnalysis } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { CELL_COLORS } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
@@ -37,8 +37,6 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
   const typeUsers = byType.reduce((n, reference) => n + liveUsers(reference), 0);
   const dataUsers = byData.reduce((n, reference) => n + liveUsers(reference), 0);
   const who = names.length ? `${names.join(' / ')} ` : '';
-  const comment = elf.comment?.split(' · ').filter(Boolean) ?? [];
-  const stripped = !elf.sections.some((section) => section.name === '.symtab');
   return (
     <section aria-labelledby="code-cell-heading" className="min-w-0 space-y-3">
       <h2 id="code-cell-heading" className="text-text-bright text-section font-medium">
@@ -88,21 +86,14 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
           className="flex min-w-0 flex-col gap-1 border-t-2 border-[#343c50] pt-2.5"
         >
           <span className="text-text-dim">built with</span>
-          {comment.length ? (
-            comment.map((piece) => (
-              <span key={piece} className="text-text-bright [overflow-wrap:anywhere]">
-                {piece}
-              </span>
-            ))
+          {elf.status === 'parsed' ? (
+            <BuiltWith elf={elf} />
           ) : (
-            <span className="text-text-dim">No .comment section</span>
+            <span data-testid="code-elf-unparsed" className="[overflow-wrap:anywhere]">
+              Its data starts like an ELF file but does not parse, so what built it is unknown:{' '}
+              <span className="text-text-bright">{elf.reason}</span>
+            </span>
           )}
-          <span>
-            {elf.riscvAttributes ? `target ${elf.riscvAttributes} · ` : ''}entry 0x
-            {BigInt(elf.header.entry).toString(16)}
-            {stripped ? ' · no symbol table' : ''}. Read from the binary&apos;s own .comment and
-            .riscv.attributes sections.
-          </span>
         </div>
       </div>
       {otherReferences.length > 0 && (
@@ -177,5 +168,39 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         </div>
       </details>
     </section>
+  );
+}
+
+/** What built the binary, from its own .comment and .riscv.attributes sections. */
+function BuiltWith({ elf }: { elf: CellElfAnalysis }) {
+  const comment = elf.comment?.split(' · ').filter(Boolean) ?? [];
+  const stripped = !elf.sections.some((section) => section.name === '.symtab');
+  const attributes = elf.riscvAttributes;
+  return (
+    <>
+      {comment.length ? (
+        comment.map((piece) => (
+          <span key={piece} className="text-text-bright [overflow-wrap:anywhere]">
+            {piece}
+          </span>
+        ))
+      ) : (
+        <span className="text-text-dim">No .comment section</span>
+      )}
+      <span>
+        {attributes?.status === 'parsed' && attributes.arch ? `target ${attributes.arch} · ` : ''}
+        {attributes?.status === 'unparsed' && (
+          <>
+            <span data-testid="code-target-unread" title={attributes.reason}>
+              target unknown: .riscv.attributes does not parse
+            </span>
+            {' · '}
+          </>
+        )}
+        entry 0x{BigInt(elf.header.entry).toString(16)}
+        {stripped ? ' · no symbol table' : ''}. Read from the binary&apos;s own .comment and
+        .riscv.attributes sections.
+      </span>
+    </>
   );
 }
