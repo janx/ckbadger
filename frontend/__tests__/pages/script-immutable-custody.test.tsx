@@ -3,6 +3,7 @@ import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
+import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
 
@@ -82,8 +83,11 @@ describe('Script page · who can change immutable code (table-rows L1-3)', () =>
     } as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
-    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    // Lane S: the newest cells read the same fixture rows newest first, and each row's detail.
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
     vi.mocked(api.lookupScripts).mockResolvedValue({});
   });
   afterEach(() => {

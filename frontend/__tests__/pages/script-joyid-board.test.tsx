@@ -3,6 +3,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
 import { phoneLines, stubLayoutWidths } from '@/__tests__/utils/phone-row';
 import fixture from '@/__tests__/fixtures/scripts/joyid-family-detail.json';
+import { byScript, rowDetail } from '@/__tests__/utils/script-newest-cells';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 import { api, type Cell } from '@/lib/api';
 import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
@@ -60,8 +61,11 @@ describe('JoyID script page against the ScriptJoyid board', () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
-    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    // Lane S: the newest cells read the same fixture rows newest first, and each row's detail.
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
     vi.mocked(api.lookupScripts).mockResolvedValue({});
   });
   afterEach(() => {
@@ -263,8 +267,11 @@ describe('JoyID script page · visual pass', () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
-    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    // Lane S: the newest cells read the same fixture rows newest first, and each row's detail.
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
     vi.mocked(api.lookupScripts).mockResolvedValue({});
   });
   afterEach(() => {
@@ -303,8 +310,11 @@ describe('JoyID script page · visual pass', () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
-    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    // Lane S: the newest cells read the same fixture rows newest first, and each row's detail.
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
     vi.mocked(api.lookupScripts).mockResolvedValue({});
     render(<ScriptDetailPage name="JoyID" />);
     await screen.findByRole('heading', { name: 'JoyID', level: 1 });
@@ -343,8 +353,11 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
-    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    // Lane S: the newest cells read the same fixture rows newest first, and each row's detail.
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
     vi.mocked(api.lookupScripts).mockResolvedValue({});
   });
   afterEach(() => {
@@ -523,8 +536,15 @@ describe('JoyID script page · hierarchy v3 (C0′, C2, C3)', () => {
 
   it('spaces tier 1 like the DAO page: 64 px under the hero, then 72 px, h2 18 px above its evidence (R6)', async () => {
     await renderJoyid();
+    // Lane S: "Newest cells" is the first section under the hero now; custody follows at 72 px.
+    const newest = screen.getByRole('region', { name: 'Newest cells' });
+    expect(newest).toHaveClass('mt-16');
+    expect(within(newest).getByRole('heading', { level: 2 }).parentElement).toHaveClass(
+      'mb-[18px]',
+      'flex'
+    );
     const custody = screen.getByRole('region', { name: 'Who can change its code' });
-    expect(custody).toHaveClass('mt-16');
+    expect(custody).toHaveClass('mt-[72px]');
     for (const name of ['Code versions', 'Its cells']) {
       const h2 = within(tier1()).getByRole('heading', { name, level: 2 });
       expect(h2.closest('section')).toHaveClass('mt-[72px]');
@@ -578,8 +598,11 @@ describe('JoyID code versions at phone and 640 widths (board L7)', () => {
     vi.mocked(api.getScriptFamilyDetail).mockResolvedValue(fixture.family as never);
     vi.mocked(api.getScriptUsage).mockResolvedValue(fixture.usage);
     vi.mocked(api.getScriptCapacityChart).mockResolvedValue(fixture.chart);
-    vi.mocked(api.getCell).mockImplementation(async (tx, index) => codeCell(tx, index));
-    vi.mocked(api.getCellsByScriptRef).mockResolvedValue(fixture.cells as never);
+    // Lane S: the newest cells read the same fixture rows newest first, and each row's detail.
+    vi.mocked(api.getCell).mockImplementation(
+      async (tx, index) => rowDetail(fixture.cells.data as never, tx, index) ?? codeCell(tx, index)
+    );
+    vi.mocked(api.getCellsByScriptRef).mockImplementation(byScript(() => fixture.cells as never));
     vi.mocked(api.lookupScripts).mockResolvedValue({});
     render(<ScriptDetailPage name="JoyID" />);
   };

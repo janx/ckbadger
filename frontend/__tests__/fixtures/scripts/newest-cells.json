@@ -1,0 +1,1761 @@
+{
+  "capturedAtTip": 20911460,
+  "scripts": {
+    "Default Lock": {
+      "family": {
+        "familyId": "default-lock",
+        "name": "Default Lock",
+        "description": "SECP256K1/blake160 is the default lock script to verify CKB transaction signature.",
+        "scriptKind": "lock",
+        "website": null,
+        "liveCellsCount": 887562,
+        "cellsCount": 78344014,
+        "ownedCapacitySum": "4674809312848278883",
+        "ownedKnowledgeSum": "6538845400000000",
+        "versionsCount": 1,
+        "versions": [
+          {
+            "versionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "name": "Default Lock",
+            "description": "SECP256K1/blake160 is the default lock script to verify CKB transaction signature.",
+            "scriptKind": "lock",
+            "website": null,
+            "deprecated": false,
+            "canonicalReferenceHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "canonicalHashType": "type",
+            "deployedAt": 1573852190812,
+            "firstDeployedBlock": 0,
+            "firstDeployedTxIndex": 0,
+            "liveCellsCount": 887562,
+            "cellsCount": 78344014,
+            "ownedCapacitySum": "4674809312848278883",
+            "ownedKnowledgeSum": "6538845400000000",
+            "codeCellsLiveCount": 1,
+            "codeCellsTotal": 1,
+            "deployments": [
+              {
+                "hashType": "type",
+                "typeReferenceHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                "dataReferenceHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+                "codeCellTxHash": "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c",
+                "codeCellOutputIndex": 1,
+                "deployedAt": 1573852190812,
+                "createdAtBlock": 0,
+                "status": "live",
+                "consumedAtBlock": null,
+                "consumedByTx": null,
+                "custody": {
+                  "class": "unspendable",
+                  "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "lockHashType": "data",
+                  "lockArgs": "0x",
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": []
+                }
+              }
+            ],
+            "references": [
+              {
+                "referenceHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                "hashType": "type",
+                "liveCellsCount": 887559,
+                "cellsCount": 78344009,
+                "ownedCapacitySum": "4674809276048286304",
+                "ownedKnowledgeSum": "6538812700000000",
+                "currentVersionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+                "custody": {
+                  "class": "unspendable",
+                  "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "lockHashType": "data",
+                  "lockArgs": "0x",
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": [
+                    {
+                      "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                      "lockHashType": "data",
+                      "lockArgs": "0x",
+                      "class": "unspendable",
+                      "codeCells": [
+                        "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c:1"
+                      ]
+                    }
+                  ]
+                }
+              },
+              {
+                "referenceHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+                "hashType": "data",
+                "liveCellsCount": 2,
+                "cellsCount": 3,
+                "ownedCapacitySum": "26799993379",
+                "ownedKnowledgeSum": "26600000000",
+                "currentVersionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+                "custody": {
+                  "class": "fixed",
+                  "lockCodeHash": null,
+                  "lockHashType": null,
+                  "lockArgs": null,
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": []
+                }
+              },
+              {
+                "referenceHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+                "hashType": "data1",
+                "liveCellsCount": 1,
+                "cellsCount": 2,
+                "ownedCapacitySum": "9999999200",
+                "ownedKnowledgeSum": "6100000000",
+                "currentVersionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+                "custody": {
+                  "class": "fixed",
+                  "lockCodeHash": null,
+                  "lockHashType": null,
+                  "lockArgs": null,
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": []
+                }
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "referenceHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "hashType": "data",
+            "liveCellsCount": 2,
+            "cellsCount": 3,
+            "ownedCapacitySum": "26799993379",
+            "ownedKnowledgeSum": "26600000000",
+            "currentVersionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "custody": {
+              "class": "fixed",
+              "lockCodeHash": null,
+              "lockHashType": null,
+              "lockArgs": null,
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": []
+            }
+          },
+          {
+            "referenceHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "hashType": "data1",
+            "liveCellsCount": 1,
+            "cellsCount": 2,
+            "ownedCapacitySum": "9999999200",
+            "ownedKnowledgeSum": "6100000000",
+            "currentVersionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "custody": {
+              "class": "fixed",
+              "lockCodeHash": null,
+              "lockHashType": null,
+              "lockArgs": null,
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": []
+            }
+          },
+          {
+            "referenceHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "liveCellsCount": 887559,
+            "cellsCount": 78344009,
+            "ownedCapacitySum": "4674809276048286304",
+            "ownedKnowledgeSum": "6538812700000000",
+            "currentVersionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "custody": {
+              "class": "unspendable",
+              "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "lockHashType": "data",
+              "lockArgs": "0x",
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": [
+                {
+                  "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "lockHashType": "data",
+                  "lockArgs": "0x",
+                  "class": "unspendable",
+                  "codeCells": [
+                    "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c:1"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "codeClasses": [
+          {
+            "class": "fixed",
+            "lockCellsCount": 3,
+            "lockOwnedCapacitySum": "36799992579",
+            "referenceCount": 2
+          },
+          {
+            "class": "unspendable",
+            "lockCellsCount": 887559,
+            "lockOwnedCapacitySum": "4674809276048286304",
+            "referenceCount": 1
+          }
+        ],
+        "history": [
+          {
+            "referenceHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "versionHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "event": "deployed",
+            "blockNumber": 0,
+            "txIndex": 0,
+            "timestamp": 1573852190812,
+            "chainTimeMs": 1573852190812,
+            "indexedDay": "2019-11-16",
+            "codeCellTxHash": "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c",
+            "codeCellOutputIndex": 1,
+            "eventTxHash": "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c",
+            "custody": {
+              "class": "unspendable",
+              "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "lockHashType": "data",
+              "lockArgs": "0x",
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": []
+            }
+          }
+        ]
+      },
+      "usage": {
+        "name": "Default Lock",
+        "cellsCount": 78344014,
+        "liveCellsCount": 887562,
+        "capacitySum": "1319883067970388799008",
+        "ownedCapacitySum": "4674809312848278883",
+        "commonKnowledgeSizeSum": "584329795600000000",
+        "ownedKnowledgeSum": "6538845400000000",
+        "byDeployment": [
+          {
+            "codeHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "scriptKind": "lock",
+            "cellsCount": 78344014,
+            "liveCellsCount": 887562,
+            "capacitySum": "1319883067970388799008",
+            "ownedCapacitySum": "4674809312848278883",
+            "commonKnowledgeSizeSum": "584329795600000000",
+            "ownedKnowledgeSum": "6538845400000000"
+          }
+        ]
+      },
+      "newest": {
+        "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649:data": {
+          "data": [
+            {
+              "txHash": "0xf4ef987e5ac12901064c4377ac35e24761cb9ca4483cf37ff382a135961c3ff2",
+              "outputIndex": 0,
+              "capacity": "13399996373",
+              "commonKnowledgeSize": "13300000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 61,
+                "dataBytes": 11,
+                "totalBytes": 133
+              },
+              "lockScriptHash": "0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2",
+              "address": "ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz",
+              "typeScriptHash": "0xa64c9bd8c43451483ea6257654fe13221273fa0b50384c19b8de2d3896cb714c",
+              "typeCodeHash": "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+              "typeHashType": "type",
+              "typeProtocolName": "m-nft",
+              "lockScriptName": null,
+              "typeScriptName": "M-NFT",
+              "dataSize": 11,
+              "createdAtBlock": 6716961,
+              "matchedScriptKind": "lock"
+            },
+            {
+              "txHash": "0xae43edadc318fc802ce20ed40b785f75839c7455047c15ebb9de2d757a308f5d",
+              "outputIndex": 0,
+              "capacity": "13399997006",
+              "commonKnowledgeSize": "13300000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 61,
+                "dataBytes": 11,
+                "totalBytes": 133
+              },
+              "lockScriptHash": "0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2",
+              "address": "ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz",
+              "typeScriptHash": "0x0f8234867a7f24ccb15f80fe00653322d4afb49b52daff2b8fdbe8ed006b732b",
+              "typeCodeHash": "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+              "typeHashType": "type",
+              "typeProtocolName": "m-nft",
+              "lockScriptName": null,
+              "typeScriptName": "M-NFT",
+              "dataSize": 11,
+              "createdAtBlock": 6716959,
+              "matchedScriptKind": "lock"
+            }
+          ],
+          "total": 2,
+          "limit": 5,
+          "hasMore": false,
+          "nextCursor": null
+        },
+        "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649:data1": {
+          "data": [
+            {
+              "txHash": "0x2f4d89d9e56a933af5edd9f5c029010786229709aed4a455abf3ce0623e1ea71",
+              "outputIndex": 1,
+              "capacity": "9999999200",
+              "commonKnowledgeSize": "6100000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 0,
+                "dataBytes": 0,
+                "totalBytes": 61
+              },
+              "lockScriptHash": "0x540f5b432d7a6da522aca749e6cdbdcabc86e3fa02a1122d81086333699f0ae4",
+              "address": "ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjqhyv0tufjegg4an5tmnt5we92t3kr66w5gqxxdsg",
+              "typeScriptHash": null,
+              "lockScriptName": null,
+              "typeScriptName": null,
+              "dataSize": 0,
+              "createdAtBlock": 7151178,
+              "matchedScriptKind": "lock"
+            }
+          ],
+          "total": 1,
+          "limit": 5,
+          "hasMore": false,
+          "nextCursor": null
+        },
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8:type": {
+          "data": [
+            {
+              "txHash": "0xfc79070b2593309294792fb537251c84806315337dc1514a6216131bd45bcf91",
+              "outputIndex": 0,
+              "capacity": "64940561670",
+              "commonKnowledgeSize": "6100000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 0,
+                "dataBytes": 0,
+                "totalBytes": 61
+              },
+              "lockScriptHash": "0xfc20a8c81a461efaf91585c631db784749d066f709d30243095efda7a7fdcfd9",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfrdwlcghv62qw704s93hhsj",
+              "typeScriptHash": null,
+              "lockScriptName": "Default Lock",
+              "typeScriptName": null,
+              "dataSize": 0,
+              "createdAtBlock": 20911460,
+              "matchedScriptKind": "lock"
+            },
+            {
+              "txHash": "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f",
+              "outputIndex": 2,
+              "capacity": "261819762000",
+              "commonKnowledgeSize": "6100000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 0,
+                "dataBytes": 0,
+                "totalBytes": 61
+              },
+              "lockScriptHash": "0x3e58983700f5219ba071a6ccc58a0c9efb8e2823aa58e43cbab4dcd69892ec45",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0764vl97f7teu43k9x9v93fr9330zgf0cr43nr7",
+              "typeScriptHash": null,
+              "lockScriptName": "Default Lock",
+              "typeScriptName": null,
+              "dataSize": 0,
+              "createdAtBlock": 20911460,
+              "matchedScriptKind": "lock"
+            },
+            {
+              "txHash": "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f",
+              "outputIndex": 1,
+              "capacity": "40000000000",
+              "commonKnowledgeSize": "10500000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 34,
+                "dataBytes": 10,
+                "totalBytes": 105
+              },
+              "lockScriptHash": "0x3e58983700f5219ba071a6ccc58a0c9efb8e2823aa58e43cbab4dcd69892ec45",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0764vl97f7teu43k9x9v93fr9330zgf0cr43nr7",
+              "typeScriptHash": "0x91cc6d9bd033e7d693105a7ed7e1cd32747b605f4004134946798e58f12cf816",
+              "typeCodeHash": "0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79",
+              "typeHashType": "type",
+              "lockScriptName": "Default Lock",
+              "typeScriptName": ".bit Time Info",
+              "dataSize": 10,
+              "createdAtBlock": 20911460,
+              "matchedScriptKind": "lock"
+            },
+            {
+              "txHash": "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f",
+              "outputIndex": 0,
+              "capacity": "40000000000",
+              "commonKnowledgeSize": "9700000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 34,
+                "dataBytes": 2,
+                "totalBytes": 97
+              },
+              "lockScriptHash": "0x3e58983700f5219ba071a6ccc58a0c9efb8e2823aa58e43cbab4dcd69892ec45",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0764vl97f7teu43k9x9v93fr9330zgf0cr43nr7",
+              "typeScriptHash": "0x2213d714b2a3a01a470af4025b2440f4472a4517f8c11220d8cf91686e645502",
+              "typeCodeHash": "0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43",
+              "typeHashType": "type",
+              "lockScriptName": "Default Lock",
+              "typeScriptName": ".bit Time Index State",
+              "dataSize": 2,
+              "createdAtBlock": 20911460,
+              "matchedScriptKind": "lock"
+            },
+            {
+              "txHash": "0x3daee52a6315ca3c1c7129cf3b3b907e4afd3cd22ef46a90a04f2c4132b84722",
+              "outputIndex": 2,
+              "capacity": "131865233000",
+              "commonKnowledgeSize": "6100000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 0,
+                "dataBytes": 0,
+                "totalBytes": 61
+              },
+              "lockScriptHash": "0xdec6e99cc157fa44b4771ef092f711c4676044d0e49e6d31c19770f757288995",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwyt2p74pg74ccrqll50yvv50fd4098u5sq3q7ue",
+              "typeScriptHash": null,
+              "lockScriptName": "Default Lock",
+              "typeScriptName": null,
+              "dataSize": 0,
+              "createdAtBlock": 20911460,
+              "matchedScriptKind": "lock"
+            }
+          ],
+          "total": 887559,
+          "limit": 5,
+          "hasMore": true,
+          "nextCursor": "9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce80100000000013f15643daee52a6315ca3c1c7129cf3b3b907e4afd3cd22ef46a90a04f2c4132b847220002"
+        }
+      },
+      "details": {
+        "0xf4ef987e5ac12901064c4377ac35e24761cb9ca4483cf37ff382a135961c3ff2:0": {
+          "txHash": "0xf4ef987e5ac12901064c4377ac35e24761cb9ca4483cf37ff382a135961c3ff2",
+          "outputIndex": 0,
+          "capacity": "13399996373",
+          "commonKnowledgeSize": "13300000000",
+          "lockScriptHash": "0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2",
+          "dataSize": 11,
+          "createdAtBlock": 6716961,
+          "createdTimestamp": "2022-03-17T04:13:54.480+00:00",
+          "status": "live",
+          "address": "ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz",
+          "typeScriptHash": "0xa64c9bd8c43451483ea6257654fe13221273fa0b50384c19b8de2d3896cb714c",
+          "lock": {
+            "codeHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "hashType": "data",
+            "args": "0xb73961e46d9eb118d3de1d1e8f30b3af7bbf3160"
+          },
+          "type": {
+            "codeHash": "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+            "hashType": "type",
+            "args": "0x558765d2e67a13b9374c27286edeb3e61e5359660000000400000006"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "m-nft"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "mnft_token_cell",
+              "summary": "mNFT token layout detected",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0xae43edadc318fc802ce20ed40b785f75839c7455047c15ebb9de2d757a308f5d:0": {
+          "txHash": "0xae43edadc318fc802ce20ed40b785f75839c7455047c15ebb9de2d757a308f5d",
+          "outputIndex": 0,
+          "capacity": "13399997006",
+          "commonKnowledgeSize": "13300000000",
+          "lockScriptHash": "0x64b2aa1eadd2ad55a37296d7624c1c822156eee760506a9b67db51badebfdea2",
+          "dataSize": 11,
+          "createdAtBlock": 6716959,
+          "createdTimestamp": "2022-03-17T04:13:49.050+00:00",
+          "status": "live",
+          "address": "ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjq9h89s7gmv7kyvd8hsar68npva00wlnzcqgh76tz",
+          "typeScriptHash": "0x0f8234867a7f24ccb15f80fe00653322d4afb49b52daff2b8fdbe8ed006b732b",
+          "lock": {
+            "codeHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "hashType": "data",
+            "args": "0xb73961e46d9eb118d3de1d1e8f30b3af7bbf3160"
+          },
+          "type": {
+            "codeHash": "0x2b24f0d644ccbdd77bbf86b27c8cca02efa0ad051e447c212636d9ee7acaaec9",
+            "hashType": "type",
+            "args": "0xcb5625b6d3fbce2e12549a2ab56787f9f069007b000000000000001e"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "m-nft"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "mnft_token_cell",
+              "summary": "mNFT token layout detected",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0x2f4d89d9e56a933af5edd9f5c029010786229709aed4a455abf3ce0623e1ea71:1": {
+          "txHash": "0x2f4d89d9e56a933af5edd9f5c029010786229709aed4a455abf3ce0623e1ea71",
+          "outputIndex": 1,
+          "capacity": "9999999200",
+          "commonKnowledgeSize": "6100000000",
+          "lockScriptHash": "0x540f5b432d7a6da522aca749e6cdbdcabc86e3fa02a1122d81086333699f0ae4",
+          "dataSize": 0,
+          "createdAtBlock": 7151178,
+          "createdTimestamp": "2022-05-17T07:33:07.467+00:00",
+          "status": "live",
+          "address": "ckb1qpcf7076zt6krnavly3883t6nrlduxy28ud9nv0c3rg387wvuzryjqhyv0tufjegg4an5tmnt5we92t3kr66w5gqxxdsg",
+          "typeScriptHash": null,
+          "lock": {
+            "codeHash": "0x709f3fda12f561cfacf92273c57a98fede188a3f1a59b1f888d113f9cce08649",
+            "hashType": "data1",
+            "args": "0xe463d7c4cb28457b3a2f735d1d92a971b0f5a751"
+          },
+          "type": null,
+          "protocolScript": {
+            "lock": null,
+            "type": null
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": null,
+            "heuristicGuesses": []
+          }
+        },
+        "0xfc79070b2593309294792fb537251c84806315337dc1514a6216131bd45bcf91:0": {
+          "txHash": "0xfc79070b2593309294792fb537251c84806315337dc1514a6216131bd45bcf91",
+          "outputIndex": 0,
+          "capacity": "64940561670",
+          "commonKnowledgeSize": "6100000000",
+          "lockScriptHash": "0xfc20a8c81a461efaf91585c631db784749d066f709d30243095efda7a7fdcfd9",
+          "dataSize": 0,
+          "createdAtBlock": 20911460,
+          "createdTimestamp": "2026-11-03T03:52:34.428+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0tpsqq08mkay9ewrfrdwlcghv62qw704s93hhsj",
+          "typeScriptHash": null,
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xeb0c00079f76e90b970d236bbf845d9a501de7d6"
+          },
+          "type": null,
+          "protocolScript": {
+            "lock": null,
+            "type": null
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": null,
+            "heuristicGuesses": []
+          }
+        },
+        "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f:2": {
+          "txHash": "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f",
+          "outputIndex": 2,
+          "capacity": "261819762000",
+          "commonKnowledgeSize": "6100000000",
+          "lockScriptHash": "0x3e58983700f5219ba071a6ccc58a0c9efb8e2823aa58e43cbab4dcd69892ec45",
+          "dataSize": 0,
+          "createdAtBlock": 20911460,
+          "createdTimestamp": "2026-11-03T03:52:34.428+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0764vl97f7teu43k9x9v93fr9330zgf0cr43nr7",
+          "typeScriptHash": null,
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xfed559f2f93e5e7958d8a62b0b148cb18bc484bf"
+          },
+          "type": null,
+          "protocolScript": {
+            "lock": null,
+            "type": null
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": null,
+            "heuristicGuesses": []
+          }
+        },
+        "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f:1": {
+          "txHash": "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f",
+          "outputIndex": 1,
+          "capacity": "40000000000",
+          "commonKnowledgeSize": "10500000000",
+          "lockScriptHash": "0x3e58983700f5219ba071a6ccc58a0c9efb8e2823aa58e43cbab4dcd69892ec45",
+          "dataSize": 10,
+          "createdAtBlock": 20911460,
+          "createdTimestamp": "2026-11-03T03:52:34.428+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0764vl97f7teu43k9x9v93fr9330zgf0cr43nr7",
+          "typeScriptHash": "0x91cc6d9bd033e7d693105a7ed7e1cd32747b605f4004134946798e58f12cf816",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xfed559f2f93e5e7958d8a62b0b148cb18bc484bf"
+          },
+          "type": {
+            "codeHash": "0x9e537bf5b8ec044ca3f53355e879f3fd8832217e4a9b41d9994cf0c547241a79",
+            "hashType": "type",
+            "args": "0x02"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": null
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": null,
+            "heuristicGuesses": []
+          }
+        },
+        "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f:0": {
+          "txHash": "0x55d53352cbd463c7bd6c9ca6c7b215a5264f30941c095a1d4ca52fdd112a136f",
+          "outputIndex": 0,
+          "capacity": "40000000000",
+          "commonKnowledgeSize": "9700000000",
+          "lockScriptHash": "0x3e58983700f5219ba071a6ccc58a0c9efb8e2823aa58e43cbab4dcd69892ec45",
+          "dataSize": 2,
+          "createdAtBlock": 20911460,
+          "createdTimestamp": "2026-11-03T03:52:34.428+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0764vl97f7teu43k9x9v93fr9330zgf0cr43nr7",
+          "typeScriptHash": "0x2213d714b2a3a01a470af4025b2440f4472a4517f8c11220d8cf91686e645502",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xfed559f2f93e5e7958d8a62b0b148cb18bc484bf"
+          },
+          "type": {
+            "codeHash": "0x3a468d53352eb855521dabed0dc7036929bfe72766ad58f801edfbae564f7b43",
+            "hashType": "type",
+            "args": "0x02"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": null
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": null,
+            "heuristicGuesses": []
+          }
+        },
+        "0x3daee52a6315ca3c1c7129cf3b3b907e4afd3cd22ef46a90a04f2c4132b84722:2": {
+          "txHash": "0x3daee52a6315ca3c1c7129cf3b3b907e4afd3cd22ef46a90a04f2c4132b84722",
+          "outputIndex": 2,
+          "capacity": "131865233000",
+          "commonKnowledgeSize": "6100000000",
+          "lockScriptHash": "0xdec6e99cc157fa44b4771ef092f711c4676044d0e49e6d31c19770f757288995",
+          "dataSize": 0,
+          "createdAtBlock": 20911460,
+          "createdTimestamp": "2026-11-03T03:52:34.428+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqwyt2p74pg74ccrqll50yvv50fd4098u5sq3q7ue",
+          "typeScriptHash": null,
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xc45a83ea851eae30307ff47918ca3d2dabca7e52"
+          },
+          "type": null,
+          "protocolScript": {
+            "lock": null,
+            "type": null
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": null,
+            "heuristicGuesses": []
+          }
+        }
+      }
+    },
+    "Nervos DAO": {
+      "family": {
+        "familyId": "nervos-dao",
+        "name": "Nervos DAO",
+        "description": "Nervos DAO is a smart contract with which users can interact the same way as any smart contract on CKB.",
+        "scriptKind": "type",
+        "website": null,
+        "liveCellsCount": 22291,
+        "cellsCount": 163163,
+        "ownedCapacitySum": "904628969152297315",
+        "ownedKnowledgeSum": "227686200000000",
+        "versionsCount": 1,
+        "versions": [
+          {
+            "versionHash": "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+            "name": "Nervos DAO",
+            "description": "Nervos DAO is a smart contract with which users can interact the same way as any smart contract on CKB.",
+            "scriptKind": "type",
+            "website": null,
+            "deprecated": false,
+            "canonicalReferenceHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "canonicalHashType": "type",
+            "deployedAt": 1573852190812,
+            "firstDeployedBlock": 0,
+            "firstDeployedTxIndex": 0,
+            "liveCellsCount": 22291,
+            "cellsCount": 163163,
+            "ownedCapacitySum": "904628969152297315",
+            "ownedKnowledgeSum": "227686200000000",
+            "codeCellsLiveCount": 1,
+            "codeCellsTotal": 1,
+            "deployments": [
+              {
+                "hashType": "type",
+                "typeReferenceHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+                "dataReferenceHash": "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+                "codeCellTxHash": "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c",
+                "codeCellOutputIndex": 2,
+                "deployedAt": 1573852190812,
+                "createdAtBlock": 0,
+                "status": "live",
+                "consumedAtBlock": null,
+                "consumedByTx": null,
+                "custody": {
+                  "class": "unspendable",
+                  "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "lockHashType": "data",
+                  "lockArgs": "0x",
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": []
+                }
+              }
+            ],
+            "references": [
+              {
+                "referenceHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+                "hashType": "type",
+                "liveCellsCount": 22291,
+                "cellsCount": 163163,
+                "ownedCapacitySum": "904628969152297315",
+                "ownedKnowledgeSum": "227686200000000",
+                "currentVersionHash": "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+                "custody": {
+                  "class": "unspendable",
+                  "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "lockHashType": "data",
+                  "lockArgs": "0x",
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": [
+                    {
+                      "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                      "lockHashType": "data",
+                      "lockArgs": "0x",
+                      "class": "unspendable",
+                      "codeCells": [
+                        "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c:2"
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "referenceHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "liveCellsCount": 22291,
+            "cellsCount": 163163,
+            "ownedCapacitySum": "904628969152297315",
+            "ownedKnowledgeSum": "227686200000000",
+            "currentVersionHash": "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+            "custody": {
+              "class": "unspendable",
+              "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "lockHashType": "data",
+              "lockArgs": "0x",
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": [
+                {
+                  "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+                  "lockHashType": "data",
+                  "lockArgs": "0x",
+                  "class": "unspendable",
+                  "codeCells": [
+                    "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c:2"
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "codeClasses": [
+          {
+            "class": "unspendable",
+            "lockCellsCount": 0,
+            "lockOwnedCapacitySum": "0",
+            "referenceCount": 1
+          }
+        ],
+        "history": [
+          {
+            "referenceHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "versionHash": "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+            "event": "deployed",
+            "blockNumber": 0,
+            "txIndex": 0,
+            "timestamp": 1573852190812,
+            "chainTimeMs": 1573852190812,
+            "indexedDay": "2019-11-16",
+            "codeCellTxHash": "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c",
+            "codeCellOutputIndex": 2,
+            "eventTxHash": "0xe2fb199810d49a4d8beec56718ba2593b665db9d52299a0f9e6e75416d73ff5c",
+            "custody": {
+              "class": "unspendable",
+              "lockCodeHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+              "lockHashType": "data",
+              "lockArgs": "0x",
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": []
+            }
+          }
+        ]
+      },
+      "usage": {
+        "name": "Nervos DAO",
+        "cellsCount": 163163,
+        "liveCellsCount": 22291,
+        "capacitySum": "6928992828770943369",
+        "ownedCapacitySum": "904628969152297315",
+        "commonKnowledgeSizeSum": "1665537200000000",
+        "ownedKnowledgeSum": "227686200000000",
+        "byDeployment": [
+          {
+            "codeHash": "0x32064a14ce10d95d4b7343054cc19d73b25b16ae61a6c681011ca781a60c7923",
+            "scriptKind": "type",
+            "cellsCount": 163163,
+            "liveCellsCount": 22291,
+            "capacitySum": "6928992828770943369",
+            "ownedCapacitySum": "904628969152297315",
+            "commonKnowledgeSizeSum": "1665537200000000",
+            "ownedKnowledgeSum": "227686200000000"
+          }
+        ]
+      },
+      "newest": {
+        "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e:type": {
+          "data": [
+            {
+              "txHash": "0xfa30a7a1baeb12035322c0f91b0aae1be4848886efc9f8e397f727c1ab7831b9",
+              "outputIndex": 0,
+              "capacity": "10000000000000",
+              "commonKnowledgeSize": "10200000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 33,
+                "dataBytes": 8,
+                "totalBytes": 102
+              },
+              "lockScriptHash": "0x77b4e752f740cbd7914a3f769a71f0ae714500f9f88ba7fde0297e2f8319834f",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0dceyxzz2668v84aqldf259hph9s92npcexld6f",
+              "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+              "typeCodeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+              "typeHashType": "type",
+              "typeProtocolName": "nervos-dao",
+              "lockScriptName": "Default Lock",
+              "typeScriptName": "Nervos DAO",
+              "dataSize": 8,
+              "createdAtBlock": 20907299,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0xafbe1b69f9baf12bd5951556570e130d2cc380ad8228ca437f22ab94b83ca45c",
+              "outputIndex": 0,
+              "capacity": "255969662401",
+              "commonKnowledgeSize": "10200000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 33,
+                "dataBytes": 8,
+                "totalBytes": 102
+              },
+              "lockScriptHash": "0xd22f4cb9f31b20e8a49a112042fa12de178781677e7cb39a49cdaf46a3a010df",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq26w96mcgwauq2h6mdgwm66te5u97x0uncjl07m7",
+              "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+              "typeCodeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+              "typeHashType": "type",
+              "typeProtocolName": "nervos-dao",
+              "lockScriptName": "Default Lock",
+              "typeScriptName": "Nervos DAO",
+              "dataSize": 8,
+              "createdAtBlock": 20907185,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0x0648f71f9dda86a4930ce820c3c9b0d4cef14e8f74a7638be3d25b9e0132c107",
+              "outputIndex": 0,
+              "capacity": "1250000000000",
+              "commonKnowledgeSize": "10200000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 53,
+                "typeScriptBytes": 33,
+                "dataBytes": 8,
+                "totalBytes": 102
+              },
+              "lockScriptHash": "0x1d8490cbc1f3e30896fdd870087327c25e009fa54d17c26059fe7a04e74dec36",
+              "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdks3s3jj2rjjvjat3gdq5p8739d2ens6c0g7r0u",
+              "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+              "typeCodeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+              "typeHashType": "type",
+              "typeProtocolName": "nervos-dao",
+              "lockScriptName": "Default Lock",
+              "typeScriptName": "Nervos DAO",
+              "dataSize": 8,
+              "createdAtBlock": 20906522,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0xce10fbc11577b08674acb635a94244250df9972b9631471efc72262a800e0692",
+              "outputIndex": 0,
+              "capacity": "3000000000000",
+              "commonKnowledgeSize": "10400000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 55,
+                "typeScriptBytes": 33,
+                "dataBytes": 8,
+                "totalBytes": 104
+              },
+              "lockScriptHash": "0x90cee50cfdb5c5a387ff79e7da8edb77d56209f516d1297841e96840baec3c17",
+              "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqxrdrfphedazs4fmnjt3x326cfqgpmw6ssqkjpah",
+              "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+              "typeCodeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+              "typeHashType": "type",
+              "typeProtocolName": "nervos-dao",
+              "lockScriptName": "JoyID",
+              "typeScriptName": "Nervos DAO",
+              "dataSize": 8,
+              "createdAtBlock": 20905880,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0x4d7aa475f9a7cedebe41ce91610403e92cfcb87f901f1d49289036572253f8f2",
+              "outputIndex": 0,
+              "capacity": "500000000000000",
+              "commonKnowledgeSize": "10400000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 55,
+                "typeScriptBytes": 33,
+                "dataBytes": 8,
+                "totalBytes": 104
+              },
+              "lockScriptHash": "0xf8a176f98b2c79e259e60482eba7121ddc927743e52dd07ac73b382da6c7f209",
+              "address": "ckb1qzdcr9un5ezx8tkh03s46m9jymh22jruelq8svzr5krj2nx69dhjvqgj4uadkk4g56z9vp76m0urltpv0gew2tm2qqf0ycv5",
+              "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+              "typeCodeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+              "typeHashType": "type",
+              "typeProtocolName": "nervos-dao",
+              "lockScriptName": "OMNI Lock",
+              "typeScriptName": "Nervos DAO",
+              "dataSize": 8,
+              "createdAtBlock": 20903026,
+              "matchedScriptKind": "type"
+            }
+          ],
+          "total": 22291,
+          "limit": 5,
+          "hasMore": true,
+          "nextCursor": "82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e0100000000013ef4724d7aa475f9a7cedebe41ce91610403e92cfcb87f901f1d49289036572253f8f20000"
+        }
+      },
+      "details": {
+        "0xfa30a7a1baeb12035322c0f91b0aae1be4848886efc9f8e397f727c1ab7831b9:0": {
+          "txHash": "0xfa30a7a1baeb12035322c0f91b0aae1be4848886efc9f8e397f727c1ab7831b9",
+          "outputIndex": 0,
+          "capacity": "10000000000000",
+          "commonKnowledgeSize": "10200000000",
+          "lockScriptHash": "0x77b4e752f740cbd7914a3f769a71f0ae714500f9f88ba7fde0297e2f8319834f",
+          "dataSize": 8,
+          "createdAtBlock": 20907299,
+          "createdTimestamp": "2026-11-02T17:55:30.249+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0dceyxzz2668v84aqldf259hph9s92npcexld6f",
+          "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xedc64861095ad1d87af41f6a5542dc372c0aa987"
+          },
+          "type": {
+            "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "args": "0x"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "nervos-dao"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "dao_withdraw_request_cell",
+              "summary": "DAO withdraw-request cell detected (deposit_block_number=11227034)",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0xafbe1b69f9baf12bd5951556570e130d2cc380ad8228ca437f22ab94b83ca45c:0": {
+          "txHash": "0xafbe1b69f9baf12bd5951556570e130d2cc380ad8228ca437f22ab94b83ca45c",
+          "outputIndex": 0,
+          "capacity": "255969662401",
+          "commonKnowledgeSize": "10200000000",
+          "lockScriptHash": "0xd22f4cb9f31b20e8a49a112042fa12de178781677e7cb39a49cdaf46a3a010df",
+          "dataSize": 8,
+          "createdAtBlock": 20907185,
+          "createdTimestamp": "2026-11-02T17:33:13.699+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq26w96mcgwauq2h6mdgwm66te5u97x0uncjl07m7",
+          "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0x5a7175bc21dde0157d6da876f5a5e69c2f8cfe4f"
+          },
+          "type": {
+            "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "args": "0x"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "nervos-dao"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "dao_withdraw_request_cell",
+              "summary": "DAO withdraw-request cell detected (deposit_block_number=11227506)",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0x0648f71f9dda86a4930ce820c3c9b0d4cef14e8f74a7638be3d25b9e0132c107:0": {
+          "txHash": "0x0648f71f9dda86a4930ce820c3c9b0d4cef14e8f74a7638be3d25b9e0132c107",
+          "outputIndex": 0,
+          "capacity": "1250000000000",
+          "commonKnowledgeSize": "10200000000",
+          "lockScriptHash": "0x1d8490cbc1f3e30896fdd870087327c25e009fa54d17c26059fe7a04e74dec36",
+          "dataSize": 8,
+          "createdAtBlock": 20906522,
+          "createdTimestamp": "2026-11-02T15:34:37.615+00:00",
+          "status": "live",
+          "address": "ckb1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsqdks3s3jj2rjjvjat3gdq5p8739d2ens6c0g7r0u",
+          "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+          "lock": {
+            "codeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            "hashType": "type",
+            "args": "0xb6846119494394992eae28682813fa256ab3386b"
+          },
+          "type": {
+            "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "args": "0x"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "nervos-dao"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "dao_deposit_cell",
+              "summary": "DAO deposit cell detected (8-byte zero data)",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0xce10fbc11577b08674acb635a94244250df9972b9631471efc72262a800e0692:0": {
+          "txHash": "0xce10fbc11577b08674acb635a94244250df9972b9631471efc72262a800e0692",
+          "outputIndex": 0,
+          "capacity": "3000000000000",
+          "commonKnowledgeSize": "10400000000",
+          "lockScriptHash": "0x90cee50cfdb5c5a387ff79e7da8edb77d56209f516d1297841e96840baec3c17",
+          "dataSize": 8,
+          "createdAtBlock": 20905880,
+          "createdTimestamp": "2026-11-02T13:43:25.264+00:00",
+          "status": "live",
+          "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqxrdrfphedazs4fmnjt3x326cfqgpmw6ssqkjpah",
+          "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+          "lock": {
+            "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "hashType": "type",
+            "args": "0x000186d1a437cb7a28553b9c9713455ac24080edda84"
+          },
+          "type": {
+            "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "args": "0x"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "nervos-dao"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "dao_deposit_cell",
+              "summary": "DAO deposit cell detected (8-byte zero data)",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0x4d7aa475f9a7cedebe41ce91610403e92cfcb87f901f1d49289036572253f8f2:0": {
+          "txHash": "0x4d7aa475f9a7cedebe41ce91610403e92cfcb87f901f1d49289036572253f8f2",
+          "outputIndex": 0,
+          "capacity": "500000000000000",
+          "commonKnowledgeSize": "10400000000",
+          "lockScriptHash": "0xf8a176f98b2c79e259e60482eba7121ddc927743e52dd07ac73b382da6c7f209",
+          "dataSize": 8,
+          "createdAtBlock": 20903026,
+          "createdTimestamp": "2026-11-02T06:45:38.550+00:00",
+          "status": "live",
+          "address": "ckb1qzdcr9un5ezx8tkh03s46m9jymh22jruelq8svzr5krj2nx69dhjvqgj4uadkk4g56z9vp76m0urltpv0gew2tm2qqf0ycv5",
+          "typeScriptHash": "0xcc77c4deac05d68ab5b26828f0bf4565a8d73113d7bb7e92b8362b8a74e58e58",
+          "lock": {
+            "codeHash": "0x9b819793a64463aed77c615d6cb226eea5487ccfc0783043a587254cda2b6f26",
+            "hashType": "type",
+            "args": "0x12af3adb5aa8a6845607dadbf83fac2c7a32e52f6a00"
+          },
+          "type": {
+            "codeHash": "0x82d76d1b75fe2fd9a27dfbaa65a039221a380d76c926f378d3f81cf3e7e13f2e",
+            "hashType": "type",
+            "args": "0x"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "nervos-dao"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "dao_deposit_cell",
+              "summary": "DAO deposit cell detected (8-byte zero data)",
+              "segments": []
+            },
+            "heuristicGuesses": []
+          }
+        }
+      }
+    },
+    "Spore": {
+      "family": {
+        "familyId": "spore",
+        "name": "Spore",
+        "description": "Spore Protocol infuses digital assets with enduring value backed by tokenomics, redeemable at any time. Ensures true on-chain ownership, privacy, creative freedom and frictionless interaction.",
+        "scriptKind": "type",
+        "website": "https://spore.pro/",
+        "liveCellsCount": 37269,
+        "cellsCount": 99974,
+        "ownedCapacitySum": "1285121076293023",
+        "ownedKnowledgeSum": "1223141500000000",
+        "versionsCount": 1,
+        "versions": [
+          {
+            "versionHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "name": "Spore",
+            "description": "Spore Protocol infuses digital assets with enduring value backed by tokenomics, redeemable at any time. Ensures true on-chain ownership, privacy, creative freedom and frictionless interaction.",
+            "scriptKind": "type",
+            "website": "https://spore.pro/",
+            "deprecated": false,
+            "canonicalReferenceHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "canonicalHashType": "data1",
+            "deployedAt": 1706159020610,
+            "firstDeployedBlock": 12042082,
+            "firstDeployedTxIndex": 2,
+            "liveCellsCount": 37269,
+            "cellsCount": 99974,
+            "ownedCapacitySum": "1285121076293023",
+            "ownedKnowledgeSum": "1223141500000000",
+            "codeCellsLiveCount": 1,
+            "codeCellsTotal": 1,
+            "deployments": [
+              {
+                "hashType": "data",
+                "typeReferenceHash": null,
+                "dataReferenceHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+                "codeCellTxHash": "0x96b198fb5ddbd1eed57ed667068f1f1e55d07907b4c0dbd38675a69ea1b69824",
+                "codeCellOutputIndex": 0,
+                "deployedAt": 1706159020610,
+                "createdAtBlock": 12042082,
+                "status": "live",
+                "consumedAtBlock": null,
+                "consumedByTx": null,
+                "custody": {
+                  "class": "one_key",
+                  "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+                  "lockHashType": "type",
+                  "lockArgs": "0x20da6b70dfe59586e89635dbb3adc7aa998e7189",
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "unavailable",
+                  "owners": []
+                }
+              }
+            ],
+            "references": [
+              {
+                "referenceHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+                "hashType": "data1",
+                "liveCellsCount": 37269,
+                "cellsCount": 99974,
+                "ownedCapacitySum": "1285121076293023",
+                "ownedKnowledgeSum": "1223141500000000",
+                "currentVersionHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+                "custody": {
+                  "class": "fixed",
+                  "lockCodeHash": null,
+                  "lockHashType": null,
+                  "lockArgs": null,
+                  "threshold": null,
+                  "keyCount": null,
+                  "requireFirstN": null,
+                  "keyHashes": [],
+                  "verifiedByTx": null,
+                  "witnessState": "not_applicable",
+                  "owners": []
+                }
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "referenceHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "liveCellsCount": 37269,
+            "cellsCount": 99974,
+            "ownedCapacitySum": "1285121076293023",
+            "ownedKnowledgeSum": "1223141500000000",
+            "currentVersionHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "custody": {
+              "class": "fixed",
+              "lockCodeHash": null,
+              "lockHashType": null,
+              "lockArgs": null,
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "not_applicable",
+              "owners": []
+            }
+          }
+        ],
+        "codeClasses": [
+          {
+            "class": "fixed",
+            "lockCellsCount": 0,
+            "lockOwnedCapacitySum": "0",
+            "referenceCount": 1
+          }
+        ],
+        "history": [
+          {
+            "referenceHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "versionHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "event": "deployed",
+            "blockNumber": 12042082,
+            "txIndex": 2,
+            "timestamp": 1706159020610,
+            "chainTimeMs": 1706159020610,
+            "indexedDay": "2024-01-25",
+            "codeCellTxHash": "0x96b198fb5ddbd1eed57ed667068f1f1e55d07907b4c0dbd38675a69ea1b69824",
+            "codeCellOutputIndex": 0,
+            "eventTxHash": "0x96b198fb5ddbd1eed57ed667068f1f1e55d07907b4c0dbd38675a69ea1b69824",
+            "custody": {
+              "class": "one_key",
+              "lockCodeHash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+              "lockHashType": "type",
+              "lockArgs": "0x20da6b70dfe59586e89635dbb3adc7aa998e7189",
+              "threshold": null,
+              "keyCount": null,
+              "requireFirstN": null,
+              "keyHashes": [],
+              "verifiedByTx": null,
+              "witnessState": "unavailable",
+              "owners": []
+            }
+          }
+        ]
+      },
+      "usage": {
+        "name": "Spore",
+        "cellsCount": 99974,
+        "liveCellsCount": 37269,
+        "capacitySum": "3500967594818881",
+        "ownedCapacitySum": "1285121076293023",
+        "commonKnowledgeSizeSum": "3374646000000000",
+        "ownedKnowledgeSum": "1223141500000000",
+        "byDeployment": [
+          {
+            "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "scriptKind": "type",
+            "cellsCount": 99974,
+            "liveCellsCount": 37269,
+            "capacitySum": "3500967594818881",
+            "ownedCapacitySum": "1285121076293023",
+            "commonKnowledgeSizeSum": "3374646000000000",
+            "ownedKnowledgeSum": "1223141500000000"
+          }
+        ]
+      },
+      "newest": {
+        "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5:data1": {
+          "data": [
+            {
+              "txHash": "0x9ddaf121339c518c46aac7b7ea87010f469c28ef35823304513aa7d22217743d",
+              "outputIndex": 2,
+              "capacity": "32400000000",
+              "commonKnowledgeSize": "32400000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 55,
+                "typeScriptBytes": 65,
+                "dataBytes": 196,
+                "totalBytes": 324
+              },
+              "lockScriptHash": "0x914b19df06c0f8cd39c55a161a405668584e78ffc584a17719807c2fbbd919d0",
+              "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq89qeq8sz02jymcmc8nm5qsfmwyxtvqemvnunp36",
+              "typeScriptHash": "0x0b8c18c814d22530b77b21c8deb22c51a123163758acccc8b7ad2edadc00c567",
+              "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+              "typeHashType": "data1",
+              "typeProtocolName": "spore",
+              "lockScriptName": "JoyID",
+              "typeScriptName": "Spore",
+              "dataSize": 196,
+              "createdAtBlock": 20858605,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0x5451be2be217f39ffdcb39b6160844af889bf5031a93e13d39c2472514e7c205",
+              "outputIndex": 1,
+              "capacity": "36200000000",
+              "commonKnowledgeSize": "36100000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 55,
+                "typeScriptBytes": 65,
+                "dataBytes": 233,
+                "totalBytes": 361
+              },
+              "lockScriptHash": "0x7eeaf4e717edf7f7fd5724b5dffe41accbbbc212c78d7a0e8141f0806299d7a2",
+              "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq962xjh0fpcyaueaeslh5lw4erj3gn4xnvay02wn",
+              "typeScriptHash": "0x652e01b4e5d0fd5ca360ceefd0849b20a0f35037b4af8d8352baf2fd9037344c",
+              "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+              "typeHashType": "data1",
+              "typeProtocolName": "spore",
+              "lockScriptName": "JoyID",
+              "typeScriptName": "Spore",
+              "dataSize": 233,
+              "createdAtBlock": 20835685,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0xe5fc0301a23fc4914da79b250ca6c4cfcd3cbd4b2b6888bf07f89fc31130cb0b",
+              "outputIndex": 0,
+              "capacity": "39700000000",
+              "commonKnowledgeSize": "39600000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 55,
+                "typeScriptBytes": 65,
+                "dataBytes": 268,
+                "totalBytes": 396
+              },
+              "lockScriptHash": "0x7eeaf4e717edf7f7fd5724b5dffe41accbbbc212c78d7a0e8141f0806299d7a2",
+              "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq962xjh0fpcyaueaeslh5lw4erj3gn4xnvay02wn",
+              "typeScriptHash": "0x368907cb42c02d320762f8fe9c86670a7a65fd9a345966b6c02f2217f0183b8b",
+              "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+              "typeHashType": "data1",
+              "typeProtocolName": "spore",
+              "lockScriptName": "JoyID",
+              "typeScriptName": "Spore",
+              "dataSize": 268,
+              "createdAtBlock": 20835660,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0x4bec9ecabded9ace10d7525ef5988f48693809c64afb412a82ff7b592ec812ad",
+              "outputIndex": 0,
+              "capacity": "36200000000",
+              "commonKnowledgeSize": "36100000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 55,
+                "typeScriptBytes": 65,
+                "dataBytes": 233,
+                "totalBytes": 361
+              },
+              "lockScriptHash": "0x52547dc8564c85e0aeef7e264c04b7177882d35ef6ee8584c89824b466418584",
+              "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqy28n5m69va267nv0wvsudngtxz8t9jwss3xkhpk",
+              "typeScriptHash": "0xfabcd8fb3c5e0ac3cfc175879b3f2d37d332d2fb58b29cbf95648e173cb718e0",
+              "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+              "typeHashType": "data1",
+              "typeProtocolName": "spore",
+              "lockScriptName": "JoyID",
+              "typeScriptName": "Spore",
+              "dataSize": 233,
+              "createdAtBlock": 20808935,
+              "matchedScriptKind": "type"
+            },
+            {
+              "txHash": "0xbe1b9761b6258b002769a0ff356d4b45469d467a08e978604506c2d2df936cd8",
+              "outputIndex": 1,
+              "capacity": "32000000000",
+              "commonKnowledgeSize": "32000000000",
+              "commonKnowledgeSizeBreakdown": {
+                "capacityFieldBytes": 8,
+                "lockScriptBytes": 66,
+                "typeScriptBytes": 65,
+                "dataBytes": 181,
+                "totalBytes": 320
+              },
+              "lockScriptHash": "0x641fef9c93da844a9356cb5080864c5ad1d1a0d310802571b61826ffe40494d8",
+              "address": "ckb1qp3kr49jpkz9j57ee9p3hwaq3yz4wvq95u0z5fpjulsw0359vehjgqspx8dt37xm49jqzky5ktwm2hdgl2npg7gezqz0xmxd8vdjqnlat46qshp3hr",
+              "typeScriptHash": "0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998",
+              "typeCodeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+              "typeHashType": "data1",
+              "typeProtocolName": "spore",
+              "lockScriptName": "Nervape Shadow Lock",
+              "typeScriptName": "Spore",
+              "dataSize": 181,
+              "createdAtBlock": 20801533,
+              "matchedScriptKind": "type"
+            }
+          ],
+          "total": 37269,
+          "limit": 5,
+          "hasMore": true,
+          "nextCursor": "4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f50200000000013d67fdbe1b9761b6258b002769a0ff356d4b45469d467a08e978604506c2d2df936cd80001"
+        }
+      },
+      "details": {
+        "0x9ddaf121339c518c46aac7b7ea87010f469c28ef35823304513aa7d22217743d:2": {
+          "txHash": "0x9ddaf121339c518c46aac7b7ea87010f469c28ef35823304513aa7d22217743d",
+          "outputIndex": 2,
+          "capacity": "32400000000",
+          "commonKnowledgeSize": "32400000000",
+          "lockScriptHash": "0x914b19df06c0f8cd39c55a161a405668584e78ffc584a17719807c2fbbd919d0",
+          "dataSize": 196,
+          "createdAtBlock": 20858605,
+          "createdTimestamp": "2026-10-28T12:25:59.375+00:00",
+          "status": "live",
+          "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq89qeq8sz02jymcmc8nm5qsfmwyxtvqemvnunp36",
+          "typeScriptHash": "0x0b8c18c814d22530b77b21c8deb22c51a123163758acccc8b7ad2edadc00c567",
+          "lock": {
+            "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "hashType": "type",
+            "args": "0x0001ca0c80f013d5226f1bc1e7ba0209db8865b019db"
+          },
+          "type": {
+            "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "args": "0x00f84b0b92879b2289a1dc8975d936dc551cf70099d57b86c518c0d529a63c91"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "spore"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "spore_cell",
+              "summary": "Spore molecule layout detected (content_type=dob/1, content_bytes=131)",
+              "segments": [
+                {
+                  "label": "cluster_id",
+                  "start": 164,
+                  "end": 196,
+                  "meaning": "Cluster id bytes",
+                  "humanValue": "0xb6353355cbd7ba969c7f4324277794d1d88623b59b6e2f59daabb87b41e568cc"
+                }
+              ]
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0x5451be2be217f39ffdcb39b6160844af889bf5031a93e13d39c2472514e7c205:1": {
+          "txHash": "0x5451be2be217f39ffdcb39b6160844af889bf5031a93e13d39c2472514e7c205",
+          "outputIndex": 1,
+          "capacity": "36200000000",
+          "commonKnowledgeSize": "36100000000",
+          "lockScriptHash": "0x7eeaf4e717edf7f7fd5724b5dffe41accbbbc212c78d7a0e8141f0806299d7a2",
+          "dataSize": 233,
+          "createdAtBlock": 20835685,
+          "createdTimestamp": "2026-10-26T03:07:47.401+00:00",
+          "status": "live",
+          "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq962xjh0fpcyaueaeslh5lw4erj3gn4xnvay02wn",
+          "typeScriptHash": "0x652e01b4e5d0fd5ca360ceefd0849b20a0f35037b4af8d8352baf2fd9037344c",
+          "lock": {
+            "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "hashType": "type",
+            "args": "0x000174a34aef48704ef33dcc3f7a7dd5c8e5144ea69b"
+          },
+          "type": {
+            "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "args": "0x4a2237a7d19ea8738a0207adbcc3910c256136ee141554b7b154ecf7c12abf1d"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "spore"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "spore_cell",
+              "summary": "Spore molecule layout detected (content_type=dob/0, content_bytes=168)",
+              "segments": [
+                {
+                  "label": "cluster_id",
+                  "start": 201,
+                  "end": 233,
+                  "meaning": "Cluster id bytes",
+                  "humanValue": "0xff52ecebc641a51442aea621c1070c4188a4eaadbc935d6183d2d8f76a806961"
+                }
+              ]
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0xe5fc0301a23fc4914da79b250ca6c4cfcd3cbd4b2b6888bf07f89fc31130cb0b:0": {
+          "txHash": "0xe5fc0301a23fc4914da79b250ca6c4cfcd3cbd4b2b6888bf07f89fc31130cb0b",
+          "outputIndex": 0,
+          "capacity": "39700000000",
+          "commonKnowledgeSize": "39600000000",
+          "lockScriptHash": "0x7eeaf4e717edf7f7fd5724b5dffe41accbbbc212c78d7a0e8141f0806299d7a2",
+          "dataSize": 268,
+          "createdAtBlock": 20835660,
+          "createdTimestamp": "2026-10-26T03:04:13.973+00:00",
+          "status": "live",
+          "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq962xjh0fpcyaueaeslh5lw4erj3gn4xnvay02wn",
+          "typeScriptHash": "0x368907cb42c02d320762f8fe9c86670a7a65fd9a345966b6c02f2217f0183b8b",
+          "lock": {
+            "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "hashType": "type",
+            "args": "0x000174a34aef48704ef33dcc3f7a7dd5c8e5144ea69b"
+          },
+          "type": {
+            "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "args": "0x1cea19b6de3405f58bc11fbaf4ee94aa70d9d4f12035e7a46494cba4e286e134"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "spore"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "spore_cell",
+              "summary": "Spore molecule layout detected (content_type=application/json, content_bytes=192)",
+              "segments": [
+                {
+                  "label": "cluster_id",
+                  "start": 236,
+                  "end": 268,
+                  "meaning": "Cluster id bytes",
+                  "humanValue": "0x071feb0778d667fedac312023abe449f5a60cdfc1d69216499564cdc02ee21bd"
+                }
+              ]
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0x4bec9ecabded9ace10d7525ef5988f48693809c64afb412a82ff7b592ec812ad:0": {
+          "txHash": "0x4bec9ecabded9ace10d7525ef5988f48693809c64afb412a82ff7b592ec812ad",
+          "outputIndex": 0,
+          "capacity": "36200000000",
+          "commonKnowledgeSize": "36100000000",
+          "lockScriptHash": "0x52547dc8564c85e0aeef7e264c04b7177882d35ef6ee8584c89824b466418584",
+          "dataSize": 233,
+          "createdAtBlock": 20808935,
+          "createdTimestamp": "2026-10-23T09:49:24.966+00:00",
+          "status": "live",
+          "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqqy28n5m69va267nv0wvsudngtxz8t9jwss3xkhpk",
+          "typeScriptHash": "0xfabcd8fb3c5e0ac3cfc175879b3f2d37d332d2fb58b29cbf95648e173cb718e0",
+          "lock": {
+            "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+            "hashType": "type",
+            "args": "0x00011479d37a2b3aad7a6c7b990e3668598475964e84"
+          },
+          "type": {
+            "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "args": "0x0a3a5cabbd73c28571911e56304f9d24e3ca7c72e075c654325b9adbfd466129"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "spore"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "spore_cell",
+              "summary": "Spore molecule layout detected (content_type=dob/0, content_bytes=168)",
+              "segments": [
+                {
+                  "label": "cluster_id",
+                  "start": 201,
+                  "end": 233,
+                  "meaning": "Cluster id bytes",
+                  "humanValue": "0x1a2ca0c10daadb9f9e087283fecdc72c136dfd0d050d8041f2d4a4cf012d5149"
+                }
+              ]
+            },
+            "heuristicGuesses": []
+          }
+        },
+        "0xbe1b9761b6258b002769a0ff356d4b45469d467a08e978604506c2d2df936cd8:1": {
+          "txHash": "0xbe1b9761b6258b002769a0ff356d4b45469d467a08e978604506c2d2df936cd8",
+          "outputIndex": 1,
+          "capacity": "32000000000",
+          "commonKnowledgeSize": "32000000000",
+          "lockScriptHash": "0x641fef9c93da844a9356cb5080864c5ad1d1a0d310802571b61826ffe40494d8",
+          "dataSize": 181,
+          "createdAtBlock": 20801533,
+          "createdTimestamp": "2026-10-22T14:43:55.651+00:00",
+          "status": "live",
+          "address": "ckb1qp3kr49jpkz9j57ee9p3hwaq3yz4wvq95u0z5fpjulsw0359vehjgqspx8dt37xm49jqzky5ktwm2hdgl2npg7gezqz0xmxd8vdjqnlat46qshp3hr",
+          "typeScriptHash": "0x303e7b5e16db979e24e79690a8f3a3436cffd00e8c60b40e067db097136cc998",
+          "lock": {
+            "codeHash": "0x6361d4b20d845953d9c9431bbba08905573005a71e2a2432e7e0e7c685666f24",
+            "hashType": "data1",
+            "args": "0x0131dab8f8dba964015894b2ddb55da8faa61479191004f36ccd3b1b204ffd5d74"
+          },
+          "type": {
+            "codeHash": "0x4a4dce1df3dffff7f8b2cd7dff7303df3b6150c9788cb75dcf6747247132b9f5",
+            "hashType": "data1",
+            "args": "0x51c75ad6c509e05ec5933e32093a5b32eeab7fe59dbe9ecc05546306002796f2"
+          },
+          "protocolScript": {
+            "lock": null,
+            "type": "spore"
+          },
+          "dataAnalysis": {
+            "token": null,
+            "deterministic": {
+              "kind": "spore_cell",
+              "summary": "Spore molecule layout detected (content_type=dob/0, content_bytes=116)",
+              "segments": [
+                {
+                  "label": "cluster_id",
+                  "start": 149,
+                  "end": 181,
+                  "meaning": "Cluster id bytes",
+                  "humanValue": "0x26a1fe3f4e84ae2cd1dc3e319ca416e27624c5ebe2f1b0aa731ca18d67784c4c"
+                }
+              ]
+            },
+            "heuristicGuesses": []
+          }
+        }
+      }
+    }
+  }
+}
