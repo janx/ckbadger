@@ -96,6 +96,8 @@ describe('Cell page against the Cell board', () => {
     const h1 = screen.getByRole('heading', { level: 1 });
     expect(h1).toHaveTextContent(/^Cell 0xbe1b9761…936cd8:1$/);
     expect(within(h1).getByText('Cell')).toHaveClass('text-text-dim');
+    // the out point is one box: a phone wraps "Cell" away before breaking it
+    expect(within(h1).getByText('0xbe1b9761…936cd8:1')).toHaveClass('inline-block');
     expect(h1).toHaveClass('text-entity');
     expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger');
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);

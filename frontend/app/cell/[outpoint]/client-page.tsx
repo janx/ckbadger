@@ -303,7 +303,7 @@ function CellOrigin({ cell }: { cell: Cell }) {
       ·{' '}
       {cell.status === 'dead' ? (
         cell.consumedAtBlock != null ? (
-          <>
+          <span className="whitespace-nowrap">
             spent at{' '}
             <Link
               href={`/blocks/${cell.consumedAtBlock}`}
@@ -311,12 +311,12 @@ function CellOrigin({ cell }: { cell: Cell }) {
             >
               {formatBlockNumber(cell.consumedAtBlock)}
             </Link>
-          </>
+          </span>
         ) : (
           'spent, block unavailable'
         )
       ) : (
-        <>
+        <span className="whitespace-nowrap">
           live since{' '}
           <Link
             href={`/blocks/${cell.createdAtBlock}`}
@@ -324,7 +324,7 @@ function CellOrigin({ cell }: { cell: Cell }) {
           >
             {formatBlockNumber(cell.createdAtBlock)}
           </Link>
-        </>
+        </span>
       )}
     </p>
   );
@@ -341,7 +341,11 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
         // of are the identity lines beneath (no "Transaction … / output N" breadcrumb).
         title={
           <>
-            <span className="text-text-dim">Cell</span> {short(cell.txHash)}:{cell.outputIndex}
+            {/* An inline-block, so a phone wraps "Cell" away before it breaks the out point. */}
+            <span className="text-text-dim">Cell</span>{' '}
+            <span className="inline-block">
+              {short(cell.txHash)}:{cell.outputIndex}
+            </span>
           </>
         }
         documentTitle={[`Cell ${titleHash(cell.txHash)}:${cell.outputIndex}`]}
