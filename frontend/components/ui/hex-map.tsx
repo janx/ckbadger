@@ -1,5 +1,7 @@
 'use client';
-import { useState, type CSSProperties, type ReactNode } from 'react';
+import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react';
+import { ReadoutRow } from '@/components/ui/readout-row';
+import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes, validateByteRanges, type ByteRange } from '@/lib/hex-bytes';
 import {
   bytePieces,
@@ -51,29 +53,42 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
     !Number.isSafeInteger(offsetBase + bytes.length)
   )
     throw new Error(`${subject}: invalid byte-map base offset ${offsetBase}`);
-  const [active, setActive] = useState<string | null>(null);
-  const select = (id: string | null) => {
-    setActive(id);
-    onFieldHover?.(id);
-  };
+  // The shared touch rule (docs/RESPONSIVE_LAYOUT.md, Touch; review 2026-11-03): a hover shows a
+  // field while the pointer or focus is on it; a click pins it, so the highlight outlasts the
+  // pointer, until a second click on it or Escape. The readout reports the shown field.
+  const readout = usePinnedReadout<string>();
+  const active = readout.active;
+  const reported = useRef<string | null>(null);
+  useEffect(() => {
+    if (reported.current === active) return;
+    reported.current = active;
+    onFieldHover?.(active);
+  }, [active, onFieldHover]);
   const selected = fields.find((f) => f.id === active);
+  /** Hover, focus and click on a byte (its first field, or none) or on a field's label. */
+  const target = (id: string | null) => ({
+    onMouseEnter: () => readout.hover(id),
+    onMouseLeave: () => readout.hover(null),
+    onFocus: () => readout.hover(id),
+    onBlur: () => readout.hover(null),
+    onClick: () => (id === null ? readout.clear() : readout.toggle(id)),
+  });
   return (
     <div aria-label={`${subject} byte map`} className="min-w-0 space-y-3">
       <div className="flex flex-wrap gap-1">
         {bytes.map((byte, i) => {
           const owners = fields.filter((f) => i >= f.offset && i < f.offset + f.length);
           const highlighted = active !== null && owners.some((f) => f.id === active);
+          const own = owners[0]?.id ?? null;
           return (
             <button
               type="button"
               key={i}
               data-byte-offset={offsetBase + i}
               data-highlighted={highlighted}
+              aria-pressed={own === null ? undefined : readout.isPinned(own)}
               title={`Byte ${offsetBase + i}: 0x${byte}${owners.length ? ` · ${owners.map((f) => f.label).join(', ')}` : ''}`}
-              onMouseEnter={() => select(owners[0]?.id ?? null)}
-              onMouseLeave={() => select(null)}
-              onFocus={() => select(owners[0]?.id ?? null)}
-              onBlur={() => select(null)}
+              {...target(own)}
               className={cn(
                 'text-small min-w-[2.5ch] rounded-sm px-0.5 py-1 tabular-nums',
                 highlighted ? 'bg-base-elevated text-text-bright' : 'text-text-dim'
@@ -90,10 +105,8 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
           <button
             type="button"
             key={f.id}
-            onMouseEnter={() => select(f.id)}
-            onMouseLeave={() => select(null)}
-            onFocus={() => select(f.id)}
-            onBlur={() => select(null)}
+            aria-pressed={readout.isPinned(f.id)}
+            {...target(f.id)}
             className={cn(
               'text-meta text-left',
               active === f.id ? 'text-text-bright' : 'text-text-dim'
@@ -106,9 +119,13 @@ function HexBytesMap({ hex, fields, subject, onFieldHover, offsetBase = 0 }: Hex
           </button>
         ))}
       </div>
-      <p aria-live="polite" className="text-text text-small min-h-5">
-        {selected ? selected.description : `${bytes.length} bytes · inspect a field or byte`}
-      </p>
+      <ReadoutRow
+        label={`${subject} byte readout`}
+        pinned={readout.showingPin}
+        idle={`${bytes.length} bytes · inspect a field or byte`}
+      >
+        {selected ? selected.description : null}
+      </ReadoutRow>
     </div>
   );
 }

@@ -227,6 +227,51 @@ describe('byte and DNA inspection', () => {
     );
     expect(onHover).toHaveBeenCalledWith('body');
   });
+  it('pins a field on click, so its highlight outlasts the pointer until a second click or Escape', () => {
+    // Review 2026-11-03: every byte viewer keeps a highlight after a click (the shared touch rule,
+    // docs/RESPONSIVE_LAYOUT.md: a tap pins a readout under the figure).
+    const onHover = vi.fn();
+    const { container } = render(
+      <HexMap hex="0x0102ff" fields={fields} subject="tx 0xabc" onFieldHover={onHover} />
+    );
+    const readout = screen.getByRole('status', { name: 'tx 0xabc byte readout' });
+    const body = screen.getByRole('button', { name: 'Body bytes 1–2' });
+    const flags = screen.getByRole('button', { name: 'Flags bytes 0–0' });
+    const byte0 = container.querySelector('[data-byte-offset="0"]')!;
+    const byte1 = container.querySelector('[data-byte-offset="1"]')!;
+    expect(readout).toHaveTextContent('3 bytes · inspect a field or byte');
+    fireEvent.mouseEnter(body);
+    fireEvent.click(body);
+    fireEvent.mouseLeave(body);
+    expect(body).toHaveAttribute('aria-pressed', 'true');
+    expect(byte1).toHaveAttribute('data-highlighted', 'true');
+    expect(readout).toHaveTextContent('selected Payload bytes');
+    expect(onHover).toHaveBeenLastCalledWith('body');
+    // hovering another field shows it; leaving returns to the pin
+    fireEvent.mouseEnter(flags);
+    expect(readout).toHaveTextContent('Protocol version byte');
+    expect(byte0).toHaveAttribute('data-highlighted', 'true');
+    expect(byte1).toHaveAttribute('data-highlighted', 'false');
+    expect(onHover).toHaveBeenLastCalledWith('flags');
+    fireEvent.mouseLeave(flags);
+    expect(byte1).toHaveAttribute('data-highlighted', 'true');
+    expect(readout).toHaveTextContent('selected Payload bytes');
+    expect(onHover).toHaveBeenLastCalledWith('body');
+    // a byte pins (and unpins) its field too
+    fireEvent.click(byte1);
+    expect(body).toHaveAttribute('aria-pressed', 'false');
+    expect(byte1).toHaveAttribute('data-highlighted', 'false');
+    expect(onHover).toHaveBeenLastCalledWith(null);
+    fireEvent.click(byte0);
+    expect(flags).toHaveAttribute('aria-pressed', 'true');
+    expect(readout).toHaveTextContent('selected Protocol version byte');
+    // Escape clears the pin
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(flags).toHaveAttribute('aria-pressed', 'false');
+    expect(byte0).toHaveAttribute('data-highlighted', 'false');
+    expect(readout).toHaveTextContent('3 bytes · inspect a field or byte');
+  });
+
   it('rejects malformed hex and field ranges outside the payload', () => {
     expect(() => render(<HexMap hex="0xabc" fields={[]} subject="cell X" />)).toThrow(
       'cell X: expected byte-aligned'
