@@ -9,6 +9,7 @@ import { Logo } from '@/components/layout/logo';
 import { LOGO_NOTCH_CLASS, LOGO_STRIP_NOTCH_CLASS } from '@/components/layout/logo-geometry';
 import { useStickyHeaderHeight } from '@/components/layout/sticky-header';
 import { NetworkSwitcher } from '@/components/layout/network-switcher';
+import { NavMenu } from '@/components/layout/nav-menu';
 import {
   NAVBAR_LINK_ACTIVE_CLASS,
   NAVBAR_LINK_CLASS,
@@ -22,10 +23,15 @@ interface NavLink {
   label: string;
 }
 
-/** A section with views: one link on the desktop row (TX-02), its views listed in the phone menu. */
+/**
+ * A section with views (TX-02, U4): on the desktop row one entry that opens a menu — the section's
+ * index (`href`, named `indexLabel`) then its views; the phone menu lists the same, the section row
+ * itself linking to the index.
+ */
 interface NavDropdown {
   href: string;
   label: string;
+  indexLabel: string;
   children: NavLink[];
 }
 
@@ -41,6 +47,7 @@ const navItems: NavItem[] = [
   {
     href: '/inventory',
     label: 'Inventory',
+    indexLabel: 'Inventory index',
     children: [
       { href: '/inventory/tokens', label: 'Tokens' },
       { href: '/inventory/objects', label: 'Objects' },
@@ -93,9 +100,21 @@ export function Header() {
             className="relative z-10 hidden shrink-0 items-center gap-x-4 md:flex lg:gap-x-6"
           >
             <NetworkSwitcher />
-            {/* TX-02 (Main.dc.html): five plain links; the current one bright and aria-current. */}
+            {/* TX-02 (Main.dc.html): five entries; the current one bright and aria-current.
+                U4: Inventory opens a menu of its index and its three views. */}
             {navItems.map((item) => {
-              const current = isDropdown(item) ? isDropdownActive(item) : isLinkActive(item.href);
+              if (isDropdown(item))
+                return (
+                  <NavMenu
+                    key={item.href}
+                    label={item.label}
+                    index={{ href: item.href, label: item.indexLabel }}
+                    items={item.children}
+                    current={isDropdownActive(item)}
+                    pathname={pathname}
+                  />
+                );
+              const current = isLinkActive(item.href);
               return (
                 <Link
                   key={item.href}
@@ -170,15 +189,18 @@ export function Header() {
                 {navItems.map((item) =>
                   isDropdown(item) ? (
                     <div key={item.label} className="flex flex-col">
-                      <span
-                        className={`text-body block rounded-md border px-3 py-2.5 font-mono ${
+                      {/* U4: the section row is the index's link, as the desktop menu's first item. */}
+                      <Link
+                        href={item.href}
+                        onClick={() => setIsMenuOpen(false)}
+                        className={`text-body block rounded-md border px-3 py-2.5 font-mono transition ${
                           isDropdownActive(item)
                             ? 'border-jade/40 bg-jade/8 text-jade'
-                            : 'text-text border-transparent'
+                            : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
                         }`}
                       >
                         {item.label}
-                      </span>
+                      </Link>
                       <div className="border-base-border/40 ml-3 flex flex-col gap-1 border-l pl-3 pt-1">
                         {item.children.map((child) => (
                           <Link
