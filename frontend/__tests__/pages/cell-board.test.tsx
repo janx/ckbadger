@@ -47,19 +47,36 @@ describe('Cell page against the Cell board', () => {
     } as never);
   });
 
-  it('names the cell by its out point, with breadcrumb, copy and the "only name" note (SC-C9)', async () => {
+  it('names the cell by its out point, with copy, its origin line and the "only name" note (SC-C9)', async () => {
     view();
     await screen.findByText('The cell, byte by byte', undefined, { timeout: 5000 });
-    expect(screen.getByRole('navigation', { name: 'Breadcrumb' })).toHaveTextContent(
-      'Transaction 0xbe1b9761…936cd8 / output 1'
-    );
+    // Lane U (U3): the page presents a CELL, not a transaction output — no "Transaction … /
+    // output 1" breadcrumb; the transaction and the index are one line under the full out point.
+    expect(screen.queryByRole('navigation', { name: 'Breadcrumb' })).toBeNull();
+    expect(screen.queryByText(/^Transaction 0x/)).toBeNull();
     expect(screen.getByRole('button', { name: 'Copy out point' })).toBeInTheDocument();
-    // Consistency round C13: the h1 is the short out point (entity), not the word "Cell"; the
-    // full out point and its copy are the line beneath.
+    // Consistency round C13 + U3: the h1 is "Cell" (dim) before the bright short out point.
     const h1 = screen.getByRole('heading', { level: 1 });
-    expect(h1).toHaveTextContent(`${cell.txHash.slice(0, 12)}…${cell.txHash.slice(-8)}:1`);
+    expect(h1).toHaveTextContent(/^Cell 0xbe1b9761…936cd8:1$/);
+    expect(within(h1).getByText('Cell')).toHaveClass('text-text-dim');
     expect(h1).toHaveClass('text-entity');
+    expect(document.title).toBe('Cell 0xbe1b…6cd8:1 · CKBadger');
     expect(h1.closest('header')).toHaveTextContent(`${cell.txHash}:1`);
+    const origin = screen.getByTestId('cell-origin');
+    expect(origin).toHaveTextContent(
+      /^output 1 of transaction 0xbe1b9761…936cd8 · live since #20,801,533$/
+    );
+    expect(within(origin).getByRole('link', { name: '0xbe1b9761…936cd8' })).toHaveAttribute(
+      'href',
+      `/mainnet/tx/${cell.txHash}`
+    );
+    expect(within(origin).getByRole('link', { name: '#20,801,533' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20801533'
+    );
+    // the origin line sits under the full out point, before the "only name" sentence
+    const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
+    expect(outpointLine.compareDocumentPosition(origin)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(screen.getByText(/The out point is the cell's only name/)).toHaveTextContent(
       'exists from block #20,801,533 until a transaction spends it.'
     );

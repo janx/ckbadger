@@ -49,6 +49,8 @@ const base = {
   liveAgeAtBlock: 125,
   lock: { codeHash: `0x${'22'.repeat(32)}`, hashType: 'type', args: `0x${'33'.repeat(20)}` },
   type: undefined,
+  // The cell detail always carries the registry slugs (null = not a registered protocol).
+  protocolScript: { lock: null, type: null },
   data: '0x',
   // 97-byte CellOutput: 16 B header + 8 B capacity + 73 B lock (20-byte args); 61 occupied.
   cellOutputMolecule: {
@@ -111,7 +113,8 @@ describe('CellDetailPage', () => {
     resolve(base);
     expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
     // Consistency plan C1: the tab names the page.
-    expect(document.title).toMatch(/^0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · cell · CKBadger$/);
+    // Lane U (U3): the tab names a cell — "Cell 0xabab…abab:0 · CKBadger".
+    expect(document.title).toMatch(/^Cell 0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · CKBadger$/);
     expect(screen.getByText('Unspent for').parentElement).toHaveTextContent(
       /^Unspent for1 mas of #125$/
     );
@@ -141,6 +144,10 @@ describe('CellDetailPage', () => {
     expect(screen.getByText('2024-01-02 08:00:00 UTC+8')).toBeInTheDocument();
     expect(screen.queryByText(/2024-01-02T00:00:00Z/)).not.toBeInTheDocument();
     expect(screen.getByTestId('transactions')).toHaveTextContent('spent evidence');
+    // Lane U (U3): a spent cell's origin line names the block that spent it.
+    expect(screen.getByTestId('cell-origin')).toHaveTextContent(
+      /^output 0 of transaction 0xabababab…ababab · spent at #125$/
+    );
   });
   it('shows DAO lifecycle only for DAO cells', async () => {
     getCell.mockResolvedValue({
