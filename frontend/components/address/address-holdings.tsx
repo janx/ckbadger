@@ -9,6 +9,7 @@ import Link from '@/components/ui/link';
 import { ExactCkb, formatStandard } from '@/components/activity-event-row';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
 import { exactUnsignedInteger, formatScaledInteger } from '@/lib/exact-integer';
 import { splitTokenAmount } from '@/lib/format-asset';
@@ -435,7 +436,7 @@ function HoldingSection({
 export function AddressHoldingsSection({ holdings }: { holdings: AddressHoldings }) {
   const addr = holdings.lockScriptHash;
   const [active, setActive] = useState<AddressCellClass | null>(null);
-  const pageSize = usePageSize(50);
+  const pageSize = usePageSize(ENTITY_PAGE_SIZE);
   const tokensPage = useCursorPagination(),
     daoPage = useCursorPagination(),
     identitiesPage = useCursorPagination();

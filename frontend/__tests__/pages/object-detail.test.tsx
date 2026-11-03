@@ -266,7 +266,7 @@ it('switches to real transaction layer and requests its own full scope', async (
   fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
   expect(await screen.findByText('No transactions.')).toBeInTheDocument();
   expect(api.getItemTransactions).toHaveBeenCalledWith('spore', id, {
-    limit: 50,
+    limit: 20,
     cursor: undefined,
   });
 });

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, type TokenDistribution, type TokenHolder } from '@/lib/api';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import {
   AssetAmount,
   AssetCount,
@@ -207,7 +208,7 @@ export function TokenHolders({ typeHash, symbol, decimals }: TokenHoldersProps) 
     queryFn: () => api.getTokenDistribution(typeHash),
   });
   // "All holders" pages by the list size (R2: twenty below md); the top ten stay ten.
-  const allPageSize = usePageSize(50);
+  const allPageSize = usePageSize(ENTITY_PAGE_SIZE);
   const limit = all ? allPageSize : 10;
   const holders = useQuery({
     queryKey: ['token-holders', typeHash, all, pagination.cursor, limit],

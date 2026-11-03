@@ -33,6 +33,7 @@ import { cn, formatUtc8Date } from '@/lib/utils';
 import { apiBaseFor } from '@/lib/active-network';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
 import { usePageSize } from '@/hooks/usePageSize';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { titleAddress, titleHash } from '@/lib/use-document-title';
 import { ScriptByteMap, ScriptNames } from '@/components/ui/script-byte-map';
 
@@ -133,7 +134,7 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   const [tab, setTab] = useState<'activities' | 'transactions' | 'cells'>('activities');
   const [filter, setFilter] = useState<ActivityFilter>('all');
   const [cellClass, setCellClass] = useState<AddressCellClass | undefined>();
-  const pageSize = usePageSize(50);
+  const pageSize = usePageSize(ENTITY_PAGE_SIZE);
   const activityPage = useCursorPagination(),
     txPage = useCursorPagination(),
     cellPage = useCursorPagination(),

@@ -85,7 +85,7 @@ const history: TokenHistory = {
   burnCount: 1,
   transfersCount: 1000,
 };
-const empty = { data: [], limit: 50, hasMore: false, nextCursor: null };
+const empty = { data: [], limit: 20, hasMore: false, nextCursor: null };
 const activity: GlobalActivity = {
   txHash: other,
   blockNumber: 12345,
@@ -246,7 +246,7 @@ describe('TokenDetailPage', () => {
     );
     fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() =>
-      expect(api.getTokenTransactions).toHaveBeenCalledWith(hash, { limit: 50, cursor: undefined })
+      expect(api.getTokenTransactions).toHaveBeenCalledWith(hash, { limit: 20, cursor: undefined })
     );
   });
   it('renders unknown decimals as raw amounts, never as zero decimals', async () => {
@@ -332,7 +332,7 @@ describe('TokenDetailPage', () => {
       )
     );
     await waitFor(() =>
-      expect(api.getTokenHolders).toHaveBeenCalledWith(hash, { limit: 50, cursor: 'page2' })
+      expect(api.getTokenHolders).toHaveBeenCalledWith(hash, { limit: 20, cursor: 'page2' })
     );
   });
 });

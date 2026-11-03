@@ -73,14 +73,14 @@ it('hydrates the explicit activity cursor and advances full-record pagination', 
   render(<Page identityId={evidence.itemId} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
-      limit: 50,
+      limit: 20,
       cursor: '100:0',
     })
   );
   fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
-      limit: 50,
+      limit: 20,
       cursor: '90:0',
     })
   );
@@ -109,7 +109,7 @@ it('uses the independent Transactions layer, without a Cycles column (ID-C8)', a
   );
   expect(screen.getByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getItemTransactions).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
-    limit: 50,
+    limit: 20,
     cursor: undefined,
   });
 });
@@ -124,7 +124,7 @@ it('starts a new identity on its own first cursor page', async () => {
   fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', evidence.itemId, {
-      limit: 50,
+      limit: 20,
       cursor: '90:0',
     })
   );
@@ -137,7 +137,7 @@ it('starts a new identity on its own first cursor page', async () => {
   rerender(<Page identityId={next} />);
   await waitFor(() =>
     expect(api.getItemActivityFeed).toHaveBeenCalledWith('bit-cell', next, {
-      limit: 50,
+      limit: 20,
       cursor: undefined,
     })
   );

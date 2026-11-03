@@ -54,7 +54,7 @@ it('renders collection identity, capacity history, genes, gallery, holders and b
   );
   expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
   expect(api.getCollectionTransactions).toHaveBeenCalledWith('spore', id, {
-    limit: 50,
+    limit: 20,
     cursor: undefined,
   });
 });

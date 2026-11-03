@@ -26,6 +26,7 @@ import { ResourceBar, ScaleHeader, resourceScale } from '@/components/blocks/blo
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
 import { usePageSize } from '@/hooks/usePageSize';
+import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { AssetReadState } from '@/components/asset/detail-shell';
 import { AssetAmount } from '@/components/asset/inventory-table';
 import { formatTimeAgo, formatUtc8Date } from '@/lib/utils';
@@ -522,7 +523,7 @@ function FullAssetFeed({
   const [tab, setTab] = useState<'activities' | 'transactions'>(initialTab);
   const actsPages = useCursorPagination(),
     txPages = useCursorPagination();
-  const pageSize = usePageSize(50);
+  const pageSize = usePageSize(ENTITY_PAGE_SIZE);
   const activityCursor = actsPages.cursor ?? initialActivityCursor;
   useEffect(() => {
     onActivityCursorChange?.(activityCursor);

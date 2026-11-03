@@ -168,7 +168,7 @@ describe('MnftItemDetailPage', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toBeInTheDocument();
     expect(api.getItemTransactions).toHaveBeenCalledWith('mnft', id, {
-      limit: 50,
+      limit: 20,
       cursor: undefined,
     });
     expect(screen.getAllByText(/cell after/).length).toBeGreaterThan(0);
@@ -201,7 +201,7 @@ describe('MnftItemDetailPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
     await waitFor(() =>
       expect(api.getItemActivityFeed).toHaveBeenCalledWith('mnft', id, {
-        limit: 50,
+        limit: 20,
         cursor: '100:2',
       })
     );
@@ -217,7 +217,7 @@ describe('MnftItemDetailPage', () => {
     await screen.findByRole('heading', { name: 'Class A #100' });
     await waitFor(() =>
       expect(api.getItemActivityFeed).toHaveBeenCalledWith('mnft', nextId, {
-        limit: 50,
+        limit: 20,
         cursor: undefined,
       })
     );

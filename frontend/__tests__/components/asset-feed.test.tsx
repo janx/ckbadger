@@ -149,14 +149,14 @@ describe('Shared asset feeds', () => {
         loadActivities={async () => ({
           data: [edit],
           total: 1,
-          limit: 50,
+          limit: 20,
           hasMore: false,
           nextCursor: null,
         })}
         loadTransactions={async () => ({
           data: [],
           total: 0,
-          limit: 50,
+          limit: 20,
           hasMore: false,
           nextCursor: null,
         })}
@@ -194,11 +194,11 @@ describe('Shared asset feeds', () => {
         item={cell}
         loadActivities={async () => ({
           data: [t3, broken],
-          limit: 50,
+          limit: 20,
           hasMore: false,
           nextCursor: null,
         })}
-        loadTransactions={async () => ({ data: [], limit: 50, hasMore: false, nextCursor: null })}
+        loadTransactions={async () => ({ data: [], limit: 20, hasMore: false, nextCursor: null })}
       />
     );
     const headline = await screen.findByText('Neighbour registered a sub-name');
@@ -238,11 +238,11 @@ describe('Shared asset feeds', () => {
         item={{ kind: 'identity', protocol: 'dotbit' }}
         loadActivities={async () => ({
           data: [own, neighbour],
-          limit: 50,
+          limit: 20,
           hasMore: false,
           nextCursor: null,
         })}
-        loadTransactions={async () => ({ data: [], limit: 50, hasMore: false, nextCursor: null })}
+        loadTransactions={async () => ({ data: [], limit: 20, hasMore: false, nextCursor: null })}
       />
     );
     const renewed = await screen.findByText(/^Renewed/);
@@ -275,10 +275,10 @@ describe('Shared asset feeds', () => {
   it('keeps both layers with independent cursors and exact tx identity', async () => {
     const loadActivities = vi
       .fn()
-      .mockResolvedValue({ data: [activity], limit: 50, hasMore: true, nextCursor: 'older' });
+      .mockResolvedValue({ data: [activity], limit: 20, hasMore: true, nextCursor: 'older' });
     const loadTransactions = vi
       .fn()
-      .mockResolvedValue({ data: [transaction], limit: 50, hasMore: false, nextCursor: null });
+      .mockResolvedValue({ data: [transaction], limit: 20, hasMore: false, nextCursor: null });
     render(
       <AssetFeed
         queryKey="token:test"
@@ -288,25 +288,25 @@ describe('Shared asset feeds', () => {
       />
     );
     await waitFor(() =>
-      expect(loadActivities).toHaveBeenCalledWith({ limit: 50, cursor: undefined })
+      expect(loadActivities).toHaveBeenCalledWith({ limit: 20, cursor: undefined })
     );
     fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
     expect(await screen.findByRole('table', { name: 'Asset transactions' })).toHaveTextContent(
       'Not computed'
     );
-    expect(loadTransactions).toHaveBeenCalledWith({ limit: 50, cursor: undefined });
+    expect(loadTransactions).toHaveBeenCalledWith({ limit: 20, cursor: undefined });
   });
   it('hydrates an activity cursor and returns to that exact starting page without affecting transactions', async () => {
     const loadActivities = vi.fn().mockResolvedValue({
       data: [activity],
       total: 100,
-      limit: 50,
+      limit: 20,
       hasMore: true,
       nextCursor: 'older',
     });
     const loadTransactions = vi
       .fn()
-      .mockResolvedValue({ data: [], total: 0, limit: 50, hasMore: false, nextCursor: null });
+      .mockResolvedValue({ data: [], total: 0, limit: 20, hasMore: false, nextCursor: null });
     const changed = vi.fn();
     render(
       <AssetFeed
@@ -319,7 +319,7 @@ describe('Shared asset feeds', () => {
       />
     );
     await waitFor(() =>
-      expect(loadActivities).toHaveBeenLastCalledWith({ limit: 50, cursor: '100:2' })
+      expect(loadActivities).toHaveBeenLastCalledWith({ limit: 20, cursor: '100:2' })
     );
     fireEvent.click(await screen.findByRole('button', { name: 'Next' }));
     await waitFor(() => expect(changed).toHaveBeenLastCalledWith('older'));
@@ -327,7 +327,7 @@ describe('Shared asset feeds', () => {
     await waitFor(() => expect(changed).toHaveBeenLastCalledWith('100:2'));
     fireEvent.click(screen.getByRole('tab', { name: 'Transactions' }));
     await waitFor(() =>
-      expect(loadTransactions).toHaveBeenCalledWith({ limit: 50, cursor: undefined })
+      expect(loadTransactions).toHaveBeenCalledWith({ limit: 20, cursor: undefined })
     );
   });
 });

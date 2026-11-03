@@ -90,7 +90,7 @@ const history: TokenHistory = {
   burnCount: 1,
   transfersCount: 1000,
 };
-const empty = { data: [], limit: 50, hasMore: false, nextCursor: null };
+const empty = { data: [], limit: 20, hasMore: false, nextCursor: null };
 const activity: GlobalActivity = {
   txHash: other,
   blockNumber: 12345,
@@ -246,7 +246,7 @@ describe('Token board (F2 objects)', () => {
     fireEvent.click(within(history).getByRole('button', { name: 'Next' }));
     await waitFor(() =>
       expect(api.getTokenSupplyEvents).toHaveBeenLastCalledWith(hash, {
-        limit: 50,
+        limit: 20,
         cursor: '999:2',
       })
     );
