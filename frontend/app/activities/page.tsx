@@ -1,4 +1,5 @@
 'use client';
+import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery } from '@tanstack/react-query';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
 import { Header } from '@/components/layout/header';
@@ -65,6 +66,7 @@ export default function ActivitiesPage() {
           )}
           <ActivitiesStreamExplorer summary={summary} totalCount={count} />
         </DetailLayout>
+        <TopicCharts topic="/activities" />
       </main>
     </div>
   );

@@ -1,5 +1,6 @@
 'use client';
 
+import { TopicCharts } from '@/components/charts/topic-charts';
 import { useEffect, useState } from 'react';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
@@ -717,6 +718,7 @@ export default function TransactionsPage() {
             </>
           )}
         </DetailLayout>
+        <TopicCharts topic="/transactions" />
       </main>
     </div>
   );

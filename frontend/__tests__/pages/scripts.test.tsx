@@ -1,3 +1,4 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { render } from '../utils/test-utils';
@@ -84,6 +85,19 @@ const mockScriptsResponse = {
 describe('ScriptsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // Lane L (charts ↔ topics).
+  it('links the chart drawn from scripts (lane L)', async () => {
+    vi.mocked(api.getScripts).mockResolvedValue(mockScriptsResponse);
+    render(<ScriptsPage />);
+    const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+    const hrefs = within(charts)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(
+      CHARTS.filter((c) => c.evidenceHref === '/scripts').map((c) => `/mainnet/charts/${c.slug}`)
+    );
   });
 
   it('offers name or code-hash search (SC-L5, R2b-b)', async () => {

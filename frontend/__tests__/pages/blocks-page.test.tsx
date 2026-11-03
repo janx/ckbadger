@@ -1,3 +1,4 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { stubViewportFromMd } from '@/__tests__/utils/viewport';
@@ -89,6 +90,18 @@ describe('BlocksPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(api.getBlocks).mockResolvedValue(mockBlocksResponse);
+  });
+
+  // Lane L (charts ↔ topics): the blocks list links the charts drawn from blocks.
+  it('links every chart whose numbers come from blocks (lane L)', async () => {
+    render(<BlocksPage />);
+    const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+    const hrefs = within(charts)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(
+      CHARTS.filter((c) => c.evidenceHref === '/blocks').map((c) => `/mainnet/charts/${c.slug}`)
+    );
   });
 
   it('asks for twenty blocks a page below md (R2)', async () => {

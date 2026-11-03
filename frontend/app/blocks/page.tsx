@@ -1,5 +1,6 @@
 'use client';
 
+import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api, type Block } from '@/lib/api';
@@ -194,6 +195,7 @@ export default function BlocksPage() {
             </>
           )}
         </DetailLayout>
+        <TopicCharts topic="/blocks" />
       </main>
     </div>
   );

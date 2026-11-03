@@ -1,3 +1,4 @@
+import { CHARTS } from '@/components/charts/chart-catalogue';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
@@ -129,6 +130,18 @@ describe('DaoPage', () => {
     expect(screen.queryByText(/DAO chain evidence could not be loaded/)).toBeNull();
     await waitFor(() => expect(screen.queryByRole('status', { name: 'Being derived' })).toBeNull());
     expect(screen.queryByText(/DAO chain evidence could not be loaded/)).toBeNull();
+  });
+
+  // Lane L (charts ↔ topics).
+  it('links every chart drawn from the Nervos DAO (lane L)', async () => {
+    render(<DaoPage />);
+    const charts = await screen.findByRole('navigation', { name: 'Charts of these numbers' });
+    const hrefs = within(charts)
+      .getAllByRole('link')
+      .map((a) => a.getAttribute('href'));
+    expect(hrefs).toEqual(
+      CHARTS.filter((c) => c.evidenceHref === '/dao').map((c) => `/mainnet/charts/${c.slug}`)
+    );
   });
 
   it('renders the API-produced epoch, owner, AR and raw DAO evidence', async () => {
