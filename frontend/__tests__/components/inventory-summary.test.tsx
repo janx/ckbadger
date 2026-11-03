@@ -34,6 +34,10 @@ describe('Inventory global summary', () => {
       '90 of 200 collections are fully on-chain · so are 4,200 live objects · 17 await DOB decoding'
     );
     expect(screen.getByText(/Canonical asset totals/)).toHaveTextContent('#123');
+    // Lane L: the block the totals are taken at is a link.
+    expect(
+      within(screen.getByText(/Canonical asset totals/)).getByRole('link', { name: '#123' })
+    ).toHaveAttribute('href', '/mainnet/blocks/123');
   });
   it('fails when the composition tiers do not add up to the object count', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});

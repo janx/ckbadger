@@ -42,6 +42,10 @@ describe('CkbytesSection', () => {
     expect(total).toHaveTextContent('49,868,783,034.50933125 CKB');
     expect(within(total).getByText('.50933125')).toHaveClass('text-text-dim');
     expect(screen.getByTestId('ckbytes-block')).toHaveTextContent('at #20,820,045');
+    // Lane L: the block the total is exact at is a link.
+    expect(
+      within(screen.getByTestId('ckbytes-block')).getByRole('link', { name: '#20,820,045' })
+    ).toHaveAttribute('href', '/mainnet/blocks/20820045');
     expect(screen.getByRole('link', { name: 'CKBytes in circulation' })).toHaveAttribute(
       'href',
       '/mainnet/charts/total-supply'

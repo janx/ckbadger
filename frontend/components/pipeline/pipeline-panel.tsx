@@ -9,6 +9,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
+  type ReactNode,
   type SVGProps,
 } from 'react';
 import {
@@ -69,6 +70,7 @@ import {
 import { fmtInt, FOOTER_ROW } from '@/components/pipeline/svg-text';
 import { WindowLabel, WindowMarks, WindowTicks } from '@/components/pipeline/window-ruler';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { tapOrHover } from '@/components/ui/tap-or-hover-hint';
 
 const SVG_LABEL = {
@@ -97,7 +99,7 @@ function useMeasuredWidth(ref: RefObject<HTMLDivElement | null>): number | null 
   return width;
 }
 
-function Stat({ label, value, tone }: { label: string; value: string; tone: string }) {
+function Stat({ label, value, tone }: { label: string; value: ReactNode; tone: string }) {
   return (
     <span className="flex items-baseline gap-1.5 font-mono">
       <span className="text-text-dim text-small uppercase tracking-wider">{label}</span>
@@ -112,7 +114,7 @@ function PipelineStats({ snapshot }: { snapshot: PipelineSnapshot | undefined })
     <div data-testid="pipeline-stats" className="flex flex-wrap gap-x-[18px] gap-y-1">
       <Stat
         label="Tip"
-        value={snapshot ? `${formatBlockNumber(snapshot.tip.number)}` : '—'}
+        value={snapshot ? <BlockLink number={snapshot.tip.number} /> : '—'}
         tone="text-text-bright"
       />
     </div>
