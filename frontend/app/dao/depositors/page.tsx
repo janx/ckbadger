@@ -12,7 +12,6 @@ import { shareBarWidthFromPercent } from '@/components/ui/share-bar';
 import { CLASS_COLORS } from '@/lib/design-tokens';
 import { api, type DaoDepositorRow, type DaoDepositorsPage as RankedPage } from '@/lib/api';
 import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
-import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 import { retryTransientOnly } from '@/lib/query-client';
 import { cn } from '@/lib/utils';
