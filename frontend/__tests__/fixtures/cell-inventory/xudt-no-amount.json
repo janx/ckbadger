@@ -1,0 +1,45 @@
+{
+  "txHash": "0xfbe2782f9644fbcb3141a2051f75eb74e876258ad858fb75649295e53dd3c11c",
+  "outputIndex": 11,
+  "capacity": "828099995918",
+  "commonKnowledgeSize": "14400000000",
+  "lockScriptHash": "0x373fa47e15a932fee23117f396578b62480fa4d21c08945e10fbcc0a2db695a9",
+  "address": "ckb1qrgqep8saj8agswr30pls73hra28ry8jlnlc3ejzh3dl2ju7xxpjxqgqq800d3w9muaaxjwudexdp45eej4kn6kw8vmvty2j",
+  "typeScriptHash": "0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d",
+  "dataSize": 0,
+  "createdAtBlock": 12680867,
+  "status": "live",
+  "consumedAtBlock": null,
+  "lock": {
+    "codeHash": "0xd00c84f0ec8fd441c38bc3f87a371f547190f2fcff88e642bc5bf54b9e318323",
+    "hashType": "type",
+    "args": "0x0001def6c5c5df3bd349dc6e4cd0d699ccab69eace3b"
+  },
+  "type": {
+    "codeHash": "0x50bd8d6680b8b9cf98b73f3c08faf8b2a21914311954118ad6609be6e78a1b95",
+    "hashType": "data1",
+    "args": "0x08875c56644d39dd9629d291357d3026debc5d22fa88d924d60ce8f16dd50e70"
+  },
+  "protocolScript": {
+    "lock": null,
+    "type": "xudt"
+  },
+  "dataAnalysis": {
+    "token": {
+      "name": "RGB++ Protocol",
+      "symbol": "RGB++",
+      "decimals": 8,
+      "rawAmount": null,
+      "formattedAmount": null,
+      "noAmountReason": "xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)"
+    },
+    "heuristicGuesses": [
+      {
+        "kind": "script_hint",
+        "confidence": "high",
+        "reason": "Type script indicates XUDT but payload does not decode as canonical XUDT amount",
+        "humanValue": "expected first 16 bytes as little-endian u128 amount; observed length=0 bytes"
+      }
+    ]
+  }
+}

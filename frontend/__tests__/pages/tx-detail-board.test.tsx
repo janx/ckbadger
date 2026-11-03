@@ -627,6 +627,7 @@ describe('Transaction board, R2b-a fields', () => {
             symbol: null,
             decimals: null,
             amount: null,
+            noAmountReason: null,
             compositionTier: null,
           },
           lockArgsDecoded: { lock: 'shadow-lock', prefix: '0x07', hash: shadow },

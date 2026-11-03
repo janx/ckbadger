@@ -19,6 +19,13 @@ interface TransactionCellContentProps {
   cellHref: string;
 }
 
+/** A token cell without an amount carries the API's reason; anything else is a broken contract. */
+function noAmountReason(display: TransactionCellDisplay): string {
+  if (!display.noAmountReason)
+    throw new Error(`Token cell ${display.id}: no amount and no reason for none`);
+  return display.noAmountReason;
+}
+
 /** Compact cell identity; all amounts, names and media provenance come from its API descriptor. */
 export function TransactionCellContent({ display, cellHref }: TransactionCellContentProps) {
   const standard =
@@ -52,12 +59,16 @@ export function TransactionCellContent({ display, cellHref }: TransactionCellCon
       >
         {display.kind === 'token' ? (
           <span className="tabular-nums">
-            {display.amount === null
-              ? 'Amount unavailable'
-              : formatTokenBalanceWithRawMarker(
-                  exactUnsignedInteger(display.amount, `${display.id}: token amount`).toString(),
-                  display.decimals
-                )}{' '}
+            {display.amount === null ? (
+              <span title={noAmountReason(display)} className="text-text-dim">
+                no readable amount of
+              </span>
+            ) : (
+              formatTokenBalanceWithRawMarker(
+                exactUnsignedInteger(display.amount, `${display.id}: token amount`).toString(),
+                display.decimals
+              )
+            )}{' '}
             {display.symbol ?? display.name ?? (
               <Hash
                 hash={display.id}

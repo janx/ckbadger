@@ -152,6 +152,7 @@ export const addressObjectsFixture: AddressCell[] = collections.flatMap(
         symbol: null,
         decimals: null,
         amount: null,
+        noAmountReason: null,
         compositionTier: tier,
       },
     }))
@@ -182,6 +183,7 @@ export const addressIdentitiesFixture: AddressCell[] = [
       symbol: null,
       decimals: null,
       amount: null,
+      noAmountReason: null,
       compositionTier: null,
     },
   },
@@ -288,6 +290,7 @@ const tokenCells: AddressCell[] = Array.from({ length: 15 }, (_, i) => {
       symbol: token.symbol,
       decimals: token.decimals,
       amount: amount.toString(),
+      noAmountReason: null,
       compositionTier: null,
     },
   };

@@ -163,21 +163,25 @@ pub struct CellTokenDecode {
     pub name: Option<String>,
     pub symbol: Option<String>,
     pub decimals: Option<u8>,
-    pub raw_amount: String,
+    /// Exact base units; `None` exactly when `no_amount_reason` is set.
+    pub raw_amount: Option<String>,
     pub formatted_amount: Option<String>,
+    /// Why a cell of this token type holds no readable amount
+    /// ([`super::transaction_cells::read_udt_amount`]); `None` for an amount.
+    pub no_amount_reason: Option<String>,
 }
 
 fn enrich_token_decode(
     analysis: &mut CellDataAnalysis,
     token: &ckbadger_store::TokenInfo,
 ) -> anyhow::Result<()> {
-    let Some(decode) = analysis
+    // Called for a token cell whose data holds an amount, which the UDT
+    // decode always reads (same `UdtParser::parse_amount` rule).
+    let decode = analysis
         .deterministic
         .as_mut()
         .filter(|d| d.kind == "udt_amount")
-    else {
-        return Ok(());
-    };
+        .ok_or_else(|| anyhow::anyhow!("token cell with an amount lacks its udt_amount decode"))?;
     let amount = decode
         .segments
         .iter_mut()
@@ -212,10 +216,35 @@ fn enrich_token_decode(
         name: token.name.clone(),
         symbol: token.symbol.clone(),
         decimals,
-        raw_amount: raw,
+        raw_amount: Some(raw),
         formatted_amount: formatted,
+        no_amount_reason: None,
     });
     Ok(())
+}
+
+/// The token reading of a token-typed cell whose data holds no amount: its
+/// token's names when the token is indexed (the indexer writes a token row
+/// from amount-bearing cells only, so a type no amount ever moved in has
+/// none), no amount, and why.
+fn no_amount_token_decode(
+    token: Option<&ckbadger_store::TokenInfo>,
+    reason: String,
+) -> anyhow::Result<CellTokenDecode> {
+    Ok(CellTokenDecode {
+        name: token.and_then(|token| token.name.clone()),
+        symbol: token.and_then(|token| token.symbol.clone()),
+        decimals: token
+            .and_then(|token| token.decimals)
+            .map(u8::try_from)
+            .transpose()
+            .map_err(|_| {
+                anyhow::anyhow!("invalid token decimals {:?}", token.map(|t| t.decimals))
+            })?,
+        raw_amount: None,
+        formatted_amount: None,
+        no_amount_reason: Some(reason),
+    })
 }
 
 /// The registry protocol each of a cell's scripts belongs to, as the
@@ -926,12 +955,9 @@ fn maybe_parse_udt_decode(
 ) -> Option<CellDeterministicDecode> {
     let type_code_hash = info.type_code_hash.as_ref()?;
     let standard = detect_udt_standard_from_code_hash(type_code_hash)?;
-
-    if data.len() < 16 {
-        return None;
-    }
-
-    let amount = u128::from_le_bytes(data[0..16].try_into().ok()?);
+    // The one amount rule; data too short for it has no decode here and is
+    // described as `dataAnalysis.token.noAmountReason` (lane B, B3).
+    let amount = ckbadger_indexer::parser::udt::UdtParser::parse_amount(data)?;
     let mut segments = vec![CellDataSegment {
         label: "amount".to_string(),
         start: 0,
@@ -3914,22 +3940,35 @@ async fn get_cell(
             ))
         })?;
 
-    if let (Some(analysis), Some(type_hash)) = (&mut data_analysis, &info.type_script_hash) {
-        if analysis
-            .deterministic
-            .as_ref()
-            .is_some_and(|decode| decode.kind == "udt_amount")
-        {
-            let token = state
-                .store
-                .get_token(type_hash)
-                .map_err(|e| ApiError::internal(e.to_string()))?
-                .ok_or_else(|| {
+    let udt_standard = info.type_code_hash.as_deref().and_then(|code_hash| {
+        ckbadger_indexer::parser::udt::UdtParser::is_udt_code_hash_bytes(code_hash, 0)
+    });
+    if let (Some(analysis), Some(type_hash), Some(standard), Some(data)) = (
+        &mut data_analysis,
+        &info.type_script_hash,
+        udt_standard,
+        cell_data.as_deref(),
+    ) {
+        let token = state
+            .store
+            .get_token(type_hash)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        match super::transaction_cells::read_udt_amount(&standard, data) {
+            super::transaction_cells::UdtAmountReading::Amount(_) => {
+                let token = token.ok_or_else(|| {
                     ApiError::internal(format!(
                         "recognized token cell {outpoint} lacks indexed TokenInfo"
                     ))
                 })?;
-            enrich_token_decode(analysis, &token).map_err(|e| ApiError::internal(e.to_string()))?;
+                enrich_token_decode(analysis, &token)
+                    .map_err(|e| ApiError::internal(e.to_string()))?;
+            }
+            super::transaction_cells::UdtAmountReading::NoAmount { reason } => {
+                analysis.token = Some(
+                    no_amount_token_decode(token.as_ref(), reason)
+                        .map_err(|e| ApiError::internal(format!("cell {outpoint}: {e:#}")))?,
+                );
+            }
         }
     }
 

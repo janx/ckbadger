@@ -4319,3 +4319,177 @@ async fn committed_detail_outputs_name_the_script_and_version_a_code_cell_holds(
         "{json}"
     );
 }
+
+/// A committed transaction whose output 0 is an xUDT-typed cell carrying
+/// `data` (mainnet 0xfbe2782f…d3c11c output 11 carries 0 bytes), with the
+/// token's indexed row when `token` is set. Lane B (B3).
+async fn committed_tx_with_xudt_output(
+    data: Vec<u8>,
+    token: bool,
+) -> (axum::Router, String, TestCkbChain) {
+    use ckb_types::{
+        core::{BlockBuilder, EpochNumberWithFraction, ScriptHashType, TransactionBuilder},
+        packed,
+        prelude::*,
+    };
+    let store = test_store();
+    seed_genesis_baseline(&store);
+    let server = MockServer::start().await;
+    let hash = pending_tx_hash_hex();
+    let hash_bytes = hex::decode(hash.strip_prefix("0x").unwrap()).unwrap();
+    insert_committed_transaction(&store, &hash_bytes);
+    mount_pending_transaction_rpc(&server, &hash, "pending").await;
+
+    let lock = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new([0x11; 32]))
+        .hash_type(1u8.into())
+        .args(ckb_types::bytes::Bytes::from(vec![0; 20]).pack())
+        .build();
+    let xudt_code_hash: [u8; 32] =
+        hex::decode(ckbadger_indexer::parser::udt::XUDT_CODE_HASH_DATA1.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap();
+    let xudt = packed::Script::new_builder()
+        .code_hash(packed::Byte32::new(xudt_code_hash))
+        .hash_type(ScriptHashType::Data1.into())
+        .args(ckb_types::bytes::Bytes::from(vec![0x08; 32]).pack())
+        .build();
+    let node_tx = TransactionBuilder::default()
+        .input(
+            packed::CellInput::new_builder()
+                .previous_output(
+                    packed::OutPoint::new_builder()
+                        .tx_hash(packed::Byte32::new([0xab; 32]))
+                        .index(0u32.pack())
+                        .build(),
+                )
+                .build(),
+        )
+        .output(
+            packed::CellOutput::new_builder()
+                .capacity(20_000_000_000u64.pack())
+                .lock(lock.clone())
+                .type_(Some(xudt.clone()).pack())
+                .build(),
+        )
+        .output_data(ckb_types::bytes::Bytes::from(data).pack())
+        .build()
+        .fake_hash(packed::Byte32::from_slice(&hash_bytes).unwrap());
+    let mut batch = StoreBatch::new(store.as_ref());
+    batch.put_cell(
+        &[0xab; 32],
+        0,
+        &LiveCellInfo {
+            capacity: 20_000_001_234,
+            lock_script_hash: lock.calc_script_hash().as_slice().to_vec(),
+            lock_code_hash: vec![0x11; 32],
+            lock_hash_type: 1,
+            lock_args: vec![0; 20],
+            type_script_hash: None,
+            type_code_hash: None,
+            type_hash_type: None,
+            type_args: None,
+            data_size: 0,
+            occupied_capacity: 6_100_000_000,
+            udt_amount: None,
+            data_hash: None,
+        },
+        320,
+    );
+    batch.put_live_cell_marker_by_outpoint(&hash_bytes, 0, 321);
+    if token {
+        batch.put_token(
+            xudt.calc_script_hash().as_slice(),
+            &TokenInfo {
+                type_code_hash: xudt_code_hash.to_vec(),
+                hash_type: 2,
+                type_args: vec![0x08; 32],
+                standard: "xudt".into(),
+                name: Some("RGB++".into()),
+                symbol: Some("RGB++".into()),
+                decimals: Some(8),
+                max_supply: None,
+                first_seen_block: 300,
+                icon_url: None,
+                description: None,
+                transfers_count: 1,
+                metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                chain_metadata: None,
+            },
+        );
+    }
+    batch.commit().unwrap();
+    let block = BlockBuilder::default()
+        .number(321u64.pack())
+        .epoch(EpochNumberWithFraction::new(1, 0, 1000).pack())
+        .transaction(node_tx)
+        .build();
+    let chain = seed_ckb_chain(&[block]);
+    let mut config = test_config_with_ckb_db_path(
+        store.clone(),
+        store,
+        chain.path.clone(),
+        Some(chain.cleanup.clone()),
+    );
+    config.ckb_rpc_url = server.uri();
+    (create_router(config).await, hash, chain)
+}
+
+/// Lane B (B3), regression: mainnet 0xfbe2782f…d3c11c/detail answered 500
+/// "building output … output_index=11 display: invalid xudt amount for token
+/// 0xb5fd…". An xUDT-typed cell whose data is shorter than an amount is on-chain
+/// fact (the indexer, by `UdtParser::parse_amount`, records it with no amount:
+/// not a holder, moving no supply). The transaction renders; the output says
+/// what it is: a cell of that token type with no readable amount, and why.
+#[tokio::test]
+async fn transaction_detail_describes_an_xudt_output_without_an_amount() {
+    let (app, hash, _chain) = committed_tx_with_xudt_output(Vec::new(), true).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let display = &json["outputs"][0]["display"];
+    assert_eq!(display["kind"], "token", "{display}");
+    assert_eq!(display["standard"], "xudt");
+    assert_eq!(display["amount"], serde_json::Value::Null);
+    assert_eq!(
+        display["noAmountReason"],
+        "xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)"
+    );
+    assert_eq!(display["symbol"], "RGB++");
+    // The type script and the raw data are the output's own fields.
+    assert_eq!(
+        json["outputs"][0]["type"]["codeHash"],
+        ckbadger_indexer::parser::udt::XUDT_CODE_HASH_DATA1
+    );
+}
+
+/// The indexer writes a token row only from amount-bearing cells, so a type
+/// whose cells never carried an amount has none; its no-amount cell is still
+/// described, not a "missing indexed token metadata" error.
+#[tokio::test]
+async fn transaction_detail_describes_a_no_amount_xudt_output_of_an_unindexed_token() {
+    let (app, hash, _chain) = committed_tx_with_xudt_output(vec![0x01; 5], false).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let display = &json["outputs"][0]["display"];
+    assert_eq!(display["amount"], serde_json::Value::Null, "{display}");
+    assert_eq!(
+        display["noAmountReason"],
+        "xUDT data is 5 bytes; an amount is its first 16 bytes (u128 LE)"
+    );
+    assert_eq!(display["symbol"], serde_json::Value::Null);
+}
+
+/// An amount-bearing output is read by the same rule: the first 16 bytes,
+/// extension bytes after them, and no reason.
+#[tokio::test]
+async fn transaction_detail_reads_an_xudt_amount_by_the_indexer_rule() {
+    let mut data = 100_000_000_000_u128.to_le_bytes().to_vec();
+    data.extend_from_slice(&[0xee; 4]);
+    let (app, hash, _chain) = committed_tx_with_xudt_output(data, true).await;
+    let (status, json) = get_json(&app, &format!("/transactions/{hash}/detail")).await;
+    assert_eq!(status, StatusCode::OK, "{json}");
+    let display = &json["outputs"][0]["display"];
+    assert_eq!(display["amount"], "100000000000", "{display}");
+    assert_eq!(display["noAmountReason"], serde_json::Value::Null);
+}

@@ -2559,3 +2559,66 @@ async fn test_code_cell_whose_elf_does_not_parse_is_served_with_the_reason() {
     );
     assert_eq!(json["codeCell"]["versionHash"], json["dataHash"]);
 }
+
+/// Lane B (B3): the cell page of an xUDT-typed cell whose data holds no amount
+/// (mainnet 0xfbe2782f…d3c11c:11, 0 bytes) names its token and says it has no
+/// readable amount, by the same rule as the transaction tile — the cell page's
+/// inventory line read the missing `dataAnalysis.token` as broken data.
+#[tokio::test]
+async fn test_xudt_cell_without_an_amount_names_its_token_and_the_reason() {
+    use ckb_types::core::ScriptHashType;
+    use ckb_types::prelude::*;
+    let lock = fixture_script(
+        "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+        ScriptHashType::Type,
+        &[0x31; 20],
+    );
+    let xudt = fixture_script(
+        ckbadger_indexer::parser::udt::XUDT_CODE_HASH_DATA1,
+        ScriptHashType::Data1,
+        &[0x08; 32],
+    );
+    let type_hash = xudt.calc_script_hash().as_slice().to_vec();
+    let (app, tx_hash, _chain) =
+        one_output_cell_app(lock, Some(xudt), Vec::new(), 828_099_995_918, |batch| {
+            batch.put_token(
+                &type_hash,
+                &TokenInfo {
+                    type_code_hash: hex::decode(
+                        ckbadger_indexer::parser::udt::XUDT_CODE_HASH_DATA1
+                            .trim_start_matches("0x"),
+                    )
+                    .unwrap(),
+                    hash_type: 2,
+                    type_args: vec![0x08; 32],
+                    standard: "xudt".into(),
+                    name: Some("RGB++".into()),
+                    symbol: Some("RGB++".into()),
+                    decimals: Some(8),
+                    max_supply: None,
+                    first_seen_block: 100,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 1,
+                    metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+                    chain_metadata: None,
+                },
+            );
+        })
+        .await;
+
+    let (status, json) = get_json(&app, &format!("/cells/0x{}/0", hex::encode(tx_hash))).await;
+    assert_eq!(status, StatusCode::OK, "got {json}");
+    assert_eq!(json["protocolScript"]["type"], "xudt");
+    assert_eq!(
+        json["dataAnalysis"]["token"],
+        serde_json::json!({
+            "name": "RGB++",
+            "symbol": "RGB++",
+            "decimals": 8,
+            "rawAmount": null,
+            "formattedAmount": null,
+            "noAmountReason": "xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)",
+        })
+    );
+}

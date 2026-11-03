@@ -10,7 +10,7 @@ use ckbadger_indexer::parser::{
     mnft::MnftParser,
     registry::{ProtocolScript, PROTOCOL_REGISTRY},
     spore::SporeParser,
-    udt::UdtParser,
+    udt::{UdtParser, UdtStandard},
 };
 use ckbadger_store::{
     types::{IdentityStandard, ObjectExtra, ObjectStandard},
@@ -32,8 +32,12 @@ pub struct CellDisplay {
     pub collection_name: Option<String>,
     pub symbol: Option<String>,
     pub decimals: Option<u8>,
-    /// Exact raw token amount, without decimal scaling.
+    /// Exact raw token amount, without decimal scaling; `None` for a token
+    /// cell exactly when `no_amount_reason` says why its data holds none.
     pub amount: Option<String>,
+    /// A token-typed cell whose data is too short for an amount (see
+    /// [`read_udt_amount`]): why there is no readable amount. `None` otherwise.
+    pub no_amount_reason: Option<String>,
     pub composition_tier: Option<String>,
 }
 impl CellDisplay {
@@ -48,8 +52,44 @@ impl CellDisplay {
             symbol: None,
             decimals: None,
             amount: None,
+            no_amount_reason: None,
             composition_tier: None,
         }
+    }
+}
+
+/// What a sUDT/xUDT-typed cell's data says about its amount.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UdtAmountReading {
+    Amount(u128),
+    /// The data is too short for an amount; `reason` says so with its length.
+    NoAmount {
+        reason: String,
+    },
+}
+
+/// Read a sUDT/xUDT-typed cell's amount by the indexer's one rule,
+/// [`UdtParser::parse_amount`]: the first 16 bytes as u128 LE (extension data
+/// may follow). Shorter data is on-chain fact, not corruption — the type
+/// script admits it (owner mode), and the indexer records such a cell with no
+/// amount: never a holder, moving no supply, its capacity still in the
+/// token's history. So it is described, never an error, and every display of
+/// a token cell (transaction tiles, address holdings, the cell page) reads it
+/// through this one function.
+pub fn read_udt_amount(standard: &UdtStandard, data: &[u8]) -> UdtAmountReading {
+    match UdtParser::parse_amount(data) {
+        Some(amount) => UdtAmountReading::Amount(amount),
+        None => UdtAmountReading::NoAmount {
+            reason: format!(
+                "{} data is {} byte{}; an amount is its first 16 bytes (u128 LE)",
+                match standard {
+                    UdtStandard::Sudt => "sUDT",
+                    UdtStandard::Xudt => "xUDT",
+                },
+                data.len(),
+                if data.len() == 1 { "" } else { "s" }
+            ),
+        },
     }
 }
 
@@ -113,20 +153,16 @@ fn display(store: &CkbadgerStore, cell: &ParsedCell, indexed: bool) -> Result<Op
             .ok_or_else(|| anyhow!("display requires type hash type"))?,
     ) {
         let mut result = CellDisplay::new("token", standard.as_str(), type_hash);
-        result.amount = Some(
-            UdtParser::parse_amount(&cell.data)
-                .ok_or_else(|| {
-                    anyhow!(
-                        "invalid {} amount for token {}",
-                        standard.as_str(),
-                        result.id
-                    )
-                })?
-                .to_string(),
-        );
+        match read_udt_amount(&standard, &cell.data) {
+            UdtAmountReading::Amount(amount) => result.amount = Some(amount.to_string()),
+            UdtAmountReading::NoAmount { reason } => result.no_amount_reason = Some(reason),
+        }
         let token = store.get_token(type_hash)?;
+        // The indexer writes a token row from amount-bearing cells only: an
+        // indexed cell with an amount must find one, while a no-amount cell
+        // may be of a type no amount ever moved in.
         ensure!(
-            !indexed || token.is_some(),
+            !indexed || token.is_some() || result.amount.is_none(),
             "missing indexed token metadata {}",
             result.id
         );
@@ -544,6 +580,37 @@ fn molecule_bytes(data: &[u8]) -> Result<&[u8]> {
 
 #[cfg(test)]
 mod tests {
+    use super::{read_udt_amount, UdtAmountReading};
+    use ckbadger_indexer::parser::udt::UdtStandard;
+
+    /// Lane B (B3): one amount rule for every display, the indexer's.
+    #[test]
+    fn udt_amount_is_the_first_16_bytes_or_a_described_absence() {
+        let no = |standard, len: usize| match read_udt_amount(&standard, &vec![0x01; len]) {
+            UdtAmountReading::NoAmount { reason } => reason,
+            other => panic!("{len} bytes read as {other:?}"),
+        };
+        assert_eq!(
+            no(UdtStandard::Xudt, 0),
+            "xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)"
+        );
+        assert_eq!(
+            no(UdtStandard::Sudt, 1),
+            "sUDT data is 1 byte; an amount is its first 16 bytes (u128 LE)"
+        );
+        assert!(no(UdtStandard::Xudt, 15).starts_with("xUDT data is 15 bytes"));
+        let mut data = 42u128.to_le_bytes().to_vec();
+        assert_eq!(
+            read_udt_amount(&UdtStandard::Xudt, &data),
+            UdtAmountReading::Amount(42)
+        );
+        data.extend_from_slice(&[0xff; 7]); // xUDT extension data after the amount
+        assert_eq!(
+            read_udt_amount(&UdtStandard::Xudt, &data),
+            UdtAmountReading::Amount(42)
+        );
+    }
+
     use super::*;
     fn table(fields: &[Vec<u8>]) -> Vec<u8> {
         let mut offset = 4 * (fields.len() + 1);

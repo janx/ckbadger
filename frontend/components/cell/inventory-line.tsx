@@ -246,6 +246,21 @@ export function CellInventoryLine({ cell }: { cell: Cell }) {
           name={<span className="whitespace-nowrap">{`${item.amount} ${item.unit}`}</span>}
         />
       );
+    case 'token-without-amount':
+      return (
+        <Line
+          mark="tokens"
+          lead="This cell holds no readable amount of"
+          href={item.href}
+          name={<span className="whitespace-nowrap">{item.unit}</span>}
+          tail={
+            <span data-testid="cell-inventory-no-amount" className="text-text-dim text-small">
+              {' '}
+              · {item.reason}
+            </span>
+          }
+        />
+      );
     case 'dao':
       return (
         <Line

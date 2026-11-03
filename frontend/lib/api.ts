@@ -718,8 +718,13 @@ interface TransactionCellDisplay {
   collectionName: string | null;
   symbol: string | null;
   decimals: number | null;
-  /** Exact token base units; null for non-token cells. */
+  /**
+   * Exact token base units; null for non-token cells, and for a token cell whose data is too
+   * short for an amount — then `noAmountReason` says so.
+   */
   amount: string | null;
+  /** A token cell with no readable amount: why (its data length vs the 16-byte amount). */
+  noAmountReason: string | null;
   compositionTier: NonNullable<SporeNft['mediaProfile']>['tier'] | null;
 }
 
@@ -947,8 +952,10 @@ interface CellDataAnalysis {
     name: string | null;
     symbol: string | null;
     decimals: number | null;
-    rawAmount: string;
+    /** null exactly when the cell's data holds no amount; `noAmountReason` says why. */
+    rawAmount: string | null;
     formattedAmount: string | null;
+    noAmountReason: string | null;
   };
   deterministic?: CellDeterministicDecode;
   heuristicGuesses: CellDataGuess[];

@@ -823,6 +823,7 @@ describe('TransactionDetailPage', () => {
       symbol: null,
       decimals: null,
       amount: null,
+      noAmountReason: null,
       compositionTier: null,
     };
     tx.inputs![0].display = display;
@@ -885,6 +886,7 @@ describe('TransactionDetailPage', () => {
         symbol: null,
         decimals: null,
         amount: null,
+        noAmountReason: null,
         compositionTier: null,
       };
       tx.inputs![0].display = display;
@@ -917,6 +919,7 @@ describe('TransactionDetailPage', () => {
         symbol: null,
         decimals: null,
         amount: null,
+        noAmountReason: null,
         compositionTier: 'btc_ckb',
       } satisfies TransactionCellDisplay,
       expected: ['Spore', 'Nervape 3x', '0x55555555...555555', 'BTC+CKB'],
@@ -934,6 +937,7 @@ describe('TransactionDetailPage', () => {
         symbol: null,
         decimals: null,
         amount: null,
+        noAmountReason: null,
         compositionTier: null,
       } satisfies TransactionCellDisplay,
       expected: ['CKBFS file', '3X0125NMNVAP033202.LOGS'],
@@ -951,6 +955,7 @@ describe('TransactionDetailPage', () => {
         symbol: 'USDI',
         decimals: 6,
         amount: '9007199254740993123456',
+        noAmountReason: null,
         compositionTier: null,
       } satisfies TransactionCellDisplay,
       expected: ['xUDT', '9,007,199,254,740,993.123456', 'USDI'],
@@ -968,6 +973,7 @@ describe('TransactionDetailPage', () => {
         symbol: null,
         decimals: null,
         amount: null,
+        noAmountReason: null,
         compositionTier: null,
       } satisfies TransactionCellDisplay,
       expected: ['.bit', 'alice.bit', '0x99999999...999999'],

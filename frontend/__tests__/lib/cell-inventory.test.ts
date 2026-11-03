@@ -3,6 +3,7 @@ import type { Cell } from '@/lib/api';
 import { CELL_INVENTORY_KINDS, cellInventoryItem } from '@/lib/cell-inventory';
 import spore from '@/__tests__/fixtures/cell-inventory/spore.json';
 import xudt from '@/__tests__/fixtures/cell-inventory/xudt.json';
+import xudtNoAmount from '@/__tests__/fixtures/cell-inventory/xudt-no-amount.json';
 import dao from '@/__tests__/fixtures/cell-inventory/dao.json';
 import daoWithdraw from '@/__tests__/fixtures/cell-inventory/dao-withdraw.json';
 import dotbit from '@/__tests__/fixtures/cell-inventory/dotbit.json';
@@ -51,6 +52,27 @@ describe('cellInventoryItem (lane U, U6): what inventory item a cell is, from pr
       unit: 'RGB++',
       href: '/tokens/0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d',
     });
+  });
+
+  // Lane B (B3): mainnet 0xfbe2…c11c:11 is an RGB++-typed cell with 0 data bytes. The API reads it
+  // by the indexer's rule (no amount: not a holding) and says why; the line names the token.
+  it('an xUDT cell whose data holds no amount names its token and the reason', () => {
+    expect(cellInventoryItem(cell(xudtNoAmount))).toEqual({
+      kind: 'token-without-amount',
+      typeHash: '0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d',
+      unit: 'RGB++',
+      reason: 'xUDT data is 0 bytes; an amount is its first 16 bytes (u128 LE)',
+      href: '/tokens/0xb5fdb4e8ad52f5e3ed4a294c01ca99f7811b06baef2e7fce5b7d4ebbf006717d',
+    });
+    const noReason = cell(xudtNoAmount, {
+      dataAnalysis: {
+        ...xudtNoAmount.dataAnalysis,
+        token: { ...xudtNoAmount.dataAnalysis.token, noAmountReason: null },
+      } as Cell['dataAnalysis'],
+    });
+    expect(() => cellInventoryItem(noReason)).toThrow(
+      /xudt cell with no token amount and no reason for none/
+    );
   });
 
   it('a token of unknown decimals shows its raw amount, marked', () => {
