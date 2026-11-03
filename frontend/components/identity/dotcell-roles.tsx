@@ -1,4 +1,5 @@
 import type { ItemProtocol, DotCellPartyRef } from '@/lib/api';
+import Link from '@/components/ui/link';
 import { PartyLine } from '@/components/identity/identity-overview';
 import { ownerRun, ownerRuns } from '@/lib/identity-term';
 import { formatUtc8Date, truncateHash } from '@/lib/utils';
@@ -120,7 +121,17 @@ export function DotcellRoles({
                   step === 'now' ? 'text-text-bright' : 'text-text'
                 )}
               >
-                {partyShort(party)}
+                {party.address ? (
+                  <Link
+                    href={`/address/${party.address}`}
+                    title={party.address}
+                    className="hover:text-jade"
+                  >
+                    {partyShort(party)}
+                  </Link>
+                ) : (
+                  partyShort(party)
+                )}
               </span>
               <span className="text-text-dim text-meta">
                 {party.scriptName ?? 'lock not named'}
