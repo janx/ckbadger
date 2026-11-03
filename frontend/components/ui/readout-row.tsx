@@ -3,6 +3,7 @@
 import type { ReactNode } from 'react';
 import { TapOrHoverHint } from '@/components/ui/tap-or-hover-hint';
 import { usePinWord } from '@/hooks/usePinWord';
+import { cn } from '@/lib/utils';
 
 export interface ReadoutRowProps {
   /** The accessible name of the readout (it is a polite live region). */
@@ -32,6 +33,11 @@ export function ReadoutRow({ label, pinned, idle, hint = true, children }: Reado
   const pinWord = usePinWord();
   const empty = children === null || children === undefined || children === false;
   if (pinned && empty) throw new Error(`${label}: readout pinned with nothing to read`);
+  // Hover never moves layout: with no idle words the row still holds its text line (a no-break
+  // space), so the first hover changes the words in the line, not the page's height below it.
+  const idleWords =
+    idle === null || idle === undefined || idle === false || idle === '' ? '\u00a0' : idle;
+  const ghost = typeof idle === 'string' && idle !== '' ? idle : undefined;
   return (
     <div
       role="status"
@@ -39,15 +45,29 @@ export function ReadoutRow({ label, pinned, idle, hint = true, children }: Reado
       aria-label={label}
       className="border-base-border-subtle text-small flex items-baseline justify-between gap-3 border-t pt-2"
     >
-      <span className="text-text min-w-0" style={{ overflowWrap: 'anywhere' }}>
-        {empty ? (
-          <span className="text-text-dim">{idle}</span>
-        ) : (
-          <>
-            {pinned && <span className="text-text-dim">{pinWord} </span>}
-            {children}
-          </>
+      {/* Hover never moves layout: an idle sentence stays reserved under the reading as an
+          invisible ghost in the same grid cell (generated content, so it is neither the reading's
+          text nor its accessible name) — a one-line reading cannot shrink a row whose idle words
+          wrap to two lines on a phone. */}
+      <span
+        data-idle={ghost}
+        className={cn(
+          'text-text grid min-w-0',
+          ghost !== undefined &&
+            'after:invisible after:content-[attr(data-idle)] after:[grid-area:1/1]'
         )}
+        style={{ overflowWrap: 'anywhere' }}
+      >
+        <span className="[grid-area:1/1]">
+          {empty ? (
+            <span className="text-text-dim">{idleWords}</span>
+          ) : (
+            <>
+              {pinned && <span className="text-text-dim">{pinWord} </span>}
+              {children}
+            </>
+          )}
+        </span>
       </span>
       {hint && <TapOrHoverHint className="text-text-dim text-meta shrink-0 whitespace-nowrap" />}
     </div>
