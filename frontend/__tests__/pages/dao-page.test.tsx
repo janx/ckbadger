@@ -200,9 +200,13 @@ describe('DaoPage', () => {
       anchor: { blockNumber: 4, blockHash: '0x' + '4'.repeat(64) },
     });
     render(<DaoPage />);
-    expect(
-      await screen.findByText(/is used at block #4 · every block splits its issuance/)
-    ).toBeInTheDocument();
+    // Lane L: '#4' is a link inside the line (was one text node).
+    const used = await screen.findByText(/is used at block/);
+    expect(used).toHaveTextContent(/is used at block #4 · every block splits its issuance/);
+    expect(within(used).getByRole('link', { name: '#4' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/4'
+    );
     expect(
       screen.getByText(/Protocol occupied \(U\) includes the genesis virtual occupied baseline/)
     ).toBeInTheDocument();

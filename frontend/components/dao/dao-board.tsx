@@ -19,6 +19,7 @@ import { formatAccumulatedRate } from '@/lib/dao-header';
 import { exactUnsignedInteger } from '@/lib/exact-integer';
 import { formatCapacity, formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { IciclePartition, type IcicleNode } from '@/components/ui/icicle-partition';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { DAO_ISSUANCE_COLORS } from '@/lib/design-tokens';
@@ -596,7 +597,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
         <span className="text-text">
           <Amount value={issued.toString()} />
         </span>{' '}
-        CKB issued so far is used at block {formatBlockNumber(statistics.tipBlockNumber)} · every
+        CKB issued so far is used at block <BlockLink number={statistics.tipBlockNumber} /> · every
         block splits its issuance in these proportions
       </div>
       <div
@@ -1085,7 +1086,11 @@ function RawEvidence({
   ];
   const headerField = (
     <DetailSection
-      title={`The DAO field in every block header · ${formatBlockNumber(header.blockNumber)}`}
+      title={
+        <>
+          The DAO field in every block header · <BlockLink number={header.blockNumber} />
+        </>
+      }
     >
       <div className="text-small">
         {fields.map((field) => (
@@ -1122,7 +1127,7 @@ function RawEvidence({
       </p>
       {evidence.ar.year365 && (
         <div className="text-text-dim text-meta mt-2 font-mono">
-          365-day anchor: block {formatBlockNumber(evidence.ar.year365.anchorBlockNumber)} · chain
+          365-day anchor: block <BlockLink number={evidence.ar.year365.anchorBlockNumber} /> · chain
           time {formatUtc8DateTime(evidence.ar.year365.anchorChainTimeMs)} · AR{' '}
           {formatAr(evidence.ar.year365.anchorAr)} · observed span{' '}
           {formatDurationMs(
@@ -1235,7 +1240,7 @@ function HowItWorks({
           secondary issuance to use; what is burnt stays burnt. Estimated APC is at today&apos;s
           issuance and deposits; &ldquo;Compensation, last 365 days&rdquo; is on free capacity, from
           the header&apos;s AR. Statistics are exact to the shannon at block{' '}
-          {formatBlockNumber(statistics.tipBlockNumber)}; the indexed epoch is{' '}
+          <BlockLink number={statistics.tipBlockNumber} />; the indexed epoch is{' '}
           {evidence.tipEpoch.display}. &ldquo;Recent DAO activity&rdquo; lists deposits, withdrawal
           requests and withdrawals, newest first.
         </p>

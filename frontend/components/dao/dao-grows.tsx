@@ -9,6 +9,7 @@ import { api, type DaoArHistory, type DaoEvidence } from '@/lib/api';
 import { formatPercent, parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
 import { formatBlockNumber } from '@/lib/format-block';
+import { BlockLink } from '@/components/ui/block-link';
 import { formatUtc8Date } from '@/lib/utils';
 
 /** The board's example deposit: 10,000 CKB, in shannons. */
@@ -106,7 +107,7 @@ function ArByDay({ days, evidence }: { days: ArDay[]; evidence: DaoEvidence }) {
             ) : (
               <span>…</span>
             )}{' '}
-            compensation by {formatBlockNumber(tip)}
+            compensation by <BlockLink number={tip} />
           </span>
         </ReadoutRow>
       </div>

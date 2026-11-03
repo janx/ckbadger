@@ -45,9 +45,13 @@ describe('DAO depositors page (DAO-12)', () => {
     const table = await screen.findByRole('table', { name: 'DAO depositors' });
     expect(table.querySelectorAll('tbody tr')).toHaveLength(2);
     expect(table.querySelector('tbody tr')).toHaveTextContent('999.00000000');
-    expect(
-      screen.getByText((_, el) => el?.getAttribute('data-role') === 'ranked-at')
-    ).toHaveTextContent('3 depositors ranked by CKB deposited at block #20,879,205');
+    const rankedAt = screen.getByText((_, el) => el?.getAttribute('data-role') === 'ranked-at');
+    expect(rankedAt).toHaveTextContent('3 depositors ranked by CKB deposited at block #20,879,205');
+    // Lane L: the block the ranking is taken at is a link.
+    expect(within(rankedAt).getByRole('link', { name: '#20,879,205' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20879205'
+    );
     expect(api.getDaoDepositors).toHaveBeenCalledWith({ limit: 50, cursor: undefined });
     fireEvent.click(screen.getByRole('button', { name: 'Next 50 →' }));
     await waitFor(() =>
