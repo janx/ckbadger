@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Cell } from '@/lib/api';
 import sporeCell from '@/__tests__/fixtures/d5/cell-spore-board.json';
+import daoDeposit from '@/__tests__/fixtures/cell-inventory/dao.json';
+import daoWithdraw from '@/__tests__/fixtures/cell-inventory/dao-withdraw.json';
 import { cellDataParts, cellOutputParts } from '@/lib/cell-parts';
 import { CELL_COLORS } from '@/lib/design-tokens';
 
@@ -40,5 +42,22 @@ describe('cell parts (Cell board: every byte named once)', () => {
     ]);
     expect(parts.every((p) => p.occupied)).toBe(true);
     expect(parts.find((p) => p.label === 'content type')!.value).toBe('dob/0');
+  });
+
+  // Lane B (B2): the API described a withdraw request's 8 bytes twice (`dao_state` [0..8) and
+  // `deposit_block_number` [0..8)), and this map threw "overlaps" — the cell page crashed. The
+  // decode is one field now, for both DAO cells.
+  it("names a DAO cell's 8 data bytes once: the deposit block number", () => {
+    const request = cellDataParts({
+      ...daoWithdraw,
+      data: '0x39bd3e0100000000',
+    } as unknown as Cell);
+    expect(request.map((p) => [p.label, p.start, p.end, p.value])).toEqual([
+      ['deposit block number', 0, 8, '20888889'],
+    ]);
+    const deposit = cellDataParts({ ...daoDeposit, data: '0x0000000000000000' } as unknown as Cell);
+    expect(deposit.map((p) => [p.label, p.start, p.end, p.value])).toEqual([
+      ['deposit block number', 0, 8, '0 = still deposited'],
+    ]);
   });
 });

@@ -30,17 +30,10 @@
       "summary": "DAO withdraw-request cell detected (deposit_block_number=20888889)",
       "segments": [
         {
-          "label": "dao_state",
-          "start": 0,
-          "end": 8,
-          "meaning": "DAO state marker",
-          "humanValue": "withdraw_request"
-        },
-        {
           "label": "deposit_block_number",
           "start": 0,
           "end": 8,
-          "meaning": "Original deposit block number (u64 LE)",
+          "meaning": "The block of the deposit this request withdraws (u64 LE)",
           "humanValue": "20888889"
         }
       ]

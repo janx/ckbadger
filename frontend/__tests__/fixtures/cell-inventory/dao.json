@@ -30,11 +30,11 @@
       "summary": "DAO deposit cell detected (8-byte zero data)",
       "segments": [
         {
-          "label": "dao_state",
+          "label": "deposit_block_number",
           "start": 0,
           "end": 8,
-          "meaning": "DAO state marker",
-          "humanValue": "deposit"
+          "meaning": "The block of the deposit a withdraw request withdraws (u64 LE); a deposit cell holds 0",
+          "humanValue": "0 = still deposited"
         }
       ]
     },

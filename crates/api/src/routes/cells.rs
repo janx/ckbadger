@@ -877,48 +877,42 @@ fn maybe_parse_dao_decode(
     if !is_dao_type_code_hash(type_code_hash) {
         return None;
     }
-    if data.len() != 8 {
-        return None;
-    }
-
-    if data == [0u8; 8] {
-        return Some(CellDeterministicDecode {
+    // The indexer's one rule (`DaoParser`): 8 zero bytes are a deposit, any
+    // other 8 bytes a withdraw request naming its deposit's block. The data is
+    // ONE field either way, so it is one segment: the deposit block number,
+    // which a deposit cell holds as 0.
+    use ckbadger_indexer::parser::dao::{DaoParser, DaoState};
+    let deposit_block_number = |meaning: &str, human_value: String| CellDataSegment {
+        label: "deposit_block_number".to_string(),
+        start: 0,
+        end: 8,
+        meaning: meaning.to_string(),
+        human_value,
+    };
+    match DaoParser::parse_dao_state(data)? {
+        DaoState::Deposit => Some(CellDeterministicDecode {
             kind: "dao_deposit_cell".to_string(),
             summary: "DAO deposit cell detected (8-byte zero data)".to_string(),
-            segments: vec![CellDataSegment {
-                label: "dao_state".to_string(),
-                start: 0,
-                end: 8,
-                meaning: "DAO state marker".to_string(),
-                human_value: "deposit".to_string(),
-            }],
-        });
+            segments: vec![deposit_block_number(
+                "The block of the deposit a withdraw request withdraws (u64 LE); a deposit cell holds 0",
+                "0 = still deposited".to_string(),
+            )],
+        }),
+        DaoState::WithdrawRequest => {
+            let block = DaoParser::parse_deposit_block_number(data)
+                .expect("a withdraw request's 8 bytes are a nonzero u64");
+            Some(CellDeterministicDecode {
+                kind: "dao_withdraw_request_cell".to_string(),
+                summary: format!(
+                    "DAO withdraw-request cell detected (deposit_block_number={block})"
+                ),
+                segments: vec![deposit_block_number(
+                    "The block of the deposit this request withdraws (u64 LE)",
+                    block.to_string(),
+                )],
+            })
+        }
     }
-
-    let deposit_block_number = u64::from_le_bytes(data.try_into().ok()?);
-    Some(CellDeterministicDecode {
-        kind: "dao_withdraw_request_cell".to_string(),
-        summary: format!(
-            "DAO withdraw-request cell detected (deposit_block_number={})",
-            deposit_block_number
-        ),
-        segments: vec![
-            CellDataSegment {
-                label: "dao_state".to_string(),
-                start: 0,
-                end: 8,
-                meaning: "DAO state marker".to_string(),
-                human_value: "withdraw_request".to_string(),
-            },
-            CellDataSegment {
-                label: "deposit_block_number".to_string(),
-                start: 0,
-                end: 8,
-                meaning: "Original deposit block number (u64 LE)".to_string(),
-                human_value: deposit_block_number.to_string(),
-            },
-        ],
-    })
 }
 
 fn detect_udt_standard_from_code_hash(code_hash: &[u8]) -> Option<&'static str> {
@@ -5561,10 +5555,20 @@ mod tests {
             analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao deposit decode");
         assert_eq!(deterministic.kind, "dao_deposit_cell");
-        assert!(deterministic
-            .segments
-            .iter()
-            .any(|s| s.label == "dao_state" && s.human_value == "deposit"));
+        // The DAO data is one 8-byte field — the deposit block number a
+        // withdraw request writes — and a deposit carries 0 there. One segment,
+        // so every byte belongs to exactly one field (the cell microscope's rule).
+        assert_eq!(
+            deterministic.segments.len(),
+            1,
+            "{:?}",
+            deterministic.segments
+        );
+        let field = &deterministic.segments[0];
+        assert_eq!(field.label, "deposit_block_number");
+        assert_eq!((field.start, field.end), (0, 8));
+        assert_eq!(field.human_value, "0 = still deposited");
+        assert!(field.meaning.contains("u64 LE"), "{}", field.meaning);
     }
 
     #[test]
@@ -5582,13 +5586,45 @@ mod tests {
             analyze_cell_data(&info, &data, data.len() as i32).expect("cell data analysis");
         let deterministic = analysis.deterministic.expect("dao withdraw decode");
         assert_eq!(deterministic.kind, "dao_withdraw_request_cell");
-        assert!(deterministic
+        // Regression (mainnet 0xc0aee100…3f83ee:0): `dao_state` [0..8) and
+        // `deposit_block_number` [0..8) described the same 8 bytes twice, and
+        // the cell microscope rejected the overlap. One field, one segment.
+        assert_eq!(
+            deterministic.segments.len(),
+            1,
+            "{:?}",
+            deterministic.segments
+        );
+        let field = &deterministic.segments[0];
+        assert_eq!(field.label, "deposit_block_number");
+        assert_eq!((field.start, field.end), (0, 8));
+        assert_eq!(field.human_value, block_number.to_string());
+        assert_eq!(
+            field.meaning,
+            "The block of the deposit this request withdraws (u64 LE)"
+        );
+    }
+
+    /// The live cell of the report: mainnet 0xc0aee100…3f83ee:0 carries
+    /// `39bd3e0100000000`, the request for the deposit at #20,888,889.
+    #[test]
+    fn test_dao_withdraw_request_mainnet_bytes_are_one_field() {
+        let info = positioned(LiveCellInfo {
+            type_code_hash: Some(hex::decode(DAO_CODE_HASH.trim_start_matches("0x")).unwrap()),
+            type_script_hash: Some(vec![0x35; 32]),
+            ..make_payload()
+        });
+        let data = hex::decode("39bd3e0100000000").unwrap();
+        let decode = analyze_cell_data(&info, &data, 8)
+            .expect("cell data analysis")
+            .deterministic
+            .expect("dao withdraw decode");
+        let labels: Vec<_> = decode
             .segments
             .iter()
-            .any(|s| s.label == "dao_state" && s.human_value == "withdraw_request"));
-        assert!(deterministic.segments.iter().any(
-            |s| s.label == "deposit_block_number" && s.human_value == block_number.to_string()
-        ));
+            .map(|s| (s.label.as_str(), s.start, s.end, s.human_value.as_str()))
+            .collect();
+        assert_eq!(labels, [("deposit_block_number", 0, 8, "20888889")]);
     }
 
     #[test]
