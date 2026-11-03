@@ -12,6 +12,8 @@ describe('SiteFooter', () => {
 
   // TX-04 (Main.dc.html footer): "CKBadger 0.8.2" as text (the build string in its title), then
   // Hardforks · Fiber dashboard · cknerv · Web5 · Keyboard shortcuts; no always-on pulse.
+  // Review 2026-11-03, item 4 (Nav.dc.html): Network and Fiber channels join Hardforks, before the
+  // external links — the chain's surroundings, which no header or footer link reached before.
   it('names the release, lists the board links and opens the keyboard shortcuts (TX-04)', () => {
     const opened = vi.fn();
     window.addEventListener(OPEN_SHORTCUTS_EVENT, opened);
@@ -28,6 +30,13 @@ describe('SiteFooter', () => {
       'href',
       '/mainnet/hardforks'
     );
+    expect(within(navigation).getByRole('link', { name: 'Network' })).toHaveAttribute(
+      'href',
+      '/mainnet/network'
+    );
+    const channels = within(navigation).getByRole('link', { name: 'Fiber channels' });
+    expect(channels).toHaveAttribute('href', '/mainnet/fiber/channels');
+    expect(channels).not.toHaveAttribute('target');
     const fiber = within(navigation).getByRole('link', { name: 'Fiber dashboard' });
     expect(fiber).toHaveAttribute('href', 'https://dashboard.fiber.channel/');
     const cknerv = within(navigation).getByRole('link', { name: 'cknerv' });
@@ -40,7 +49,15 @@ describe('SiteFooter', () => {
     );
     expect(
       Array.from(navigation.querySelectorAll('a, button')).map((el) => el.textContent)
-    ).toEqual(['Hardforks', 'Fiber dashboard', 'cknerv', 'Web5', 'Keyboard shortcuts']);
+    ).toEqual([
+      'Hardforks',
+      'Network',
+      'Fiber channels',
+      'Fiber dashboard',
+      'cknerv',
+      'Web5',
+      'Keyboard shortcuts',
+    ]);
     fireEvent.click(within(navigation).getByRole('button', { name: 'Keyboard shortcuts' }));
     expect(opened).toHaveBeenCalledTimes(1);
     window.removeEventListener(OPEN_SHORTCUTS_EVENT, opened);

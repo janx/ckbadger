@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useMemo, type CSSProperties } from 'react';
 import { ChartDataPoint } from '@/lib/api';
 import {
   exactDecimalRatio,
@@ -600,12 +600,19 @@ export function LineChart({
         })}
 
         {chartType === 'line' && (
+          // Midnight, continued (move 5): the primary line carries a halo in its own colour.
           <path
             d={pathD}
             fill="none"
             stroke={primaryColor}
             strokeWidth="2"
             data-testid="line-series-primary"
+            className="chart-line-halo"
+            style={
+              {
+                '--halo-color': `color-mix(in srgb, ${primaryColor} 55%, transparent)`,
+              } as CSSProperties
+            }
           />
         )}
         {chartType === 'line' && path2D && (

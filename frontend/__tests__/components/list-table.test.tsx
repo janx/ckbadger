@@ -177,6 +177,35 @@ describe('ListTable measures its container (R1, R7)', () => {
   });
 });
 
+describe('ListTable row scan (Midnight, continued, move 4)', () => {
+  // A hovered table row gets the row-scan sweep (`.row-scan`: a faint jade band crossing once,
+  // 0.5 s; globals.css paints it as the row's background so a <tr> can carry it). Column heads
+  // and the phone rows do not sweep.
+  it('puts row-scan on every body row of the table, not on the head or the phone rows', () => {
+    stubChartWidth(608);
+    const { unmount } = render(table());
+    const t = screen.getByRole('table', { name: 'Holdings' });
+    const body = Array.from(t.querySelectorAll('tbody tr'));
+    expect(body).toHaveLength(2);
+    for (const tr of body) expect(tr).toHaveClass('row-scan', 'border-b', 'border-base-elevated');
+    expect(t.querySelector('thead tr')).not.toHaveClass('row-scan');
+    unmount();
+    vi.restoreAllMocks();
+    stubChartWidth(358);
+    render(table());
+    for (const item of screen.getAllByRole('listitem')) expect(item).not.toHaveClass('row-scan');
+  });
+
+  it('keeps a caller row class beside row-scan', () => {
+    stubChartWidth(608);
+    render(table({ rowClassName: (r) => (r.name === 'Coin' ? 'bg-jade/5' : '') }));
+    const rows = within(screen.getByRole('table')).getAllByRole('row').slice(1);
+    expect(rows[1]).toHaveClass('row-scan', 'bg-jade/5');
+    expect(rows[0]).toHaveClass('row-scan');
+    expect(rows[0]).not.toHaveClass('bg-jade/5');
+  });
+});
+
 describe('ListTable row density and row title (table-rows plan T2, lane R1)', () => {
   const cellsOf = (t: HTMLElement) => Array.from(t.querySelectorAll('tbody td')) as HTMLElement[];
   const headsOf = (t: HTMLElement) => Array.from(t.querySelectorAll('thead th')) as HTMLElement[];

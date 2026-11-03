@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback, useMemo } from 'react';
+import { useState, useRef, useCallback, useMemo, type CSSProperties } from 'react';
 import { StackedAreaDataPoint, StackedAreaSeries } from '@/lib/api';
 import { formatCompactInteger } from '@/lib/exact-integer';
 import {
@@ -381,9 +381,24 @@ export function MultiSeriesLineChart({
         ))}
 
         {series.map(
-          (s) =>
+          (s, i) =>
             paths[s.key] && (
-              <path key={s.key} d={paths[s.key]} fill="none" stroke={s.color} strokeWidth="2" />
+              <path
+                key={s.key}
+                d={paths[s.key]}
+                fill="none"
+                stroke={s.color}
+                strokeWidth="2"
+                // Midnight, continued (move 5): the first series is the primary line, with a halo.
+                className={i === 0 ? 'chart-line-halo' : undefined}
+                style={
+                  i === 0
+                    ? ({
+                        '--halo-color': `color-mix(in srgb, ${s.color} 55%, transparent)`,
+                      } as CSSProperties)
+                    : undefined
+                }
+              />
             )
         )}
 

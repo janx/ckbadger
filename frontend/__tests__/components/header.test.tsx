@@ -61,13 +61,17 @@ describe('Header', () => {
       'href',
       '/mainnet/dao'
     );
-    expect(screen.getAllByRole('link', { name: 'Activities' }).at(0)).toHaveAttribute(
-      'href',
-      '/mainnet/activities'
+    // Review 2026-11-03, item 4 (Nav.dc.html): Activities is a menu button now, as Inventory is,
+    // so the desktop row holds no plain Activities link; its index is the menu's first item (see
+    // the Activities menu tests below).
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    expect(within(nav).queryByRole('link', { name: 'Activities' })).toBeNull();
+    expect(within(nav).getByRole('button', { name: 'Activities' })).toHaveAttribute(
+      'aria-haspopup',
+      'menu'
     );
     // Lane U (U4, after TX-02): Inventory opens a menu (hover, click, keyboard) with the index and
     // its three views; closed, the menu is not in the page.
-    const nav = screen.getByRole('navigation', { name: 'Main' });
     const inventory = within(nav).getByRole('button', { name: 'Inventory' });
     expect(inventory).toHaveAttribute('aria-haspopup', 'menu');
     expect(inventory).toHaveAttribute('aria-expanded', 'false');
@@ -258,7 +262,20 @@ describe('Header', () => {
     fireEvent.click(toggleMenu);
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(2);
-    expect(screen.getAllByRole('link', { name: 'Activities' })).toHaveLength(2);
+    // Review 2026-11-03, item 4: Activities is a section with views, so the desktop row shows a
+    // menu button and the phone menu one Activities row (its index link) with the three views
+    // under it — one link, as Inventory has.
+    expect(screen.getAllByRole('link', { name: 'Activities' })).toHaveLength(1);
+    expect(screen.getByRole('link', { name: 'Activities' })).toHaveAttribute(
+      'href',
+      '/mainnet/activities'
+    );
+    expect(screen.getByRole('link', { name: 'Transactions' })).toHaveAttribute(
+      'href',
+      '/mainnet/transactions'
+    );
+    expect(screen.getByRole('link', { name: 'Blocks' })).toHaveAttribute('href', '/mainnet/blocks');
+    expect(screen.getByRole('link', { name: 'Forks' })).toHaveAttribute('href', '/mainnet/forks');
     // The phone menu lists the same four as the desktop Inventory menu: the index (the Inventory
     // row itself, now a link — U4) and its three views under it.
     expect(screen.getAllByRole('link', { name: 'Inventory' })).toHaveLength(1);
@@ -279,6 +296,74 @@ describe('Header', () => {
     fireEvent.click(toggleMenu);
 
     expect(screen.getAllByRole('link', { name: 'DAO' })).toHaveLength(1);
+  });
+
+  // Review 2026-11-03, item 4 (Nav.dc.html): Activities opens the way Inventory does — the index,
+  // then Transactions · Blocks · Forks, one layer deeper per row. Nothing else in the bar moves.
+  it('opens the Activities menu: Activities · Transactions · Blocks · Forks, in the same bar (item 4)', () => {
+    usePathnameMock.mockReturnValue('/dao');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    // the bar: DAO · Activities ∨ · Inventory ∨ · Scripts · Charts
+    expect(
+      Array.from(nav.querySelectorAll(':scope > a, :scope > div > button')).map(
+        (el) => el.textContent
+      )
+    ).toEqual(['DAO', 'Activities', 'Inventory', 'Scripts', 'Charts']);
+    const activities = within(nav).getByRole('button', { name: 'Activities' });
+    expect(activities).toHaveAttribute('aria-expanded', 'false');
+    expect(activities).not.toHaveAttribute('aria-current');
+    fireEvent.click(activities);
+    expect(activities).toHaveAttribute('aria-expanded', 'true');
+    const menu = within(nav).getByRole('menu', { name: 'Activities' });
+    expect(activities).toHaveAttribute('aria-controls', menu.id);
+    const items = within(menu).getAllByRole('menuitem');
+    expect(items.map((i) => [i.textContent, i.getAttribute('href')])).toEqual([
+      ['Activities', '/mainnet/activities'],
+      ['Transactions', '/mainnet/transactions'],
+      ['Blocks', '/mainnet/blocks'],
+      ['Forks', '/mainnet/forks'],
+    ]);
+    // the Inventory menu's materials and inks, no new colours
+    for (const item of items) expect(item).toHaveClass('font-mono', 'text-body');
+    expect(items[2]).toHaveClass('text-text', 'hover:text-jade');
+    // the Inventory menu is untouched and the two never open together
+    expect(within(nav).queryByRole('menu', { name: 'Inventory' })).toBeNull();
+    fireEvent.click(activities);
+    expect(within(nav).queryByRole('menu')).toBeNull();
+  });
+
+  it('marks Activities current on its views (a block, the forks), and the view in its menu', () => {
+    usePathnameMock.mockReturnValue('/blocks');
+    render(<Header />);
+    const nav = screen.getByRole('navigation', { name: 'Main' });
+    const activities = within(nav).getByRole('button', { name: 'Activities' });
+    expect(activities).toHaveAttribute('aria-current', 'true');
+    expect(activities).toHaveClass('text-text-bright');
+    expect(within(nav).getByRole('button', { name: 'Inventory' })).not.toHaveAttribute(
+      'aria-current'
+    );
+    fireEvent.click(activities);
+    const menu = within(nav).getByRole('menu', { name: 'Activities' });
+    expect(within(menu).getByRole('menuitem', { name: 'Blocks' })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(within(menu).getByRole('menuitem', { name: 'Activities' })).not.toHaveAttribute(
+      'aria-current'
+    );
+    // the phone row names the view
+    expect(screen.getByText('Blocks', { selector: 'span' })).toHaveClass('text-jade');
+  });
+
+  // Midnight, continued (review 2026-11-03, item 5, move 2): the header's bottom edge is a tube —
+  // the 1 px border-b painted by `.hairline-tube-header`, jade at the left fading into the
+  // subtle border. The sticky geometry is unchanged.
+  it('closes the header row on a lit hairline (move 2)', () => {
+    usePathnameMock.mockReturnValue('/');
+    render(<Header />);
+    const banner = screen.getByRole('banner');
+    expect(banner).toHaveClass('border-b', 'border-base-border-subtle', 'hairline-tube-header');
   });
 
   it('separates the network context selector from navbar links', () => {

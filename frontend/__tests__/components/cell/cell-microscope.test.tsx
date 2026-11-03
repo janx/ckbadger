@@ -84,6 +84,28 @@ describe('cell microscope', () => {
     expect(cellDataParts(elfCell).map((part) => part.label)).toEqual(['unclassified bytes']);
   });
 
+  // Midnight, continued (review 2026-11-03, item 5, move 3): the byte dump is an instrument, so
+  // it sits in the one frame (TerminalPanel); its handlers and the highlight's data attributes
+  // stay on the frame, the dump scrolls sideways inside it, and the field-detail rail stays flat.
+  it('puts the byte dump in the instrument frame, with its handlers and highlight hooks (move 3)', () => {
+    stubChartWidth(1200);
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    expect(box).toHaveAttribute('data-instrument-frame');
+    expect(box).toHaveAttribute('data-cell-bytes');
+    expect(box).toHaveClass('neon-edge-top', 'rounded-md', 'border', 'border-base-border');
+    expect(box).not.toHaveClass('border-[#1a1f30]');
+    const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
+    expect(dump).toHaveClass('px-4', 'py-3');
+    expect(dump).toContainElement(box.querySelector('[data-byte="data:2"]') as HTMLElement);
+    // the hover still lights the part through the frame's data-active
+    fireEvent.mouseOver(box.querySelector('[data-byte="data:2"]')!);
+    expect(box.getAttribute('data-active')).toBeTruthy();
+    expect(screen.getByRole('complementary', { name: 'Field detail' })).not.toHaveAttribute(
+      'data-instrument-frame'
+    );
+  });
+
   it('a tap pins a byte, a field or a map part in the line under the bytes; a second tap clears it (R6)', () => {
     render(<CellMicroscope cell={cell} />);
     const box = screen.getByLabelText('Cell bytes');

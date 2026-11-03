@@ -49,6 +49,28 @@ describe('NetworkMapView', () => {
     );
   });
 
+  // Midnight, continued (review 2026-11-03, item 5, move 3): the map is an instrument, in the one
+  // frame; the peer evidence rail beside it stays flat.
+  it('draws the map inside the instrument frame, measured within it (move 3)', async () => {
+    server.use(http.get('/api/:network/v1/network/map', () => HttpResponse.json(producerMap)));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <NetworkMapView neverVerified={0} />
+      </QueryClientProvider>
+    );
+    const map = await screen.findByRole('img', {
+      name: 'Approximate GeoIP locations of retained verified CKB peers',
+    });
+    const frame = map.closest('[data-instrument-frame]') as HTMLElement;
+    expect(frame).not.toBeNull();
+    expect(frame).toHaveAttribute('aria-label', 'Map of verified peers');
+    expect(frame).toHaveClass('neon-edge-top', 'rounded-md', 'border', 'border-base-border');
+    expect(frame).not.toContainElement(
+      screen.getByRole('complementary', { name: 'Selected peer evidence' })
+    );
+  });
+
   it('displaces coincident dots deterministically without changing source coordinates', () => {
     const layout = layoutMapPoints([second, first]);
     expect(layout.map(({ point }) => point.peerId)).toEqual(['a', 'b']);

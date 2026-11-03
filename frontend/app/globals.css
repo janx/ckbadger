@@ -181,32 +181,28 @@ body * {
     animation: glitch 0.3s ease-out;
   }
 
-  /* Row scan effect for tables */
+  /*
+   * Row scan (Midnight, continued: move 4): a faint jade band crosses a hovered row once, in
+   * 0.5 s. Painted as the row's own background image — a gradient three rows wide whose middle
+   * third is the band, slid from right to left — rather than a positioned pseudo-element, so it
+   * works on a <tr> too (a table row is no containing block and clips nothing). At rest the band
+   * sits off the row's right edge; after the sweep it rests off the left; reduced motion keeps
+   * it off the row.
+   */
   .row-scan {
-    position: relative;
-    overflow: hidden;
-  }
-
-  .row-scan::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    background: linear-gradient(
+    background-image: linear-gradient(
       90deg,
-      transparent 0%,
-      rgba(46, 219, 163, 0.06) 50%,
-      transparent 100%
+      transparent 33.333%,
+      rgba(46, 219, 163, 0.07) 50%,
+      transparent 66.667%
     );
-    transform: translateX(-100%);
-    transition: transform 0.5s ease-out;
-    pointer-events: none;
+    background-size: 300% 100%;
+    background-position: 100% 0;
+    background-repeat: no-repeat;
   }
 
-  .row-scan:hover::after {
-    transform: translateX(100%);
+  .row-scan:hover {
+    animation: row-scan-sweep 0.5s ease-out forwards;
   }
 
   /* Indicator light pulse */
@@ -503,33 +499,12 @@ body * {
   }
 }
 
-/* Midnight CRT effects */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent 0px,
-    transparent 2px,
-    rgba(0, 0, 0, 0.08) 2px,
-    rgba(0, 0, 0, 0.08) 4px
-  );
-  pointer-events: none;
-  z-index: 9999;
-  opacity: 0.35;
-}
-
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: radial-gradient(ellipse at center, transparent 50%, rgba(0, 0, 0, 0.4) 100%);
-  pointer-events: none;
-  z-index: 9998;
-}
-
-/* === Atmosphere: Full Immersion (no particles) === */
+/*
+ * === Atmosphere (Midnight, continued: move 5) ===
+ * One pair of CRT layers, mounted once in app/layout.tsx (.crt-scanlines, .crt-vignette), at the
+ * combined strength the doubled pair had (body::before / body::after painted a second scanline
+ * and vignette over them; those are gone).
+ */
 
 .crt-scanlines {
   position: fixed;
@@ -538,8 +513,8 @@ body::before {
     0deg,
     transparent 0px,
     transparent 1px,
-    rgba(0, 0, 0, 0.07) 1px,
-    rgba(0, 0, 0, 0.07) 3px
+    rgba(0, 0, 0, 0.09) 1px,
+    rgba(0, 0, 0, 0.09) 3px
   );
   pointer-events: none;
   z-index: 9999;
@@ -548,7 +523,7 @@ body::before {
 .crt-vignette {
   position: fixed;
   inset: 0;
-  background: radial-gradient(ellipse at center, transparent 20%, rgba(0, 0, 0, 0.55) 100%);
+  background: radial-gradient(ellipse at center, transparent 30%, rgba(0, 0, 0, 0.6) 100%);
   pointer-events: none;
   z-index: 9998;
 }
@@ -564,9 +539,171 @@ body::before {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 350px 250px at 25% 15%, rgba(46, 219, 163, 0.07) 0%, transparent 70%),
-    radial-gradient(ellipse 300px 200px at 75% 50%, rgba(104, 204, 240, 0.05) 0%, transparent 70%),
-    radial-gradient(ellipse 200px 200px at 50% 85%, rgba(242, 197, 92, 0.05) 0%, transparent 70%);
+    radial-gradient(ellipse 350px 250px at 25% 15%, rgba(46, 219, 163, 0.1) 0%, transparent 70%),
+    radial-gradient(ellipse 300px 200px at 75% 50%, rgba(104, 204, 240, 0.07) 0%, transparent 70%),
+    radial-gradient(ellipse 200px 200px at 50% 85%, rgba(242, 197, 92, 0.07) 0%, transparent 70%);
+}
+
+/*
+ * === Midnight, continued (review 2026-11-03, item 5) ===
+ * Five moves on shared pieces, so each lands on every route at once. Nothing below adds a colour
+ * token: jade #2edba3, the inks and the borders are the theme's own.
+ */
+
+/* Move 1a — the section mark: a 6 px jade dot before every tier-1 h2 (`text-section`, 17 px; a
+   tier-2 h2 is `text-body` and has none), and as `.section-mark` for a frame's eyebrow. */
+.section-mark,
+h2.text-section::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #2edba3;
+  box-shadow:
+    0 0 4px rgba(46, 219, 163, 0.6),
+    0 0 10px rgba(46, 219, 163, 0.25);
+  vertical-align: middle;
+}
+h2.text-section::before {
+  content: '';
+  margin-right: 10px;
+}
+.section-mark {
+  flex: none;
+}
+/* The mark as a live indicator (a frame reporting a realtime feed) breathes; gold warns. */
+.section-mark-live {
+  animation: live-pulse 1.5s ease-in-out infinite;
+}
+.section-mark-gold {
+  background: #f2c55c;
+  box-shadow:
+    0 0 4px rgba(242, 197, 92, 0.6),
+    0 0 10px rgba(242, 197, 92, 0.25);
+}
+
+/* Move 1b — one lit figure per page: the display figure, an entity page's h1, an index page's h1.
+   The colour is untouched (ink-bright stays ink-bright, DAO gold stays gold): only a white-jade
+   halo. Its quieter companions inside the same element — decimals, a unit, "at #block" — are not
+   lit, nor is a ghost zero. */
+.text-display,
+.sm\:text-display,
+h1.text-entity,
+h1.text-index {
+  text-shadow:
+    0 0 1px rgba(222, 226, 236, 0.6),
+    0 0 14px rgba(46, 219, 163, 0.28),
+    0 0 32px rgba(46, 219, 163, 0.12);
+}
+:is(.text-display, .sm\:text-display, h1.text-entity, h1.text-index)
+  :is(
+    .text-text-dim,
+    .text-text-ghost,
+    .text-text,
+    .text-meta,
+    .text-small,
+    .text-body,
+    .text-section,
+    .text-hero
+  ),
+.text-text-ghost:is(.text-display, .sm\:text-display) {
+  text-shadow: none;
+}
+
+/* Move 1c — hover: a link (and, through `.hover-lit`, a copyable hash) turns jade and glows. SVG
+   links (the pipeline's cards) keep their own hover design. */
+a:hover {
+  color: #2edba3;
+  text-shadow: 0 0 8px rgba(46, 219, 163, 0.45);
+}
+svg a:hover {
+  color: inherit;
+  text-shadow: none;
+}
+.hover-lit:hover {
+  color: #2edba3;
+  text-shadow: 0 0 8px rgba(46, 219, 163, 0.45);
+}
+
+/* Move 2 — hairlines are tubes: a 1 px jade line lit from the left (where the mark is), fading
+   to the right. `.hairline-tube` is a standalone 1 px element (under an index page's title row);
+   `.hairline-tube-border` paints an element's own 1 px border with it, so `border-t` /
+   `border-b` keep their width (the tier boundary); `.hairline-tube-header` is the header's bottom
+   edge, which fades into the subtle border instead of to nothing. Table rules, frames and tier-2
+   rules stay flat. */
+.hairline-tube {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(46, 219, 163, 0.55),
+    rgba(46, 219, 163, 0.14) 45%,
+    transparent 90%
+  );
+}
+.hairline-tube-border {
+  border-image: linear-gradient(
+      90deg,
+      rgba(46, 219, 163, 0.55),
+      rgba(46, 219, 163, 0.14) 45%,
+      transparent 90%
+    )
+    1;
+}
+.hairline-tube-header {
+  border-image: linear-gradient(
+      90deg,
+      rgba(46, 219, 163, 0.6),
+      rgba(46, 219, 163, 0.18) 30%,
+      #1a1f30 70%
+    )
+    1;
+}
+
+/* Move 4 — the terminal speaks: the search field's block cursor, after the typed text while the
+   field has focus. */
+.cursor {
+  display: inline-block;
+  width: 7px;
+  height: 14px;
+  background: #2edba3;
+  vertical-align: -2px;
+  box-shadow: 0 0 6px rgba(46, 219, 163, 0.6);
+  animation: cursor-blink 1s step-end infinite;
+}
+@keyframes cursor-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes row-scan-sweep {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0% 0;
+  }
+}
+
+/* Move 5 — a chart's primary data line is a tube, not a stroke: a 2.5 px halo in the line's own
+   colour (jade unless the series says otherwise). Bars and areas have none. */
+.chart-line-halo {
+  filter: drop-shadow(0 0 2.5px var(--halo-color, rgba(46, 219, 163, 0.55)));
+}
+
+/* Reduced motion: no sweep, no blink; the halos are static anyway. */
+@media (prefers-reduced-motion: reduce) {
+  .row-scan:hover {
+    animation: none;
+  }
+  .cursor,
+  .section-mark-live {
+    animation: none;
+  }
 }
 
 .neon-edge-top {
@@ -582,7 +719,7 @@ body::before {
   background: linear-gradient(
     90deg,
     transparent,
-    var(--neon-color, rgba(46, 219, 163, 0.4)),
+    var(--neon-color, rgba(46, 219, 163, 0.45)),
     transparent
   );
   pointer-events: none;

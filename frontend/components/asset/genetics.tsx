@@ -9,6 +9,7 @@ import type {
 import { apiBaseFor, resolveActiveNetwork } from '@/lib/active-network';
 import { AlleleGel, NotGenesNote } from '@/components/ui/allele-gel';
 import { SequencingGel } from '@/components/ui/sequencing-gel';
+import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { DnaStrip } from '@/components/ui/dna-strip';
 import { AppLink } from '@/components/ui/app-link';
 import { useDetailTier } from '@/components/ui/detail-layout';
@@ -68,6 +69,35 @@ function plateStyle(tier: CompositionTier | undefined): CSSProperties | undefine
     backgroundOrigin: 'padding-box, border-box',
     border: '1px solid transparent',
   };
+}
+/**
+ * The plate a gel sits on. A BTC+CKB or pure-CKB object keeps its copper plate (the object pages'
+ * copper is not touched); any other gel sits in the one instrument frame (Midnight, continued,
+ * move 3). `className` lays out the gel inside either.
+ */
+function GelPlate({
+  tier,
+  className,
+  children,
+}: {
+  tier: CompositionTier | undefined;
+  className: string;
+  children: ReactNode;
+}) {
+  const copper = plateStyle(tier);
+  if (copper)
+    return (
+      <div data-gel-plate="copper" className="rounded-[10px] p-[5px]" style={copper}>
+        <div className={cn('rounded-md', className)}>{children}</div>
+      </div>
+    );
+  return (
+    <TerminalPanel data-gel-plate="frame">
+      <TerminalPanelContent padding="none" className={className}>
+        {children}
+      </TerminalPanelContent>
+    </TerminalPanel>
+  );
 }
 /**
  * What the DNA section says in words, from its sequencing layout: how many bytes of DNA, and the
@@ -176,31 +206,26 @@ export function ObjectGeneticsView({
         {cached.status === 'failed' && (
           <p role="alert">DOB execution failed: {cached.reason ?? 'Failure reason unavailable'}</p>
         )}
-        <div
-          className={cn('rounded-[10px] p-[5px]', !plateStyle(tier) && 'border-base-border border')}
-          style={plateStyle(tier)}
-        >
-          <div className="space-y-4 rounded-md px-4 py-4 sm:px-5">
-            {layout.genes.length ? (
-              <SequencingGel
-                layout={layout}
-                subject={subject}
-                active={active}
-                onActive={setActive}
-                // C10: the readout row's own "tap or hover" is the section's one hint.
-                idle="A gene's bytes, its rule and the trait they express."
-              />
-            ) : (
-              <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
-            )}
-            {layout.unsupported.map((u) => (
-              <p key={u.step} role="status" title={u.reason} className="text-text-dim text-meta">
-                Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern
-                alone is used.
-              </p>
-            ))}
-          </div>
-        </div>
+        <GelPlate tier={tier} className="space-y-4 px-4 py-4 sm:px-5">
+          {layout.genes.length ? (
+            <SequencingGel
+              layout={layout}
+              subject={subject}
+              active={active}
+              onActive={setActive}
+              // C10: the readout row's own "tap or hover" is the section's one hint.
+              idle="A gene's bytes, its rule and the trait they express."
+            />
+          ) : (
+            <DnaStrip dna={dnaHex} label={`${subject} DNA`} />
+          )}
+          {layout.unsupported.map((u) => (
+            <p key={u.step} role="status" title={u.reason} className="text-text-dim text-meta">
+              Decoder {u.step + 1}: the decoder binary describes no byte mapping; the pattern alone
+              is used.
+            </p>
+          ))}
+        </GelPlate>
         {/* Hierarchy v3 (F4): evidence first, one caption under it; the paragraph is tier 2. */}
         <p data-role="caption" className="text-text text-body max-w-[640px]">
           Its traits are read from {words.bytes} bytes of DNA
@@ -213,66 +238,58 @@ export function ObjectGeneticsView({
       {/* C10: the collection's gel is its own section (and plate), so each section keeps one hint. */}
       {collection && (
         <section aria-label={`Among ${among}`} className="min-w-0 space-y-3">
-          <div
-            className={cn(
-              'rounded-[10px] p-[5px]',
-              !plateStyle(tier) && 'border-base-border border'
-            )}
-            style={plateStyle(tier)}
-          >
-            <div className="space-y-2 rounded-md px-4 py-4 sm:px-5">
-              <div className="flex flex-wrap items-baseline justify-between gap-4">
-                <span className="text-text text-body">
-                  Among {among} · its variant in each gene, and how common it is among the{' '}
-                  {collection.genetics.eligibleItems.toLocaleString('en-US')}
-                </span>
-                {collectionHref && (
-                  <AppLink href={collectionHref} className="text-small">
-                    Open the collection →
-                  </AppLink>
-                )}
-              </div>
-              {bridge && own3 ? (
-                <>
-                  <AlleleGel
-                    lanes={bridge}
-                    total={collection.genetics.eligibleItems}
-                    subject={collectionName ?? subject}
-                    ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
-                    bandHeight={170}
-                    overlays={[
-                      { key: 'me', label: 'this one', points: own3.points, persistent: true },
-                    ]}
-                    activeGene={active}
-                    onGeneHover={setActive}
-                    labelOf={geneLabel}
-                    idle="Its own band is outlined in every lane; a band reads how many share it."
-                  />
-                  <NotGenesNote
-                    traits={traitsOutsidePattern(
-                      collection.genetics,
-                      geneOrder(collection.currentPattern)
-                    )}
-                  />
-                  {own3.absent.length > 0 && (
-                    <p role="status" className="text-text-dim text-meta">
-                      Its {own3.absent.join(', ')} variant is not among the collection’s counted
-                      variants.
-                    </p>
-                  )}
-                </>
-              ) : ruled ? null : (
-                <p role="status" className="text-text-dim text-meta">
-                  Collection variant frequencies await complete decoding.
-                </p>
-              )}
-              {ruled && ruled.dropped.length > 0 && (
-                <p data-role="caption" className="text-text-dim text-small max-w-[640px]">
-                  {droppedGenesCaption(ruled.dropped, collection.genetics.eligibleItems)}
-                </p>
+          <GelPlate tier={tier} className="space-y-2 px-4 py-4 sm:px-5">
+            <div className="flex flex-wrap items-baseline justify-between gap-4">
+              <span className="text-text text-body">
+                Among {among} · its variant in each gene, and how common it is among the{' '}
+                {collection.genetics.eligibleItems.toLocaleString('en-US')}
+              </span>
+              {collectionHref && (
+                <AppLink href={collectionHref} className="text-small">
+                  Open the collection →
+                </AppLink>
               )}
             </div>
-          </div>
+            {bridge && own3 ? (
+              <>
+                <AlleleGel
+                  lanes={bridge}
+                  total={collection.genetics.eligibleItems}
+                  subject={collectionName ?? subject}
+                  ink={tier === 'btc_ckb' || tier === 'pure_ckb' ? tier : 'other'}
+                  bandHeight={170}
+                  overlays={[
+                    { key: 'me', label: 'this one', points: own3.points, persistent: true },
+                  ]}
+                  activeGene={active}
+                  onGeneHover={setActive}
+                  labelOf={geneLabel}
+                  idle="Its own band is outlined in every lane; a band reads how many share it."
+                />
+                <NotGenesNote
+                  traits={traitsOutsidePattern(
+                    collection.genetics,
+                    geneOrder(collection.currentPattern)
+                  )}
+                />
+                {own3.absent.length > 0 && (
+                  <p role="status" className="text-text-dim text-meta">
+                    Its {own3.absent.join(', ')} variant is not among the collection’s counted
+                    variants.
+                  </p>
+                )}
+              </>
+            ) : ruled ? null : (
+              <p role="status" className="text-text-dim text-meta">
+                Collection variant frequencies await complete decoding.
+              </p>
+            )}
+            {ruled && ruled.dropped.length > 0 && (
+              <p data-role="caption" className="text-text-dim text-small max-w-[640px]">
+                {droppedGenesCaption(ruled.dropped, collection.genetics.eligibleItems)}
+              </p>
+            )}
+          </GelPlate>
         </section>
       )}
     </>

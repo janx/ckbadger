@@ -1,6 +1,7 @@
 'use client';
 import { memo, useMemo, useState, type ReactNode } from 'react';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { hexBytes } from '@/lib/hex-bytes';
 import type { Cell } from '@/lib/api';
@@ -685,64 +686,69 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
             )}
           </div>
           <div ref={bytesRef} className="min-w-0">
-            <div
+            {/* Midnight, continued (move 3): the byte dump is an instrument, in the one frame. */}
+            <TerminalPanel
               aria-label="Cell bytes"
               data-cell-bytes=""
               data-active={litIds ? litIds.join(' ') : undefined}
-              className="text-small overflow-x-auto rounded-md border border-[#1a1f30] px-4 py-3 tabular-nums"
+              className="text-small tabular-nums"
               onMouseOver={onHover}
               onClick={onTap}
               onMouseLeave={() => setActive(null)}
             >
-              {molecule && (
-                <div aria-label="CellOutput byte map">
+              <TerminalPanelContent padding="none" className="overflow-x-auto px-4 py-3">
+                {molecule && (
+                  <div aria-label="CellOutput byte map">
+                    <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
+                      <span>outputs[{cell.outputIndex}] · CellOutput · molecule</span>
+                      <span>
+                        {fmt(outBytes.length)} B · {fmt(outOccupied)} occupied
+                      </span>
+                    </div>
+                    <HexRows
+                      block="output"
+                      digits={digits}
+                      perRow={perRow}
+                      bytes={outBytes}
+                      owner={outOwner}
+                      parts={byId}
+                      from={0}
+                      to={outBytes.length}
+                    />
+                  </div>
+                )}
+                <div
+                  aria-label="CellData byte map"
+                  className={cn(
+                    molecule && 'mt-2.5 border-t border-dashed border-[#1a1f30] pt-3.5'
+                  )}
+                >
                   <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
-                    <span>outputs[{cell.outputIndex}] · CellOutput · molecule</span>
                     <span>
-                      {fmt(outBytes.length)} B · {fmt(outOccupied)} occupied
+                      outputs_data[{cell.outputIndex}]
+                      {elf
+                        ? ' · ELF64 RISC-V'
+                        : cell.elf?.status === 'unparsed'
+                          ? ` · an ELF file that does not parse: ${cell.elf.reason}`
+                          : typeName
+                            ? ` · decoded by its type script, ${typeName}`
+                            : ''}
+                    </span>
+                    <span>
+                      {fmt(dataBytes.length)} B · all occupied
+                      {ranges.length > 1 || (ranges[0] && ranges[0][1] < dataBytes.length)
+                        ? ' · excerpts shown'
+                        : ''}
                     </span>
                   </div>
-                  <HexRows
-                    block="output"
-                    digits={digits}
-                    perRow={perRow}
-                    bytes={outBytes}
-                    owner={outOwner}
-                    parts={byId}
-                    from={0}
-                    to={outBytes.length}
-                  />
+                  {dataBytes.length ? (
+                    dataRows
+                  ) : (
+                    <p className="text-text-dim py-1">No data: the cell carries 0 bytes.</p>
+                  )}
                 </div>
-              )}
-              <div
-                aria-label="CellData byte map"
-                className={cn(molecule && 'mt-2.5 border-t border-dashed border-[#1a1f30] pt-3.5')}
-              >
-                <div className="text-text-dim text-meta flex flex-wrap justify-between gap-x-3 pb-1.5">
-                  <span>
-                    outputs_data[{cell.outputIndex}]
-                    {elf
-                      ? ' · ELF64 RISC-V'
-                      : cell.elf?.status === 'unparsed'
-                        ? ` · an ELF file that does not parse: ${cell.elf.reason}`
-                        : typeName
-                          ? ` · decoded by its type script, ${typeName}`
-                          : ''}
-                  </span>
-                  <span>
-                    {fmt(dataBytes.length)} B · all occupied
-                    {ranges.length > 1 || (ranges[0] && ranges[0][1] < dataBytes.length)
-                      ? ' · excerpts shown'
-                      : ''}
-                  </span>
-                </div>
-                {dataBytes.length ? (
-                  dataRows
-                ) : (
-                  <p className="text-text-dim py-1">No data: the cell carries 0 bytes.</p>
-                )}
-              </div>
-            </div>
+              </TerminalPanelContent>
+            </TerminalPanel>
           </div>
           <ReadoutRow label="Byte readout" pinned={readout.showingPin}>
             {active === null ? null : line(active)}

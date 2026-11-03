@@ -6,6 +6,7 @@ import { api, type NetworkMap } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout, type PinnedReadout } from '@/hooks/usePinnedReadout';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { DATA_COLOR } from '@/lib/design-tokens';
 import { formatDurationMs, formatUtc8Date, formatUtc8Time } from '@/lib/utils';
@@ -348,114 +349,119 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
   return (
     <div className="min-w-0">
       <div className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_20rem]">
-        {/* Measured from mount, so the map is drawn 1:1 in its own column at every width. */}
-        <div ref={ref} className="flex min-w-0 flex-col gap-3">
-          {isLoading ? (
-            <p className="text-text-dim text-small">Loading crawler locations…</p>
-          ) : !ready ? (
-            <p role="alert" className="text-negative text-small">
-              Crawler locations unavailable: {String(error)}
-            </p>
-          ) : (
-            <svg
-              width={width}
-              height={height + NAME_BAND}
-              viewBox={`0 0 ${width} ${height + NAME_BAND}`}
-              role="img"
-              aria-label="Approximate GeoIP locations of retained verified CKB peers"
-              className="block"
-              onMouseLeave={() => readout.hover(null)}
-            >
-              {[1, 2, 3, 4, 5, 6, 7].map((k) => (
-                <line
-                  key={'lon' + k}
-                  x1={(width * k) / 8}
-                  x2={(width * k) / 8}
-                  y1={NAME_BAND}
-                  y2={height + NAME_BAND}
-                  stroke="#121620"
-                />
-              ))}
-              {[1, 2, 3, 4, 5].map((k) => (
-                <line
-                  key={'lat' + k}
-                  x1="0"
-                  x2={width}
-                  y1={NAME_BAND + (height * k) / 6}
-                  y2={NAME_BAND + (height * k) / 6}
-                  stroke={k === 3 ? '#1a1f30' : '#121620'}
-                />
-              ))}
-              <text data-role="chart-name" x="8" y="14" fontSize="11" fill="#7c849c">
-                verified nodes · approximate GeoIP place
-              </text>
-              {countryLabels.map(({ country, count, x, y }) => (
-                <text
-                  key={country}
-                  data-country-label
-                  x={x}
-                  y={y + NAME_BAND}
-                  textAnchor="middle"
-                  fontSize="10"
-                  fill="#7c849c"
-                  stroke="#0c0e15"
-                  strokeWidth="3"
-                  paintOrder="stroke"
+        {/* Midnight, continued (move 3): the map is an instrument, in the one frame. Measured
+            inside the frame from mount, so it is drawn 1:1 in its column at every width. */}
+        <TerminalPanel aria-label="Map of verified peers" className="min-w-0 self-start">
+          <TerminalPanelContent padding="sm">
+            <div ref={ref} className="flex min-w-0 flex-col gap-3">
+              {isLoading ? (
+                <p className="text-text-dim text-small">Loading crawler locations…</p>
+              ) : !ready ? (
+                <p role="alert" className="text-negative text-small">
+                  Crawler locations unavailable: {String(error)}
+                </p>
+              ) : (
+                <svg
+                  width={width}
+                  height={height + NAME_BAND}
+                  viewBox={`0 0 ${width} ${height + NAME_BAND}`}
+                  role="img"
+                  aria-label="Approximate GeoIP locations of retained verified CKB peers"
+                  className="block"
+                  onMouseLeave={() => readout.hover(null)}
                 >
-                  {country} {count}
-                </text>
-              ))}
-              {layout.map(({ point, x, y: mapY }) => {
-                const y = mapY + NAME_BAND;
-                return (
-                  <g
-                    key={point.peerId}
-                    data-peer={point.peerId}
-                    {...readout.bind(point.peerId)}
-                    aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
-                      point.reachable ? 'reachable now' : 'verified before, not reachable now'
-                    }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
-                    opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
-                    className="cursor-pointer outline-none"
-                  >
-                    <circle cx={x} cy={y} r="5.5" fill="transparent" />
-                    {point.localSessionObserved && (
-                      <circle
-                        data-ring
-                        cx={x}
-                        cy={y}
-                        r={RING_R}
-                        fill="none"
-                        stroke="#dee2ec"
-                        strokeWidth="1.2"
-                      />
-                    )}
-                    {point.reachable ? (
-                      <circle
-                        data-dot="reachable"
-                        cx={x}
-                        cy={y}
-                        r={DOT_R}
-                        fill={DATA_COLOR}
-                        fillOpacity={point.localSessionObserved ? 0.9 : 0.55}
-                      />
-                    ) : (
-                      <circle
-                        data-dot="verified-before"
-                        cx={x}
-                        cy={y}
-                        r="3.3"
-                        fill="#0c0e15"
-                        stroke="#dee2ec"
-                        strokeWidth="0.9"
-                      />
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-          )}
-        </div>
+                  {[1, 2, 3, 4, 5, 6, 7].map((k) => (
+                    <line
+                      key={'lon' + k}
+                      x1={(width * k) / 8}
+                      x2={(width * k) / 8}
+                      y1={NAME_BAND}
+                      y2={height + NAME_BAND}
+                      stroke="#121620"
+                    />
+                  ))}
+                  {[1, 2, 3, 4, 5].map((k) => (
+                    <line
+                      key={'lat' + k}
+                      x1="0"
+                      x2={width}
+                      y1={NAME_BAND + (height * k) / 6}
+                      y2={NAME_BAND + (height * k) / 6}
+                      stroke={k === 3 ? '#1a1f30' : '#121620'}
+                    />
+                  ))}
+                  <text data-role="chart-name" x="8" y="14" fontSize="11" fill="#7c849c">
+                    verified nodes · approximate GeoIP place
+                  </text>
+                  {countryLabels.map(({ country, count, x, y }) => (
+                    <text
+                      key={country}
+                      data-country-label
+                      x={x}
+                      y={y + NAME_BAND}
+                      textAnchor="middle"
+                      fontSize="10"
+                      fill="#7c849c"
+                      stroke="#0c0e15"
+                      strokeWidth="3"
+                      paintOrder="stroke"
+                    >
+                      {country} {count}
+                    </text>
+                  ))}
+                  {layout.map(({ point, x, y: mapY }) => {
+                    const y = mapY + NAME_BAND;
+                    return (
+                      <g
+                        key={point.peerId}
+                        data-peer={point.peerId}
+                        {...readout.bind(point.peerId)}
+                        aria-label={`${point.country} peer ${shortPeerId(point.peerId)}, ${
+                          point.reachable ? 'reachable now' : 'verified before, not reachable now'
+                        }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
+                        opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
+                        className="cursor-pointer outline-none"
+                      >
+                        <circle cx={x} cy={y} r="5.5" fill="transparent" />
+                        {point.localSessionObserved && (
+                          <circle
+                            data-ring
+                            cx={x}
+                            cy={y}
+                            r={RING_R}
+                            fill="none"
+                            stroke="#dee2ec"
+                            strokeWidth="1.2"
+                          />
+                        )}
+                        {point.reachable ? (
+                          <circle
+                            data-dot="reachable"
+                            cx={x}
+                            cy={y}
+                            r={DOT_R}
+                            fill={DATA_COLOR}
+                            fillOpacity={point.localSessionObserved ? 0.9 : 0.55}
+                          />
+                        ) : (
+                          <circle
+                            data-dot="verified-before"
+                            cx={x}
+                            cy={y}
+                            r="3.3"
+                            fill="#0c0e15"
+                            stroke="#dee2ec"
+                            strokeWidth="0.9"
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
+                </svg>
+              )}
+            </div>
+          </TerminalPanelContent>
+        </TerminalPanel>
         {ready && (
           <aside
             aria-label="Selected peer evidence"
