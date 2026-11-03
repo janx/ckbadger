@@ -2,6 +2,7 @@
 import type { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
+import { BlockLink } from '@/components/ui/block-link';
 import { DetailSection } from '@/components/ui/detail-layout';
 import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-structure';
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
@@ -192,7 +193,12 @@ function NotSpentYet({
         {cell.liveAgeMs != null && (
           <span className="text-text-dim">
             {formatDurationMs(cell.liveAgeMs)}
-            {cell.liveAgeAtBlock != null && <> · as of {formatBlockNumber(cell.liveAgeAtBlock)}</>}
+            {cell.liveAgeAtBlock != null && (
+              <>
+                {' '}
+                · as of <BlockLink number={cell.liveAgeAtBlock} />
+              </>
+            )}
           </span>
         )}
       </div>

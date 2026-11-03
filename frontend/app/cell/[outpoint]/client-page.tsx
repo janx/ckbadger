@@ -13,10 +13,11 @@ import { parseCkbDecimal } from '@/lib/ckb-decimal';
 import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
-import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
+import { formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
 import { CELL_COLORS, DATA_COLOR, EXPIRED_COLOR } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+import { BlockLink } from '@/components/ui/block-link';
 import { titleHash } from '@/lib/use-document-title';
 
 function outpointParts(outpoint: string): { hash: string; index: number } | null {
@@ -99,11 +100,14 @@ function ScriptFact({
   script,
   name,
   color,
+  owner,
 }: {
   label: string;
   script: Cell['lock'];
   name: string | null;
   color: string;
+  /** Lane L: the lock's address, the cell's owner, linked under the args (the Lock fact only). */
+  owner?: string;
 }) {
   if (!script)
     return (
@@ -120,8 +124,21 @@ function ScriptFact({
     <Fact
       label={label}
       sub={
-        script.args !== '0x' ? (
-          <span title={script.args}>args {short(script.args, 4, 4)}</span>
+        script.args !== '0x' || owner ? (
+          <>
+            {script.args !== '0x' && (
+              <span title={script.args}>args {short(script.args, 4, 4)}</span>
+            )}
+            {owner && (
+              <Link
+                href={`/address/${owner}`}
+                title={owner}
+                className="hover:text-jade block [overflow-wrap:anywhere]"
+              >
+                {truncateHash(owner, 10, 6)}
+              </Link>
+            )}
+          </>
         ) : undefined
       }
     >
@@ -179,7 +196,13 @@ function CellFacts({
           free
         </span>
       </Fact>
-      <ScriptFact label="Lock" script={cell.lock} name={lockName} color={CELL_COLORS.lock} />
+      <ScriptFact
+        label="Lock"
+        script={cell.lock}
+        name={lockName}
+        color={CELL_COLORS.lock}
+        owner={cell.address}
+      />
       <ScriptFact label="Type" script={cell.type} name={typeName} color={CELL_COLORS.type} />
       <Fact label="Data" sub={cell.elf ? 'RISC-V ELF' : undefined}>
         <span style={{ color: CELL_COLORS.data }}>{cell.dataSize.toLocaleString('en-US')} B</span>
@@ -236,7 +259,13 @@ function CellFacts({
         cell.liveAgeMs != null && (
           <Fact
             label="Unspent for"
-            sub={cell.liveAgeAtBlock != null && <>as of {formatBlockNumber(cell.liveAgeAtBlock)}</>}
+            sub={
+              cell.liveAgeAtBlock != null && (
+                <>
+                  as of <BlockLink number={cell.liveAgeAtBlock} />
+                </>
+              )
+            }
           >
             <span className="text-text-bright">{formatDurationMs(cell.liveAgeMs)}</span>
           </Fact>
@@ -381,9 +410,17 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
             <p>
               The out point is the cell&apos;s only name: transaction hash and output index. No
               other cell has it, and this one{' '}
-              {cell.status === 'dead' && cell.consumedAtBlock != null
-                ? `existed from block ${formatBlockNumber(cell.createdAtBlock)} until block ${formatBlockNumber(cell.consumedAtBlock)} spent it.`
-                : `exists from block ${formatBlockNumber(cell.createdAtBlock)} until a transaction spends it.`}
+              {cell.status === 'dead' && cell.consumedAtBlock != null ? (
+                <>
+                  existed from block <BlockLink number={cell.createdAtBlock} /> until block{' '}
+                  <BlockLink number={cell.consumedAtBlock} /> spent it.
+                </>
+              ) : (
+                <>
+                  exists from block <BlockLink number={cell.createdAtBlock} /> until a transaction
+                  spends it.
+                </>
+              )}
             </p>
           </div>
         }
@@ -398,7 +435,7 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
           <DetailSection title="Nervos DAO">
             <p className="text-text-dim text-small">
               {cell.daoInfo.daoStatus} · deposit block{' '}
-              {formatBlockNumber(cell.daoInfo.depositBlockNumber)}
+              <BlockLink number={cell.daoInfo.depositBlockNumber} />
               {cell.daoInfo.compensationCkb != null ? (
                 <>
                   {' '}

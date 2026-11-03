@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import CellDetailPage from '@/app/cell/[outpoint]/client-page';
 import { api, type Cell } from '@/lib/api';
@@ -147,6 +147,17 @@ describe('CellDetailPage', () => {
     // Lane U (U3): a spent cell's origin line names the block that spent it.
     expect(screen.getByTestId('cell-origin')).toHaveTextContent(
       /^output 0 of transaction 0xabababab…ababab · spent at #125$/
+    );
+    // Lane L: the "only name" sentence links both blocks of the cell's life.
+    const onlyName = screen.getByText(/The out point is the cell's only name/);
+    expect(onlyName).toHaveTextContent('existed from block #123 until block #125 spent it.');
+    expect(within(onlyName).getByRole('link', { name: '#123' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/123'
+    );
+    expect(within(onlyName).getByRole('link', { name: '#125' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/125'
     );
   });
   it('shows DAO lifecycle only for DAO cells', async () => {

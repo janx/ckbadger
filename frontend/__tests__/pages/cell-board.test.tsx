@@ -116,13 +116,27 @@ describe('Cell page against the Cell board', () => {
     // the origin line sits under the full out point, before the "only name" sentence
     const outpointLine = screen.getByRole('button', { name: 'Copy out point' }).parentElement!;
     expect(outpointLine.compareDocumentPosition(origin)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(screen.getByText(/The out point is the cell's only name/)).toHaveTextContent(
+    const onlyName = screen.getByText(/The out point is the cell's only name/);
+    expect(onlyName).toHaveTextContent(
       'exists from block #20,801,533 until a transaction spends it.'
+    );
+    // Lane L: every block height on the page links to its block.
+    expect(within(onlyName).getByRole('link', { name: '#20,801,533' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20801533'
     );
     const facts = screen.getByRole('region', { name: 'Cell facts' });
     expect(facts).toHaveTextContent('Occupied320 B');
     expect(facts).toHaveTextContent('Unspent for3 d 10 h');
     expect(facts).toHaveTextContent('as of #20,834,844');
+    expect(within(facts).getByRole('link', { name: '#20,834,844' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20834844'
+    );
+    // Lane L: the lock's owner, the cell's address, is named and linked under the lock.
+    const owner = within(facts).getByRole('link', { name: /^ckb1qp3kr4/ });
+    expect(owner).toHaveAttribute('href', `/mainnet/address/${cell.address}`);
+    expect(owner).toHaveAttribute('title', cell.address);
   });
 
   it('shows the lock and type by name, never a raw code hash (SC-C4)', async () => {
@@ -230,8 +244,11 @@ describe('Cell page against the Cell board', () => {
       },
     } as Cell);
     view();
-    expect(await screen.findByText(/withdrawn · deposit block/)).toHaveTextContent(
-      'deposit block #20,311,586'
+    const dao = await screen.findByText(/withdrawn · deposit block/);
+    expect(dao).toHaveTextContent('deposit block #20,311,586');
+    expect(within(dao).getByRole('link', { name: '#20,311,586' })).toHaveAttribute(
+      'href',
+      '/mainnet/blocks/20311586'
     );
   });
 });
