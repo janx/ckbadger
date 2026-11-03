@@ -573,8 +573,9 @@ export function NetworkMapNotes() {
       </p>
     );
   const counts = mapCounts(data);
+  // Set in the page's tier-2 Prose (HowTheCrawlerSees): the paragraph carries no classes of its own.
   return (
-    <p className="text-text-dim text-body">
+    <p>
       {data.located.toLocaleString()} verified nodes in {counts.countries} countries · ringed: the{' '}
       {counts.ringed} this node had a session with in the latest round.{' '}
       {data.located.toLocaleString()} of {data.verifiedRetained.toLocaleString()} retained verified

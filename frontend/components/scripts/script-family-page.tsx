@@ -6,6 +6,7 @@ import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { PhoneRow } from '@/components/ui/phone-row';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -1141,16 +1142,18 @@ export function ScriptFamilyPage({
             <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
               {/* Board ScriptDetail (table-rows L1-5): one paragraph, then the script's facts. */}
               <DetailSection title="How to read this page">
-                <p className="text-body max-w-[640px]">
-                  <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} inline />{' '}
-                  <ScriptSummarySentence family={family} lineage={lineage} inline />{' '}
-                  <ScriptCustodyMechanism
-                    family={family}
-                    lineage={lineage}
-                    binaries={binaries}
-                    inline
-                  />
-                </p>
+                <Prose>
+                  <p>
+                    <ScriptHistoryNotes family={family} chart={chart} lineage={lineage} inline />{' '}
+                    <ScriptSummarySentence family={family} lineage={lineage} inline />{' '}
+                    <ScriptCustodyMechanism
+                      family={family}
+                      lineage={lineage}
+                      binaries={binaries}
+                      inline
+                    />
+                  </p>
+                </Prose>
               </DetailSection>
               <DetailSection title="The script">
                 <ScriptFacts family={family} />

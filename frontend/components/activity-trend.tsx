@@ -130,9 +130,7 @@ export function ActivityTrend() {
         {/* 24h stats */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <div className="text-text-dim text-meta uppercase tracking-wider">
-              Unique Addr (24h)
-            </div>
+            <div className="eyebrow text-text-dim text-meta">Unique Addr (24h)</div>
             {isLoading ? (
               <div className="bg-base-elevated mt-1 inline-block h-5 w-16 animate-pulse rounded" />
             ) : (
@@ -142,7 +140,7 @@ export function ActivityTrend() {
             )}
           </div>
           <div>
-            <div className="text-text-dim text-meta uppercase tracking-wider">CKB Moved (24h)</div>
+            <div className="eyebrow text-text-dim text-meta">CKB Moved (24h)</div>
             {isLoading ? (
               <div className="bg-base-elevated mt-1 inline-block h-5 w-16 animate-pulse rounded" />
             ) : (

@@ -1,5 +1,6 @@
 import { Fragment, useState } from 'react';
 import { DetailSection } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { AppLink } from '@/components/ui/app-link';
 import { Chart } from '@/components/ui/chart';
 import type {
@@ -268,17 +269,19 @@ export function ScriptCodeClassSummary({
   return (
     <DetailSection title={title}>
       {total > BigInt(0) && (
-        <p data-testid="code-class-sentence" className="text-body mb-3 max-w-[640px]">
-          Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
-          {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
-          {joinClauses(
-            groups.map(
-              (group) =>
-                `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
-            )
-          )}
-          .
-        </p>
+        <Prose className="mb-3">
+          <p data-testid="code-class-sentence">
+            Of the <ExactCkb shannons={total} signed={false} tone="plain" /> under these{' '}
+            {lockScriptCount.toLocaleString('en-US')} lock scripts,{' '}
+            {joinClauses(
+              groups.map(
+                (group) =>
+                  `${scriptShare(group.capacity, total)} ${group.does}${group.families === null ? '' : ` (${formatCount(group.families, 'script')})`}`
+              )
+            )}
+            .
+          </p>
+        </Prose>
       )}
       <ul
         aria-label="Code classes"

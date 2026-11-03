@@ -829,7 +829,7 @@ function PipelineFooter({ snapshot }: { snapshot: PipelineSnapshot | undefined }
       aria-live="polite"
       className={`${FOOTER_ROW} text-text text-meta gap-x-3`}
     >
-      <span className="text-text-dim text-meta uppercase tracking-wider">Selected</span>
+      <span className="eyebrow text-text-dim text-meta">Selected</span>
       <span className="text-text-bright">{shortHash(pinned)}</span>
       {sel ? (
         <>

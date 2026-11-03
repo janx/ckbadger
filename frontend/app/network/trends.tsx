@@ -438,8 +438,9 @@ export function NetworkTrends() {
  */
 export function NetworkTrendNotes() {
   const { verifiedPeers } = usePeerHistories();
+  // Set in the page's tier-2 Prose (HowTheCrawlerSees): the paragraph carries no classes of its own.
   return (
-    <p className="text-text-dim text-body">
+    <p>
       “Over time” draws the retained verification state (daily): verified and reachable peers per
       completed UTC+8 day. Daily history of retained verified peers, by UTC+8 day. The current
       (incomplete) day is excluded. Round counts were not recorded. Days older than the

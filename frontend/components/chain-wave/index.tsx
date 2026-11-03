@@ -167,7 +167,7 @@ function StageFlowPill({
 }) {
   return (
     <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
-      <div className="text-text/70 text-meta uppercase tracking-widest">{title}</div>
+      <div className="eyebrow text-text/70 text-meta">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
         <div className="text-text-bright text-hero font-semibold">{value.toLocaleString()}</div>
         <div className="text-text/70 text-meta">{subtitle}</div>
@@ -184,7 +184,7 @@ function StageConnector({ label }: { label: string }) {
         <div className="bg-gold/80 h-2 w-2 rounded-full" />
         <div className="bg-gold/35 absolute inset-0 animate-ping rounded-full" />
       </div>
-      <div className="text-text-dim text-meta uppercase tracking-widest">{label}</div>
+      <div className="eyebrow text-text-dim text-meta">{label}</div>
       <div className="bg-base-border h-px w-6" />
     </div>
   );
@@ -262,16 +262,16 @@ function TxMetricScatter({
 
       {!compact && (
         <>
-          <div className="text-text-dim text-meta absolute bottom-1 left-2 uppercase tracking-widest">
+          <div className="eyebrow text-text-dim text-meta absolute bottom-1 left-2">
             Low fee rate
           </div>
-          <div className="text-text-dim text-meta absolute bottom-1 right-2 uppercase tracking-widest">
+          <div className="eyebrow text-text-dim text-meta absolute bottom-1 right-2">
             High fee rate
           </div>
-          <div className="text-text-dim text-meta absolute left-1 top-2 -rotate-90 uppercase tracking-widest">
+          <div className="eyebrow text-text-dim text-meta absolute left-1 top-2 -rotate-90">
             High cycles
           </div>
-          <div className="text-text-dim text-meta absolute bottom-2 left-1 -rotate-90 uppercase tracking-widest">
+          <div className="eyebrow text-text-dim text-meta absolute bottom-2 left-1 -rotate-90">
             Low cycles
           </div>
         </>
@@ -310,7 +310,7 @@ function StageScatterCard({
         </div>
         <div className="text-right">
           <div className="text-text-bright text-hero font-bold">{totalCount.toLocaleString()}</div>
-          <div className="text-text-dim text-meta uppercase tracking-widest">txns</div>
+          <div className="eyebrow text-text-dim text-meta">txns</div>
         </div>
       </div>
 
@@ -365,7 +365,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
                 {formatBlockNumber(entry.block.number)}
               </div>
               {index === 0 ? (
-                <span className="border-gold/40 bg-gold/20 text-gold text-meta rounded-md border px-1.5 py-0.5 uppercase tracking-widest">
+                <span className="eyebrow border-gold/40 bg-gold/20 text-gold text-meta rounded-md border px-1.5 py-0.5">
                   New
                 </span>
               ) : (
@@ -388,7 +388,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
 function TriMetricLegend() {
   return (
     <div className="border-base-border/60 bg-base-bg/40 mt-4 rounded-xl border p-3">
-      <div className="text-text-dim text-small uppercase tracking-widest">Tri-metric encoding</div>
+      <div className="eyebrow text-text-dim text-small">Tri-metric encoding</div>
       <div className="text-text text-small mt-2 grid gap-2 sm:grid-cols-3">
         <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
           Bubble size = txn size (bytes)

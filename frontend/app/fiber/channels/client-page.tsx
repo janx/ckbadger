@@ -12,6 +12,7 @@ import {
   useFiberGraphPin,
 } from '@/components/fiber/fiber-network-graph';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { TopicHero, type TopicDisplayFigure, type TopicFigure } from '@/components/ui/topic-hero';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { useCursorPagination } from '@/hooks/useCursorPagination';
@@ -455,14 +456,14 @@ export default function FiberChannelsPage() {
         <div id="evidence" className="scroll-mt-4">
           <DetailTier2 className="grid items-start gap-x-14 gap-y-10 space-y-0 lg:grid-cols-2">
             <DetailSection title="What the chain sees of Fiber">
-              <div className="flex flex-col gap-3">
-                <p className="text-text-dim text-body">
+              <Prose>
+                <p>
                   Fiber is a payment-channel network on CKB. Two parties lock CKB, or a token, in
                   one shared cell and pay each other off chain as often as they like. Only opening
                   and closing a channel touch the chain, so that is what CKBadger sees.
                 </p>
                 {network.data && <FiberPartiesNote network={network.data} />}
-              </div>
+              </Prose>
             </DetailSection>
             <DetailSection title="How to read the graph">
               <FiberGraphNotes />

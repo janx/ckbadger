@@ -2,7 +2,9 @@
 
 import { useMemo, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
+import { Prose } from '@/components/ui/prose';
 import { ReadoutRow } from '@/components/ui/readout-row';
+import { TerminalPanel, TerminalPanelContent } from '@/components/ui/terminal-panel';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
@@ -16,10 +18,12 @@ import { FIBER_COLORS } from '@/lib/design-tokens';
 import {
   fiberGraphData,
   fiberGraphLayout,
+  fiberNodeReach,
   pairKey,
   partyTail,
   type FiberGraphData,
   type FiberGraphEdge,
+  type FiberGraphModel,
   type FiberGraphNode,
 } from '@/lib/fiber-network-model';
 
@@ -34,10 +38,34 @@ interface Props {
 
 const DIM = 0.18;
 const targetKey = (target: FiberGraphTarget) => `${target.kind}:${target.id}`;
-/** The open-channel ring reaches 4 px beyond a party's circle (r + 3, 1.2 px stroke). */
-const RING = 4;
 /** The band at the plot's top that holds its name (one 11 px line and its gap, R13). */
 const NAME_BAND = 22;
+
+/**
+ * The box the picture needs (material pass v2 leftovers: the graph sits in the instrument frame,
+ * clipped to its svg, so the svg must hold everything it draws): the drawing's bounds from every
+ * party's reach — its ring or label across, its ring up, its label down — and from the notes.
+ * `shift` moves the drawing down only as far as a party would reach into the name's band;
+ * `height` is the model's or the lowest label's, whichever is lower, plus the shift. Across, the
+ * layout's contract is that nothing reaches past the width; a party that does is named.
+ */
+export function fiberPictureBox(model: FiberGraphModel): { shift: number; height: number } {
+  let top = Infinity;
+  let bottom = 0;
+  for (const node of model.nodes) {
+    const reach = fiberNodeReach(node.r);
+    if (node.x - reach.x < 0 || node.x + reach.x > model.width)
+      throw new Error(
+        `Fiber graph: party …${node.label} reaches past the ${model.width} px canvas (x ${node.x.toFixed(1)}, reach ${reach.x.toFixed(1)})`
+      );
+    top = Math.min(top, node.y - reach.up);
+    bottom = Math.max(bottom, node.y + reach.down);
+  }
+  // the islands' note: an 11 px line, 3 px of descenders
+  if (model.islandsNote) bottom = Math.max(bottom, model.islandsNote.y + 3);
+  const shift = Math.max(0, NAME_BAND - top);
+  return { shift, height: Math.ceil(Math.max(model.height, bottom)) + shift };
+}
 /** The reading's line while nothing is hovered or pinned: what it will read (R14: the row's own
  * "tap or hover" is the section's one hint). */
 const IDLE = 'a party’s channels and partners, or a pair’s channels';
@@ -307,154 +335,159 @@ export function FiberNetworkPicture({ network, pin }: Props) {
     ...pin.bind(target),
     className: 'cursor-pointer outline-none',
   });
-  // The drawing moves down only as far as a party would reach into the name's band.
-  const shift = model
-    ? Math.max(0, NAME_BAND - Math.min(...model.nodes.map((n) => n.y - n.r - RING)))
-    : 0;
+  const picture = model ? fiberPictureBox(model) : null;
+  const shift = picture?.shift ?? 0;
 
   return (
     <div className="grid min-w-0 items-start gap-x-7 gap-y-4 lg:grid-cols-[minmax(0,1fr)_340px]">
-      <div ref={box} className="min-w-0">
-        {model && (
-          <svg
-            data-fiber-graph
-            viewBox={`0 0 ${model.width} ${model.height + shift}`}
-            width={model.width}
-            height={model.height + shift}
-            role="img"
-            aria-label={`The Fiber network on chain: ${model.nodes.length} parties and the ${model.edges.length} pairs that opened channels`}
-            className="block overflow-visible"
-          >
-            <text data-role="chart-name" x="8" y="14" fontSize="11" fill={FIBER_COLORS.note}>
-              the network, as the chain sees it
-            </text>
-            <g data-role="drawing" transform={`translate(0 ${shift})`}>
-              {model.islandsNote && (
-                <text
-                  x={model.islandsNote.x}
-                  y={model.islandsNote.y}
-                  textAnchor={model.islandsNote.anchor}
-                  fontSize="11"
-                  fill={FIBER_COLORS.note}
-                >
-                  not linked to the rest
+      {/* Material pass v2 leftovers: the picture is an instrument, in the one frame (as the network
+          map). Measured inside the frame from mount, so it is drawn 1:1 in its column at every
+          width; its svg holds everything it draws (fiberPictureBox), so it clips nothing. */}
+      <TerminalPanel aria-label="The Fiber network on chain" className="min-w-0 self-start">
+        <TerminalPanelContent padding="sm">
+          <div ref={box} className="min-w-0">
+            {model && picture && (
+              <svg
+                data-fiber-graph
+                viewBox={`0 0 ${model.width} ${picture.height}`}
+                width={model.width}
+                height={picture.height}
+                role="img"
+                aria-label={`The Fiber network on chain: ${model.nodes.length} parties and the ${model.edges.length} pairs that opened channels`}
+                className="block"
+              >
+                <text data-role="chart-name" x="8" y="14" fontSize="11" fill={FIBER_COLORS.note}>
+                  the network, as the chain sees it
                 </text>
-              )}
-              {model.edges.map((edge) => {
-                const lit = edgeLit(edge);
-                const [a, b] = [nodesById.get(edge.a)!.party, nodesById.get(edge.b)!.party];
-                return (
-                  <g
-                    key={edge.id}
-                    data-edge
-                    data-lit={lit}
-                    opacity={lit ? 1 : DIM}
-                    aria-label={`Pair …${partyTail(a)} and …${partyTail(b)}, ${formatCount(edge.pair.channels, 'channel')}`}
-                    {...handlers({ kind: 'edge', id: edge.id })}
-                  >
-                    <line
-                      x1={edge.x1}
-                      y1={edge.y1}
-                      x2={edge.x2}
-                      y2={edge.y2}
-                      stroke="transparent"
-                      strokeWidth="12"
-                    />
-                    <line
-                      x1={edge.x1}
-                      y1={edge.y1}
-                      x2={edge.x2}
-                      y2={edge.y2}
-                      stroke={FIBER_COLORS.history}
-                      strokeOpacity=".28"
-                      strokeWidth={edge.greyWidth.toFixed(2)}
-                    />
-                    {edge.jadeWidth !== null && (
-                      <line
-                        data-open
-                        x1={edge.x1}
-                        y1={edge.y1}
-                        x2={edge.x2}
-                        y2={edge.y2}
-                        stroke={FIBER_COLORS.open}
-                        strokeOpacity=".85"
-                        strokeWidth={edge.jadeWidth.toFixed(2)}
-                      />
-                    )}
-                    {edge.forceClosed && (
-                      <line
-                        data-forced
-                        {...edge.dash}
-                        stroke={FIBER_COLORS.forced}
-                        strokeOpacity=".7"
-                        strokeWidth="1"
-                        strokeDasharray="3 3"
-                      />
-                    )}
-                  </g>
-                );
-              })}
-              {model.nodes.map((node) => {
-                const lit = litNodes ? litNodes.has(node.id) : true;
-                return (
-                  <g
-                    key={node.id}
-                    data-node
-                    data-lit={lit}
-                    opacity={lit ? 1 : DIM}
-                    aria-label={`Party …${node.label}, ${formatCount(node.channels, 'channel')}${node.openChannels ? `, ${node.openChannels} open` : ''}`}
-                    {...handlers({ kind: 'node', id: node.id })}
-                  >
-                    <circle cx={node.x} cy={node.y} r={node.r + 8} fill="transparent" />
-                    {node.ring && (
-                      <circle
-                        cx={node.x}
-                        cy={node.y}
-                        r={node.r + 3}
-                        fill="none"
-                        stroke={FIBER_COLORS.open}
-                        strokeWidth="1.2"
-                        strokeOpacity=".9"
-                      />
-                    )}
-                    <circle
-                      cx={node.x}
-                      cy={node.y}
-                      r={node.r}
-                      fill={FIBER_COLORS.nodeFill}
-                      stroke={FIBER_COLORS.nodeStroke}
-                      strokeWidth="1.2"
-                    />
+                <g data-role="drawing" transform={`translate(0 ${shift})`}>
+                  {model.islandsNote && (
                     <text
-                      x={node.x}
-                      y={node.y + node.r + 14}
-                      textAnchor="middle"
+                      x={model.islandsNote.x}
+                      y={model.islandsNote.y}
+                      textAnchor={model.islandsNote.anchor}
                       fontSize="11"
-                      fill={FIBER_COLORS.label}
-                      stroke={FIBER_COLORS.halo}
-                      strokeWidth="3"
-                      paintOrder="stroke"
+                      fill={FIBER_COLORS.note}
                     >
-                      {node.label}
+                      not linked to the rest
                     </text>
-                    {node.r > 14 && (
-                      <text
-                        x={node.x}
-                        y={node.y + 4}
-                        textAnchor="middle"
-                        fontSize="11"
-                        fill={FIBER_COLORS.count}
+                  )}
+                  {model.edges.map((edge) => {
+                    const lit = edgeLit(edge);
+                    const [a, b] = [nodesById.get(edge.a)!.party, nodesById.get(edge.b)!.party];
+                    return (
+                      <g
+                        key={edge.id}
+                        data-edge
+                        data-lit={lit}
+                        opacity={lit ? 1 : DIM}
+                        aria-label={`Pair …${partyTail(a)} and …${partyTail(b)}, ${formatCount(edge.pair.channels, 'channel')}`}
+                        {...handlers({ kind: 'edge', id: edge.id })}
                       >
-                        {node.channels}
-                      </text>
-                    )}
-                  </g>
-                );
-              })}
-            </g>
-          </svg>
-        )}
-      </div>
+                        <line
+                          x1={edge.x1}
+                          y1={edge.y1}
+                          x2={edge.x2}
+                          y2={edge.y2}
+                          stroke="transparent"
+                          strokeWidth="12"
+                        />
+                        <line
+                          x1={edge.x1}
+                          y1={edge.y1}
+                          x2={edge.x2}
+                          y2={edge.y2}
+                          stroke={FIBER_COLORS.history}
+                          strokeOpacity=".28"
+                          strokeWidth={edge.greyWidth.toFixed(2)}
+                        />
+                        {edge.jadeWidth !== null && (
+                          <line
+                            data-open
+                            x1={edge.x1}
+                            y1={edge.y1}
+                            x2={edge.x2}
+                            y2={edge.y2}
+                            stroke={FIBER_COLORS.open}
+                            strokeOpacity=".85"
+                            strokeWidth={edge.jadeWidth.toFixed(2)}
+                          />
+                        )}
+                        {edge.forceClosed && (
+                          <line
+                            data-forced
+                            {...edge.dash}
+                            stroke={FIBER_COLORS.forced}
+                            strokeOpacity=".7"
+                            strokeWidth="1"
+                            strokeDasharray="3 3"
+                          />
+                        )}
+                      </g>
+                    );
+                  })}
+                  {model.nodes.map((node) => {
+                    const lit = litNodes ? litNodes.has(node.id) : true;
+                    return (
+                      <g
+                        key={node.id}
+                        data-node
+                        data-lit={lit}
+                        opacity={lit ? 1 : DIM}
+                        aria-label={`Party …${node.label}, ${formatCount(node.channels, 'channel')}${node.openChannels ? `, ${node.openChannels} open` : ''}`}
+                        {...handlers({ kind: 'node', id: node.id })}
+                      >
+                        <circle cx={node.x} cy={node.y} r={node.r + 8} fill="transparent" />
+                        {node.ring && (
+                          <circle
+                            cx={node.x}
+                            cy={node.y}
+                            r={node.r + 3}
+                            fill="none"
+                            stroke={FIBER_COLORS.open}
+                            strokeWidth="1.2"
+                            strokeOpacity=".9"
+                          />
+                        )}
+                        <circle
+                          cx={node.x}
+                          cy={node.y}
+                          r={node.r}
+                          fill={FIBER_COLORS.nodeFill}
+                          stroke={FIBER_COLORS.nodeStroke}
+                          strokeWidth="1.2"
+                        />
+                        <text
+                          x={node.x}
+                          y={node.y + node.r + 14}
+                          textAnchor="middle"
+                          fontSize="11"
+                          fill={FIBER_COLORS.label}
+                          stroke={FIBER_COLORS.halo}
+                          strokeWidth="3"
+                          paintOrder="stroke"
+                        >
+                          {node.label}
+                        </text>
+                        {node.r > 14 && (
+                          <text
+                            x={node.x}
+                            y={node.y + 4}
+                            textAnchor="middle"
+                            fontSize="11"
+                            fill={FIBER_COLORS.count}
+                          >
+                            {node.channels}
+                          </text>
+                        )}
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+            )}
+          </div>
+        </TerminalPanelContent>
+      </TerminalPanel>
       <aside
         aria-label="Party or pair"
         aria-live="polite"
@@ -501,28 +534,29 @@ export function FiberNetworkReading({ network, pin }: Props) {
   );
 }
 
-/** Tier 2, "How to read the graph": the explainer the picture's column used to hold. */
+/** Tier 2, "How to read the graph": the explainer the picture's column used to hold, as Prose. */
 export function FiberGraphNotes() {
   return (
-    <div className="flex flex-col gap-3">
-      <p className="text-text-dim text-body">
+    <Prose>
+      <p>
         Each circle is a party: the address that funded or received a channel. Its size follows how
         many channels it took part in. A green ring means it has a channel open now.
       </p>
-      <p className="text-text-dim text-body">
+      <p>
         Each line is a pair that opened channels. Grey grows with how many channels they opened over
         time; green with the CKB locked between them right now; a dashed line means a channel was
         force-closed.
       </p>
-    </div>
+    </Prose>
   );
 }
 
-/** Tier 2: what a party is, and the channels the graph cannot draw as a pair. */
+/** Tier 2: what a party is, and the channels the graph cannot draw as a pair. One paragraph, set
+ * in the page's "What the chain sees of Fiber" Prose: it carries no classes of its own. */
 export function FiberPartiesNote({ network }: { network: FiberNetwork }) {
   const data = useMemo(() => fiberGraphData(network), [network]);
   return (
-    <p className="text-text-dim text-body">
+    <p>
       Parties are on-chain addresses, not Fiber node ids: the chain shows who funded a channel, not
       which node ran it.
       {data.unpairedChannels > 0 &&

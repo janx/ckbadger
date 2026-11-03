@@ -1085,3 +1085,19 @@ h2.text-section {
     animation: none;
   }
 }
+
+/* Material pass v2, leftovers — tier-2 prose (components/ui/prose.tsx): an explanation reads at
+   14 px on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is the true
+   italic (the 400 italic face above). The piece carries the class; its paragraphs carry nothing. */
+.prose-tier2 p {
+  font-size: 14px;
+  line-height: 1.7;
+  max-width: 64ch;
+  color: #7c849c;
+}
+.prose-tier2 p + p {
+  margin-top: 14px;
+}
+.prose-tier2 em {
+  font-style: italic;
+}

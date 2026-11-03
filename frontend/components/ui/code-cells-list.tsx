@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
 import { HexDisplay } from '@/components/ui/hex-display';
-import { Capacity } from '@/components/ui/capacity';
+import { ExactCkb } from '@/components/activity-event-row';
 import { Badge } from '@/components/ui/page-header';
 import { TerminalRow } from '@/components/ui/terminal-panel';
 import type { ScriptRefHashType } from '@/lib/script-ref';
@@ -40,7 +40,7 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
 
   return (
     <div>
-      <div className="border-base-border bg-base-surface/50 text-text-dim text-small flex items-center gap-x-4 border-b px-4 py-2 font-mono uppercase tracking-wider">
+      <div className="eyebrow border-base-border bg-base-surface/50 text-text-dim text-small flex items-center gap-x-4 border-b px-4 py-2 font-mono">
         <div className="w-48">Outpoint</div>
         <div className="w-20">Status</div>
         <div className="w-28 text-right">Created At</div>
@@ -72,8 +72,10 @@ export function CodeCellsList({ codeHash, hashType }: CodeCellsListProps) {
                 {formatBlockNumber(cell.createdAtBlock)}
               </Link>
             </div>
-            <div className="flex-1 text-right">
-              <Capacity value={cell.capacity} className="text-body" />
+            {/* Material pass v2 leftovers: the capacity is the shared exact figure — ink, its unit one
+                step dimmer on the baseline (ExactCkb) — never gold, which is for DAO and proposed. */}
+            <div className="text-body flex-1 text-right">
+              <ExactCkb shannons={BigInt(cell.capacity)} signed={false} tone="plain" />
             </div>
           </div>
         </TerminalRow>

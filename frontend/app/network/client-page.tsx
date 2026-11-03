@@ -17,6 +17,7 @@ import {
   useNetworkMap,
 } from '@/app/network/network-map';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { Prose } from '@/components/ui/prose';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const PAGE_TITLE = 'Where the nodes are';
@@ -282,20 +283,23 @@ function Hero({
 function HowTheCrawlerSees() {
   return (
     <DetailSection title="How the crawler sees the network">
-      <p className="text-text-dim text-body">
-        CKB nodes find each other by word of mouth: each node tells its peers about other nodes it
-        knows. This crawler asks every node it can reach, then tries to connect to each one it hears
-        about. A node it cannot reach may still be running, behind NAT or a firewall.
-      </p>
-      <div className="mt-3.5">
-        <NetworkMapNotes />
-      </div>
-      <p className="text-text-dim text-body mt-3.5">
-        “Which software they run” counts every verified node, reachable now or verified before.
-      </p>
-      <div className="mt-3.5">
-        <NetworkTrendNotes />
-      </div>
+      {/* Material pass v2 leftovers: the explanation and the two notes it renders are one Prose. */}
+      <Prose>
+        <p>
+          CKB nodes find each other by word of mouth: each node tells its peers about other nodes it
+          knows. This crawler asks every node it can reach, then tries to connect to each one it
+          hears about. A node it cannot reach may still be running, behind NAT or a firewall.
+        </p>
+        <div className="mt-3.5">
+          <NetworkMapNotes />
+        </div>
+        <p className="mt-3.5">
+          “Which software they run” counts every verified node, reachable now or verified before.
+        </p>
+        <div className="mt-3.5">
+          <NetworkTrendNotes />
+        </div>
+      </Prose>
     </DetailSection>
   );
 }
