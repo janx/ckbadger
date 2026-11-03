@@ -28,8 +28,8 @@ const IDENTITY_WORD = { dotbit: '.bit', 'bit-cell': '.bit Cell', did: 'did:ckb',
 const shortId = (id: string) => shortHex(id, 8, 6);
 
 /**
- * The words lane U's inventory naming gives the item (its pending statement on the cell page:
- * the class and the short id, no name read), or null for a cell that is no inventory item.
+ * The words lane U's inventory naming gives the item: its pending statement on the cell page (the
+ * class and the short id; no further name is read per row), or the name the cell's data carries.
  */
 function itemWords(item: CellInventoryItem): string {
   switch (item.kind) {
@@ -52,11 +52,25 @@ function itemWords(item: CellInventoryItem): string {
   }
 }
 
+/** The full id an item's words shorten; none for a DAO cell, whose words shorten nothing. */
+function itemId(item: CellInventoryItem): string | undefined {
+  switch (item.kind) {
+    case 'token':
+    case 'token-without-amount':
+      return item.typeHash;
+    case 'dao':
+      return undefined;
+    default:
+      return item.id;
+  }
+}
+
 type What =
   | { state: 'reading' }
   | { state: 'failed'; message: string }
-  | { state: 'item'; text: string; href: string }
-  | { state: 'typed'; text: string; href: string }
+  /** `title`: the full id the shortened words stand for (lane L: hover titles keep the full id). */
+  | { state: 'item'; text: string; href: string; title?: string }
+  | { state: 'typed'; text: string; href: string; title: string }
   | { state: 'plain' };
 
 /**
@@ -73,7 +87,7 @@ function whatOf(row: Cell, detail: Cell | undefined, error: Error | null): What 
   } catch (failure) {
     return { state: 'failed', message: (failure as Error).message };
   }
-  if (item) return { state: 'item', text: itemWords(item), href: item.href };
+  if (item) return { state: 'item', text: itemWords(item), href: item.href, title: itemId(item) };
   if (!row.typeScriptHash) return { state: 'plain' };
   if (!row.typeCodeHash || !row.typeHashType)
     return { state: 'failed', message: 'type reference unavailable' };
@@ -83,6 +97,7 @@ function whatOf(row: Cell, detail: Cell | undefined, error: Error | null): What 
     state: 'typed',
     text: row.typeScriptName ?? `type ${shortHex(row.typeCodeHash)}`,
     href: `/script/${row.typeCodeHash}?hashType=${row.typeHashType}`,
+    title: `type script ${row.typeCodeHash} · ${row.typeHashType}`,
   };
 }
 
@@ -99,7 +114,7 @@ function WhatItIs({ what }: { what: What }) {
     case 'item':
     case 'typed':
       return (
-        <Link href={what.href} className="text-text hover:text-jade">
+        <Link href={what.href} title={what.title} className="text-text hover:text-jade">
           {what.text}
         </Link>
       );
@@ -120,7 +135,11 @@ function whatText(what: What): string {
 
 function Owner({ cell }: { cell: Cell }) {
   return cell.address ? (
-    <Link href={`/address/${cell.address}`} className="text-text hover:text-jade">
+    <Link
+      href={`/address/${cell.address}`}
+      title={cell.address}
+      className="text-text hover:text-jade"
+    >
       {cell.address.slice(0, 10)}…{cell.address.slice(-6)}
     </Link>
   ) : (
@@ -308,8 +327,11 @@ export function ScriptNewestCells({
       {newest.kind && (
         // The section's one caption, under its evidence (as the custody timeline's is).
         <p data-role="caption" className="text-text-dim text-small mt-2">
-          The newest live cells this script {verb}, newest block first · it is not a list of
-          transactions
+          {/* The words' own box (R16 measures a text node's parent: a bare <p> is full width). */}
+          <span>
+            The newest live cells this script {verb}, newest block first · it is not a list of
+            transactions
+          </span>
         </p>
       )}
       <p data-role="newest-footer" className="text-small mt-1 flex flex-wrap gap-x-4 gap-y-1">

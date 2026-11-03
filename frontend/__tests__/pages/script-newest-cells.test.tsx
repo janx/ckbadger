@@ -117,6 +117,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
     );
     expect(caption.textContent!.length).toBeLessThanOrEqual(160);
     expect(caption).toHaveClass('text-small', 'text-text-dim');
+    // R16 measures a text node's parent box: the words sit in their own inline box, not the
+    // full-width paragraph.
+    expect(caption.children).toHaveLength(1);
+    expect(caption.firstElementChild!.tagName).toBe('SPAN');
+    expect(caption.firstElementChild!.textContent).toBe(caption.textContent);
   });
 
   it('reads each registered reference newest block first from its lock index, five at most', async () => {
@@ -180,6 +185,12 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         name: `${first.address!.slice(0, 10)}…${first.address!.slice(-6)}`,
       })
     ).toHaveAttribute('href', `/mainnet/address/${first.address}`);
+    // A shortened link keeps the full id in its title (lane L's rule).
+    expect(
+      within(row).getByRole('link', {
+        name: `${first.address!.slice(0, 10)}…${first.address!.slice(-6)}`,
+      })
+    ).toHaveAttribute('title', first.address);
     expect(within(row).getByRole('link', { name: '0xfc7907…cf91' })).toHaveAttribute(
       'href',
       `/mainnet/tx/${first.txHash}`
@@ -258,6 +269,11 @@ describe('Script page · Newest cells (lane S, S1/S2)', () => {
         })
       ).toHaveAttribute('href', `/mainnet/objects/${args}`)
     );
+    expect(
+      within(rows[0]).getByRole('link', {
+        name: `Spore object ${args.slice(0, 10)}…${args.slice(-6)}`,
+      })
+    ).toHaveAttribute('title', args);
     const footer = section.querySelector('[data-role="newest-footer"]') as HTMLElement;
     expect(within(footer).getByRole('link', { name: 'Activity: Objects →' })).toHaveAttribute(
       'href',
