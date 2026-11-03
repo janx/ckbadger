@@ -228,14 +228,14 @@ function DetailBody({
           <div className="mt-3 flex flex-col gap-1">
             {/* R-10 (CH-27): a dated block chart names the blocks of its latest day exactly. */}
             {definition.source === 'blocks' &&
-            model.latest &&
-            /^\d{4}-\d{2}-\d{2}$/.test(model.latest.label) ? (
-              <BlocksOfDay date={model.latest.label} />
-            ) : (
-              <Link href={definition.evidenceHref} className="text-jade hover:underline">
-                Explore {definition.evidenceLabel} →
-              </Link>
-            )}
+              model.latest &&
+              /^\d{4}-\d{2}-\d{2}$/.test(model.latest.label) && (
+                <BlocksOfDay date={model.latest.label} />
+              )}
+            {/* Lane L: every chart links the topic page its numbers come from. */}
+            <Link href={definition.evidenceHref} className="text-jade hover:underline">
+              Explore {definition.evidenceLabel} →
+            </Link>
             {crossed.length > 0 && (
               <Link href="/hardforks" className="text-jade hover:underline">
                 Hardforks:{' '}
