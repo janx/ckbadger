@@ -719,6 +719,10 @@ describe('TransactionDetailPage', () => {
       'href',
       '/mainnet/identities/dotcell/joaom'
     );
+    // Lane L: "output #1" names the name's cell in this transaction, so it links to it.
+    const cellLink = within(section).getByRole('link', { name: 'output #1' });
+    expect(cellLink).toHaveAttribute('href', `/mainnet/cell/${TX_HASH}-1`);
+    expect(cellLink).toHaveAttribute('title', `${TX_HASH}:1`);
     // Header row + the two records.
     expect(within(section).getAllByRole('row')).toHaveLength(3);
     expect(within(section).getByText('maria@example.com')).toBeInTheDocument();

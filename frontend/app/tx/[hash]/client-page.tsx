@@ -494,7 +494,15 @@ function WitnessInspector({ tx, witness }: { tx: TransactionDetail; witness: Tra
               >
                 {name.name}
               </Link>{' '}
-              (output #{name.outputIndex})
+              (
+              <Link
+                href={`/cell/${tx.hash}-${name.outputIndex}`}
+                title={`${tx.hash}:${name.outputIndex}`}
+                className="hover:text-jade"
+              >
+                output #{name.outputIndex}
+              </Link>
+              )
             </p>
             <DotCellRecordsTable records={name.records} />
           </div>
