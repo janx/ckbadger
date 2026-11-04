@@ -7,6 +7,7 @@ import type { ScriptCustodyApi, ScriptFamilyDetail, ScriptHistoryMarkerApi } fro
 import { formatCount } from '@/lib/format-count';
 import { holderName, shortHex, signingText, type CodeHolder } from '@/lib/script-lineage';
 import { cn, formatUtc8Date } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 
 /**
  * "Who can change its code" as a picture (table-rows plan L1-3, rule T8; board ScriptDetail): one
@@ -204,15 +205,19 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
             data-version-tick={tick.date}
             data-row={tick.row}
             className={cn(
-              'absolute whitespace-nowrap border-[#4b5266] leading-[14px]',
+              'absolute whitespace-nowrap leading-[14px]',
               tick.anchorRight ? 'border-r pr-1' : 'border-l pl-1'
             )}
             style={{
+              borderColor: BOARD_INKS.quiet,
               top: tick.row * TICK_ROW_PX,
               ...(tick.anchorRight ? { right: `${100 - tick.at}%` } : { left: `${tick.at}%` }),
             }}
           >
-            {tick.versions} <span className="text-[#4b5266]">{tick.date}</span>
+            {tick.versions}{' '}
+            <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
+              {tick.date}
+            </span>
           </span>
         ))}
       </div>
@@ -239,7 +244,7 @@ export function HolderTimeline({ family, lineage, holders, numbers, now }: Holde
               onClick={() => setActive(i)}
               className={cn(
                 'text-small text-text-bright flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-sm px-1.5 text-left',
-                current && 'border-l-[3px] border-l-[#a0a8be]'
+                current && 'border-l-text border-l-[3px]'
               )}
               style={{
                 ...(current

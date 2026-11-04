@@ -647,7 +647,7 @@ export default function ScriptsPage() {
                       setRole(value);
                       pagination.reset();
                     }}
-                    className={`text-section -mb-px flex h-11 items-center gap-2 border-b-2 font-medium ${role === value ? 'text-text-bright border-[#2edba3]' : 'text-text-dim border-transparent'}`}
+                    className={`text-section -mb-px flex h-11 items-center gap-2 border-b-2 font-medium ${role === value ? 'text-text-bright border-jade' : 'text-text-dim border-transparent'}`}
                   >
                     {label}{' '}
                     {count !== undefined && (

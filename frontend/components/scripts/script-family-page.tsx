@@ -38,6 +38,7 @@ import { formatBlockNumber } from '@/lib/format-block';
 import { SentenceNodes, sentenceText, type SentencePart } from '@/components/ui/block-link';
 import { formatCount } from '@/lib/format-count';
 import { cn } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { RowTag } from '@/components/ui/row-tag';
 import {
@@ -97,7 +98,12 @@ function CellOwner({ cell }: { cell: Cell }) {
 
 /** The type script beside the lock: its registry name (R6), or its code hash when unregistered. */
 function AlsoGuardedBy({ cell }: { cell: Cell }) {
-  if (!cell.typeScriptHash) return <span className="text-[#4b5266]">—</span>;
+  if (!cell.typeScriptHash)
+    return (
+      <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
+        —
+      </span>
+    );
   if (!cell.typeCodeHash || !cell.typeHashType)
     return (
       <span role="alert" className="text-negative">
@@ -109,7 +115,7 @@ function AlsoGuardedBy({ cell }: { cell: Cell }) {
   return (
     <Link
       href={`/script/${cell.typeCodeHash}?hashType=${cell.typeHashType}`}
-      className="hover:text-jade text-[#a0a8be]"
+      className="hover:text-jade text-text"
     >
       {cell.typeScriptName ?? shortHex(cell.typeCodeHash)}
     </Link>
@@ -138,14 +144,14 @@ function OccupiedBytes({ cell }: { cell: Cell }) {
       </span>
     ) : (
       <span
-        className="text-[#a0a8be]"
+        className="text-text"
         title={`Virtual common knowledge size: ${formatCapacity(cell.virtualCommonKnowledgeSize)}`}
       >
         {toBytes(cell.virtualCommonKnowledgeSize)}
       </span>
     );
   }
-  return <span className="text-[#a0a8be]">{toBytes(cell.commonKnowledgeSize)}</span>;
+  return <span className="text-text">{toBytes(cell.commonKnowledgeSize)}</span>;
 }
 
 function CellAnatomy({ cell }: { cell: Cell }) {
@@ -880,7 +886,7 @@ export function ScriptFamilyPage({
               {roleCrumb && (
                 <>
                   {' '}
-                  <span className="text-[#343c50]">/</span> {roleCrumb}
+                  <span className="text-text-ghost">/</span> {roleCrumb}
                 </>
               )}
             </nav>

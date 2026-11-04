@@ -21,7 +21,7 @@ import { formatCkbAmount, formatUtc8Date } from '@/lib/utils';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
 import { scriptShare } from '@/components/scripts/script-code-evidence';
-import { DATA_COLOR, HELD_CAPACITY_COLOR } from '@/lib/design-tokens';
+import { BOARD_INKS, DATA_COLOR, HELD_CAPACITY_COLOR, inkStyle } from '@/lib/design-tokens';
 import {
   deploymentOnDay,
   holderName,
@@ -298,8 +298,8 @@ function UpgradeLines({
           <span
             key={day}
             {...{ [attribute]: day }}
-            className="absolute inset-y-0 border-l border-dashed border-[#4b5266]"
-            style={{ left: `${at}%` }}
+            className="absolute inset-y-0 border-l border-dashed"
+            style={{ left: `${at}%`, borderColor: BOARD_INKS.quiet }}
           />
         );
       })}
@@ -359,8 +359,11 @@ function UpgradeLabels({
           <span
             key={day}
             data-upgrade-label={day}
-            className={`text-meta absolute top-[5px] whitespace-nowrap leading-[14px] text-[#4b5266] ${right ? 'pr-1' : 'pl-1'}`}
-            style={right ? { right: `${100 - at}%` } : { left: `${at}%` }}
+            className={`text-meta absolute top-[5px] whitespace-nowrap leading-[14px] text-[color:var(--ink)] ${right ? 'pr-1' : 'pl-1'}`}
+            style={{
+              ...inkStyle(BOARD_INKS.quiet),
+              ...(right ? { right: `${100 - at}%` } : { left: `${at}%` }),
+            }}
           >
             {text}
           </span>
@@ -542,8 +545,7 @@ export function ScriptHistoryNotes({
       <Sentence className={block}>
         A cell must hold enough CKB to pay for its own bytes.{' '}
         <span style={{ color: DATA_COLOR }}>Occupied</span> is that cost for every cell{' '}
-        {family.name} guards; <span className="text-[#a0a8be]">free</span> is CKB its owners keep
-        there.
+        {family.name} guards; <span className="text-text">free</span> is CKB its owners keep there.
         {lineage && lineage.length > 1 ? ' Dashed lines mark the days its code was replaced.' : ''}
       </Sentence>
       {inline && peak && ' '}
@@ -651,14 +653,18 @@ export function ScriptCustodyFigure({
             </div>
             <div className="text-text-bright text-body mt-1">
               {i > 0 && (
-                <span aria-hidden="true" className="text-[#4b5266]">
+                <span
+                  aria-hidden="true"
+                  className="text-[color:var(--ink)]"
+                  style={inkStyle(BOARD_INKS.quiet)}
+                >
                   →{' '}
                 </span>
               )}
               {holderName(holder.custody)}
             </div>
             {signingText(holder) && (
-              <div className={holder.neverSigned ? 'text-text-dim mt-1' : 'mt-1 text-[#a0a8be]'}>
+              <div className={holder.neverSigned ? 'text-text-dim mt-1' : 'text-text mt-1'}>
                 {signingText(holder)}
               </div>
             )}
@@ -693,7 +699,7 @@ export function ScriptCustodyFigure({
                 ))}
               </ul>
             ) : holder.neverSigned ? (
-              <div className="text-meta mt-3 rounded border border-dashed border-[#343c50] p-3 text-[#a0a8be]">
+              <div className="text-meta border-text-ghost text-text mt-3 rounded border border-dashed p-3">
                 Its keys and threshold appear on chain the first time it signs.
               </div>
             ) : null}

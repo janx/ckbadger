@@ -119,7 +119,7 @@ export function ScriptByteMap({
           className="text-small grid grid-cols-[88px_minmax(0,1fr)] gap-x-4 gap-y-1.5"
         >
           <dt style={{ color: SCRIPT_INKS.codeHash }}>code_hash</dt>
-          <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+          <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
             <AppLink href={href}>{script.codeHash}</AppLink>
             {name && (
               <span className="text-text-dim">
@@ -131,11 +131,11 @@ export function ScriptByteMap({
             {codeNote && <span className="text-text-dim"> · {codeNote}</span>}
           </dd>
           <dt style={{ color: SCRIPT_INKS.hashType }}>hash_type</dt>
-          <dd className="m-0 min-w-0 text-[#a0a8be]">
+          <dd className="text-text m-0 min-w-0">
             {script.hashType} ({hashType.byte}) · {hashType.words}
           </dd>
           <dt style={{ color: SCRIPT_INKS.args }}>args</dt>
-          <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+          <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
             {args === 0 ? 'empty: no args' : script.args}
             {argsNote && <span className="text-text-dim"> · {argsNote}</span>}
           </dd>
@@ -154,12 +154,12 @@ function Chain({ from, to, words }: { from: string; to: string; words: string })
       ].map((tile, i) => (
         <li key={tile.title} className="flex min-w-0 flex-col gap-1.5 sm:flex-1 sm:flex-row">
           {i > 0 && (
-            <span aria-hidden="true" className="text-center text-[#343c50] sm:w-5 sm:self-center">
+            <span aria-hidden="true" className="text-text-ghost text-center sm:w-5 sm:self-center">
               <span className="sm:hidden">↓</span>
               <span className="hidden sm:inline">→</span>
             </span>
           )}
-          <div className="text-small text-text-dim min-w-0 flex-1 rounded border border-[#1a1f30] px-3 py-2.5">
+          <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5">
             <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
             {tile.body}
           </div>
@@ -178,7 +178,7 @@ export function ScriptNames({ lockHash, address }: { lockHash: string; address: 
   const row = (term: string, value: string) => (
     <dl className="text-small mt-3 grid grid-cols-[88px_minmax(0,1fr)] gap-x-4">
       <dt className="text-text-dim">{term}</dt>
-      <dd className="m-0 min-w-0 break-all text-[#a0a8be]">{value}</dd>
+      <dd className="text-text m-0 min-w-0 break-all">{value}</dd>
     </dl>
   );
   return (
@@ -187,7 +187,7 @@ export function ScriptNames({ lockHash, address }: { lockHash: string; address: 
         <h2
           className={cn(
             'font-medium',
-            tier === 2 ? 'text-body text-[#a0a8be]' : 'text-text-bright text-section'
+            tier === 2 ? 'text-body text-text' : 'text-text-bright text-section'
           )}
         >
           Two names for the same script
