@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 // ============================================
 
 /// Canonical cell payload: the value of the append-only `cells` CF, keyed by
-/// outpoint (layout v2, 2026-11-04).
+/// outpoint (layout v2, 2026-11-05).
 ///
 /// Persisted only through [`Self::encode`] / [`Self::encode_into`] and read
 /// only through [`Self::decode`]. The type deliberately implements neither
@@ -24,6 +24,9 @@ use serde::{Deserialize, Serialize};
 /// The lock and type script hashes are not stored: [`Self::lock_script_hash`]
 /// and [`Self::type_script_hash`] derive them from the script fields with the
 /// workspace's one script-hash routine, [`ckbadger_common::script_hash`].
+/// Neither is the occupied capacity: [`Self::occupied_capacity`] derives it
+/// from the args and data lengths with the workspace's one occupied-capacity
+/// routine, [`ckbadger_common::dao::occupied_capacity_shannons`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCellInfo {
     pub capacity: i64,
@@ -34,7 +37,6 @@ pub struct LiveCellInfo {
     pub type_hash_type: Option<i16>,
     pub type_args: Option<Vec<u8>>,
     pub data_size: i32,
-    pub occupied_capacity: i64,
     pub udt_amount: Option<u128>,
     pub data_hash: Option<[u8; 32]>,
 }
@@ -53,7 +55,6 @@ struct LiveCellInfoWire {
     type_hash_type: Option<i16>,
     type_args: Option<Vec<u8>>,
     data_size: i32,
-    occupied_capacity: i64,
     udt_amount: Option<u128>,
     data_hash: Option<[u8; 32]>,
 }
@@ -97,7 +98,7 @@ impl LiveCellInfo {
     /// leaves `out` untouched) a payload [`Self::decode`] would refuse. The
     /// caller adds the outpoint.
     pub fn encode_into(&self, out: &mut Vec<u8>) -> anyhow::Result<()> {
-        self.check_script_fields()
+        self.check_fields()
             .map_err(|e| anyhow::anyhow!("refusing to encode LiveCellInfo v2 payload: {e}"))?;
         cell_payload_codec()
             .serialize_into(out, &EncodeLiveCellInfo(self))
@@ -115,9 +116,9 @@ impl LiveCellInfo {
 
     /// Decodes a `cells` value. A payload that is short, long, or not this
     /// layout (a v1 payload included) is an error, never a default; so is one
-    /// whose script fields cannot be hashed (a hash type outside `u8`, or a
-    /// type script with some but not all of its three fields). The caller
-    /// adds the outpoint.
+    /// whose derived values cannot be computed (a hash type outside `u8`, a
+    /// type script with some but not all of its three fields, or a negative
+    /// data size). The caller adds the outpoint.
     pub fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
         let DecodeLiveCellInfo(cell) = cell_payload_codec()
             .deserialize::<DecodeLiveCellInfo>(bytes)
@@ -127,7 +128,7 @@ impl LiveCellInfo {
                     bytes.len()
                 )
             })?;
-        cell.check_script_fields().map_err(|e| {
+        cell.check_fields().map_err(|e| {
             anyhow::anyhow!(
                 "invalid LiveCellInfo v2 payload of {} bytes: {e}",
                 bytes.len()
@@ -137,9 +138,15 @@ impl LiveCellInfo {
     }
 
     /// The one payload validation, run by both [`Self::encode_into`] and
-    /// [`Self::decode`]: both hash types fit a byte, and the type script is
-    /// whole or absent.
-    fn check_script_fields(&self) -> anyhow::Result<()> {
+    /// [`Self::decode`]: both hash types fit a byte, the type script is whole
+    /// or absent, and the data size is not negative; so the derived script
+    /// hashes and occupied capacity exist for every stored payload.
+    fn check_fields(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.data_size >= 0,
+            "data_size {} is negative",
+            self.data_size
+        );
         anyhow::ensure!(
             u8::try_from(self.lock_hash_type).is_ok(),
             "lock hash_type {} is not a byte",
@@ -160,6 +167,22 @@ impl LiveCellInfo {
                 args.is_some()
             ),
         }
+    }
+
+    /// The cell's occupied capacity in shannons, as CKB computes it: 8 bytes of
+    /// capacity, 33 + args bytes of lock, 33 + args bytes of type script when
+    /// there is one, and the data bytes, times 10^8. A stored payload has a
+    /// non-negative data size (`check_fields`), so this only panics for a
+    /// value built in memory with a negative one.
+    pub fn occupied_capacity(&self) -> i64 {
+        let data_size = usize::try_from(self.data_size)
+            .unwrap_or_else(|_| panic!("LiveCellInfo data_size {} is negative", self.data_size));
+        ckbadger_common::dao::occupied_capacity_shannons(
+            data_size,
+            self.lock_args.len(),
+            self.type_args.as_ref().map(Vec::len),
+        )
+        .unwrap_or_else(|e| panic!("LiveCellInfo occupied capacity: {e}"))
     }
 
     /// The lock script hash, as the indexer computes it for every index key
@@ -190,7 +213,7 @@ impl LiveCellInfo {
     }
 }
 
-/// Every stored payload passed `check_script_fields` when it was written and
+/// Every stored payload passed `check_fields` when it was written and
 /// again when it was read, so this only fails for a value built in memory with
 /// an impossible hash type (which the store would refuse to write).
 fn script_hash_type_byte(hash_type: i16, script: &str) -> u8 {
@@ -237,7 +260,7 @@ pub(crate) mod v1_layout {
                 type_hash_type: cell.type_hash_type,
                 type_args: cell.type_args.clone(),
                 data_size: cell.data_size,
-                occupied_capacity: cell.occupied_capacity,
+                occupied_capacity: cell.occupied_capacity(),
                 udt_amount: cell.udt_amount,
                 data_hash: cell.data_hash.map(|hash| hash.to_vec()),
             }
@@ -3380,7 +3403,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x66; 8]),
             data_size: 16,
-            occupied_capacity: 6_100_000_000,
             udt_amount: Some(42),
             data_hash: None,
         }
@@ -4221,7 +4243,6 @@ mod tests {
             type_hash_type: with_type.then_some(0),
             type_args: with_type.then(|| vec![0x3c; 32]),
             data_size: if with_udt { 16 } else { 0 },
-            occupied_capacity: if with_type { 142_00000000 } else { 61_00000000 },
             udt_amount: with_udt.then_some(1_000_000_000_000_000_000_000_000u128),
             data_hash: with_data_hash.then_some([0x44; 32]),
         }
@@ -4270,6 +4291,57 @@ mod tests {
         }
     }
 
+    /// The candA2 (`899f756e`) layout, which still stored the occupied
+    /// capacity between `data_size` and `udt_amount`.
+    #[derive(serde::Serialize)]
+    struct LiveCellInfoWithStoredOccupied<'a> {
+        capacity: i64,
+        lock_code_hash: [u8; 32],
+        lock_hash_type: i16,
+        lock_args: &'a Vec<u8>,
+        type_code_hash: Option<[u8; 32]>,
+        type_hash_type: Option<i16>,
+        type_args: &'a Option<Vec<u8>>,
+        data_size: i32,
+        occupied_capacity: i64,
+        udt_amount: Option<u128>,
+        data_hash: Option<[u8; 32]>,
+    }
+
+    /// A store written before the occupied capacity left the payload is not
+    /// read as this layout: every shape fails to decode, naming its length.
+    #[test]
+    fn decode_rejects_payloads_that_still_store_the_occupied_capacity() {
+        for with_type in [false, true] {
+            for with_udt in [false, true] {
+                let cell = v2_cell(with_type, with_udt, true);
+                let bytes = cell_payload_codec()
+                    .serialize(&LiveCellInfoWithStoredOccupied {
+                        capacity: cell.capacity,
+                        lock_code_hash: cell.lock_code_hash,
+                        lock_hash_type: cell.lock_hash_type,
+                        lock_args: &cell.lock_args,
+                        type_code_hash: cell.type_code_hash,
+                        type_hash_type: cell.type_hash_type,
+                        type_args: &cell.type_args,
+                        data_size: cell.data_size,
+                        occupied_capacity: cell.occupied_capacity(),
+                        udt_amount: cell.udt_amount,
+                        data_hash: cell.data_hash,
+                    })
+                    .unwrap();
+                assert_eq!(bytes.len(), cell.encode().unwrap().len() + 9);
+                let error = LiveCellInfo::decode(&bytes)
+                    .expect_err("a payload with a stored occupied capacity")
+                    .to_string();
+                assert!(
+                    error.contains(&format!("{} bytes", bytes.len())),
+                    "type={with_type} udt={with_udt}: {error}"
+                );
+            }
+        }
+    }
+
     /// The codec without the validation, to build the invalid bytes that only
     /// a corrupt store (or another writer) could hold.
     fn encode_unchecked(cell: &LiveCellInfo) -> Vec<u8> {
@@ -4279,7 +4351,8 @@ mod tests {
     }
 
     /// Payloads the store must never hold: a type script with some but not
-    /// all of its fields, and a hash type that is not a byte.
+    /// all of its fields, a hash type that is not a byte, and a negative data
+    /// size (the occupied capacity is derived from it).
     fn invalid_cells() -> Vec<(&'static str, LiveCellInfo)> {
         let mut no_args = v2_cell(true, false, true);
         no_args.type_args = None;
@@ -4291,12 +4364,15 @@ mod tests {
         lock_257.lock_hash_type = 257;
         let mut type_257 = v2_cell(true, false, true);
         type_257.type_hash_type = Some(257);
+        let mut negative_data = v2_cell(false, false, true);
+        negative_data.data_size = -1;
         vec![
             ("type script is partial", no_args),
             ("type script is partial", no_hash_type),
             ("type script is partial", args_only),
             ("lock hash_type 257 is not a byte", lock_257),
             ("type hash_type 257 is not a byte", type_257),
+            ("data_size -1 is negative", negative_data),
         ]
     }
 

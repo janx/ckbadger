@@ -810,7 +810,6 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1412,7 +1411,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1596,7 +1594,6 @@ mod tests {
                 type_hash_type: None,
                 type_args: None,
                 data_size: 0,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
                 data_hash: None,
             };
@@ -1752,7 +1749,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1856,7 +1852,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };

@@ -159,7 +159,6 @@ async fn fixture_with_cluster(has_cluster: bool) -> Fixture {
             type_hash_type: t.as_ref().map(|s| i16::from(s.hash_type().as_slice()[0])),
             type_args: t.as_ref().map(|s| s.args().raw_data().to_vec()),
             data_size: data.len() as i32,
-            occupied_capacity: used,
             udt_amount: matches!(i, 4 | 5)
                 .then(|| u128::from_le_bytes(data.as_slice().try_into().unwrap())),
             data_hash: Some(ckb_hash::blake2b_256(data).to_vec().try_into().unwrap()),
@@ -637,7 +636,7 @@ async fn zero_amount_token_cells_keep_capacity_but_do_not_create_positive_balanc
     let owner = hex::decode(&f.owner[2..]).unwrap();
     let mut balance = f.store.get_addr_balance(&owner).unwrap().unwrap();
     balance.balance += i128::from(zero.capacity);
-    balance.used_capacity += i128::from(zero.occupied_capacity);
+    balance.used_capacity += i128::from(zero.occupied_capacity());
     balance.live_cells_count += 1;
     let mut b = StoreBatch::new(&f.store);
     b.put_cell(&[0xc1; 32], 0, &zero, 7);
@@ -675,7 +674,7 @@ async fn sparse_class_page_counts_full_owner_set_without_node_reads_for_summary(
         b.put_cell_by_lock(&owner, 1, &[0xa3; 32], n);
     }
     balance.balance += i128::from(plain.capacity) * 2048;
-    balance.used_capacity += i128::from(plain.occupied_capacity) * 2048;
+    balance.used_capacity += i128::from(plain.occupied_capacity()) * 2048;
     balance.live_cells_count += 2048;
     b.put_addr_balance(&owner, &balance);
     b.commit().unwrap();
@@ -896,10 +895,9 @@ async fn address_dotcell_ring_root_is_script_infrastructure_not_an_identity() {
     root.type_hash_type = Some(1);
     root.type_args = Some(vec![0x33; 20]);
     root.data_size = 144;
-    root.occupied_capacity = (8 + 33 + 20 + 33 + 20 + 144) * 100_000_000;
     let mut balance = f.store.get_addr_balance(&owner).unwrap().unwrap();
     balance.balance += i128::from(root.capacity);
-    balance.used_capacity += i128::from(root.occupied_capacity);
+    balance.used_capacity += i128::from(root.occupied_capacity());
     balance.live_cells_count += 1;
     let mut b = StoreBatch::new(&f.store);
     b.put_cell(&[0xf4; 32], 0, &root, 7);
@@ -1085,7 +1083,6 @@ fn put_dao_deposit_cell(
         type_hash_type: Some(1),
         type_args: Some(vec![]),
         data_size: 8,
-        occupied_capacity: used,
         udt_amount: None,
         data_hash: Some(
             (ckb_hash::blake2b_256([0u8; 8]).to_vec())

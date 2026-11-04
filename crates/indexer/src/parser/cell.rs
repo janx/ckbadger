@@ -27,7 +27,6 @@ impl ParsedCell {
     /// bytes is an error here rather than a different hash later.
     pub fn to_live_cell_info(
         &self,
-        occupied_capacity: i64,
         udt_amount: Option<u128>,
     ) -> Result<ckbadger_store::LiveCellInfo> {
         let code_hash = |bytes: &[u8], script: &str| -> Result<[u8; 32]> {
@@ -52,7 +51,6 @@ impl ParsedCell {
             type_hash_type: self.type_hash_type,
             type_args: self.type_args.clone(),
             data_size: self.data_size,
-            occupied_capacity,
             udt_amount,
             data_hash: Some(self.data_hash),
         })
@@ -358,13 +356,7 @@ mod tests {
             .into_iter()
             .map(|(output, data, udt_amount)| {
                 let parsed = CellParser::parse_output(&output, &data).unwrap();
-                let occupied = ckbadger_common::dao::occupied_capacity_shannons(
-                    parsed.data.len(),
-                    parsed.lock_args.len(),
-                    parsed.type_args.as_ref().map(Vec::len),
-                )
-                .unwrap();
-                let info = parsed.to_live_cell_info(occupied, udt_amount).unwrap();
+                let info = parsed.to_live_cell_info(udt_amount).unwrap();
                 (parsed, info)
             })
             .collect()
@@ -409,7 +401,7 @@ mod tests {
                     type_hash_type: parsed.type_hash_type,
                     type_args: &parsed.type_args,
                     data_size: parsed.data_size,
-                    occupied_capacity: info.occupied_capacity,
+                    occupied_capacity: info.occupied_capacity(),
                     udt_amount: info.udt_amount,
                     data_hash: Some(parsed.data_hash.to_vec()),
                 })
@@ -482,5 +474,77 @@ mod tests {
             3,
             "the fixture exercises sUDT and xUDT type scripts"
         );
+    }
+
+    /// The plain secp256k1 cell, the most common shape on chain, encodes in
+    /// 101 bytes: capacity 9, lock code hash 32, hash type 1, args 1 + 20,
+    /// three absent type-script fields 3, data size 1, absent UDT amount 1,
+    /// data hash 1 + 32. No occupied capacity: it is derived.
+    #[test]
+    fn cells_payload_of_a_plain_secp_cell_is_101_bytes() {
+        let cells = real_shaped_cells();
+        let (parsed, info) = &cells[0];
+        assert!(parsed.type_code_hash.is_none() && parsed.data_size == 0);
+        assert_eq!(info.encode().unwrap().len(), 101);
+    }
+
+    /// The derived occupied capacity is CKB's own: ckb-types'
+    /// `CellOutput::occupied_capacity` over the same output and data, for every
+    /// fixture shape plus a type script with long args.
+    #[test]
+    fn derived_occupied_capacity_equals_ckb_types_for_every_cell_shape() {
+        use ckb_types::{bytes::Bytes, core::Capacity, packed, prelude::*};
+
+        let packed_script = |code_hash: &[u8; 32], hash_type: i16, args: &[u8]| {
+            packed::Script::new_builder()
+                .code_hash(code_hash.pack())
+                .hash_type(packed::Byte::new(u8::try_from(hash_type).unwrap()))
+                .args(Bytes::from(args.to_vec()).pack())
+                .build()
+        };
+        let mut outputs = real_shaped_outputs();
+        outputs.push((
+            CellOutput {
+                capacity: format!("{:#x}", 100_000_000_000u64),
+                lock: rpc_script(SECP256K1_CODE_HASH, "type", &[0x0b; 20]),
+                type_: Some(rpc_script(XUDT_CODE_HASH, "data1", &[0xa4; 300])),
+            },
+            format!("0x{}", "d4".repeat(50)),
+            None,
+        ));
+        assert_eq!(outputs.len(), 11);
+        for (index, (output, data, udt_amount)) in outputs.iter().enumerate() {
+            let parsed = CellParser::parse_output(output, data).unwrap();
+            let info = parsed.to_live_cell_info(*udt_amount).unwrap();
+            let packed_output = packed::CellOutput::new_builder()
+                .capacity(Capacity::shannons(u64::try_from(info.capacity).unwrap()).pack())
+                .lock(packed_script(
+                    &info.lock_code_hash,
+                    info.lock_hash_type,
+                    &info.lock_args,
+                ))
+                .type_(
+                    info.type_code_hash
+                        .as_ref()
+                        .map(|code_hash| {
+                            packed_script(
+                                code_hash,
+                                info.type_hash_type.unwrap(),
+                                info.type_args.as_ref().unwrap(),
+                            )
+                        })
+                        .pack(),
+                )
+                .build();
+            let ckb = packed_output
+                .occupied_capacity(Capacity::bytes(parsed.data.len()).unwrap())
+                .unwrap()
+                .as_u64();
+            assert_eq!(
+                u64::try_from(info.occupied_capacity()).unwrap(),
+                ckb,
+                "cell {index}: derived occupied capacity vs ckb-types"
+            );
+        }
     }
 }

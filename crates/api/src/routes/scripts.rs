@@ -3729,7 +3729,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 100,
-            occupied_capacity: 100_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -3791,7 +3790,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 100,
-            occupied_capacity: 100_00000000,
             udt_amount: None,
             data_hash: None,
         };

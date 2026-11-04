@@ -338,13 +338,15 @@ fn owner_cell(
                 == key,
             "owner index height disagrees with live marker"
         );
+        // The occupied capacity is derived from the payload's fields (and a
+        // decoded payload's data size is never negative); only the stored
+        // capacity can disagree with it.
         ensure!(
-            info.capacity >= info.occupied_capacity && info.occupied_capacity > 0,
+            info.capacity >= info.occupied_capacity(),
             "invalid capacity/occupied capacity {}/{}",
             info.capacity,
-            info.occupied_capacity
+            info.occupied_capacity()
         );
-        ensure!(info.data_size >= 0, "negative data size");
         let evidence = classify(&state.store, &hash, index, &info)?;
         Ok((hash.to_vec(), index, info, evidence))
     })()
@@ -420,7 +422,7 @@ fn classify(
             ensure!(
                 entry.lock_script_hash == info.lock_script_hash()
                     && entry.capacity == info.capacity
-                    && entry.occupied_capacity == info.occupied_capacity
+                    && entry.occupied_capacity == info.occupied_capacity()
                     && entry.deposit_block_number == info.created_at_block,
                 "DAO deposit metadata disagrees with current cell"
             );
@@ -441,7 +443,7 @@ fn classify(
             );
             ensure!(
                 entry.capacity == info.capacity
-                    && entry.withdraw_request_occupied_capacity == Some(info.occupied_capacity),
+                    && entry.withdraw_request_occupied_capacity == Some(info.occupied_capacity()),
                 "DAO withdrawal capacity disagrees with current cell"
             );
             (key, entry)
@@ -657,7 +659,7 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
             .context("capacity overflow")?;
         totals.occupied_capacity = totals
             .occupied_capacity
-            .checked_add(i128::from(info.occupied_capacity))
+            .checked_add(i128::from(info.occupied_capacity()))
             .context("occupied capacity overflow")?;
         // The existing token balance list contains only positive balances.
         // Zero-amount cells still belong to the token capacity/class partition.
@@ -1130,7 +1132,7 @@ fn cell_response(
         tx_hash: format!("0x{}", hex::encode(hash)),
         output_index: i32::from(index),
         capacity: info.capacity.to_string(),
-        occupied_capacity: info.occupied_capacity.to_string(),
+        occupied_capacity: info.occupied_capacity().to_string(),
         lock_script_hash: format!("0x{}", hex::encode(info.lock_script_hash())),
         type_script_hash: info
             .type_script_hash()

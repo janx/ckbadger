@@ -56,7 +56,6 @@ fn plain_cell(lock: u8) -> LiveCellInfo {
     let args = vec![lock; 20];
     LiveCellInfo {
         capacity: 200_00000000,
-        occupied_capacity: 61_00000000,
         lock_code_hash: code,
         lock_hash_type: 1,
         lock_args: args,

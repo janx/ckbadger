@@ -36,7 +36,6 @@ fn make_live_cell(
             type_hash_type: type_seed.map(|_| 1),
             type_args: type_seed.map(|seed| vec![seed]),
             data_size,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         },

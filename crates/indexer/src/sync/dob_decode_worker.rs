@@ -1783,7 +1783,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: decoder_binary.len() as i32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: Some(expected_hash),
         };

@@ -1373,10 +1373,8 @@ fn seed_spore_cell(
 ) {
     let lock_code = [0x41; 32];
     let lock_args = vec![0x02; 20];
-    let type_bytes = if type_code.is_some() { 33 + 32 } else { 0 };
     let cell = LiveCellInfo {
         capacity: 300_00000000,
-        occupied_capacity: (8 + 33 + 20 + type_bytes) as i64 * 100_000_000,
         lock_code_hash: lock_code,
         lock_hash_type: 1,
         lock_args,

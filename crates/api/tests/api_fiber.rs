@@ -331,7 +331,6 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
     assert_ne!(empty_data_hash, vec![0; 32]);
     let previous_cell = LiveCellInfo {
         capacity: 100_000_000_000,
-        occupied_capacity: 6_100_000_000,
         lock_code_hash: owner_code,
         lock_hash_type: 1,
         lock_args: owner_args,
@@ -344,7 +343,6 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
     };
     let funding_cell = LiveCellInfo {
         capacity: 30_000_000_000,
-        occupied_capacity: 6_100_000_000,
         lock_code_hash: funding_code.try_into().unwrap(),
         lock_hash_type: 1,
         lock_args: funding_args.clone(),
@@ -579,7 +577,6 @@ async fn fiber_force_close_evidence_serializes_decoded_commitment_delay() {
         ckbadger_indexer::parser::script::ScriptParser::compute_data_hash(&[]).to_vec();
     let cell = |code: &[u8], args: &[u8], capacity: i64| LiveCellInfo {
         capacity,
-        occupied_capacity: i64::try_from(8 + 33 + args.len()).unwrap() * 100_000_000,
         lock_code_hash: code.to_vec().try_into().unwrap(),
         lock_hash_type: 1,
         lock_args: args.to_vec(),

@@ -1208,7 +1208,6 @@ mod tests {
                     type_hash_type: None,
                     type_args: None,
                     data_size: 0,
-                    occupied_capacity: 1,
                     udt_amount: None,
                     data_hash: None,
                 },

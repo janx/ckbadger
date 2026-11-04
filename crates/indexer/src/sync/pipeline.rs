@@ -1669,14 +1669,7 @@ impl Indexer {
                                 return;
                             }
                         };
-                        let occupied_capacity = occupied_capacity_shannons_i64(
-                            cell.lock_args.len(),
-                            cell.type_args.as_ref().map(|args| args.len()),
-                            cell.data_size,
-                        );
-                        let live_cell_info = match cell
-                            .to_live_cell_info(occupied_capacity, udt_amount)
-                        {
+                        let live_cell_info = match cell.to_live_cell_info(udt_amount) {
                             Ok(info) => info,
                             Err(e) => {
                                 record_worker_exit_reason(
@@ -2077,7 +2070,7 @@ impl Indexer {
                                     .entry(lock_script_hash.clone())
                                     .or_default() += 1;
                                 *tx_occupied_changes.entry(lock_script_hash).or_default() -=
-                                    i128::from(info.occupied_capacity);
+                                    i128::from(info.occupied_capacity());
                                 // script usage - inputs
                                 let lock_key = (info.lock_code_hash.to_vec(), false);
                                 let lock_hash_type = match parse_script_reference_hash_type(
@@ -2103,19 +2096,19 @@ impl Indexer {
                                     .or_insert((0, 0, 0, 0, 0, 0));
                                 reference_entry.1 -= 1;
                                 reference_entry.3 -= i128::from(info.capacity);
-                                reference_entry.5 -= i128::from(info.occupied_capacity);
+                                reference_entry.5 -= i128::from(info.occupied_capacity());
                                 let entry = script_usage_changes
                                     .entry(lock_key)
                                     .or_insert((0, 0, 0, 0, 0, 0));
                                 entry.1 -= 1;
                                 entry.3 -= i128::from(info.capacity);
-                                entry.5 -= i128::from(info.occupied_capacity);
+                                entry.5 -= i128::from(info.occupied_capacity());
                                 accumulate_daily!(
                                     script_daily_changes,
                                     tx_data.block_number,
                                     (info.lock_code_hash.to_vec(), lock_hash_type, false),
                                     -i128::from(info.capacity),
-                                    -i128::from(info.occupied_capacity)
+                                    -i128::from(info.occupied_capacity())
                                 );
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_hash_type = match info.type_hash_type {
@@ -2157,19 +2150,19 @@ impl Indexer {
                                         .or_insert((0, 0, 0, 0, 0, 0));
                                     reference_entry.1 -= 1;
                                     reference_entry.3 -= i128::from(info.capacity);
-                                    reference_entry.5 -= i128::from(info.occupied_capacity);
+                                    reference_entry.5 -= i128::from(info.occupied_capacity());
                                     let entry = script_usage_changes
                                         .entry(type_key)
                                         .or_insert((0, 0, 0, 0, 0, 0));
                                     entry.1 -= 1;
                                     entry.3 -= i128::from(info.capacity);
-                                    entry.5 -= i128::from(info.occupied_capacity);
+                                    entry.5 -= i128::from(info.occupied_capacity());
                                     accumulate_daily!(
                                         script_daily_changes,
                                         tx_data.block_number,
                                         (type_code_hash.to_vec(), type_hash_type, true),
                                         -i128::from(info.capacity),
-                                        -i128::from(info.occupied_capacity)
+                                        -i128::from(info.occupied_capacity())
                                     );
                                 }
                                 if let Some(type_script_hash) = token_daily_member(
@@ -2180,7 +2173,7 @@ impl Indexer {
                                     tx_token_daily_members.push(token_daily_consumed(
                                         type_script_hash,
                                         info.capacity,
-                                        info.occupied_capacity,
+                                        info.occupied_capacity(),
                                     ));
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
@@ -2221,7 +2214,7 @@ impl Indexer {
                                                 tx_data.block_number,
                                                 index.spore_id.clone(),
                                                 -i128::from(info.capacity),
-                                                -i128::from(info.occupied_capacity)
+                                                -i128::from(info.occupied_capacity())
                                             );
 
                                             {
@@ -2234,7 +2227,7 @@ impl Indexer {
                                                     tx_data.block_number,
                                                     effective_cluster_id,
                                                     -i128::from(info.capacity),
-                                                    -i128::from(info.occupied_capacity)
+                                                    -i128::from(info.occupied_capacity())
                                                 );
                                             }
                                         }
@@ -2248,7 +2241,7 @@ impl Indexer {
                                             tx_data.block_number,
                                             collection_id,
                                             -i128::from(info.capacity),
-                                            -i128::from(info.occupied_capacity)
+                                            -i128::from(info.occupied_capacity())
                                         );
                                     }
                                 }
@@ -4431,7 +4424,6 @@ mod tests {
                 type_hash_type: hash_type,
                 type_args: None,
                 data_size: 0,
-                occupied_capacity: 0,
                 udt_amount: None,
                 data_hash: None,
             };

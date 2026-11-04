@@ -39,7 +39,6 @@ use crate::AppState;
 use ckbadger_indexer::parser::registry::{ProtocolScript, PROTOCOL_REGISTRY};
 use ckbadger_store::{keys, CkbadgerStore};
 
-const SHANNONS_PER_CKB: i64 = 100_000_000;
 // All protocol detection (DAO / sUDT / xUDT / .bit-account / mNFT issuer·class·token /
 // Spore NFT / Spore Cluster) is delegated to the shared network-agnostic
 // `ckbadger_indexer::parser::registry::PROTOCOL_REGISTRY`, which covers mainnet + testnet.
@@ -2302,25 +2301,6 @@ fn cell_info_to_response(
         && ckbadger_common::burn_policy::burn_policy(network)
             .is_some_and(|p| info.lock_args.as_slice() == p.lock_args);
     let breakdown = estimated_occupied_capacity_breakdown(info);
-    let expected_occupied = breakdown
-        .total_bytes
-        .checked_mul(SHANNONS_PER_CKB)
-        .ok_or_else(|| {
-            ApiError::internal(format!(
-                "cell {}:{} occupied capacity overflow",
-                hex::encode(tx_hash),
-                output_index
-            ))
-        })?;
-    if info.occupied_capacity != expected_occupied {
-        return Err(ApiError::internal(format!(
-            "cell {}:{} indexed occupied capacity {} differs from exact anatomy {}",
-            hex::encode(tx_hash),
-            output_index,
-            info.occupied_capacity,
-            expected_occupied
-        )));
-    }
     let address = script_to_address(
         &info.lock_code_hash,
         info.lock_hash_type,
@@ -2359,7 +2339,7 @@ fn cell_info_to_response(
         tx_hash: format!("0x{}", hex::encode(tx_hash)),
         output_index: output_index as i32,
         capacity: info.capacity.to_string(),
-        occupied_capacity: info.occupied_capacity.to_string(),
+        occupied_capacity: info.occupied_capacity().to_string(),
         common_knowledge_size_breakdown: breakdown,
         lock_script_hash: format!("0x{}", hex::encode(info.lock_script_hash())),
         address,
@@ -3847,11 +3827,6 @@ async fn get_cell(
     // `canonical_version_at` encoded (and failed on, naming the outpoint).
     let address = Some(owner_address);
 
-    if info.data_size < 0 {
-        return Err(ApiError::internal(format!(
-            "negative data size for {outpoint}"
-        )));
-    }
     let node_tx = if let Some(reader) = state.ckb_store.as_ref() {
         let hash: [u8; 32] = hash_bytes.as_slice().try_into().expect("validated hash");
         Some(reader.get_transaction(&hash).ok_or_else(|| {
@@ -4044,17 +4019,7 @@ async fn get_cell(
     }
 
     let occupied_capacity_breakdown = estimated_occupied_capacity_breakdown(&info);
-    let expected_occupied = occupied_capacity_breakdown
-        .total_bytes
-        .checked_mul(SHANNONS_PER_CKB)
-        .ok_or_else(|| ApiError::internal(format!("cell {outpoint} occupied capacity overflow")))?;
-    if info.occupied_capacity != expected_occupied {
-        return Err(ApiError::internal(format!(
-            "cell {outpoint} indexed occupied capacity {} differs from exact anatomy {}",
-            info.occupied_capacity, expected_occupied
-        )));
-    }
-    let occupied_capacity = info.occupied_capacity;
+    let occupied_capacity = info.occupied_capacity();
 
     let is_satoshi = info.created_at_block == 0
         && ckbadger_common::burn_policy::burn_policy(&state.ckb_network)
@@ -5033,7 +4998,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 6_100_000_000,
             udt_amount: None,
             data_hash: None,
         }

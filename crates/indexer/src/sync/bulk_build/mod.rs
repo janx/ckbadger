@@ -6029,7 +6029,6 @@ fn cell_facts_to_live_cell_info(
             .type_args_id
             .map(|id| interner.resolve_bytes(id).to_vec()),
         data_size: cell.data_size,
-        occupied_capacity: cell.occupied_capacity,
         udt_amount: cell.udt_amount,
         data_hash: cell.data_hash,
     })

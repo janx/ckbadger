@@ -298,11 +298,11 @@ impl Indexer {
                                     input.previous_output_index
                                 )
                             })?;
-                        tracker.cell_consumed(info.occupied_capacity)?;
+                        tracker.cell_consumed(info.occupied_capacity())?;
 
                         let lock_hash = info.cell.lock_script_hash().to_vec();
                         let entry = tx_addr_deltas.entry(lock_hash).or_insert((0, 0));
-                        entry.0 -= info.occupied_capacity as i128; // used_capacity_delta
+                        entry.0 -= info.occupied_capacity() as i128; // used_capacity_delta
                         entry.1 -= info.capacity as i128; // balance_delta
                     }
                 }

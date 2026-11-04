@@ -1101,7 +1101,7 @@ impl CkbadgerStore {
         for cell in cells.values() {
             stats.cells_count += 1;
             stats.total_capacity += cell.capacity as i128;
-            stats.total_used_capacity += cell.occupied_capacity as i128;
+            stats.total_used_capacity += cell.occupied_capacity() as i128;
         }
         Ok(())
     }
@@ -1121,7 +1121,7 @@ mod tests {
     }
 
     /// The type script's args tell fixtures apart: its hash is derived.
-    fn make_cell(capacity: i64, occupied: i64, type_args: &[u8]) -> LiveCellInfo {
+    fn make_cell(capacity: i64, type_args: &[u8]) -> LiveCellInfo {
         LiveCellInfo {
             capacity,
             lock_code_hash: [0xBB; 32],
@@ -1131,7 +1131,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(type_args.to_vec()),
             data_size: 0,
-            occupied_capacity: occupied,
             udt_amount: None,
             data_hash: None,
         }
@@ -1141,8 +1140,8 @@ mod tests {
     fn tx_output_payloads_are_one_batched_read_in_output_order() {
         let (_dir, store) = test_store();
         let tx = [0x42; 32];
-        insert_cell(&store, &tx, 0, &make_cell(100, 61, &[0x01; 32]));
-        insert_cell(&store, &tx, 2, &make_cell(300, 61, &[0x01; 32]));
+        insert_cell(&store, &tx, 0, &make_cell(100, &[0x01; 32]));
+        insert_cell(&store, &tx, 2, &make_cell(300, &[0x01; 32]));
         store.reset_read_call_counters();
         let payloads = store.get_tx_output_payloads(&tx, 3).unwrap();
         assert_eq!(store.read_call_counts(), (0, 1));
@@ -1223,7 +1222,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         }
@@ -1623,7 +1621,7 @@ mod tests {
     fn test_aggregate_token_cell_stats_single_cell() {
         let (_dir, store) = test_store();
         let tx_hash = [0x11u8; 32];
-        let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
+        let cell = make_cell(200_00000000, &[0x01; 32]);
         let type_hash = cell.type_script_hash().unwrap();
         insert_cell(&store, &tx_hash, 0, &cell);
 
@@ -1632,7 +1630,8 @@ mod tests {
             .unwrap();
         assert_eq!(stats.cells_count, 1);
         assert_eq!(stats.total_capacity, 200_00000000);
-        assert_eq!(stats.total_used_capacity, 61_00000000);
+        // Derived: 8 + 33 (empty lock args) + 33 + 32 (type args), no data.
+        assert_eq!(stats.total_used_capacity, 106_00000000);
     }
 
     #[test]
@@ -1641,15 +1640,16 @@ mod tests {
         let type_args = [0x01u8; 32];
 
         let tx1 = [0x11u8; 32];
-        let cell1 = make_cell(200_00000000, 61_00000000, &type_args);
+        let cell1 = make_cell(200_00000000, &type_args);
         insert_cell(&store, &tx1, 0, &cell1);
 
         let tx2 = [0x22u8; 32];
-        let cell2 = make_cell(300_00000000, 80_00000000, &type_args);
+        let mut cell2 = make_cell(300_00000000, &type_args);
+        cell2.data_size = 19;
         insert_cell(&store, &tx2, 0, &cell2);
 
         let tx3 = [0x33u8; 32];
-        let cell3 = make_cell(150_00000000, 61_00000000, &type_args);
+        let cell3 = make_cell(150_00000000, &type_args);
         insert_cell(&store, &tx3, 1, &cell3);
         let type_hash = cell1.type_script_hash().unwrap();
 
@@ -1658,18 +1658,19 @@ mod tests {
             .unwrap();
         assert_eq!(stats.cells_count, 3);
         assert_eq!(stats.total_capacity, 650_00000000);
-        assert_eq!(stats.total_used_capacity, 202_00000000);
+        // 106 CKB per cell, plus 19 data bytes on the second.
+        assert_eq!(stats.total_used_capacity, (3 * 106 + 19) * 100_000_000);
     }
 
     #[test]
     fn test_aggregate_token_cell_stats_different_types_isolated() {
         let (_dir, store) = test_store();
         let tx1 = [0x11u8; 32];
-        let cell1 = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
+        let cell1 = make_cell(200_00000000, &[0x01; 32]);
         insert_cell(&store, &tx1, 0, &cell1);
 
         let tx2 = [0x22u8; 32];
-        let cell2 = make_cell(500_00000000, 100_00000000, &[0x02; 32]);
+        let cell2 = make_cell(500_00000000, &[0x02; 32]);
         insert_cell(&store, &tx2, 0, &cell2);
         let type_a = cell1.type_script_hash().unwrap();
         let type_b = cell2.type_script_hash().unwrap();
@@ -1687,7 +1688,7 @@ mod tests {
     fn test_get_consumed_cell_info_returns_consumer_metadata() {
         let (_dir, store) = test_store();
         let type_hash = [0x01u8; 32];
-        let consumed_cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        let consumed_cell = make_cell(200_00000000, &type_hash);
         let tx_hash = [0x11u8; 32];
         let consumed_by_tx = [0x22u8; 32];
 
@@ -1757,7 +1758,7 @@ mod tests {
     fn test_get_consumed_cells_batch_fails_when_marker_has_no_canonical_cell() {
         let (_dir, store) = test_store();
         let tx_hash = [0xDE; 32];
-        let cell = make_cell(123_00000000, 61_00000000, &[0x01; 32]);
+        let cell = make_cell(123_00000000, &[0x01; 32]);
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, 0, &cell, 100);
@@ -1779,7 +1780,7 @@ mod tests {
     fn test_get_consumed_cell_meta_batch_returns_consumer_metadata() {
         let (_dir, store) = test_store();
         let type_hash = [0x01u8; 32];
-        let consumed_cell = make_cell(200_00000000, 61_00000000, &type_hash);
+        let consumed_cell = make_cell(200_00000000, &type_hash);
         let tx_hash = [0x11u8; 32];
         let consumed_by_tx = [0x22u8; 32];
 
@@ -1830,7 +1831,7 @@ mod tests {
         let (_dir, store) = test_store();
         let tx_hash = [0xEF; 32];
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
-        let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
+        let cell = make_cell(200_00000000, &[0x01; 32]);
         let legacy = crate::types::v1_layout::ConsumedCellInfoV1 {
             cell: crate::types::v1_layout::LiveCellInfoV1::from_v2(&cell),
             consumed_at_block: 123,
@@ -1871,7 +1872,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 50,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         };
@@ -1914,7 +1914,6 @@ mod tests {
             type_hash_type: type_args.map(|_| 1),
             type_args: type_args.map(<[u8]>::to_vec),
             data_size: 50,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         }

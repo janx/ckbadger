@@ -37,7 +37,6 @@ fn cell(id: &[u8], capacity: i64, owner: u8) -> LiveCellInfo {
     let type_code = [0x42; 32];
     LiveCellInfo {
         capacity,
-        occupied_capacity: 114_00000000,
         lock_code_hash: code,
         lock_hash_type: 1,
         lock_args: args,
@@ -190,7 +189,6 @@ async fn did_protocol_reads_original_local_cbor_and_rejects_missing_node() {
     raw.extend(&cbor);
     let mut payload = cell(&id, 320_00000000, 1);
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity += (raw.len() as i64) * 100_000000;
     payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let lock = packed::Script::new_builder()
         .code_hash(packed::Byte32::from_slice(&payload.lock_code_hash).unwrap())
@@ -354,10 +352,9 @@ async fn spore_genetics_fixture_seeded(
             .unwrap(),
         );
         payload.data_size = raw.len() as i32;
-        payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
         payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
         owned += i128::from(payload.capacity);
-        occupied += i128::from(payload.occupied_capacity);
+        occupied += i128::from(payload.occupied_capacity());
         let script = |code: &[u8], args: Vec<u8>| {
             packed::Script::new_builder()
                 .code_hash(packed::Byte32::from_slice(code).unwrap())
@@ -403,7 +400,7 @@ async fn spore_genetics_fixture_seeded(
                 20231115,
                 &SporeDailyDelta {
                     owned_capacity_delta: i128::from(payload.capacity),
-                    owned_knowledge_delta: i128::from(payload.occupied_capacity),
+                    owned_knowledge_delta: i128::from(payload.occupied_capacity()),
                 },
             )
             .unwrap();
@@ -509,7 +506,6 @@ async fn spore_genetics_fixture_seeded(
     let mut payload = cell(&cluster, 1000_00000000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
     payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
@@ -789,7 +785,6 @@ async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Ve
     let with_type = |id: &[u8], owner: u8, type_code: u8| {
         let mut payload = cell(id, 300_00000000, owner);
         payload.type_code_hash = Some([type_code; 32]);
-        payload.occupied_capacity = ((8 + 53 + 33 + id.len()) as i64) * 100_000000;
         payload
     };
     let token_cell = with_type(&token_id, 2, 0x42);
@@ -1214,8 +1209,6 @@ async fn protocol_fixture(
         payload.lock_args = args;
     }
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity =
-        ((8 + 33 + payload.lock_args.len() + 33 + id.len() + raw.len()) as i64) * 100_000000;
     payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: Vec<u8>| {
         packed::Script::new_builder()
@@ -1368,8 +1361,6 @@ fn seed_item_versions(
         let mut payload = cell(id, 1000_00000000, 1);
         payload.type_code_hash = Some(type_code);
         payload.data_size = version.data.len() as i32;
-        payload.occupied_capacity =
-            ((8 + 53 + 33 + id.len() + version.data.len()) as i64) * 100_000000;
         payload.data_hash = Some(
             ckb_hash::blake2b_256(&version.data)
                 .to_vec()
@@ -2667,7 +2658,6 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
     let mut payload = cell(&id, 1000_00000000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
     payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
@@ -2881,7 +2871,6 @@ async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
     let mut payload = cell(&args, 10_000_000_000_000, 1);
     payload.type_code_hash = Some(code.clone().try_into().unwrap());
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
     payload.data_hash = Some(if matches!(case, DecoderCellCase::WrongDataHash) {
         [0x99; 32]
     } else {

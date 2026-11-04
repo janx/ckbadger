@@ -880,7 +880,6 @@ mod tests {
             type_hash_type: None,
             type_args: Some(vec![0x11; 20]),
             data_size: 16,
-            occupied_capacity: 0,
             udt_amount: Some(1234),
             data_hash: None,
         };
@@ -932,7 +931,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x11; 20]),
             data_size: 16,
-            occupied_capacity: 0,
             udt_amount: Some(1234),
             data_hash: None,
         };
@@ -980,7 +978,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x99; 32]),
             data_size: 16,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -1038,7 +1035,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x11; 32]),
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -1100,7 +1096,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x21; 32]),
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };

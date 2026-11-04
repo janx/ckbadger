@@ -38,7 +38,6 @@ fn seeded_cell() -> LiveCellInfo {
         type_args: Some(vec![]),
         data_size: 0,
         // 8-byte capacity + two 33-byte scripts, with empty args and data.
-        occupied_capacity: 74_00000000,
         udt_amount: None,
         data_hash: None,
     }

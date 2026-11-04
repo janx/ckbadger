@@ -226,7 +226,6 @@ mod tests {
                     .as_ref()
                     .map(|script| script.args().raw_data().to_vec()),
                 data_size: 0,
-                occupied_capacity: 0,
                 udt_amount: None,
                 data_hash: None,
             };

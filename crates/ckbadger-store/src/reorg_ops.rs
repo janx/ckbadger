@@ -1437,7 +1437,7 @@ fn reverse_created_consumed_cell_totals(
         })?;
     lock.4 = lock
         .4
-        .checked_sub(i128::from(cell.occupied_capacity))
+        .checked_sub(i128::from(cell.occupied_capacity()))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "lock script created used delta overflow during rollback: code_hash=0x{}",
@@ -1466,7 +1466,7 @@ fn reverse_created_consumed_cell_totals(
             })?;
         type_entry.4 = type_entry
             .4
-            .checked_sub(i128::from(cell.occupied_capacity))
+            .checked_sub(i128::from(cell.occupied_capacity()))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "type script created used delta overflow during rollback: code_hash=0x{}",
@@ -1507,13 +1507,13 @@ fn accumulate_cell_deltas(
     hodl_capacity_deltas: &mut HashMap<i64, i128>,
 ) -> anyhow::Result<()> {
     let cap = cell.capacity as i128 * sign;
-    let occ = cell.occupied_capacity as i128 * sign;
+    let occ = cell.occupied_capacity() as i128 * sign;
     let live_d = sign as i32;
 
     // cell distribution bucket: live cell count and capacity per size bucket.
     // sign=+1 when restoring a consumed cell (add back to bucket),
     // sign=-1 when removing a created cell (subtract from bucket).
-    let bucket = cell_dist_size_bucket(cell.occupied_capacity);
+    let bucket = cell_dist_size_bucket(cell.occupied_capacity());
     cell_dist_count_deltas[bucket] += live_d as i64;
     cell_dist_capacity_deltas[bucket] += occ;
 
@@ -2764,13 +2764,13 @@ impl CkbadgerStore {
                         *hour_cap_deltas.entry(hour_str.clone()).or_default() +=
                             cell.capacity as i128;
                     }
-                    e.1 += cell.occupied_capacity as i128; // used_capacity_created
+                    e.1 += cell.occupied_capacity() as i128; // used_capacity_created
                     e.3 += cell.data_size as i64; // data_size_created
                 }
                 if let Some(consumed_block) = consumed_at_block {
                     if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
                         let e = date_cap_deltas.entry(date_str.clone()).or_default();
-                        e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
+                        e.2 += cell.occupied_capacity() as i128; // used_capacity_consumed
                         e.4 += cell.data_size as i64; // data_size_consumed
                     }
                 }
@@ -6118,7 +6118,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("fixture lock capacity overflow"))?;
             lock.2 = lock
                 .2
-                .checked_add(i128::from(cell.occupied_capacity))
+                .checked_add(i128::from(cell.occupied_capacity()))
                 .ok_or_else(|| anyhow::anyhow!("fixture lock occupied overflow"))?;
             let lock_hash_type = u8::try_from(cell.lock_hash_type).map_err(|_| {
                 anyhow::anyhow!(
@@ -6148,7 +6148,7 @@ mod tests {
             )?;
             lock_ref.lock_used_capacity_sum = checked_rollback_script_i128(
                 lock_ref.lock_used_capacity_sum,
-                i128::from(cell.occupied_capacity),
+                i128::from(cell.occupied_capacity()),
                 &cell.lock_code_hash,
                 "fixture.reference.lock_used_capacity_sum",
             )?;
@@ -6167,7 +6167,7 @@ mod tests {
                 )?;
                 lock_ref.lock_owned_knowledge_sum = checked_rollback_script_i128(
                     lock_ref.lock_owned_knowledge_sum,
-                    i128::from(cell.occupied_capacity),
+                    i128::from(cell.occupied_capacity()),
                     &cell.lock_code_hash,
                     "fixture.reference.lock_owned_knowledge_sum",
                 )?;
@@ -6184,7 +6184,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("fixture type capacity overflow"))?;
                 type_total.5 = type_total
                     .5
-                    .checked_add(i128::from(cell.occupied_capacity))
+                    .checked_add(i128::from(cell.occupied_capacity()))
                     .ok_or_else(|| anyhow::anyhow!("fixture type occupied overflow"))?;
                 let hash_type = u8::try_from(cell.type_hash_type.ok_or_else(|| {
                     anyhow::anyhow!(
@@ -6219,7 +6219,7 @@ mod tests {
                 )?;
                 type_ref.type_used_capacity_sum = checked_rollback_script_i128(
                     type_ref.type_used_capacity_sum,
-                    i128::from(cell.occupied_capacity),
+                    i128::from(cell.occupied_capacity()),
                     code_hash,
                     "fixture.reference.type_used_capacity_sum",
                 )?;
@@ -6238,7 +6238,7 @@ mod tests {
                     )?;
                     type_ref.type_owned_knowledge_sum = checked_rollback_script_i128(
                         type_ref.type_owned_knowledge_sum,
-                        i128::from(cell.occupied_capacity),
+                        i128::from(cell.occupied_capacity()),
                         code_hash,
                         "fixture.reference.type_owned_knowledge_sum",
                     )?;
@@ -7405,7 +7405,6 @@ mod tests {
                     type_hash_type: None,
                     type_args: None,
                     data_size: 0,
-                    occupied_capacity: 6_100_000_000,
                     udt_amount: None,
                     data_hash: None,
                 },
@@ -8737,7 +8736,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 500,
             udt_amount: None,
             data_hash: None,
         };
@@ -8830,7 +8828,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 400,
             udt_amount: None,
             data_hash: None,
         };
@@ -8843,7 +8840,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
@@ -8894,7 +8890,7 @@ mod tests {
             &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(rollback_output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -8907,7 +8903,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 200,
-                lock_owned_knowledge_sum: 200,
+                lock_owned_knowledge_sum: i128::from(rollback_output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -8986,7 +8982,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: capacity,
             udt_amount: None,
             data_hash: None,
         };
@@ -9127,7 +9122,7 @@ mod tests {
             &addr_b,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9142,7 +9137,7 @@ mod tests {
             &addr_c,
             &AddressBalance {
                 balance: 500,
-                used_capacity: 500,
+                used_capacity: i128::from(cellbase_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9160,7 +9155,8 @@ mod tests {
                 hash_type: 1,
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 700,
-                lock_owned_knowledge_sum: 700,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity())
+                    + i128::from(cellbase_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -9254,7 +9250,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: capacity,
             udt_amount: None,
             data_hash: None,
         };
@@ -9288,6 +9283,8 @@ mod tests {
         batch.delete_cell(&cellbase_1, 0);
         batch.put_cell(&cellbase_2, 0, &cell(500, &miner), 2);
         batch.put_cell(&spend, 0, &cell(500, &receiver), 2);
+        // Every fixture cell has 32 bytes of lock args, so one occupied capacity.
+        let occupied = i128::from(cell(500, &miner).occupied_capacity());
         // The fixture's lock args name the owners; their addresses are the derived hashes.
         let miner = cell(500, &miner).lock_script_hash().to_vec();
         let receiver = cell(500, &receiver).lock_script_hash().to_vec();
@@ -9321,7 +9318,7 @@ mod tests {
             &miner,
             &AddressBalance {
                 balance: 500,
-                used_capacity: 500,
+                used_capacity: occupied,
                 live_cells_count: 1,
                 total_cells_count: 2,
                 txs_count: 3,
@@ -9336,7 +9333,7 @@ mod tests {
             &receiver,
             &AddressBalance {
                 balance: 500,
-                used_capacity: 500,
+                used_capacity: occupied,
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9354,7 +9351,7 @@ mod tests {
                 hash_type: 1,
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 1000,
-                lock_owned_knowledge_sum: 1000,
+                lock_owned_knowledge_sum: 2 * occupied,
                 ..Default::default()
             },
         );
@@ -9473,7 +9470,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: capacity,
             udt_amount: None,
             data_hash: None,
         };
@@ -9513,7 +9509,7 @@ mod tests {
             &addr_a,
             &AddressBalance {
                 balance: 600,
-                used_capacity: 600,
+                used_capacity: 2 * i128::from(make_cell(0).occupied_capacity()),
                 live_cells_count: 2,
                 total_cells_count: 2,
                 txs_count: 2,
@@ -9532,7 +9528,7 @@ mod tests {
                 hash_type: 1,
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 600,
-                lock_owned_knowledge_sum: 600,
+                lock_owned_knowledge_sum: 2 * i128::from(make_cell(0).occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -9627,7 +9623,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(100),
             data_hash: None,
         };
@@ -9696,7 +9691,7 @@ mod tests {
             &lock_b,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9709,7 +9704,7 @@ mod tests {
                 code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -9719,7 +9714,7 @@ mod tests {
                 code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
-                type_owned_knowledge_sum: 100,
+                type_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -9940,7 +9935,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 400,
             udt_amount: None,
             data_hash: None,
         };
@@ -9953,7 +9947,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
@@ -10003,7 +9996,7 @@ mod tests {
             &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -10016,7 +10009,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 200,
-                lock_owned_knowledge_sum: 200,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -10110,7 +10103,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(100),
             data_hash: None,
         };
@@ -10123,7 +10115,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(100),
             data_hash: None,
         };
@@ -10163,7 +10154,7 @@ mod tests {
             &lock_b,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -10176,7 +10167,7 @@ mod tests {
                 code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -10186,7 +10177,7 @@ mod tests {
                 code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
-                type_owned_knowledge_sum: 100,
+                type_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -10317,7 +10308,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
@@ -10330,7 +10320,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
@@ -10370,7 +10359,7 @@ mod tests {
             &lock_b,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -10383,7 +10372,7 @@ mod tests {
                 code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -10393,7 +10382,7 @@ mod tests {
                 code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
-                type_owned_knowledge_sum: 100,
+                type_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -10532,7 +10521,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
@@ -10545,7 +10533,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
@@ -10721,7 +10708,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 400,
             udt_amount: None,
             data_hash: None,
         };
@@ -10734,7 +10720,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
@@ -10747,7 +10732,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 180,
             udt_amount: None,
             data_hash: None,
         };
@@ -10804,7 +10788,7 @@ mod tests {
             &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(rollback_output_cell_a.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 ..Default::default()
@@ -10814,7 +10798,7 @@ mod tests {
             &lock_cc,
             &AddressBalance {
                 balance: 180,
-                used_capacity: 180,
+                used_capacity: i128::from(rollback_output_cell_b.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 ..Default::default()
@@ -10826,7 +10810,8 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 380,
-                lock_owned_knowledge_sum: 380,
+                lock_owned_knowledge_sum: i128::from(rollback_output_cell_a.occupied_capacity())
+                    + i128::from(rollback_output_cell_b.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -11095,7 +11080,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
@@ -11124,7 +11108,7 @@ mod tests {
             &lock_aa,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -11138,7 +11122,7 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -11205,7 +11189,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
@@ -11218,7 +11201,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
@@ -11231,7 +11213,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 300,
             udt_amount: None,
             data_hash: None,
         };
@@ -11263,7 +11244,7 @@ mod tests {
             &lock_aa,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(keep_cell.occupied_capacity()),
                 live_cells_count: 1,
                 ..Default::default()
             },
@@ -11272,7 +11253,7 @@ mod tests {
             &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(drop_live_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 first_seen_block: 2,
@@ -11301,10 +11282,11 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 300,
-                lock_owned_knowledge_sum: 300,
+                lock_owned_knowledge_sum: i128::from(keep_cell.occupied_capacity())
+                    + i128::from(drop_live_cell.occupied_capacity()),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 200,
-                type_owned_knowledge_sum: 200,
+                type_owned_knowledge_sum: i128::from(drop_live_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -11768,7 +11750,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
@@ -11866,7 +11847,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
@@ -12488,7 +12468,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 142_00000000,
             udt_amount: Some(amount),
             data_hash: None,
         };
@@ -12543,7 +12522,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 6_100_000_000,
             udt_amount: None,
             data_hash: None,
         };
@@ -12602,7 +12580,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
@@ -12610,13 +12587,15 @@ mod tests {
         let mut script = HashMap::new();
         reverse_created_consumed_cell_totals(&cell, &mut address, &mut script).unwrap();
         assert_eq!(address[cell.lock_script_hash().as_slice()], (0, 0, 0, -1));
+        // Occupied is derived: 8 + 33 (no lock args) + 33 (no type args) bytes.
+        assert_eq!(cell.occupied_capacity(), 74_00000000);
         assert_eq!(
             script[&(cell.lock_code_hash.to_vec(), 1, false)],
-            (-1, 0, -200, 0, -100, 0)
+            (-1, 0, -200, 0, -74_00000000, 0)
         );
         assert_eq!(
             script[&(cell.type_code_hash.unwrap().to_vec(), 1, true)],
-            (-1, 0, -200, 0, -100, 0)
+            (-1, 0, -200, 0, -74_00000000, 0)
         );
     }
 
@@ -14283,7 +14262,6 @@ mod tests {
                     type_hash_type: None,
                     type_args: None,
                     data_size: 0,
-                    occupied_capacity: 6_100_000_000,
                     udt_amount: None,
                     data_hash: None,
                 },

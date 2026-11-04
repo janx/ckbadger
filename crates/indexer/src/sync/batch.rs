@@ -189,7 +189,7 @@ fn resolve_consumed_stats(
                     )
                 })?;
             data_size_consumed += i64::from(info.data_size);
-            used_capacity_consumed += i128::from(info.occupied_capacity);
+            used_capacity_consumed += i128::from(info.occupied_capacity());
         }
     }
     Ok((data_size_consumed, used_capacity_consumed))
@@ -640,7 +640,7 @@ fn build_activity_input_views<'a>(
                 lock_hash_type: info.lock_hash_type,
                 lock_args: &info.lock_args,
                 capacity: info.capacity,
-                occupied_capacity: info.occupied_capacity,
+                occupied_capacity: info.occupied_capacity(),
                 type_code_hash: info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
                 type_hash_type: info.type_hash_type,
                 type_script_hash: type_script_hash.as_ref().map(|hash| hash.as_slice()),
@@ -4779,7 +4779,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 1,
             udt_amount: None,
             data_hash: None,
         }
@@ -4873,7 +4872,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_000_000,
             udt_amount: None,
             data_hash: Some(plain.data_hash),
         };
@@ -5174,7 +5172,6 @@ mod tests {
 
         let mut info = dummy_live_cell_info();
         info.capacity = 123;
-        info.occupied_capacity = 456;
         info.data_size = 16;
         info.lock_args = vec![0xAB; 20];
 
@@ -5214,7 +5211,7 @@ mod tests {
         .expect("input lookup should fall back to same-batch cell cache");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].capacity, info.capacity);
-        assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity);
+        assert_eq!(inputs[0].occupied_capacity, info.occupied_capacity());
         assert_eq!(inputs[0].lock_script_hash, info.lock_script_hash());
     }
 
@@ -5392,7 +5389,6 @@ mod tests {
         let key = (DOTBIT_PARITY_PREV_TX.to_vec(), 0i16);
         let mut info = dummy_live_cell_info();
         info.capacity = 300_00000000;
-        info.occupied_capacity = 200_00000000;
         info.lock_args = input.owner.to_vec();
         info.lock_code_hash = DOTBIT_PARITY_LOCK_CODE_HASH;
         info.type_code_hash = Some(dotbit_account_code_hash().try_into().unwrap());
@@ -6157,7 +6153,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
             data_size: 16,
-            occupied_capacity: 0,
             udt_amount: Some(145_203),
             data_hash: None,
         };
@@ -7087,7 +7082,7 @@ mod tests {
                             i128::from(info.capacity);
                         *consumed.entry(lock_script_hash.clone()).or_default() += 1;
                         *used.entry(lock_script_hash).or_default() -=
-                            i128::from(info.occupied_capacity);
+                            i128::from(info.occupied_capacity());
                     }
                 }
                 for cell in &tx_data.cells {
@@ -7238,7 +7233,7 @@ mod tests {
                             members.push(crate::sync::pipeline::token_daily_consumed(
                                 type_hash,
                                 info.capacity,
-                                info.occupied_capacity,
+                                info.occupied_capacity(),
                             ));
                         }
                     }
@@ -7326,7 +7321,7 @@ mod tests {
                                 tx.block_number,
                                 collection_id,
                                 -i128::from(info.capacity),
-                                -i128::from(info.occupied_capacity),
+                                -i128::from(info.occupied_capacity()),
                             )?;
                         }
                     }
@@ -7424,7 +7419,7 @@ mod tests {
                         info.lock_hash_type,
                         false,
                         info.capacity,
-                        info.occupied_capacity,
+                        info.occupied_capacity(),
                         false,
                     )?;
                     if let (Some(code_hash), Some(hash_type)) =
@@ -7435,7 +7430,7 @@ mod tests {
                             hash_type,
                             true,
                             info.capacity,
-                            info.occupied_capacity,
+                            info.occupied_capacity(),
                             false,
                         )?;
                     }
@@ -7457,11 +7452,6 @@ mod tests {
                 for (output_index, cell) in tx_data.cells.iter().enumerate() {
                     let output_index_i16 =
                         checked_usize_to_i16(output_index, "live fee test output index")?;
-                    let occupied_capacity = occupied_capacity_shannons_i64(
-                        cell.lock_args.len(),
-                        cell.type_args.as_ref().map(|args| args.len()),
-                        cell.data_size,
-                    );
                     // Mirror the parser's Pass 1 (`pipeline.rs`): UDT outputs
                     // carry their parsed amount into `batch_cell_infos`, which
                     // is what the write path persists as live cell state.
@@ -7470,7 +7460,7 @@ mod tests {
                     batch_cell_infos.insert(
                         (tx_data.hash.to_vec(), output_index_i16),
                         PositionedCellInfo::new(
-                            cell.to_live_cell_info(occupied_capacity, udt_amount)?,
+                            cell.to_live_cell_info(udt_amount)?,
                             tx_data.block_number,
                         ),
                     );
@@ -11311,7 +11301,7 @@ mod tests {
                     .is_some_and(|hash| hash.as_slice() == type_hash.as_slice())
                 {
                     current_capacity += i128::from(cell.capacity);
-                    current_occupied += i128::from(cell.occupied_capacity);
+                    current_occupied += i128::from(cell.occupied_capacity());
                 }
             }
             assert_eq!(current_capacity, 349_00000000, "both B cells are live");

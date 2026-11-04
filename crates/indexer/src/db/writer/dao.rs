@@ -1050,10 +1050,7 @@ mod tests {
     }
 
     fn cell_info(cell: &ParsedCell, created_at_block: i64) -> PositionedCellInfo {
-        PositionedCellInfo::new(
-            cell.to_live_cell_info(102_00000000, None).unwrap(),
-            created_at_block,
-        )
+        PositionedCellInfo::new(cell.to_live_cell_info(None).unwrap(), created_at_block)
     }
 
     fn ars(blocks: &[(i64, i64)]) -> HashMap<i64, i64> {

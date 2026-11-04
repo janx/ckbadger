@@ -177,13 +177,12 @@ pub(crate) fn canonical_version_at(
         .with_context(|| format!("negative data length: {context}"))?;
     let lock_bytes = 33 + cell.lock_args.len();
     let type_bytes = cell.type_args.as_ref().map_or(0, |args| 33 + args.len());
-    let occupied = i64::try_from(8 + lock_bytes + type_bytes + data_bytes)?
-        .checked_mul(100_000_000)
-        .ok_or_else(|| anyhow!("occupied capacity overflow: {context}"))?;
+    // Derived from the fields above, never stored: only the stored capacity
+    // can disagree with it.
+    let occupied = cell.occupied_capacity();
     ensure!(
-        cell.occupied_capacity == occupied && cell.capacity >= occupied,
-        "cell occupied/capacity mismatch: {context}, stored={} actual={occupied} capacity={}",
-        cell.occupied_capacity,
+        cell.capacity >= occupied,
+        "cell capacity below its occupied capacity: {context}, occupied={occupied} capacity={}",
         cell.capacity
     );
     let owner_address = crate::utils::address::encode_lock_address(

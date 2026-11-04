@@ -1931,7 +1931,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x22; 32]),
             data_size: 16,
-            occupied_capacity: 600,
             udt_amount: Some(1),
             data_hash: None,
         };
@@ -1944,7 +1943,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![0x22; 32]),
             data_size: 16,
-            occupied_capacity: 300,
             udt_amount: Some(1),
             data_hash: None,
         };

@@ -1937,7 +1937,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -1971,7 +1970,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2079,7 +2077,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2210,7 +2207,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2290,7 +2286,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2351,7 +2346,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2414,7 +2408,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2452,7 +2445,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2494,7 +2486,6 @@ mod tests {
             type_hash_type: Some(1),
             type_args: Some(vec![6u8; 32]),
             data_size: 64,
-            occupied_capacity: 10200000000,
             udt_amount: Some(999),
             data_hash: None,
         };
@@ -2537,7 +2528,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2596,7 +2586,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2660,7 +2649,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2867,7 +2855,6 @@ mod tests {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };

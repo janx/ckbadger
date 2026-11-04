@@ -1129,7 +1129,6 @@ fn data_cell(data_size: i32, data_hash: &[u8]) -> ckbadger_store::LiveCellInfo {
         type_hash_type: None,
         type_args: None,
         data_size,
-        occupied_capacity: 61_00000000,
         udt_amount: None,
         data_hash: Some(data_hash.to_vec().try_into().unwrap()),
     }

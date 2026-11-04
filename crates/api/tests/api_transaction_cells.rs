@@ -207,7 +207,6 @@ async fn display_fixture(missing_object: bool, malformed_file: bool) -> (axum::R
             type_hash_type: t.as_ref().map(|_| 2),
             type_args: t.as_ref().map(|s| s.args().raw_data().to_vec()),
             data_size: data[i].len() as i32,
-            occupied_capacity: 0,
             udt_amount: (i == 2).then_some(amount),
             data_hash: None,
         };
@@ -387,7 +386,6 @@ async fn transaction_cells_input_missing_its_type_hash_type_is_never_stored() {
         type_hash_type: None,
         type_args: Some(vec![0x44; 20]),
         data_size: 0,
-        occupied_capacity: 0,
         udt_amount: None,
         data_hash: None,
     };

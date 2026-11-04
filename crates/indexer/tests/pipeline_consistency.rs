@@ -159,11 +159,7 @@ fn precomputed_infos_for_insert(
         .map(|(tx_hash, output_index, cell, created_at_block)| {
             (
                 ((*tx_hash).to_vec(), *output_index),
-                PositionedCellInfo::new(
-                    cell.to_live_cell_info(occupied_capacity_from_cell(cell), None)
-                        .unwrap(),
-                    *created_at_block,
-                ),
+                PositionedCellInfo::new(cell.to_live_cell_info(None).unwrap(), *created_at_block),
             )
         })
         .collect()
@@ -381,12 +377,15 @@ fn test_full_cells_info_no_type_script() {
 }
 
 #[test]
-fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
+fn test_full_cells_info_errors_when_capacity_is_below_the_derived_occupied_capacity() {
+    // The payload stores no occupied capacity; the writer derives it (here
+    // 8 + 33 + 20 + 33 + 20 + 100 bytes = 214 CKB) and refuses a stored cell
+    // whose capacity cannot hold its own fields.
     let (store, writer) = setup_store();
     let tx_hash = vec![0x31u8; 32];
 
-    let legacy_like = LiveCellInfo {
-        capacity: 300_00000000,
+    let underfunded = LiveCellInfo {
+        capacity: 213_00000000,
         lock_code_hash: [0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
@@ -394,19 +393,24 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
         type_hash_type: Some(0),
         type_args: Some(vec![0x55u8; 20]),
         data_size: 100,
-        occupied_capacity: 0,
         udt_amount: None,
         data_hash: None,
     };
 
     let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx_hash, 0, &legacy_like, 1000);
+    batch.put_cell(&tx_hash, 0, &underfunded, 1000);
     batch.commit().unwrap();
 
     let err = writer
         .get_full_cells_info_batch(&[(&tx_hash, 0)])
-        .unwrap_err();
-    assert!(err.to_string().contains("invalid occupied capacity"));
+        .unwrap_err()
+        .to_string();
+    assert!(
+        err.contains("invalid occupied capacity")
+            && err.contains("occupied=21400000000")
+            && err.contains("capacity=21300000000"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -423,7 +427,6 @@ fn test_typed_cell_lacking_type_args_is_never_stored() {
         type_hash_type: Some(0),
         type_args: None,
         data_size: 100,
-        occupied_capacity: 0,
         udt_amount: None,
         data_hash: None,
     };

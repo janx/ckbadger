@@ -321,7 +321,6 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
             type_hash_type: Some(1),
             type_args: Some(vec![0xaa, 0xbb]),
             data_size: 42,
-            occupied_capacity: 138_00000000,
             udt_amount: None,
             data_hash: Some((fixture_data_hash(&[0; 42])).try_into().unwrap()),
         },
@@ -499,7 +498,6 @@ async fn test_dao_cell_missing_deposit_header_is_error() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 6_100_000_000,
             udt_amount: None,
             data_hash: None,
         },
@@ -548,8 +546,6 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
     let lock_code_hash = hex::decode(DOTCELL_ACCOUNT_LOCK_MAINNET).unwrap();
     let type_code_hash = hex::decode(DOTCELL_ACCOUNT_TYPE_MAINNET).unwrap();
     let type_args = hex::decode(DOTCELL_NAMESPACE_ARGS_MAINNET).unwrap();
-    let occupied_capacity =
-        (8 + 33 + 33 + type_args.len() as i64 + i64::from(data_size)) * 100_000_000;
     LiveCellInfo {
         capacity: 240_00000000,
         lock_code_hash: lock_code_hash.try_into().unwrap(),
@@ -559,7 +555,6 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
         type_hash_type: Some(1),
         type_args: Some(type_args),
         data_size,
-        occupied_capacity,
         udt_amount: None,
         data_hash: None,
     }
@@ -718,7 +713,6 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -872,11 +866,6 @@ fn insert_by_script_cell(
         type_hash_type,
         type_args: type_code_hash.map(|_| vec![]),
         data_size: 0,
-        occupied_capacity: if type_code_hash.is_some() {
-            74_00000000
-        } else {
-            41_00000000
-        },
         udt_amount: None,
         data_hash: None,
     };
@@ -1497,7 +1486,6 @@ async fn test_get_address_keeps_exact_hash_type_for_live_address() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -1592,7 +1580,6 @@ fn cell_with(lock_hash_type: i16, type_hash_type: Option<i16>) -> LiveCellInfo {
         type_hash_type,
         type_args: Some(type_args),
         data_size: 42,
-        occupied_capacity: 138_00000000,
         udt_amount: None,
         data_hash: Some((fixture_data_hash(&[0; 42])).try_into().unwrap()),
     }
@@ -1757,7 +1744,6 @@ async fn test_get_cell_fails_fast_when_address_cannot_be_encoded() {
     // that address, so its encoding failure is this one.
     cell.lock_args = vec![0x33; 700];
     cell.capacity = 100_000_000_000;
-    cell.occupied_capacity = (8 + 33 + 700 + 33 + 2 + 42) * 100_000_000;
 
     let (status, json) = get_cell_json(&tx_hash, cell).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
@@ -2480,7 +2466,6 @@ async fn redesign_cell_data_requires_node_bytes() {
             type_hash_type: None,
             type_args: None,
             data_size: 16,
-            occupied_capacity: 7700000000,
             udt_amount: None,
             data_hash: None,
         },
@@ -2582,11 +2567,6 @@ async fn one_output_cell_app(
     };
     let lock_args = lock.args().raw_data().to_vec();
     let type_args = type_.as_ref().map(|t| t.args().raw_data().to_vec());
-    let occupied_bytes = 8
-        + 33
-        + lock_args.len() as i64
-        + type_args.as_ref().map_or(0, |args| 33 + args.len() as i64)
-        + data.len() as i64;
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(
@@ -2602,7 +2582,6 @@ async fn one_output_cell_app(
             type_hash_type: type_.as_ref().map(hash_type),
             type_args,
             data_size: data.len() as i32,
-            occupied_capacity: occupied_bytes * 100_000_000,
             udt_amount: None,
             data_hash: Some(fixture_data_hash(&data).try_into().unwrap()),
         },

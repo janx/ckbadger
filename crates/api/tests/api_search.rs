@@ -384,7 +384,6 @@ async fn test_search_cell_prefix_supports_colon_and_hex_output_index() {
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         },

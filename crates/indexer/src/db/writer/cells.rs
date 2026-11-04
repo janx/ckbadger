@@ -48,74 +48,25 @@ pub fn compute_occupied_capacity_shannons(
     ckbadger_common::dao::occupied_capacity_shannons(data_size, lock_args_len, type_args_len)
 }
 
-fn expected_occupied_capacity_for_cell(
-    info: &LiveCellInfo,
-    tx_hash: &[u8],
-    output_index: i16,
-    source: &str,
-) -> Result<i64> {
-    let data_size_i128 = i128::from(info.data_size);
-    if data_size_i128 < 0 {
-        bail!(
-            "negative data_size while loading {} cell: outpoint=0x{}:{}, data_size={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            info.data_size
-        );
-    }
-
-    // Both callers validate payloads just decoded from the store, and a
-    // decoded payload holds its whole type script or none
-    // (`LiveCellInfo::decode`), so the args are present iff the type script is.
-    let type_args_len = info.type_args.as_ref().map(Vec::len);
-    compute_occupied_capacity_shannons(info.data_size as usize, info.lock_args.len(), type_args_len)
-        .with_context(|| {
-            format!(
-                "while computing occupied capacity for {} cell: outpoint=0x{}:{}",
-                source,
-                hex::encode(tx_hash),
-                output_index
-            )
-        })
-}
-
+/// A stored cell must hold at least the capacity its own fields occupy (CKB
+/// consensus). The occupied capacity is derived from those fields, never
+/// stored, so this compares two different things: the stored capacity and
+/// the size of the stored scripts and data.
 fn validate_input_cell_occupied_capacity(
     info: &LiveCellInfo,
     tx_hash: &[u8],
     output_index: i16,
     source: &str,
 ) -> Result<()> {
-    let expected = expected_occupied_capacity_for_cell(info, tx_hash, output_index, source)?;
-    if info.occupied_capacity <= 0 {
+    let occupied = info.occupied_capacity();
+    if occupied > info.capacity {
         bail!(
-            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, expected={}",
+            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, capacity={}",
             source,
             hex::encode(tx_hash),
             output_index,
-            info.occupied_capacity,
-            expected
-        );
-    }
-    if info.occupied_capacity != expected {
-        bail!(
-            "occupied capacity mismatch while loading {} cell: outpoint=0x{}:{}, occupied={}, expected={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            info.occupied_capacity,
-            expected
-        );
-    }
-    if info.occupied_capacity > info.capacity {
-        bail!(
-            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, capacity={}, expected={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            info.occupied_capacity,
-            info.capacity,
-            expected
+            occupied,
+            info.capacity
         );
     }
     Ok(())
@@ -489,16 +440,6 @@ mod tests {
         }
     }
 
-    fn occupied_capacity_from_parsed_cell(cell: &ParsedCell) -> i64 {
-        let type_args_len = cell.type_args.as_ref().map(|args| args.len());
-        compute_occupied_capacity_shannons(
-            cell.data_size as usize,
-            cell.lock_args.len(),
-            type_args_len,
-        )
-        .unwrap()
-    }
-
     fn precomputed_info_map(
         tx_hash: &[u8],
         output_index: i16,
@@ -510,9 +451,7 @@ mod tests {
             (tx_hash.to_vec(), output_index),
             PositionedCellInfo::new(
                 {
-                    let mut info = cell
-                        .to_live_cell_info(occupied_capacity_from_parsed_cell(cell), udt_amount)
-                        .unwrap();
+                    let mut info = cell.to_live_cell_info(udt_amount).unwrap();
                     if cell.data_size == 0 {
                         info.data_hash = None;
                     }
@@ -632,7 +571,7 @@ mod tests {
             vec![(tx_hash.as_slice(), 0, 20, consumed_by.as_slice(), 21, 1)];
         let info = PositionedCellInfo::new(
             build_udt_cell(vec![0x77; 32], vec![0u8; 16])
-                .to_live_cell_info(142_00000000, None)
+                .to_live_cell_info(None)
                 .unwrap(),
             20,
         );

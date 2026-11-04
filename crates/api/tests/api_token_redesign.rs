@@ -390,7 +390,6 @@ async fn token_cells_count_reads_no_cells() {
     let store = fixture();
     let cell = LiveCellInfo {
         capacity: 100,
-        occupied_capacity: 80,
         lock_code_hash: [0x33; 32],
         lock_hash_type: 1,
         lock_args: vec![],
@@ -571,7 +570,6 @@ async fn real_token_router_producer_contract() {
         0,
         &LiveCellInfo {
             capacity: 1000,
-            occupied_capacity: 600,
             lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![],
@@ -1015,7 +1013,6 @@ async fn token_transactions_rows_read_outputs_in_one_batch() {
                         index,
                         &LiveCellInfo {
                             capacity: 100,
-                            occupied_capacity: 61,
                             lock_code_hash: [0x33; 32],
                             lock_hash_type: 1,
                             lock_args: vec![],

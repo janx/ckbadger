@@ -824,7 +824,6 @@ mod tests {
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 8,
-                occupied_capacity: capacity,
                 udt_amount: None,
                 data_hash: None,
             },

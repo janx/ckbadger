@@ -3473,7 +3473,6 @@ mod version_identity_tests {
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 128,
-                occupied_capacity: 61_00000000,
                 udt_amount: None,
                 data_hash: Some(funding_version.as_slice().try_into().unwrap()),
             },
