@@ -557,7 +557,7 @@ function DepRow({
     >
       <Link
         href={`/cell/${dep.outPointTxHash}-${dep.outPointIndex}`}
-        className="text-info/80 hover:text-jade min-w-0 [overflow-wrap:anywhere]"
+        className="text-text-bright decoration-aqua/35 min-w-0 underline underline-offset-[3px] transition-colors [overflow-wrap:anywhere]"
       >
         {truncateHash(dep.outPointTxHash, 10, 6)}:{dep.outPointIndex}
       </Link>

@@ -3,6 +3,7 @@ import { blockEvidence } from '@/__tests__/msw/fixtures/block-evidence';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import BlockDetailPage from '@/app/blocks/[id]/client-page';
 import { resourceScale } from '@/components/blocks/block-visual';
 import { api, type GlobalActivity, type Transaction } from '@/lib/api';
@@ -271,6 +272,21 @@ describe('Block board · first tier', () => {
     expect(evidence).toHaveTextContent(/^#0 · 0x0fbf9fbc/);
     expect(evidence).not.toHaveTextContent('20,827,932');
     expect(screen.queryByText('Coinbase')).not.toBeInTheDocument();
+  });
+
+  // Visual finish V5: a feed row's tx link rests as ink with the faint aqua underline (was
+  // `text-interactive-dim`); the global a:hover lights it jade.
+  it("rests each activity row's tx link as ink, not aqua-dim (V5)", async () => {
+    render(<BlockDetailPage />);
+    await screen.findByText('Cellbase');
+    const rows = Array.from(document.querySelectorAll('[data-feed-row]'));
+    expect(rows).toHaveLength(4);
+    for (const row of rows) {
+      const hash = row.getAttribute('data-feed-row')!;
+      const link = row.querySelector(`[data-role="evidence"] a[href$="/tx/${hash}"]`);
+      expect(link, hash).not.toBeNull();
+      expectRestingLink(link as HTMLElement);
+    }
   });
 });
 

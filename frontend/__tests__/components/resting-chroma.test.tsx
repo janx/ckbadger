@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@/__tests__/utils/test-utils';
 import { stubChartWidth } from '@/__tests__/utils/chart-width';
+import { AQUA_AT_REST, expectRestingLink } from '@/__tests__/utils/resting-link';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import { Address } from '@/components/ui/address';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -24,28 +25,10 @@ const ADDRESS =
 const LOCK_HASH = `0x${'5e'.repeat(32)}`;
 const TX = `0x${'ab'.repeat(32)}`;
 
-/** The resting style of a link in a row (ruling V5). */
-const RESTING = [
-  'text-text-bright',
-  'underline',
-  'decoration-aqua/35',
-  'underline-offset-[3px]',
-  'transition-colors',
-];
-/** A class that rests a link in the CTA aqua (#68ccf0: aqua = interactive = info). */
-const AQUA_AT_REST = /^(text-aqua|text-interactive|text-info)(\/\d+)?$/;
 /** A hover colour that would beat the global jade `a:hover` with aqua. */
 const AQUA_HOVER = /^hover:text-(aqua|interactive|info)/;
 
 const classesOf = (el: Element) => Array.from(el.classList);
-
-/** A row link at rest: ink, the faint aqua underline, and no hover colour of its own. */
-function expectResting(link: HTMLElement) {
-  expect(link.tagName).toBe('A');
-  expect(link).toHaveClass(...RESTING);
-  expect(classesOf(link).filter((c) => AQUA_AT_REST.test(c))).toEqual([]);
-  expect(classesOf(link).filter((c) => c.startsWith('hover:text-'))).toEqual([]);
-}
 
 /** Every link inside `scope`: never aqua at rest, never an aqua hover (one hover colour, jade). */
 function expectNoAquaLink(scope: Element) {
@@ -66,13 +49,13 @@ afterEach(() => {
 describe('resting chroma (V5): links in rows rest as ink and light up on hover', () => {
   it('Address rests as ink with the faint aqua underline; the global a:hover is its hover', () => {
     render(<Address address={ADDRESS} />);
-    expectResting(screen.getByRole('link'));
+    expectRestingLink(screen.getByRole('link'));
   });
 
   it('keeps the resting ink when a caller sets only the size (the blocks table miner)', () => {
     render(<Address address={ADDRESS} startChars={10} endChars={6} className="text-small" />);
     const link = screen.getByRole('link');
-    expectResting(link);
+    expectRestingLink(link);
     expect(link).toHaveClass('text-small');
     expect(link).not.toHaveClass('text-body');
   });
@@ -108,7 +91,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const table = screen.getByRole('table', { name: 'Blocks' });
     const [, row] = within(table).getAllByRole('row');
     expectNoAquaLink(row);
-    expectResting(within(row).getByRole('link', { name: 'ckb1qzda0c...ratvu9' }));
+    expectRestingLink(within(row).getByRole('link', { name: 'ckb1qzda0c...ratvu9' }));
   });
 
   it('a .cell records table row: its decoded address link rests as ink', () => {
@@ -128,7 +111,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     );
     const [, row] = screen.getAllByRole('row');
     expectNoAquaLink(row);
-    expectResting(within(row).getByRole('link', { name: ADDRESS }));
+    expectRestingLink(within(row).getByRole('link', { name: ADDRESS }));
   });
 
   it('a party: the standalone form is an Address; a bare lock hash hovers jade, not aqua', () => {
@@ -141,7 +124,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
     const { container, rerender } = render(
       <ParticipantRefView participant={{ ...party, address: ADDRESS }} />
     );
-    expectResting(screen.getByRole('link'));
+    expectRestingLink(screen.getByRole('link'));
     for (const compact of [false, true]) {
       rerender(<ParticipantRefView participant={party} compact={compact} />);
       const link = screen.getByRole('link');
@@ -206,7 +189,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       .filter((a) => a.getAttribute('href')?.includes('/identities/'));
     // The group draws its narrow card and its wide grid cells, each with both identities.
     expect(hashLinks).toHaveLength(2 * identities.length);
-    hashLinks.forEach(expectResting);
+    hashLinks.forEach(expectRestingLink);
     const txLinks = screen
       .getAllByRole('link')
       .filter((a) => a.getAttribute('href')?.endsWith(`/tx/${TX}`));
@@ -234,7 +217,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       .getAllByRole('link')
       .filter((a) => a.getAttribute('href')?.includes('/identities/'));
     expect(hashLinks).toHaveLength(2);
-    hashLinks.forEach(expectResting);
+    hashLinks.forEach(expectRestingLink);
   });
 
   it('an identity card in the object gallery: its label link rests as ink', () => {
@@ -265,7 +248,7 @@ describe('resting chroma (V5): links in rows rest as ink and light up on hover',
       />
     );
     const label = screen.getByRole('link', { name: 'badger.bit' });
-    expectResting(label);
+    expectRestingLink(label);
     expect(label).toHaveClass('font-semibold');
   });
 

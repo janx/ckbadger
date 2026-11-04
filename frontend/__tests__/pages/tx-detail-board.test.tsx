@@ -7,6 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { render } from '@/__tests__/utils/test-utils';
+import { expectRestingLink } from '@/__tests__/utils/resting-link';
 import { feedSamples } from '@/__tests__/msw/fixtures/home';
 import TransactionDetailPage from '@/app/tx/[hash]/client-page';
 import { api, type GlobalActivity, type TransactionDetail } from '@/lib/api';
@@ -384,6 +385,27 @@ describe('Transaction board, tier 2', () => {
     expect(screen.getByTestId('tx-io-output-0')).toHaveClass('opacity-30');
     fireEvent.mouseLeave(w0);
     expect(screen.getByTestId('tx-witness-item-1')).not.toHaveClass('opacity-25');
+  });
+
+  // Visual finish V5: a dep row's out point link rests as ink with the faint aqua underline (was
+  // `text-info/80`); the global a:hover lights it jade.
+  it("rests each cell dep's out point link as ink, not aqua (V5)", async () => {
+    render(<TransactionDetailPage />);
+    const dep0 = await waitFor(() => {
+      const el = document.querySelector('#tx-dep-0');
+      if (!el) throw new Error('no dep row yet');
+      return el as HTMLElement;
+    }, SLOW);
+    const deps = [dep0, ...Array.from(document.querySelectorAll('[id^="tx-dep-"]')).slice(1)];
+    expect(deps.length).toBeGreaterThan(1);
+    for (const dep of deps) {
+      const outPoint = dep.querySelector(':scope > a') as HTMLElement | null;
+      expect(outPoint, dep.id).not.toBeNull();
+      expect(outPoint!.getAttribute('href')).toMatch(/\/cell\/0x[0-9a-z]+-\d+$/);
+      expectRestingLink(outPoint!);
+      // The out point still wraps anywhere in its narrow column.
+      expect(outPoint).toHaveClass('min-w-0', '[overflow-wrap:anywhere]');
+    }
   });
 
   it('says which script each cell dep supplies code for (TX-15)', async () => {

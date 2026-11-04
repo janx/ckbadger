@@ -624,7 +624,7 @@ export default function BlockDetailPage() {
                               #{activity.txIndex} ·{' '}
                               <Link
                                 href={`/tx/${activity.txHash}`}
-                                className="hover:text-jade text-interactive-dim"
+                                className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
                               >
                                 {truncateHash(activity.txHash, 10, 6)}
                               </Link>
