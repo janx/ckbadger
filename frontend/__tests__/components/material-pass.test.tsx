@@ -166,13 +166,21 @@ describe('the rules in globals.css', () => {
     // no second family: every @font-face is JetBrains Mono (the error pages' serif left with the vessels)
     const families = [...css.matchAll(/@font-face \{\s*font-family: '([^']+)'/g)].map((m) => m[1]);
     expect(families.filter((f) => f !== 'JetBrains Mono')).toEqual([]);
-    expect(css).toMatch(/\n\.text-display\s*\{\s*font-weight: 300;\s*\}/);
+    // visual finish V12: the display figure sits tighter (−0.03 em), an entity / index h1 a
+    // little (−0.02 em); size and weight unchanged, a tier-1 h2 untouched
     expect(css).toMatch(
-      /@media \(min-width: 640px\)\s*\{\s*\.sm\\:text-display\s*\{\s*font-weight: 300;\s*\}\s*\}/
+      /\n\.text-display\s*\{\s*font-weight: 300;\s*letter-spacing: -0\.03em;\s*\}/
+    );
+    expect(css).toMatch(
+      /@media \(min-width: 640px\)\s*\{\s*\.sm\\:text-display\s*\{\s*font-weight: 300;\s*letter-spacing: -0\.03em;\s*\}\s*\}/
     );
     expect(css).toMatch(
       /h1\.text-entity,\s*h1\.text-index,\s*h2\.text-section\s*\{\s*font-weight: 600;\s*\}/
     );
+    expect(css).toMatch(
+      /\nh1\.text-entity,\s*h1\.text-index\s*\{\s*letter-spacing: -0\.02em;\s*\}/
+    );
+    expect(css).not.toMatch(/h2\.text-section\s*\{[^}]*letter-spacing/);
     expect(css).toMatch(
       /\.eyebrow\s*\{\s*text-transform: uppercase;\s*letter-spacing: 0\.12em;\s*font-weight: 500;\s*\}/
     );

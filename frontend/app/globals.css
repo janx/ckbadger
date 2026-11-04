@@ -1066,19 +1066,27 @@ svg a:hover {
 
 /* Move 3 — the weights. The display figure is thin under its halo (a neon tube is thin); an h1
    and a tier-1 h2 are 600; an eyebrow (an uppercase meta label: the tier boundary's, a frame's, a
-   hero figure's) is 500 at .12 em; text stays 400 and `em` renders the true italic. */
+   hero figure's) is 500 at .12 em; text stays 400 and `em` renders the true italic. The tracking
+   (visual finish V12): a monospace figure at 40 px reads loose at the face's own spacing, so the
+   display figure sits at −0.03 em and an entity / index h1 at −0.02 em; size and weight stay. */
 .text-display {
   font-weight: 300;
+  letter-spacing: -0.03em;
 }
 @media (min-width: 640px) {
   .sm\:text-display {
     font-weight: 300;
+    letter-spacing: -0.03em;
   }
 }
 h1.text-entity,
 h1.text-index,
 h2.text-section {
   font-weight: 600;
+}
+h1.text-entity,
+h1.text-index {
+  letter-spacing: -0.02em;
 }
 .eyebrow {
   text-transform: uppercase;
