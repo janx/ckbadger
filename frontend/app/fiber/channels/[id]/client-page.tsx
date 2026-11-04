@@ -2,7 +2,6 @@
 
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import { FiberChannelBoard } from '@/components/fiber/fiber-channel-board';
 import { api, isNotFoundApiError } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
@@ -40,7 +39,6 @@ export default function FiberChannelDetailPage() {
   }
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto max-w-[1280px] pb-[72px] pt-7">
         <DocumentTitle
           parts={

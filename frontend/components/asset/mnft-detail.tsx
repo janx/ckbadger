@@ -6,7 +6,6 @@ import { api, isNotFoundApiError } from '@/lib/api';
 import { hexBytes } from '@/lib/hex-bytes';
 import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
 import { AssetCount } from '@/components/asset/inventory-table';
@@ -142,7 +141,6 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
   if (!detail.data) {
     return (
       <div className="min-h-screen">
-        <Header />
         <main className="container mx-auto min-w-0 py-8">
           <h1 className="text-text-bright text-entity">m-NFT</h1>
           <AssetReadState label="m-NFT" error={detail.error} loading={detail.isLoading} />

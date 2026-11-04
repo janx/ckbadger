@@ -146,7 +146,6 @@ describe('DaoPage', () => {
 
   it('renders the API-produced epoch, owner, AR and raw DAO evidence', async () => {
     render(<DaoPage />);
-    expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(
       await screen.findByRole('heading', { name: 'When deposits can leave' })
     ).toBeInTheDocument();

@@ -5,7 +5,6 @@ import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { useInRouterContext } from 'react-router-dom';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
-import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
@@ -587,7 +586,6 @@ export default function ScriptsPage() {
 
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13, R6): hero → the list 64 px; tier 2 after the 96 px boundary. */}

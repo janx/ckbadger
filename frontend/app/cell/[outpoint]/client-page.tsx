@@ -2,7 +2,6 @@
 import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
@@ -536,7 +535,6 @@ export default function CellDetailPage() {
   );
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">{body}</main>
     </div>
   );

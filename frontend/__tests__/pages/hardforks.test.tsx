@@ -134,7 +134,6 @@ describe('HardforksPage', () => {
 
     render(<HardforksPage />);
 
-    expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Hardforks' })).toBeInTheDocument();
 
     await waitFor(() => {

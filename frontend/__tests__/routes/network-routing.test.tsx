@@ -5,6 +5,9 @@ import { render, screen, waitFor } from '@/__tests__/utils/test-utils';
 import { createAppRouter } from '@/src/routes/router';
 import Link from '@/components/ui/link';
 
+// The frame renders the header (visual finish V6); these tests are about the routes.
+vi.mock('@/components/layout/header', () => ({ Header: () => null }));
+
 vi.mock('@/components/layout/site-footer', () => ({
   SiteFooter: () => <div data-testid="site-footer">SiteFooter</div>,
 }));

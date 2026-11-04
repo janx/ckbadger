@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useRouter, useSearchParams } from '@/src/navigation';
-import { Header } from '@/components/layout/header';
 import { api } from '@/lib/api';
 import ScriptDetailPage from '@/app/scripts/[name]/client-page';
 
@@ -91,7 +90,6 @@ export default function ScriptByCodeHashPage({
   if (!isCodeHashIdentifier || (knownScript && hasKnownScriptName(knownScript.name))) {
     return (
       <div className="min-h-screen">
-        <Header />
         <main className="container mx-auto py-8">
           <div className="text-text-dim text-body">Resolving script page...</div>
         </main>

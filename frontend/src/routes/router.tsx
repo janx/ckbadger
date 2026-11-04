@@ -2,6 +2,7 @@ import type { ComponentType, ReactElement } from 'react';
 import type { RouteObject } from 'react-router-dom';
 import { Navigate, Outlet, useLocation, useParams } from 'react-router-dom';
 import { Atmosphere } from '@/components/layout/atmosphere';
+import { Header } from '@/components/layout/header';
 import { SiteFooter } from '@/components/layout/site-footer';
 import { TapOrHoverHintProvider } from '@/components/ui/tap-or-hover-hint';
 import { tintOfPath } from '@/lib/page-tint';
@@ -21,7 +22,14 @@ type ParamRecord = Record<string, string | undefined>;
  * The page root (material pass v2): `data-tint` names the page's class hue for the ambient pools
  * (lib/page-tint, from the path after the network segment), the atmosphere paints the night sky,
  * the grain and the CRT layers once for every route, and the tap-or-hover registry lets one hint
- * per page render; then the network-scoped page and the footer.
+ * per page render; then the network-scoped header and page, and the footer.
+ *
+ * The header is part of the frame (visual finish V6): it renders here, once, above the page — so
+ * a cold load shows it from the first paint, before the page's lazy chunk arrives, and no page
+ * mounts its own. It sits inside the network query scope (its vitals strip and search read the
+ * active network's API). The column holding the header and the page is at least a screen tall and
+ * a flex column, so a page that fills the screen (the not-found and error night) takes `flex-1`
+ * and fills what the header leaves.
  */
 function AppFrame() {
   const { network } = useParams();
@@ -33,9 +41,12 @@ function AppFrame() {
     <div data-tint={tintOfPath(path)} className="flex min-h-screen flex-col">
       <Atmosphere />
       <TapOrHoverHintProvider>
-        <div className="flex-1">
+        <div className="flex min-h-screen flex-1 flex-col">
           <NetworkQueryScope>
-            <Outlet />
+            <Header />
+            <div className="flex flex-1 flex-col">
+              <Outlet />
+            </div>
           </NetworkQueryScope>
         </div>
         <SiteFooter />
@@ -80,9 +91,14 @@ function LegacyRedirect({ to }: { to: string }) {
   return <Navigate to={`/${network}/${to}${location.search}${location.hash}`} replace />;
 }
 
+/** While a page's chunk is on its way the frame's header is already there; this holds its place. */
+function PageLoading() {
+  return <div className="min-h-[60vh]" />;
+}
+
 function lazyPage<TProps extends object>(loader: () => Promise<PageModule<TProps>>) {
   return dynamic(loader, {
-    loading: () => <div className="min-h-[240px]" />,
+    loading: PageLoading,
   });
 }
 
@@ -91,7 +107,7 @@ function lazyParamPage<TProps extends object>(
   mapParams: (params: ParamRecord) => TProps
 ) {
   const LazyPage = dynamic(loader, {
-    loading: () => <div className="min-h-[240px]" />,
+    loading: PageLoading,
   });
 
   return function ParamPage() {
@@ -518,8 +534,12 @@ export function createAppRouter(): RouteObject[] {
           <AppFrame />
         </NetworkGuard>
       ),
-      errorElement: <RouteErrorBoundary />,
-      children,
+      // The frame itself failed: the error page is drawn in its place, with its own header and
+      // footer.
+      errorElement: <RouteErrorBoundary standalone />,
+      // A page failed (a render error, `notFound()`): the error page renders in the frame, under
+      // its header, like the not-found route (visual finish V6).
+      children: [{ errorElement: <RouteErrorBoundary />, children }],
     },
   ];
 }

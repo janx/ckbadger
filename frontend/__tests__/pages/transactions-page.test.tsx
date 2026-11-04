@@ -98,7 +98,6 @@ describe('TransactionsPage', () => {
 
     render(<TransactionsPage />);
 
-    expect(screen.getByTestId('header')).toBeInTheDocument();
     // Lane L: the "Transactions" chart link now shares the h1's word, so the h1 is named by role.
     expect(screen.getByRole('heading', { level: 1, name: 'Transactions' })).toBeInTheDocument();
     expect(

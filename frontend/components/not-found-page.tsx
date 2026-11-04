@@ -60,11 +60,11 @@ const RETURNS: Partial<Record<NotFoundEntity['kind'], { href: string; label: str
 interface NotFoundPageProps {
   entity?: NotFoundEntity;
   errMessage?: string;
-  /** React Router errorElement replaces AppFrame, including its footer. */
-  footer?: boolean;
+  /** Drawn in place of AppFrame (the frame route's error boundary): its own header and footer. */
+  standalone?: boolean;
 }
 
-export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPageProps = {}) {
+export function NotFoundPage({ entity, errMessage, standalone = false }: NotFoundPageProps = {}) {
   const pathname = usePathname();
   const lookup = useNotFoundEvidence(entity);
   useDocumentTitle(NOT_FOUND_TITLE);
@@ -82,7 +82,7 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
       sign={readings[0]}
       readings={readings}
       hash={entityHash(entity)}
-      footer={footer}
+      standalone={standalone}
     >
       {entity ? (
         <span className="min-w-0 break-all">

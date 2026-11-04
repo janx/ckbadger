@@ -2,7 +2,6 @@
 
 import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery } from '@tanstack/react-query';
-import { Header } from '@/components/layout/header';
 import { DaoBoard, DaoHeading, DaoLede } from '@/components/dao/dao-board';
 import { api } from '@/lib/api';
 import { useDocumentTitle } from '@/lib/use-document-title';
@@ -33,7 +32,6 @@ export default function DaoPage() {
 
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto pb-16 pt-6">
         {!(statistics.data && evidence.data) && <div className="mb-7">{intro}</div>}
         {statistics.isError && (

@@ -1,7 +1,6 @@
 'use client';
 import { useState, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
@@ -870,7 +869,6 @@ export function ScriptFamilyPage({
     : `${rows.length} binaries`;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13, R6): the hero, its reading and figures; sections 64 / 72 px apart. */}

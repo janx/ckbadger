@@ -3,7 +3,6 @@
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { notFound, useParams } from '@/src/navigation';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
@@ -41,7 +40,6 @@ export default function UncleDetailPage() {
   }
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 py-8">
         {query.isLoading && <p role="status">Loading uncle…</p>}
         {query.error && (

@@ -2,7 +2,6 @@
 
 import { ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Header } from '@/components/layout/header';
 import { api, LabelCount, NetworkActiveRound, NetworkLastRound } from '@/lib/api';
 import { formatTimeAgo, formatUtc8DateTime } from '@/lib/utils';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -25,7 +24,6 @@ const PAGE_TITLE = 'Where the nodes are';
 function PageShell({ children }: { children: ReactNode }) {
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-4">{children}</main>
     </div>
   );

@@ -4,7 +4,6 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useQueries, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { useParams, useRouter } from '@/src/navigation';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
@@ -138,7 +137,6 @@ export default function BlockDetailPage() {
   if (isLoading)
     return (
       <div>
-        <Header />
         <main className="container mx-auto py-8">
           <p role="status">Loading block…</p>
         </main>
@@ -158,7 +156,6 @@ export default function BlockDetailPage() {
   if (error && !block)
     return (
       <div>
-        <Header />
         <main className="container mx-auto py-8">
           <p role="alert">Unable to read block: {error.message}</p>
         </main>
@@ -216,7 +213,6 @@ export default function BlockDetailPage() {
   const paidIn = block.rewardFinalizesAt === null ? null : block.rewardFinalizesAt - block.number;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 py-8">
         {error && (
           <p role="alert">

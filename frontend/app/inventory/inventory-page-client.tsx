@@ -3,7 +3,6 @@ import { TopicCharts } from '@/components/charts/topic-charts';
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { usePathname, useRouter, useSearchParams } from '@/src/navigation';
-import { Header } from '@/components/layout/header';
 import { AppLink } from '@/components/ui/app-link';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -133,7 +132,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
   ];
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 py-8">
         <DetailLayout
           kind="index"
@@ -329,7 +327,6 @@ export function InventoryPageClient({ assetType }: InventoryPageClientProps) {
 export function InventoryPageFallback() {
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">
         <p role="status" className="text-text-dim text-small">
           Loading inventory…

@@ -3,7 +3,6 @@
 import Link from '@/components/ui/link';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
-import { Header } from '@/components/layout/header';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { api } from '@/lib/api';
 import { useActiveNetwork } from '@/hooks/useActiveNetwork';
@@ -279,7 +278,6 @@ export default function HardforksPage() {
       : null;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto pb-16 pt-6">
         <div className="text-body min-w-0 font-mono">
           {/* Hierarchy v3 (R13): the hero is tier 1's first section — the title row, one sentence,

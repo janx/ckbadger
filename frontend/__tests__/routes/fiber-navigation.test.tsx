@@ -1,7 +1,6 @@
 import { MemoryRouter, useLocation, useRoutes } from 'react-router-dom';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
-import { Header } from '@/components/layout/header';
 import { createAppRouter } from '@/src/routes/router';
 
 vi.mock('@/components/command-palette', () => ({
@@ -43,7 +42,7 @@ function AppHarness() {
   return (
     <>
       <div data-testid="pathname">{location.pathname}</div>
-      <Header />
+      {/* the frame renders the header (visual finish V6) */}
       {element}
     </>
   );

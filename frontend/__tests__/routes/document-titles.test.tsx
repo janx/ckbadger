@@ -47,7 +47,11 @@ const SAMPLE: Record<string, string> = {
 
 function routePaths(): string[] {
   const network = createAppRouter().find((r) => r.path === '/:network') as RouteObject;
-  return (network.children ?? []).map((r) => (r.index ? '' : (r.path as string)));
+  // the page routes sit under one pathless route that holds their error boundary (visual finish V6)
+  const pages = (network.children ?? []).flatMap((r) =>
+    r.path === undefined && !r.index ? (r.children ?? []) : [r]
+  );
+  return pages.map((r) => (r.index ? '' : (r.path as string)));
 }
 
 describe('every route names its page in the tab (C1)', () => {

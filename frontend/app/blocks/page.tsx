@@ -4,7 +4,6 @@ import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { api, type Block } from '@/lib/api';
-import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
 import { Dotted, PhoneRow } from '@/components/ui/phone-row';
@@ -156,7 +155,6 @@ export default function BlocksPage() {
   ];
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 py-8">
         <DetailLayout title="Blocks" kind="index" actions={<BlocksLegend />}>
           {isLoading && (

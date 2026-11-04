@@ -1,7 +1,6 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Header } from '@/components/layout/header';
 import { HomeContent } from '@/components/home-content';
 import { DeepForkAlert } from '@/components/deep-fork-alert';
 import { api } from '@/lib/api';
@@ -16,7 +15,6 @@ export default function Home() {
 
   return (
     <div className="min-h-screen">
-      <Header />
       {stats && stats.deepForkStatus && <DeepForkAlert status={stats.deepForkStatus} />}
       <HomeContent />
     </div>

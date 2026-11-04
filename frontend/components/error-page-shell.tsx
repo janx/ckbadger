@@ -32,14 +32,23 @@ interface ErrorPageShellProps {
   hash?: string | null;
   /** The facts: two or three lines bottom-left, the actions among them. */
   children: ReactNode;
-  footer?: boolean;
-  /** The outer boundary renders without Router or QueryClient: no realtime night, no ticks. */
+  /**
+   * Drawn in place of AppFrame — the frame route's error boundary caught a failure of the frame
+   * itself: the shell draws its own header and footer and fills the screen. Otherwise (the
+   * not-found route, a page's not-found, a page's route error) it renders inside the frame, under
+   * the frame's header (visual finish V6), and fills what the header leaves.
+   */
+  standalone?: boolean;
+  /**
+   * The outer boundary renders without Router or QueryClient: no realtime night, no ticks, a
+   * plain header in place of the site header. Never inside the frame: a whole screen.
+   */
   contextSafe?: boolean;
 }
 
 const EYEBROW_EGG = 'You are (not) here';
 
-/** Route errors replace AppFrame, while ordinary 404 routes render inside it. */
+/** In the frame by default; `standalone` / `contextSafe` when drawn in place of it. */
 export function ErrorPageShell({
   status,
   path,
@@ -48,9 +57,10 @@ export function ErrorPageShell({
   brownout = false,
   hash = null,
   children,
-  footer = false,
+  standalone = false,
   contextSafe = false,
 }: ErrorPageShellProps) {
+  const wholeScreen = standalone || contextSafe;
   const [block, setBlock] = useState<Block | null>(null);
   const [inverted, setInverted] = useState(false);
   const [eyebrowEgg, setEyebrowEgg] = useState(false);
@@ -60,7 +70,8 @@ export function ErrorPageShell({
   return (
     <div
       className={clsx(
-        'bg-base-bg relative flex min-h-screen min-w-0 flex-col overflow-x-hidden',
+        'bg-base-bg relative flex min-w-0 flex-col overflow-x-hidden',
+        wholeScreen ? 'min-h-screen' : 'flex-1',
         inverted && 'sign-inverted'
       )}
     >
@@ -76,9 +87,9 @@ export function ErrorPageShell({
             />
           </a>
         </header>
-      ) : (
+      ) : standalone ? (
         <Header />
-      )}
+      ) : null}
       <main className="relative isolate flex min-h-[34rem] min-w-0 flex-1 flex-col overflow-hidden">
         {contextSafe ? (
           <div className="error-night" aria-hidden="true" data-night="static">
@@ -114,7 +125,7 @@ export function ErrorPageShell({
           {children}
         </div>
       </main>
-      {footer && <SiteFooter />}
+      {standalone && <SiteFooter />}
     </div>
   );
 }

@@ -4,7 +4,6 @@ import { useMemo, useState } from 'react';
 import { BlocksOfDay } from '@/components/charts/blocks-of-day';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { Chart, type ChartMarker, type ChartPoint } from '@/components/ui/chart';
@@ -546,7 +545,6 @@ export function ChartDetail({ slug }: { slug: string }) {
   }
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 py-8">
         {sync.data?.syncStatus?.chartDataMayBeIncomplete && (
           <p

@@ -2,7 +2,6 @@
 import { TopicCharts } from '@/components/charts/topic-charts';
 import { useQuery } from '@tanstack/react-query';
 import { ActivitiesStreamExplorer } from '@/components/activities-stream-explorer';
-import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { api } from '@/lib/api';
@@ -33,7 +32,6 @@ export default function ActivitiesPage() {
       : undefined;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">
         <DetailLayout
           title="Activities"

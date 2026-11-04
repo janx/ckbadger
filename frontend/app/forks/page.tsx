@@ -3,7 +3,6 @@
 import { useState, type ReactNode } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
 import { Prose } from '@/components/ui/prose';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -357,7 +356,6 @@ export default function ForksPage() {
   const total = events.data?.total;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
         {/* Hierarchy v3 (R13): the uncle rate and the days under it are the hero; the concept,
             the chart's long caption and the list's record note are tier 2. */}

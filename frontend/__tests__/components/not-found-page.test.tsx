@@ -71,7 +71,7 @@ describe('NotFoundPage', () => {
             identifier: '0xabc',
             checkedEndpoint: '/transactions/0xabc',
           }}
-          footer
+          standalone
         />
       </MemoryRouter>
     );

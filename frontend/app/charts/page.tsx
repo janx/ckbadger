@@ -1,7 +1,6 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Header } from '@/components/layout/header';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { ChartSmallMultiple } from '@/components/charts/chart-small-multiple';
 import { CHART_SECTIONS, INDEX_CHARTS, chartSectionId } from '@/components/charts/chart-catalogue';
@@ -12,7 +11,6 @@ export default function ChartsPage() {
   const network = useQuery({ queryKey: ['network-stats'], queryFn: api.getNetworkStats });
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 py-8">
         <DetailLayout
           title="Charts"

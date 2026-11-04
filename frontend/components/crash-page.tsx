@@ -24,10 +24,12 @@ interface CrashPageProps {
   message: string;
   /** The outer React boundary can render without Router or QueryClient context. */
   contextSafe?: boolean;
+  /** Drawn in place of AppFrame (the frame route's error boundary): its own header and footer. */
+  standalone?: boolean;
 }
 
 /** A failed read/render is not evidence that a chain entity does not exist. */
-export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
+export function CrashPage({ message, contextSafe = false, standalone = false }: CrashPageProps) {
   const pathname = usePathname();
   const locationContext = useContext(UNSAFE_LocationContext);
   const location = locationContext?.location;
@@ -72,7 +74,8 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
       sign={ERROR_READINGS[0]}
       readings={ERROR_READINGS}
       brownout
-      footer
+      // the outer React boundary is above the router, so never inside the frame
+      standalone={standalone || contextSafe}
       contextSafe={contextSafe}
     >
       <span role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">

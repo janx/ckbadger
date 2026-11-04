@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
 import { Hash } from '@/components/ui/hash';
@@ -231,7 +230,6 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   }
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">
         {!a ? (
           <AddressLoadState label="address" error={address.error} loading={address.isLoading} />

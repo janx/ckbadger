@@ -131,7 +131,6 @@ describe('BlocksPage', () => {
       screen.getAllByRole('img', { name: /Cellbase, 1 user transactions/ }).length
     ).toBeGreaterThan(0);
     expect(screen.queryByText('Browse all blocks on the CKB network')).not.toBeInTheDocument();
-    expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Blocks')).toBeInTheDocument();
     expect(screen.getAllByText('#8,775,638').length).toBeGreaterThan(0);
     expect(screen.getAllByText('HF · MIRANA')[0]).toBeInTheDocument();

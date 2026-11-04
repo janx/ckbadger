@@ -69,9 +69,10 @@ describe('ErrorPageShell', () => {
   });
 
   it('the crash page: the thought of the failed transition, the error in red, one footer, and no claim about the chain', () => {
+    // drawn in place of the frame (the frame route's boundary): its own header and footer
     render(
       <MemoryRouter initialEntries={['/mainnet/fiber/channels/0x01']}>
-        <CrashPage message="TypeError: missing channel output" />
+        <CrashPage message="TypeError: missing channel output" standalone />
       </MemoryRouter>
     );
     expect(
@@ -98,6 +99,35 @@ describe('ErrorPageShell', () => {
     );
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
     expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'failed');
+  });
+
+  // Visual finish V6: in the frame (the default) the frame draws the header and the footer; the
+  // shell draws neither and fills what the header leaves (flex-1, not a whole screen).
+  it('in the frame: no header and no footer of its own, and it fills what the header leaves', () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/fiber/channels/0x01']}>
+        <CrashPage message="TypeError: missing channel output" />
+      </MemoryRouter>
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('✗ TypeError: missing channel output');
+    expect(screen.queryByRole('banner')).toBeNull();
+    expect(screen.queryByRole('contentinfo')).toBeNull();
+    const shell = screen.getByRole('main').parentElement!;
+    expect(shell).toHaveClass('flex-1');
+    expect(shell).not.toHaveClass('min-h-screen');
+  });
+
+  it('drawn in place of the frame: its own header and footer, once each, a whole screen', () => {
+    render(
+      <MemoryRouter initialEntries={['/mainnet/fiber/channels/0x01']}>
+        <CrashPage message="TypeError: missing channel output" standalone />
+      </MemoryRouter>
+    );
+    expect(screen.getAllByRole('banner')).toHaveLength(1);
+    expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
+    const shell = screen.getByRole('main').parentElement!;
+    expect(shell).toHaveClass('min-h-screen');
+    expect(shell).not.toHaveClass('flex-1');
   });
 
   it('renders a provider-safe fallback when the app itself throws', () => {

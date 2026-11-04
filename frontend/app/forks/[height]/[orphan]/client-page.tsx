@@ -14,7 +14,6 @@ import {
   type ReorgDetail,
   type ReorgEvent,
 } from '@/lib/api';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { ExactCkb } from '@/components/activity-event-row';
 import { DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
@@ -91,7 +90,6 @@ export default function ForkDetailPage() {
   const mismatch = query.data ? answerMismatch(address, route, query.data) : null;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto min-w-0 max-w-[1280px] pb-[72px] pt-7">
         <DocumentTitle parts={[formatBlockNumber(route.height), route.orphan, 'fork']} />
         {query.isLoading && <p role="status">Loading fork evidence…</p>}

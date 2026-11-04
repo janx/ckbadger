@@ -273,12 +273,11 @@ describe('ChartsPage', () => {
     vi.mocked(api.getHardforks).mockResolvedValue(mockHardforkTimeline);
   });
 
-  it('renders the charts overview with header, title, and chart sections', async () => {
+  it('renders the charts overview with its title and chart sections', async () => {
     vi.mocked(api.getNetworkStats).mockResolvedValue(mockNetworkStatsComplete);
 
     render(<ChartsPage />);
 
-    expect(screen.getByTestId('header')).toBeInTheDocument();
     expect(screen.getByText('Charts')).toBeInTheDocument();
 
     // Each section name is also its jump link in the header nav (CH-10): read the headings.

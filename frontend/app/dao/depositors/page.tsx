@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Header } from '@/components/layout/header';
 import { DetailLayout } from '@/components/ui/detail-layout';
 import Link from '@/components/ui/link';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -107,7 +106,6 @@ export default function DaoDepositorsPage() {
       : null;
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto pb-16 pt-6">
         <DetailLayout
           kind="index"

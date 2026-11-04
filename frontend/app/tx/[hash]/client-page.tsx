@@ -2,7 +2,6 @@
 import { Fragment, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams, usePathname, useRouter, useSearchParams } from '@/src/navigation';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
@@ -693,7 +692,6 @@ export default function TransactionDetailPage() {
   };
   const shell = (children: ReactNode) => (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">{children}</main>
     </div>
   );

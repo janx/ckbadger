@@ -3,7 +3,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueries, keepPreviousData } from '@tanstack/react-query';
 import { useSearchParams } from '@/src/navigation';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import { NotFoundPage } from '@/components/not-found-page';
 import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { ExactCkb } from '@/components/activity-event-row';
@@ -1025,7 +1024,6 @@ export default function ScriptDetailPage({
   if (isLoading) {
     return (
       <div className="min-h-screen">
-        <Header />
         <main className="container mx-auto py-8">
           <div className="animate-pulse space-y-8">
             <div className="bg-base-surface h-20 w-full rounded" />
@@ -1050,7 +1048,6 @@ export default function ScriptDetailPage({
   if (failedRequest) {
     return (
       <div className="min-h-screen">
-        <Header />
         <main className="container mx-auto py-8">
           <DetailLayout title="Script data unavailable" identity={normalizedCodeHash ?? name}>
             <p role="alert" className="text-negative text-small break-words py-8">
@@ -1068,7 +1065,6 @@ export default function ScriptDetailPage({
   if (isCodeHashMode && codeHashAmbiguity) {
     return (
       <div className="min-h-screen">
-        <Header />
         <main className="container mx-auto py-8">
           <DetailLayout title="Ambiguous script reference" identity={normalizedCodeHash}>
             <DetailSection title="Conflicting live bytecode">
@@ -1124,7 +1120,6 @@ export default function ScriptDetailPage({
   ) {
     return (
       <div className="min-h-screen">
-        <Header />
         <main className="container mx-auto py-8">
           <DetailLayout title="No script deployments">
             <p className="text-text-dim text-small py-8">
@@ -1295,7 +1290,6 @@ export default function ScriptDetailPage({
   );
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto py-8">
         <DetailLayout
           title={pageTitle}

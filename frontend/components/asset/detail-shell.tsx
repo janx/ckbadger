@@ -1,5 +1,4 @@
 import { useId, type ReactNode } from 'react';
-import { Header } from '@/components/layout/header';
 import { STICKY_RAIL } from '@/components/layout/sticky-header';
 import { ClassMark } from '@/components/ui/class-mark';
 import { AppLink } from '@/components/ui/app-link';
@@ -181,7 +180,6 @@ export function AssetDetailShell({
   );
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="text-body container mx-auto min-w-0 py-8 font-mono">
         <div
           data-tier="1"

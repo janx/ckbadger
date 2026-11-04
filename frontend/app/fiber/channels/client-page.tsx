@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
-import { Header } from '@/components/layout/header';
 import {
   FiberGraphNotes,
   FiberPartiesNote,
@@ -276,7 +275,6 @@ export default function FiberChannelsPage() {
   const lastColumn = stateFilter === 'open' ? 'Open for' : 'Lifetime';
   return (
     <div className="min-h-screen">
-      <Header />
       <main className="container mx-auto max-w-[1280px] pb-16 pt-7">
         {/* Hierarchy v3 (R13): the hero is open now and the network picture; the concept and the
             graph's explainer are tier 2. Hero → first section 64 px (R6). */}

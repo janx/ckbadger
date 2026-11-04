@@ -398,13 +398,12 @@ describe('Tokens Inventory Page', () => {
     );
   });
 
-  it('renders header, title, and token content', async () => {
+  it('renders the title and token content', async () => {
     vi.mocked(api.getAssets).mockResolvedValue(mockTokenAssets);
 
     render(<TokensPage />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('header')).toBeInTheDocument();
       expect(screen.getByText('Tokens')).toBeInTheDocument();
       expect(api.getAssets).toHaveBeenCalledWith(expect.objectContaining({ type: 'token' }));
       // F2 objects (IV-04): the full name leads. Table-rows L2-1: the symbol is a tag beside it
