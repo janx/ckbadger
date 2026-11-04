@@ -114,9 +114,13 @@ impl BatchWriter {
 
     /// Look up UDT cell info for multiple outpoints.
     /// Returns (type_script_hash, type_code_hash, type_hash_type, type_args, lock_script_hash, amount, standard).
+    ///
+    /// `script_hashes` holds each input's script hashes as the parser derived
+    /// them once for the batch; they are read from there, not derived again.
     pub fn get_udt_cells_info_batch(
         &self,
         outpoints: &[(&[u8], i16)],
+        script_hashes: &crate::sync::types::InputScriptHashes,
     ) -> Result<HashMap<(Vec<u8>, i16), (Vec<u8>, Vec<u8>, i16, Vec<u8>, Vec<u8>, u128, String)>>
     {
         if outpoints.is_empty() {
@@ -142,11 +146,20 @@ impl BatchWriter {
                 .get_cell(tx_hash, output_index, &self.append_only_store)?;
 
             if let Some(info) = cell_info {
+                let (lock_script_hash, type_script_hash) = script_hashes
+                    .get(&(tx_hash.to_vec(), output_index))
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "UDT input has no derived script hashes: outpoint=0x{}:{}",
+                            hex::encode(tx_hash),
+                            output_index
+                        )
+                    })?;
                 // Only include cells that have a type script (UDT cells always have one).
                 // A payload has either its whole type script or none of it, so the
-                // derived hash and the code hash are present together.
+                // type script hash and the code hash are present together.
                 let (Some(type_script_hash), Some(type_code_hash)) =
-                    (info.type_script_hash(), info.type_code_hash)
+                    (*type_script_hash, info.type_code_hash)
                 else {
                     continue;
                 };
@@ -186,7 +199,7 @@ impl BatchWriter {
                         type_code_hash.to_vec(),
                         hash_type,
                         type_args,
-                        info.lock_script_hash().to_vec(),
+                        lock_script_hash.to_vec(),
                         amount,
                         standard.as_str().to_string(),
                     ),
@@ -931,7 +944,17 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        // What the parser ships for this input.
+        let shipped = crate::sync::types::InputScriptHashes::from([(
+            (tx_hash.clone(), output_index),
+            (
+                consumed_cell.lock_script_hash(),
+                consumed_cell.type_script_hash(),
+            ),
+        )]);
+        let result = writer
+            .get_udt_cells_info_batch(&outpoints, &shipped)
+            .unwrap();
         assert!(
             result.is_empty(),
             "spent outpoints from consumed_cells must not be reused as UDT inputs"
@@ -966,7 +989,14 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        // What the parser ships for this input.
+        let shipped = crate::sync::types::InputScriptHashes::from([(
+            (tx_hash.clone(), output_index),
+            (cell.lock_script_hash(), cell.type_script_hash()),
+        )]);
+        let result = writer
+            .get_udt_cells_info_batch(&outpoints, &shipped)
+            .unwrap();
         assert!(
             result.is_empty(),
             "typed cell without token metadata should not be classified as UDT"
@@ -1020,7 +1050,14 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        // What the parser ships for this input.
+        let shipped = crate::sync::types::InputScriptHashes::from([(
+            (tx_hash.clone(), output_index),
+            (cell.lock_script_hash(), cell.type_script_hash()),
+        )]);
+        let result = writer
+            .get_udt_cells_info_batch(&outpoints, &shipped)
+            .unwrap();
         assert!(result.is_empty());
     }
 
@@ -1075,7 +1112,14 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
+        // What the parser ships for this input.
+        let shipped = crate::sync::types::InputScriptHashes::from([(
+            (tx_hash.clone(), output_index),
+            (cell.lock_script_hash(), cell.type_script_hash()),
+        )]);
+        let result = writer
+            .get_udt_cells_info_batch(&outpoints, &shipped)
+            .unwrap();
         assert!(result.is_empty());
     }
 

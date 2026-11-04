@@ -45,8 +45,8 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    fold_tx_address_deltas, AddressBalanceDelta, EntityDailyChanges, ReorgAction,
-    TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
+    fold_tx_address_deltas, AddressBalanceDelta, EntityDailyChanges, InputScriptHashes,
+    ReorgAction, TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -945,6 +945,7 @@ impl Indexer {
             all_tx_data: Vec<TxData>,
             input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            input_script_hashes: InputScriptHashes,
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
@@ -1727,6 +1728,9 @@ impl Indexer {
                 let cache_balance_and_script_started = Instant::now();
                 let mut address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta> =
                     HashMap::new();
+                // Each input's lock / type script hash, derived here once and
+                // shipped to the writer, which reads them instead of deriving.
+                let mut input_script_hashes = InputScriptHashes::new();
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
                     HashMap::new();
@@ -2059,9 +2063,13 @@ impl Indexer {
                             };
                             {
                                 // The payload does not store script hashes:
-                                // derive them once per input cell.
-                                let lock_script_hash = info.lock_script_hash().to_vec();
+                                // derive them once per input cell, for this
+                                // pass and for the writer.
+                                let lock_script_hash = info.lock_script_hash();
                                 let type_script_hash = info.type_script_hash();
+                                input_script_hashes
+                                    .insert(key.clone(), (lock_script_hash, type_script_hash));
+                                let lock_script_hash = lock_script_hash.to_vec();
                                 *tx_balance_changes
                                     .entry(lock_script_hash.clone())
                                     .or_default() -= i128::from(info.capacity);
@@ -2397,6 +2405,7 @@ impl Indexer {
                         all_tx_data,
                         input_cell_info,
                         batch_cell_infos,
+                        input_script_hashes,
                         address_balance_changes,
                         script_usage_changes,
                         script_reference_usage_changes,
@@ -2507,6 +2516,7 @@ impl Indexer {
                     all_tx_data,
                     input_cell_info,
                     batch_cell_infos,
+                    input_script_hashes,
                     address_balance_changes,
                     script_usage_changes,
                     script_reference_usage_changes,
@@ -2826,6 +2836,7 @@ impl Indexer {
                             all_tx_data,
                             input_cell_info,
                             batch_cell_infos,
+                            input_script_hashes,
                             address_balance_changes,
                             script_usage_changes,
                             script_reference_usage_changes,

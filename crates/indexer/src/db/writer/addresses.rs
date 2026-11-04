@@ -1459,6 +1459,7 @@ impl BatchWriter {
         txs: &[crate::sync::types::TxData],
         input_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
         batch_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
+        input_script_hashes: &crate::sync::types::InputScriptHashes,
         undo_seq: &crate::sync::undo::SharedUndoSeq,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -1486,24 +1487,21 @@ impl BatchWriter {
                     let cell = batch_cells.get(&key).or_else(|| input_cells.get(&key)).ok_or_else(|| anyhow::anyhow!(
                         "missing prefetched input for script lineage: block={} tx=0x{} input=0x{}:{}",
                         tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index))?;
-                    if !cell
+                    let (_, type_script_hash) = input_script_hashes.get(&key).ok_or_else(|| anyhow::anyhow!(
+                        "input has no derived script hashes for script lineage: block={} tx=0x{} input=0x{}:{}",
+                        tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index))?;
+                    let is_type_id_input = cell
                         .type_code_hash
                         .as_ref()
                         .map(|hash| hash.as_slice())
                         .zip(cell.type_hash_type)
                         .is_some_and(|(hash, kind)| {
                             kind == 1 && crate::parser::script::is_type_id(hash, 1)
-                        })
-                    {
+                        });
+                    // A type-id input's reference is its type script hash.
+                    let Some(reference) = type_script_hash.filter(|_| is_type_id_input) else {
                         continue;
-                    }
-                    let reference = cell.type_script_hash().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "type-id input lacks script hash: block={} tx=0x{}",
-                            tx.block_number,
-                            hex::encode(tx.hash)
-                        )
-                    })?;
+                    };
                     let current = match chain_mappings.get(reference.as_slice()) {
                         Some(value) => value.clone(),
                         None => self
@@ -2644,6 +2642,11 @@ mod tests {
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&tx),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2823,6 +2826,11 @@ mod tests {
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&tx),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2957,6 +2965,11 @@ mod tests {
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&tx),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3032,6 +3045,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &inactive,
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &inactive,
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut inactive_batch,
             )
@@ -3050,6 +3068,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &input_cells,
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &input_cells,
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3114,6 +3137,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &input_cells,
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &input_cells,
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3183,6 +3211,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &HashMap::new(),
                 &batch_cells,
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &HashMap::new(),
+                    &batch_cells,
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3413,6 +3446,7 @@ mod tests {
                 &txs,
                 &HashMap::new(),
                 &inputs,
+                &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3614,6 +3648,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3762,6 +3797,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3871,6 +3907,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut unchanged_batch,
             )
@@ -3922,6 +3959,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut changed_batch,
             )

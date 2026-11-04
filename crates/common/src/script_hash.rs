@@ -1,6 +1,7 @@
 //! The CKB script hash: blake2b-256 (CKB personalization) of the script's
 //! Molecule encoding. The one routine in the workspace; the indexer's parser,
-//! the API and the store's `LiveCellInfo` all call it.
+//! the API and the store's `LiveCellInfo` all call it. It streams the encoding
+//! into the hasher, so it allocates nothing.
 
 use ckb_hash::new_blake2b;
 
@@ -15,48 +16,42 @@ use ckb_hash::new_blake2b;
 /// }
 /// ```
 pub fn script_hash(code_hash: &[u8], hash_type: u8, args: &[u8]) -> [u8; 32] {
-    let encoded = molecule_encode_script(code_hash, hash_type, args);
+    let args_len = u32::try_from(args.len())
+        .unwrap_or_else(|_| panic!("script args length exceeds u32 range: {}", args.len()));
 
+    // The Molecule encoding, fed to the hasher field by field instead of
+    // being assembled in a buffer first.
     let mut hasher = new_blake2b();
-    hasher.update(&encoded);
+    hasher.update(&molecule_script_header(args_len));
+    hasher.update(code_hash); // Byte32
+    hasher.update(&[hash_type]); // byte
+    hasher.update(&args_len.to_le_bytes()); // Bytes length prefix
+    hasher.update(args); // Bytes data
 
     let mut hash = [0u8; 32];
     hasher.finalize(&mut hash);
     hash
 }
 
-/// Molecule table encoding of a script:
-/// - Header: 4 bytes (total size) + 4 bytes per field (offsets)
-/// - Body: fields in declaration order
-fn molecule_encode_script(code_hash: &[u8], hash_type: u8, args: &[u8]) -> Vec<u8> {
+/// The Molecule table header of a script: total size, then the offsets of
+/// `code_hash`, `hash_type` and `args`, each a little-endian u32.
+fn molecule_script_header(args_len: u32) -> [u8; 16] {
     const HEADER_SIZE: u32 = 4 + 3 * 4; // total_size + 3 field offsets
     const CODE_HASH_SIZE: u32 = 32;
     const HASH_TYPE_SIZE: u32 = 1;
 
-    let args_len_u32 = u32::try_from(args.len())
-        .unwrap_or_else(|_| panic!("script args length exceeds u32 range: {}", args.len()));
-    let args_size = 4 + args_len_u32; // Bytes = length prefix (4) + data
+    let args_size = 4 + args_len; // Bytes = length prefix (4) + data
     let total_size = HEADER_SIZE + CODE_HASH_SIZE + HASH_TYPE_SIZE + args_size;
-
     let offset_code_hash = HEADER_SIZE;
     let offset_hash_type = offset_code_hash + CODE_HASH_SIZE;
     let offset_args = offset_hash_type + HASH_TYPE_SIZE;
 
-    let mut buf = Vec::with_capacity(total_size as usize);
-
-    // Header
-    buf.extend_from_slice(&total_size.to_le_bytes());
-    buf.extend_from_slice(&offset_code_hash.to_le_bytes());
-    buf.extend_from_slice(&offset_hash_type.to_le_bytes());
-    buf.extend_from_slice(&offset_args.to_le_bytes());
-
-    // Body
-    buf.extend_from_slice(code_hash); // Byte32
-    buf.push(hash_type); // byte
-    buf.extend_from_slice(&args_len_u32.to_le_bytes()); // Bytes length prefix
-    buf.extend_from_slice(args); // Bytes data
-
-    buf
+    let mut header = [0u8; 16];
+    header[0..4].copy_from_slice(&total_size.to_le_bytes());
+    header[4..8].copy_from_slice(&offset_code_hash.to_le_bytes());
+    header[8..12].copy_from_slice(&offset_hash_type.to_le_bytes());
+    header[12..16].copy_from_slice(&offset_args.to_le_bytes());
+    header
 }
 
 #[cfg(test)]
@@ -65,14 +60,33 @@ mod tests {
 
     #[test]
     fn test_molecule_encoding_size() {
-        let code_hash = [0u8; 32];
-        let args = vec![0u8; 32];
-        let encoded = molecule_encode_script(&code_hash, 1, &args);
+        let header = molecule_script_header(32);
+        let word = |i: usize| u32::from_le_bytes(header[i..i + 4].try_into().unwrap());
 
         // Header: 4 (total) + 4*3 (offsets) = 16 bytes
         // Body: 32 (code_hash) + 1 (hash_type) + 4 (args len) + 32 (args) = 69 bytes
         // Total: 85 bytes
-        assert_eq!(encoded.len(), 85);
+        assert_eq!(word(0), 85);
+        assert_eq!((word(4), word(8), word(12)), (16, 48, 49));
+    }
+
+    /// Streaming the fields into the hasher hashes exactly the assembled
+    /// Molecule bytes.
+    #[test]
+    fn script_hash_streams_the_molecule_encoding() {
+        let code_hash = [0x9b; 32];
+        let args = [0xab, 0xcd, 0xef];
+        let mut encoded = molecule_script_header(3).to_vec();
+        encoded.extend_from_slice(&code_hash);
+        encoded.push(2);
+        encoded.extend_from_slice(&3u32.to_le_bytes());
+        encoded.extend_from_slice(&args);
+        assert_eq!(encoded.len(), 16 + 32 + 1 + 4 + 3);
+        let mut hasher = new_blake2b();
+        hasher.update(&encoded);
+        let mut expected = [0u8; 32];
+        hasher.finalize(&mut expected);
+        assert_eq!(script_hash(&code_hash, 2, &args), expected);
     }
 
     /// The SECP256K1/blake160 code cell's type script (TYPE_ID, `type`, its

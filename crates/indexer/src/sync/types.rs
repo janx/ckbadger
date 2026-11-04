@@ -57,6 +57,40 @@ pub(crate) struct XudtExtensionScript {
 /// that created it, exactly as the writer holds a resolved input cell.
 pub(crate) type CachedCellInfo = ckbadger_store::PositionedCellInfo;
 
+/// Lock and (if typed) type script hash of each input cell of a live batch,
+/// keyed by its outpoint. The `cells` payload stores no script hashes: the
+/// parser's pass 3 derives each input's once and ships them with the batch, and
+/// every writer site reads them from here instead of deriving them again.
+pub(crate) type InputScriptHashes = HashMap<(Vec<u8>, i16), ([u8; 32], Option<[u8; 32]>)>;
+
+/// What pass 3 ships, for writer tests that build a batch by hand: the script
+/// hashes of every input of `txs` whose cell is in `cell_info` or
+/// `batch_cell_info` (an input without one is left out; the writer reports it).
+#[cfg(test)]
+pub(crate) fn derive_input_script_hashes<'t>(
+    txs: impl IntoIterator<Item = &'t TxData>,
+    cell_info: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
+    batch_cell_info: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
+) -> InputScriptHashes {
+    let mut hashes = InputScriptHashes::new();
+    for tx in txs {
+        if tx.is_cellbase {
+            continue;
+        }
+        for input in &tx.inputs {
+            let Ok(output_index) = i16::try_from(input.previous_output_index) else {
+                continue;
+            };
+            let key = (input.previous_tx_hash.to_vec(), output_index);
+            if let Some(info) = cell_info.get(&key).or_else(|| batch_cell_info.get(&key)) {
+                let derived = (info.lock_script_hash(), info.type_script_hash());
+                hashes.insert(key, derived);
+            }
+        }
+    }
+    hashes
+}
+
 #[derive(Clone)]
 pub(crate) struct CachedUdtCellInfo {
     pub(crate) type_script_hash: Vec<u8>,

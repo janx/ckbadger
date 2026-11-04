@@ -49,8 +49,8 @@ use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
     AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
-    EntityDailyChanges, TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey,
-    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
+    EntityDailyChanges, InputScriptHashes, TokenDailyChanges, TxData, UndatedEntityKey,
+    UndatedScriptKey, UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
@@ -469,9 +469,9 @@ fn prepare_live_cell_summary_snapshots(
 struct ActivityInputIndexes<'a> {
     cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
     batch_cell_info: &'a HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    /// Lock / type script hashes of every input cell, derived once per batch
-    /// by [`derive_input_script_hashes`]: the `cells` payload does not store
-    /// them, and the activity views borrow them from here.
+    /// Lock / type script hashes of every input cell, derived once by the
+    /// parser's pass 3 (the `cells` payload does not store them); the activity
+    /// views borrow them from here.
     script_hashes: &'a InputScriptHashes,
     dao_withdraw_outpoints: &'a HashSet<(Vec<u8>, i16)>,
     dao_compensations: &'a HashMap<(Vec<u8>, i16), i64>,
@@ -486,41 +486,6 @@ struct ActivityInputIndexes<'a> {
     dotcell_inputs: &'a HashMap<(Vec<u8>, i16), crate::parser::DotCellNameData>,
     /// The DAS ActionData action of each transaction that carries one.
     das_actions: &'a HashMap<[u8; 32], String>,
-}
-
-/// Lock and (if typed) type script hash of each activity input cell, keyed by
-/// its outpoint.
-type InputScriptHashes = HashMap<(Vec<u8>, i16), ([u8; 32], Option<[u8; 32]>)>;
-
-/// Derives the script hashes of every input of `txs` whose cell is in
-/// `cell_info` (read from the store) or `batch_cell_info` (created earlier in
-/// this batch): one derivation per input cell, however many views read it.
-/// An input without cell info is left out; the view builder reports it.
-fn derive_input_script_hashes<'t>(
-    txs: impl IntoIterator<Item = &'t TxData>,
-    cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    batch_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-) -> InputScriptHashes {
-    let mut hashes = InputScriptHashes::new();
-    for tx in txs {
-        if tx.is_cellbase {
-            continue;
-        }
-        for input in &tx.inputs {
-            let Ok(output_index) = i16::try_from(input.previous_output_index) else {
-                continue;
-            };
-            let key = (input.previous_tx_hash.to_vec(), output_index);
-            if hashes.contains_key(&key) {
-                continue;
-            }
-            if let Some(info) = cell_info.get(&key).or_else(|| batch_cell_info.get(&key)) {
-                let derived = (info.lock_script_hash(), info.type_script_hash());
-                hashes.insert(key, derived);
-            }
-        }
-    }
-    hashes
 }
 
 /// One transaction as the live activity builder sees it: inputs resolved
@@ -1028,6 +993,7 @@ fn resolve_input_udt_info_from_live_cells(
     writer: &BatchWriter,
     udt_cache: &DashMap<([u8; 32], i16), CachedUdtCellInfo>,
     all_input_outpoints_udt: &[(Vec<u8>, i16)],
+    input_script_hashes: &InputScriptHashes,
 ) -> Result<HashMap<(Vec<u8>, i16), UdtInputInfo>> {
     if all_input_outpoints_udt.is_empty() {
         return Ok(HashMap::new());
@@ -1070,7 +1036,7 @@ fn resolve_input_udt_info_from_live_cells(
             .iter()
             .map(|(h, i)| (h.as_slice(), *i))
             .collect();
-        let db_results = writer.get_udt_cells_info_batch(&outpoint_refs)?;
+        let db_results = writer.get_udt_cells_info_batch(&outpoint_refs, input_script_hashes)?;
 
         for ((tx_hash, idx), info) in &db_results {
             let key = tx_hash_key32(
@@ -1741,6 +1707,7 @@ impl Indexer {
         mut all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        input_script_hashes: InputScriptHashes,
         address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
@@ -2126,6 +2093,7 @@ impl Indexer {
                 &all_consumptions,
                 &input_cell_info,
                 &batch_cell_infos,
+                &input_script_hashes,
                 &mut data_batch,
                 false,
             )?;
@@ -2391,6 +2359,7 @@ impl Indexer {
                     &self.writer,
                     &self.udt_cell_cache,
                     &all_input_outpoints_udt,
+                    &input_script_hashes,
                 )?;
             }
 
@@ -2422,23 +2391,28 @@ impl Indexer {
                 // `input_udt_info` here would be narrower than bulk: it drops
                 // owner-mode (amount-less) and not-yet-registered typed inputs,
                 // which must still veto a "mint" classification.
-                // The payload no longer stores type script hashes: derive each
-                // typed input's once, and let the borrowed map point at them.
-                let persisted_input_type_hashes: Vec<((&[u8], i32), [u8; 32])> = input_cell_info
-                    .iter()
-                    .filter_map(|((tx_hash, output_index), info)| {
-                        info.type_script_hash().map(|type_script_hash| {
-                            (
-                                (tx_hash.as_slice(), i32::from(*output_index)),
-                                type_script_hash,
+                // The payload stores no type script hashes: each typed input's
+                // was derived once by pass 3.
+                let persisted_input_types: OutpointTypeHashes<'_> = input_cell_info
+                    .keys()
+                    .map(|key| {
+                        let (_, type_script_hash) =
+                            input_script_hashes.get(key).ok_or_else(|| {
+                                anyhow!(
+                                "persisted input has no derived script hashes: outpoint=0x{}:{}",
+                                hex::encode(&key.0),
+                                key.1
                             )
-                        })
+                            })?;
+                        Ok(type_script_hash.as_ref().map(|type_script_hash| {
+                            (
+                                (key.0.as_slice(), i32::from(key.1)),
+                                type_script_hash.as_slice(),
+                            )
+                        }))
                     })
-                    .collect();
-                let persisted_input_types: OutpointTypeHashes<'_> = persisted_input_type_hashes
-                    .iter()
-                    .map(|(outpoint, type_script_hash)| (*outpoint, type_script_hash.as_slice()))
-                    .collect();
+                    .filter_map(Result::transpose)
+                    .collect::<Result<_>>()?;
                 let onchain_token_info =
                     collect_token_onchain_info(&all_tx_data, &persisted_input_types);
                 let mut all_transfers: Vec<(crate::parser::ParsedUdtTransfer, Vec<u8>, i64)> =
@@ -3403,8 +3377,6 @@ impl Indexer {
         // over this whole batch. Rollback reverses the counter from the prefix
         // rows it deletes, so no per-block bookkeeping is needed here.
         let mut prefix_tx_counts: BTreeMap<[u8; 20], i64> = BTreeMap::new();
-        let input_script_hashes =
-            derive_input_script_hashes(&all_tx_data, &input_cell_info, &batch_cell_infos);
         {
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
@@ -3717,17 +3689,25 @@ impl Indexer {
                             "sync_indexer",
                         )?,
                     );
-                    if let Some(info) = input_cell_info
+                    if input_cell_info
                         .get(&key)
                         .or_else(|| batch_cell_infos.get(&key))
-                        .filter(|info| {
+                        .is_some_and(|info| {
                             info.type_code_hash
                                 .as_ref()
                                 .map(|hash| hash.as_slice())
                                 .is_some_and(DaoParser::is_dao_code_hash)
                         })
                     {
-                        touched_lock_hashes.insert(info.lock_script_hash().to_vec());
+                        let (lock_script_hash, _) =
+                            input_script_hashes.get(&key).ok_or_else(|| {
+                                anyhow!(
+                                    "DAO input has no derived script hashes: outpoint=0x{}:{}",
+                                    hex::encode(&key.0),
+                                    key.1
+                                )
+                            })?;
+                        touched_lock_hashes.insert(lock_script_hash.to_vec());
                     }
                 }
             }
@@ -4257,6 +4237,7 @@ impl Indexer {
                     &all_tx_data,
                     &input_cell_info,
                     &batch_cell_infos,
+                    &input_script_hashes,
                     &batch_undo_seq,
                     &mut data_batch,
                 )
@@ -5146,7 +5127,11 @@ mod tests {
         let empty_dao_comp = HashMap::new();
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
-        let script_hashes = derive_input_script_hashes([&tx], &empty_cell_info, &empty_batch_info);
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &empty_cell_info,
+            &empty_batch_info,
+        );
         let err = match build_activity_input_views(
             &tx,
             99,
@@ -5205,7 +5190,11 @@ mod tests {
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
         let empty_dotbit_unindexed = HashSet::new();
-        let script_hashes = derive_input_script_hashes([&tx], &empty_cell_info, &batch_cell_infos);
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &empty_cell_info,
+            &batch_cell_infos,
+        );
         let inputs = build_activity_input_views(
             &tx,
             100,
@@ -5270,7 +5259,11 @@ mod tests {
         let empty_dotbit = HashMap::new();
         let empty_dotcell = HashMap::new();
         let empty_dotbit_unindexed = HashSet::new();
-        let script_hashes = derive_input_script_hashes([&tx], &input_cell_info, &empty_batch_info);
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &input_cell_info,
+            &empty_batch_info,
+        );
         let inputs = build_activity_input_views(
             &tx,
             200,
@@ -5327,7 +5320,11 @@ mod tests {
         let empty_dotcell = HashMap::new();
 
         let empty_dotbit_unindexed = HashSet::new();
-        let script_hashes = derive_input_script_hashes([&tx], &input_cell_info, &empty_batch_info);
+        let script_hashes = crate::sync::types::derive_input_script_hashes(
+            [&tx],
+            &input_cell_info,
+            &empty_batch_info,
+        );
         let inputs = build_activity_input_views(
             &tx,
             201,
@@ -5443,7 +5440,8 @@ mod tests {
         let empty_dao_comp = HashMap::new();
         let empty_bit_cell = HashMap::new();
         let empty_dotcell = HashMap::new();
-        let script_hashes = derive_input_script_hashes([&tx], &cell_info, &empty_cell_info);
+        let script_hashes =
+            crate::sync::types::derive_input_script_hashes([&tx], &cell_info, &empty_cell_info);
         let view = build_live_activity_tx_view(
             &tx,
             5_867_661,
@@ -5893,7 +5891,8 @@ mod tests {
         let empty_ids = HashMap::new();
         let empty_dotcell = HashMap::new();
 
-        let script_hashes = derive_input_script_hashes([&tx], &cell_info, &empty_cell_info);
+        let script_hashes =
+            crate::sync::types::derive_input_script_hashes([&tx], &cell_info, &empty_cell_info);
         let err = match build_activity_input_views(
             &tx,
             77,
@@ -6110,6 +6109,7 @@ mod tests {
             &writer,
             &cache,
             &[(tx_hash.clone(), output_index)],
+            &InputScriptHashes::new(),
         )
         .unwrap();
 
@@ -6169,10 +6169,16 @@ mod tests {
         batch.put_cell(&tx_hash, output_index, &live_cell, 1);
         batch.commit().unwrap();
 
+        // What pass 3 ships for this input.
+        let input_script_hashes = InputScriptHashes::from([(
+            (tx_hash.clone(), output_index),
+            (live_cell.lock_script_hash(), live_cell.type_script_hash()),
+        )]);
         let resolved = resolve_input_udt_info_from_live_cells(
             &writer,
             &cache,
             &[(tx_hash.clone(), output_index)],
+            &input_script_hashes,
         )
         .unwrap();
 
@@ -7505,6 +7511,12 @@ mod tests {
                 object_daily_from_cells(&all_tx_data, &input_cell_info, &batch_cell_infos)?;
 
             let chain_tip = u64::try_from(all_parsed_blocks.last().unwrap().number)?;
+            // What the parser's pass 3 ships with a live batch.
+            let input_script_hashes = crate::sync::types::derive_input_script_hashes(
+                &all_tx_data,
+                &input_cell_info,
+                &batch_cell_infos,
+            );
             let metrics = indexer
                 .write_parsed_batch(
                     &blocks,
@@ -7512,6 +7524,7 @@ mod tests {
                     all_tx_data,
                     input_cell_info,
                     batch_cell_infos,
+                    input_script_hashes,
                     address_balance_changes,
                     script_usage_changes,
                     script_reference_usage_changes,

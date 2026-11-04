@@ -823,11 +823,22 @@ fn test_live_sync_files_cell_by_code_rows_under_their_hash_type_form() {
     let preloaded = writer
         .get_full_cells_info_batch(&[(&data_form_tx, 0)])
         .unwrap();
+    // What the parser ships with a live batch: each input's script hashes.
+    let shipped: HashMap<(Vec<u8>, i16), ([u8; 32], Option<[u8; 32]>)> = preloaded
+        .iter()
+        .map(|(key, info)| {
+            (
+                key.clone(),
+                (info.lock_script_hash(), info.type_script_hash()),
+            )
+        })
+        .collect();
     writer
         .consume_cells_batch_preloaded(
             &[(&data_form_tx, 0, 1000, &type_form_tx, 1002, 0)],
             &preloaded,
             &Default::default(),
+            &shipped,
             &mut domain_batch,
             false,
         )

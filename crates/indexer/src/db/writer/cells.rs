@@ -199,9 +199,11 @@ impl BatchWriter {
             cells_batch.put_cell_payload(&raw_key, &info.cell)?;
             // Live marker -> domain batch
             domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
+            // Index keys take the script hashes the parser computed for this
+            // output; the payload stores none.
             // Lock script mapping (idempotent, survives cell consumption)
             domain_batch.put_lock_script(
-                &info.lock_script_hash(),
+                &cell.lock_script_hash,
                 &LockScriptEntry {
                     code_hash: info.lock_code_hash.to_vec(),
                     hash_type: info.lock_hash_type,
@@ -210,7 +212,7 @@ impl BatchWriter {
             );
             if !skip_cell_indices {
                 domain_batch.put_cell_by_lock(
-                    &info.lock_script_hash(),
+                    &cell.lock_script_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -222,7 +224,7 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = info.type_script_hash() {
+                if let Some(type_hash) = &cell.type_script_hash {
                     domain_batch.put_cell_by_type(
                         type_hash,
                         info.created_at_block,
@@ -390,6 +392,7 @@ impl BatchWriter {
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
         preloaded_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         same_batch_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        script_hashes: &crate::sync::types::InputScriptHashes,
         domain_batch: &mut StoreBatch,
         skip_cell_indices: bool,
     ) -> Result<()> {
@@ -427,8 +430,18 @@ impl BatchWriter {
             );
             domain_batch.delete_cell_raw_key(&raw_key);
             if !skip_cell_indices {
+                // The input's script hashes, derived once by the parser.
+                let (lock_script_hash, type_script_hash) =
+                    script_hashes.get(&lookup_key).ok_or_else(|| {
+                        anyhow!(
+                            "consumed cell has no derived script hashes: outpoint=0x{}:{}, consumed_by_tx=0x{}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            hex::encode(consumed_by_tx)
+                        )
+                    })?;
                 domain_batch.delete_cell_by_lock(
-                    &info.lock_script_hash(),
+                    lock_script_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -440,7 +453,7 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = info.type_script_hash() {
+                if let Some(type_hash) = type_script_hash {
                     domain_batch.delete_cell_by_type(
                         type_hash,
                         info.created_at_block,
@@ -472,17 +485,20 @@ mod tests {
     use ckbadger_store::CkbadgerStore;
     use std::sync::Arc;
 
+    /// A parsed UDT output whose script hashes are the parser's, computed from
+    /// its script fields.
     fn build_udt_cell(type_code_hash: Vec<u8>, data: Vec<u8>) -> ParsedCell {
+        let script_hash = crate::parser::ScriptParser::compute_script_hash_raw;
         ParsedCell {
             capacity: 100_000_000,
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![0x22; 20],
-            lock_script_hash: vec![0x33; 32],
+            lock_script_hash: script_hash(&[0x11; 32], 1, &[0x22; 20]),
+            type_script_hash: Some(script_hash(&type_code_hash, 1, &[0x44; 32])),
             type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
-            type_script_hash: Some(vec![0x55; 32]),
             data_hash: [0x66; 32],
             data_size: data.len() as i32,
             data,
@@ -617,6 +633,79 @@ mod tests {
         assert_eq!(stored.udt_amount, Some(7));
     }
 
+    /// The writer reads each consumed input's script hashes from what the
+    /// parser shipped (it derives none itself): the index rows go under those
+    /// keys, and an input missing from the shipped map is an error.
+    #[test]
+    fn test_consume_cells_batch_preloaded_uses_the_shipped_script_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let tx_hash = vec![0xFB; 32];
+        let consumed_by = [0xBD_u8; 32];
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+            vec![(tx_hash.as_slice(), 0, 20, consumed_by.as_slice(), 21, 1)];
+        let info = PositionedCellInfo::new(
+            build_udt_cell(vec![0x77; 32], vec![0u8; 16])
+                .to_live_cell_info(142_00000000, None)
+                .unwrap(),
+            20,
+        );
+        let lock_hash = info.lock_script_hash();
+        let type_hash = info.type_script_hash().unwrap();
+        let preloaded_cells = HashMap::from([((tx_hash.clone(), 0i16), info)]);
+        let same_batch_cells = HashMap::new();
+
+        let mut setup = StoreBatch::new(&store);
+        setup.put_cell_by_lock(&lock_hash, 20, &tx_hash, 0);
+        setup.put_cell_by_type(&type_hash, 20, &tx_hash, 0);
+        setup.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .consume_cells_batch_preloaded(
+                &consumptions,
+                &preloaded_cells,
+                &same_batch_cells,
+                &crate::sync::types::InputScriptHashes::new(),
+                &mut batch,
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("consumed cell has no derived script hashes")
+                && err.to_string().contains(&hex::encode(&tx_hash)),
+            "{err}"
+        );
+
+        let shipped = crate::sync::types::InputScriptHashes::from([(
+            (tx_hash.clone(), 0i16),
+            (lock_hash, Some(type_hash)),
+        )]);
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .consume_cells_batch_preloaded(
+                &consumptions,
+                &preloaded_cells,
+                &same_batch_cells,
+                &shipped,
+                &mut batch,
+                false,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+        assert!(store
+            .list_cells_by_lock(&lock_hash, 10, None, &store)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .list_cells_by_type(&type_hash, 10, None, &store)
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn test_consume_cells_batch_preloaded_errors_on_missing_cell_info() {
         let dir = tempfile::tempdir().unwrap();
@@ -636,6 +725,7 @@ mod tests {
                 &consumptions,
                 &preloaded_cells,
                 &same_batch_cells,
+                &crate::sync::types::InputScriptHashes::new(),
                 &mut batch,
                 false,
             )
