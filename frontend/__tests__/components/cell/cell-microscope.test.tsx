@@ -94,7 +94,7 @@ describe('cell microscope', () => {
     expect(box).toHaveAttribute('data-instrument-frame');
     expect(box).toHaveAttribute('data-cell-bytes');
     expect(box).toHaveClass('neon-edge-top', 'rounded', 'border', 'border-base-border');
-    expect(box).not.toHaveClass('border-[#1a1f30]');
+    expect(box).not.toHaveClass('border-base-border-subtle');
     const dump = box.querySelector('.overflow-x-auto') as HTMLElement;
     expect(dump).toHaveClass('px-4', 'py-3');
     // material pass v2 (move 2): the dump itself is a well inside the glass
@@ -400,5 +400,26 @@ describe('cell microscope at phone width (responsive review A#10, A#11)', () => 
     expect(data).toHaveTextContent(/^2$/);
     expect(data.style.paddingInline).toBe('4px');
     expect(Number.parseFloat(data.style.minWidth)).toBeGreaterThanOrEqual(6.3 + 8);
+  });
+});
+
+// Visual finish V11: the dump's inks are theme classes or named inks, no bracket hex.
+describe('cell microscope inks (V11)', () => {
+  it('draws the offsets in the quiet slate and the rail on the theme’s row rule', () => {
+    stubChartWidth(1200);
+    render(<CellMicroscope cell={cell} />);
+    const box = screen.getByLabelText('Cell bytes');
+    const offsets = [...box.querySelectorAll<HTMLElement>('span')].filter((el) =>
+      /^0x[0-9a-f]{4,5}$/.test(el.textContent ?? '')
+    );
+    expect(offsets.length).toBeGreaterThan(0);
+    for (const el of offsets) {
+      expect(el).toHaveClass('text-[color:var(--ink)]');
+      expect(el.style.getPropertyValue('--ink')).toBe('#4b5266');
+    }
+    expect(screen.getByRole('complementary', { name: 'Field detail' })).toHaveClass(
+      'border-base-border-subtle'
+    );
+    expect(document.body.innerHTML).not.toMatch(/(text|bg|border)-\[#/);
   });
 });

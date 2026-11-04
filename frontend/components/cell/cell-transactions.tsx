@@ -8,9 +8,13 @@ import { TxStructure, type TxStructureGroup } from '@/components/transaction/tx-
 import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { api, type Cell, type TransactionDetail } from '@/lib/api';
 import { formatDurationMs, formatUtc8DateTime } from '@/lib/utils';
-import { CELL_COLORS } from '@/lib/design-tokens';
+import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
 import { TYPE_ID_CODE_HASH, txContinuity } from '@/lib/tx-continuity';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
+
+/** Links in a board ink; the global `a:hover` jade still wins over them. */
+const CELL_LINK = inkStyle(BOARD_INKS.cellLink);
+const LINK = inkStyle(BOARD_INKS.link);
 
 function short(hash: string, head = 8, tail = 6): string {
   return hash.length <= head + tail + 3 ? hash : `${hash.slice(0, 2 + head)}…${hash.slice(-tail)}`;
@@ -144,7 +148,7 @@ export function TransactionEvidence({
     <div className="space-y-3">
       <div className="text-small flex flex-wrap items-baseline gap-3">
         <span className="text-text-bright">{label}</span>
-        <Link href={`/tx/${hash}`} className="break-all text-[#7aa7d6]">
+        <Link href={`/tx/${hash}`} className="break-all text-[color:var(--ink)]" style={CELL_LINK}>
           {hash}
         </Link>
         {tx.timestamp && (
@@ -187,7 +191,8 @@ function NotSpentYet({
   return (
     <div
       data-testid="not-spent-yet"
-      className="text-small flex max-w-[640px] flex-col gap-1.5 rounded border border-dashed border-[#4b5266] px-3 py-2.5"
+      className="text-small flex max-w-[640px] flex-col gap-1.5 rounded border border-dashed px-3 py-2.5"
+      style={{ borderColor: BOARD_INKS.quiet }}
     >
       <div className="flex flex-wrap justify-between gap-2">
         <span className="text-text-bright">{replaced ? 'Not replaced yet' : 'Not spent yet'}</span>
@@ -239,7 +244,8 @@ function NotSpentYet({
                   {' '}
                   <Link
                     href={`/cell/${candidate.txHash}-${candidate.outputIndex}`}
-                    className="text-[#6aa9c4]"
+                    className="text-[color:var(--ink)]"
+                    style={LINK}
                     title={`Candidate cell ${candidate.txHash}:${candidate.outputIndex} · version ${candidate.versionHash}`}
                   >
                     {short(candidate.txHash)}:{candidate.outputIndex}

@@ -213,7 +213,7 @@ describe('Cell page against the Cell board', () => {
     // byte → pill
     expect(
       screen.getByLabelText('Field index').querySelector('[data-pill="out:lock.code_hash"]')
-    ).toHaveClass('border-[#a0a8be]');
+    ).toHaveClass('border-text');
     const map = screen.getByRole('group', { name: 'Capacity map' });
     expect(within(map).getByTitle('lock · 66 bytes')).toHaveAttribute('data-lit', 'true');
     expect(within(map).getByTitle('type · 65 bytes')).toHaveAttribute('data-lit', 'false');

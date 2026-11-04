@@ -2,10 +2,12 @@
 import Link from '@/components/ui/link';
 import type { Cell, CellElfAnalysis } from '@/lib/api';
 import { BlockLink } from '@/components/ui/block-link';
-import { CELL_COLORS } from '@/lib/design-tokens';
+import { BOARD_INKS, CELL_COLORS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 const DATA_HASH_TYPES = new Set(['data', 'data1', 'data2']);
+/** A cell or script link in the lock blue; the global `a:hover` jade still wins over it. */
+const CELL_LINK = inkStyle(BOARD_INKS.cellLink);
 
 function liveUsers(reference: { lockLiveCellsCount: number; typeLiveCellsCount: number }): number {
   return reference.lockLiveCellsCount + reference.typeLiveCellsCount;
@@ -83,7 +85,7 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
         </div>
         <div
           data-testid="code-built-with"
-          className="flex min-w-0 flex-col gap-1 border-t-2 border-[#343c50] pt-2.5"
+          className="border-text-ghost flex min-w-0 flex-col gap-1 border-t-2 pt-2.5"
         >
           <span className="text-text-dim">built with</span>
           {elf.status === 'parsed' ? (
@@ -103,7 +105,8 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               Also named as{' '}
               <Link
                 href={`/script/${reference.referenceHash}?hashType=${reference.hashType}`}
-                className="text-[#7aa7d6]"
+                className="text-[color:var(--ink)]"
+                style={CELL_LINK}
               >
                 {reference.hashType} · {reference.referenceHash}
               </Link>{' '}
@@ -130,7 +133,8 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
                 </span>{' '}
                 <Link
                   href={`/cell/${item.codeCellTxHash}-${item.codeCellOutputIndex}`}
-                  className="text-[#7aa7d6]"
+                  className="text-[color:var(--ink)]"
+                  style={CELL_LINK}
                 >
                   {item.codeCellTxHash}
                   <OutpointIndex index={item.codeCellOutputIndex} />
@@ -145,7 +149,8 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
             <p key={`${item.currentTxHash}:${item.currentOutputIndex}`} className="break-all">
               <Link
                 href={`/cell/${item.previousTxHash}-${item.previousOutputIndex}`}
-                className="text-[#7aa7d6]"
+                className="text-[color:var(--ink)]"
+                style={CELL_LINK}
               >
                 Input {item.previousTxHash}
                 <OutpointIndex index={item.previousOutputIndex} />
@@ -153,7 +158,8 @@ export function CodeCellBoard({ cell }: { cell: Cell }) {
               →{' '}
               <Link
                 href={`/cell/${item.currentTxHash}-${item.currentOutputIndex}`}
-                className="text-[#7aa7d6]"
+                className="text-[color:var(--ink)]"
+                style={CELL_LINK}
               >
                 output #{item.currentOutputIndex}
               </Link>{' '}

@@ -14,7 +14,7 @@ import { api, isNotFoundApiError, type Cell } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { useParams } from '@/src/navigation';
 import { formatDurationMs, formatUtc8DateTime, truncateHash } from '@/lib/utils';
-import { CELL_COLORS, DATA_COLOR, EXPIRED_COLOR } from '@/lib/design-tokens';
+import { BOARD_INKS, CELL_COLORS, DATA_COLOR, EXPIRED_COLOR, inkStyle } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 import { BlockLink } from '@/components/ui/block-link';
@@ -294,7 +294,7 @@ function CopyOutpoint({ value }: { value: string }) {
         await navigator.clipboard.writeText(value);
         setCopied(true);
       }}
-      className="text-text-dim hover:text-text-bright text-meta h-[26px] rounded border border-[#222840] px-2"
+      className="text-text-dim hover:text-text-bright text-meta border-base-border h-[26px] rounded border px-2"
     >
       {copied ? 'copied' : 'copy'}
     </button>
@@ -474,7 +474,8 @@ function CellBody({ cell, refreshError }: { cell: Cell; refreshError: Error | nu
                 <li key={`${item.txHash}:${item.outputIndex}`}>
                   <Link
                     href={`/cell/${item.txHash}-${item.outputIndex}`}
-                    className="text-[#7aa7d6]"
+                    className="text-[color:var(--ink)]"
+                    style={inkStyle(BOARD_INKS.cellLink)}
                   >
                     {item.txHash}
                     <OutpointIndex index={item.outputIndex} />

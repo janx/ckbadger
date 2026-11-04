@@ -200,3 +200,23 @@ describe('CodeCellBoard', () => {
     expect(screen.getByTestId('code-target-unread')).toHaveAttribute('title', reason);
   });
 });
+
+// Visual finish V11: the links' lock blue is a named ink (BOARD_INKS.cellLink), carried by a CSS
+// variable that a class reads, so the global `a:hover` jade still wins over it (an inline colour
+// would not); no bracket-hex class is left.
+describe('CodeCellBoard inks (V11)', () => {
+  it('draws its cell and script links in the lock blue through --ink, never an inline colour', () => {
+    render(<CodeCellBoard cell={cell} />);
+    const links = [
+      screen.getByRole('link', { name: `type · ${reference}` }),
+      screen.getByRole('link', { name: `${txB}:1` }),
+    ];
+    for (const link of links) {
+      expect(link).toHaveClass('text-[color:var(--ink)]');
+      expect(link.style.getPropertyValue('--ink')).toBe('#7aa7d6');
+      expect(link.style.color).toBe('');
+      expect(link.className).not.toMatch(/\[#/);
+    }
+    expect(screen.getByTestId('code-built-with')).toHaveClass('border-text-ghost');
+  });
+});
