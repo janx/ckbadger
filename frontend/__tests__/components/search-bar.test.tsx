@@ -161,6 +161,41 @@ describe('SearchBar', () => {
     expect(screen.getByTestId('search-cursor')).toHaveClass('cursor');
   });
 
+  // Visual finish V11: the compact results' well, selected row and hover are named inks
+  // (SEARCH_RESULT_COLORS), the hover through a CSS variable its class reads; no bracket hex.
+  it('draws the compact results in their own well, the selected row lit, the hover through a variable', async () => {
+    render(<SearchBar variant="compact" />);
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '12' } });
+    const dropdown = await screen.findByTestId('search-results-dropdown');
+    await waitFor(() => expect(screen.getByText('Block #12')).toBeInTheDocument());
+    expect(dropdown).toHaveStyle({ backgroundColor: '#06090f' });
+    const row = (label: string) => screen.getByText(label).closest('button') as HTMLElement;
+    expect(row('Block #12')).toHaveClass('text-text', 'hover:bg-[color:var(--row-hover)]');
+    expect(row('Block #12').style.getPropertyValue('--row-hover')).toBe('#070e13');
+    expect(row('Block #12').style.backgroundColor).toBe('');
+    fireEvent.keyDown(input, { key: 'ArrowDown' });
+    expect(row('Block #12')).toHaveClass('text-jade');
+    expect(row('Block #12')).toHaveStyle({ backgroundColor: '#091217' });
+    expect(row('Transaction 0xabc').style.getPropertyValue('--row-hover')).toBe('#070e13');
+    expect(dropdown.outerHTML).not.toMatch(/(text|bg|border)-\[#/);
+  });
+
+  it('keeps the default results on theme classes, with no inline colour', async () => {
+    render(<SearchBar />);
+    const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+    fireEvent.focus(input);
+    fireEvent.change(input, { target: { value: '12' } });
+    const dropdown = await screen.findByTestId('search-results-dropdown');
+    await waitFor(() => expect(screen.getByText('Block #12')).toBeInTheDocument());
+    expect(dropdown).toHaveClass('bg-base-surface');
+    expect(dropdown.getAttribute('style')).toBeNull();
+    expect(
+      (screen.getByText('Block #12').closest('button') as HTMLElement).getAttribute('style')
+    ).toBeNull();
+  });
+
   it('renders semantic icons for different search result types', async () => {
     render(<SearchBar />);
 

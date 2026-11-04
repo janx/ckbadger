@@ -51,7 +51,7 @@ describe('detail and list foundations', () => {
     // Tier-2 headings are the quieter body 13 px #a0a8be; tier 1 takes section 17 px (TX-16, R1).
     expect(screen.getByRole('heading', { name: 'Script groups' })).toHaveClass(
       'text-body',
-      'text-[#a0a8be]'
+      'text-text'
     );
     expect(screen.getByRole('heading', { name: 'Script groups' })).not.toHaveClass('text-section');
     expect(screen.getByRole('heading', { name: 'Activity' })).not.toHaveClass('text-body');

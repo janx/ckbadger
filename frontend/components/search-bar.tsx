@@ -7,6 +7,7 @@ import { api, type SearchResult } from '@/lib/api';
 import { normalizeHash32 } from '@/lib/search-intent';
 import { resolveSearchRoute } from '@/lib/search-routing';
 import { cn } from '@/lib/utils';
+import { cssVars, SEARCH_RESULT_COLORS } from '@/lib/design-tokens';
 
 interface SearchBarProps {
   className?: string;
@@ -261,9 +262,10 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
           className={cn(
             'absolute z-50 mt-1 w-full border',
             isCompact
-              ? 'border-jade/12 rounded-none bg-[#06090f] shadow-[0_14px_32px_rgba(0,0,0,0.68)]'
+              ? 'border-jade/12 rounded-none shadow-[0_14px_32px_rgba(0,0,0,0.68)]'
               : 'border-base-border bg-base-surface rounded-lg shadow-lg'
           )}
+          style={isCompact ? { backgroundColor: SEARCH_RESULT_COLORS.panel } : undefined}
         >
           {isLoading ? (
             <div className="text-text-dim px-4 py-3">Searching...</div>
@@ -278,12 +280,19 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
                       'flex w-full items-center gap-3 px-4 py-2 text-left transition-colors',
                       isCompact
                         ? selectedIndex === index
-                          ? 'text-jade bg-[#091217]'
-                          : 'text-text hover:bg-[#070e13]'
+                          ? 'text-jade'
+                          : 'text-text hover:bg-[color:var(--row-hover)]'
                         : selectedIndex === index
                           ? 'text-jade bg-base-elevated'
                           : 'text-text hover:bg-base-elevated/50'
                     )}
+                    style={
+                      isCompact
+                        ? selectedIndex === index
+                          ? { backgroundColor: SEARCH_RESULT_COLORS.selected }
+                          : cssVars({ '--row-hover': SEARCH_RESULT_COLORS.hover })
+                        : undefined
+                    }
                   >
                     <SearchResultIcon type={result.resultType} />
                     <div className="min-w-0 flex-1">

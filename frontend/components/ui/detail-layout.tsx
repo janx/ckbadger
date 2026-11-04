@@ -157,7 +157,7 @@ export function DetailSection({
             the quiet 500. */}
         <h2
           className={
-            tier === 2 ? 'text-body font-medium text-[#a0a8be]' : 'text-text-bright text-section'
+            tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'
           }
         >
           {title}

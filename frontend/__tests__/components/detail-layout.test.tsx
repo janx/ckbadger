@@ -77,7 +77,7 @@ describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
     );
     expect(screen.getByRole('heading', { name: 'Script groups' })).toHaveClass(
       'text-body',
-      'text-[#a0a8be]'
+      'text-text'
     );
   });
 

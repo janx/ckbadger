@@ -266,7 +266,7 @@ describe('FiberChannelBoard', () => {
     for (const name of ['The two locks', 'Witnesses and timing']) {
       const heading = screen.getByRole('heading', { name });
       expect(tier2).toContainElement(heading);
-      expect(heading).toHaveClass('text-body', 'text-[#a0a8be]');
+      expect(heading).toHaveClass('text-body', 'text-text');
     }
     expect(screen.getByText('Fiber Funding Lock · args, 20 bytes')).toBeInTheDocument();
     expect(

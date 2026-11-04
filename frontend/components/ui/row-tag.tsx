@@ -1,5 +1,6 @@
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { cn } from '@/lib/utils';
+import { ROW_TAG_COLORS } from '@/lib/design-tokens';
 
 /**
  * `default`: a role, symbol, standard or lock kind. `ghost`: what is set back or said beside the
@@ -15,17 +16,31 @@ export type RowTagVariant = 'default' | 'ghost' | 'accent' | 'warn';
 
 /** The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, 2 px corners, 5 px sides. */
 const BASE =
-  'text-meta text-text-dim border-base-border inline-block whitespace-nowrap rounded-sm border px-[5px] align-middle leading-4';
+  'text-meta text-text-dim inline-block whitespace-nowrap rounded-sm border px-[5px] align-middle leading-4';
+/** Each variant's ink and edge; the accent's edge has no theme class and comes as a style. */
 const VARIANT: Record<RowTagVariant, string> = {
-  default: '',
-  ghost: 'border-dashed',
-  accent: 'text-jade border-[#1f5a46]',
+  default: 'border-base-border',
+  ghost: 'border-base-border border-dashed',
+  accent: 'text-jade',
   warn: 'text-rouge border-rouge',
 };
 
-/** The class string of a row tag, for a caller that draws the chip on its own element. */
+/** A variant's edge with no theme token (visual finish V11): the accent's deep jade, a style. */
+const VARIANT_STYLE: Partial<Record<RowTagVariant, CSSProperties>> = {
+  accent: { borderColor: ROW_TAG_COLORS.accentEdge },
+};
+
+/**
+ * The class string of a row tag, for a caller that draws the chip on its own element; an accent
+ * chip also takes `rowTagStyle('accent')` (its edge).
+ */
 export function rowTagClass(variant: RowTagVariant = 'default', className?: string): string {
   return cn(BASE, VARIANT[variant], className);
+}
+
+/** The style a variant adds to its classes: the accent's edge; none for the others. */
+export function rowTagStyle(variant: RowTagVariant = 'default'): CSSProperties | undefined {
+  return VARIANT_STYLE[variant];
 }
 
 export interface RowTagProps {
@@ -40,7 +55,12 @@ export function RowTag({ children, variant = 'default', title, className }: RowT
   if (children === null || children === undefined || children === false || children === '')
     throw new Error('RowTag: empty tag');
   return (
-    <span data-row-tag={variant} title={title} className={rowTagClass(variant, className)}>
+    <span
+      data-row-tag={variant}
+      title={title}
+      className={rowTagClass(variant, className)}
+      style={rowTagStyle(variant)}
+    >
       {children}
     </span>
   );

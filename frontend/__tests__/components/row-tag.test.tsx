@@ -50,8 +50,13 @@ describe('RowTag (table-rows R3)', () => {
     render(<RowTag variant="accent">BTC+CKB</RowTag>);
     const tag = screen.getByText('BTC+CKB');
     expect(tag).toHaveAttribute('data-row-tag', 'accent');
-    expect(tag).toHaveClass('text-meta', 'leading-4', 'border', 'text-jade', 'border-[#1f5a46]');
-    expect(tag).not.toHaveClass('text-text-dim', 'border-base-border', 'border-dashed');
+    expect(tag).toHaveClass('text-meta', 'leading-4', 'border', 'text-jade');
+    // the deep jade edge has no theme class: a named ink (ROW_TAG_COLORS), a style (V11)
+    expect(tag).toHaveStyle({ borderColor: '#1f5a46' });
+    expect(tag.className).not.toMatch(/\[#/);
+    expect(tag).not.toHaveClass('text-text-dim');
+    expect(tag).not.toHaveClass('border-base-border');
+    expect(tag).not.toHaveClass('border-dashed');
   });
 
   it("takes a title and the caller's layout classes", () => {

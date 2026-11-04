@@ -151,7 +151,7 @@ describe('shared chart detail', () => {
     const method = screen.getByRole('heading', { name: 'How it is computed / Evidence' });
     expect(related.compareDocumentPosition(method) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(related).toHaveClass('text-section');
-    expect(method).toHaveClass('text-body', 'text-[#a0a8be]');
+    expect(method).toHaveClass('text-body', 'text-text');
     expect(method.closest('[data-tier="2"]')).not.toBeNull();
   });
 

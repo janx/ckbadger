@@ -305,7 +305,7 @@ describe('DaoBoard', () => {
       'The DAO script',
       'The DAO field in every block header · #5',
     ]);
-    for (const h of headings) expect(h).toHaveClass('text-body', 'text-[#a0a8be]');
+    for (const h of headings) expect(h).toHaveClass('text-body', 'text-text');
     // Lane L: the header's block is a link.
     expect(within(headings[2]).getByRole('link', { name: '#5' })).toHaveAttribute(
       'href',

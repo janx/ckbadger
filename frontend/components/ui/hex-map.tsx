@@ -324,7 +324,7 @@ export function ByteScaleMap({
           };
           const className = cn(
             'text-meta flex min-w-0 items-center justify-center overflow-hidden whitespace-nowrap rounded-sm',
-            on && 'outline outline-1 outline-[#a0a8be]'
+            on && 'outline outline-1 outline-text'
           );
           return s.target !== undefined && (onHover || onSelect) ? (
             <button

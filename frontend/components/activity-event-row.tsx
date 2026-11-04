@@ -1100,7 +1100,7 @@ export function protocolActionNoteFacts(pa: ActivityProtocolAction): ProtocolNot
     facts.push({
       kind: 'other',
       node: (
-        <span className="text-[#dc8a5a]" title={meta.btcTxid}>
+        <span className="text-copper" title={meta.btcTxid}>
           Bitcoin tx {truncateHash(meta.btcTxid, 8, 6)}
           {meta.btcOutputIndex !== null ? `:${meta.btcOutputIndex}` : ''}
         </span>

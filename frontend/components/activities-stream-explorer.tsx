@@ -3,7 +3,13 @@
 import { BELOW_STICKY_HEADER } from '@/components/layout/sticky-header';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ClassMark } from '@/components/ui/class-mark';
-import { CLASS_COLORS, DATA_COLOR, type AssetClass } from '@/lib/design-tokens';
+import {
+  CLASS_COLORS,
+  cssVars,
+  DATA_COLOR,
+  STREAM_COLORS,
+  type AssetClass,
+} from '@/lib/design-tokens';
 import { totalActivities, activityFilterCounts, previousChainDay } from '@/lib/activity-stats';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { startTransition, useEffect, useMemo, useRef, useState } from 'react';
@@ -520,7 +526,11 @@ export function ActivitiesStreamExplorer({
               type="button"
               onClick={handleMergePending}
               aria-label={`${pendingNewItems.length} new activit${pendingNewItems.length === 1 ? 'y' : 'ies'}`}
-              className="border-jade/10 w-full rounded-none border-y bg-[#04070d] px-4 py-1.5 text-left transition-colors hover:bg-[#060a11] sm:py-2"
+              className="border-jade/10 w-full rounded-none border-y bg-[color:var(--bar)] px-4 py-1.5 text-left transition-colors hover:bg-[color:var(--bar-hover)] sm:py-2"
+              style={cssVars({
+                '--bar': STREAM_COLORS.pending,
+                '--bar-hover': STREAM_COLORS.pendingHover,
+              })}
             >
               <span className="text-text text-small">
                 {pendingNewItems.length} new activit{pendingNewItems.length === 1 ? 'y' : 'ies'} ·

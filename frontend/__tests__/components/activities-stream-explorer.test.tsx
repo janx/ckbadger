@@ -549,6 +549,12 @@ describe('ActivitiesStreamExplorer', () => {
 
     const banner = await screen.findByRole('button', { name: '1 new activity' });
     expect(screen.queryByText(exactAmount('+4.00000000 CKB'))).not.toBeInTheDocument();
+    // Visual finish V11: the bar and its hover are named inks (STREAM_COLORS), both read by classes
+    // through CSS variables, so the hover still wins over the bar; no bracket hex
+    expect(banner).toHaveClass('bg-[color:var(--bar)]', 'hover:bg-[color:var(--bar-hover)]');
+    expect(banner.style.getPropertyValue('--bar')).toBe('#04070d');
+    expect(banner.style.getPropertyValue('--bar-hover')).toBe('#060a11');
+    expect(banner.style.backgroundColor).toBe('');
 
     fireEvent.click(banner);
 
