@@ -249,8 +249,8 @@ impl BatchWriter {
             )?;
             // Re-derive script version/family rollups from corrected reference info.
             self.refresh_script_reference_rollups()?;
-            // Re-derive DAO singleton stats (latest stats + top depositors)
-            // which may have been deleted during rollback.
+            // The DAO tip summary (latest stats, top depositors and the open
+            // day's snapshot) at the new tip.
             self.refresh_latest_dao_statistics()?;
             info!(
                 start_block,
@@ -287,9 +287,9 @@ impl BatchWriter {
         // only legacy DB state from before that change.  Idempotent and fast
         // (reads CF_SCRIPT_REFERENCE_INFO, writes ≤3 CFs).
         self.refresh_script_reference_rollups()?;
-        // Re-derive DAO singleton stats unconditionally on startup to ensure
-        // they are consistent even after a crash between batch commit and DAO
-        // refresh.  Idempotent.
+        // Re-derive the DAO tip summary (singletons and the open day's
+        // snapshot) unconditionally on startup, so a crash between a batch
+        // commit and its tip summary leaves no stale row.  Idempotent.
         self.refresh_latest_dao_statistics()?;
 
         // Align persistent sync tip to the startup tip to avoid stale sync_status metadata.
@@ -380,6 +380,9 @@ impl BatchWriter {
         )?;
         // Re-derive script version/family rollups from corrected reference info.
         self.refresh_script_reference_rollups()?;
+        // The DAO tip summary (singletons and the open day's snapshot) at the
+        // new tip, as after every rollback.
+        self.refresh_latest_dao_statistics()?;
 
         info!(
             "Batch cleanup complete for blocks {} to {}",
@@ -494,6 +497,12 @@ mod tests {
                 virtual_occupied: 504_000_000_000_000_000,
             })
             .unwrap();
+        // Every rollback ends with the DAO tip summary, whose open day's
+        // miner series needs the consensus secondary epoch reward the indexer
+        // persists at startup.
+        store
+            .set_secondary_epoch_reward(61_369_863_013_698)
+            .unwrap();
         let writer = BatchWriter::new(store.clone(), append_store.clone());
         (dir, store, append_store, writer)
     }
@@ -506,7 +515,15 @@ mod tests {
             epoch_number: 0,
             epoch_index: 0,
             epoch_length: 1,
-            dao: vec![0; 32],
+            // A valid DAO field (C, AR, S, U): the DAO tip summary every
+            // rollback ends with observes the tip with it.
+            dao: {
+                let mut dao = vec![0; 32];
+                dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+                dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+                dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+                dao
+            },
             transactions_count: 1,
             uncles_count: 0,
             proposals_count: 0,
@@ -607,37 +624,9 @@ mod tests {
         }
         batch.commit().unwrap();
         store.update_sync_tip(11, &parent, 0).unwrap();
-        // Startup and execute_reorg also refresh DAO singleton statistics.
-        // Retain the earlier day's snapshot, outside this rollback's cutoff.
-        let snapshot = ckbadger_store::DaoDailySnapshot {
-            date: "20231114".to_string(),
-            total_deposited: 0,
-            depositors_count: 0,
-            new_deposits: 0,
-            withdrawals: 0,
-            compensation: 0,
-            cumulative_deposit_amount: 0,
-            total_issuance: 0,
-            secondary_pool: 0,
-            occupied_capacity: 0,
-            cum_miner_secondary: 0,
-            cum_dao_compensation: 0,
-            cum_treasury: 0,
-            unclaimed_compensation: 0,
-            frozen_phase1_compensation: 0,
-            cumulative_depositors: 0,
-            daily_depositor_addresses: 0,
-            protocol_deposited: None,
-        };
-        store
-            .put_stats_key(
-                &ckbadger_store::keys::encode_stats_key(
-                    ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
-                    snapshot.date.as_bytes(),
-                ),
-                &bincode::serialize(&snapshot).unwrap(),
-            )
-            .unwrap();
+        // Startup and execute_reorg end with the DAO tip summary: every block
+        // here is on one UTC+8 day that starts at genesis, so it computes the
+        // open day from the zero baseline and needs no earlier row.
         let histogram_key = ckbadger_store::keys::encode_stats_key(
             ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
             &0_i32.to_be_bytes(),

@@ -549,9 +549,7 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::store::CF_SCRIPT_FAMILY_BY_NAME, None),
     // B-3 statistics.rs: the chain statistics (daily, hourly, daily block,
     // miner, epoch, block / epoch time histograms) and the activity buckets
-    // (with their live per-address rows) are written per block. `stats_dao`
-    // is not covered: the DAO daily snapshot is still written once per batch
-    // (lane B record, design findings).
+    // (with their live per-address rows) are written per block.
     (ckbadger_store::CF_STATS_CHAIN, None),
     // B-3 sync/batch.rs: the activity pass is scoped per block (addr_txs and
     // addr_txs_by_prefix rows, TxActions bucket index rows), and the
@@ -634,6 +632,16 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_IDENTITY_AGG, None),
     // `stats_script` holds only the SCRIPT_DAILY family (above).
     (ckbadger_store::CF_STATS_SCRIPT, None),
+    // B-3 DAO daily snapshot (coordinator ruling): a sealed day's row is
+    // written in its sealer block's scope (the next UTC+8 day's first block);
+    // the open day's row is the DAO tip summary, written after every tip
+    // change outside the journal, so the oracle runs the tip summary after
+    // the replay (`with_tip_summary`), as the B-5 rollback will. The rest of
+    // `stats_dao` (latest stats, top depositors) is tip summary only.
+    (
+        ckbadger_store::CF_STATS_DAO,
+        Some(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT),
+    ),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
@@ -764,6 +772,39 @@ fn simulate_journal_rollback(
     dump
 }
 
+/// Every rollback ends, like every tip change, with the DAO tip summary
+/// (`refresh_latest_dao_statistics`): the open day's `stats_dao` 0x08 row and
+/// the DAO singletons are functions of the tip, written outside the journal,
+/// and rows of days after the tip's are removed. Run it over the replayed
+/// rows — materialised in a fresh store, the summary computed there — and
+/// take that store's `stats_dao` rows.
+fn with_tip_summary(mut replayed: Dump) -> Dump {
+    let stores = open_stores();
+    for ((cf, key), value) in &replayed {
+        // The dump keys the undo log by `block ‖ rank`; the tip summary
+        // does not read it.
+        if *cf == ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK {
+            continue;
+        }
+        stores
+            .domain
+            .put_cf(stores.domain.cf(cf), key, value)
+            .expect("materialise a replayed row");
+    }
+    ckbadger_indexer::db::BatchWriter::new(stores.domain.clone(), stores._append.clone())
+        .refresh_latest_dao_statistics()
+        .expect("the DAO tip summary over the replayed rows");
+    replayed.retain(|(cf, _), _| *cf != ckbadger_store::CF_STATS_DAO);
+    for row in stores.domain.iterator_cf(
+        stores.domain.cf(ckbadger_store::CF_STATS_DAO),
+        rocksdb::IteratorMode::Start,
+    ) {
+        let (key, value) = row.expect("iterate stats_dao");
+        replayed.insert((ckbadger_store::CF_STATS_DAO, key.to_vec()), value.to_vec());
+    }
+    replayed
+}
+
 fn only_covered(mut dump: Dump) -> Dump {
     dump.retain(|(cf, key), _| is_covered(cf, key));
     dump
@@ -782,7 +823,7 @@ async fn journal_property(
     sync_with_derive(&stores, chain, plan, tip, derive).await;
     let at_tip = dump_domain(&stores.domain);
     let journal = read_journal(&stores.domain);
-    let simulated = simulate_journal_rollback(&at_tip, &journal, tip, fork);
+    let simulated = with_tip_summary(simulate_journal_rollback(&at_tip, &journal, tip, fork));
     let reference = open_stores();
     sync_with_derive(&reference, chain, plan, fork, derive).await;
     // Not vacuous: the covered rows the rolled-back blocks changed outside
@@ -1703,6 +1744,91 @@ async fn journal_restores_covered_cfs_whole_protocol_chain_in_one_batch() {
         16
     );
     assert_journal_properties(&chain, &plan, 16, &[14, 9, 4]).await;
+}
+
+/// The open day's DAO daily snapshot (`stats_dao` 0x08 of the tip's UTC+8
+/// day) is the DAO tip summary, a function of the tip: the row the forward
+/// path leaves at a tip, the row a rollback to that tip recomputes, and the
+/// row the journal replay followed by the tip summary leaves are the same
+/// bytes, and no row is left for a later day. Forks on the first day (2, 5:
+/// the day block 6 sealed in the rolled-back store is open again) and on the
+/// second (6: its first block, 8, 14), inside multi-block batches.
+#[tokio::test]
+async fn the_open_day_dao_snapshot_is_a_function_of_the_tip() {
+    let chain = protocol_chain(0);
+    let mut plan: Vec<RangeInclusive<usize>> = single_block_plan(1);
+    plan.extend(
+        chunked_plan(16, 4)
+            .into_iter()
+            .map(|r| r.start() + 1..=r.end() + 1),
+    );
+    let dao_days = |store: &CkbadgerStore| -> BTreeMap<Vec<u8>, Vec<u8>> {
+        store
+            .iterator_cf(
+                store.cf(ckbadger_store::CF_STATS_DAO),
+                rocksdb::IteratorMode::Start,
+            )
+            .map(|row| row.expect("iterate stats_dao"))
+            .filter(|(key, _)| key.first() == Some(&keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT))
+            .map(|(key, value)| (key.to_vec(), value.to_vec()))
+            .collect()
+    };
+    let rolled_from_tip = open_stores();
+    sync_prefix(&rolled_from_tip, &chain, &plan, 0, 16).await;
+    let at_tip = dump_domain(&rolled_from_tip.domain);
+    let journal = read_journal(&rolled_from_tip.domain);
+    let days_at_tip = dao_days(&rolled_from_tip.domain);
+    assert_eq!(
+        days_at_tip.len(),
+        2,
+        "the protocol chain spans two UTC+8 days"
+    );
+    for fork in [2, 5, 6, 8, 14] {
+        let forward = open_stores();
+        sync_prefix(&forward, &chain, &plan, 0, fork).await;
+        let forward_days = dao_days(&forward.domain);
+        let tip_day = ckbadger_common::stats_bucket::stats_day(
+            forward
+                .domain
+                .get_block_header(fork as i64)
+                .unwrap()
+                .unwrap()
+                .chain_time_ms,
+        )
+        .unwrap();
+        let open_key = keys::encode_stats_key(
+            keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+            tip_day.format("%Y%m%d").to_string().as_bytes(),
+        );
+        assert_eq!(
+            forward_days.keys().last(),
+            Some(&open_key),
+            "fork {fork}: the forward store's last day row is the open day's"
+        );
+
+        let rolled = open_stores();
+        sync_prefix(&rolled, &chain, &plan, 0, 16).await;
+        reorg_to(&rolled.indexer, fork as i64).await.unwrap();
+        assert_eq!(
+            dao_days(&rolled.domain),
+            forward_days,
+            "fork {fork}: the rollback's DAO daily rows differ from the forward path's"
+        );
+
+        let replayed = with_tip_summary(simulate_journal_rollback(&at_tip, &journal, 16, fork));
+        let replayed_days: BTreeMap<Vec<u8>, Vec<u8>> = replayed
+            .into_iter()
+            .filter(|((cf, key), _)| {
+                *cf == ckbadger_store::CF_STATS_DAO
+                    && key.first() == Some(&keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT)
+            })
+            .map(|((_, key), value)| (key, value))
+            .collect();
+        assert_eq!(
+            replayed_days, forward_days,
+            "fork {fork}: the journal replay and tip summary leave other DAO daily rows"
+        );
+    }
 }
 
 #[tokio::test]

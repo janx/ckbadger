@@ -76,7 +76,7 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
         epoch_number: 11,
         epoch_index: (block_num % 1800) as i32,
         epoch_length: 1800,
-        dao: vec![0u8; 32],
+        dao: valid_dao_field(),
         transactions_count: 0,
         uncles_count: 0,
         proposals_count: 0,
@@ -85,6 +85,67 @@ fn make_header(block_num: i64, timestamp: i64) -> CachedBlockHeader {
         cycles: None,
         chain_time_ms: timestamp,
     }
+}
+
+/// A valid DAO field (C, AR, S, U): every rollback ends with the DAO tip
+/// summary, which observes the tip with it and splits each block's secondary
+/// issuance against its parent's C / U.
+fn valid_dao_field() -> Vec<u8> {
+    let mut dao = vec![0u8; 32];
+    dao[0..8].copy_from_slice(&3_360_000_000_000_000_000u64.to_le_bytes());
+    dao[8..16].copy_from_slice(&10_000_000_000_000_000u64.to_le_bytes());
+    dao[24..32].copy_from_slice(&100_000_000_000_000u64.to_le_bytes());
+    dao
+}
+
+/// What the DAO tip summary every rollback ends with reads besides the
+/// blocks: the genesis baseline, the consensus secondary epoch reward the
+/// indexer persists at startup, a genesis header on the previous UTC+8 day
+/// and that day's sealed row (no DAO activity), on which the open day
+/// builds. The rollbacks here never reach the previous day.
+fn seed_dao_tip_summary_inputs(domain: &CkbadgerStore) {
+    domain
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 840_000_000_000_000_000,
+            virtual_occupied: 0,
+        })
+        .unwrap();
+    domain
+        .set_secondary_epoch_reward(61_369_863_013_698)
+        .unwrap();
+    let mut genesis = StoreBatch::new(domain);
+    genesis.put_block_header(0, &make_header(0, TS_PREV_DAY - 1_000));
+    genesis.commit().unwrap();
+    domain
+        .put_stats_key(
+            &keys::encode_stats_key(
+                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
+                PREV_DAY.to_string().as_bytes(),
+            ),
+            &bincode::serialize(&ckbadger_store::types::DaoDailySnapshot {
+                date: "2026-09-21".to_string(),
+                total_deposited: 0,
+                depositors_count: 0,
+                new_deposits: 0,
+                withdrawals: 0,
+                compensation: 0,
+                cumulative_deposit_amount: 0,
+                total_issuance: 3_360_000_000_000_000_000,
+                secondary_pool: 0,
+                occupied_capacity: 100_000_000_000_000,
+                cum_miner_secondary: 0,
+                cum_dao_compensation: 0,
+                cum_treasury: 0,
+                unclaimed_compensation: 0,
+                frozen_phase1_compensation: 0,
+                cumulative_depositors: 0,
+                daily_depositor_addresses: 0,
+                protocol_deposited: Some(0),
+            })
+            .unwrap(),
+        )
+        .unwrap();
 }
 
 /// Epoch rows consistent with `make_header`: rollback fails fast when the
@@ -1675,45 +1736,10 @@ async fn crash_between_undo_replay_and_domain_rollback_is_recoverable() {
     for commit in &original {
         apply_commit(&writer_a, &domain_a, commit);
     }
-    domain_a
-        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
-            total_issuance: 3_360_000_000_000_000_000,
-            burnt: 840_000_000_000_000_000,
-            virtual_occupied: 0,
-        })
-        .unwrap();
-    // The startup cleanup path also re-derives the DAO singleton stats, which
-    // need a daily snapshot to exist. Seed one on a day BEFORE the cutoff, the
-    // way a real chain would have it; it is untouched by this rollback.
-    domain_a
-        .put_stats_key(
-            &keys::encode_stats_key(
-                keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
-                PREV_DAY.to_string().as_bytes(),
-            ),
-            &bincode::serialize(&ckbadger_store::types::DaoDailySnapshot {
-                date: PREV_DAY.to_string(),
-                total_deposited: 0,
-                depositors_count: 0,
-                new_deposits: 0,
-                withdrawals: 0,
-                compensation: 0,
-                cumulative_deposit_amount: 0,
-                total_issuance: 0,
-                secondary_pool: 0,
-                occupied_capacity: 0,
-                cum_miner_secondary: 0,
-                cum_dao_compensation: 0,
-                cum_treasury: 0,
-                unclaimed_compensation: 0,
-                frozen_phase1_compensation: 0,
-                cumulative_depositors: 0,
-                daily_depositor_addresses: 0,
-                protocol_deposited: None,
-            })
-            .unwrap(),
-        )
-        .unwrap();
+    // The startup cleanup path ends with the DAO tip summary, which builds the
+    // open day on the previous day's row. Seed it on a day BEFORE the cutoff,
+    // the way a real chain would have it; it is untouched by this rollback.
+    seed_dao_tip_summary_inputs(&domain_a);
 
     let undo = domain_a.rollback_via_undo_log(&append_a, 2).unwrap();
     assert!(
@@ -1727,9 +1753,6 @@ async fn crash_between_undo_replay_and_domain_rollback_is_recoverable() {
     );
 
     // Recovery: the startup cleanup path with the same target.
-    let mut genesis = StoreBatch::new(domain_a.as_ref());
-    genesis.put_block_header(0, &make_header(0, TS_PREV_DAY - 1_000));
-    genesis.commit().unwrap();
     seed_forward_histogram(&domain_a);
     writer_a
         .init_sync_start_with_options(append_a.as_ref(), 2, false, true)
@@ -1942,7 +1965,9 @@ async fn cleanup_at_or_above_coverage_floor_still_runs() {
             blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
         ],
     );
-    // No contract yet (fresh store mid-first-batch): cleanup proceeds.
+    // No contract yet (fresh store mid-first-batch): cleanup proceeds, and
+    // ends with the DAO tip summary.
+    seed_dao_tip_summary_inputs(&domain);
     seed_forward_histogram(&domain);
     writer
         .cleanup_batch_range(append.as_ref(), 2, 2)

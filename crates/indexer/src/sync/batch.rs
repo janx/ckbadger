@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{anyhow, bail, Context, Result};
 #[cfg(test)]
 use chrono::DateTime;
-use chrono::{NaiveDate, Utc};
+use chrono::Utc;
 use dashmap::DashMap;
 use rayon::prelude::*;
 use tracing::{debug, info, warn};
@@ -4304,9 +4304,10 @@ impl Indexer {
         if let Some((block_number, ref block_hash)) = batch_stats.last_block {
             let ema_rate = self.progress.ema_blocks_per_second();
             let ema_rate_opt = if ema_rate > 0.0 { Some(ema_rate) } else { None };
-            // Completed days were materialized exact inside the atomic commit
-            // above. This only re-derives the tip-scoped DAO singletons and the
-            // still-incomplete tip day.
+            // Sealed days were written exact inside the atomic commit above,
+            // each in its sealer block's scope. The DAO tip summary — the
+            // singletons and the still-open tip day's snapshot — follows the
+            // new tip.
             self.writer.refresh_latest_dao_statistics()?;
             // Reorg history is reconciled only after live canonical replay.
             // The fresh-store bulk engine never enters this path.
@@ -4487,11 +4488,15 @@ impl Indexer {
         Ok(())
     }
 
-    /// Write the DAO daily snapshot of every day the batch touched, once per
-    /// batch: each day observed at its last block in the batch (sealed when a
-    /// later day follows it). Not block-scoped: a day's snapshot at the end of
-    /// every block would need the whole DAO lifecycle scanned per block (lane
-    /// B record, design findings).
+    /// Write the DAO daily snapshot of every day this batch sealed — a day it
+    /// has blocks of, followed by a later day's block — each in its sealer
+    /// block's scope (the next UTC+8 day's first block, the sealed day's end
+    /// block + 1), so the block journal restores it. A sealed day's row
+    /// depends only on its own blocks. The batch's last day is still open:
+    /// its row is the DAO tip summary (`refresh_latest_dao_statistics`),
+    /// recomputed after the commit and after every rollback, never written
+    /// here (its value at every block would need the DAO lifecycle scanned
+    /// per block; lane B record, design findings).
     fn write_dao_daily_snapshots(
         &self,
         stats: &BatchStats,
@@ -4507,6 +4512,37 @@ impl Indexer {
                 // Only chain facts are accumulated here. The shared reducer owns
                 // cumulative totals and the complete compensation partition.
                 let mut previous = load_latest_dao_daily_snapshot(self.writer.store())?;
+                // A day this batch seals may have begun before it: the row it
+                // continues is the DAO tip summary of the store's tip (every
+                // tip change ends with it), so it is the tip's day observed
+                // at the tip, with the tip header's total issuance `C`.
+                if let Some(previous) = previous.as_ref() {
+                    let (tip_block, tip_header) =
+                        self.writer.store().get_sync_tip_block()?.ok_or_else(|| {
+                            anyhow!(
+                                "DAO daily snapshot {} exists without a canonical tip header",
+                                previous.date
+                            )
+                        })?;
+                    let (tip_c, _, _) = ckbadger_common::dao::extract_dao_csu(&tip_header.dao)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "invalid DAO field at the store tip {tip_block}: dao_len={}",
+                                tip_header.dao.len()
+                            )
+                        })?;
+                    let tip_day =
+                        ckbadger_common::stats_bucket::stats_day(tip_header.chain_time_ms)?
+                            .format("%Y-%m-%d")
+                            .to_string();
+                    if previous.date != tip_day || previous.total_issuance != tip_c {
+                        bail!(
+                            "the latest DAO daily snapshot is not the DAO tip summary of the store tip {tip_block}: date {} total issuance {}, tip day {tip_day} total issuance {tip_c}",
+                            previous.date,
+                            previous.total_issuance
+                        );
+                    }
+                }
                 if previous.is_none() {
                     let first_block = stats
                         .dao_block_numbers_by_date
@@ -4519,13 +4555,23 @@ impl Indexer {
                         bail!("missing prior DAO daily snapshot before live batch starting at block {first_block}; zero baseline is only valid from genesis");
                     }
                 }
-                let completed_boundaries: HashMap<NaiveDate, i64> =
-                    completed_dao_snapshot_boundaries(stats)?
-                        .into_iter()
-                        .map(|boundary| (boundary.date, boundary.end_block))
-                        .collect();
-
-                for date in snapshot_dates {
+                for boundary in completed_dao_snapshot_boundaries(stats)? {
+                    let date = &boundary.date;
+                    // The sealer: the first block of the next day of this
+                    // batch, right after the sealed day's last block.
+                    let sealer = boundary.end_block + 1;
+                    let next_day_first_block = snapshot_dates
+                        .iter()
+                        .find(|next| **next > date)
+                        .and_then(|next| stats.dao_block_numbers_by_date.get(*next))
+                        .and_then(|blocks| blocks.iter().min())
+                        .copied();
+                    if next_day_first_block != Some(sealer) {
+                        bail!(
+                            "DAO day {date} ends at block {} but the next day of the batch starts at {next_day_first_block:?}",
+                            boundary.end_block
+                        );
+                    }
                     let delta = ckbadger_store::dao_snapshot::DaoSnapshotDelta {
                         active_capacity: stats
                             .dao_daily_active_delta
@@ -4638,24 +4684,7 @@ impl Indexer {
                             dao_bytes.len()
                         )
                     })?;
-                    let end_block = stats
-                        .dao_block_numbers_by_date
-                        .get(date)
-                        .and_then(|blocks| blocks.iter().max())
-                        .copied()
-                        .ok_or_else(|| {
-                            anyhow!("missing DAO end block for snapshot date {}", date)
-                        })?;
-                    let kind = if let Some(boundary_end_block) =
-                        completed_boundaries.get(date).copied()
-                    {
-                        if boundary_end_block != end_block {
-                            bail!("completed DAO snapshot boundary disagrees with batch end block: date={date}, boundary_block={boundary_end_block}, end_block={end_block}");
-                        }
-                        ckbadger_store::dao_snapshot::DaoObservationKind::SealedDay
-                    } else {
-                        ckbadger_store::dao_snapshot::DaoObservationKind::IncompleteTip
-                    };
+                    let end_block = boundary.end_block;
                     let compensation = self
                         .writer
                         .store()
@@ -4672,7 +4701,7 @@ impl Indexer {
                         previous.as_ref(),
                         delta,
                         ckbadger_store::dao_snapshot::DaoSnapshotObservation {
-                            kind,
+                            kind: ckbadger_store::dao_snapshot::DaoObservationKind::SealedDay,
                             date: *date,
                             block_number: end_block,
                             chain_time_ms,
@@ -4687,7 +4716,9 @@ impl Indexer {
                         ckbadger_store::keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
                         date.format("%Y%m%d").to_string().as_bytes(),
                     );
-                    batch.put_stats(&key, &bincode::serialize(&snapshot)?);
+                    batch
+                        .at(sealer)
+                        .put_stats(&key, &bincode::serialize(&snapshot)?);
                     previous = Some(snapshot);
                 }
             }
@@ -6725,7 +6756,19 @@ mod tests {
                 );
                 batch.commit().expect("seed parent block header");
             }
-            make_test_indexer(store, 99, Some(block_hash(99).to_vec()))
+            // Block 99 opens its UTC+8 day (2023-11-15): that open day's row
+            // is the DAO tip summary at 99, as a resuming indexer has it,
+            // and it needs the consensus secondary epoch reward the indexer
+            // persists at startup.
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .expect("seed the consensus secondary epoch reward");
+            let indexer = make_test_indexer(store, 99, Some(block_hash(99).to_vec()));
+            indexer
+                .writer
+                .refresh_latest_dao_statistics()
+                .expect("the DAO tip summary at the fixture tip");
+            indexer
         }
 
         /// A clean store for a continuous genesis-to-tip parity chain. The
@@ -8424,6 +8467,96 @@ mod tests {
             assert_eq!(replayed_rows.len(), unbatched_rows.len());
             assert_same_modeled_domain_rows(&unbatched, &batched, "rollback/replay");
             assert_eq!(cell_payloads(&batched), immutable_cells_before);
+        }
+
+        /// A day the live batch seals is written in its sealer block's scope
+        /// (the next UTC+8 day's first block), so the block journal holds the
+        /// row's previous value at that block; the batch writes nothing for
+        /// its still-open last day, whose row is the DAO tip summary, written
+        /// after the commit outside the journal.
+        #[tokio::test]
+        async fn a_sealed_dao_day_is_journaled_at_its_sealer_block() {
+            let _detectors =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let mut blocks = phase_setup_blocks();
+            blocks.push(completion_block(527));
+            // Blocks 100-101 on 2023-11-15 UTC+8, 102-103 on 2023-11-16.
+            for (block, raw_ms) in blocks.iter_mut().zip([
+                1_700_063_998_000u64,
+                1_700_063_999_000,
+                1_700_064_001_000,
+                1_700_064_002_000,
+            ]) {
+                block.block.header.timestamp = format!("0x{raw_ms:x}");
+            }
+            let (store, indexer) = live_dao_fixture_store();
+            seed_secp_script_info(store.as_ref());
+            seed_script_info(store.as_ref(), crate::parser::dao::DAO_CODE_HASH);
+            let day_key =
+                |day: &[u8]| keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, day);
+            let stats_dao = store.cf(ckbadger_store::CF_STATS_DAO);
+            let open_at_99 = store.get_cf(stats_dao, &day_key(b"20231115")).unwrap();
+            assert!(
+                open_at_99.is_some(),
+                "the fixture's tip summary wrote its open day at block 99"
+            );
+
+            write_live_blocks_with_parser_script_deltas(&indexer, blocks)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                crate::db::writer::journal_test_support::journal_entries(
+                    &store,
+                    ckbadger_store::CF_STATS_DAO
+                ),
+                vec![(102, day_key(b"20231115"), open_at_99)],
+                "the sealed day at its sealer block, nothing for the open day"
+            );
+            let open_day = store
+                .get_cf(stats_dao, &day_key(b"20231116"))
+                .unwrap()
+                .expect("the tip summary's open-day row");
+            let open_day_row: ckbadger_store::types::DaoDailySnapshot =
+                bincode::deserialize(&open_day).unwrap();
+            assert_eq!(open_day_row.withdrawals, 1, "the completion at 103");
+            indexer.writer.refresh_latest_dao_statistics().unwrap();
+            assert_eq!(
+                store.get_cf(stats_dao, &day_key(b"20231116")).unwrap(),
+                Some(open_day),
+                "the open day's row is a function of the tip"
+            );
+        }
+
+        /// A live batch continues the open-day row the DAO tip summary left
+        /// at the store tip; a latest row observed at another block (a tip
+        /// summary that did not run) fails the batch before anything commits.
+        #[tokio::test]
+        async fn live_dao_snapshot_rejects_an_open_day_row_not_observed_at_the_tip() {
+            let (store, indexer) = live_dao_fixture_store();
+            let stats_dao = store.cf(ckbadger_store::CF_STATS_DAO);
+            let key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20231115");
+            let mut row: ckbadger_store::types::DaoDailySnapshot =
+                bincode::deserialize(&store.get_cf(stats_dao, &key).unwrap().unwrap()).unwrap();
+            row.total_issuance -= 1;
+            store
+                .put_cf(stats_dao, &key, &bincode::serialize(&row).unwrap())
+                .unwrap();
+            let error = write_live_block(
+                &indexer,
+                block(100, AR_DEPOSIT, vec![cellbase_tx(0xc0, FUNDING_CAPACITY)]),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                format!("{error:#}").contains("is not the DAO tip summary of the store tip 99"),
+                "{error:#}"
+            );
+            assert_eq!(
+                store.get_sync_status().unwrap().tip_block_number,
+                99,
+                "nothing of block 100 may commit"
+            );
         }
 
         #[tokio::test]

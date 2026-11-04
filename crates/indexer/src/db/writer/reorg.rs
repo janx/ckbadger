@@ -393,10 +393,11 @@ impl BatchWriter {
         append_store.flush_all_memtables()?;
         // Re-derive script version/family rollups from the corrected reference info.
         self.refresh_script_reference_rollups()?;
-        // Advance the DAO singleton stats (latest stats + top depositors) to the
-        // post-rollback tip. Rollback deliberately leaves the pre-rollback row
-        // in place — it is never deleted — so the read path always has a value
-        // and this refresh overwrites it rather than filling a gap.
+        // Advance the DAO tip summary (latest stats, top depositors and the
+        // open day's snapshot) to the post-rollback tip. Rollback deliberately
+        // leaves the pre-rollback singleton rows in place — they are never
+        // deleted — so the read path always has a value and this refresh
+        // overwrites them rather than filling a gap.
         self.refresh_latest_dao_statistics()?;
 
         // Record reorg event and clear deep fork flag in one sync_meta batch.

@@ -50,7 +50,9 @@ pub(crate) struct BlockChainStats {
 }
 
 /// Accumulated statistics across a batch of blocks: the sync totals and the
-/// inputs of the DAO daily snapshots, which are written once per batch.
+/// inputs of the DAO daily snapshots of the days the batch seals (each
+/// written in its sealer block's scope; the open day's row is the DAO tip
+/// summary's).
 #[derive(Default)]
 pub(crate) struct BatchStats {
     pub(crate) sync_totals: (i64, i64, i64),

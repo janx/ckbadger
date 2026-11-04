@@ -3891,6 +3891,10 @@ where
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         seed_test_genesis_baseline(domain_store.as_ref())?;
+        // The consensus secondary epoch reward the indexer persists at
+        // startup (the DAO reducer above is handed it directly); the DAO tip
+        // summary after finalize reads it from the store.
+        domain_store.set_secondary_epoch_reward(61_369_863_013_698)?;
         start_bulk_build_session_marker(domain_store.as_ref(), "bulk-build-test-session", 0)?;
         let mut materializer =
             materialize::Materializer::new(domain_store.as_ref(), append_store.as_ref());
@@ -4077,6 +4081,10 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
         let append_store = Arc::new(CkbadgerStore::open_append_only(&append_path)?);
         domain_store.update_sync_status(|status| status.init_sync_start(0, true))?;
         seed_test_genesis_baseline(domain_store.as_ref())?;
+        // The consensus secondary epoch reward the indexer persists at
+        // startup (the DAO reducer above is handed it directly); the DAO tip
+        // summary after finalize reads it from the store.
+        domain_store.set_secondary_epoch_reward(61_369_863_013_698)?;
         seed(domain_store.as_ref())?;
         if include_latest_dao && first_number > 0 {
             let mut prefix = ckbadger_store::batch::StoreBatch::new(domain_store.as_ref());
