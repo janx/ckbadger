@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBCompressionType, IteratorMode,
@@ -160,19 +160,22 @@ pub struct BackgroundThreads {
     pub compaction: i32,
 }
 
-/// Splits a background-job count into the two `Env` pools.
+/// Splits a background-job count into the two `Env` pools. The bulk
+/// controller moves `jobs`; the profile's `max_background_jobs` gives the
+/// open-time split.
 ///
-/// - Compaction follows the bulk controller exactly as before the flush pool
-///   was fixed: `max(1, jobs - max(1, jobs / 4))`.
-/// - Flush is the profile's fixed `flush_threads`, extra threads on top,
-///   never derived from `jobs`. A flush pool that followed the controller
-///   shrank to one thread shared by both stores at the controller's floor.
+/// - Flush: `max(2, jobs / 4)`. Base used `max(1, jobs / 4)`, which at the
+///   controller's floor (6-7 jobs on a 24-thread host) left ONE flush thread
+///   shared by the domain store's atomic multi-CF flushes and the `cells`
+///   flushes. The floor of 2 keeps the two stores from sharing one thread.
+/// - Compaction: `max(1, jobs - max(1, jobs / 4))`, base's count.
 ///
-/// So the only thing that differs from the old split is flush capacity.
-/// Flush threads are idle unless a memtable is pending.
-fn background_thread_split(flush_threads: i32, jobs: i32) -> BackgroundThreads {
+/// From 8 jobs up the split is base's; below, the only difference is 2 flush
+/// threads instead of 1. A fixed 6-thread flush pool (0-d) was dropped in
+/// 0-e: extra concurrent background threads compete with the bulk build.
+fn background_thread_split(jobs: i32) -> BackgroundThreads {
     BackgroundThreads {
-        flush: flush_threads,
+        flush: (jobs / 4).max(2),
         compaction: (jobs - (jobs / 4).max(1)).max(1),
     }
 }
@@ -196,11 +199,11 @@ pub struct MemoryProfile {
     pub write_buffer_low_bytes: usize,
     pub write_buffer_hot_cf_bytes: usize,
     pub max_background_jobs: i32,
-    /// Size of the process-wide RocksDB HIGH-priority (flush) pool, shared by
-    /// every store the process opens: `max(2, max_background_jobs / 4)`.
-    /// Set once at primary open and never moved by the bulk controller; the
-    /// floor of 2 keeps the domain and append-only stores from sharing one
-    /// flush thread.
+    /// Open-time size of the process-wide RocksDB HIGH-priority (flush) pool,
+    /// shared by every store the process opens:
+    /// `background_thread_split(max_background_jobs).flush`, i.e.
+    /// `max(2, max_background_jobs / 4)`. The bulk controller then moves it
+    /// with `set_max_background_jobs`, never below 2.
     pub flush_threads: i32,
     pub max_subcompactions: u32,
     pub bulk_max_bytes_for_level_base: u64,
@@ -267,7 +270,7 @@ impl MemoryProfile {
         // RocksDB compaction benefits from SMT — use logical cores.
         let logical = logical_cpu_count.max(1);
         let max_background_jobs = logical.clamp(4, 32) as i32;
-        let flush_threads = (max_background_jobs / 4).max(2);
+        let flush_threads = background_thread_split(max_background_jobs).flush;
         let max_subcompactions = (logical / 4).clamp(2, 8) as u32;
 
         let budget_scale = budget_u64 as f64 / (16.0 * GB as f64);
@@ -2518,33 +2521,38 @@ impl CkbadgerStore {
         self.runtime_config
     }
 
-    /// Dynamically adjust the number of RocksDB background compaction
-    /// threads.  Used by the bottleneck controller to shift CPU between
-    /// compaction and build/fetch work.
+    /// Dynamically adjust the number of RocksDB background flush and
+    /// compaction threads.  Used by the bottleneck controller to shift CPU
+    /// between compaction and build/fetch work.
     ///
     /// RocksDB's `SetDBOptions` is not exposed through the C API, so we
     /// adjust the default `Env` thread pools directly, split by
     /// [`background_thread_split`]:
-    ///   - HIGH priority pool → flush threads: NOT touched here. It is the
-    ///     profile's fixed `flush_threads`, set at primary open, so the
-    ///     domain and append-only stores always have their own flush threads
-    ///     (idle unless a memtable is pending).
-    ///   - LOW  priority pool → compaction threads: `max(1, jobs - max(1, jobs / 4))`,
-    ///     exactly the count the controller got before the flush pool was fixed.
+    ///   - HIGH priority pool → flush threads: `max(2, jobs / 4)`, never one
+    ///     thread shared by the domain and append-only stores
+    ///   - LOW  priority pool → compaction threads: `max(1, jobs - max(1, jobs / 4))`
     ///
     /// Returns the split it applied.
     pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<BackgroundThreads> {
         let mut env = rocksdb::Env::new()
             .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
-        let split = background_thread_split(self.memory_profile.flush_threads, jobs);
+        let split = background_thread_split(jobs);
+        env.set_high_priority_background_threads(split.flush);
         env.set_low_priority_background_threads(split.compaction);
+        debug!(
+            jobs,
+            flush_threads = split.flush,
+            compaction_threads = split.compaction,
+            "RocksDB background pools resized"
+        );
         Ok(split)
     }
 
-    /// Size the process-wide HIGH-priority (flush) pool from the profile.
-    /// Called at every primary open (idempotent: same profile, same size);
-    /// RocksDB only ever raises the pool at open to `max_background_jobs / 4`,
-    /// which never exceeds `flush_threads`.
+    /// Size the process-wide HIGH-priority (flush) pool from the profile at
+    /// primary open (idempotent: same profile, same size). RocksDB itself only
+    /// raises the pool at open to `max_background_jobs / 4`, which can be 1;
+    /// the profile's `flush_threads` is never below 2. The bulk controller
+    /// moves the pool afterwards through `set_max_background_jobs`.
     fn size_flush_pool(profile: &MemoryProfile) -> anyhow::Result<()> {
         let mut env = rocksdb::Env::new()
             .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
@@ -4304,52 +4312,50 @@ mod tests {
     fn test_set_max_background_jobs_succeeds() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let flush_threads = store.memory_profile.flush_threads;
         // This previously failed with "Extra option not recognized: max_background_jobs"
         // because set_options() targets CF options, not DB options.
-        // The controller's job count moves only the compaction pool, exactly
-        // as it did before the flush pool was fixed; the flush pool stays at
-        // the profile's size.
-        for (jobs, compaction) in [(4, 3), (6, 5), (7, 6), (8, 6), (24, 18)] {
+        // The controller's job count moves both pools; the flush pool never
+        // drops below 2.
+        for (jobs, flush, compaction) in [(4, 2, 3), (6, 2, 5), (7, 2, 6), (8, 2, 6), (24, 6, 18)] {
             let applied = store
                 .set_max_background_jobs(jobs)
                 .expect("dynamic background jobs adjustment should succeed");
             assert_eq!(
                 applied,
-                BackgroundThreads {
-                    flush: flush_threads,
-                    compaction,
-                },
+                BackgroundThreads { flush, compaction },
                 "jobs={jobs}"
             );
         }
     }
 
-    /// The bottleneck controller keeps `bg_jobs` at its floor (6 on a
-    /// 24-thread host) for most of a bulk run. Deriving the flush pool from
-    /// it (`jobs / 4`) left ONE flush thread shared by the domain store's
-    /// atomic multi-CF flushes and the `cells` flushes: in base46-1, 66 s of
-    /// the 89 s finalize `cells` flush was queueing behind domain flushes.
-    ///
-    /// The compaction pool must stay exactly what it was before
-    /// (`jobs - max(1, jobs / 4)`), so a paired run against base differs in
-    /// flush capacity alone.
+    /// The flush pool follows the bulk controller as in base, `jobs / 4`,
+    /// but never below 2. At the controller's floor (6-7 jobs on a 24-thread
+    /// host) base's `max(1, jobs / 4)` left ONE flush thread shared by the
+    /// domain store's atomic multi-CF flushes and the `cells` flushes: in
+    /// base46-1, 66 s of the 89 s finalize `cells` flush was queueing. The
+    /// compaction pool keeps base's count, so from 8 jobs up the split is
+    /// base's, and below it the only difference is 2 flush threads instead of 1.
     #[test]
-    fn background_thread_split_keeps_the_flush_pool_whatever_the_job_count() {
-        for (jobs, compaction) in [(4, 3), (6, 5), (7, 6), (12, 9), (24, 18)] {
+    fn background_thread_split_follows_the_controller_with_at_least_two_flush_threads() {
+        for (jobs, flush, compaction) in [
+            (4, 2, 3),
+            (6, 2, 5),
+            (7, 2, 6),
+            (8, 2, 6),
+            (12, 3, 9),
+            (24, 6, 18),
+        ] {
             assert_eq!(
-                background_thread_split(6, jobs),
-                BackgroundThreads {
-                    flush: 6,
-                    compaction,
-                },
+                background_thread_split(jobs),
+                BackgroundThreads { flush, compaction },
                 "jobs={jobs}"
             );
         }
     }
 
-    /// The flush pool is sized once from the profile and never below 2, so
-    /// the domain and append-only stores never share one flush thread.
+    /// The open-time flush pool comes from the profile's
+    /// `max_background_jobs` through the same split, never below 2, so the
+    /// domain and append-only stores never share one flush thread.
     #[test]
     fn memory_profile_flush_threads_are_a_quarter_of_background_jobs_floor_two() {
         for (logical_cpus, max_background_jobs, flush_threads) in [
