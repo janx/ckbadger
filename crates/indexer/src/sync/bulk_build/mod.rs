@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use ckb_types::utilities::compact_to_difficulty as ckb_compact_to_difficulty;
@@ -41,7 +41,7 @@ use ckbadger_store::{
 };
 use rayon::prelude::*;
 use rocksdb::IteratorMode;
-use tracing::{info, warn};
+use tracing::{info, warn, Instrument};
 
 use super::indexer::{
     finalize_bulk_stage_handoff_state, persist_bulk_sync_completion_status,
@@ -774,7 +774,10 @@ impl BulkBuildEngine {
                 return Err(err);
             }
         };
-        // Run flush drain and materialize phases concurrently.
+        // Run flush drain and materialize phases concurrently; the moment the
+        // drain has committed its last batch (the run's last CF_CELLS write),
+        // the append-only flush is started without waiting, so it overlaps the
+        // rest of phases 2-11 (see drain_flush_and_materialize_finalize).
         // Safety: they write to disjoint CF sets.
         //   Flush drain: CF_CELLS (append-only), CF_BLOCK_HEADERS, CF_TX_INDEX,
         //     CF_ADDR_TXS, CF_CONSUMED_CELLS, CF_ACTIVITIES, CF_ADDR_ACTIVITIES,
@@ -803,24 +806,28 @@ impl BulkBuildEngine {
             ..
         } = runtime;
 
-        let materialize_handle = tokio::task::spawn_blocking(move || {
-            materialize_finalize_phases(
-                domain_store_arc.as_ref(),
-                append_only_arc.as_ref(),
-                prepared_finalize,
-                owners,
-                sequencer,
-                interner,
-                hodl_tracker,
-                cell_dist_tracker,
-                &perf_stats,
-                finalize_started_copy,
-                materialize_shutdown.as_ref(),
-            )
-        });
-
-        let (drain_result, materialize_result) =
-            tokio::join!(flush_drain.wait(), materialize_handle,);
+        let (drain_result, materialize_result) = drain_flush_and_materialize_finalize(
+            flush_drain,
+            Arc::clone(&indexer.append_only_store),
+            indexer.shutdown_flag(),
+            finalize_started,
+            move || {
+                materialize_finalize_phases(
+                    domain_store_arc.as_ref(),
+                    append_only_arc.as_ref(),
+                    prepared_finalize,
+                    owners,
+                    sequencer,
+                    interner,
+                    hodl_tracker,
+                    cell_dist_tracker,
+                    &perf_stats,
+                    finalize_started_copy,
+                    materialize_shutdown.as_ref(),
+                )
+            },
+        )
+        .await;
 
         if indexer.is_shutdown_requested() {
             let mut cleanup_errors = Vec::new();
@@ -842,7 +849,12 @@ impl BulkBuildEngine {
             .into());
         }
 
-        let flush_stats = drain_result?;
+        let FinalizeDrainOutcome {
+            flush_stats,
+            append_only_flush,
+        } = drain_result?;
+        let append_only_flush_started_at = append_only_flush.started_at;
+        let append_only_flush_start_call = append_only_flush.start_call;
         let materialize_report = materialize_result
             .map_err(|e| anyhow!("materialize finalize task panicked: {e}"))??;
 
@@ -861,8 +873,11 @@ impl BulkBuildEngine {
             flush_stats.total_history_rows + flush_stats.total_sealed_rows,
         );
 
-        // Phase 11: memtable flush
-        {
+        // Phase 11: memtable flush. The append-only store's flush has been
+        // running on a side thread since the end of phase 1; it is joined
+        // here, then both stores pass the usual flush barrier (the append-only
+        // one finds nothing left to flush).
+        let memtable_flush = {
             if indexer.is_shutdown_requested() {
                 sampler.shutdown();
                 return Err(RebuildRequiredError::interrupted_bulk_session(
@@ -873,16 +888,25 @@ impl BulkBuildEngine {
                 )
                 .into());
             }
-            let _guard = tracing::info_span!("bulk_finalize", phase = 12, label = "memtable_flush")
-                .entered();
+            let phase_span =
+                tracing::info_span!("bulk_finalize", phase = 12, label = "memtable_flush");
             indexer
                 .bulk_build_perf
                 .record_finalize_step(12, finalize_started.elapsed());
-            flush_bulk_build_materialized_state(
+            let append_only_join = append_only_flush
+                .join()
+                .instrument(phase_span.clone())
+                .await?;
+            let _guard = phase_span.entered();
+            let barrier = flush_bulk_build_materialized_state(
                 indexer.writer.store().as_ref(),
                 indexer.writer.append_only_store(),
             )?;
-        }
+            MaterializedStateFlushTimings {
+                append_only: append_only_join + barrier.append_only,
+                domain: barrier.domain,
+            }
+        };
 
         // Phase 12: sync status + cleanup
         {
@@ -914,6 +938,19 @@ impl BulkBuildEngine {
         info!(
             run_id = %indexer.run_id,
             finalize_ms = format!("{:.1}", finalize_elapsed.as_secs_f64() * 1000.0),
+            append_only_flush_started_at_ms = format!(
+                "{:.1}",
+                append_only_flush_started_at.as_secs_f64() * 1000.0
+            ),
+            append_only_flush_start_call_ms = format!(
+                "{:.1}",
+                append_only_flush_start_call.as_secs_f64() * 1000.0
+            ),
+            append_only_flush_wait_ms = format!(
+                "{:.1}",
+                memtable_flush.append_only.as_secs_f64() * 1000.0
+            ),
+            domain_flush_ms = format!("{:.1}", memtable_flush.domain.as_secs_f64() * 1000.0),
             batch_count,
             "Bulk build finalize completed"
         );
@@ -1106,23 +1143,157 @@ fn start_bulk_build_session_marker(
     Ok(marker)
 }
 
+/// Finalize phase 12's flush barrier: make every bulk write durable before
+/// the sync status is persisted. Production joins the append-only flush
+/// started at the end of phase 1 first, so the append-only half finds
+/// nothing left to flush.
 fn flush_bulk_build_materialized_state(
     domain_store: &CkbadgerStore,
     append_store: &CkbadgerStore,
-) -> Result<()> {
+) -> Result<MaterializedStateFlushTimings> {
+    let append_started = Instant::now();
     append_store.flush_all_memtables().map_err(|e| {
         anyhow!(
             "failed to flush append-only bulk build memtables before sync status persistence: {}",
             e
         )
     })?;
+    let append_only = append_started.elapsed();
+    let domain_started = Instant::now();
     domain_store.flush_all_memtables().map_err(|e| {
         anyhow!(
             "failed to flush domain bulk build memtables before sync status persistence: {}",
             e
         )
     })?;
-    Ok(())
+    Ok(MaterializedStateFlushTimings {
+        append_only,
+        domain: domain_started.elapsed(),
+    })
+}
+
+type MaterializeJoinResult =
+    std::result::Result<Result<materialize::MaterializationReport>, tokio::task::JoinError>;
+
+/// What finalize phase 1 hands on: the drained flush channel's totals and
+/// the append-only flush it started.
+struct FinalizeDrainOutcome {
+    flush_stats: materialize::FlushChannelStats,
+    append_only_flush: AppendOnlyFlushInFlight,
+}
+
+/// The append-only store's waiting `flush_all_memtables`, running on a
+/// blocking side thread from the end of finalize phase 1 until phase 12
+/// joins it.
+#[derive(Debug)]
+struct AppendOnlyFlushInFlight {
+    /// Offset from the start of finalize.
+    started_at: Duration,
+    /// Time until the side thread was spawned.
+    start_call: Duration,
+    handle: tokio::task::JoinHandle<Result<()>>,
+}
+
+impl AppendOnlyFlushInFlight {
+    /// Finalize phase 12: waits for the side-thread flush to finish and
+    /// returns how long the wait took. Its failure fails finalize.
+    async fn join(self) -> Result<Duration> {
+        let wait_started = Instant::now();
+        self.handle
+            .await
+            .map_err(|e| anyhow!("append-only flush thread panicked: {e}"))?
+            .map_err(|e| {
+                anyhow!("append-only flush started after the bulk flush drain failed: {e:#}")
+            })?;
+        Ok(wait_started.elapsed())
+    }
+}
+
+/// Phase-12 wall time per store.
+#[derive(Debug, Clone, Copy)]
+struct MaterializedStateFlushTimings {
+    append_only: Duration,
+    domain: Duration,
+}
+
+/// Finalize phase 1 (drain the flush channel, then start the append-only
+/// flush) and phases 2-11 (materialize), run concurrently. They write
+/// disjoint CF sets; see the caller.
+///
+/// The flush channel's queued batches hold the run's last `CF_CELLS` writes:
+/// phases 2-11 write domain rows only (the bounded finalize materializer
+/// rejects append-only CFs). So the moment the drain has committed its last
+/// batch, nothing writes `cells` again, and the append-only store's waiting
+/// `flush_all_memtables` is started on a blocking side thread. The
+/// single-threaded `cells` flush then runs while phases 2-11 still write
+/// domain rows, and phase 12 only joins it.
+///
+/// The drain stays concurrent with phases 2-11 rather than being waited for
+/// before phase 2: at the end of the 2026-11-01 run 7 batches were still
+/// queued at ~3.5 s each, and putting them in front of phases 2-11 would cost
+/// finalize more than the overlap gains.
+async fn drain_flush_and_materialize_finalize<M>(
+    flush_drain: materialize::FlushDrainHandle,
+    append_only_store: Arc<CkbadgerStore>,
+    shutdown_requested: Arc<AtomicBool>,
+    finalize_started: Instant,
+    materialize: M,
+) -> (Result<FinalizeDrainOutcome>, MaterializeJoinResult)
+where
+    M: FnOnce() -> Result<materialize::MaterializationReport> + Send + 'static,
+{
+    let materialize_handle = tokio::task::spawn_blocking(materialize);
+    let drain_then_start_append_only_flush = async move {
+        let flush_stats = flush_drain.wait().await?;
+        let append_only_flush = start_append_only_flush(
+            append_only_store,
+            shutdown_requested.as_ref(),
+            finalize_started,
+        )?;
+        Ok(FinalizeDrainOutcome {
+            flush_stats,
+            append_only_flush,
+        })
+    };
+    tokio::join!(drain_then_start_append_only_flush, materialize_handle)
+}
+
+/// Starts the append-only store's waiting `flush_all_memtables` on a
+/// blocking side thread, once the last `cells` write has landed. The waiting
+/// form, not a `FlushOptions::wait = false` call: RocksDB refuses a
+/// non-waiting flush (`TryAgain`) while the DB's writes are stopped, and may
+/// hold either form while one more immutable memtable would stall writes;
+/// on a side thread neither can fail or delay finalize.
+fn start_append_only_flush(
+    append_only_store: Arc<CkbadgerStore>,
+    shutdown_requested: &AtomicBool,
+    finalize_started: Instant,
+) -> Result<AppendOnlyFlushInFlight> {
+    fail_if_bulk_finalize_cancelled(shutdown_requested, "append_only_flush_started")?;
+    let _guard = tracing::info_span!(
+        "bulk_finalize",
+        phase = 1,
+        label = "append_only_flush_started"
+    )
+    .entered();
+    let started_at = finalize_started.elapsed();
+    let call_started = Instant::now();
+    let handle = tokio::task::spawn_blocking(move || {
+        let _guard =
+            tracing::info_span!("bulk_finalize", phase = 1, label = "append_only_flush").entered();
+        append_only_store.flush_all_memtables()
+    });
+    let start_call = call_started.elapsed();
+    info!(
+        started_at_ms = format!("{:.1}", started_at.as_secs_f64() * 1000.0),
+        start_call_ms = format!("{:.1}", start_call.as_secs_f64() * 1000.0),
+        "Append-only flush started on a side thread after the last cells write"
+    );
+    Ok(AppendOnlyFlushInFlight {
+        started_at,
+        start_call,
+        handle,
+    })
 }
 
 /// Executes finalize phases 1-11: writes sealed aggregates, final snapshot,
@@ -7429,6 +7600,180 @@ mod tests {
                     .expect("append-only SST observation")
         );
 
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Finalize must start the append-only flush once the flush channel has
+    /// committed the run's last `cells` batch and while phases 2-11 still run,
+    /// so phase 12 only joins it. The stand-in for phases 2-11 below ends only
+    /// once a `cells` SST exists. That SST can come only from a flush started
+    /// after the drained row landed (one started earlier finds an empty
+    /// memtable) and before phases 2-11 end (phase 12 never runs while they
+    /// do); the row is far too small for RocksDB to flush it on its own.
+    /// Joining the in-flight flush must then leave nothing in memory without
+    /// any further flush call.
+    #[tokio::test]
+    async fn finalize_starts_append_only_flush_after_drain_while_phases_2_to_11_run() {
+        let root = unique_temp_test_dir("bulk-finalize-append-only-flush-order");
+        let domain_path = root.join("domain");
+        let append_path = root.join("append-only");
+        std::fs::create_dir_all(&domain_path).expect("create domain dir");
+        std::fs::create_dir_all(&append_path).expect("create append-only dir");
+        let domain_store =
+            Arc::new(CkbadgerStore::open_domain(&domain_path).expect("open domain store"));
+        let append_store = Arc::new(
+            CkbadgerStore::open_append_only(&append_path).expect("open append-only store"),
+        );
+        let empty_active_memtable_bytes = append_store
+            .flush_stats()
+            .expect("flush stats")
+            .active_memtable_bytes;
+
+        let flush_channel = materialize::FlushChannelHandle::new(
+            2,
+            128 * 1024 * 1024,
+            Arc::clone(&domain_store),
+            Arc::clone(&append_store),
+        )
+        .expect("flush channel");
+        // A heavy domain-only batch ahead of the cells batch, so the last
+        // cells write lands well after the drain began: a flush started
+        // before the drain ends would find the cells memtable still empty.
+        let header_value = vec![0x48_u8; 64 * 1024];
+        flush_channel
+            .send(PendingFlush {
+                history_chunks: vec![materialize::EncodedHistoryChunk::from_materialized_rows(
+                    (0..512_i64)
+                        .map(|block_number| {
+                            materialize::MaterializedRow::new(
+                                CF_BLOCK_HEADERS,
+                                keys::encode_block_num(block_number).to_vec(),
+                                header_value.clone(),
+                            )
+                        })
+                        .collect(),
+                )
+                .expect("domain history chunk")],
+                sealed_rows: Vec::new(),
+            })
+            .await
+            .expect("queue a domain-only batch");
+        let outpoint_key = keys::encode_outpoint(&[0x42; 32], 0);
+        flush_channel
+            .send(PendingFlush {
+                history_chunks: vec![materialize::EncodedHistoryChunk::from_materialized_rows(
+                    vec![materialize::MaterializedRow::new(
+                        CF_CELLS,
+                        outpoint_key.to_vec(),
+                        b"cell".to_vec(),
+                    )],
+                )
+                .expect("history chunk")],
+                sealed_rows: Vec::new(),
+            })
+            .await
+            .expect("queue the last cells batch");
+        let flush_drain = flush_channel.begin_shutdown();
+
+        let observed_store = Arc::clone(&append_store);
+        let finalize_started = Instant::now();
+        let (drain_result, materialize_result) = drain_flush_and_materialize_finalize(
+            flush_drain,
+            Arc::clone(&append_store),
+            Arc::new(AtomicBool::new(false)),
+            finalize_started,
+            move || {
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    let sst_bytes = observed_store
+                        .memory_stats()
+                        .sst_files_size
+                        .ok_or_else(|| anyhow!("append-only SST size unavailable"))?;
+                    if sst_bytes > 0 {
+                        return Ok(materialize::MaterializationReport::default());
+                    }
+                    if Instant::now() >= deadline {
+                        bail!("no append-only flush was started while finalize phases 2-11 ran");
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            },
+        )
+        .await;
+
+        let drain = drain_result.expect("drain the flush channel and start the append-only flush");
+        assert_eq!(drain.flush_stats.flush_count, 2);
+        assert!(drain.append_only_flush.started_at <= finalize_started.elapsed());
+        materialize_result
+            .expect("phases 2-11 task joined")
+            .expect("phases 2-11 saw the append-only flush");
+
+        // Phase 12: joining the side-thread flush is the whole wait.
+        drain
+            .append_only_flush
+            .join()
+            .await
+            .expect("join the append-only flush");
+        let after_join = append_store.memory_stats();
+        assert_eq!(after_join.immutable_memtables, Some(0));
+        assert!(after_join.sst_files_size.expect("append-only SST size") > 0);
+        assert_eq!(
+            append_store
+                .flush_stats()
+                .expect("flush stats")
+                .active_memtable_bytes,
+            empty_active_memtable_bytes,
+            "every drained cells row must be in the memtable the append-only flush switched out"
+        );
+        assert_eq!(
+            append_store
+                .get_cf(append_store.cf_cells(), &outpoint_key)
+                .expect("read cell")
+                .as_deref(),
+            Some(b"cell".as_slice())
+        );
+
+        drop(domain_store);
+        drop(append_store);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A shutdown request during the drain ends finalize as an interrupted
+    /// session; no append-only flush is started for it.
+    #[tokio::test]
+    async fn append_only_flush_is_not_started_after_a_shutdown_request() {
+        let root = unique_temp_test_dir("bulk-finalize-append-only-flush-shutdown");
+        std::fs::create_dir_all(&root).expect("create append-only dir");
+        let append_store =
+            Arc::new(CkbadgerStore::open_append_only(&root).expect("open append-only store"));
+        let mut batch = rocksdb::WriteBatch::default();
+        batch.put_cf(append_store.cf_cells(), b"cell-key", b"cell");
+        append_store
+            .write_batch_no_wal_bulk(batch)
+            .expect("write a cells row");
+        let active_before = append_store
+            .flush_stats()
+            .expect("flush stats")
+            .active_memtable_bytes;
+
+        let error = start_append_only_flush(
+            Arc::clone(&append_store),
+            &AtomicBool::new(true),
+            Instant::now(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("stage=append_only_flush_started"), "{error}");
+        assert_eq!(
+            append_store
+                .flush_stats()
+                .expect("flush stats")
+                .active_memtable_bytes,
+            active_before,
+            "the active cells memtable must not be switched after a shutdown request"
+        );
+
+        drop(append_store);
         let _ = std::fs::remove_dir_all(&root);
     }
 

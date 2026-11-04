@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use rocksdb::{
     ColumnFamily, ColumnFamilyDescriptor, DBCompactionStyle, DBCompressionType, IteratorMode,
@@ -151,6 +151,35 @@ fn scale_clamp(base: u64, scale: f64, min: u64, max: u64) -> usize {
     value.clamp(min, max) as usize
 }
 
+/// Thread counts of the process-wide RocksDB `Env` pools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackgroundThreads {
+    /// HIGH-priority pool: memtable flushes of every store in the process.
+    pub flush: i32,
+    /// LOW-priority pool: compactions.
+    pub compaction: i32,
+}
+
+/// Splits a background-job count into the two `Env` pools. The bulk
+/// controller moves `jobs`; the profile's `max_background_jobs` gives the
+/// open-time split.
+///
+/// - Flush: `max(2, jobs / 4)`. Base used `max(1, jobs / 4)`, which at the
+///   controller's floor (6-7 jobs on a 24-thread host) left ONE flush thread
+///   shared by the domain store's atomic multi-CF flushes and the `cells`
+///   flushes. The floor of 2 keeps the two stores from sharing one thread.
+/// - Compaction: `max(1, jobs - max(1, jobs / 4))`, base's count.
+///
+/// From 8 jobs up the split is base's; below, the only difference is 2 flush
+/// threads instead of 1. A fixed 6-thread flush pool (0-d) was dropped in
+/// 0-e: extra concurrent background threads compete with the bulk build.
+fn background_thread_split(jobs: i32) -> BackgroundThreads {
+    BackgroundThreads {
+        flush: (jobs / 4).max(2),
+        compaction: (jobs - (jobs / 4).max(1)).max(1),
+    }
+}
+
 /// Auto-detected system memory profile that drives RocksDB memory parameters.
 #[derive(Debug, Clone)]
 pub struct MemoryProfile {
@@ -170,6 +199,12 @@ pub struct MemoryProfile {
     pub write_buffer_low_bytes: usize,
     pub write_buffer_hot_cf_bytes: usize,
     pub max_background_jobs: i32,
+    /// Open-time size of the process-wide RocksDB HIGH-priority (flush) pool,
+    /// shared by every store the process opens:
+    /// `background_thread_split(max_background_jobs).flush`, i.e.
+    /// `max(2, max_background_jobs / 4)`. The bulk controller then moves it
+    /// with `set_max_background_jobs`, never below 2.
+    pub flush_threads: i32,
     pub max_subcompactions: u32,
     pub bulk_max_bytes_for_level_base: u64,
     pub bulk_target_file_size_base: u64,
@@ -235,6 +270,7 @@ impl MemoryProfile {
         // RocksDB compaction benefits from SMT — use logical cores.
         let logical = logical_cpu_count.max(1);
         let max_background_jobs = logical.clamp(4, 32) as i32;
+        let flush_threads = background_thread_split(max_background_jobs).flush;
         let max_subcompactions = (logical / 4).clamp(2, 8) as u32;
 
         let budget_scale = budget_u64 as f64 / (16.0 * GB as f64);
@@ -270,6 +306,7 @@ impl MemoryProfile {
             write_buffer_low_bytes: write_buffer_low,
             write_buffer_hot_cf_bytes: write_buffer_hot,
             max_background_jobs,
+            flush_threads,
             max_subcompactions,
             bulk_max_bytes_for_level_base: bulk_level_base,
             bulk_target_file_size_base: bulk_file_base,
@@ -1067,6 +1104,7 @@ impl CkbadgerStore {
             })
             .collect();
 
+        Self::size_flush_pool(&memory_profile)?;
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
 
         Ok(Self {
@@ -1433,6 +1471,57 @@ impl CkbadgerStore {
         } else {
             (2, profile.write_buffer_low_bytes)
         }
+    }
+
+    /// CFs whose bulk-sync memtable is `MemoryProfile::write_buffer_hot_cf_bytes`.
+    const BULK_HOT_WRITE_CFS: &'static [&'static str] = &[
+        CF_TX_INDEX,
+        CF_CELLS,
+        CF_LIVE_CELLS,
+        CF_CONSUMED_CELLS,
+        CF_CELL_BY_LOCK,
+        CF_TX_ACTIONS,
+    ];
+
+    /// Per-CF option overrides applied by
+    /// [`Self::set_bulk_sync_compaction_options`], as `(option, value)` pairs.
+    ///
+    /// The single source of a CF's bulk profile: the setter applies exactly
+    /// this list, so the bulk tier of every CF can be pinned by a unit test
+    /// from a `MemoryProfile` alone.
+    fn bulk_cf_options(cf_name: &str, profile: &MemoryProfile) -> Vec<(&'static str, String)> {
+        // More write buffers = more memtable headroom before flush stall.
+        // With WBM controlling global budget, per-CF limits are a safety net.
+        let max_write_buffer_number = if Self::is_mega_write_cf(cf_name) {
+            12
+        } else if Self::is_high_write_cf(cf_name) {
+            8
+        } else {
+            6
+        };
+        let mut options = vec![
+            ("level0_slowdown_writes_trigger", "96".to_string()),
+            ("level0_stop_writes_trigger", "192".to_string()),
+            (
+                "max_write_buffer_number",
+                max_write_buffer_number.to_string(),
+            ),
+            (
+                "max_bytes_for_level_base",
+                profile.bulk_max_bytes_for_level_base.to_string(),
+            ),
+            (
+                "target_file_size_base",
+                profile.bulk_target_file_size_base.to_string(),
+            ),
+        ];
+        if Self::BULK_HOT_WRITE_CFS.contains(&cf_name) {
+            options.push((
+                "write_buffer_size",
+                profile.write_buffer_hot_cf_bytes.to_string(),
+            ));
+        }
+        options
     }
 
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
@@ -2386,6 +2475,7 @@ impl CkbadgerStore {
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
             max_background_jobs = p.max_background_jobs,
+            flush_threads = p.flush_threads,
             max_subcompactions = p.max_subcompactions,
             block_cache_normal_mb = p.block_cache_normal_bytes / (1024 * 1024),
             block_cache_bulk_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
@@ -2431,21 +2521,42 @@ impl CkbadgerStore {
         self.runtime_config
     }
 
-    /// Dynamically adjust the number of RocksDB background compaction/flush
-    /// threads.  Used by the bottleneck controller to shift CPU between
-    /// compaction and build/fetch work.
+    /// Dynamically adjust the number of RocksDB background flush and
+    /// compaction threads.  Used by the bottleneck controller to shift CPU
+    /// between compaction and build/fetch work.
     ///
     /// RocksDB's `SetDBOptions` is not exposed through the C API, so we
-    /// adjust the default `Env` thread pools directly:
-    ///   - HIGH priority pool → flush threads (max(1, jobs/4))
-    ///   - LOW  priority pool → compaction threads (the rest)
-    pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<()> {
+    /// adjust the default `Env` thread pools directly, split by
+    /// [`background_thread_split`]:
+    ///   - HIGH priority pool → flush threads: `max(2, jobs / 4)`, never one
+    ///     thread shared by the domain and append-only stores
+    ///   - LOW  priority pool → compaction threads: `max(1, jobs - max(1, jobs / 4))`
+    ///
+    /// Returns the split it applied.
+    pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<BackgroundThreads> {
         let mut env = rocksdb::Env::new()
             .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
-        let flush_threads = (jobs / 4).max(1);
-        let compaction_threads = (jobs - flush_threads).max(1);
-        env.set_high_priority_background_threads(flush_threads);
-        env.set_background_threads(compaction_threads);
+        let split = background_thread_split(jobs);
+        env.set_high_priority_background_threads(split.flush);
+        env.set_low_priority_background_threads(split.compaction);
+        debug!(
+            jobs,
+            flush_threads = split.flush,
+            compaction_threads = split.compaction,
+            "RocksDB background pools resized"
+        );
+        Ok(split)
+    }
+
+    /// Size the process-wide HIGH-priority (flush) pool from the profile at
+    /// primary open (idempotent: same profile, same size). RocksDB itself only
+    /// raises the pool at open to `max_background_jobs / 4`, which can be 1;
+    /// the profile's `flush_threads` is never below 2. The bulk controller
+    /// moves the pool afterwards through `set_max_background_jobs`.
+    fn size_flush_pool(profile: &MemoryProfile) -> anyhow::Result<()> {
+        let mut env = rocksdb::Env::new()
+            .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
+        env.set_high_priority_background_threads(profile.flush_threads);
         Ok(())
     }
 
@@ -2455,6 +2566,7 @@ impl CkbadgerStore {
     /// The default per-CF `max_write_buffer_number=4` can cause flush stalls when
     /// memtables fill faster than background flush can drain. Increasing to
     /// 12 (mega) / 8 (high) / 6 (low) gives more headroom before stalling.
+    /// Per-CF values come from [`Self::bulk_cf_options`].
     ///
     /// Also expands the global WriteBufferManager budget and shrinks block cache
     /// to shift memory from reads to writes during the write-heavy bulk phase.
@@ -2466,9 +2578,6 @@ impl CkbadgerStore {
         self.bulk_sync_mode.store(true, Ordering::Relaxed);
 
         let p = &self.memory_profile;
-        let level_base_str = p.bulk_max_bytes_for_level_base.to_string();
-        let file_base_str = p.bulk_target_file_size_base.to_string();
-        let hot_cf_buffer_str = p.write_buffer_hot_cf_bytes.to_string();
 
         self.write_buffer_manager
             .set_buffer_size(p.wbm_bulk_sync_bytes);
@@ -2482,56 +2591,18 @@ impl CkbadgerStore {
         let mut fail = 0u32;
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                // More write buffers = more memtable headroom before flush stall.
-                // With WBM controlling global budget, per-CF limits are a safety net.
-                let max_wb = if Self::is_mega_write_cf(cf_name) {
-                    "12"
-                } else if Self::is_high_write_cf(cf_name) {
-                    "8"
-                } else {
-                    "6"
-                };
-                let result = self.db.set_options_cf(
-                    cf,
-                    &[
-                        ("level0_slowdown_writes_trigger", "96"),
-                        ("level0_stop_writes_trigger", "192"),
-                        ("max_write_buffer_number", max_wb),
-                        ("max_bytes_for_level_base", &level_base_str),
-                        ("target_file_size_base", &file_base_str),
-                    ],
-                );
+                let options = Self::bulk_cf_options(cf_name, p);
+                let options: Vec<(&str, &str)> = options
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                let result = self.db.set_options_cf(cf, &options);
                 if result.is_ok() {
                     ok += 1;
                 } else {
                     warn!(
                         "Failed to set bulk sync options for CF '{}': {:?}",
                         cf_name,
-                        result.err()
-                    );
-                    fail += 1;
-                }
-            }
-        }
-
-        for &hot_cf_name in &[
-            CF_TX_INDEX,
-            CF_CELLS,
-            CF_LIVE_CELLS,
-            CF_CONSUMED_CELLS,
-            CF_CELL_BY_LOCK,
-            CF_TX_ACTIONS,
-        ] {
-            if let Some(cf) = self.db.cf_handle(hot_cf_name) {
-                let result = self
-                    .db
-                    .set_options_cf(cf, &[("write_buffer_size", &hot_cf_buffer_str)]);
-                if result.is_ok() {
-                    ok += 1;
-                } else {
-                    warn!(
-                        cf = hot_cf_name,
-                        "Failed to set hot CF write_buffer_size: {:?}",
                         result.err()
                     );
                     fail += 1;
@@ -3864,6 +3935,159 @@ mod tests {
         );
     }
 
+    /// `cells` keeps base's bulk profile: the budget-scaled hot-CF buffer and
+    /// the mega tier's 12 buffers. A fixed 512 MiB x 16 buffer (task 0-b,
+    /// reverted in 0-e) cut each flush short, but the 512 MiB L0 files made
+    /// universal compaction rewrite `cells` almost twice: 73.3 GiB of
+    /// compaction output against 42.0 / 40.1 GiB in base (cand2-1 vs
+    /// base46-1 / base46-2), +555 s of background CPU, and a build 12-19 %
+    /// slower per cell from block 5M on.
+    #[test]
+    fn bulk_cells_keeps_base_buffer_because_512_mib_l0_files_doubled_universal_compaction_output() {
+        for system_ram in [48 * GB, 96 * GB] {
+            let profile = MemoryProfile::compute(system_ram, 12, 24, false);
+            assert_eq!(
+                CkbadgerStore::bulk_cf_options(CF_CELLS, &profile),
+                vec![
+                    ("level0_slowdown_writes_trigger", "96".to_string()),
+                    ("level0_stop_writes_trigger", "192".to_string()),
+                    ("max_write_buffer_number", "12".to_string()),
+                    (
+                        "max_bytes_for_level_base",
+                        profile.bulk_max_bytes_for_level_base.to_string(),
+                    ),
+                    (
+                        "target_file_size_base",
+                        profile.bulk_target_file_size_base.to_string(),
+                    ),
+                    (
+                        "write_buffer_size",
+                        profile.write_buffer_hot_cf_bytes.to_string(),
+                    ),
+                ],
+                "cells bulk options at system_ram={system_ram}"
+            );
+        }
+    }
+
+    /// Every CF other than `cells` (pinned by its own test above) keeps its
+    /// base bulk profile.
+    #[test]
+    fn bulk_options_of_every_other_cf_are_unchanged() {
+        let domain_hot_cfs = [
+            CF_TX_INDEX,
+            CF_LIVE_CELLS,
+            CF_CONSUMED_CELLS,
+            CF_CELL_BY_LOCK,
+            CF_TX_ACTIONS,
+        ];
+        let profile = MemoryProfile::compute(96 * GB, 12, 24, false);
+        for &cf_name in ALL_CFS {
+            if cf_name == CF_CELLS {
+                continue;
+            }
+            let max_write_buffer_number = if CkbadgerStore::is_mega_write_cf(cf_name) {
+                "12"
+            } else if CkbadgerStore::is_high_write_cf(cf_name) {
+                "8"
+            } else {
+                "6"
+            };
+            let mut expected = vec![
+                ("level0_slowdown_writes_trigger", "96".to_string()),
+                ("level0_stop_writes_trigger", "192".to_string()),
+                (
+                    "max_write_buffer_number",
+                    max_write_buffer_number.to_string(),
+                ),
+                (
+                    "max_bytes_for_level_base",
+                    profile.bulk_max_bytes_for_level_base.to_string(),
+                ),
+                (
+                    "target_file_size_base",
+                    profile.bulk_target_file_size_base.to_string(),
+                ),
+            ];
+            if domain_hot_cfs.contains(&cf_name) {
+                expected.push((
+                    "write_buffer_size",
+                    profile.write_buffer_hot_cf_bytes.to_string(),
+                ));
+            }
+            assert_eq!(
+                CkbadgerStore::bulk_cf_options(cf_name, &profile),
+                expected,
+                "{cf_name}: bulk options"
+            );
+        }
+    }
+
+    /// Reads one CF's options from the newest `OPTIONS-*` file RocksDB wrote,
+    /// which `SetOptions` rewrites on every call.
+    fn persisted_cf_options(
+        db_path: &Path,
+        cf_name: &str,
+    ) -> std::collections::HashMap<String, String> {
+        let newest = std::fs::read_dir(db_path)
+            .unwrap()
+            .filter_map(|entry| {
+                let name = entry.unwrap().file_name().into_string().unwrap();
+                let number = name.strip_prefix("OPTIONS-")?.parse::<u64>().ok()?;
+                Some((number, name))
+            })
+            .max()
+            .expect("RocksDB OPTIONS file")
+            .1;
+        let text = std::fs::read_to_string(db_path.join(newest)).unwrap();
+        let header = format!("[CFOptions \"{cf_name}\"]");
+        let mut options = std::collections::HashMap::new();
+        let mut in_section = false;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_section = line == header;
+                continue;
+            }
+            if in_section {
+                if let Some((name, value)) = line.split_once('=') {
+                    options.insert(name.to_string(), value.to_string());
+                }
+            }
+        }
+        assert!(!options.is_empty(), "no {header} section in OPTIONS file");
+        options
+    }
+
+    /// The setter applies `bulk_cf_options` to a real append-only store, and
+    /// the live restore puts `cells` back on its live tier afterwards.
+    #[test]
+    fn append_only_store_applies_bulk_cells_options_and_restores_live_tier() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+
+        store.set_bulk_sync_compaction_options();
+        let bulk = persisted_cf_options(dir.path(), CF_CELLS);
+        assert_eq!(
+            bulk["write_buffer_size"],
+            store.memory_profile.write_buffer_hot_cf_bytes.to_string()
+        );
+        assert_eq!(bulk["max_write_buffer_number"], "12");
+
+        store.restore_normal_compaction_options();
+        let live = persisted_cf_options(dir.path(), CF_CELLS);
+        let (live_max_write_buffer_number, live_write_buffer_size) =
+            CkbadgerStore::live_cf_write_buffer(CF_CELLS, &store.memory_profile);
+        assert_eq!(
+            live["write_buffer_size"],
+            live_write_buffer_size.to_string()
+        );
+        assert_eq!(
+            live["max_write_buffer_number"],
+            live_max_write_buffer_number.to_string()
+        );
+    }
+
     #[test]
     fn test_bulk_sync_then_restore_compaction_round_trip() {
         let dir = TempDir::new().unwrap();
@@ -3918,6 +4142,8 @@ mod tests {
         let profile = MemoryProfile::compute(32 * GB, 12, 24, false);
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
         assert_eq!(profile.wbm_normal_bytes, 8 * GB as usize);
+        assert_eq!(profile.max_background_jobs, 24);
+        assert_eq!(profile.flush_threads, 6);
         assert_eq!(profile.block_cache_normal_bytes, 8 * GB as usize);
         assert_eq!(profile.write_buffer_mega_bytes, 256 * MB as usize);
         assert_eq!(profile.write_buffer_high_bytes, 128 * MB as usize);
@@ -4088,12 +4314,68 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         // This previously failed with "Extra option not recognized: max_background_jobs"
         // because set_options() targets CF options, not DB options.
-        store
-            .set_max_background_jobs(4)
-            .expect("dynamic background jobs adjustment should succeed");
-        store
-            .set_max_background_jobs(8)
-            .expect("should succeed with different value");
+        // The controller's job count moves both pools; the flush pool never
+        // drops below 2.
+        for (jobs, flush, compaction) in [(4, 2, 3), (6, 2, 5), (7, 2, 6), (8, 2, 6), (24, 6, 18)] {
+            let applied = store
+                .set_max_background_jobs(jobs)
+                .expect("dynamic background jobs adjustment should succeed");
+            assert_eq!(
+                applied,
+                BackgroundThreads { flush, compaction },
+                "jobs={jobs}"
+            );
+        }
+    }
+
+    /// The flush pool follows the bulk controller as in base, `jobs / 4`,
+    /// but never below 2. At the controller's floor (6-7 jobs on a 24-thread
+    /// host) base's `max(1, jobs / 4)` left ONE flush thread shared by the
+    /// domain store's atomic multi-CF flushes and the `cells` flushes: in
+    /// base46-1, 66 s of the 89 s finalize `cells` flush was queueing. The
+    /// compaction pool keeps base's count, so from 8 jobs up the split is
+    /// base's, and below it the only difference is 2 flush threads instead of 1.
+    #[test]
+    fn background_thread_split_follows_the_controller_with_at_least_two_flush_threads() {
+        for (jobs, flush, compaction) in [
+            (4, 2, 3),
+            (6, 2, 5),
+            (7, 2, 6),
+            (8, 2, 6),
+            (12, 3, 9),
+            (24, 6, 18),
+        ] {
+            assert_eq!(
+                background_thread_split(jobs),
+                BackgroundThreads { flush, compaction },
+                "jobs={jobs}"
+            );
+        }
+    }
+
+    /// The open-time flush pool comes from the profile's
+    /// `max_background_jobs` through the same split, never below 2, so the
+    /// domain and append-only stores never share one flush thread.
+    #[test]
+    fn memory_profile_flush_threads_are_a_quarter_of_background_jobs_floor_two() {
+        for (logical_cpus, max_background_jobs, flush_threads) in [
+            (1, 4, 2),
+            (4, 4, 2),
+            (8, 8, 2),
+            (12, 12, 3),
+            (24, 24, 6),
+            (64, 32, 8),
+        ] {
+            let profile = MemoryProfile::compute(32 * GB, 12, logical_cpus, false);
+            assert_eq!(
+                profile.max_background_jobs, max_background_jobs,
+                "logical_cpus={logical_cpus}"
+            );
+            assert_eq!(
+                profile.flush_threads, flush_threads,
+                "logical_cpus={logical_cpus}"
+            );
+        }
     }
 
     #[test]
