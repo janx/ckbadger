@@ -17,6 +17,10 @@
 //! - **One write per key.** Every key is staged into the commit once, with its
 //!   final value, by [`BlockOverlay::finish`].
 //!
+//! A block whose writes leave a key at the value it found (an idempotent
+//! rewrite such as a `lock_scripts` row of a known lock) journals nothing for
+//! it: restoring that value would be a no-op.
+//!
 //! Blocks must reach a key in ascending order; a write for an older block than
 //! the key's last one is an error, never a silently wrong pre-image.
 //!
@@ -359,24 +363,54 @@ impl BlockOverlay {
             stats.keys_written += 1;
         }
 
-        let undo_cf = store.cf_reorg_undo_log_by_block();
-        for entry in &self.entries {
-            if self.unattributed.contains(&(entry.cf, entry.key.clone())) {
+        // Every entry's previous value, and whether its block changed the key
+        // at all: a key's entries are in ascending block order, so the value
+        // at the end of an entry's block is the previous value of the key's
+        // next entry, or the key's final value after its last one. A block
+        // that leaves the key as it found it (an idempotent rewrite, a delete
+        // of a missing key) journals nothing: restoring the value is a no-op.
+        let mut previous_values: Vec<Option<Option<Vec<u8>>>> = vec![None; self.entries.len()];
+        let mut value_after: HashMap<CfKey, Option<Vec<u8>>> = HashMap::new();
+        for (index, entry) in self.entries.iter().enumerate().rev() {
+            let cf_key = (entry.cf, entry.key.clone());
+            if self.unattributed.contains(&cf_key) {
                 continue;
             }
             let previous_value = match &entry.previous {
                 Previous::Known(previous) => previous.clone(),
-                Previous::Committed => self
-                    .committed
-                    .get(&(entry.cf, entry.key.clone()))
-                    .cloned()
+                Previous::Committed => self.committed.get(&cf_key).cloned().ok_or_else(|| {
+                    anyhow!(
+                        "block overlay: committed pre-image not resolved: cf={} key=0x{}",
+                        entry.cf,
+                        hex::encode(&entry.key)
+                    )
+                })?,
+            };
+            let end_of_block = match value_after.get(&cf_key) {
+                Some(value) => value.clone(),
+                None => self
+                    .keys
+                    .get(&cf_key)
                     .ok_or_else(|| {
                         anyhow!(
-                            "block overlay: committed pre-image not resolved: cf={} key=0x{}",
+                            "block overlay: journal entry for a key never written: cf={} key=0x{}",
                             entry.cf,
                             hex::encode(&entry.key)
                         )
-                    })?,
+                    })?
+                    .value
+                    .clone(),
+            };
+            if previous_value != end_of_block {
+                previous_values[index] = Some(previous_value.clone());
+            }
+            value_after.insert(cf_key, previous_value);
+        }
+
+        let undo_cf = store.cf_reorg_undo_log_by_block();
+        for (entry, previous_value) in self.entries.iter().zip(previous_values) {
+            let Some(previous_value) = previous_value else {
+                continue;
             };
             let seq = next_seq(entry.block)?;
             let row_key = keys::encode_reorg_undo_log_key(entry.block, seq);
@@ -526,6 +560,53 @@ mod tests {
         assert_eq!(
             store.get_cf(store.cf_addr_balance(), b"k").unwrap(),
             Some(b"v15b".to_vec())
+        );
+    }
+
+    /// A block that leaves a key as it found it — an idempotent rewrite, a
+    /// key created and deleted inside the block, a delete of a missing key —
+    /// journals nothing (restoring the value would be a no-op); the blocks
+    /// around it still journal the value at the end of the previous block.
+    #[test]
+    fn a_block_that_leaves_a_key_unchanged_journals_nothing() {
+        let (store, _dir) = store();
+        store.put_cf(store.cf_addr_balance(), b"k", b"v0").unwrap();
+        let overlay = SharedBlockOverlay::new(&store);
+        put(&overlay, 5, b"k", b"v0");
+        put(&overlay, 6, b"k", b"v1");
+        put(&overlay, 7, b"k", b"tmp");
+        put(&overlay, 7, b"k", b"v1");
+        put(&overlay, 8, b"k", b"v2");
+        put(&overlay, 8, b"brief", b"x");
+        overlay
+            .with(|o| o.write(Some(8), CF_ADDR_BALANCE, b"brief", None, 0))
+            .unwrap();
+        overlay
+            .with(|o| o.write(Some(9), CF_ADDR_BALANCE, b"missing", None, 0))
+            .unwrap();
+        let stats = commit(&store, &overlay);
+        assert_eq!(
+            journal_rows(&store),
+            vec![
+                (
+                    6,
+                    CF_ADDR_BALANCE.into(),
+                    b"k".to_vec(),
+                    Some(b"v0".to_vec())
+                ),
+                (
+                    8,
+                    CF_ADDR_BALANCE.into(),
+                    b"k".to_vec(),
+                    Some(b"v1".to_vec())
+                ),
+            ]
+        );
+        assert_eq!(stats.entries, 2);
+        assert_eq!(stats.keys_written, 3, "every written key is still staged");
+        assert_eq!(
+            store.get_cf(store.cf_addr_balance(), b"k").unwrap(),
+            Some(b"v2".to_vec())
         );
     }
 

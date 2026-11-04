@@ -572,6 +572,17 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     // transaction's `tx_hash_map` row are written in their block's scope.
     (ckbadger_store::CF_BLOCK_HASH_INDEX, None),
     (ckbadger_store::CF_TX_HASH_MAP, None),
+    // B-3 cells.rs: a created cell's live marker, lock script and index rows
+    // in its creating block's scope; a consumed cell's consumed marker,
+    // live-marker delete and index-row deletes in its consuming block's.
+    (ckbadger_store::CF_LIVE_CELLS, None),
+    (ckbadger_store::CF_CONSUMED_CELLS, None),
+    (ckbadger_store::CF_LOCK_SCRIPTS, None),
+    (ckbadger_store::CF_CELL_BY_LOCK, None),
+    (ckbadger_store::CF_CELL_BY_LOCK_CODE, None),
+    (ckbadger_store::CF_CELL_BY_TYPE, None),
+    (ckbadger_store::CF_CELL_BY_TYPE_CODE, None),
+    (ckbadger_store::CF_CELL_BY_DATA_HASH, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
