@@ -160,15 +160,20 @@ pub struct BackgroundThreads {
     pub compaction: i32,
 }
 
-/// Splits a background-job count into the two `Env` pools. The flush pool is
-/// the profile's fixed `flush_threads`, never derived from `jobs`: the bulk
-/// controller moves `jobs` to trade compaction CPU against build/fetch, and a
-/// flush pool that followed it shrank to one thread shared by both stores.
-/// Compaction gets the rest, at least one thread.
+/// Splits a background-job count into the two `Env` pools.
+///
+/// - Compaction follows the bulk controller exactly as before the flush pool
+///   was fixed: `max(1, jobs - max(1, jobs / 4))`.
+/// - Flush is the profile's fixed `flush_threads`, extra threads on top,
+///   never derived from `jobs`. A flush pool that followed the controller
+///   shrank to one thread shared by both stores at the controller's floor.
+///
+/// So the only thing that differs from the old split is flush capacity.
+/// Flush threads are idle unless a memtable is pending.
 fn background_thread_split(flush_threads: i32, jobs: i32) -> BackgroundThreads {
     BackgroundThreads {
         flush: flush_threads,
-        compaction: (jobs - flush_threads).max(1),
+        compaction: (jobs - (jobs / 4).max(1)).max(1),
     }
 }
 
@@ -2562,7 +2567,8 @@ impl CkbadgerStore {
     ///     profile's fixed `flush_threads`, set at primary open, so the
     ///     domain and append-only stores always have their own flush threads
     ///     (idle unless a memtable is pending).
-    ///   - LOW  priority pool → compaction threads: `max(1, jobs - flush_threads)`.
+    ///   - LOW  priority pool → compaction threads: `max(1, jobs - max(1, jobs / 4))`,
+    ///     exactly the count the controller got before the flush pool was fixed.
     ///
     /// Returns the split it applied.
     pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<BackgroundThreads> {
@@ -4359,9 +4365,10 @@ mod tests {
         let flush_threads = store.memory_profile.flush_threads;
         // This previously failed with "Extra option not recognized: max_background_jobs"
         // because set_options() targets CF options, not DB options.
-        // The controller's job count moves only the compaction pool; the
-        // flush pool stays at the profile's size.
-        for jobs in [4, 8, 24] {
+        // The controller's job count moves only the compaction pool, exactly
+        // as it did before the flush pool was fixed; the flush pool stays at
+        // the profile's size.
+        for (jobs, compaction) in [(4, 3), (6, 5), (7, 6), (8, 6), (24, 18)] {
             let applied = store
                 .set_max_background_jobs(jobs)
                 .expect("dynamic background jobs adjustment should succeed");
@@ -4369,7 +4376,7 @@ mod tests {
                 applied,
                 BackgroundThreads {
                     flush: flush_threads,
-                    compaction: (jobs - flush_threads).max(1),
+                    compaction,
                 },
                 "jobs={jobs}"
             );
@@ -4381,17 +4388,22 @@ mod tests {
     /// it (`jobs / 4`) left ONE flush thread shared by the domain store's
     /// atomic multi-CF flushes and the `cells` flushes: in base46-1, 66 s of
     /// the 89 s finalize `cells` flush was queueing behind domain flushes.
+    ///
+    /// The compaction pool must stay exactly what it was before
+    /// (`jobs - max(1, jobs / 4)`), so a paired run against base differs in
+    /// flush capacity alone.
     #[test]
     fn background_thread_split_keeps_the_flush_pool_whatever_the_job_count() {
-        let low = background_thread_split(6, 4);
-        let floor = background_thread_split(6, 6);
-        let high = background_thread_split(6, 24);
-        assert_eq!(low.flush, 6);
-        assert_eq!(floor.flush, 6);
-        assert_eq!(high.flush, 6);
-        assert_eq!(low.compaction, 1);
-        assert_eq!(floor.compaction, 1);
-        assert_eq!(high.compaction, 18);
+        for (jobs, compaction) in [(4, 3), (6, 5), (7, 6), (12, 9), (24, 18)] {
+            assert_eq!(
+                background_thread_split(6, jobs),
+                BackgroundThreads {
+                    flush: 6,
+                    compaction,
+                },
+                "jobs={jobs}"
+            );
+        }
     }
 
     /// The flush pool is sized once from the profile and never below 2, so
