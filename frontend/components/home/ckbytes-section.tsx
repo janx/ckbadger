@@ -41,6 +41,7 @@ import {
 } from '@/lib/ckb-decimal';
 import { dailyDeltas, dayLabel } from '@/lib/daily-series';
 import { cn, formatCkbAmount, formatCkbCompact } from '@/lib/utils';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { formatBlockNumber } from '@/lib/format-block';
 import { BlockLink } from '@/components/ui/block-link';
 
@@ -136,7 +137,8 @@ export function allocationOf(a: CkbytesAllocation): AllocationView {
   return v;
 }
 
-const FREE_COLOR = 'bg-[#3a4258]';
+/** Free CKB is plain CKB held: the neutral slate of a CKB mark. */
+const FREE_COLOR = CLASS_COLORS.ckb;
 
 function Allocation({ data, error }: { data: CkbytesAllocation | undefined; error: Error | null }) {
   const d = derive({ data, error }, allocationOf, 'No allocation yet');
@@ -250,8 +252,8 @@ function AllocationReady({ view }: { view: AllocationView }) {
         {free > BigInt(0) && (
           <span
             {...segment('free')}
-            className={cn(SEGMENT, FREE_COLOR, 'shrink-0', dim('free'))}
-            style={{ width: width(free) }}
+            className={cn(SEGMENT, 'shrink-0', dim('free'))}
+            style={{ width: width(free), backgroundColor: FREE_COLOR }}
           />
         )}
         {daoFree > BigInt(0) && (
@@ -271,7 +273,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
           {...legend('knowledge')}
         />
         <LegendItem
-          swatch={FREE_COLOR}
+          swatchColor={FREE_COLOR}
           name="Free"
           value={free}
           note={`${pct(free)}%`}
@@ -292,7 +294,10 @@ function AllocationReady({ view }: { view: AllocationView }) {
 const SEGMENT = 'transition-opacity duration-150';
 
 interface LegendItemProps {
-  swatch: string;
+  /** The swatch's theme class (`bg-jade`), or … */
+  swatch?: string;
+  /** … its colour, for an ink with no theme class (free CKB's slate). */
+  swatchColor?: string;
   name: string;
   value: bigint;
   note: string;
@@ -307,7 +312,15 @@ interface LegendItemProps {
 }
 
 /** One legend item: a button, so it is focusable; hovered, focused or tapped, it highlights. */
-function LegendItem({ swatch, name, value, note, active, ...events }: LegendItemProps) {
+function LegendItem({
+  swatch,
+  swatchColor,
+  name,
+  value,
+  note,
+  active,
+  ...events
+}: LegendItemProps) {
   const compact = formatCkbCompact(value);
   return (
     <button
@@ -317,7 +330,11 @@ function LegendItem({ swatch, name, value, note, active, ...events }: LegendItem
       className="focus-visible:ring-base-border -mx-1 flex items-baseline gap-2 rounded bg-transparent px-1 py-1 text-left outline-none focus-visible:ring-1"
       {...events}
     >
-      <span aria-hidden="true" className={cn('h-2 w-2 self-center rounded-sm', swatch)} />
+      <span
+        aria-hidden="true"
+        className={cn('h-2 w-2 self-center rounded-sm', swatch)}
+        style={swatchColor === undefined ? undefined : { backgroundColor: swatchColor }}
+      />
       <span className={active ? 'text-text-bright' : 'text-text'}>{name}</span>
       <span className="text-text-bright tabular-nums">
         {active ? formatCkbAmount(value).full : compact.value} CKB

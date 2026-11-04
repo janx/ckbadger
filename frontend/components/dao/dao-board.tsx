@@ -555,7 +555,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
 /** A mechanism tile (the "Two names for the same script" chain's tile, `script-byte-map.tsx`). */
 function MechanismTile({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="text-small text-text-dim min-w-0 flex-1 rounded border border-[#1a1f30] px-3 py-2.5">
+    <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5">
       <b className="text-text-bright mb-0.5 block font-medium">{title}</b>
       {children}
     </div>
@@ -564,7 +564,7 @@ function MechanismTile({ title, children }: { title: string; children: ReactNode
 
 function MechanismArrow() {
   return (
-    <span aria-hidden="true" className="text-center text-[#343c50] sm:w-5 sm:self-center">
+    <span aria-hidden="true" className="text-text-ghost text-center sm:w-5 sm:self-center">
       <span className="sm:hidden">↓</span>
       <span className="hidden sm:inline">→</span>
     </span>

@@ -60,6 +60,16 @@ describe('CkbytesSection', () => {
     expect(bar.querySelector('[data-segment="knowledge"]')).toHaveClass('bg-jade');
     expect(bar.querySelector('[data-segment="knowledge"]')).not.toHaveClass('min-w-[3px]');
     expect(bar.querySelector('[data-segment="dao"]')).toHaveClass('bg-gold');
+    // Visual finish V11: free CKB is plain CKB held, the CKB mark's slate (CLASS_COLORS.ckb) as a
+    // style on the segment and its legend swatch; no bracket hex
+    expect(bar.querySelector('[data-segment="free"]')).toHaveStyle({ backgroundColor: '#3a4258' });
+    expect(document.querySelector('[data-legend="Free"] > span[aria-hidden="true"]')).toHaveStyle({
+      backgroundColor: '#3a4258',
+    });
+    expect(
+      document.querySelector('[data-legend="Knowledge"] > span[aria-hidden="true"]')
+    ).toHaveClass('bg-jade');
+    expect(bar.parentElement!.innerHTML).not.toMatch(/bg-\[#/);
     for (const [part, amount] of [
       ['knowledge', ckbytesAllocation.knowledge],
       ['free', ckbytesAllocation.free],

@@ -154,7 +154,12 @@ export function ResourceBar({ label, value, scale, overhead, stacked = false }: 
         className="bg-base-elevated flex h-2 w-20 max-w-full shrink-0 overflow-hidden"
       >
         {overhead !== undefined && (
-          <span className="bg-[#3a4258]" style={{ width: `${(overhead / scale) * 100}%` }} />
+          <span
+            style={{
+              width: `${(overhead / scale) * 100}%`,
+              backgroundColor: CLASS_COLORS.ckb,
+            }}
+          />
         )}
         <span
           className="bg-jade"

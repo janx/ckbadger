@@ -38,6 +38,15 @@ describe('block evidence visuals', () => {
     }
     expect(container.querySelectorAll('[data-aligned-bar]')).toHaveLength(2);
   });
+  it('draws a stacked bar’s overhead in the CKB mark’s slate, a named ink (V11)', () => {
+    render(<ResourceBar label="Size, bytes" value={3205} overhead={883} scale={4000} stacked />);
+    const [overhead, user] = Array.from(
+      screen.getByRole('img', { name: /^Size, bytes: 3,205, 883 overhead/ }).children
+    ) as HTMLElement[];
+    expect(overhead).toHaveStyle({ backgroundColor: '#3a4258' });
+    expect(overhead.getAttribute('class')).toBeNull();
+    expect(user).toHaveClass('bg-jade');
+  });
   it('uses stacked resource bars without shortening an exact cycle count', () => {
     render(<ResourceBar label="Cycles" value={3500000000} scale={4000000000} stacked />);
     const bar = screen.getByRole('img', { name: 'Cycles: 3,500,000,000' });

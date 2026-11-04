@@ -597,7 +597,7 @@ function DepRow({
 function EvidenceHeading({ title, note }: { title: string; note: ReactNode }) {
   return (
     <div className="border-base-border-subtle flex flex-wrap items-baseline justify-between gap-2 border-b pb-1.5">
-      <h2 className="text-body font-medium text-[#a0a8be]">{title}</h2>
+      <h2 className="text-body text-text font-medium">{title}</h2>
       <span className="text-text-dim text-small">{note}</span>
     </div>
   );

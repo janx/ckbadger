@@ -10,6 +10,7 @@ import {
   type SentencePart,
 } from '@/components/ui/block-link';
 import type { Block, BlockProposal, Transaction } from '@/lib/api';
+import { BLOCK_POSITION_COLORS } from '@/lib/design-tokens';
 import { getUncleDetailHref } from '@/lib/detail-routes';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8Time } from '@/lib/utils';
@@ -186,7 +187,10 @@ export function BlockPosition({
         </p>
       )}
       <div aria-label="Chain position relationships" className="min-w-0 space-y-4 md:hidden">
-        <div className="text-small space-y-2 rounded bg-[#123029] p-3">
+        <div
+          className="text-small space-y-2 rounded p-3"
+          style={{ backgroundColor: BLOCK_POSITION_COLORS.currentTile }}
+        >
           <Link href={`/blocks/${block.hash}`} className="text-text-bright block">
             Current block {formatBlockNumber(block.number)}
           </Link>
@@ -337,7 +341,7 @@ export function BlockPosition({
                     width={tileWidth}
                     height="88"
                     rx="6"
-                    fill={current ? '#123029' : '#131826'}
+                    fill={current ? BLOCK_POSITION_COLORS.currentTile : '#131826'}
                   />
                   <text x="10" y="20" fill={current ? '#dee2ec' : '#a0a8be'} fontSize="12">
                     {formatBlockNumber(number)}

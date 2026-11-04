@@ -346,13 +346,13 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
           />
           <dl className="text-small mt-4 grid grid-cols-[88px_minmax(0,1fr)] gap-x-4 gap-y-1.5 sm:grid-cols-[168px_minmax(0,1fr)]">
             <dt className="text-text-dim">Name · symbol · decimals</dt>
-            <dd className="m-0 min-w-0 text-[#a0a8be]">
+            <dd className="text-text m-0 min-w-0">
               {t.name ?? 'Name unavailable'} · {t.symbol ?? 'Symbol unavailable'} ·{' '}
               {t.decimals ?? 'Decimals unknown'}
               <span className="text-text-dim text-meta block">{provenanceText(t.metadata)}</span>
             </dd>
             <dt className="text-text-dim">Live cells</dt>
-            <dd className="m-0 text-[#a0a8be]">
+            <dd className="text-text m-0">
               <AssetCount value={t.cellsCount} />
             </dd>
           </dl>
