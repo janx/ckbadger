@@ -490,6 +490,15 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
         ckbadger_store::CF_STATS_MNFT,
         Some(keys::STATS_PREFIX_OBJECT_HOURLY),
     ),
+    // B-3 spore.rs: the object loop's protocol writes are scoped per block,
+    // cluster capacity is folded per block, type-index rows carry their block.
+    (ckbadger_store::CF_SPORE_DATA, None),
+    (ckbadger_store::CF_SPORE_BY_CLUSTER, None),
+    (ckbadger_store::CF_CLUSTER_AGG, None),
+    (ckbadger_store::CF_STATS_SPORE, None),
+    (ckbadger_store::CF_IDENTITY_DATA, None),
+    (ckbadger_store::store::CF_IDENTITY_BY_COLLECTION, None),
+    (ckbadger_store::store::CF_STATS_IDENTITY, None),
 ];
 
 fn is_covered(cf: &str, key: &[u8]) -> bool {

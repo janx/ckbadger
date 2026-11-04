@@ -45,8 +45,9 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    fold_tx_address_deltas, AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction,
-    TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
+    fold_tx_address_deltas, AddressBalanceDelta, BlockIndexChanges, CachedCellInfo,
+    EntityDailyChanges, ReorgAction, TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey,
+    UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -938,7 +939,7 @@ pub(crate) struct LiveBatchPrecompute {
     pub(crate) script_reference_usage_changes: ScriptReferenceUsageChanges,
     pub(crate) script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
     pub(crate) token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
-    pub(crate) spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+    pub(crate) spore_type_index_changes: BlockIndexChanges<SporeTypeIndex>,
     pub(crate) spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
     pub(crate) cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
     pub(crate) object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
@@ -1099,7 +1100,7 @@ pub(crate) fn precompute_live_batch(
     // undo log needs to restore a key's end-of-block-N value.
     let mut script_daily_changes = EntityDailyChanges::<UndatedScriptKey>::new();
     let mut token_daily_changes = TokenDailyChanges::<UndatedEntityKey>::new();
-    let mut spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex> = HashMap::new();
+    let mut spore_type_index_changes: BlockIndexChanges<SporeTypeIndex> = BlockIndexChanges::new();
     let mut spore_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
     let mut cluster_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
     let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
@@ -1320,7 +1321,10 @@ pub(crate) fn precompute_live_batch(
                         cluster_id: cluster_id.clone(),
                     };
                     spore_type_index_cache.insert(type_script_hash.clone(), Some(index.clone()));
-                    spore_type_index_changes.insert(type_script_hash.clone(), index);
+                    spore_type_index_changes
+                        .entry(tx_data.block_number)
+                        .or_default()
+                        .insert(type_script_hash.clone(), index);
 
                     accumulate_daily!(
                         spore_daily_changes,
@@ -1660,7 +1664,7 @@ impl Indexer {
             script_reference_usage_changes: ScriptReferenceUsageChanges,
             script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
             token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
-            spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+            spore_type_index_changes: BlockIndexChanges<SporeTypeIndex>,
             spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,

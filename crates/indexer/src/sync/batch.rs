@@ -1692,7 +1692,7 @@ impl Indexer {
         script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
         token_daily_changes: TokenDailyChanges<UndatedEntityKey>,
-        spore_type_index_changes: HashMap<Vec<u8>, SporeTypeIndex>,
+        spore_type_index_changes: super::types::BlockIndexChanges<SporeTypeIndex>,
         spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
@@ -2213,9 +2213,9 @@ impl Indexer {
                 )
             })
         })?;
-        if !spore_type_index_changes.is_empty() {
+        for (block, changes) in &spore_type_index_changes {
             self.writer
-                .update_spore_type_index_batch(&spore_type_index_changes, &mut data_batch)?;
+                .update_spore_type_index_batch(changes, &mut data_batch.at(*block))?;
         }
         entity_stats.with(|overlay| -> Result<()> {
             batch_undo_seq.with(|undo_seq| {
@@ -2669,12 +2669,25 @@ impl Indexer {
             }
 
             // --- Main pass: per-tx with inputs-before-outputs ---
+            // A cluster aggregate's capacity moves with its spores' cells, block
+            // by block, interleaved with the same block's protocol writes so the
+            // aggregate key is journaled in ascending block order.
+            let cluster_capacity_by_block: HashMap<
+                i64,
+                &crate::sync::types::EntityDailyBlockMap<(Vec<u8>, u32)>,
+            > = cluster_daily_changes
+                .by_block()
+                .iter()
+                .map(|(block, changes)| (*block, changes))
+                .collect();
             let mut block_tx_idx = 0usize;
             for (block_idx, block_response) in blocks.iter().enumerate() {
                 // Protocol state for one block: the longest stretch of the
                 // staging body. Beat the heartbeat per block here too.
                 self.perf.mark_writer_phase();
                 let parsed = &all_parsed_blocks[block_idx];
+                // Every protocol write of this block belongs to it.
+                let mut data_batch = data_batch.at(parsed.number);
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -3233,6 +3246,13 @@ impl Indexer {
                         );
                     }
                 }
+                if let Some(changes) = cluster_capacity_by_block.get(&parsed.number) {
+                    self.writer.apply_cluster_capacity_deltas(
+                        changes,
+                        &mut data_batch,
+                        &mut spore_state,
+                    )?;
+                }
                 block_tx_idx += tx_count_for_block;
             }
 
@@ -3299,15 +3319,6 @@ impl Indexer {
             mnft_state.extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
             spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
             derive_identity_transitions.extend(spore_state.take_bit_cell_transitions());
-
-            // Apply cumulative capacity deltas to cluster aggregates
-            if !cluster_daily_changes.is_empty() {
-                self.writer.apply_cluster_capacity_deltas(
-                    &cluster_daily_changes.fold_total()?,
-                    &mut data_batch,
-                    &mut spore_state,
-                )?;
-            }
 
             pending_identity_aggs.extend(
                 spore_state
@@ -7390,7 +7401,7 @@ mod tests {
                     script_reference_usage_changes,
                     script_daily_changes,
                     token_daily_changes,
-                    HashMap::new(),
+                    Default::default(),
                     EntityDailyChanges::new(),
                     EntityDailyChanges::new(),
                     object_type_index_changes,

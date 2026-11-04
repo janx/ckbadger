@@ -317,6 +317,11 @@ pub type UndatedEntityKey = Vec<u8>;
 /// One block's contributions: entity key → `(capacity_delta, knowledge_delta)`.
 pub type EntityDailyBlockMap<K> = std::collections::HashMap<K, (i128, i128)>;
 
+/// Per-block index rows a live batch writes (a type script hash's protocol
+/// index), so each row is written at the block whose output carried it.
+pub type BlockIndexChanges<V> =
+    std::collections::BTreeMap<i64, std::collections::HashMap<Vec<u8>, V>>;
+
 #[derive(Debug, Clone)]
 pub struct EntityDailyChanges<K: Eq + std::hash::Hash> {
     by_block: Vec<(i64, EntityDailyBlockMap<K>)>,

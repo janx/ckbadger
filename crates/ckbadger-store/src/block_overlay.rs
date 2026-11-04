@@ -217,6 +217,14 @@ impl BlockOverlay {
             }
         }
         let Some(block) = block else {
+            // Transitional diagnostic (B-3): name the first unscoped write.
+            if std::env::var_os("CKBADGER_JOURNAL_STRICT").is_some() {
+                bail!(
+                    "block overlay: write without a block scope: cf={cf} key=0x{}\n{}",
+                    hex::encode(key),
+                    std::backtrace::Backtrace::force_capture()
+                );
+            }
             self.unattributed_cfs.insert(cf);
             self.unattributed.insert(cf_key.clone());
             let state = self.keys.entry(cf_key).or_insert(KeyState {
@@ -323,6 +331,22 @@ impl BlockOverlay {
             self.read_committed(store, cf, &refs)?;
         }
 
+        // Transitional diagnostic (B-3): list the unscoped writes by CF and
+        // first key byte.
+        if let Some(path) = std::env::var_os("CKBADGER_JOURNAL_UNATTRIBUTED_LOG") {
+            use std::io::Write;
+            let mut seen: BTreeSet<(&str, u8)> = BTreeSet::new();
+            for (cf, key) in &self.unattributed {
+                seen.insert((cf, key.first().copied().unwrap_or(0)));
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            for (cf, first) in seen {
+                writeln!(file, "{cf} {first:#04x}")?;
+            }
+        }
         let mut stats = JournalStats::default();
         let mut cf_keys: Vec<(&CfKey, &KeyState)> = self.keys.iter().collect();
         cf_keys.sort_by(|a, b| a.0.cmp(b.0));
