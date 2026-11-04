@@ -1747,19 +1747,24 @@ async fn test_cell_missing_its_type_hash_type_is_never_stored() {
 #[tokio::test]
 async fn test_get_cell_fails_fast_when_address_cannot_be_encoded() {
     // `script_to_address(...).ok()` turned an unencodable lock into `address:
-    // null`, indistinguishable from a cell that legitimately has no address —
-    // there is no such cell.
+    // null`, indistinguishable from a cell that legitimately has no address.
     let tx_hash = vec![0xc4; 32];
     let mut cell = cell_with(1, Some(1));
-    // The payload's code hash is always 32 bytes now; an unknown hash_type is
-    // the remaining way RFC-0021 refuses to encode a lock.
-    cell.lock_hash_type = 3;
+    // A valid lock RFC-0021 cannot encode: bech32m's 1023-character code
+    // length caps a full address at about 600 bytes of args, and lock args
+    // are unbounded on chain. Capacity and occupied follow the longer args.
+    // `canonical_version_at` encodes the owner address once; `get_cell` shows
+    // that address, so its encoding failure is this one.
+    cell.lock_args = vec![0x33; 700];
+    cell.capacity = 100_000_000_000;
+    cell.occupied_capacity = (8 + 33 + 700 + 33 + 2 + 42) * 100_000_000;
 
     let (status, json) = get_cell_json(&tx_hash, cell).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
     let message = json["message"].as_str().unwrap_or_default();
     assert!(
-        message.contains(&hex::encode(&tx_hash)) && message.contains("address"),
+        message.contains(&hex::encode(&tx_hash))
+            && message.contains("lock script cannot be encoded as an address"),
         "error must name the outpoint and the encoding failure, got {message}"
     );
 }

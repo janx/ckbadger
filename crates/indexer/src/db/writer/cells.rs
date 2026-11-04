@@ -65,26 +65,10 @@ fn expected_occupied_capacity_for_cell(
         );
     }
 
-    // A type script is present iff its code hash is; its hash is derived from
-    // the three fields, so it is not consulted (or computed) here.
-    let type_args_len = if let Some(type_code_hash) = &info.type_code_hash {
-        Some(
-            info.type_args
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing type_args for typed {} cell: outpoint=0x{}:{}, type_code_hash=0x{}",
-                        source,
-                        hex::encode(tx_hash),
-                        output_index,
-                        hex::encode(type_code_hash)
-                    )
-                })?
-                .len(),
-        )
-    } else {
-        None
-    };
+    // Both callers validate payloads just decoded from the store, and a
+    // decoded payload holds its whole type script or none
+    // (`LiveCellInfo::decode`), so the args are present iff the type script is.
+    let type_args_len = info.type_args.as_ref().map(Vec::len);
     compute_occupied_capacity_shannons(info.data_size as usize, info.lock_args.len(), type_args_len)
         .with_context(|| {
             format!(

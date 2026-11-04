@@ -3795,6 +3795,7 @@ async fn get_cell(
     };
     let consumed_at_block = canonical.response.consumed_at_block;
     let consumed_by_tx = canonical.response.consumed_by_tx.clone();
+    let owner_address = canonical.response.owner_address.clone();
     let info =
         ckbadger_store::PositionedCellInfo::new(canonical.cell, canonical.response.block_number);
 
@@ -3842,22 +3843,9 @@ async fn get_cell(
         None
     };
 
-    // Every cell has a lock, so it always has an address. Swallowing the encoder
-    // error rendered `address: null`, indistinguishable from a cell that has none.
-    let address = Some(
-        script_to_address(
-            &info.lock_code_hash,
-            lock_hash_type_num,
-            &info.lock_args,
-            &state.ckb_network,
-        )
-        .map_err(|e| {
-            ApiError::internal(format!(
-                "failed to encode address: outpoint={}, error={}",
-                outpoint, e
-            ))
-        })?,
-    );
+    // Every cell has a lock, so it always has an address: the one
+    // `canonical_version_at` encoded (and failed on, naming the outpoint).
+    let address = Some(owner_address);
 
     if info.data_size < 0 {
         return Err(ApiError::internal(format!(

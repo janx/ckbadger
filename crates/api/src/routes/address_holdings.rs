@@ -375,10 +375,6 @@ fn classify(
         .type_script_hash()
         .context("typed cell missing type hash")?;
     let type_hash = type_hash.as_slice();
-    ensure!(
-        code.len() == 32 && type_hash.len() == 32,
-        "invalid typed cell hash widths"
-    );
     let hash_type = info
         .type_hash_type
         .context("typed cell missing hash type")?;
