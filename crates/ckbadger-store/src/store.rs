@@ -1435,6 +1435,57 @@ impl CkbadgerStore {
         }
     }
 
+    /// CFs whose bulk-sync memtable is `MemoryProfile::write_buffer_hot_cf_bytes`.
+    const BULK_HOT_WRITE_CFS: &'static [&'static str] = &[
+        CF_TX_INDEX,
+        CF_CELLS,
+        CF_LIVE_CELLS,
+        CF_CONSUMED_CELLS,
+        CF_CELL_BY_LOCK,
+        CF_TX_ACTIONS,
+    ];
+
+    /// Per-CF option overrides applied by
+    /// [`Self::set_bulk_sync_compaction_options`], as `(option, value)` pairs.
+    ///
+    /// The single source of a CF's bulk profile: the setter applies exactly
+    /// this list, so the bulk tier of every CF can be pinned by a unit test
+    /// from a `MemoryProfile` alone.
+    fn bulk_cf_options(cf_name: &str, profile: &MemoryProfile) -> Vec<(&'static str, String)> {
+        // More write buffers = more memtable headroom before flush stall.
+        // With WBM controlling global budget, per-CF limits are a safety net.
+        let max_write_buffer_number = if Self::is_mega_write_cf(cf_name) {
+            12
+        } else if Self::is_high_write_cf(cf_name) {
+            8
+        } else {
+            6
+        };
+        let mut options = vec![
+            ("level0_slowdown_writes_trigger", "96".to_string()),
+            ("level0_stop_writes_trigger", "192".to_string()),
+            (
+                "max_write_buffer_number",
+                max_write_buffer_number.to_string(),
+            ),
+            (
+                "max_bytes_for_level_base",
+                profile.bulk_max_bytes_for_level_base.to_string(),
+            ),
+            (
+                "target_file_size_base",
+                profile.bulk_target_file_size_base.to_string(),
+            ),
+        ];
+        if Self::BULK_HOT_WRITE_CFS.contains(&cf_name) {
+            options.push((
+                "write_buffer_size",
+                profile.write_buffer_hot_cf_bytes.to_string(),
+            ));
+        }
+        options
+    }
+
     fn default_block_options(block_cache: &rocksdb::Cache) -> rocksdb::BlockBasedOptions {
         let mut block_opts = rocksdb::BlockBasedOptions::default();
         block_opts.set_block_size(16 * 1024);
@@ -2466,9 +2517,6 @@ impl CkbadgerStore {
         self.bulk_sync_mode.store(true, Ordering::Relaxed);
 
         let p = &self.memory_profile;
-        let level_base_str = p.bulk_max_bytes_for_level_base.to_string();
-        let file_base_str = p.bulk_target_file_size_base.to_string();
-        let hot_cf_buffer_str = p.write_buffer_hot_cf_bytes.to_string();
 
         self.write_buffer_manager
             .set_buffer_size(p.wbm_bulk_sync_bytes);
@@ -2482,56 +2530,18 @@ impl CkbadgerStore {
         let mut fail = 0u32;
         for &cf_name in ALL_CFS {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                // More write buffers = more memtable headroom before flush stall.
-                // With WBM controlling global budget, per-CF limits are a safety net.
-                let max_wb = if Self::is_mega_write_cf(cf_name) {
-                    "12"
-                } else if Self::is_high_write_cf(cf_name) {
-                    "8"
-                } else {
-                    "6"
-                };
-                let result = self.db.set_options_cf(
-                    cf,
-                    &[
-                        ("level0_slowdown_writes_trigger", "96"),
-                        ("level0_stop_writes_trigger", "192"),
-                        ("max_write_buffer_number", max_wb),
-                        ("max_bytes_for_level_base", &level_base_str),
-                        ("target_file_size_base", &file_base_str),
-                    ],
-                );
+                let options = Self::bulk_cf_options(cf_name, p);
+                let options: Vec<(&str, &str)> = options
+                    .iter()
+                    .map(|(name, value)| (*name, value.as_str()))
+                    .collect();
+                let result = self.db.set_options_cf(cf, &options);
                 if result.is_ok() {
                     ok += 1;
                 } else {
                     warn!(
                         "Failed to set bulk sync options for CF '{}': {:?}",
                         cf_name,
-                        result.err()
-                    );
-                    fail += 1;
-                }
-            }
-        }
-
-        for &hot_cf_name in &[
-            CF_TX_INDEX,
-            CF_CELLS,
-            CF_LIVE_CELLS,
-            CF_CONSUMED_CELLS,
-            CF_CELL_BY_LOCK,
-            CF_TX_ACTIONS,
-        ] {
-            if let Some(cf) = self.db.cf_handle(hot_cf_name) {
-                let result = self
-                    .db
-                    .set_options_cf(cf, &[("write_buffer_size", &hot_cf_buffer_str)]);
-                if result.is_ok() {
-                    ok += 1;
-                } else {
-                    warn!(
-                        cf = hot_cf_name,
-                        "Failed to set hot CF write_buffer_size: {:?}",
                         result.err()
                     );
                     fail += 1;
@@ -3862,6 +3872,60 @@ mod tests {
             expected.len(),
             "HISTORICAL_APPEND_CFS length mismatch"
         );
+    }
+
+    /// Every CF except `cells` keeps the bulk profile it had before the
+    /// fixed `cells` buffer: the domain CFs flush in parallel and their
+    /// finalize tail was 14 s.
+    #[test]
+    fn bulk_options_of_every_other_cf_are_unchanged() {
+        let domain_hot_cfs = [
+            CF_TX_INDEX,
+            CF_LIVE_CELLS,
+            CF_CONSUMED_CELLS,
+            CF_CELL_BY_LOCK,
+            CF_TX_ACTIONS,
+        ];
+        let profile = MemoryProfile::compute(96 * GB, 12, 24, false);
+        for &cf_name in ALL_CFS {
+            if cf_name == CF_CELLS {
+                continue;
+            }
+            let max_write_buffer_number = if CkbadgerStore::is_mega_write_cf(cf_name) {
+                "12"
+            } else if CkbadgerStore::is_high_write_cf(cf_name) {
+                "8"
+            } else {
+                "6"
+            };
+            let mut expected = vec![
+                ("level0_slowdown_writes_trigger", "96".to_string()),
+                ("level0_stop_writes_trigger", "192".to_string()),
+                (
+                    "max_write_buffer_number",
+                    max_write_buffer_number.to_string(),
+                ),
+                (
+                    "max_bytes_for_level_base",
+                    profile.bulk_max_bytes_for_level_base.to_string(),
+                ),
+                (
+                    "target_file_size_base",
+                    profile.bulk_target_file_size_base.to_string(),
+                ),
+            ];
+            if domain_hot_cfs.contains(&cf_name) {
+                expected.push((
+                    "write_buffer_size",
+                    profile.write_buffer_hot_cf_bytes.to_string(),
+                ));
+            }
+            assert_eq!(
+                CkbadgerStore::bulk_cf_options(cf_name, &profile),
+                expected,
+                "{cf_name}: bulk options"
+            );
+        }
     }
 
     #[test]
