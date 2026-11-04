@@ -1,3 +1,5 @@
+import type { CSSProperties } from 'react';
+
 /** Canonical semantic encodings from the approved site review. */
 export const CLASS_COLORS = {
   dao: '#f2c55c',
@@ -106,6 +108,8 @@ export const REWARD_COLORS = {
   committed: '#a0a8be',
   proposal: CLASS_COLORS.dao,
 } as const;
+/** The Block board's position diagram: the current block's tile (the SVG and the phone list). */
+export const BLOCK_POSITION_COLORS = { currentTile: '#123029' } as const;
 
 // ---- F2 group dao (round-2 fix) ----
 /**
@@ -133,6 +137,8 @@ export const FIBER_COLORS = {
   count: '#dee2ec',
   halo: '#0c0e15',
   note: '#7c849c',
+  /** The edge of the pressed state filter on the channels list (the "other" slate). */
+  filterOn: '#2c3348',
 } as const;
 /** Uncles on chain are grey ink; this node's view and an uncle inclusion are jade. */
 export const FORK_COLORS = {
@@ -213,4 +219,71 @@ export const GEL_INK = {
   btc_ckb: ['#ffe7d8', BITCOIN_COLORS.copper, '#9df6dc'],
   pure_ckb: ['#f3fffb', '#9df6dc', '#3ee0b0'],
   other: [CLASS_COLORS.objects, CLASS_COLORS.objects, CLASS_COLORS.objects],
+} as const;
+
+// ---- Inks with no theme token (visual finish V11) ---------------------------------------------
+// Values the pages drew as bracket-hex classes (`text-[#4b5266]`), named here so page code carries
+// no hex; no new Tailwind colour tokens (ruling V11) and no value changed. A text ink stays a class
+// (R11: an inline `color` is a data hue): `inkStyle` sets the value and the element's
+// `text-[color:var(--ink)]` reads it, so the rules that win over a class still win over it — the
+// global `a:hover` jade on a link, a `hover:` state. Borders, backgrounds and data hues go through
+// `style`, the pattern above; a `hover:` state on them reads a CSS variable set with `cssVars`.
+
+/** CSS custom properties for a `style` prop (React's `CSSProperties` has no `--*` keys). */
+export function cssVars(vars: Record<`--${string}`, string>): CSSProperties {
+  return vars as CSSProperties;
+}
+
+/** `style` for a text ink with no theme token, read by the element's `text-[color:var(--ink)]`. */
+export function inkStyle(color: string): CSSProperties {
+  return cssVars({ '--ink': color });
+}
+
+/** Inks the boards share. */
+export const BOARD_INKS = {
+  /**
+   * The quiet slate between text.ghost (#343c50) and text.dim (#7c849c): separators (↔, vs, —,
+   * →), byte offsets, the version ruler's dates and day labels, the dashed frame of a note.
+   */
+  quiet: '#4b5266',
+  /** A link on the cell, fiber and fork boards (hashes, outputs, a script): cyan under aqua. */
+  link: '#6aa9c4',
+  /** A cell or script link on the cell boards: the lock blue. */
+  cellLink: CELL_COLORS.lock,
+} as const;
+
+// ---- Chrome inks (visual finish V11) ----
+/** The accent row tag's deep jade edge under its jade ink (table-rows T5). */
+export const ROW_TAG_COLORS = { accentEdge: '#1f5a46' } as const;
+/** The header search's results: a well deeper than the page, its selected row and a hovered one. */
+export const SEARCH_RESULT_COLORS = {
+  panel: '#06090f',
+  selected: '#091217',
+  hover: '#070e13',
+} as const;
+/** The activity stream's "n new activities" bar and its hover. */
+export const STREAM_COLORS = { pending: '#04070d', pendingHover: '#060a11' } as const;
+
+// ---- Storage tiers (composition card, content preview; visual finish V11) ----
+/**
+ * The storage tiers' own inks: BTC+CKB a moss green over a dark amber wash, Pure CKB a deep jade
+ * over a dark jade wash, centralised a dark rouge edge. `inkLit` / `edgeLit` are the tooltip
+ * button's hover; a `wash` is the preview header gradient's start, at 50 % (it fades to nothing).
+ */
+export const STORAGE_TIER_COLORS = {
+  btc_ckb: {
+    ink: '#a0b880',
+    inkLit: '#c0d8a0',
+    edge: '#4a6838',
+    edgeLit: '#6a8850',
+    wash: 'rgba(74, 58, 18, 0.5)',
+  },
+  pure_ckb: {
+    ink: '#5abfa0',
+    inkLit: '#40e8b0',
+    edge: '#1a6050',
+    edgeLit: '#2a8068',
+    wash: 'rgba(14, 56, 48, 0.5)',
+  },
+  centralized_mixture: { edge: '#5a2020' },
 } as const;
