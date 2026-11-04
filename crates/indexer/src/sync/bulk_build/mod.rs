@@ -6882,8 +6882,8 @@ mod tests {
         assert_eq!(single.cell_payloads.len(), split.cell_payloads.len());
         for (outpoint, payload) in &single.cell_payloads {
             assert_eq!(
-                payload.encode(),
-                split.cell_payloads[outpoint].encode(),
+                payload.encode().unwrap(),
+                split.cell_payloads[outpoint].encode().unwrap(),
                 "append-only payload differs at {}",
                 hex::encode(outpoint)
             );

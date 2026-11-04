@@ -847,15 +847,14 @@ mod tests {
     }
 
     /// A live cell whose payload carries type args but no type code hash (the
-    /// shape a pre-v2 payload could decode to through `#[serde(default)]`) is
-    /// no longer resolved through the token's metadata: the v2 payload has its
-    /// whole type script or none, so this payload fails to decode, with its
-    /// outpoint, instead of entering UDT matching.
+    /// shape a pre-v2 payload could decode to through `#[serde(default)]`) can
+    /// no longer be resolved through the token's metadata: the v2 payload holds
+    /// its whole type script or none, and the store refuses to write (or read)
+    /// one that does not, naming the outpoint, so UDT matching never sees it.
     #[test]
-    fn test_get_udt_cells_info_batch_rejects_a_payload_without_type_code_hash() {
+    fn test_get_udt_cells_info_batch_never_sees_a_payload_without_type_code_hash() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
-        let writer = BatchWriter::new(store.clone(), store.clone());
 
         let tx_hash = vec![0xEF; 32];
         let output_index = 0i16;
@@ -873,16 +872,13 @@ mod tests {
             data_hash: None,
         };
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell(&tx_hash, output_index, &cell, 1);
-        batch.commit().unwrap();
-
-        let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let error = writer
-            .get_udt_cells_info_batch(&outpoints)
-            .expect_err("a partial type script payload must not resolve")
+        let error = batch
+            .put_cell_payload_by_outpoint(&tx_hash, output_index, &cell)
+            .expect_err("a partial type script payload must not be stored")
             .to_string();
         assert!(error.contains("type script is partial"), "{error}");
         assert!(error.contains(&hex::encode(&tx_hash)), "{error}");
+        assert!(batch.is_empty(), "nothing staged");
     }
 
     #[test]

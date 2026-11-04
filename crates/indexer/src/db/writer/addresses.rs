@@ -2242,22 +2242,24 @@ mod tests {
             // An unrelated immutable payload guards the store boundary. The
             // metadata import and rollup must never update/delete append-only CF_CELLS.
             let mut payload = StoreBatch::new(&append);
-            payload.put_cell_payload(
-                &payload_key,
-                &ckbadger_store::LiveCellInfo {
-                    capacity: 10000,
-                    lock_code_hash: [0x22; 32],
-                    lock_hash_type: 1,
-                    lock_args: vec![],
-                    type_code_hash: None,
-                    type_hash_type: None,
-                    type_args: None,
-                    data_size: 0,
-                    occupied_capacity: 41,
-                    udt_amount: None,
-                    data_hash: None,
-                },
-            );
+            payload
+                .put_cell_payload(
+                    &payload_key,
+                    &ckbadger_store::LiveCellInfo {
+                        capacity: 10000,
+                        lock_code_hash: [0x22; 32],
+                        lock_hash_type: 1,
+                        lock_args: vec![],
+                        type_code_hash: None,
+                        type_hash_type: None,
+                        type_args: None,
+                        data_size: 0,
+                        occupied_capacity: 41,
+                        udt_amount: None,
+                        data_hash: None,
+                    },
+                )
+                .unwrap();
             payload.commit().unwrap();
             (
                 script_startup_rows(&store),
@@ -2998,7 +3000,9 @@ mod tests {
         let payload_key = keys::encode_outpoint(&tx.hash, 0);
         let payload_before = input_cell.cell.clone();
         let mut payload_batch = StoreBatch::new(&append);
-        payload_batch.put_cell_payload(&payload_key, &payload_before);
+        payload_batch
+            .put_cell_payload(&payload_key, &payload_before)
+            .unwrap();
         payload_batch.commit().unwrap();
         let mut input_cells = HashMap::from([((tx.hash.to_vec(), 0), input_cell.clone())]);
         let mut retired = tx;

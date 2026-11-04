@@ -391,7 +391,10 @@ mod tests {
     #[test]
     fn cells_payload_v2_of_real_shaped_cells_averages_at_most_140_bytes() {
         let cells = real_shaped_cells();
-        let v2: Vec<usize> = cells.iter().map(|(_, info)| info.encode().len()).collect();
+        let v2: Vec<usize> = cells
+            .iter()
+            .map(|(_, info)| info.encode().unwrap().len())
+            .collect();
         let v1: Vec<usize> = cells
             .iter()
             .map(|(parsed, info)| {

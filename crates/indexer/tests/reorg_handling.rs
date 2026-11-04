@@ -199,7 +199,9 @@ fn insert_full_block(
     if let Some(cs) = cells_store {
         // Split stores: payload to append-only, marker to domain
         let mut cells_batch = StoreBatch::new(cs);
-        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell);
+        cells_batch
+            .put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell)
+            .unwrap();
         cells_batch.commit().unwrap();
         domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
@@ -271,7 +273,9 @@ fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
 
     let original = make_cell(100, &lock_args);
     let mut original_cells_batch = StoreBatch::new(&append);
-    original_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &original.cell);
+    original_cells_batch
+        .put_cell_payload_by_outpoint(&tx_hash, 0, &original.cell)
+        .unwrap();
     original_cells_batch.commit().unwrap();
 
     let mut original_domain_batch = StoreBatch::new(&domain);
@@ -300,7 +304,9 @@ fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
     reorged.cell.udt_amount = original.udt_amount;
 
     let mut reorg_cells_batch = StoreBatch::new(&append);
-    reorg_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &reorged.cell);
+    reorg_cells_batch
+        .put_cell_payload_by_outpoint(&tx_hash, 0, &reorged.cell)
+        .unwrap();
     reorg_cells_batch.commit().unwrap();
 
     let mut reorg_domain_batch = StoreBatch::new(&domain);
@@ -598,7 +604,9 @@ fn insert_udt_cell(
 
     if let Some(cs) = cells_store {
         let mut cells_batch = StoreBatch::new(cs);
-        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell);
+        cells_batch
+            .put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell)
+            .unwrap();
         cells_batch.commit().unwrap();
         domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
@@ -1466,8 +1474,12 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     let restore_cell = make_extra_cell(CAP_RST, OCC_RST, DATA_RST);
 
     let mut cells_batch = StoreBatch::new(&append);
-    cells_batch.put_cell_payload_by_outpoint(&normal_tx_hash(4), 1, &pair_cell);
-    cells_batch.put_cell_payload_by_outpoint(&normal_tx_hash(2), 1, &restore_cell);
+    cells_batch
+        .put_cell_payload_by_outpoint(&normal_tx_hash(4), 1, &pair_cell)
+        .unwrap();
+    cells_batch
+        .put_cell_payload_by_outpoint(&normal_tx_hash(2), 1, &restore_cell)
+        .unwrap();
     cells_batch.commit().unwrap();
     let mut domain_batch = StoreBatch::new(&domain);
     domain_batch.put_consumed_cell_meta(&normal_tx_hash(4), 1, 4, 5, Some(&normal_tx_hash(5)));

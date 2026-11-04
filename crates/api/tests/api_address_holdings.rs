@@ -854,10 +854,13 @@ async fn address_holdings_does_not_include_completed_original_depositor_history(
     assert_eq!(j["daoUnclaimedCompensation"], "2694000000");
 }
 
+/// A type hash byte outside 0..=255 is never truncated to a byte: the store
+/// refuses to write such a payload, naming the outpoint, and stages nothing
+/// (it refuses to read one too: `ckbadger-store` `types::tests`), so holdings
+/// can never be handed one.
 #[tokio::test]
-async fn address_holdings_rejects_noncanonical_type_hash_byte_without_truncation() {
+async fn address_holdings_cell_with_noncanonical_type_hash_byte_is_never_stored() {
     let f = fixture().await;
-    let owner = hex::decode(&f.owner[2..]).unwrap();
     let mut invalid = f
         .store
         .get_cell(&f.hash, 1, &f.store)
@@ -866,14 +869,16 @@ async fn address_holdings_rejects_noncanonical_type_hash_byte_without_truncation
         .cell;
     invalid.type_hash_type = Some(257);
     let mut b = StoreBatch::new(&f.store);
-    b.put_cell(&[0xf3; 32], 0, &invalid, 7);
-    b.put_cell_by_lock(&owner, 7, &[0xf3; 32], 0);
-    b.commit().unwrap();
-    let (s, j) = get(&f.app, &format!("/api/v1/addresses/{}/holdings", f.owner)).await;
-    assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR, "{j}");
-    // Refused where the store decodes the payload: 257 is not a hash type
-    // byte, and it is never truncated to one.
-    assert!(j.to_string().contains("hash_type 257"), "{j}");
+    let error = b
+        .put_cell_payload_by_outpoint(&[0xf3; 32], 0, &invalid)
+        .expect_err("type hash_type 257 must not be stored")
+        .to_string();
+    assert!(
+        error.contains("type hash_type 257 is not a byte"),
+        "{error}"
+    );
+    assert!(error.contains(&hex::encode([0xf3; 32])), "{error}");
+    assert!(b.is_empty(), "nothing staged");
 }
 
 #[tokio::test]

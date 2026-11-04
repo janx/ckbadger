@@ -1009,23 +1009,25 @@ async fn token_transactions_rows_read_outputs_in_one_batch() {
             entry.outputs_count = outputs;
             batch.put_tx_index(block, 2, &entry);
             for index in 0..outputs {
-                batch.put_cell_payload_by_outpoint(
-                    &hash,
-                    index,
-                    &LiveCellInfo {
-                        capacity: 100,
-                        occupied_capacity: 61,
-                        lock_code_hash: [0x33; 32],
-                        lock_hash_type: 1,
-                        lock_args: vec![],
-                        type_code_hash: None,
-                        type_hash_type: None,
-                        type_args: None,
-                        data_size: 0,
-                        udt_amount: None,
-                        data_hash: None,
-                    },
-                );
+                batch
+                    .put_cell_payload_by_outpoint(
+                        &hash,
+                        index,
+                        &LiveCellInfo {
+                            capacity: 100,
+                            occupied_capacity: 61,
+                            lock_code_hash: [0x33; 32],
+                            lock_hash_type: 1,
+                            lock_args: vec![],
+                            type_code_hash: None,
+                            type_hash_type: None,
+                            type_args: None,
+                            data_size: 0,
+                            udt_amount: None,
+                            data_hash: None,
+                        },
+                    )
+                    .unwrap();
             }
         }
         batch.commit().unwrap();

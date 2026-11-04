@@ -1725,18 +1725,23 @@ async fn test_get_cell_fails_fast_on_invalid_stored_type_hash_type() {
 }
 
 #[tokio::test]
-async fn test_get_cell_fails_fast_on_missing_type_hash_type() {
+async fn test_cell_missing_its_type_hash_type_is_never_stored() {
     // A cell with a type script always has a hash_type on chain. `unwrap_or(1)`
-    // silently rendered "type" for a cell the indexer stored incompletely.
+    // silently rendered "type" for a cell the indexer stored incompletely; the
+    // v2 payload is whole or refused, here at write (and at read, in
+    // `ckbadger-store` `types::tests`), so the cell page can never be handed one.
+    let store = test_store();
     let tx_hash = vec![0xc3; 32];
-    let (status, json) = get_cell_json(&tx_hash, cell_with(1, None)).await;
-
-    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
-    let message = json["message"].as_str().unwrap_or_default();
+    let mut batch = StoreBatch::new(store.as_ref());
+    let error = batch
+        .put_cell_payload_by_outpoint(&tx_hash, 1, &cell_with(1, None))
+        .expect_err("a typed payload without its hash_type must not be stored")
+        .to_string();
     assert!(
-        message.contains(&hex::encode(&tx_hash)) && message.contains("hash_type"),
-        "error must name the outpoint and the missing hash_type, got {message}"
+        error.contains(&hex::encode(&tx_hash)) && error.contains("hash_type=None"),
+        "error must name the outpoint and the missing hash_type, got {error}"
     );
+    assert!(batch.is_empty(), "nothing staged");
 }
 
 #[tokio::test]

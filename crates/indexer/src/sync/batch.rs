@@ -14434,7 +14434,8 @@ mod tests {
                         .cell_payloads
                         .get(key)
                         .expect("bulk append-only cell payload")
-                        .encode(),
+                        .encode()
+                        .unwrap(),
                     "bulk and live append-only payload: outpoint=0x{}",
                     hex::encode(key),
                 );

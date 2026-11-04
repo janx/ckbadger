@@ -4203,7 +4203,9 @@ fn seed_dotcell_name(
             udt_amount: None,
             data_hash: None,
         };
-        batch.put_cell_payload_by_outpoint(&create_tx, 1, &name_cell);
+        batch
+            .put_cell_payload_by_outpoint(&create_tx, 1, &name_cell)
+            .unwrap();
         batch.put_live_cell_marker_by_outpoint(&create_tx, 1, 20_518_306);
     }
     batch.put_block_header(

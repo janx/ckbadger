@@ -410,8 +410,8 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
 }
 
 #[test]
-fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_missing() {
-    let (store, writer) = setup_store();
+fn test_typed_cell_lacking_type_args_is_never_stored() {
+    let (store, _writer) = setup_store();
     let tx_hash = vec![0x41u8; 32];
 
     let bad = LiveCellInfo {
@@ -428,17 +428,16 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
         data_hash: None,
     };
 
-    let mut batch = StoreBatch::new(&store);
-    batch.put_cell(&tx_hash, 0, &bad, 1000);
-    batch.commit().unwrap();
-
     // The v2 payload holds a whole type script or none: a typed payload
-    // without args is rejected where it is decoded, with its outpoint.
-    let err = writer
-        .get_full_cells_info_batch(&[(&tx_hash, 0)])
+    // without args is refused when it is written, with its outpoint (and when
+    // read: `ckbadger-store` `types::tests`), so no reader is handed one.
+    let mut batch = StoreBatch::new(&store);
+    let err = batch
+        .put_cell_payload_by_outpoint(&tx_hash, 0, &bad)
         .unwrap_err();
     assert!(err.to_string().contains("type script is partial"), "{err}");
     assert!(err.to_string().contains(&hex::encode(&tx_hash)), "{err}");
+    assert!(batch.is_empty(), "nothing staged");
 }
 
 #[test]

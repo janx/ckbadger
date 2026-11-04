@@ -143,11 +143,16 @@ impl EncodedHistoryChunk {
 
     /// A `cells` row: the payload's own codec ([`LiveCellInfo::encode_into`])
     /// writes straight into the chunk, like [`Self::push_serialized`] does
-    /// for bincode values.
+    /// for bincode values. A payload the codec refuses is an error naming the
+    /// outpoint, and the chunk is left as it was.
     pub(crate) fn push_cell_payload(&mut self, key: &[u8], cell: &LiveCellInfo) -> Result<()> {
         self.push_encoded(CF_CELLS, key, cell.encoded_len(), |payload| {
-            cell.encode_into(payload);
-            Ok(())
+            cell.encode_into(payload).map_err(|e| {
+                anyhow!(
+                    "cells payload refused: outpoint=0x{}: {e}",
+                    hex::encode(key)
+                )
+            })
         })
     }
 
@@ -827,7 +832,7 @@ pub(crate) fn run_sample_bulk_materialization_for_test() -> Result<Materializati
         };
 
         materializer.stream_history_rows(&[
-            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode()),
+            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode()?),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(42).to_vec(),
@@ -1429,7 +1434,7 @@ mod tests {
         };
 
         let history_rows = vec![
-            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode()),
+            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode().unwrap()),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(100).to_vec(),
@@ -1614,7 +1619,11 @@ mod tests {
 
             let pending = super::super::PendingFlush {
                 history_chunks: vec![EncodedHistoryChunk::from_materialized_rows(vec![
-                    MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode()),
+                    MaterializedRow::new(
+                        CF_CELLS,
+                        outpoint_key.to_vec(),
+                        cell_info.encode().unwrap(),
+                    ),
                     MaterializedRow::new(
                         CF_BLOCK_HEADERS,
                         header_key.to_vec(),
@@ -1747,7 +1756,7 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
-        let cell_bytes = cell_info.encode();
+        let cell_bytes = cell_info.encode().unwrap();
 
         for i in 0u8..10 {
             let outpoint_key = keys::encode_outpoint(&[i; 32], 0);
@@ -1869,7 +1878,7 @@ mod tests {
         };
 
         let history_rows = vec![
-            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode()),
+            MaterializedRow::new(CF_CELLS, outpoint_key.to_vec(), cell_info.encode().unwrap()),
             MaterializedRow::new(
                 CF_BLOCK_HEADERS,
                 keys::encode_block_num(200).to_vec(),

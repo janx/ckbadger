@@ -1175,7 +1175,7 @@ mod tests {
     ) {
         // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-        let value = cell.encode();
+        let value = cell.encode().unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &value)
             .unwrap();
@@ -1853,7 +1853,7 @@ mod tests {
         let legacy_payload = bincode::serialize(&legacy).unwrap();
 
         store
-            .put_cf(store.cf_cells(), &outpoint_key, &cell.encode())
+            .put_cf(store.cf_cells(), &outpoint_key, &cell.encode().unwrap())
             .unwrap();
         store
             .put_cf(store.cf_consumed_cells(), &outpoint_key, &legacy_payload)
@@ -1892,13 +1892,13 @@ mod tests {
         // Cell 1: live at block 5
         let mut batch = StoreBatch::new(&store);
         batch.put_live_cell_marker_by_outpoint(&tx1, 0, 5);
-        batch.put_cell_payload_by_outpoint(&tx1, 0, &cell);
+        batch.put_cell_payload_by_outpoint(&tx1, 0, &cell).unwrap();
         batch.put_cell_by_data_hash(&data_hash, 5, &tx1, 0);
         batch.commit().unwrap();
 
         // Cell 2: consumed (created block 10, consumed block 20)
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell_payload_by_outpoint(&tx2, 0, &cell);
+        batch.put_cell_payload_by_outpoint(&tx2, 0, &cell).unwrap();
         batch.put_consumed_cell(&tx2, 0, &cell, 10, 20);
         batch.put_cell_by_data_hash(&data_hash, 10, &tx2, 0);
         batch.commit().unwrap();
@@ -2029,7 +2029,9 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&live_tx, 0, &cell, 5);
         batch.put_cell_by_data_hash(&data_hash, 5, &live_tx, 0);
-        batch.put_cell_payload_by_outpoint(&consumed_tx, 0, &cell);
+        batch
+            .put_cell_payload_by_outpoint(&consumed_tx, 0, &cell)
+            .unwrap();
         batch.put_consumed_cell(&consumed_tx, 0, &cell, 10, 20);
         batch.put_cell_by_data_hash(&data_hash, 10, &consumed_tx, 0);
         batch.commit().unwrap();

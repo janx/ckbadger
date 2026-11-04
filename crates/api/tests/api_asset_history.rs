@@ -94,7 +94,9 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
     seed_tx(&mut batch, &mint, 100, 1);
     seed_tx(&mut batch, &transfer, 100, 2);
     // Immutable payload left by a reorg has no canonical reverse index/marker.
-    batch.put_cell_payload_by_outpoint(&orphan, 0, &cell(&id, 999_00000000, 3));
+    batch
+        .put_cell_payload_by_outpoint(&orphan, 0, &cell(&id, 999_00000000, 3))
+        .unwrap();
     batch.commit().unwrap();
     (store, id)
 }

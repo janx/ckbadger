@@ -84,18 +84,25 @@ fn cell_payload_codec() -> impl bincode::Options + Copy {
 }
 
 impl LiveCellInfo {
-    /// The `cells` value bytes of this payload.
-    pub fn encode(&self) -> Vec<u8> {
+    /// The `cells` value bytes of this payload. A payload [`Self::decode`]
+    /// would refuse is refused here, by the same check, so it never reaches
+    /// the append-only CF.
+    pub fn encode(&self) -> anyhow::Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(self.encoded_len());
-        self.encode_into(&mut bytes);
-        bytes
+        self.encode_into(&mut bytes)?;
+        Ok(bytes)
     }
 
-    /// Appends the `cells` value bytes of this payload to `out`.
-    pub fn encode_into(&self, out: &mut Vec<u8>) {
+    /// Appends the `cells` value bytes of this payload to `out`; refuses (and
+    /// leaves `out` untouched) a payload [`Self::decode`] would refuse. The
+    /// caller adds the outpoint.
+    pub fn encode_into(&self, out: &mut Vec<u8>) -> anyhow::Result<()> {
+        self.check_script_fields()
+            .map_err(|e| anyhow::anyhow!("refusing to encode LiveCellInfo v2 payload: {e}"))?;
         cell_payload_codec()
             .serialize_into(out, &EncodeLiveCellInfo(self))
             .expect("encoding a LiveCellInfo into a Vec cannot fail");
+        Ok(())
     }
 
     /// Length of [`Self::encode`]'s output, without encoding.
@@ -129,6 +136,9 @@ impl LiveCellInfo {
         Ok(cell)
     }
 
+    /// The one payload validation, run by both [`Self::encode_into`] and
+    /// [`Self::decode`]: both hash types fit a byte, and the type script is
+    /// whole or absent.
     fn check_script_fields(&self) -> anyhow::Result<()> {
         anyhow::ensure!(
             u8::try_from(self.lock_hash_type).is_ok(),
@@ -180,8 +190,9 @@ impl LiveCellInfo {
     }
 }
 
-/// A decoded payload has passed `check_script_fields`, so this only fails for
-/// a value built in memory with an impossible hash type.
+/// Every stored payload passed `check_script_fields` when it was written and
+/// again when it was read, so this only fails for a value built in memory with
+/// an impossible hash type (which the store would refuse to write).
 fn script_hash_type_byte(hash_type: i16, script: &str) -> u8 {
     u8::try_from(hash_type)
         .unwrap_or_else(|_| panic!("LiveCellInfo {script} hash_type {hash_type} is not a byte"))
@@ -3462,7 +3473,7 @@ mod tests {
     #[test]
     fn test_decode_consumed_cell_meta_rejects_live_cell_schema() {
         let info = sample_live_cell_info();
-        let bytes = info.encode();
+        let bytes = info.encode().unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
 
@@ -4222,7 +4233,7 @@ mod tests {
             for with_udt in [false, true] {
                 for with_data_hash in [false, true] {
                     let cell = v2_cell(with_type, with_udt, with_data_hash);
-                    let bytes = cell.encode();
+                    let bytes = cell.encode().unwrap();
                     assert_eq!(
                         LiveCellInfo::decode(&bytes).unwrap(),
                         cell,
@@ -4230,7 +4241,7 @@ mod tests {
                     );
                     assert_eq!(cell.encoded_len(), bytes.len());
                     let mut appended = vec![0xEE];
-                    cell.encode_into(&mut appended);
+                    cell.encode_into(&mut appended).unwrap();
                     assert_eq!(&appended[1..], bytes.as_slice());
                 }
             }
@@ -4241,7 +4252,7 @@ mod tests {
     fn decode_rejects_v1_truncated_and_padded_payloads_instead_of_defaulting() {
         let cell = v2_cell(true, true, true);
         let v1 = bincode::serialize(&v1_layout::LiveCellInfoV1::from_v2(&cell)).unwrap();
-        let v2 = cell.encode();
+        let v2 = cell.encode().unwrap();
         // An old-layout payload missing its trailing field: v2 without `data_hash`.
         let truncated = &v2[..v2.len() - 33];
         let mut padded = v2.clone();
@@ -4259,14 +4270,55 @@ mod tests {
         }
     }
 
+    /// The codec without the validation, to build the invalid bytes that only
+    /// a corrupt store (or another writer) could hold.
+    fn encode_unchecked(cell: &LiveCellInfo) -> Vec<u8> {
+        cell_payload_codec()
+            .serialize(&EncodeLiveCellInfo(cell))
+            .unwrap()
+    }
+
+    /// Payloads the store must never hold: a type script with some but not
+    /// all of its fields, and a hash type that is not a byte.
+    fn invalid_cells() -> Vec<(&'static str, LiveCellInfo)> {
+        let mut no_args = v2_cell(true, false, true);
+        no_args.type_args = None;
+        let mut no_hash_type = v2_cell(true, false, true);
+        no_hash_type.type_hash_type = None;
+        let mut args_only = v2_cell(false, false, true);
+        args_only.type_args = Some(vec![0x01]);
+        let mut lock_257 = v2_cell(false, false, true);
+        lock_257.lock_hash_type = 257;
+        let mut type_257 = v2_cell(true, false, true);
+        type_257.type_hash_type = Some(257);
+        vec![
+            ("type script is partial", no_args),
+            ("type script is partial", no_hash_type),
+            ("type script is partial", args_only),
+            ("lock hash_type 257 is not a byte", lock_257),
+            ("type hash_type 257 is not a byte", type_257),
+        ]
+    }
+
     #[test]
-    fn decode_rejects_a_partial_type_script() {
-        let mut cell = v2_cell(true, false, true);
-        cell.type_args = None;
-        let error = LiveCellInfo::decode(&cell.encode())
-            .expect_err("partial type script")
-            .to_string();
-        assert!(error.contains("type script is partial"), "{error}");
+    fn encode_refuses_every_payload_decode_refuses() {
+        for (reason, cell) in invalid_cells() {
+            let mut out = vec![0xEE];
+            let error = cell.encode_into(&mut out).expect_err(reason).to_string();
+            assert!(error.contains(reason), "{error}");
+            assert_eq!(out, vec![0xEE], "{reason}: nothing appended");
+            assert!(cell.encode().is_err(), "{reason}");
+        }
+    }
+
+    #[test]
+    fn decode_rejects_partial_type_scripts_and_non_byte_hash_types() {
+        for (reason, cell) in invalid_cells() {
+            let bytes = encode_unchecked(&cell);
+            let error = LiveCellInfo::decode(&bytes).expect_err(reason).to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(error.contains(&format!("{} bytes", bytes.len())), "{error}");
+        }
     }
 
     /// The derived hashes are the CKB script hashes of the stored fields:

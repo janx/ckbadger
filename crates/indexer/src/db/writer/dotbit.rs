@@ -1962,7 +1962,9 @@ mod tests {
         reactivate_batch.commit().unwrap();
 
         let mut append_batch = StoreBatch::new(append.as_ref());
-        append_batch.put_cell_payload_by_outpoint(&reactivate_tx_hash, 0, &make_live_cell());
+        append_batch
+            .put_cell_payload_by_outpoint(&reactivate_tx_hash, 0, &make_live_cell())
+            .unwrap();
         append_batch.commit().unwrap();
 
         let mut domain_batch = StoreBatch::new(domain.as_ref());

@@ -3734,7 +3734,7 @@ mod tests {
             data_hash: None,
         };
         let marker = ckbadger_store::types::encode_live_cell_marker(block_num);
-        let payload = cell_info.encode();
+        let payload = cell_info.encode().unwrap();
         store
             .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
             .unwrap();
@@ -3795,7 +3795,7 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
-        let payload = cell_info.encode();
+        let payload = cell_info.encode().unwrap();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &payload)
             .unwrap();

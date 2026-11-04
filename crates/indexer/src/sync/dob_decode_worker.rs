@@ -1789,7 +1789,9 @@ mod tests {
         };
 
         let mut append_batch = StoreBatch::new(append_only_store.as_ref());
-        append_batch.put_cell_payload_by_outpoint(&tx_hash, output_index, &cell_info);
+        append_batch
+            .put_cell_payload_by_outpoint(&tx_hash, output_index, &cell_info)
+            .unwrap();
         append_batch.commit().unwrap();
 
         let mut domain_batch = StoreBatch::new(store.as_ref());

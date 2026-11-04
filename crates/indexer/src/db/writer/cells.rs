@@ -196,7 +196,7 @@ impl BatchWriter {
             })?;
             let raw_key = keys::encode_outpoint(tx_hash, *output_index);
             // Cell payload -> append-only batch
-            cells_batch.put_cell_payload(&raw_key, &info.cell);
+            cells_batch.put_cell_payload(&raw_key, &info.cell)?;
             // Live marker -> domain batch
             domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
             // Lock script mapping (idempotent, survives cell consumption)

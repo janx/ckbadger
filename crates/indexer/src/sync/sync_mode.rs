@@ -142,23 +142,25 @@ mod tests {
             ckbadger_store::CkbadgerStore::open_append_only(dir.path().join("append")).unwrap();
         // Write a dummy cell entry
         let mut batch = ckbadger_store::StoreBatch::new(&append_store);
-        batch.put_cell_payload_by_outpoint(
-            &[0x01; 32],
-            0,
-            &ckbadger_store::LiveCellInfo {
-                capacity: 100,
-                lock_code_hash: [0xBB; 32],
-                lock_hash_type: 1,
-                lock_args: vec![],
-                type_code_hash: None,
-                type_hash_type: None,
-                type_args: None,
-                data_size: 0,
-                occupied_capacity: 61,
-                udt_amount: None,
-                data_hash: None,
-            },
-        );
+        batch
+            .put_cell_payload_by_outpoint(
+                &[0x01; 32],
+                0,
+                &ckbadger_store::LiveCellInfo {
+                    capacity: 100,
+                    lock_code_hash: [0xBB; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 61,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+            )
+            .unwrap();
         batch.commit().unwrap();
 
         let err = ensure_bulk_sync_fresh_start(true, 0, &None, &append_store).unwrap_err();
@@ -174,23 +176,25 @@ mod tests {
         let append_store =
             ckbadger_store::CkbadgerStore::open_append_only(dir.path().join("append")).unwrap();
         let mut batch = ckbadger_store::StoreBatch::new(&append_store);
-        batch.put_cell_payload_by_outpoint(
-            &[0x02; 32],
-            0,
-            &ckbadger_store::LiveCellInfo {
-                capacity: 100,
-                lock_code_hash: [0xBB; 32],
-                lock_hash_type: 1,
-                lock_args: vec![],
-                type_code_hash: None,
-                type_hash_type: None,
-                type_args: None,
-                data_size: 0,
-                occupied_capacity: 61,
-                udt_amount: None,
-                data_hash: None,
-            },
-        );
+        batch
+            .put_cell_payload_by_outpoint(
+                &[0x02; 32],
+                0,
+                &ckbadger_store::LiveCellInfo {
+                    capacity: 100,
+                    lock_code_hash: [0xBB; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    occupied_capacity: 61,
+                    udt_amount: None,
+                    data_hash: None,
+                },
+            )
+            .unwrap();
         batch.commit().unwrap();
 
         let err = ensure_bulk_sync_fresh_start(false, 0, &None, &append_store).unwrap_err();

@@ -408,17 +408,38 @@ impl<'a> StoreBatch<'a> {
     /// TestUnified stores (domain + append-only CFs coexist). Production code should use
     /// separate batches: `put_cell_payload` on append-only batch +
     /// `put_live_cell_marker` on domain batch.
+    ///
+    /// # Panics
+    /// On a payload `put_cell_payload` refuses (a test-store helper; production
+    /// writers call `put_cell_payload` and propagate its error).
     pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo, created_at_block: i64) {
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
-        self.put_cell_payload(raw_key, info);
+        self.put_test_store_cell_payload(raw_key, info);
         self.put_live_cell_marker(raw_key, created_at_block);
+    }
+
+    fn put_test_store_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
+        if let Err(error) = self.put_cell_payload(raw_key, info) {
+            panic!("{error:#}");
+        }
     }
 
     // ---- Split cell methods for cross-store writes ----
 
     /// Write cell payload to CF_CELLS. Call on append-only store batch.
-    pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
-        self.put_cf(self.store.cf_cells(), raw_key, info.encode());
+    ///
+    /// A payload the store could not read back (see `LiveCellInfo::decode`)
+    /// is refused with its outpoint and nothing is staged: the append-only CF
+    /// can only be repaired by a rebuild.
+    pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) -> anyhow::Result<()> {
+        let value = info.encode().map_err(|e| {
+            anyhow::anyhow!(
+                "cells payload refused: outpoint=0x{}: {e}",
+                bytes_to_hex(raw_key)
+            )
+        })?;
+        self.put_cf(self.store.cf_cells(), raw_key, value);
+        Ok(())
     }
 
     /// Write cell payload using tx_hash + output_index. Call on append-only store batch.
@@ -427,9 +448,9 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
         info: &LiveCellInfo,
-    ) {
+    ) -> anyhow::Result<()> {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.put_cell_payload(&key, info);
+        self.put_cell_payload(&key, info)
     }
 
     /// Write live cell marker to CF_LIVE_CELLS. Call on domain store batch.
@@ -518,7 +539,7 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
-        self.put_cell_payload(raw_key, info);
+        self.put_test_store_cell_payload(raw_key, info);
         let consumed = ConsumedCellMeta {
             created_at_block,
             consumed_at_block,
@@ -2064,8 +2085,12 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
-        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
+        batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         let err = batch.commit().unwrap_err();
         assert!(err
             .to_string()
@@ -2191,14 +2216,18 @@ mod tests {
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell_payload_by_outpoint(&[0x11; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0x11; 32], 0, &info)
+            .unwrap();
         batch.commit().unwrap();
 
         // Overwrite with a DIFFERENT value should be rejected
         let mut different_info = info.clone();
         different_info.capacity = 99999;
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_cell_payload_by_outpoint(&[0x11; 32], 0, &different_info);
+        overwrite_batch
+            .put_cell_payload_by_outpoint(&[0x11; 32], 0, &different_info)
+            .unwrap();
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
@@ -2269,7 +2298,9 @@ mod tests {
         const CELLS: u8 = 64;
         let mut batch = StoreBatch::new(&store);
         for index in 0..CELLS {
-            batch.put_cell_payload_by_outpoint(&[index; 32], 0, &info);
+            batch
+                .put_cell_payload_by_outpoint(&[index; 32], 0, &info)
+                .unwrap();
         }
         store.reset_read_call_counters();
         batch.commit().unwrap();
@@ -2288,7 +2319,9 @@ mod tests {
         // one probe.
         let mut replay = StoreBatch::new(&store);
         for index in 0..CELLS {
-            replay.put_cell_payload_by_outpoint(&[index; 32], 0, &info);
+            replay
+                .put_cell_payload_by_outpoint(&[index; 32], 0, &info)
+                .unwrap();
         }
         store.reset_read_call_counters();
         replay.commit().unwrap();
@@ -2329,7 +2362,9 @@ mod tests {
         for index in 0..cells {
             let mut tx_hash = [0u8; 32];
             tx_hash[..4].copy_from_slice(&(index as u32).to_le_bytes());
-            batch.put_cell_payload_by_outpoint(&tx_hash, 0, &info);
+            batch
+                .put_cell_payload_by_outpoint(&tx_hash, 0, &info)
+                .unwrap();
         }
         store.reset_read_call_counters();
         batch.commit().unwrap();
@@ -2346,7 +2381,9 @@ mod tests {
         for index in 0..cells {
             let mut tx_hash = [0u8; 32];
             tx_hash[..4].copy_from_slice(&(index as u32).to_le_bytes());
-            replay.put_cell_payload_by_outpoint(&tx_hash, 0, &info);
+            replay
+                .put_cell_payload_by_outpoint(&tx_hash, 0, &info)
+                .unwrap();
         }
         replay.commit().unwrap();
 
@@ -2356,7 +2393,9 @@ mod tests {
         tx_hash[..4].copy_from_slice(&((cells - 1) as u32).to_le_bytes());
         let mut changed = info.clone();
         changed.capacity = 20_000;
-        overwrite.put_cell_payload_by_outpoint(&tx_hash, 0, &changed);
+        overwrite
+            .put_cell_payload_by_outpoint(&tx_hash, 0, &changed)
+            .unwrap();
         let err = overwrite.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
@@ -2381,12 +2420,16 @@ mod tests {
         };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        first_batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         first_batch.commit().unwrap();
 
         // Replay with identical value should succeed (idempotent)
         let mut replay_batch = StoreBatch::new(&store);
-        replay_batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        replay_batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         replay_batch.commit().unwrap();
 
         // Cell should still be readable
@@ -2415,12 +2458,16 @@ mod tests {
         };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_cell_payload_by_outpoint(&[0xB1; 32], 0, &info);
+        first_batch
+            .put_cell_payload_by_outpoint(&[0xB1; 32], 0, &info)
+            .unwrap();
         first_batch.commit().unwrap();
 
         let replay = info.clone();
         let mut replay_batch = StoreBatch::new(&store);
-        replay_batch.put_cell_payload_by_outpoint(&[0xB1; 32], 0, &replay);
+        replay_batch
+            .put_cell_payload_by_outpoint(&[0xB1; 32], 0, &replay)
+            .unwrap();
         replay_batch.commit().unwrap();
 
         let key = keys::encode_outpoint(&[0xB1; 32], 0);
@@ -2829,14 +2876,20 @@ mod tests {
         assert_eq!(batch.len(), 0);
         assert!(batch.is_empty());
 
-        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         assert_eq!(batch.len(), 1);
         assert!(!batch.is_empty());
 
-        batch.put_cell_payload_by_outpoint(&[0xA2; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA2; 32], 0, &info)
+            .unwrap();
         assert_eq!(batch.len(), 2);
 
-        batch.put_cell_payload_by_outpoint(&[0xA3; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA3; 32], 0, &info)
+            .unwrap();
         assert_eq!(batch.len(), 3);
     }
 
