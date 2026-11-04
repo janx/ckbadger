@@ -107,8 +107,11 @@ pub(crate) fn record_failure_before_stop(
 struct StagedAggregate {
     /// `(block, key, value at the end of the previous block)`, ascending block.
     undo: Vec<(i64, Vec<u8>, Option<Vec<u8>>)>,
-    /// Final value per touched key (`None` = row removed).
-    rows: HashMap<Vec<u8>, Option<Vec<i128>>>,
+    /// `(block, key, value at the end of the block)` for every block that
+    /// moves a key, ascending block (`None` = row removed): each is written in
+    /// its block's scope, so the block journal restores the row as of the
+    /// end of any block of the batch.
+    rows: Vec<(i64, Vec<u8>, Option<Vec<i128>>)>,
 }
 
 fn stage_one(
@@ -120,11 +123,13 @@ fn stage_one(
     let id = aggregate.id();
     let mut deltas = BlockDeltas::new();
     aggregate.live_deltas(ctx, &mut deltas)?;
-    let mut rows: HashMap<Vec<u8>, Option<Vec<i128>>> = HashMap::new();
+    // Each touched key's value as of the last block that moved it.
+    let mut current_rows: HashMap<Vec<u8>, Option<Vec<i128>>> = HashMap::new();
+    let mut rows = Vec::new();
     let mut undo = Vec::new();
     for (block, keyed) in deltas {
         for (key, delta) in keyed {
-            let current = match rows.get(&key) {
+            let current = match current_rows.get(&key) {
                 Some(value) => value.clone(),
                 None => store.get_derived_value(id.cf_name, &key)?,
             };
@@ -142,11 +147,12 @@ fn stage_one(
                     hex::encode(&key)
                 )
             })?;
-            rows.insert(key, next);
+            rows.push((block, key.clone(), next.clone()));
+            current_rows.insert(key, next);
         }
     }
     if meta.checks_rows() {
-        for (key, value) in &rows {
+        for (key, value) in &current_rows {
             if let Some(value) = value {
                 aggregate.check_row(key, value).map_err(|e| {
                     anyhow!(
@@ -182,8 +188,10 @@ fn stage_into(
             },
         );
     }
-    for (key, value) in staged.rows {
-        batch.put_derived_value(cf_name, &key, value.as_deref())?;
+    for (block, key, value) in staged.rows {
+        batch
+            .at(block)
+            .put_derived_value(cf_name, &key, value.as_deref())?;
     }
     Ok(())
 }
@@ -288,6 +296,52 @@ pub(crate) mod tests {
                 "fork_point={fork_point}"
             );
         }
+    }
+
+    /// Through the live batch's block overlay, every block that moves a row
+    /// writes it in its own scope: the block journal holds the row's value at
+    /// the end of the previous block, so replaying it restores the rows as of
+    /// any block of the batch (store refactor lane B, B-3).
+    #[test]
+    fn a_journaled_live_batch_journals_each_row_at_its_block() {
+        use crate::db::writer::journal_test_support::journal_entries;
+        use ckbadger_store::block_overlay::SharedBlockOverlay;
+
+        let (_dir, store) = toy_store();
+        commit_headers(&store, 0..=10);
+        complete(&store);
+        // Epoch 3 (blocks 9..=11) gains block 11; epoch 4 (12..=14) is
+        // created by block 12 and moved by block 13.
+        let points = blocks(11..=13);
+        let overlay = SharedBlockOverlay::new(&store);
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        for number in 11..=13 {
+            batch.put_block_header(number, &header(number, epoch_of(number)));
+        }
+        let ctx = LiveDeriveCtx {
+            store: &store,
+            blocks: &points,
+            dao_transitions: &[],
+            object_collection_activity_rows: &[],
+            identity_transitions: &[],
+        };
+        let undo_seq = SharedUndoSeq::default();
+        apply_live_batch(&store, &toy(), &ctx, &mut batch, &undo_seq).unwrap();
+        batch
+            .stage_journal(&mut |block| Ok(undo_seq.next(block, UndoSeqScope::Journal)))
+            .unwrap();
+        batch.commit().unwrap();
+
+        let row = |count: i128| Some(encode_derived_value(&[count]));
+        assert_eq!(
+            journal_entries(&store, TOY.cf_name),
+            vec![
+                (11, epoch_key(3), row(2)),
+                (12, epoch_key(4), None),
+                (13, epoch_key(4), row(1)),
+            ]
+        );
+        assert_eq!(stored_rows(&store, &TOY), expected_rows(13));
     }
 
     /// Ruling A: a live invariant violation fails the batch like any other

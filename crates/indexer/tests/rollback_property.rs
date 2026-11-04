@@ -617,6 +617,12 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_DAO_BY_BLOCK, None),
     (ckbadger_store::CF_DAO_BY_LOCK_BLOCK, None),
     (ckbadger_store::CF_DAO_BY_STATUS_BLOCK, None),
+    // B-3 derive/live.rs: the derived aggregates' live rows are written at
+    // every block that moves them (exercised by the derived-aggregates case;
+    // the other cases never start a derivation, so these CFs stay empty).
+    (ckbadger_store::CF_DAO_LIVE_AGG, None),
+    (ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITY_COUNT, None),
+    (ckbadger_store::CF_BIT_CELL_BY_ACCOUNT, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
@@ -742,20 +748,21 @@ fn only_covered(mut dump: Dump) -> Dump {
 }
 
 /// The journal alone restores every covered CF to the store that never saw
-/// the rolled-back blocks.
+/// the rolled-back blocks (both stores run `derive` at the same block).
 async fn journal_property(
     chain: &[BlockResponseWithCycles],
     plan: &[RangeInclusive<usize>],
     tip: usize,
     fork: usize,
+    derive: Option<Derive>,
 ) -> Result<(), String> {
     let stores = open_stores();
-    sync_prefix(&stores, chain, plan, 0, tip).await;
+    sync_with_derive(&stores, chain, plan, tip, derive).await;
     let at_tip = dump_domain(&stores.domain);
     let journal = read_journal(&stores.domain);
     let simulated = simulate_journal_rollback(&at_tip, &journal, tip, fork);
     let reference = open_stores();
-    sync_prefix(&reference, chain, plan, 0, fork).await;
+    sync_with_derive(&reference, chain, plan, fork, derive).await;
     // Not vacuous: the covered rows the rolled-back blocks changed outside
     // their own block keys are restored by journal entries, not by luck.
     let changed_journaled_rows = only_covered(at_tip.clone())
@@ -788,9 +795,19 @@ async fn assert_journal_properties(
     tip: usize,
     forks: &[usize],
 ) {
+    assert_journal_properties_with_derive(chain, plan, tip, forks, None).await;
+}
+
+async fn assert_journal_properties_with_derive(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    forks: &[usize],
+    derive: Option<Derive>,
+) {
     let mut failures = Vec::new();
     for &fork in forks {
-        if let Err(report) = journal_property(chain, plan, tip, fork).await {
+        if let Err(report) = journal_property(chain, plan, tip, fork, derive).await {
             failures.push(report);
         }
     }
@@ -1609,6 +1626,30 @@ async fn journal_restores_covered_cfs_forks_inside_batches() {
             .map(|r| r.start() + 1..=r.end() + 1),
     );
     assert_journal_properties(&chain, &plan, 16, &[14, 10, 6, 2]).await;
+}
+
+/// The three derived aggregates, derived to completion when block 4 commits
+/// and maintained by every live batch after it: their rows are written per
+/// block, so the journal restores them at forks inside later batches (the
+/// DAO request at 7 and completion at 12, the object collection rows, the
+/// `.bit Cell` transitions at 5 and 13).
+#[tokio::test]
+async fn journal_restores_covered_cfs_with_derived_aggregates() {
+    let chain = protocol_chain(0);
+    let mut plan: Vec<RangeInclusive<usize>> = single_block_plan(1);
+    plan.extend(
+        chunked_plan(16, 4)
+            .into_iter()
+            .map(|r| r.start() + 1..=r.end() + 1),
+    );
+    assert_journal_properties_with_derive(
+        &chain,
+        &plan,
+        16,
+        &[14, 10, 6],
+        Some(Derive::CompleteAt(4)),
+    )
+    .await;
 }
 
 #[tokio::test]
