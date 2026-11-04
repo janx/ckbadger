@@ -1656,10 +1656,13 @@ impl CkbadgerStore {
         opts.set_level_zero_slowdown_writes_trigger(12);
         opts.set_level_zero_stop_writes_trigger(24);
         opts.set_max_bytes_for_level_base(profile.normal_max_bytes_for_level_base);
+        // Every CF, `cells` included, is lz4 (the bottommost level follows
+        // this type). `cells` was uncompressed until 2026-11-04: a 16 KB-block
+        // trial on its mainnet SSTs gave lz4 0.38 against zstd-1 0.345, and
+        // zstd's extra CPU would land on the flush thread that the bulk build
+        // already overlaps with (store refactor plan J3).
         opts.set_compression_type(DBCompressionType::Lz4);
         if Self::is_historical_append_cf(name) {
-            // Prioritize write throughput for append-heavy history CFs.
-            opts.set_compression_type(DBCompressionType::None);
             opts.set_compaction_style(DBCompactionStyle::Universal);
             let mut uco = UniversalCompactOptions::default();
             uco.set_size_ratio(10);
@@ -4086,6 +4089,66 @@ mod tests {
             live["max_write_buffer_number"],
             live_max_write_buffer_number.to_string()
         );
+    }
+
+    /// `cells` is lz4 on every option path the primary takes: open-time
+    /// `cf_options`, the bulk overrides and the live restore (neither setter
+    /// touches compression, so open-time lz4 must survive both), and a real
+    /// flush in bulk mode writes compressed SSTs. A 16 KB-block lz4 trial on
+    /// mainnet `cells` SSTs gave ratio 0.38; zstd-1 0.345 was not worth its
+    /// CPU on the flush thread (plan J3).
+    #[test]
+    fn cells_is_lz4_compressed_on_open_bulk_and_live_restore_paths() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let assert_lz4 = |step: &str| {
+            let options = persisted_cf_options(dir.path(), CF_CELLS);
+            assert_eq!(
+                options["compression"], "kLZ4Compression",
+                "cells compression after {step}"
+            );
+            // kDisableCompressionOption = the bottommost level uses `compression`.
+            assert_eq!(
+                options["bottommost_compression"], "kDisableCompressionOption",
+                "cells bottommost compression after {step}"
+            );
+            assert_eq!(
+                options["compaction_style"], "kCompactionStyleUniversal",
+                "cells compaction style after {step}"
+            );
+        };
+        assert_lz4("open");
+
+        store.set_bulk_sync_compaction_options();
+        assert_lz4("bulk options");
+
+        // Real bytes: 4 MiB of payload-shaped, compressible rows flushed in
+        // bulk mode must land in SSTs well under the raw size.
+        let cf = store.cf_cells();
+        let mut written = 0usize;
+        for i in 0u32..16_384 {
+            let mut tx_hash = [0u8; 32];
+            tx_hash[..4].copy_from_slice(&i.to_be_bytes());
+            let key = crate::keys::encode_outpoint(&tx_hash, 0);
+            let mut value = vec![0u8; 256];
+            value[..4].copy_from_slice(&i.to_le_bytes());
+            value[64..96].copy_from_slice(&[0x9b; 32]);
+            store.db.put_cf(cf, key, &value).unwrap();
+            written += key.len() + value.len();
+        }
+        store.flush_all_memtables().unwrap();
+        let sst_bytes = store
+            .db
+            .property_int_value_cf(cf, "rocksdb.live-sst-files-size")
+            .unwrap()
+            .expect("live-sst-files-size");
+        assert!(
+            (sst_bytes as usize) * 100 < written * 60,
+            "cells SST bytes {sst_bytes} not < 60 % of {written} bytes written"
+        );
+
+        store.restore_normal_compaction_options();
+        assert_lz4("live restore");
     }
 
     #[test]
