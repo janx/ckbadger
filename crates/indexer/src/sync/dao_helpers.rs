@@ -104,12 +104,19 @@ pub(crate) type DaoSameBatchMap = HashMap<(Vec<u8>, i16), DaoSameBatchDeposit>;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn count_new_addresses(
-    changes: &HashMap<Vec<u8>, crate::sync::types::AddressBalanceDelta>,
+    changes: &crate::sync::types::AddressBalanceChanges,
     existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
 ) -> anyhow::Result<i64> {
+    // The batch's net live-cell change per lock, over all its blocks.
+    let mut live_delta: HashMap<&Vec<u8>, i64> = HashMap::new();
+    for (_, block_changes) in changes.by_block() {
+        for (lock_hash, delta) in block_changes {
+            *live_delta.entry(lock_hash).or_default() += i64::from(delta.live_delta);
+        }
+    }
     let mut count = 0i64;
-    for (lock_hash, delta) in changes {
-        if delta.live_delta <= 0 {
+    for (lock_hash, live_delta) in live_delta {
+        if live_delta <= 0 {
             continue;
         }
         let prefetched = existing.get(lock_hash).ok_or_else(|| {
@@ -869,9 +876,12 @@ mod tests {
                 last_activity_tx: tx_hash,
             },
         )]);
-        let error = count_new_addresses(&changes, &HashMap::new())
-            .unwrap_err()
-            .to_string();
+        let error = count_new_addresses(
+            &crate::sync::types::AddressBalanceChanges::single_block(1, changes.clone()),
+            &HashMap::new(),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains(&hex::encode(lock)), "{error}");
     }
 
@@ -948,7 +958,14 @@ mod tests {
             }),
         );
 
-        assert_eq!(count_new_addresses(&changes, &existing).unwrap(), 2);
+        assert_eq!(
+            count_new_addresses(
+                &crate::sync::types::AddressBalanceChanges::single_block(1, changes.clone()),
+                &existing
+            )
+            .unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -976,9 +993,12 @@ mod tests {
                 ..Default::default()
             }),
         )]);
-        let error = count_new_addresses(&changes, &existing)
-            .unwrap_err()
-            .to_string();
+        let error = count_new_addresses(
+            &crate::sync::types::AddressBalanceChanges::single_block(1, changes.clone()),
+            &existing,
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("negative live_cells_count"), "{error}");
         assert!(error.contains(&hex::encode(lock)), "{error}");
     }
@@ -1021,7 +1041,14 @@ mod tests {
         );
 
         let existing: HashMap<Vec<u8>, Option<AddressBalance>> = HashMap::new();
-        assert_eq!(count_new_addresses(&changes, &existing).unwrap(), 0);
+        assert_eq!(
+            count_new_addresses(
+                &crate::sync::types::AddressBalanceChanges::single_block(1, changes.clone()),
+                &existing
+            )
+            .unwrap(),
+            0
+        );
     }
 
     // -- classify_object_collection_id -----------------------------------------

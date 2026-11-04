@@ -317,6 +317,78 @@ pub type UndatedEntityKey = Vec<u8>;
 /// One block's contributions: entity key → `(capacity_delta, knowledge_delta)`.
 pub type EntityDailyBlockMap<K> = std::collections::HashMap<K, (i128, i128)>;
 
+/// A live batch's per-key changes, one map per block, blocks ascending.
+///
+/// A live batch spans many blocks and a shallow fork can land on any of them,
+/// so a writer applies these block by block (each block scoped in the block
+/// overlay) instead of one batch-flattened total.
+#[derive(Debug, Clone)]
+pub struct PerBlock<K: Eq + std::hash::Hash, V> {
+    by_block: Vec<(i64, HashMap<K, V>)>,
+}
+
+impl<K: Eq + std::hash::Hash, V> Default for PerBlock<K, V> {
+    fn default() -> Self {
+        Self {
+            by_block: Vec::new(),
+        }
+    }
+}
+
+impl<K: Eq + std::hash::Hash, V> PerBlock<K, V> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The map of `block`, which must not be below the last block added.
+    pub fn block_mut(&mut self, block: i64) -> anyhow::Result<&mut HashMap<K, V>> {
+        match self.by_block.last() {
+            Some((last, _)) if *last == block => {}
+            Some((last, _)) if *last > block => anyhow::bail!(
+                "per-block changes must arrive in ascending block order: last_block={last}, block={block}"
+            ),
+            _ => self.by_block.push((block, HashMap::new())),
+        }
+        Ok(&mut self.by_block.last_mut().expect("just pushed").1)
+    }
+
+    pub fn by_block(&self) -> &[(i64, HashMap<K, V>)] {
+        &self.by_block
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_block.iter().all(|(_, changes)| changes.is_empty())
+    }
+
+    /// Every key any block changes, once.
+    pub fn keys(&self) -> Vec<&K> {
+        let mut seen = HashSet::new();
+        self.by_block
+            .iter()
+            .flat_map(|(_, changes)| changes.keys())
+            .filter(|key| seen.insert(*key))
+            .collect()
+    }
+
+    /// A batch whose changes all belong to `block`.
+    pub fn single_block(block: i64, changes: HashMap<K, V>) -> Self {
+        Self {
+            by_block: vec![(block, changes)],
+        }
+    }
+}
+
+/// A live batch's per-block address deltas.
+pub type AddressBalanceChanges = PerBlock<Vec<u8>, AddressBalanceDelta>;
+
+/// Per-block script usage by `(code_hash, is_type)`: `(cells, live, capacity,
+/// owned capacity, used, owned knowledge)` deltas.
+pub type ScriptUsageChanges = PerBlock<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
+
+/// Per-block script reference usage by `(reference_hash, hash_type, is_type)`.
+pub type ScriptReferenceUsageChanges =
+    PerBlock<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;
+
 /// Per-block index rows a live batch writes (a type script hash's protocol
 /// index), so each row is written at the block whose output carried it.
 pub type BlockIndexChanges<V> =

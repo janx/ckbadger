@@ -49,9 +49,9 @@ use super::nft_helpers::*;
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    AddressBalanceDelta, BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData,
-    EntityDailyChanges, TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey,
-    UnresolvedLocalProbeSummary, UnresolvedRpcProbeSummary,
+    BatchWriteMetrics, CachedUdtCellInfo, DotbitTxActivityData, EntityDailyChanges,
+    TokenDailyChanges, TxData, UndatedEntityKey, UndatedScriptKey, UnresolvedLocalProbeSummary,
+    UnresolvedRpcProbeSummary,
 };
 use super::undo::*;
 use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
@@ -1440,9 +1440,7 @@ fn collect_committed_proposal_ids(txs: &[TxData]) -> Vec<String> {
     collected
 }
 
-pub(super) type ScriptUsageChanges = HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>;
-pub(super) type ScriptReferenceUsageChanges =
-    HashMap<(Vec<u8>, u8, bool), (i64, i64, i128, i128, i128, i128)>;
+pub(super) use super::types::{ScriptReferenceUsageChanges, ScriptUsageChanges};
 pub(super) fn parse_blocks_parallel(
     blocks: &[BlockResponseWithCycles],
 ) -> Result<(
@@ -1687,7 +1685,7 @@ impl Indexer {
         mut all_tx_data: Vec<TxData>,
         input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
+        address_balance_changes: super::types::AddressBalanceChanges,
         script_usage_changes: ScriptUsageChanges,
         script_reference_usage_changes: ScriptReferenceUsageChanges,
         script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
@@ -2083,15 +2081,12 @@ impl Indexer {
         }
 
         // Parallel DB reads for address balances and script usage
-        let lock_hash_keys: Vec<&Vec<u8>> = if !address_balance_changes.is_empty() {
-            address_balance_changes.keys().collect()
-        } else {
-            vec![]
-        };
+        let lock_hash_keys: Vec<&Vec<u8>> = address_balance_changes.keys();
         let unique_code_hashes: Vec<Vec<u8>> = if !script_usage_changes.is_empty() {
             let mut seen = std::collections::HashSet::new();
             script_usage_changes
                 .keys()
+                .into_iter()
                 .filter_map(|(code_hash, _)| {
                     if seen.insert(code_hash.clone()) {
                         Some(code_hash.clone())
@@ -2107,6 +2102,7 @@ impl Indexer {
             let mut seen = std::collections::HashSet::new();
             script_reference_usage_changes
                 .keys()
+                .into_iter()
                 .filter_map(|(reference_hash, hash_type, _is_type)| {
                     let key = (reference_hash.clone(), *hash_type);
                     seen.insert(key.clone()).then_some(key)
@@ -2155,22 +2151,22 @@ impl Indexer {
             if let Some(existing) = existing_balances {
                 let existing = existing?;
                 batch_new_addresses = count_new_addresses(&address_balance_changes, &existing)?;
-                self.writer.apply_address_balance_deltas(
-                    &existing,
+                self.writer.apply_address_balance_changes(
+                    existing,
                     &address_balance_changes,
                     &mut data_batch,
                 )?;
             }
             if let Some(existing) = existing_scripts {
-                self.writer.apply_script_usage_deltas(
-                    &existing?,
+                self.writer.apply_script_usage_changes(
+                    existing?,
                     &script_usage_changes,
                     &mut domain_analytics_batch,
                 )?;
             }
             if let Some(existing) = existing_script_references {
-                updated_script_references = self.writer.apply_script_reference_usage_deltas(
-                    &existing?,
+                updated_script_references = self.writer.apply_script_reference_usage_changes(
+                    existing?,
                     &script_reference_usage_changes,
                     &mut domain_analytics_batch,
                 )?;
@@ -4164,7 +4160,7 @@ impl Indexer {
             // that already holds all domain writes, then commit atomically.
             data_batch.merge_from(core_batch);
             data_batch.merge_from(stats_batch);
-            let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys().collect();
+            let lock_hash_refs: Vec<&Vec<u8>> = address_balance_changes.keys();
             let prefetched_address_balances = if lock_hash_refs.is_empty() {
                 HashMap::new()
             } else {
@@ -6922,8 +6918,8 @@ mod tests {
             all_tx_data: &[TxData],
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-        ) -> Result<HashMap<Vec<u8>, AddressBalanceDelta>> {
-            let mut changes: HashMap<Vec<u8>, AddressBalanceDelta> = HashMap::new();
+        ) -> Result<crate::sync::types::AddressBalanceChanges> {
+            let mut changes = crate::sync::types::AddressBalanceChanges::new();
             for tx_data in all_tx_data {
                 let mut balance: HashMap<Vec<u8>, i128> = HashMap::new();
                 let mut created: HashMap<Vec<u8>, i32> = HashMap::new();
@@ -6967,7 +6963,7 @@ mod tests {
                         ));
                 }
                 crate::sync::types::fold_tx_address_deltas(
-                    &mut changes,
+                    changes.block_mut(tx_data.block_number)?,
                     tx_data.block_number,
                     &tx_data.hash,
                     tx_data.is_cellbase,
@@ -7225,8 +7221,12 @@ mod tests {
                         tx.block_number, hex::encode(tx.hash)
                     )
                     })?;
-                    let value = usage.entry((code_hash.to_vec(), is_type)).or_default();
+                    let value = usage
+                        .block_mut(tx.block_number)?
+                        .entry((code_hash.to_vec(), is_type))
+                        .or_default();
                     let reference = references
+                        .block_mut(tx.block_number)?
                         .entry((code_hash.to_vec(), hash_type, is_type))
                         .or_default();
                     let sign = if created { 1 } else { -1 };

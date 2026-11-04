@@ -45,7 +45,7 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    fold_tx_address_deltas, AddressBalanceDelta, BlockIndexChanges, CachedCellInfo,
+    fold_tx_address_deltas, AddressBalanceChanges, BlockIndexChanges, CachedCellInfo,
     EntityDailyChanges, ReorgAction, TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey,
     UndatedScriptKey,
 };
@@ -934,7 +934,7 @@ pub(crate) fn consumed_object_collection_id(
 /// real parser path into `write_parsed_batch`.
 pub(crate) struct LiveBatchPrecompute {
     pub(crate) batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-    pub(crate) address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
+    pub(crate) address_balance_changes: AddressBalanceChanges,
     pub(crate) script_usage_changes: ScriptUsageChanges,
     pub(crate) script_reference_usage_changes: ScriptReferenceUsageChanges,
     pub(crate) script_daily_changes: EntityDailyChanges<UndatedScriptKey>,
@@ -1091,9 +1091,9 @@ pub(crate) fn precompute_live_batch(
 
     // Pass 3: cell_cache update + address_balance_changes + script_usage_changes
     let cache_balance_and_script_started = Instant::now();
-    let mut address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta> = HashMap::new();
-    let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
-    let mut script_reference_usage_changes: ScriptReferenceUsageChanges = HashMap::new();
+    let mut address_balance_changes = AddressBalanceChanges::new();
+    let mut script_usage_changes = ScriptUsageChanges::new();
+    let mut script_reference_usage_changes = ScriptReferenceUsageChanges::new();
     // Entity daily deltas are accumulated PER BLOCK: a committed
     // batch spans many blocks, and a shallow fork can land in the
     // middle of one. Flattening them loses the block identity the
@@ -1218,6 +1218,7 @@ pub(crate) fn precompute_live_batch(
                 cell.data_size,
             );
             let reference_entry = script_reference_usage_changes
+                .block_mut(tx_data.block_number)?
                 .entry((cell.lock_code_hash.clone(), lock_hash_type, false))
                 .or_insert((0, 0, 0, 0, 0, 0));
             reference_entry.0 += 1;
@@ -1227,6 +1228,7 @@ pub(crate) fn precompute_live_batch(
             reference_entry.4 += i128::from(cell_occupied);
             reference_entry.5 += i128::from(cell_occupied);
             let entry = script_usage_changes
+                .block_mut(tx_data.block_number)?
                 .entry(lock_key)
                 .or_insert((0, 0, 0, 0, 0, 0));
             entry.0 += 1;
@@ -1272,6 +1274,7 @@ pub(crate) fn precompute_live_batch(
                 };
                 let type_key = (type_code_hash.clone(), true);
                 let reference_entry = script_reference_usage_changes
+                    .block_mut(tx_data.block_number)?
                     .entry((type_code_hash.clone(), type_hash_type, true))
                     .or_insert((0, 0, 0, 0, 0, 0));
                 reference_entry.0 += 1;
@@ -1281,6 +1284,7 @@ pub(crate) fn precompute_live_batch(
                 reference_entry.4 += i128::from(cell_occupied);
                 reference_entry.5 += i128::from(cell_occupied);
                 let entry = script_usage_changes
+                    .block_mut(tx_data.block_number)?
                     .entry(type_key)
                     .or_insert((0, 0, 0, 0, 0, 0));
                 entry.0 += 1;
@@ -1437,12 +1441,14 @@ pub(crate) fn precompute_live_batch(
                         }
                     };
                     let reference_entry = script_reference_usage_changes
+                        .block_mut(tx_data.block_number)?
                         .entry((info.lock_code_hash.clone(), lock_hash_type, false))
                         .or_insert((0, 0, 0, 0, 0, 0));
                     reference_entry.1 -= 1;
                     reference_entry.3 -= i128::from(info.capacity);
                     reference_entry.5 -= i128::from(info.occupied_capacity);
                     let entry = script_usage_changes
+                        .block_mut(tx_data.block_number)?
                         .entry(lock_key)
                         .or_insert((0, 0, 0, 0, 0, 0));
                     entry.1 -= 1;
@@ -1485,12 +1491,14 @@ pub(crate) fn precompute_live_batch(
                         };
                         let type_key = (type_code_hash.clone(), true);
                         let reference_entry = script_reference_usage_changes
+                            .block_mut(tx_data.block_number)?
                             .entry((type_code_hash.clone(), type_hash_type, true))
                             .or_insert((0, 0, 0, 0, 0, 0));
                         reference_entry.1 -= 1;
                         reference_entry.3 -= i128::from(info.capacity);
                         reference_entry.5 -= i128::from(info.occupied_capacity);
                         let entry = script_usage_changes
+                            .block_mut(tx_data.block_number)?
                             .entry(type_key)
                             .or_insert((0, 0, 0, 0, 0, 0));
                         entry.1 -= 1;
@@ -1612,7 +1620,7 @@ pub(crate) fn precompute_live_batch(
                 .or_default() += cell_occupied;
         }
         fold_tx_address_deltas(
-            &mut address_balance_changes,
+            address_balance_changes.block_mut(tx_data.block_number)?,
             tx_data.block_number,
             &tx_data.hash,
             tx_data.is_cellbase,
@@ -1659,7 +1667,7 @@ impl Indexer {
             all_tx_data: Vec<TxData>,
             input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
-            address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
+            address_balance_changes: AddressBalanceChanges,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
             script_daily_changes: EntityDailyChanges<UndatedScriptKey>,

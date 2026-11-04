@@ -712,14 +712,36 @@ impl BatchWriter {
         Ok(map)
     }
 
+    /// Apply a live batch's address deltas block by block: each block's
+    /// deltas on top of the balances the previous block left, written in that
+    /// block's scope of the block overlay.
+    pub fn apply_address_balance_changes(
+        &self,
+        mut current: HashMap<Vec<u8>, Option<AddressBalance>>,
+        changes: &crate::sync::types::AddressBalanceChanges,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (block, block_changes) in changes.by_block() {
+            let updated =
+                self.apply_address_balance_deltas(&current, block_changes, &mut batch.at(*block))?;
+            for (lock_hash, balance) in updated {
+                current.insert(lock_hash, Some(balance));
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply ONE block's address deltas on top of `existing`; returns the
+    /// rows written.
     pub fn apply_address_balance_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<AddressBalance>>,
         changes: &HashMap<Vec<u8>, crate::sync::types::AddressBalanceDelta>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<HashMap<Vec<u8>, AddressBalance>> {
+        let mut written = HashMap::with_capacity(changes.len());
         if changes.is_empty() {
-            return Ok(());
+            return Ok(written);
         }
 
         for (lock_hash, delta) in changes {
@@ -878,9 +900,10 @@ impl BatchWriter {
             };
 
             batch.put_addr_balance(lock_hash, &updated);
+            written.insert(lock_hash.clone(), updated);
         }
 
-        Ok(())
+        Ok(written)
     }
 
     pub fn read_script_info(
@@ -922,14 +945,34 @@ impl BatchWriter {
         Ok(map)
     }
 
+    /// Apply a live batch's script usage block by block (see
+    /// [`Self::apply_address_balance_changes`]).
+    pub(crate) fn apply_script_usage_changes(
+        &self,
+        mut current: HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
+        changes: &crate::sync::types::ScriptUsageChanges,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        for (block, block_changes) in changes.by_block() {
+            let updated =
+                self.apply_script_usage_deltas(&current, block_changes, &mut batch.at(*block))?;
+            for (code_hash, info) in updated {
+                current.insert(code_hash, Some(info));
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply ONE block's script usage on top of `existing`; returns the rows
+    /// written.
     pub fn apply_script_usage_deltas(
         &self,
         existing: &HashMap<Vec<u8>, Option<ckbadger_store::types::ScriptInfo>>,
         changes: &HashMap<(Vec<u8>, bool), (i64, i64, i128, i128, i128, i128)>,
         batch: &mut StoreBatch,
-    ) -> Result<()> {
+    ) -> Result<HashMap<Vec<u8>, ckbadger_store::types::ScriptInfo>> {
         if changes.is_empty() {
-            return Ok(());
+            return Ok(HashMap::new());
         }
 
         let mut updated_map: HashMap<&Vec<u8>, ckbadger_store::types::ScriptInfo> =
@@ -1121,7 +1164,10 @@ impl BatchWriter {
             batch.put_script_info(code_hash, info);
         }
 
-        Ok(())
+        Ok(updated_map
+            .into_iter()
+            .map(|(code_hash, info)| (code_hash.clone(), info))
+            .collect())
     }
 
     pub fn read_script_reference_info(
@@ -1172,6 +1218,30 @@ impl BatchWriter {
         }
 
         Ok(map)
+    }
+
+    /// Apply a live batch's script reference usage block by block (see
+    /// [`Self::apply_address_balance_changes`]); returns every row written,
+    /// with its final value.
+    pub(crate) fn apply_script_reference_usage_changes(
+        &self,
+        mut current: HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>,
+        changes: &crate::sync::types::ScriptReferenceUsageChanges,
+        batch: &mut StoreBatch,
+    ) -> Result<HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> {
+        let mut written = HashMap::new();
+        for (block, block_changes) in changes.by_block() {
+            let updated = self.apply_script_reference_usage_deltas(
+                &current,
+                block_changes,
+                &mut batch.at(*block),
+            )?;
+            for (key, info) in updated {
+                current.insert(key.clone(), Some(info.clone()));
+                written.insert(key, info);
+            }
+        }
+        Ok(written)
     }
 
     pub fn apply_script_reference_usage_deltas(
@@ -1405,6 +1475,7 @@ impl BatchWriter {
         let refs: Vec<&Vec<u8>> = unique_code_hashes.iter().collect();
         let existing = self.read_script_info(&refs)?;
         self.apply_script_usage_deltas(&existing, changes, batch)
+            .map(|_| ())
     }
 
     pub fn update_script_reference_usage_batch(

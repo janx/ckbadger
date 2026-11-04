@@ -499,6 +499,11 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_IDENTITY_DATA, None),
     (ckbadger_store::store::CF_IDENTITY_BY_COLLECTION, None),
     (ckbadger_store::store::CF_STATS_IDENTITY, None),
+    // B-3 addresses.rs: address balances, script usage and script reference
+    // usage are applied block by block.
+    (ckbadger_store::CF_ADDR_BALANCE, None),
+    (ckbadger_store::store::CF_SCRIPT_INFO, None),
+    (ckbadger_store::store::CF_SCRIPT_REFERENCE_INFO, None),
 ];
 
 fn is_covered(cf: &str, key: &[u8]) -> bool {
