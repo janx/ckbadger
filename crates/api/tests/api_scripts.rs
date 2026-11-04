@@ -178,7 +178,8 @@ async fn test_type_reference_keeps_same_binary_multiple_holders_but_flags_differ
     for different_binary in [false, true] {
         let store = test_store();
         let version = [0x81; 32];
-        let reference = vec![0x82; 32];
+        // The type reference is the derived hash of the code cells' type script.
+        let reference = compute_script_hash(&[0x61; 32], 1, &[]);
         seed_block_headers_at(&store, &[(10, 1_700_000_000_000)]);
         set_script_fixture_block_tx_count(&store, 10, 2);
         let mut batch = StoreBatch::new(store.as_ref());
@@ -330,7 +331,8 @@ async fn d6_secp_lock_with_all_zero_args_is_unspendable_code_custody() {
     let store = test_store();
     let family_id = "class-evidence";
     let version = [0x31; 32];
-    let type_ref = vec![0x42; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_ref = compute_script_hash(&[0x61; 32], 1, &[]);
     let outpoint = vec![0x53; 32];
     seed_block_headers_at(
         &store,
@@ -463,7 +465,8 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
     let store = test_store();
     let family_id = "class-evidence";
     let version = [0x31; 32];
-    let type_ref = vec![0x42; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_ref = compute_script_hash(&[0x61; 32], 1, &[]);
     let outpoint = vec![0x53; 32];
     seed_block_headers_at(
         &store,
@@ -582,7 +585,8 @@ async fn script_list_rows_carry_first_deployment_family_counts_and_code_hash_sea
     for (query, total) in [
         ("0x3131", 1),
         (&*format!("0x{}", hex::encode(&type_ref)), 1),
-        ("0x4242", 1),
+        // A prefix of the registered reference.
+        (&*format!("0x{}", hex::encode(&type_ref[..2])), 1),
         ("0xdead", 0),
         ("class", 1),
     ] {
@@ -1243,7 +1247,8 @@ async fn test_script_code_cells_resolve_unique_type_reference() {
     let store = test_store();
 
     let version_hash = [0x70; 32];
-    let type_hash = vec![0x9b; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
@@ -1434,7 +1439,8 @@ async fn test_code_cell_endpoints_resolve_exact_form_when_hash_type_given() {
     let store = test_store();
 
     let version_hash = [0x70; 32];
-    let type_hash = vec![0x9b; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let type_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let code_cell_tx_hash = vec![0xe2; 32];
     let code_cell_output_index = 1i16;
 
@@ -1854,7 +1860,9 @@ async fn test_script_lookup_and_code_cells_resolve_unique_reference_without_hash
 #[tokio::test]
 async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
     let store = test_store();
-    let reference_hash = vec![0x88; 32];
+    // Two live code cells of one type script (so one type reference), with
+    // different binaries.
+    let reference_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let version_hash_a = [0xa1; 32];
     let version_hash_b = [0xb2; 32];
 
@@ -1886,7 +1894,7 @@ async fn test_script_lookup_and_code_cells_surface_type_reference_ambiguity() {
             lock_code_hash: [0x55; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_code_hash: Some([0x66; 32]),
+            type_code_hash: Some([0x33; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 32,
@@ -2806,7 +2814,12 @@ async fn assert_type_id_history_without_current_binding(retired_payload: bool) {
     );
     set_script_fixture_block_tx_count(&store, 30, 2);
     set_script_fixture_block_tx_count(&store, 40, 2);
-    let reference = vec![0x31; 32];
+    // The type-id reference is the derived hash of the code cells' TYPE_ID script.
+    let reference = compute_script_hash(
+        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+        1,
+        &[0x13; 32],
+    );
     let binary = [0x41; 32];
     let history = ScriptVersionInfo {
         version_hash: binary.to_vec(),
@@ -4097,7 +4110,8 @@ async fn test_script_lookup_serves_queried_references_own_stats_for_shared_bytec
 async fn test_script_lookup_ambiguous_reference_reports_reference_deprecated() {
     let store = test_store();
 
-    let reference_hash = vec![0x66; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let reference_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let version_a = vec![0x67; 32];
     let version_b = vec![0x68; 32];
 
@@ -4203,8 +4217,10 @@ async fn test_script_lookup_serves_the_references_description() {
     let store = test_store();
 
     let version_hash = [0x7a; 32];
-    let described = vec![0x7b; 32];
-    let undescribed = vec![0x7c; 32];
+    // Each reference is the derived hash of its code cell's own type script
+    // (same code, distinct args).
+    let described = compute_script_hash(&[0x33; 32], 1, &[0x7b]);
+    let undescribed = compute_script_hash(&[0x33; 32], 1, &[0x7c]);
     const DESCRIPTION: &str = "Lock a .cell name sits under. Always-success by design: \
         authority is decided by the Cells Account type script from the owner and manager \
         hashes in the cell.";
@@ -4252,9 +4268,9 @@ async fn test_script_lookup_serves_the_references_description() {
         .unwrap();
 
     let mut batch = StoreBatch::new(store.as_ref());
-    for (tx_hash, type_hash, block) in [
-        (vec![0xb1; 32], &described, 100i64),
-        (vec![0xb2; 32], &undescribed, 200i64),
+    for (tx_hash, type_hash, type_args, block) in [
+        (vec![0xb1; 32], &described, 0x7bu8, 100i64),
+        (vec![0xb2; 32], &undescribed, 0x7cu8, 200i64),
     ] {
         batch.put_cell(
             &tx_hash,
@@ -4266,7 +4282,7 @@ async fn test_script_lookup_serves_the_references_description() {
                 lock_args: vec![],
                 type_code_hash: Some([0x33; 32]),
                 type_hash_type: Some(1),
-                type_args: Some(vec![]),
+                type_args: Some(vec![type_args]),
                 data_size: 64,
                 occupied_capacity: 61_00000000,
                 udt_amount: None,
@@ -4301,7 +4317,8 @@ async fn test_script_lookup_serves_the_references_description() {
 async fn test_script_lookup_ambiguous_reference_serves_reference_description() {
     let store = test_store();
 
-    let reference_hash = vec![0x6a; 32];
+    // The type reference is the derived hash of the code cell's own type script.
+    let reference_hash = compute_script_hash(&[0x33; 32], 1, &[]);
     let version_a = vec![0x6b; 32];
     let version_b = vec![0x6c; 32];
 
@@ -4415,7 +4432,12 @@ async fn test_unregistered_type_id_copy_changes_current_family_without_permanent
     );
     set_script_fixture_block_tx_count(&store, 10, 2);
     set_script_fixture_block_tx_count(&store, 11, 2);
-    let reference = vec![0x31; 32];
+    // The type-id reference is the derived hash of the code cells' TYPE_ID script.
+    let reference = compute_script_hash(
+        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+        1,
+        &[0x13; 32],
+    );
     let binaries = [vec![0x41; 32], vec![0x51; 32]];
     let anchors = [vec![0x61; 32], vec![0x71; 32]];
     let families = ["First", "Second"];
@@ -4907,7 +4929,12 @@ async fn test_script_history_rejects_missing_canonical_tx_index_and_output_bound
 #[tokio::test]
 async fn test_native_type_id_rejects_persisted_binding_conflicting_with_live_code() {
     let store = test_store();
-    let reference = vec![0x31; 32];
+    // The type-id reference is the derived hash of the code cell's TYPE_ID script.
+    let reference = compute_script_hash(
+        &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+        1,
+        &[0x13; 32],
+    );
     let mapped_binary = vec![0x41; 32];
     let actual_binary = [0x42; 32];
     let mut batch = StoreBatch::new(store.as_ref());

@@ -890,7 +890,18 @@ mod tests {
     }
     use ckbadger_store::{batch::StoreBatch, types::LiveCellInfo, CkbadgerStore};
 
+    /// The type reference of `seed_live_generic_code_cell`'s cell: the
+    /// derived hash of its type script (code `[0x13; 32]`, `type`, no args).
+    fn generic_code_cell_reference() -> Vec<u8> {
+        crate::utils::address::compute_script_hash(&[0x13; 32], 1, &[])
+    }
+
     fn seed_live_generic_code_cell(store: &CkbadgerStore, reference: &[u8], binary: &[u8]) {
+        assert_eq!(
+            reference,
+            generic_code_cell_reference(),
+            "the fixture indexes the cell under its own type script hash"
+        );
         let tx = vec![0xb1; 32];
         let mut batch = StoreBatch::new(store);
         batch.put_cell(
@@ -919,7 +930,12 @@ mod tests {
     fn type_id_retirement_keeps_history_without_promoting_non_executable_payload() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference = vec![0x31; 32];
+        // The type-id reference is the derived hash of the cell's TYPE_ID script.
+        let reference = crate::utils::address::compute_script_hash(
+            &hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            1,
+            &[0x13; 32],
+        );
         let historical_binary = vec![0x41; 32];
         let replacement_data = [0x51; 32];
         let tx = vec![0x61; 32];
@@ -1081,7 +1097,9 @@ mod tests {
     fn test_resolve_script_by_hash_returns_ambiguity_for_live_type_conflict() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x33; 32];
+        // Two live code cells of one type script (one type reference), with
+        // different binaries.
+        let reference_hash = crate::utils::address::compute_script_hash(&[0x13; 32], 1, &[]);
         let version_hash_a = [0x44; 32];
         let version_hash_b = [0x55; 32];
 
@@ -1113,7 +1131,7 @@ mod tests {
                 lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some([0x23; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
@@ -1142,7 +1160,9 @@ mod tests {
     fn test_resolve_script_by_hash_reports_generic_live_type_ambiguity_despite_mapping() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x63; 32];
+        // Two live code cells of one type script (one type reference), with
+        // different binaries.
+        let reference_hash = crate::utils::address::compute_script_hash(&[0x13; 32], 1, &[]);
         let mapped_version_hash = [0x74; 32];
         let conflicting_version_hash = [0x85; 32];
 
@@ -1188,7 +1208,7 @@ mod tests {
                 lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_code_hash: Some([0x23; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
@@ -1237,7 +1257,8 @@ mod tests {
     fn test_resolve_script_by_hash_resolves_unique_live_type_match_without_persisted_mapping() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x47; 32];
+        // The type reference is the derived hash of the code cell's type script.
+        let reference_hash = generic_code_cell_reference();
         let version_hash = [0x58; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1281,7 +1302,8 @@ mod tests {
         // reference. The junk self-mapping must not create ambiguity.
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x9b; 32];
+        // The type reference is the derived hash of the code cell's type script.
+        let reference_hash = generic_code_cell_reference();
         let version_hash = vec![0x70; 32];
 
         store
@@ -1374,7 +1396,8 @@ mod tests {
         // resolves to nothing instead of borrowing the type form's version.
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x9b; 32];
+        // The type reference is the derived hash of the code cell's type script.
+        let reference_hash = generic_code_cell_reference();
         let version_hash = vec![0x70; 32];
 
         store
@@ -1439,7 +1462,8 @@ mod tests {
     fn test_resolve_script_form_uses_live_type_matches_without_persisted_mapping() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x47; 32];
+        // The type reference is the derived hash of the code cell's type script.
+        let reference_hash = generic_code_cell_reference();
         let version_hash = [0x58; 32];
 
         let mut batch = StoreBatch::new(&store);

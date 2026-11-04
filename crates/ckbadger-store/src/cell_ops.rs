@@ -1141,20 +1141,8 @@ mod tests {
     fn tx_output_payloads_are_one_batched_read_in_output_order() {
         let (_dir, store) = test_store();
         let tx = [0x42; 32];
-        insert_cell(
-            &store,
-            &tx,
-            0,
-            &[0x01; 32],
-            &make_cell(100, 61, &[0x01; 32]),
-        );
-        insert_cell(
-            &store,
-            &tx,
-            2,
-            &[0x01; 32],
-            &make_cell(300, 61, &[0x01; 32]),
-        );
+        insert_cell(&store, &tx, 0, &make_cell(100, 61, &[0x01; 32]));
+        insert_cell(&store, &tx, 2, &make_cell(300, 61, &[0x01; 32]));
         store.reset_read_call_counters();
         let payloads = store.get_tx_output_payloads(&tx, 3).unwrap();
         assert_eq!(store.read_call_counts(), (0, 1));
@@ -1166,13 +1154,9 @@ mod tests {
         assert!(store.get_tx_output_payloads(&tx, -1).is_err());
     }
 
-    fn insert_cell(
-        store: &CkbadgerStore,
-        tx_hash: &[u8],
-        output_index: i16,
-        type_hash: &[u8],
-        cell: &LiveCellInfo,
-    ) {
+    /// A live typed cell and its `cell_by_type` row, keyed by the cell's own
+    /// derived type script hash, as the indexer writes them.
+    fn insert_cell(store: &CkbadgerStore, tx_hash: &[u8], output_index: i16, cell: &LiveCellInfo) {
         // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
         let value = cell.encode().unwrap();
@@ -1188,7 +1172,10 @@ mod tests {
             .unwrap();
 
         // Write to cell_by_type index
-        let idx_key = keys::encode_cell_index_key(type_hash, 100, tx_hash, output_index);
+        let type_hash = cell
+            .type_script_hash()
+            .expect("insert_cell takes a typed cell");
+        let idx_key = keys::encode_cell_index_key(&type_hash, 100, tx_hash, output_index);
         store
             .put_cf(store.cf_cell_by_type(), &idx_key, &[])
             .unwrap();
@@ -1635,10 +1622,10 @@ mod tests {
     #[test]
     fn test_aggregate_token_cell_stats_single_cell() {
         let (_dir, store) = test_store();
-        let type_hash = [0x01u8; 32];
         let tx_hash = [0x11u8; 32];
-        let cell = make_cell(200_00000000, 61_00000000, &type_hash);
-        insert_cell(&store, &tx_hash, 0, &type_hash, &cell);
+        let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
+        let type_hash = cell.type_script_hash().unwrap();
+        insert_cell(&store, &tx_hash, 0, &cell);
 
         let stats = store
             .aggregate_token_cell_stats(&type_hash, &store)
@@ -1651,19 +1638,20 @@ mod tests {
     #[test]
     fn test_aggregate_token_cell_stats_multiple_cells() {
         let (_dir, store) = test_store();
-        let type_hash = [0x01u8; 32];
+        let type_args = [0x01u8; 32];
 
         let tx1 = [0x11u8; 32];
-        let cell1 = make_cell(200_00000000, 61_00000000, &type_hash);
-        insert_cell(&store, &tx1, 0, &type_hash, &cell1);
+        let cell1 = make_cell(200_00000000, 61_00000000, &type_args);
+        insert_cell(&store, &tx1, 0, &cell1);
 
         let tx2 = [0x22u8; 32];
-        let cell2 = make_cell(300_00000000, 80_00000000, &type_hash);
-        insert_cell(&store, &tx2, 0, &type_hash, &cell2);
+        let cell2 = make_cell(300_00000000, 80_00000000, &type_args);
+        insert_cell(&store, &tx2, 0, &cell2);
 
         let tx3 = [0x33u8; 32];
-        let cell3 = make_cell(150_00000000, 61_00000000, &type_hash);
-        insert_cell(&store, &tx3, 1, &type_hash, &cell3);
+        let cell3 = make_cell(150_00000000, 61_00000000, &type_args);
+        insert_cell(&store, &tx3, 1, &cell3);
+        let type_hash = cell1.type_script_hash().unwrap();
 
         let stats = store
             .aggregate_token_cell_stats(&type_hash, &store)
@@ -1676,16 +1664,15 @@ mod tests {
     #[test]
     fn test_aggregate_token_cell_stats_different_types_isolated() {
         let (_dir, store) = test_store();
-        let type_a = [0x01u8; 32];
-        let type_b = [0x02u8; 32];
-
         let tx1 = [0x11u8; 32];
-        let cell1 = make_cell(200_00000000, 61_00000000, &type_a);
-        insert_cell(&store, &tx1, 0, &type_a, &cell1);
+        let cell1 = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
+        insert_cell(&store, &tx1, 0, &cell1);
 
         let tx2 = [0x22u8; 32];
-        let cell2 = make_cell(500_00000000, 100_00000000, &type_b);
-        insert_cell(&store, &tx2, 0, &type_b, &cell2);
+        let cell2 = make_cell(500_00000000, 100_00000000, &[0x02; 32]);
+        insert_cell(&store, &tx2, 0, &cell2);
+        let type_a = cell1.type_script_hash().unwrap();
+        let type_b = cell2.type_script_hash().unwrap();
 
         let stats_a = store.aggregate_token_cell_stats(&type_a, &store).unwrap();
         assert_eq!(stats_a.cells_count, 1);
@@ -1916,15 +1903,16 @@ mod tests {
 
     // ── J8: `list_cells_by_hash_cf` fails fast on a dangling or malformed row ──
 
-    fn plain_cell(type_hash: Option<&[u8]>) -> LiveCellInfo {
+    /// A plain cell, typed by code `[0x44; 32]` with these args when given.
+    fn plain_cell(type_args: Option<&[u8]>) -> LiveCellInfo {
         LiveCellInfo {
             capacity: 100_00000000,
             lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_code_hash: type_hash.map(|_| [0x44; 32]),
-            type_hash_type: type_hash.map(|_| 1),
-            type_args: type_hash.map(|_| vec![]),
+            type_code_hash: type_args.map(|_| [0x44; 32]),
+            type_hash_type: type_args.map(|_| 1),
+            type_args: type_args.map(<[u8]>::to_vec),
             data_size: 50,
             occupied_capacity: 61_00000000,
             udt_amount: None,
@@ -1938,16 +1926,11 @@ mod tests {
     #[test]
     fn test_list_cells_by_type_fails_on_a_row_without_a_live_cell() {
         let (_dir, store) = test_store();
-        let type_hash = [0x7a; 32];
+        let live_cell = plain_cell(Some(&[0x7a; 32]));
+        let type_hash = live_cell.type_script_hash().unwrap();
         let live_tx = [0x01; 32];
         let dangling_tx = [0x02; 32];
-        insert_cell(
-            &store,
-            &live_tx,
-            0,
-            &type_hash,
-            &plain_cell(Some(&type_hash)),
-        );
+        insert_cell(&store, &live_tx, 0, &live_cell);
         let dangling_key = keys::encode_cell_index_key(&type_hash, 123, &dangling_tx, 3);
         store
             .put_cf(store.cf_cell_by_type(), &dangling_key, &[])
