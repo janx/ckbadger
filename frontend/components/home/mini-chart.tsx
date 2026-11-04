@@ -44,7 +44,8 @@ const PLOT_H = BOTTOM - TOP;
 const DIMMED = 0.35;
 
 const C = {
-  grid: '#1d2233',
+  // the row-rule ink: every chart's grid is 1 px solid #1a1f30 (visual finish V13 b)
+  grid: '#1a1f30',
   base: '#343c50',
   tick: '#7c849c',
   reference: '#a0a8be',
@@ -692,7 +693,6 @@ export function SignedBarChart({ points, ariaLabel }: SignedBarChartProps) {
               data-role="grid"
               d={`M${LEFT} ${TOP}H${f1(right)}M${LEFT} ${BOTTOM}H${f1(right)}`}
               stroke={C.grid}
-              strokeDasharray="2 3"
             />
             <path data-role="base" d={`M${LEFT} ${zero}H${f1(right)}`} stroke={C.base} />
             <YAxisLabels

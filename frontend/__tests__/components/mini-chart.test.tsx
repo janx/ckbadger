@@ -118,6 +118,40 @@ describe('mini charts', () => {
     expect(svg.querySelectorAll('[data-bar="up"] rect')[0]).toHaveAttribute('fill', '#2edba3');
     expect(svg.querySelectorAll('[data-bar="down"] rect')[0]).toHaveAttribute('fill', '#e8555a');
   });
+
+  // Visual finish V13(b), every chart: a dash means a reference, never the grid. The ±cap lines of
+  // the signed axis are its grid (the scale's ends, labelled), solid like the line and bar charts'
+  // grids, all in the row-rule ink #1a1f30; the zero line is the solid base, the line chart's
+  // reference (a target) keeps its dash.
+  it('draws every mini chart grid solid in #1a1f30; only the reference is dashed', () => {
+    const changes = [0.3e6, -0.25e6, 0.4e6].map((value, i) => ({
+      label: `10/${18 + i}`,
+      value,
+      readout: { value: `${value} CKB`, text: `${value} CKB` },
+    }));
+    const { container } = render(
+      <>
+        <SignedBarChart points={changes} ariaLabel="Signed" />
+        <LineChart points={blockTimes} ariaLabel="Line" reference={9} formatValue={String} />
+        <BarChart
+          bars={[{ label: '09:00', value: 610, state: 'highlight' }]}
+          ariaLabel="Bars"
+          formatValue={String}
+        />
+      </>
+    );
+    const grids = [...container.querySelectorAll('[data-role="grid"]')];
+    expect(grids).toHaveLength(3);
+    for (const grid of grids) {
+      expect(grid).toHaveAttribute('stroke', '#1a1f30');
+      expect(grid).not.toHaveAttribute('stroke-dasharray');
+    }
+    const signed = screen.getByRole('img', { name: 'Signed' });
+    expect(signed.querySelector('[data-role="base"]')).not.toHaveAttribute('stroke-dasharray');
+    expect(
+      screen.getByRole('img', { name: 'Line' }).querySelector('[data-role="reference"]')
+    ).toHaveAttribute('stroke-dasharray', '4 3');
+  });
 });
 
 describe('ChartFigure', () => {

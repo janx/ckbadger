@@ -131,14 +131,8 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
         </g>
         {ticks.map((v) => (
           <g key={v}>
-            <line
-              x1="0"
-              x2={W}
-              y1={y(v)}
-              y2={y(v)}
-              stroke={FORK_COLORS.grid}
-              strokeDasharray="3 5"
-            />
+            {/* The scale's lines are grid: solid (visual finish V13 b). */}
+            <line data-role="grid" x1="0" x2={W} y1={y(v)} y2={y(v)} stroke={FORK_COLORS.grid} />
             {written(v) && (
               <text data-role="y-tick" x="0" y={y(v) - 4} fontSize="11" fill={GHOST}>
                 {v.toLocaleString('en-US')}

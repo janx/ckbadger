@@ -51,7 +51,14 @@ describe('ForkDaysChart (grey uncles with jade node switches, FF-L2)', () => {
     );
     // a round scale: 100, 200, 300 (its top in the name's band, unwritten)
     expect(screen.getByText('200')).toBeInTheDocument();
-    expect(container.querySelectorAll('svg line[stroke-dasharray="3 5"]')).toHaveLength(3);
+    // visual finish V13(b): the scale's lines are grid — solid, in the row-rule ink #1a1f30
+    const grid = [...container.querySelectorAll('svg line[data-role="grid"]')];
+    expect(grid).toHaveLength(3);
+    for (const line of grid) {
+      expect(line).toHaveAttribute('stroke', '#1a1f30');
+      expect(line).not.toHaveAttribute('stroke-dasharray');
+    }
+    expect(container.querySelectorAll('svg line[stroke-dasharray]')).toHaveLength(0);
   });
 
   it('is the hero’s picture: at least 280 px tall, its name and key inside the plot, ticks inside in ghost ink (R13)', () => {

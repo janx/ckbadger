@@ -145,7 +145,8 @@ export const FORK_COLORS = {
   tileFill: '#141826',
   tileStroke: '#2c3348',
   tileStrokeLit: '#dee2ec',
-  grid: '#161a25',
+  /** The row-rule ink: every chart's grid is 1 px solid #1a1f30 (visual finish V13 b). */
+  grid: '#1a1f30',
   axis: '#1a1f30',
   tick: '#7c849c',
   ink: '#dee2ec',
