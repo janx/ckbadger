@@ -1415,10 +1415,20 @@ impl CkbadgerStore {
     /// run's finalize, whose phase-12 flush of this one CF took 104.6 s.
     const BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES: usize = 512 * MB as usize;
 
-    /// Bulk-sync `max_write_buffer_number` of the historical append CFs: with
-    /// [`Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`] it bounds the
-    /// unflushed `cells` memtables to 4 x 512 MiB, whatever the budget.
-    const BULK_HISTORICAL_APPEND_MAX_WRITE_BUFFER_NUMBER: i32 = 4;
+    /// Bulk-sync `max_write_buffer_number` of the historical append CFs: 16 x
+    /// [`Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`] = 8 GiB of
+    /// unflushed `cells` memtables, whatever the budget.
+    ///
+    /// The count is slack, not tail. What finalize waits for is the bytes
+    /// still unflushed when the last batch lands, and the small memtable plus
+    /// the flush started at the end of the finalize drain already bound that.
+    /// The count only decides when RocksDB throttles `cells` writes while a
+    /// dense range (blocks 6.65M-12M) outruns the flush: it delays them once
+    /// `count - 1` memtables are unflushed and stops them at `count`. The
+    /// append-only memtables peaked at 5.75 GiB in the 2026-11-01 run (block
+    /// 11.56M), so 4 buffers (2 GiB) would stall there, while 16 keep both the
+    /// delay point (15 unflushed, 7.5 GiB) and the stop above that peak.
+    const BULK_HISTORICAL_APPEND_MAX_WRITE_BUFFER_NUMBER: i32 = 16;
 
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
@@ -2534,7 +2544,7 @@ impl CkbadgerStore {
     /// The default per-CF `max_write_buffer_number=4` can cause flush stalls when
     /// memtables fill faster than background flush can drain. Increasing to
     /// 12 (mega) / 8 (high) / 6 (low) gives more headroom before stalling.
-    /// The append-only `cells` CF is the exception: a fixed 512 MiB x 4, see
+    /// The append-only `cells` CF is the exception: a fixed 512 MiB x 16, see
     /// [`Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`]. Per-CF values come
     /// from [`Self::bulk_cf_options`].
     ///
@@ -3987,7 +3997,7 @@ mod tests {
             );
             assert_eq!(
                 bulk_option(&cells, "max_write_buffer_number"),
-                Some("4".to_string()),
+                Some("16".to_string()),
                 "cells bulk max_write_buffer_number at system_ram={system_ram}"
             );
 
@@ -4106,7 +4116,7 @@ mod tests {
         store.set_bulk_sync_compaction_options();
         let bulk = persisted_cf_options(dir.path(), CF_CELLS);
         assert_eq!(bulk["write_buffer_size"], (512 * MB).to_string());
-        assert_eq!(bulk["max_write_buffer_number"], "4");
+        assert_eq!(bulk["max_write_buffer_number"], "16");
 
         store.restore_normal_compaction_options();
         let live = persisted_cf_options(dir.path(), CF_CELLS);
