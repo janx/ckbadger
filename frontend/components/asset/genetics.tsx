@@ -319,9 +319,7 @@ export function ObjectGeneticsEvidence({
   return (
     <section aria-label="DNA evidence" className="min-w-0 space-y-3">
       <h2
-        className={
-          tier === 2 ? 'text-body font-medium text-[#a0a8be]' : 'text-text-bright text-section'
-        }
+        className={tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'}
       >
         DNA evidence
       </h2>
@@ -450,7 +448,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
           rows={layout.genes}
           rowKey={(g) => g.key}
           rowTitle={title}
-          rowClassName={(g) => (readout.active === g.key ? 'bg-[#10131c]' : '')}
+          rowClassName={(g) => (readout.active === g.key ? 'bg-base-surface' : '')}
           columns={[
             {
               key: 'gene',
@@ -493,7 +491,7 @@ function ObjectDnaReading({ layout }: { layout: ReturnType<typeof sequencingGene
               minWidth: 150,
               header: <span className="text-meta">this object</span>,
               render: (g) => (
-                <span className="block truncate leading-[18px] text-[#a0a8be]">
+                <span className="text-text block truncate leading-[18px]">
                   {g.value ?? `0x${g.raw}`}
                 </span>
               ),
@@ -661,7 +659,7 @@ function PatternReading({
       rowKey={(row) => row.genes[0].key}
       rowTitle={rowTitle}
       rowClassName={(row) =>
-        activeGene !== null && row.genes.some((g) => g.key === activeGene) ? 'bg-[#10131c]' : ''
+        activeGene !== null && row.genes.some((g) => g.key === activeGene) ? 'bg-base-surface' : ''
       }
       columns={[
         {
@@ -729,7 +727,7 @@ function PatternReading({
         <h2
           className={cn(
             'font-medium',
-            tier === 2 ? 'text-body text-[#a0a8be]' : 'text-text-bright text-section'
+            tier === 2 ? 'text-body text-text' : 'text-text-bright text-section'
           )}
         >
           How an object is read
@@ -760,12 +758,15 @@ function PatternReading({
         ].map((tile, i) => (
           <li key={tile.title} className="flex min-w-0 flex-col gap-1.5 sm:flex-1 sm:flex-row">
             {i > 0 && (
-              <span aria-hidden="true" className="text-center text-[#343c50] sm:w-5 sm:self-center">
+              <span
+                aria-hidden="true"
+                className="text-text-ghost text-center sm:w-5 sm:self-center"
+              >
                 <span className="sm:hidden">↓</span>
                 <span className="hidden sm:inline">→</span>
               </span>
             )}
-            <div className="text-small text-text-dim min-w-0 flex-1 rounded border border-[#1a1f30] px-3 py-2.5 [overflow-wrap:anywhere]">
+            <div className="text-small text-text-dim border-base-border-subtle min-w-0 flex-1 rounded border px-3 py-2.5 [overflow-wrap:anywhere]">
               <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
               {tile.body ??
                 steps.map((step) => (
@@ -919,7 +920,7 @@ function PatternReading({
         <div
           role="group"
           aria-label="One object, read this way"
-          className="min-w-0 rounded border border-[#1a1f30] px-3.5 py-3"
+          className="border-base-border-subtle min-w-0 rounded border px-3.5 py-3"
         >
           <div className="text-meta text-text-dim flex flex-wrap items-baseline justify-between gap-x-3">
             <span>
@@ -945,9 +946,7 @@ function PatternReading({
                   >
                     {row.label}
                   </dt>
-                  <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
-                    {valueOf(row)}
-                  </dd>
+                  <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">{valueOf(row)}</dd>
                 </Fragment>
               ))}
             </dl>

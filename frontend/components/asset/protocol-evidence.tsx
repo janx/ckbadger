@@ -15,6 +15,7 @@ import {
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import { useDetailTier } from '@/components/ui/detail-layout';
 import { cn } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 
 export interface ProtocolEvidenceField {
   name: string;
@@ -299,7 +300,7 @@ function FieldDetail({
       aria-label={`${title} field detail`}
       aria-live="polite"
       data-detail={reading.key}
-      className="min-h-[96px] min-w-0 rounded border border-[#1a1f30] px-3.5 py-3"
+      className="border-base-border-subtle min-h-[96px] min-w-0 rounded border px-3.5 py-3"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <span className="text-text-bright text-body min-w-0 [overflow-wrap:anywhere]">
@@ -319,7 +320,7 @@ function FieldDetail({
             data-hex-row=""
             className="text-small mt-1.5 grid grid-cols-[52px_auto_minmax(0,1fr)] items-baseline gap-x-3 tabular-nums"
           >
-            <span className="text-[#4b5266]">
+            <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
               0x{(reading.start + row.at).toString(16).padStart(digits, '0')}
             </span>
             <span className="flex flex-wrap gap-x-2">
@@ -332,7 +333,7 @@ function FieldDetail({
                 );
               })}
             </span>
-            <span className="truncate text-[#a0a8be]">{asciiPreview(row.bytes)}</span>
+            <span className="text-text truncate">{asciiPreview(row.bytes)}</span>
           </div>
         );
       })}

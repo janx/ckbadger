@@ -220,7 +220,7 @@ describe('How an object is read (C5)', () => {
     expect(screen.getByRole('status', { name: 'DNA ruler readout' })).toHaveTextContent(
       /prev\.bg · bytes 0–31 · 32/
     );
-    expect(screen.getByRole('row', { name: /^prev\.bg/ })).toHaveClass('bg-[#10131c]');
+    expect(screen.getByRole('row', { name: /^prev\.bg/ })).toHaveClass('bg-base-surface');
   });
 
   it('says what the decoded objects show for each gene and reads one real object', () => {

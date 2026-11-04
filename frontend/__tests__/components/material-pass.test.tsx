@@ -333,7 +333,7 @@ describe('move 2 on the frame and the tier boundary', () => {
     const { container } = render(<TintedJson text='{"a": 1}' />);
     const pre = container.querySelector('pre')!;
     expect(pre).toHaveClass('well');
-    expect(pre).not.toHaveClass('bg-[#10131c]', 'rounded');
+    expect(pre).not.toHaveClass('bg-base-surface', 'rounded');
   });
 });
 

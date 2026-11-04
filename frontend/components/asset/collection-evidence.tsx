@@ -43,7 +43,7 @@ export function ClusterCellEvidence({
         className="text-small grid grid-cols-[88px_minmax(0,1fr)] gap-x-4 gap-y-1.5"
       >
         <dt className="text-text-dim">{cell.isLive ? 'live cell' : 'cell'}</dt>
-        <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+        <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/cell/${cell.txHash}-${cell.outputIndex}`} title={cell.txHash}>
             {short(cell.txHash, 8, 4)}
             <OutpointIndex index={cell.outputIndex} />
@@ -55,7 +55,7 @@ export function ClusterCellEvidence({
           · {formatUtc8Date(cell.timestamp)}
         </dd>
         <dt className="text-text-dim">held by</dt>
-        <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+        <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           <AppLink href={`/address/${cell.ownerAddress}`} title={cell.ownerAddress}>
             {short(cell.ownerAddress, 12, 6)}
           </AppLink>{' '}
@@ -64,7 +64,7 @@ export function ClusterCellEvidence({
         {type && (
           <>
             <dt className="text-text-dim">type</dt>
-            <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+            <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               <AppLink
                 href={getScriptDetailHref({
                   name: cell.typeName,
@@ -225,18 +225,18 @@ export function MnftClassEvidence({
         className="text-small grid grid-cols-[88px_minmax(0,1fr)] gap-x-4 gap-y-1.5"
       >
         <dt className="text-text-dim">issued</dt>
-        <dd className="m-0 text-[#a0a8be]">
+        <dd className="text-text m-0">
           {classDetail.issued.toLocaleString('en-US')} · planned{' '}
           {classDetail.total.toLocaleString('en-US')}
         </dd>
         <dt className="text-text-dim">renderer</dt>
-        <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+        <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
           {classDetail.renderer ?? 'not recorded'}
         </dd>
         {issuerDetail && (
           <>
             <dt className="text-text-dim">issuer</dt>
-            <dd className="m-0 min-w-0 text-[#a0a8be] [overflow-wrap:anywhere]">
+            <dd className="text-text m-0 min-w-0 [overflow-wrap:anywhere]">
               {issuerDetail.name ?? 'Unnamed issuer'} ·{' '}
               {issuerDetail.classCount.toLocaleString('en-US')} classes ·{' '}
               {issuerDetail.setCount.toLocaleString('en-US')} sets

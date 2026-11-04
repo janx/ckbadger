@@ -54,9 +54,7 @@ export function MnftPermissions({ permissions, configure, state }: MnftPermissio
   return (
     <section aria-label="mNFT permissions" className="space-y-4">
       <h2
-        className={
-          tier === 2 ? 'text-body font-medium text-[#a0a8be]' : 'text-text-bright text-section'
-        }
+        className={tier === 2 ? 'text-body text-text font-medium' : 'text-text-bright text-section'}
       >
         What its configuration permits
       </h2>
