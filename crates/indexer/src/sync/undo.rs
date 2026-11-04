@@ -231,14 +231,16 @@ pub(crate) fn put_addr_tx(
     tx_hash: &[u8],
     value: &ckbadger_store::types::AddrTxValue,
 ) {
-    // addr_txs is now in domain store; rollback deletes entries directly (no undo log needed)
+    // Written in the caller's block scope: the live batch's block journal
+    // records the row's creation (until B-5 the old rollback still deletes
+    // the row directly).
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash, value);
 }
 
 /// `addr_txs_by_prefix` row for a protocol-named party.
 ///
-/// Domain store, append-only semantics, no undo entry: rollback deletes the row
-/// outright — exactly like [`put_addr_tx`].
+/// Domain store, append-only semantics, written in the caller's block scope
+/// (the block journal records the creation) — exactly like [`put_addr_tx`].
 pub(crate) fn put_addr_tx_by_prefix(
     batch: &mut StoreBatch<'_>,
     _undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -261,7 +263,8 @@ pub(crate) fn put_tx_actions(
         actions.block_number, block_num,
         "tx actions block number mismatch in undo helper"
     );
-    // activities is now in domain store; rollback deletes entries directly (no undo log needed)
+    // The `activities` row is RangeByBlock (rollback deletes it by block);
+    // its `tx_actions_by_bucket` row is journaled in the caller's block scope.
     batch.put_tx_actions(actions);
 }
 

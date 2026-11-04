@@ -143,18 +143,64 @@ impl<'a> StoreBatch<'a> {
         let Some(prefix) = key.first().copied() else {
             anyhow::bail!("empty stats key");
         };
-        let cf = CkbadgerStore::stats_cf_name_by_prefix(prefix)?;
-        match self.journal.as_ref() {
-            Some(journal)
-                if cf_spec(cf)
-                    .is_some_and(|spec| spec.rollback_class == RollbackClass::Journal) =>
-            {
-                journal
-                    .overlay
-                    .with(|overlay| overlay.current(self.store, cf, key))
-            }
-            _ => self.store.get_stats_key(key),
+        self.get_current(CkbadgerStore::stats_cf_name_by_prefix(prefix)?, key)
+    }
+
+    /// The current value of `key` in the domain column family `cf_name` as
+    /// this batch sees it: on a journaled batch the block overlay's value
+    /// (the live batch's latest write of the key from any of its sub-batches,
+    /// else the committed value); on an unjournaled batch the committed value
+    /// only, so such a batch must not read back a key it already wrote.
+    ///
+    /// A journaled batch cannot read back its writes to a column family that
+    /// is not `Journal`-class (they bypass the overlay), so asking for one is
+    /// an error rather than a stale committed value.
+    pub fn get_current(&self, cf_name: &str, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        Ok(self
+            .get_current_many(cf_name, std::slice::from_ref(&key.to_vec()))?
+            .pop()
+            .expect("one key in, one value out"))
+    }
+
+    /// [`Self::get_current`] for many keys of one column family, with one
+    /// `multi_get` for the committed values; values in `keys` order.
+    pub fn get_current_many(
+        &self,
+        cf_name: &str,
+        keys: &[Vec<u8>],
+    ) -> anyhow::Result<Vec<Option<Vec<u8>>>> {
+        if !self.store.has_cf(cf_name) {
+            anyhow::bail!("CF '{cf_name}' is not available in this store batch");
         }
+        let Some(journal) = self.journal.as_ref() else {
+            let handle = self.store.cf(cf_name);
+            return self
+                .store
+                .multi_get_cf(keys.iter().map(|key| (handle, key.as_slice())).collect())
+                .into_iter()
+                .zip(keys)
+                .map(|(value, key)| {
+                    value.map_err(|e| {
+                        anyhow::anyhow!(
+                            "batch read cf={cf_name} key=0x{}: {e}",
+                            crate::bytes_to_hex(key)
+                        )
+                    })
+                })
+                .collect();
+        };
+        if !cf_spec(cf_name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal) {
+            anyhow::bail!(
+                "a journaled batch reads back only Journal-class CFs through its overlay; \
+                 cf={cf_name} is not one"
+            );
+        }
+        journal.overlay.with(|overlay| {
+            overlay.prefetch(self.store, cf_name, keys)?;
+            keys.iter()
+                .map(|key| overlay.current(self.store, cf_name, key))
+                .collect()
+        })
     }
 
     /// Stage the overlay's final values and journal entries into this batch.
@@ -1816,7 +1862,10 @@ impl<'a> StoreBatch<'a> {
     // ---- Sync meta ----
 
     /// Stage block-end live-cell summaries into the bounded history ring and
-    /// publish the last one as the API-visible current value.
+    /// publish each as the API-visible current value, every summary's writes
+    /// in its own block's scope (on a live batch the block journal then holds
+    /// the ring entry, the expired entry and the current value as of the end
+    /// of every block); the last one stays current.
     ///
     /// This is a domain-store mutation. It intentionally has no append-only
     /// equivalent: `CF_CELLS` remains immutable cell payload history.
@@ -1860,8 +1909,9 @@ impl<'a> StoreBatch<'a> {
                     error,
                 )
             })?;
+            let mut scope = self.at(summary.tip_block_number);
             let history_key = keys::encode_live_cell_summary_history_key(summary.tip_block_number);
-            self.put_sync_meta(&history_key, &value);
+            scope.put_sync_meta(&history_key, &value);
 
             if let Some(expired_block) = summary
                 .tip_block_number
@@ -1869,23 +1919,14 @@ impl<'a> StoreBatch<'a> {
                 .filter(|block| *block >= 0)
             {
                 let expired_key = keys::encode_live_cell_summary_history_key(expired_block);
-                self.delete_sync_meta(&expired_key);
+                scope.delete_sync_meta(&expired_key);
             }
+            if previous_block.is_none() {
+                scope.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1u8]);
+            }
+            scope.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, &value);
             previous_block = Some(summary.tip_block_number);
         }
-
-        let current = summaries
-            .last()
-            .expect("non-empty summary sequence checked above");
-        let value = bincode::serialize(current).map_err(|error| {
-            anyhow::anyhow!(
-                "failed to serialize current live-cell summary: block={} error={}",
-                current.tip_block_number,
-                error,
-            )
-        })?;
-        self.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1u8]);
-        self.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT, &value);
         Ok(())
     }
 

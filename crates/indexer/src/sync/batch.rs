@@ -233,6 +233,16 @@ fn positioned_cell_summary_projection(
     )
 }
 
+/// One block's own contribution to `sync_status`: its tip and the
+/// transactions, cells created and cells consumed it adds to the totals.
+struct BlockSyncCounts {
+    number: i64,
+    hash: Vec<u8>,
+    transactions: i64,
+    cells_created: i64,
+    cells_consumed: i64,
+}
+
 /// Build exact block-end summary snapshots from the same already-resolved
 /// inputs and parsed outputs used by the canonical live writer.
 ///
@@ -2506,10 +2516,11 @@ impl Indexer {
         let mut identity_activity_batch =
             StoreBatch::journaled(self.writer.store(), &block_overlay, 4);
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
-        // Every collection activity row this batch writes, folded per
-        // (collection, UTC+8 day of its block's chain time): staged into
-        // `collection_activity_daily` once, beside the rows, before the commit.
-        let mut collection_daily = ckbadger_store::CollectionActivityDailyDeltas::new();
+        // Every collection activity row this batch writes, folded per block
+        // and (collection, UTC+8 day of its block's chain time): staged into
+        // `collection_activity_daily` block by block, beside the rows, before
+        // the commit.
+        let mut collection_daily = ckbadger_store::CollectionActivityDailyBlockDeltas::new();
         let collection_day_of_block = |block: i64| -> Result<u32> {
             let chain_time = chain_time_by_block.get(&block).ok_or_else(|| {
                 anyhow!("collection activity row of block {block} outside this batch")
@@ -3348,13 +3359,20 @@ impl Indexer {
         protocol_detectors
             .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
         let mut activity_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 5);
-        // Standalone protocol-named participations counted per 20-byte prefix
-        // over this whole batch. Rollback reverses the counter from the prefix
-        // rows it deletes, so no per-block bookkeeping is needed here.
-        let mut prefix_tx_counts: BTreeMap<[u8; 20], i64> = BTreeMap::new();
+        // Standalone protocol-named participations counted per block and
+        // 20-byte prefix, staged block by block after the loop.
+        let mut prefix_tx_counts: BTreeMap<i64, BTreeMap<[u8; 20], i64>> = BTreeMap::new();
         {
             let mut block_tx_idx = 0usize;
             for parsed in all_parsed_blocks {
+                // Every write of this block's activity pass belongs to it:
+                // its addr_txs / addr_txs_by_prefix rows, its TxActions rows
+                // and their bucket index rows, its `.cell` collection feed
+                // rows, the Fiber channel lifecycle its transactions carry and
+                // its activity bucket stats.
+                let mut append_history_batch = append_history_batch.at(parsed.number);
+                let mut activity_batch = activity_batch.at(parsed.number);
+                let mut identity_activity_batch = identity_activity_batch.at(parsed.number);
                 let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
                 block_tx_idx += tx_count;
@@ -3443,7 +3461,18 @@ impl Indexer {
                         tx_actions,
                         &built.participant_io,
                     ) {
-                        *prefix_tx_counts.entry(prefix).or_insert(0) += 1;
+                        let count = prefix_tx_counts
+                            .entry(parsed.number)
+                            .or_default()
+                            .entry(prefix)
+                            .or_insert(0);
+                        *count = count.checked_add(1).ok_or_else(|| {
+                            anyhow!(
+                                "addr_prefix_stats batch count overflow: prefix=0x{} block={}",
+                                hex::encode(prefix),
+                                parsed.number
+                            )
+                        })?;
                     }
 
                     // The `.cell` collection feed is derived from the
@@ -3465,6 +3494,7 @@ impl Indexer {
                             &entry,
                         );
                         collection_daily.add_row(
+                            tx_actions.block_number,
                             &DOTCELL_SENTINEL_COLLECTION,
                             collection_day_of_block(tx_actions.block_number)?,
                             &entry.actions,
@@ -3527,7 +3557,6 @@ impl Indexer {
                 // The block's activity stats, in its scope: each bucket row
                 // on top of the row the previous block left.
                 if !built_list.is_empty() {
-                    let mut activity_batch = activity_batch.at(parsed.number);
                     for (kind, bucket) in [
                         (
                             ckbadger_store::keys::ActivityBucketKind::Daily,
@@ -3561,35 +3590,20 @@ impl Indexer {
             &pending_identity_aggs,
         )?;
 
-        // Per-prefix participation counters. Read-modify-write against the
-        // committed value. No undo pre-image: rollback reverses this counter by
-        // the number of `CF_ADDR_TXS_BY_PREFIX` rows it deletes, exactly the way
-        // `addr_balance.txs_count` is reversed from the `CF_ADDR_TXS` rows it
-        // deletes. A pre-image would be recorded on one block of this batch and
-        // would simply not be replayed when the fork point lands on a later
-        // block of the same batch, leaving the counter above the surviving rows.
-        for (prefix, delta) in &prefix_tx_counts {
-            let previous = self.writer.store().get_addr_prefix_stats(prefix)?;
-            let next = ckbadger_store::types::AddrPrefixStats {
-                txs_count: previous
-                    .map(|s| s.txs_count)
-                    .unwrap_or(0)
-                    .checked_add(*delta)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "addr_prefix_stats txs_count overflow: prefix=0x{}, delta={}",
-                            hex::encode(prefix),
-                            delta
-                        )
-                    })?,
-            };
-            domain_analytics_batch.put_addr_prefix_stats(prefix, &next);
-        }
+        // Per-prefix participation counters, block by block: each block's
+        // counts on top of the value the previous block left, in that block's
+        // scope, so the block journal restores the counter at any block of the
+        // batch. (Until B-5 the old rollback still reverses it from the
+        // `CF_ADDR_TXS_BY_PREFIX` rows it deletes.)
+        self.writer
+            .store()
+            .stage_addr_prefix_tx_counts(&prefix_tx_counts, &mut domain_analytics_batch)?;
 
-        // Each (collection, day) this batch's collection activity rows touched:
-        // its committed counts plus this batch's, read once and written once
-        // into the same atomic domain commit as the rows. No undo pre-image —
-        // rollback subtracts the rows it deletes (`collection_activity_daily`).
+        // Each (collection, day) this batch's collection activity rows touched,
+        // block by block: the counts the previous block left plus the block's
+        // own, in that block's scope, in the same atomic domain commit as the
+        // rows. (Until B-5 the old rollback still subtracts the rows it
+        // deletes.)
         self.writer
             .store()
             .stage_collection_activity_daily(&collection_daily, &mut domain_analytics_batch)?;
@@ -3610,8 +3624,13 @@ impl Indexer {
 
         // Stats accumulation for live sync (serial — before finalize). The
         // chain statistics are written block by block, each in its block's
-        // scope; the DAO daily snapshots and the sync totals once per batch.
+        // scope (and `sync_status` per block in the finalize section); the
+        // DAO daily snapshots once per batch.
         batch_stats = BatchStats::default();
+        // Each block's own transaction / created / consumed counts, for its
+        // `sync_status` (written per block in the finalize section).
+        let mut block_sync_counts: Vec<BlockSyncCounts> =
+            Vec::with_capacity(all_parsed_blocks.len());
         let mut stats_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 7);
         // The previous day's chain stats, threaded block to block: the first
         // block of a day carries its cumulative totals forward from it.
@@ -3830,6 +3849,13 @@ impl Indexer {
                     )
                 })?;
             batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
+            block_sync_counts.push(BlockSyncCounts {
+                number: parsed.number,
+                hash: parsed.hash.clone(),
+                transactions: i64::from(parsed.transactions_count),
+                cells_created: i64::from(cells_created),
+                cells_consumed: i64::from(cells_consumed),
+            });
 
             {
                 let entry = block_stats.daily_stats.entry(block_date).or_default();
@@ -4030,30 +4056,85 @@ impl Indexer {
                 &staged_dao_completions,
                 &mut stats_batch,
             )?;
-            // Inject sync_status update into the finalize batch so it is
-            // committed atomically with block headers and domain data.
-            // Previously sync_status was written via a separate put_cf after
-            // commit, creating a crash window where totals could drift.
+            // Inject sync_status into the finalize batch so it is committed
+            // atomically with block headers and domain data, once per block:
+            // each block's tip and the running totals at its end, in its
+            // scope, so the block journal restores the status of any block of
+            // the batch. Each block's live-cell summary is checked against the
+            // totals at its end.
             if let Some((block_number, ref block_hash)) = batch_stats.last_block {
                 let ema_rate = self.progress.ema_blocks_per_second();
+                let synced_at = chrono::Utc::now().timestamp();
                 let mut status = self.writer.store().get_sync_status()?;
-                status.tip_block_number = block_number;
-                status.tip_block_hash = block_hash.clone();
-                status.total_transactions = status
-                    .total_transactions
-                    .checked_add(batch_stats.sync_totals.0)
-                    .ok_or_else(|| anyhow!("sync total_transactions overflow"))?;
-                status.total_cells_created = status
-                    .total_cells_created
-                    .checked_add(batch_stats.sync_totals.1)
-                    .ok_or_else(|| anyhow!("sync total_cells_created overflow"))?;
-                status.total_cells_consumed = status
-                    .total_cells_consumed
-                    .checked_add(batch_stats.sync_totals.2)
-                    .ok_or_else(|| anyhow!("sync total_cells_consumed overflow"))?;
-                status.last_synced_at = chrono::Utc::now().timestamp();
-                if ema_rate > 0.0 {
-                    status.sync_ema_rate = Some(ema_rate);
+                if live_cell_summary_snapshots.len() != block_sync_counts.len() {
+                    bail!(
+                        "live-cell summary count does not match the batch: blocks {}-{} summaries={} blocks={}",
+                        first_block,
+                        last_block,
+                        live_cell_summary_snapshots.len(),
+                        block_sync_counts.len(),
+                    );
+                }
+                for (summary, counts) in live_cell_summary_snapshots.iter().zip(&block_sync_counts)
+                {
+                    if summary.tip_block_number != counts.number
+                        || summary.tip_block_hash.as_slice() != counts.hash.as_slice()
+                    {
+                        bail!(
+                            "live-cell summary/status block mismatch before commit: summary_block={} summary_hash=0x{} status_block={} status_hash=0x{}",
+                            summary.tip_block_number,
+                            hex::encode(summary.tip_block_hash),
+                            counts.number,
+                            hex::encode(&counts.hash),
+                        );
+                    }
+                    status.tip_block_number = counts.number;
+                    status.tip_block_hash = counts.hash.clone();
+                    status.total_transactions = status
+                        .total_transactions
+                        .checked_add(counts.transactions)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "sync total_transactions overflow at block {}",
+                                counts.number
+                            )
+                        })?;
+                    status.total_cells_created = status
+                        .total_cells_created
+                        .checked_add(counts.cells_created)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "sync total_cells_created overflow at block {}",
+                                counts.number
+                            )
+                        })?;
+                    status.total_cells_consumed = status
+                        .total_cells_consumed
+                        .checked_add(counts.cells_consumed)
+                        .ok_or_else(|| {
+                            anyhow!(
+                                "sync total_cells_consumed overflow at block {}",
+                                counts.number
+                            )
+                        })?;
+                    status.last_synced_at = synced_at;
+                    if ema_rate > 0.0 {
+                        status.sync_ema_rate = Some(ema_rate);
+                    }
+                    summary.validate_against_sync_totals(
+                        status.total_cells_created,
+                        status.total_cells_consumed,
+                    )?;
+                    let status_bytes = bincode::serialize(&status).with_context(|| {
+                        format!(
+                            "failed to serialize sync_status of block {} for atomic batch commit",
+                            counts.number
+                        )
+                    })?;
+                    stats_batch.at(counts.number).put_sync_meta(
+                        ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
+                        &status_bytes,
+                    );
                 }
 
                 let summary = live_cell_summary_snapshots.last().ok_or_else(|| {
@@ -4074,10 +4155,6 @@ impl Indexer {
                         hex::encode(block_hash),
                     );
                 }
-                summary.validate_against_sync_totals(
-                    status.total_cells_created,
-                    status.total_cells_consumed,
-                )?;
                 ensure_dao_lifecycle_matches_live_dao_cells(
                     self.writer.store(),
                     &live_dao,
@@ -4086,6 +4163,8 @@ impl Indexer {
                 .map_err(|source| {
                     PreCommitInvariantError::new("DAO lifecycle vs live DAO cells", source)
                 })?;
+                // Each block's summary (history ring entry and current value)
+                // is written in that block's scope.
                 stats_batch
                     .put_live_cell_summary_snapshots(&live_cell_summary_snapshots)
                     .with_context(|| {
@@ -4094,12 +4173,6 @@ impl Indexer {
                             first_block, last_block
                         )
                     })?;
-                let status_bytes = bincode::serialize(&status)
-                    .with_context(|| "failed to serialize sync_status for atomic batch commit")?;
-                stats_batch.put_sync_meta(
-                    ckbadger_store::keys::sync_meta_keys::SYNC_STATUS,
-                    &status_bytes,
-                );
             }
 
             // Advance the entity-stats undo coverage floor and drop the
@@ -9005,15 +9078,32 @@ mod tests {
             out
         }
 
-        /// Every `CF_ADDR_PREFIX_STATS` undo entry, as (block, previous_value).
+        /// Every `CF_ADDR_PREFIX_STATS` undo entry of the per-writer scopes the
+        /// pre-journal rollback replays, as (block, previous_value).
         fn prefix_stats_undo_entries(store: &CkbadgerStore) -> Vec<(i64, Option<Vec<u8>>)> {
+            prefix_stats_entries(store, false)
+        }
+
+        /// Every `CF_ADDR_PREFIX_STATS` block journal entry, as (block,
+        /// previous_value).
+        fn prefix_stats_journal_entries(store: &CkbadgerStore) -> Vec<(i64, Option<Vec<u8>>)> {
+            prefix_stats_entries(store, true)
+        }
+
+        fn prefix_stats_entries(
+            store: &CkbadgerStore,
+            journal: bool,
+        ) -> Vec<(i64, Option<Vec<u8>>)> {
             let mut out = Vec::new();
             for item in store.iterator_cf(
                 store.cf_reorg_undo_log_by_block(),
                 rocksdb::IteratorMode::Start,
             ) {
                 let (key, value) = item.unwrap();
-                let (block_num, _seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) != journal {
+                    continue;
+                }
                 let entry: ckbadger_store::types::UndoLogEntry =
                     bincode::deserialize(&value).unwrap();
                 if let ckbadger_store::types::UndoLogEntry::KeyMutation {
@@ -9399,6 +9489,11 @@ mod tests {
                 "the prefix counter owns no undo pre-images: rollback reverses it \
                  from the prefix rows it deletes"
             );
+            assert_eq!(
+                prefix_stats_journal_entries(&store),
+                vec![(101, None)],
+                "the block journal records the counter's creation in the naming block"
+            );
         }
 
         #[tokio::test]
@@ -9457,6 +9552,22 @@ mod tests {
                 prefix_stats_undo_entries(&store),
                 Vec::new(),
                 "the prefix counter is reversed from the deleted rows, never from undo pre-images"
+            );
+            assert_eq!(
+                prefix_stats_journal_entries(&store),
+                vec![
+                    (101, None),
+                    (
+                        102,
+                        Some(
+                            bincode::serialize(&ckbadger_store::types::AddrPrefixStats {
+                                txs_count: 1
+                            })
+                            .unwrap()
+                        )
+                    ),
+                ],
+                "the block journal holds the counter's value at the end of the previous block"
             );
         }
 

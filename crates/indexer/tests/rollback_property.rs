@@ -98,6 +98,45 @@ fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
     bincode::serialize(&meta).expect("encode derive meta")
 }
 
+/// The dump's normalisation of one `sync_meta` value (wall-clock fields and
+/// hash-map ordering), applied alike to rows read from a store and to values
+/// the journal oracle writes back.
+fn normalize_sync_meta(key: &[u8], value: &[u8]) -> Vec<u8> {
+    if key == sync_meta_keys::SYNC_STATUS {
+        normalize_sync_status(value)
+    } else if key.starts_with(sync_meta_keys::DERIVE_META_PREFIX) {
+        normalize_derive_meta(value)
+    } else {
+        normalize_tracker(key, value)
+    }
+}
+
+/// A journal entry of a `sync_meta` key carries the key's previous value,
+/// which holds the same wall-clock fields as the row itself (the previous
+/// batch's `sync_status.last_synced_at`, ...): normalise it the same way.
+fn normalize_undo_entry(value: &[u8]) -> Vec<u8> {
+    match bincode::deserialize::<ckbadger_store::types::UndoLogEntry>(value)
+        .expect("decode an undo log row")
+    {
+        ckbadger_store::types::UndoLogEntry::KeyMutation {
+            target_store,
+            cf_name,
+            key,
+            previous_value: Some(previous),
+        } if cf_name == ckbadger_store::CF_SYNC_META => {
+            let previous = normalize_sync_meta(&key, &previous);
+            bincode::serialize(&ckbadger_store::types::UndoLogEntry::KeyMutation {
+                target_store,
+                cf_name,
+                key,
+                previous_value: Some(previous),
+            })
+            .expect("encode an undo log row")
+        }
+        _ => value.to_vec(),
+    }
+}
+
 type Dump = BTreeMap<(&'static str, Vec<u8>), Vec<u8>>;
 
 /// Every row of every domain CF, minus the volatile `sync_meta` keys.
@@ -114,7 +153,9 @@ fn dump_domain(store: &CkbadgerStore) -> Dump {
             let (key, value) = row.expect("iterate domain CF");
             let mut value = value.to_vec();
             if cf == ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK {
-                undo.entry(key[..8].to_vec()).or_default().push(value);
+                undo.entry(key[..8].to_vec())
+                    .or_default()
+                    .push(normalize_undo_entry(&value));
                 continue;
             }
             if cf == ckbadger_store::CF_SYNC_META {
@@ -125,13 +166,7 @@ fn dump_domain(store: &CkbadgerStore) -> Dump {
                 {
                     continue;
                 }
-                if key.as_ref() == sync_meta_keys::SYNC_STATUS {
-                    value = normalize_sync_status(&value);
-                }
-                if key.starts_with(sync_meta_keys::DERIVE_META_PREFIX) {
-                    value = normalize_derive_meta(&value);
-                }
-                value = normalize_tracker(&key, &value);
+                value = normalize_sync_meta(&key, &value);
             }
             dump.insert((cf, key.to_vec()), value);
         }
@@ -518,12 +553,51 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     // is not covered: the DAO daily snapshot is still written once per batch
     // (lane B record, design findings).
     (ckbadger_store::CF_STATS_CHAIN, None),
+    // B-3 sync/batch.rs: the activity pass is scoped per block (addr_txs and
+    // addr_txs_by_prefix rows, TxActions bucket index rows), and the
+    // per-prefix participation counters and the collection activity day
+    // counters are staged block by block.
+    (ckbadger_store::CF_ADDR_TXS, None),
+    (ckbadger_store::CF_ADDR_TXS_BY_PREFIX, None),
+    (ckbadger_store::CF_TX_ACTIONS_BY_BUCKET, None),
+    (ckbadger_store::CF_ADDR_PREFIX_STATS, None),
+    (ckbadger_store::CF_COLLECTION_ACTIVITY_DAILY, None),
+    // The Fiber channel lifecycle (`process_fiber_channel_events`, its only
+    // live writer) runs inside the same per-block activity pass, so it is
+    // scoped with it.
+    (ckbadger_store::CF_FIBER_CHANNELS, None),
+    (ckbadger_store::CF_ADDR_FIBER_CHANNELS, None),
+    (ckbadger_store::CF_FIBER_CHANNEL_BY_COMMITMENT, None),
+];
+
+/// Covered keys of a column family that is not covered as a whole: a
+/// `sync_meta` key, or a key prefix, whose every live write is attributed to
+/// its block.
+const JOURNAL_COVERED_KEYS: &[(&str, &[u8])] = &[
+    // B-3 sync/batch.rs: `sync_status` is written per block (that block's tip
+    // and running totals) and each live-cell summary (current value, history
+    // ring entry, the expired entry it deletes) in its block's scope.
+    (ckbadger_store::CF_SYNC_META, sync_meta_keys::SYNC_STATUS),
+    (
+        ckbadger_store::CF_SYNC_META,
+        sync_meta_keys::LIVE_CELL_SUMMARY_CURRENT,
+    ),
+    (
+        ckbadger_store::CF_SYNC_META,
+        sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
+    ),
+    (
+        ckbadger_store::CF_SYNC_META,
+        keys::LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX,
+    ),
 ];
 
 fn is_covered(cf: &str, key: &[u8]) -> bool {
     JOURNAL_COVERED.iter().any(|(covered, prefix)| {
         *covered == cf && prefix.is_none_or(|prefix| key.first() == Some(&prefix))
-    })
+    }) || JOURNAL_COVERED_KEYS
+        .iter()
+        .any(|(covered, prefix)| *covered == cf && key.starts_with(prefix))
 }
 
 const RANGE_BY_BLOCK_CFS: &[&str] = &[
@@ -597,6 +671,11 @@ fn simulate_journal_rollback(
                 .unwrap_or_else(|| panic!("journal entry names unknown CF {cf}"));
             match previous {
                 Some(value) => {
+                    let value = if cf == ckbadger_store::CF_SYNC_META {
+                        normalize_sync_meta(&key, &value)
+                    } else {
+                        value
+                    };
                     dump.insert((cf, key), value);
                 }
                 None => {
@@ -1489,6 +1568,29 @@ async fn journal_restores_covered_cfs_36_blocks_deep() {
     let tip = chain.len() - 1;
     let plan = chunked_plan(chain.len(), 7);
     assert_journal_properties(&chain, &plan, tip, &[tip - 36]).await;
+}
+
+/// The whole protocol chain as ONE live batch (blocks 0..=16): one address
+/// moves its balance, stats and activities in many blocks of the batch, the
+/// xUDT holder is minted, transferred and burnt, the DAO cell is deposited,
+/// withdrawn and completed, all inside it. The batch must commit — no key
+/// written from two sub-batches, every key in ascending block order — and the
+/// journal alone must restore the covered rows at forks inside the batch.
+#[tokio::test]
+async fn journal_restores_covered_cfs_whole_protocol_chain_in_one_batch() {
+    let chain = protocol_chain(0);
+    assert_eq!(chain.len(), 17);
+    let plan = chunked_plan(chain.len(), chain.len());
+    assert_eq!(plan, vec![0..=16]);
+    let stores = open_stores();
+    write_live_batch(&stores.indexer, chain.clone())
+        .await
+        .unwrap_or_else(|e| panic!("the one-batch protocol chain must commit: {e:#}"));
+    assert_eq!(
+        stores.domain.get_sync_status().unwrap().tip_block_number,
+        16
+    );
+    assert_journal_properties(&chain, &plan, 16, &[14, 9, 4]).await;
 }
 
 #[tokio::test]

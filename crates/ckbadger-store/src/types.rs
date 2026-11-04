@@ -2927,6 +2927,48 @@ impl CollectionActivityDailyDeltas {
     }
 }
 
+/// A live batch's [`CollectionActivityDailyDeltas`], kept per block (blocks
+/// ascending), so each block's contributions land in that block's scope of
+/// the batch's block journal.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CollectionActivityDailyBlockDeltas {
+    by_block: BTreeMap<i64, CollectionActivityDailyDeltas>,
+}
+
+impl CollectionActivityDailyBlockDeltas {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Fold one collection activity row of `collection_id`, written by
+    /// `block`, into `day` (the UTC+8 day of that block).
+    pub fn add_row(
+        &mut self,
+        block: i64,
+        collection_id: &[u8],
+        day: u32,
+        actions: &[AssetAction],
+    ) -> anyhow::Result<()> {
+        self.by_block
+            .entry(block)
+            .or_default()
+            .add_row(collection_id, day, actions)
+            .map_err(|e| e.context(format!("collection activity row of block {block}")))
+    }
+
+    /// Each block's contributions, blocks ascending. A block whose rows all
+    /// contribute nothing yields an empty map.
+    pub fn iter(&self) -> impl Iterator<Item = (i64, &CollectionActivityDailyDeltas)> {
+        self.by_block.iter().map(|(block, deltas)| (*block, deltas))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.by_block
+            .values()
+            .all(CollectionActivityDailyDeltas::is_empty)
+    }
+}
+
 // ============================================
 // Group I-c: Token Activities (derived at read time from token_transfers CF)
 // ============================================

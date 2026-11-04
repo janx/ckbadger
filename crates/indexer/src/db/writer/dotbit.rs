@@ -288,7 +288,8 @@ pub(crate) fn build_dotbit_tx_activity_entry<S: BuildHasher>(
 }
 
 /// Write the `.bit` collection activity row of one transaction (if it has
-/// one) and fold it into its `collection_activity_daily` day `day`.
+/// one) and fold it into its `collection_activity_daily` day `day` under its
+/// block.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_dotbit_tx_activity(
     das_action: Option<&str>,
@@ -301,7 +302,7 @@ pub(crate) fn resolve_dotbit_tx_activity(
     timestamp_ms: i64,
     day: u32,
     batch: &mut StoreBatch,
-    daily: &mut ckbadger_store::CollectionActivityDailyDeltas,
+    daily: &mut ckbadger_store::CollectionActivityDailyBlockDeltas,
 ) -> anyhow::Result<bool> {
     let Some(entry) = build_dotbit_tx_activity_entry(
         das_action,
@@ -320,7 +321,12 @@ pub(crate) fn resolve_dotbit_tx_activity(
         tx_idx,
         &entry,
     );
-    daily.add_row(&DOTBIT_SENTINEL_COLLECTION, day, &entry.actions)?;
+    daily.add_row(
+        block_number,
+        &DOTBIT_SENTINEL_COLLECTION,
+        day,
+        &entry.actions,
+    )?;
     Ok(true)
 }
 

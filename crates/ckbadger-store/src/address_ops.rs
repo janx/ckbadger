@@ -4,6 +4,18 @@ use crate::store::CkbadgerStore;
 use crate::types::{AddrPrefixStats, AddrTxValue, AddressBalance, LockScriptEntry};
 
 use crate::bytes_to_hex;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+
+/// Decode an `addr_prefix_stats` value, naming the prefix on failure.
+fn decode_addr_prefix_stats(prefix: &[u8], value: &[u8]) -> anyhow::Result<AddrPrefixStats> {
+    bincode::deserialize(value).map_err(|e| {
+        anyhow::anyhow!(
+            "failed to deserialize AddrPrefixStats: prefix=0x{}, error={}",
+            bytes_to_hex(prefix),
+            e
+        )
+    })
+}
 
 impl CkbadgerStore {
     pub fn get_addr_balance(&self, lock_hash: &[u8]) -> anyhow::Result<Option<AddressBalance>> {
@@ -284,16 +296,69 @@ impl CkbadgerStore {
                 prefix.len()
             );
         }
-        match self.get_cf(self.cf_addr_prefix_stats(), prefix)? {
-            Some(value) => Ok(Some(bincode::deserialize(&value).map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to deserialize AddrPrefixStats: prefix=0x{}, error={}",
-                    bytes_to_hex(prefix),
-                    e
-                )
-            })?)),
-            None => Ok(None),
+        self.get_cf(self.cf_addr_prefix_stats(), prefix)?
+            .map(|value| decode_addr_prefix_stats(prefix, &value))
+            .transpose()
+    }
+
+    /// Stage a live batch's standalone protocol-named participations, counted
+    /// per block and 20-byte prefix, into `batch` block by block: each
+    /// touched prefix's row is read once through the batch (its block overlay
+    /// on a live batch, one `multi_get`) and written in the scope of every
+    /// block that adds to it, with its value at the end of that block, so the
+    /// block journal restores it at any block of the batch.
+    pub fn stage_addr_prefix_tx_counts(
+        &self,
+        counts_by_block: &BTreeMap<i64, BTreeMap<[u8; 20], i64>>,
+        batch: &mut crate::batch::StoreBatch,
+    ) -> anyhow::Result<()> {
+        let prefixes: Vec<[u8; 20]> = counts_by_block
+            .values()
+            .flat_map(|counts| counts.keys().copied())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let row_keys: Vec<Vec<u8>> = prefixes.iter().map(|prefix| prefix.to_vec()).collect();
+        let stored = batch.get_current_many(crate::store::CF_ADDR_PREFIX_STATS, &row_keys)?;
+        let mut current: HashMap<[u8; 20], Option<AddrPrefixStats>> =
+            HashMap::with_capacity(prefixes.len());
+        for (prefix, value) in prefixes.into_iter().zip(stored) {
+            let stats = value
+                .map(|bytes| decode_addr_prefix_stats(&prefix, &bytes))
+                .transpose()?;
+            current.insert(prefix, stats);
         }
+        for (block, counts) in counts_by_block {
+            let mut scope = batch.at(*block);
+            for (prefix, delta) in counts {
+                let previous = current.get_mut(prefix).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "addr_prefix_stats row not read before staging: prefix=0x{} block={block}",
+                        bytes_to_hex(prefix)
+                    )
+                })?;
+                let txs_count = match previous {
+                    Some(stats) => stats.txs_count.checked_add(*delta),
+                    None => Some(*delta),
+                }
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "addr_prefix_stats txs_count overflow: prefix=0x{} block={block} delta={delta}",
+                        bytes_to_hex(prefix)
+                    )
+                })?;
+                if txs_count <= 0 {
+                    anyhow::bail!(
+                        "addr_prefix_stats txs_count must stay positive: prefix=0x{} block={block} previous={previous:?} delta={delta}",
+                        bytes_to_hex(prefix)
+                    );
+                }
+                let next = AddrPrefixStats { txs_count };
+                scope.put_addr_prefix_stats(prefix, &next);
+                *previous = Some(next);
+            }
+        }
+        Ok(())
     }
 
     /// How many transactions an address took part in.
@@ -601,6 +666,89 @@ mod prefix_participation_tests {
     use crate::batch::StoreBatch;
     use crate::types::{AddrPrefixStats, LockScriptEntry, TAG_IDENTITY};
     use tempfile::tempdir;
+
+    /// A live batch's per-prefix counts land block by block: two blocks of
+    /// one batch adding to one prefix thread through one read, each block
+    /// writes the row in its own scope (the journal holds the value at the
+    /// end of the previous block for each), and a later batch adds on top.
+    #[test]
+    fn stage_addr_prefix_tx_counts_writes_each_block_in_its_scope() {
+        use crate::types::{UndoLogEntry, UndoLogStoreTarget};
+        let dir = tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let (a, b) = ([0x0au8; 20], [0x0bu8; 20]);
+        let mut seed = StoreBatch::new(&store);
+        seed.put_addr_prefix_stats(&a, &AddrPrefixStats { txs_count: 3 });
+        seed.commit().unwrap();
+
+        let counts = BTreeMap::from([
+            (40, BTreeMap::from([(a, 1)])),
+            (41, BTreeMap::from([(a, 2), (b, 1)])),
+        ]);
+        let overlay = crate::block_overlay::SharedBlockOverlay::new(&store);
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        store
+            .stage_addr_prefix_tx_counts(&counts, &mut batch)
+            .unwrap();
+        let mut counters = HashMap::new();
+        batch
+            .stage_journal(&mut |block| crate::block_overlay::journal_seq(&mut counters, block))
+            .unwrap();
+        batch.commit().unwrap();
+
+        let stats = |n| Some(bincode::serialize(&AddrPrefixStats { txs_count: n }).unwrap());
+        let mut journal: Vec<(i64, Vec<u8>, Option<Vec<u8>>)> = store
+            .iterator_cf(
+                store.cf_reorg_undo_log_by_block(),
+                rocksdb::IteratorMode::Start,
+            )
+            .map(|row| {
+                let (key, value) = row.unwrap();
+                let (block, _) = crate::keys::decode_reorg_undo_log_key(&key);
+                match bincode::deserialize(&value).unwrap() {
+                    UndoLogEntry::KeyMutation {
+                        target_store: UndoLogStoreTarget::Domain,
+                        cf_name,
+                        key,
+                        previous_value,
+                    } if cf_name == crate::store::CF_ADDR_PREFIX_STATS => {
+                        (block, key, previous_value)
+                    }
+                    other => panic!("unexpected journal row {other:?}"),
+                }
+            })
+            .collect();
+        journal.sort();
+        assert_eq!(
+            journal,
+            vec![
+                (40, a.to_vec(), stats(3)),
+                (41, a.to_vec(), stats(4)),
+                (41, b.to_vec(), None),
+            ]
+        );
+        assert_eq!(
+            store.get_addr_prefix_stats(&a).unwrap(),
+            Some(AddrPrefixStats { txs_count: 6 })
+        );
+        assert_eq!(
+            store.get_addr_prefix_stats(&b).unwrap(),
+            Some(AddrPrefixStats { txs_count: 1 })
+        );
+
+        let mut next = StoreBatch::new(&store);
+        store
+            .stage_addr_prefix_tx_counts(
+                &BTreeMap::from([(42, BTreeMap::from([(b, 1)]))]),
+                &mut next,
+            )
+            .unwrap();
+        next.commit().unwrap();
+        assert_eq!(
+            store.get_addr_prefix_stats(&b).unwrap(),
+            Some(AddrPrefixStats { txs_count: 2 })
+        );
+    }
 
     #[test]
     fn list_addr_txs_recent_merges_prefix_rows_in_descending_order() {

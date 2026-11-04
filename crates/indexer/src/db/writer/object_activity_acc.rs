@@ -13,7 +13,7 @@
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AssetAction, CollectionActivityDailyDeltas, ObjectCollectionActivityEntry,
+    AssetAction, CollectionActivityDailyBlockDeltas, ObjectCollectionActivityEntry,
 };
 use std::collections::HashMap;
 
@@ -89,15 +89,15 @@ impl ObjectCollectionActivityAccumulator {
 
     /// Resolve raw actions into Mint/Transfer/Burn and write to the batch
     /// using the object collection activity CF, folding each row into its
-    /// `collection_activity_daily` day (`daily`, the day of a block from
-    /// `day_of_block`).
+    /// `collection_activity_daily` day under the row's block (`daily`, the
+    /// day of a block from `day_of_block`).
     ///
     /// Returns inserted `(collection_id, block_number, tx_idx, block_hash, tx_hash)` rows so callers
     /// can update block-scoped reorg indexes in the domain store.
     pub fn flush(
         self,
         batch: &mut StoreBatch,
-        daily: &mut CollectionActivityDailyDeltas,
+        daily: &mut CollectionActivityDailyBlockDeltas,
         day_of_block: &dyn Fn(i64) -> anyhow::Result<u32>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)>> {
         Self::flush_inner(
@@ -120,7 +120,7 @@ impl ObjectCollectionActivityAccumulator {
     pub fn flush_identity(
         self,
         batch: &mut StoreBatch,
-        daily: &mut CollectionActivityDailyDeltas,
+        daily: &mut CollectionActivityDailyBlockDeltas,
         day_of_block: &dyn Fn(i64) -> anyhow::Result<u32>,
     ) -> anyhow::Result<Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)>> {
         Self::flush_inner(
@@ -202,7 +202,7 @@ impl ObjectCollectionActivityAccumulator {
     fn flush_inner<F>(
         entries: Vec<ResolvedCollectionActivityEntry>,
         batch: &mut StoreBatch,
-        daily: &mut CollectionActivityDailyDeltas,
+        daily: &mut CollectionActivityDailyBlockDeltas,
         day_of_block: &dyn Fn(i64) -> anyhow::Result<u32>,
         write_fn: F,
     ) -> anyhow::Result<Vec<(Vec<u8>, i64, i32, Vec<u8>, Vec<u8>)>>
@@ -219,6 +219,7 @@ impl ObjectCollectionActivityAccumulator {
                 &resolved.entry,
             );
             daily.add_row(
+                resolved.block_number,
                 &resolved.collection_id,
                 day_of_block(resolved.block_number)?,
                 &resolved.entry.actions,
@@ -270,7 +271,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
-            &mut CollectionActivityDailyDeltas::new(),
+            &mut CollectionActivityDailyBlockDeltas::new(),
             &|_| Ok(20231115),
         )
         .unwrap();
@@ -320,7 +321,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
-            &mut CollectionActivityDailyDeltas::new(),
+            &mut CollectionActivityDailyBlockDeltas::new(),
             &|_| Ok(20231115),
         )
         .unwrap();
@@ -357,7 +358,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
-            &mut CollectionActivityDailyDeltas::new(),
+            &mut CollectionActivityDailyBlockDeltas::new(),
             &|_| Ok(20231115),
         )
         .unwrap();
@@ -405,7 +406,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
-            &mut CollectionActivityDailyDeltas::new(),
+            &mut CollectionActivityDailyBlockDeltas::new(),
             &|_| Ok(20231115),
         )
         .unwrap();
@@ -454,7 +455,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
-            &mut CollectionActivityDailyDeltas::new(),
+            &mut CollectionActivityDailyBlockDeltas::new(),
             &|_| Ok(20231115),
         )
         .unwrap();
@@ -493,7 +494,7 @@ mod tests {
         let inserted = acc
             .flush_identity(
                 &mut batch,
-                &mut CollectionActivityDailyDeltas::new(),
+                &mut CollectionActivityDailyBlockDeltas::new(),
                 &|_| Ok(20231115),
             )
             .unwrap();
@@ -541,7 +542,7 @@ mod tests {
         let inserted = acc
             .flush_identity(
                 &mut batch,
-                &mut CollectionActivityDailyDeltas::new(),
+                &mut CollectionActivityDailyBlockDeltas::new(),
                 &|_| Ok(20231115),
             )
             .unwrap();
@@ -582,7 +583,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         acc.flush(
             &mut batch,
-            &mut CollectionActivityDailyDeltas::new(),
+            &mut CollectionActivityDailyBlockDeltas::new(),
             &|_| Ok(20231115),
         )
         .unwrap();

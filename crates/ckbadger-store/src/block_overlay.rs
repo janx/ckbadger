@@ -712,6 +712,56 @@ mod tests {
         assert!(reader.get_stats(&[]).is_err());
     }
 
+    /// The generic read of a journaled batch is the overlay's value for any
+    /// `Journal`-class CF (the live batch's latest write from any sub-batch,
+    /// else committed), several keys in their order; a non-Journal CF cannot
+    /// be read back through it; an unjournaled batch reads committed values.
+    #[test]
+    fn get_current_reads_the_overlay_of_a_journaled_batch_for_any_journal_cf() {
+        let (store, _dir) = store();
+        store
+            .put_cf(store.cf_sync_meta(), b"a", b"committed a")
+            .unwrap();
+        store
+            .put_cf(store.cf_sync_meta(), b"b", b"committed b")
+            .unwrap();
+        let overlay = SharedBlockOverlay::new(&store);
+        let mut writer = StoreBatch::journaled(&store, &overlay, 1);
+        let reader = StoreBatch::journaled(&store, &overlay, 2);
+        writer.at(7).put_sync_meta(b"a", b"after block 7");
+        writer.at(8).delete_sync_meta(b"b");
+        writer.at(8).put_sync_meta(b"c", b"created at 8");
+        assert_eq!(
+            reader
+                .get_current_many(
+                    CF_SYNC_META,
+                    &[b"c".to_vec(), b"a".to_vec(), b"b".to_vec(), b"d".to_vec()]
+                )
+                .unwrap(),
+            vec![
+                Some(b"created at 8".to_vec()),
+                Some(b"after block 7".to_vec()),
+                None,
+                None
+            ]
+        );
+        assert_eq!(
+            reader.get_current(CF_SYNC_META, b"a").unwrap(),
+            Some(b"after block 7".to_vec())
+        );
+        let err = reader.get_current(CF_BLOCK_HEADERS, b"k").unwrap_err();
+        assert!(err.to_string().contains("not one"), "{err:#}");
+        let plain = StoreBatch::new(&store);
+        assert_eq!(
+            plain
+                .get_current_many(CF_SYNC_META, &[b"a".to_vec(), b"b".to_vec()])
+                .unwrap(),
+            vec![Some(b"committed a".to_vec()), Some(b"committed b".to_vec())],
+            "an unjournaled batch sees committed values only"
+        );
+        assert!(plain.get_current("no_such_cf", b"k").is_err());
+    }
+
     /// A write no block scope claimed is staged but journals nothing, and
     /// its CF is reported (transitional, B-3).
     #[test]
