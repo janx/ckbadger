@@ -602,6 +602,12 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_MNFT_DATA, None),
     (ckbadger_store::CF_MNFT_BY_COLLECTION, None),
     (ckbadger_store::CF_STATS_MNFT, None),
+    // B-3 dotcell.rs: every `.cell` row the object loop writes (owner index,
+    // ring roots; the names themselves are identity rows) is in its block's
+    // scope since 96802ea4; the `.cell` collection aggregate's activity
+    // count is the object_activity_acc.rs step.
+    (ckbadger_store::CF_DOTCELL_NAME_BY_OWNER, None),
+    (ckbadger_store::CF_DOTCELL_RING, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
