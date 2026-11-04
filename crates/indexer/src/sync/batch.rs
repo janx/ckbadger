@@ -3138,18 +3138,24 @@ impl Indexer {
                                 .or_insert(dotbit_create_order);
                             created_ids.insert(account_id);
                         }
-                        dotbit_tx_activity_data.insert(
-                            tx_data.hash,
-                            DotbitTxActivityData {
+                        // The consume path may already have started this
+                        // transaction's entry with the accounts it spent: the
+                        // feed row needs both sets, so add to it, never
+                        // replace it.
+                        let tx_idx_i32 = checked_usize_to_i32(tx_idx, "tx_idx")?;
+                        dotbit_tx_activity_data
+                            .entry(tx_data.hash)
+                            .or_insert_with(|| DotbitTxActivityData {
                                 das_action,
-                                created_account_ids: created_ids,
+                                created_account_ids: HashSet::new(),
                                 consumed_account_ids: HashSet::new(),
                                 block_number: parsed.number,
                                 block_hash: parsed.hash.clone(),
-                                tx_idx: checked_usize_to_i32(tx_idx, "tx_idx")?,
+                                tx_idx: tx_idx_i32,
                                 timestamp_ms: ts_ms,
-                            },
-                        );
+                            })
+                            .created_account_ids
+                            .extend(created_ids);
                     }
                 }
                 if let Some(changes) = cluster_capacity_by_block.get(&parsed.number) {
@@ -12278,6 +12284,68 @@ mod tests {
                     hex::encode(&tx_hash)
                 );
             }
+        }
+
+        /// `recycle_expired_account` consumes the expired neighbour and
+        /// valar's cell and creates valar's cell again: the `.bit` collection
+        /// feed row needs both account sets of the transaction (removed =
+        /// consumed − created = the neighbour, a Recycle). The object loop's
+        /// create path replaced the entry its consume path had started for
+        /// the same transaction, dropping the consumed accounts, so live
+        /// wrote no Recycle row and its `.bit` collection days differed from
+        /// bulk build's (lane B record, bug fixes found in B-3).
+        #[tokio::test]
+        async fn live_dotbit_feed_keeps_the_consumed_accounts_of_a_tx_that_also_creates_one() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let blocks = dotbit_blocks();
+
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+            let indexer = indexer_for_live_write_test(store.clone());
+            for b in &blocks {
+                write_live_block(&indexer, b.clone()).await.unwrap();
+            }
+
+            let feed: BTreeMap<Vec<u8>, Vec<ckbadger_store::types::AssetAction>> = store
+                .list_identity_collection_activities(&DOTBIT_SENTINEL_COLLECTION, 100, None, None)
+                .unwrap()
+                .into_iter()
+                .map(|(_, _, entry)| (entry.tx_hash, entry.actions))
+                .collect();
+            assert_eq!(
+                feed.get(&vec![0xb5; 32]),
+                Some(&vec![ckbadger_store::types::AssetAction::Recycle]),
+                "the recycle keeps its consumed accounts: {feed:?}"
+            );
+
+            let dotbit_days = |rows: Vec<(Vec<u8>, Vec<u8>)>| -> Vec<(Vec<u8>, Vec<u8>)> {
+                rows.into_iter()
+                    .filter(|(key, _)| key.starts_with(&DOTBIT_SENTINEL_COLLECTION))
+                    .collect()
+            };
+            let live_days: Vec<(Vec<u8>, Vec<u8>)> = store
+                .iterator_cf(
+                    store.cf_collection_activity_daily(),
+                    rocksdb::IteratorMode::Start,
+                )
+                .map(|row| {
+                    let (key, value) = row.unwrap();
+                    (key.to_vec(), value.to_vec())
+                })
+                .collect();
+            let bulk =
+                materialize_bulk_artifacts_for_test(&blocks).expect("bulk build must succeed");
+            let bulk_days = dotbit_days(bulk.collection_activity_daily);
+            assert!(!bulk_days.is_empty(), "the fixture writes `.bit` days");
+            assert_eq!(
+                dotbit_days(live_days),
+                bulk_days,
+                "live and bulk `.bit` collection days"
+            );
         }
 
         /// J15: `ACTIVITY_DAILY` / `ACTIVITY_HOURLY` rows are byte-identical
