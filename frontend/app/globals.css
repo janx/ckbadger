@@ -1129,9 +1129,12 @@ h1.text-index {
 
 /* Arrival (visual finish V7): a new page fades in over 160 ms, rising 2 px — the frame's page
    wrapper (keyed by the path) on every route change, and an entity page's DetailLayout when its
-   data arrives. Only `from` is written, so it ends on the element's own. */
+   data arrives. Only `from` is written, so it ends on the element's own. The fill is backwards
+   only: a forward fill would hold the end of `translateY(2px) → none` as an identity matrix, and
+   the wrapper would stay the containing block of its fixed children and a stacking context under
+   the sticky header after the fade. */
 .arrive {
-  animation: arrive 160ms ease-out both;
+  animation: arrive 160ms ease-out backwards;
 }
 @keyframes arrive {
   from {
