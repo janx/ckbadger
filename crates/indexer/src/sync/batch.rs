@@ -1,6 +1,6 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
@@ -2030,10 +2030,9 @@ impl Indexer {
         let commit_phase_total_ms: f64;
         let tracker_state_bytes: usize;
         let mut batch_stats;
-        let mut daily_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
-        let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
-        let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
-        let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
+        // The bulk-written unique-address blobs of the activity buckets this
+        // batch touches, decoded once (live sync never rewrites them).
+        let mut frozen_activity_addr_sets = crate::db::writer::FrozenActivityAddrSets::default();
         // ONE block overlay for the batch: every write to a `Journal`-class
         // domain CF, from any of the batch's sub-batches, goes through it, is
         // journaled per block (`UndoSeqScope::Journal`) and staged once, just
@@ -3359,6 +3358,23 @@ impl Indexer {
                 let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
                 block_tx_idx += tx_count;
+                // This block's activity counts and unique `Lock` participants,
+                // applied to its UTC+8 day and hour buckets once its
+                // transactions are done. Activity hour keys are UTC+8 (unlike
+                // the chain-level hourly stats, whose keys are UTC).
+                let block_chain_time =
+                    *chain_time_by_block.get(&parsed.number).ok_or_else(|| {
+                        anyhow!(
+                            "missing chain time for activity stats: block={}",
+                            parsed.number
+                        )
+                    })?;
+                let activity_date =
+                    ckbadger_common::stats_bucket::stats_date_key(block_chain_time)?;
+                let activity_hour =
+                    ckbadger_common::stats_bucket::stats_hour_utc8_key(block_chain_time)?;
+                let mut block_activity = DailyActivityStats::default();
+                let mut block_activity_addrs: BTreeSet<[u8; 32]> = BTreeSet::new();
 
                 let tx_views: Vec<crate::db::writer::activities::TxView<'_>> = tx_slice
                     .iter()
@@ -3461,26 +3477,16 @@ impl Indexer {
                             .ok_or_else(|| anyhow!("dotcell identity activity delta overflow"))?;
                     }
 
-                    // Accumulate daily activity stats
-                    let chain_time = *chain_time_by_block
-                        .get(&tx_actions.block_number)
-                        .ok_or_else(|| {
-                            anyhow!(
-                                "missing chain time for activity action: block={} tx_index={}",
-                                tx_actions.block_number,
-                                tx_actions.tx_index
-                            )
-                        })?;
-                    let date = ckbadger_common::stats_bucket::stats_date_key(chain_time)?;
-                    let day_stats = daily_activity_accum.entry(date.clone()).or_default();
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, day_stats);
-
-                    // Accumulate hourly activity stats. Activity hour keys
-                    // are UTC+8 (`block_datetime_from_ms`) — unlike the
-                    // chain-level hourly stats, whose keys are UTC.
-                    let hour = ckbadger_common::stats_bucket::stats_hour_utc8_key(chain_time)?;
-                    let hour_stats = hourly_activity_accum.entry(hour.clone()).or_default();
-                    BatchWriter::accumulate_tx_activity_stats(tx_actions, hour_stats);
+                    // Accumulate this block's activity stats.
+                    if tx_actions.block_number != parsed.number {
+                        bail!(
+                            "activity action outside its block: action block={} tx_index={} parsed block={}",
+                            tx_actions.block_number,
+                            tx_actions.tx_index,
+                            parsed.number
+                        );
+                    }
+                    BatchWriter::accumulate_tx_activity_stats(tx_actions, &mut block_activity);
 
                     // Unique address counts (exclude coinbase)
                     if !tx_actions.is_cellbase {
@@ -3489,14 +3495,7 @@ impl Indexer {
                             // see `rebuild_cutoff_addr_sets` for why a named
                             // prefix must not be counted as its own address.
                             if let ParticipantId::Lock(hash) = participant.id {
-                                daily_activity_addrs
-                                    .entry(date.clone())
-                                    .or_default()
-                                    .insert(hash);
-                                hourly_activity_addrs
-                                    .entry(hour.clone())
-                                    .or_default()
-                                    .insert(hash);
+                                block_activity_addrs.insert(hash);
                             }
                         }
                     }
@@ -3523,6 +3522,31 @@ impl Indexer {
                         tx_actions,
                     )
                     .map_err(|source| PreCommitInvariantError::new("fiber lifecycle", source))?;
+                }
+
+                // The block's activity stats, in its scope: each bucket row
+                // on top of the row the previous block left.
+                if !built_list.is_empty() {
+                    let mut activity_batch = activity_batch.at(parsed.number);
+                    for (kind, bucket) in [
+                        (
+                            ckbadger_store::keys::ActivityBucketKind::Daily,
+                            &activity_date,
+                        ),
+                        (
+                            ckbadger_store::keys::ActivityBucketKind::Hourly,
+                            &activity_hour,
+                        ),
+                    ] {
+                        self.writer.update_activity_bucket_stats(
+                            kind,
+                            bucket,
+                            &block_activity,
+                            &block_activity_addrs,
+                            &mut frozen_activity_addr_sets,
+                            &mut activity_batch,
+                        )?;
+                    }
                 }
             }
         }
@@ -3584,8 +3608,14 @@ impl Indexer {
         data_batch.merge_from(append_history_batch);
         data_batch.merge_from(activity_batch);
 
-        // Stats accumulation for live sync (serial — before finalize)
+        // Stats accumulation for live sync (serial — before finalize). The
+        // chain statistics are written block by block, each in its block's
+        // scope; the DAO daily snapshots and the sync totals once per batch.
         batch_stats = BatchStats::default();
+        let mut stats_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 7);
+        // The previous day's chain stats, threaded block to block: the first
+        // block of a day carries its cumulative totals forward from it.
+        let mut prev_day_stats: Option<ckbadger_store::types::DailyStats> = None;
         let mut prev_timestamp: Option<chrono::DateTime<Utc>> = parent_chain_time_ms
             .map(|ms| {
                 chrono::DateTime::from_timestamp_millis(ms).ok_or_else(|| {
@@ -3707,6 +3737,8 @@ impl Indexer {
         let mut block_tx_idx = 0usize;
         for (block_idx, parsed) in all_parsed_blocks.iter().enumerate() {
             self.perf.mark_writer_phase();
+            // This block's chain statistics, written in its scope below.
+            let mut block_stats = BlockChainStats::default();
             let chain_time_ms = chain_times_ms[block_idx];
             let chain_time =
                 chrono::DateTime::from_timestamp_millis(chain_time_ms).ok_or_else(|| {
@@ -3800,7 +3832,7 @@ impl Indexer {
             batch_stats.last_block = Some((parsed.number, parsed.hash.clone()));
 
             {
-                let entry = batch_stats.daily_stats.entry(block_date).or_default();
+                let entry = block_stats.daily_stats.entry(block_date).or_default();
                 entry.0 += 1;
                 entry.1 += parsed.transactions_count;
                 entry.2 += cells_created;
@@ -3829,6 +3861,9 @@ impl Indexer {
                 entry.7 += data_size_added;
                 entry.8 += data_size_consumed;
             }
+            block_stats
+                .daily_dao_fields
+                .insert(block_date, parsed.dao.to_vec());
             batch_stats
                 .daily_dao_fields
                 .insert(block_date, parsed.dao.to_vec());
@@ -3842,7 +3877,7 @@ impl Indexer {
                 // count includes the cellbase. Reorg rollback and the bulk
                 // ChainStatsAccumulator must mirror these semantics exactly.
                 let block_hour = ckbadger_common::stats_bucket::stats_hour(chain_time_ms)?;
-                let entry = batch_stats.hourly_stats.entry(block_hour).or_default();
+                let entry = block_stats.hourly_stats.entry(block_hour).or_default();
                 entry.0 += 1;
                 entry.1 += parsed.transactions_count;
                 entry.2 += cells_created;
@@ -3856,7 +3891,7 @@ impl Indexer {
                 })?;
             }
             {
-                let entry = batch_stats.daily_block_stats.entry(block_date).or_default();
+                let entry = block_stats.daily_block_stats.entry(block_date).or_default();
                 let difficulty =
                     ckbadger_common::work::compact_difficulty(parsed.compact_target as u32)
                         .map_err(|e| {
@@ -3893,12 +3928,12 @@ impl Indexer {
             // reward of the block 11 confirmations back.
             if let Some(miner_lock_hash) = parsed.miner_lock_hash.as_ref() {
                 let key = (block_date, miner_lock_hash.clone());
-                let entry = batch_stats.miner_stats.entry(key).or_insert((0, 0));
+                let entry = block_stats.miner_stats.entry(key).or_insert((0, 0));
                 entry.0 += 1;
                 entry.1 = parsed.number;
             }
             {
-                let entry = batch_stats
+                let entry = block_stats
                     .epoch_stats
                     .entry(parsed.epoch_number)
                     .or_insert_with(|| EpochAccum {
@@ -3916,7 +3951,7 @@ impl Indexer {
             }
 
             if let Some(prev_ts) = prev_timestamp {
-                batch_stats.accumulate_block_time(prev_ts, chain_time, block_date)?;
+                block_stats.accumulate_block_time(prev_ts, chain_time, block_date)?;
             }
             prev_timestamp = Some(chain_time);
 
@@ -3934,7 +3969,7 @@ impl Indexer {
                         let bucket_minutes = i32::try_from(ckbadger_common::work::rounded_ratio(duration_ms, 60_000)
                             .map_err(|e| anyhow!("epoch minute rounding failed: block={}: {e}", parsed.number))?)
                             .map_err(|_| anyhow!("epoch minute bucket exceeds i32: block={} duration_ms={duration_ms}", parsed.number))?;
-                        *batch_stats
+                        *block_stats
                             .epoch_time_dist
                             .entry(bucket_minutes)
                             .or_default() += 1;
@@ -3972,6 +4007,12 @@ impl Indexer {
                 .entry(block_date)
                 .or_default()
                 .push(parsed.number);
+
+            self.write_block_chain_stats(
+                &block_stats,
+                &mut prev_day_stats,
+                &mut stats_batch.at(parsed.number),
+            )?;
         }
         batch_stats.dao_deltas_computed = true;
         let write_ms = t_write.elapsed().as_secs_f64() * 1000.0;
@@ -3983,26 +4024,12 @@ impl Indexer {
             let mut core_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 6);
             self.writer
                 .insert_blocks_batch(&block_refs, &chain_times_ms, &mut core_batch)?;
-            let mut stats_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 7);
-            self.write_batch_stats_to_batch(
+            self.write_dao_daily_snapshots(
                 &batch_stats,
                 &staged_dao_entries,
                 &staged_dao_completions,
                 &mut stats_batch,
             )?;
-            // Write accumulated daily activity stats
-            let empty_addr_set = HashSet::new();
-            for (date, stats) in &daily_activity_accum {
-                let addrs = daily_activity_addrs.get(date).unwrap_or(&empty_addr_set);
-                self.writer
-                    .update_daily_activity_stats(date, stats, addrs, &mut stats_batch)?;
-            }
-            // Write accumulated hourly activity stats
-            for (hour, stats) in &hourly_activity_accum {
-                let addrs = hourly_activity_addrs.get(hour).unwrap_or(&empty_addr_set);
-                self.writer
-                    .update_hourly_activity_stats(hour, stats, addrs, &mut stats_batch)?;
-            }
             // Inject sync_status update into the finalize batch so it is
             // committed atomically with block headers and domain data.
             // Previously sync_status was written via a separate put_cf after
@@ -4129,6 +4156,12 @@ impl Indexer {
                 HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
             if !bulk_sync_mode {
                 let committed_tip = committed_tip_before_batch(self.writer.store(), first_block)?;
+                // Both retention stages depend only on the committed tip this
+                // batch builds on, so their writes (the coverage contract, the
+                // retention state, the expired hourly rows) belong to the
+                // batch's first block: rolling back to any block of the batch
+                // keeps them, rolling back below it undoes them.
+                let mut data_batch = data_batch.at(first_block);
                 stage_entity_stats_undo_retention(
                     self.writer.store(),
                     &mut data_batch,
@@ -4426,11 +4459,15 @@ impl Indexer {
         })
     }
 
-    fn write_batch_stats_to_batch(
+    /// Write one block's chain statistics, each row on top of the row the
+    /// previous block left (read through the block overlay), into `batch` —
+    /// the block's scope. `prev_day_stats` is the last day's stats this batch
+    /// wrote before the block; a day's first block carries its cumulative
+    /// totals forward from it.
+    fn write_block_chain_stats(
         &self,
-        stats: &BatchStats,
-        staged_dao_entries: &HashMap<Vec<u8>, ckbadger_store::types::DaoDepositCacheEntry>,
-        staged_dao_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
+        stats: &BlockChainStats,
+        prev_day_stats: &mut Option<ckbadger_store::types::DailyStats>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
         // Epoch statistics
@@ -4449,11 +4486,9 @@ impl Indexer {
         }
 
         // Daily statistics (with block time data folded in).
-        // Sort dates so cumulative totals are threaded forward correctly
-        // when a batch spans multiple calendar days.
+        // Sort dates so cumulative totals are threaded forward correctly.
         let mut sorted_dates: Vec<_> = stats.daily_stats.keys().copied().collect();
         sorted_dates.sort();
-        let mut prev_day_stats: Option<ckbadger_store::types::DailyStats> = None;
         for date in &sorted_dates {
             let (
                 blocks,
@@ -4484,7 +4519,7 @@ impl Indexer {
                 prev_day_stats.as_ref(),
                 batch,
             )?;
-            prev_day_stats = Some(result);
+            *prev_day_stats = Some(result);
         }
 
         // Daily block stats
@@ -4527,7 +4562,21 @@ impl Indexer {
             self.writer
                 .update_epoch_time_distribution_batch(*bucket, *count, batch)?;
         }
+        Ok(())
+    }
 
+    /// Write the DAO daily snapshot of every day the batch touched, once per
+    /// batch: each day observed at its last block in the batch (sealed when a
+    /// later day follows it). Not block-scoped: a day's snapshot at the end of
+    /// every block would need the whole DAO lifecycle scanned per block (lane
+    /// B record, design findings).
+    fn write_dao_daily_snapshots(
+        &self,
+        stats: &BatchStats,
+        staged_dao_entries: &HashMap<Vec<u8>, ckbadger_store::types::DaoDepositCacheEntry>,
+        staged_dao_completions: &HashMap<Vec<u8>, (i64, Vec<u8>)>,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
         // DAO daily snapshots
         {
             let mut snapshot_dates: Vec<_> = stats.dao_snapshot_dates.iter().collect();
@@ -9335,22 +9384,10 @@ mod tests {
             let date =
                 ckbadger_store::keys::timestamp_ms_to_date(1_700_000_000_000i64 + 101 * 1000)
                     .to_string();
-            let raw = store
-                .get_cf(
-                    store.cf_stats_chain(),
-                    &ckbadger_store::keys::encode_stats_key(
-                        ckbadger_store::keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-                        date.as_bytes(),
-                    ),
-                )
-                .unwrap()
-                .expect("daily addr set row");
-            assert!(
-                raw.len().is_multiple_of(32),
-                "addr set row must be whole hashes"
-            );
-            let set: std::collections::HashSet<[u8; 32]> =
-                raw.as_chunks::<32>().0.iter().copied().collect();
+            // The day's addresses: live writes one row per address.
+            let set = store
+                .get_activity_bucket_addrs(ckbadger_store::keys::ActivityBucketKind::Daily, &date)
+                .unwrap();
             let mut expected = std::collections::HashSet::new();
             expected.insert(<[u8; 32]>::try_from(lock_a.as_slice()).unwrap());
             expected.insert(<[u8; 32]>::try_from(lock_b.as_slice()).unwrap());
@@ -12413,18 +12450,23 @@ mod tests {
             }
         }
 
-        /// J15: `ACTIVITY_DAILY` / `ACTIVITY_HOURLY` rows and their
-        /// address-set rows are byte-identical from bulk build and from the
-        /// live writer (one block per batch, and one multi-block batch), over
-        /// blocks across UTC+8 hour boundaries — one with a raw timestamp
-        /// behind its chain time — with cellbase, `Lock` and prefix-only
-        /// (`LockPrefix`) participants, `.bit` transactions (`dotbit:*`
-        /// counters) and plain transfers.
+        /// J15: `ACTIVITY_DAILY` / `ACTIVITY_HOURLY` rows are byte-identical
+        /// from bulk build and from the live writer (one block per batch, and
+        /// one multi-block batch), and every bucket has the same unique
+        /// address set — bulk as one `ACTIVITY_*_ADDR_SET` blob per bucket,
+        /// live as one `ACTIVITY_*_ADDR_ROW` row per address (the layouts
+        /// differ by design: live journals per block) — over blocks across
+        /// UTC+8 hour boundaries — one with a raw timestamp behind its chain
+        /// time — with cellbase, `Lock` and prefix-only (`LockPrefix`)
+        /// participants, `.bit` transactions (`dotbit:*` counters) and plain
+        /// transfers.
         #[tokio::test]
         async fn bulk_and_live_write_identical_activity_bucket_rows() {
             use ckbadger_store::keys::stats_prefix::{
-                ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY, ACTIVITY_HOURLY_ADDR_SET,
+                ACTIVITY_DAILY, ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY,
+                ACTIVITY_HOURLY_ADDR_ROW, ACTIVITY_HOURLY_ADDR_SET,
             };
+            use ckbadger_store::keys::ActivityBucketKind;
             let _guard = crate::db::writer::activities::test_detector_override::install(
                 super::live_dao_fee::naming_detectors,
             );
@@ -12507,10 +12549,54 @@ mod tests {
                                     | ACTIVITY_HOURLY
                                     | ACTIVITY_DAILY_ADDR_SET
                                     | ACTIVITY_HOURLY_ADDR_SET
+                                    | ACTIVITY_DAILY_ADDR_ROW
+                                    | ACTIVITY_HOURLY_ADDR_ROW
                             )
                         )
                     })
                     .collect()
+            };
+            // The bucket stats rows, byte for byte.
+            let bucket_rows = |rows: &[(Vec<u8>, Vec<u8>)]| -> Vec<(Vec<u8>, Vec<u8>)> {
+                rows.iter()
+                    .filter(|(key, _)| matches!(key[0], ACTIVITY_DAILY | ACTIVITY_HOURLY))
+                    .cloned()
+                    .collect()
+            };
+            // Every bucket's unique addresses, from blobs and rows alike.
+            type BucketSets =
+                std::collections::BTreeMap<(u8, Vec<u8>), std::collections::BTreeSet<[u8; 32]>>;
+            let bucket_sets = |rows: &[(Vec<u8>, Vec<u8>)]| -> BucketSets {
+                let mut sets = BucketSets::new();
+                for (key, value) in rows {
+                    let (kind, is_row) = match key[0] {
+                        ACTIVITY_DAILY_ADDR_SET => (ActivityBucketKind::Daily, false),
+                        ACTIVITY_HOURLY_ADDR_SET => (ActivityBucketKind::Hourly, false),
+                        ACTIVITY_DAILY_ADDR_ROW => (ActivityBucketKind::Daily, true),
+                        ACTIVITY_HOURLY_ADDR_ROW => (ActivityBucketKind::Hourly, true),
+                        _ => continue,
+                    };
+                    let bucket = key[1..1 + kind.bucket_len()].to_vec();
+                    let set = sets
+                        .entry((kind.stats_prefix(), bucket.clone()))
+                        .or_default();
+                    let label = String::from_utf8(bucket).unwrap();
+                    if is_row {
+                        assert!(value.is_empty(), "address rows are empty");
+                        assert!(set.insert(kind.decode_addr_row_key(&label, key).unwrap()));
+                    } else {
+                        set.extend(
+                            ckbadger_store::decode_activity_addr_set(value, &label).unwrap(),
+                        );
+                    }
+                }
+                sets.retain(|_, set| !set.is_empty());
+                sets
+            };
+            let count_prefix = |rows: &[(Vec<u8>, Vec<u8>)], prefixes: [u8; 2]| {
+                rows.iter()
+                    .filter(|(key, _)| prefixes.contains(&key[0]))
+                    .count()
             };
             let live_rows = |store: &CkbadgerStore| {
                 activity_rows(
@@ -12593,15 +12679,31 @@ mod tests {
             assert_eq!((hourly_rows, hourly_sets), (3, 3), "hours 06, 07, 08");
 
             assert_eq!(
-                single_rows_eq(&live_rows(&single), &bulk),
-                Ok(()),
-                "bulk vs single-block live"
+                count_prefix(&bulk, [ACTIVITY_DAILY_ADDR_ROW, ACTIVITY_HOURLY_ADDR_ROW]),
+                0,
+                "bulk writes blobs only"
             );
-            assert_eq!(
-                single_rows_eq(&live_rows(&multi), &bulk),
-                Ok(()),
-                "bulk vs multi-block live"
-            );
+            assert!(!bucket_sets(&bulk).is_empty());
+            for (live, shape) in [
+                (live_rows(&single), "single-block live"),
+                (live_rows(&multi), "multi-block live"),
+            ] {
+                assert_eq!(
+                    single_rows_eq(&bucket_rows(&live), &bucket_rows(&bulk)),
+                    Ok(()),
+                    "bulk vs {shape}"
+                );
+                assert_eq!(
+                    bucket_sets(&live),
+                    bucket_sets(&bulk),
+                    "bucket address sets, bulk vs {shape}"
+                );
+                assert_eq!(
+                    count_prefix(&live, [ACTIVITY_DAILY_ADDR_SET, ACTIVITY_HOURLY_ADDR_SET]),
+                    0,
+                    "live never writes an address-set blob ({shape})"
+                );
+            }
         }
 
         /// `Ok` when the two row lists are equal, else the first differing key.
@@ -14213,6 +14315,47 @@ mod tests {
             rows
         }
 
+        /// Bulk keeps each activity bucket's unique addresses in one
+        /// `ACTIVITY_*_ADDR_SET` blob, live in one `ACTIVITY_*_ADDR_ROW` row
+        /// per address (it journals per block): the blobs as rows, so both
+        /// layouts compare row for row. Every other row is kept as it is.
+        fn activity_addr_sets_as_rows(
+            rows: Vec<(&'static str, Vec<u8>, Vec<u8>)>,
+        ) -> Vec<(&'static str, Vec<u8>, Vec<u8>)> {
+            use ckbadger_store::keys::{stats_prefix, ActivityBucketKind};
+            let cf_rank = |cf: &str| {
+                ckbadger_store::DOMAIN_CFS
+                    .iter()
+                    .position(|name| *name == cf)
+                    .expect("domain CF")
+            };
+            let mut out = Vec::with_capacity(rows.len());
+            for (cf, key, value) in rows {
+                let kind = match key.first().copied() {
+                    Some(stats_prefix::ACTIVITY_DAILY_ADDR_SET)
+                        if cf == ckbadger_store::CF_STATS_CHAIN =>
+                    {
+                        ActivityBucketKind::Daily
+                    }
+                    Some(stats_prefix::ACTIVITY_HOURLY_ADDR_SET)
+                        if cf == ckbadger_store::CF_STATS_CHAIN =>
+                    {
+                        ActivityBucketKind::Hourly
+                    }
+                    _ => {
+                        out.push((cf, key, value));
+                        continue;
+                    }
+                };
+                let bucket = std::str::from_utf8(&key[1..]).unwrap();
+                for addr in ckbadger_store::decode_activity_addr_set(&value, bucket).unwrap() {
+                    out.push((cf, kind.addr_row_key(bucket, &addr).unwrap(), Vec::new()));
+                }
+            }
+            out.sort_by(|a, b| (cf_rank(a.0), &a.1).cmp(&(cf_rank(b.0), &b.1)));
+            out
+        }
+
         fn cell_payload_rows(store: &CkbadgerStore) -> Vec<(Vec<u8>, Vec<u8>)> {
             store
                 .iterator_cf(store.cf_cells(), rocksdb::IteratorMode::Start)
@@ -14228,7 +14371,22 @@ mod tests {
             expected: &[(&'static str, Vec<u8>, Vec<u8>)],
             phase: &str,
         ) {
-            for (actual_row, expected_row) in actual.iter().zip(expected) {
+            assert!(
+                !actual.iter().any(|(cf, key, _)| {
+                    *cf == ckbadger_store::CF_STATS_CHAIN
+                        && matches!(
+                            key.first().copied(),
+                            Some(
+                                ckbadger_store::keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET
+                                    | ckbadger_store::keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET
+                            )
+                        )
+                }),
+                "{phase}: live never writes an activity address-set blob"
+            );
+            let actual = activity_addr_sets_as_rows(actual);
+            let expected = activity_addr_sets_as_rows(expected.to_vec());
+            for (actual_row, expected_row) in actual.iter().zip(&expected) {
                 assert_eq!(
                     actual_row,
                     expected_row,

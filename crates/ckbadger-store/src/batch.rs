@@ -130,6 +130,33 @@ impl<'a> StoreBatch<'a> {
         self.journal.is_some()
     }
 
+    /// The current value of a stats key as this batch sees it.
+    ///
+    /// On a journaled batch whose stats CF is `Journal`-class this is the
+    /// block overlay's value: the live batch's latest write of the key (from
+    /// any of its sub-batches, as of the last block that wrote it), else the
+    /// committed value. A writer that applies one block's deltas on top of
+    /// the previous block's row reads it here. On an unjournaled batch it is
+    /// the committed value only: such a batch must not read back a key it
+    /// already wrote.
+    pub fn get_stats(&self, key: &[u8]) -> anyhow::Result<Option<Vec<u8>>> {
+        let Some(prefix) = key.first().copied() else {
+            anyhow::bail!("empty stats key");
+        };
+        let cf = CkbadgerStore::stats_cf_name_by_prefix(prefix)?;
+        match self.journal.as_ref() {
+            Some(journal)
+                if cf_spec(cf)
+                    .is_some_and(|spec| spec.rollback_class == RollbackClass::Journal) =>
+            {
+                journal
+                    .overlay
+                    .with(|overlay| overlay.current(self.store, cf, key))
+            }
+            _ => self.store.get_stats_key(key),
+        }
+    }
+
     /// Stage the overlay's final values and journal entries into this batch.
     /// Call once, on the batch that commits, after every sub-batch's writes.
     pub fn stage_journal(

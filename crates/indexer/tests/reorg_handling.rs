@@ -1656,7 +1656,7 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
 
 #[test]
 fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
-    use ckbadger_indexer::db::BatchWriter;
+    use ckbadger_indexer::db::{BatchWriter, FrozenActivityAddrSets};
     use ckbadger_store::keys as store_keys;
     use ckbadger_store::types::DailyActivityStats;
     use std::collections::HashSet;
@@ -1815,15 +1815,27 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         }
     }
     let mut stats_batch = StoreBatch::new(&domain);
+    let as_sorted = |addrs: &HashSet<[u8; 32]>| -> std::collections::BTreeSet<[u8; 32]> {
+        addrs.iter().copied().collect()
+    };
     writer
-        .update_daily_activity_stats(DATE, &day_accum, &day_addrs, &mut stats_batch)
+        .update_activity_bucket_stats(
+            store_keys::ActivityBucketKind::Daily,
+            DATE,
+            &day_accum,
+            &as_sorted(&day_addrs),
+            &mut FrozenActivityAddrSets::default(),
+            &mut stats_batch,
+        )
         .unwrap();
     for (hour_key, accum) in &hour_accums {
         writer
-            .update_hourly_activity_stats(
+            .update_activity_bucket_stats(
+                store_keys::ActivityBucketKind::Hourly,
                 hour_key,
                 accum,
-                hour_addrs.get(hour_key).unwrap(),
+                &as_sorted(hour_addrs.get(hour_key).unwrap()),
+                &mut FrozenActivityAddrSets::default(),
                 &mut stats_batch,
             )
             .unwrap();
@@ -1836,17 +1848,10 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
     assert_eq!(pre_day.coinbase_count, 5);
     assert_eq!(pre_day.transfer_count, 5);
 
-    let read_addr_set = |prefix: u8, bucket: &str| -> HashSet<[u8; 32]> {
-        let key = store_keys::encode_stats_key(prefix, bucket.as_bytes());
-        let raw = domain.get_stats_key(&key).unwrap();
-        let mut set = HashSet::new();
-        if let Some(raw) = raw {
-            assert_eq!(raw.len() % 32, 0, "addr set row must be whole 32B hashes");
-            for lh in raw.as_chunks::<32>().0 {
-                set.insert(*lh);
-            }
-        }
-        set
+    // A bucket's address set: the bulk blob's addresses plus the live
+    // per-address rows (`ACTIVITY_*_ADDR_ROW`).
+    let read_addr_set = |kind: store_keys::ActivityBucketKind, bucket: &str| -> HashSet<[u8; 32]> {
+        domain.get_activity_bucket_addrs(kind, bucket).unwrap()
     };
 
     // Shallow partial-day reorg: fork point block 3, blocks 4-5 orphaned.
@@ -1863,7 +1868,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         "rolled-back blocks' coinbase activities must be subtracted"
     );
     assert_eq!(day_after.transfer_count, 3);
-    let day_set = read_addr_set(store_keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, DATE);
+    let day_set = read_addr_set(store_keys::ActivityBucketKind::Daily, DATE);
     assert_eq!(
         day_set,
         HashSet::from([addr_a, addr_d]),
@@ -1881,10 +1886,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
     );
     assert_eq!(hour_after.coinbase_count, 2);
     assert_eq!(hour_after.transfer_count, 2);
-    let hour_set = read_addr_set(
-        store_keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
-        HOUR_CUTOFF,
-    );
+    let hour_set = read_addr_set(store_keys::ActivityBucketKind::Hourly, HOUR_CUTOFF);
     assert_eq!(hour_set, HashSet::from([addr_a]));
 
     // Earlier hour on the same day is untouched.
@@ -1894,10 +1896,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         .unwrap();
     assert_eq!(early_after.unique_address_count, 1);
     assert_eq!(early_after.coinbase_count, 1);
-    let early_set = read_addr_set(
-        store_keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
-        HOUR_EARLY,
-    );
+    let early_set = read_addr_set(store_keys::ActivityBucketKind::Hourly, HOUR_EARLY);
     assert_eq!(early_set, HashSet::from([addr_d]));
 
     // Replay the new branch (blocks 4'-5' in the cutoff hour, address C)
@@ -1916,13 +1915,27 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         BatchWriter::accumulate_tx_activity_stats(row, &mut replay_day);
         BatchWriter::accumulate_tx_activity_stats(row, &mut replay_hour);
     }
-    let replay_addrs = HashSet::from([addr_c]);
+    let replay_addrs = std::collections::BTreeSet::from([addr_c]);
     let mut replay_batch = StoreBatch::new(&domain);
     writer
-        .update_daily_activity_stats(DATE, &replay_day, &replay_addrs, &mut replay_batch)
+        .update_activity_bucket_stats(
+            store_keys::ActivityBucketKind::Daily,
+            DATE,
+            &replay_day,
+            &replay_addrs,
+            &mut FrozenActivityAddrSets::default(),
+            &mut replay_batch,
+        )
         .unwrap();
     writer
-        .update_hourly_activity_stats(HOUR_CUTOFF, &replay_hour, &replay_addrs, &mut replay_batch)
+        .update_activity_bucket_stats(
+            store_keys::ActivityBucketKind::Hourly,
+            HOUR_CUTOFF,
+            &replay_hour,
+            &replay_addrs,
+            &mut FrozenActivityAddrSets::default(),
+            &mut replay_batch,
+        )
         .unwrap();
     replay_batch.commit().unwrap();
 
@@ -1934,7 +1947,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
     );
     assert_eq!(final_day.coinbase_count, 5);
     assert_eq!(final_day.transfer_count, 5);
-    let final_day_set = read_addr_set(store_keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, DATE);
+    let final_day_set = read_addr_set(store_keys::ActivityBucketKind::Daily, DATE);
     assert_eq!(final_day_set, HashSet::from([addr_a, addr_c, addr_d]));
     assert!(!final_day_set.contains(&addr_b));
 
@@ -1944,10 +1957,7 @@ fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
         .unwrap();
     assert_eq!(final_hour.unique_address_count, 2, "final hour = {{A,C}}");
     assert_eq!(final_hour.coinbase_count, 4);
-    let final_hour_set = read_addr_set(
-        store_keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
-        HOUR_CUTOFF,
-    );
+    let final_hour_set = read_addr_set(store_keys::ActivityBucketKind::Hourly, HOUR_CUTOFF);
     assert_eq!(final_hour_set, HashSet::from([addr_a, addr_c]));
     assert!(!final_hour_set.contains(&addr_b));
 }

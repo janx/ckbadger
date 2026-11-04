@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Duration, NaiveDate, Utc};
 use rocksdb::{Direction, IteratorMode};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use ckbadger_common::dao::{calculate_estimated_apc, extract_s_from_dao};
 use ckbadger_store::batch::StoreBatch;
@@ -146,6 +146,32 @@ impl ExactDaoSnapshotCompensation {
     }
 }
 
+/// The bulk-written unique-address blobs (`ACTIVITY_*_ADDR_SET`) of the
+/// activity buckets one live batch touches, each read and decoded once per
+/// batch. Live sync never rewrites a blob (it records new addresses as rows,
+/// see [`BatchWriter::update_activity_bucket_stats`]), so the committed value
+/// is the batch's value throughout.
+#[derive(Debug, Default)]
+pub struct FrozenActivityAddrSets {
+    sets: HashMap<(keys::ActivityBucketKind, String), HashSet<[u8; 32]>>,
+}
+
+impl FrozenActivityAddrSets {
+    fn get(
+        &mut self,
+        store: &ckbadger_store::CkbadgerStore,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+    ) -> Result<&HashSet<[u8; 32]>> {
+        match self.sets.entry((kind, bucket.to_string())) {
+            std::collections::hash_map::Entry::Occupied(entry) => Ok(entry.into_mut()),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                Ok(entry.insert(store.get_activity_addr_set_blob(kind, bucket)?))
+            }
+        }
+    }
+}
+
 /// Outcome of one bounded hourly retention step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HourlyRetentionStepResult {
@@ -178,7 +204,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_HOURLY,
             hour.format("%Y%m%d%H").to_string().as_bytes(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -263,7 +289,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let (new_block_time_sum_ms, new_block_time_count) = block_time.unwrap_or((0, 0));
 
@@ -330,8 +356,8 @@ impl BatchWriter {
                         keys::STATS_PREFIX_DAILY,
                         prev_date.format("%Y%m%d").to_string().as_bytes(),
                     );
-                    self.store
-                            .get_stats_key(&prev_key)?
+                    batch
+                            .get_stats(&prev_key)?
                             .map(|v| deserialize_stats::<DailyStats>(&v, "previous day stats"))
                             .transpose()?
                             .map(|p| {
@@ -415,7 +441,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_DAILY_BLOCK,
             date.format("%Y%m%d").to_string().as_bytes(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats =
             match existing {
@@ -464,7 +490,7 @@ impl BatchWriter {
             keys::STATS_PREFIX_MINER,
             &[date_key.as_bytes(), lock_script_hash].concat(),
         );
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats = match existing {
             Some(val) => {
@@ -498,7 +524,7 @@ impl BatchWriter {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let key = keys::encode_stats_key(keys::STATS_PREFIX_EPOCH, &epoch_number.to_be_bytes());
-        let existing = self.store.get_stats_key(&key)?;
+        let existing = batch.get_stats(&key)?;
 
         let stats = if is_new {
             let blocks_count = (end_block - start_block + 1) as i32;
@@ -559,7 +585,7 @@ impl BatchWriter {
             anyhow::bail!("invalid {kind} histogram delta: bucket={bucket} count={count}");
         }
         let key = keys::encode_stats_key(prefix, &bucket.to_be_bytes());
-        let previous = match self.store.get_stats_key(&key)? {
+        let previous = match batch.get_stats(&key)? {
             Some(bytes) => {
                 let bytes: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
                     anyhow!(
@@ -680,102 +706,74 @@ impl BatchWriter {
         accumulate_tx_actions_stats(tx_actions, stats);
     }
 
-    /// Write accumulated daily activity stats for a date.
-    /// Reads existing stats for the date, merges with accumulated, writes back.
-    /// Uses a persistent address set to correctly dedup unique addresses across batches.
-    pub fn update_daily_activity_stats(
-        &self,
-        date: &str,
-        accumulated: &DailyActivityStats,
-        batch_addrs: &HashSet<[u8; 32]>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let unique_address_count = self.merge_persistent_addr_set(
-            keys::stats_prefix::ACTIVITY_DAILY_ADDR_SET,
-            date.as_bytes(),
-            batch_addrs,
-            batch,
-        )?;
-        let existing = self.store.get_daily_activity_stats(date)?;
-        let merged = match existing {
-            Some(mut e) => {
-                e.add_counts(accumulated)
-                    .with_context(|| format!("merging daily activity stats for date {date}"))?;
-                e.unique_address_count = unique_address_count;
-                e
-            }
-            None => {
-                let mut s = accumulated.clone();
-                s.unique_address_count = unique_address_count;
-                s
-            }
-        };
-        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_DAILY, date.as_bytes());
-        let value = bincode::serialize(&merged)?;
-        batch.put_stats(&key, &value);
-        Ok(())
-    }
-
-    /// Write accumulated hourly activity stats for an hour key.
-    /// Reads existing stats for the hour, merges with accumulated, writes back.
-    /// Uses a persistent address set to correctly dedup unique addresses across batches.
-    pub fn update_hourly_activity_stats(
-        &self,
-        hour_key: &str,
-        accumulated: &DailyActivityStats,
-        batch_addrs: &HashSet<[u8; 32]>,
-        batch: &mut StoreBatch,
-    ) -> Result<()> {
-        let unique_address_count = self.merge_persistent_addr_set(
-            keys::stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
-            hour_key.as_bytes(),
-            batch_addrs,
-            batch,
-        )?;
-        let existing = self.store.get_hourly_activity_stats(hour_key)?;
-        let merged = match existing {
-            Some(mut e) => {
-                e.add_counts(accumulated).with_context(|| {
-                    format!("merging hourly activity stats for hour {hour_key}")
-                })?;
-                e.unique_address_count = unique_address_count;
-                e
-            }
-            None => {
-                let mut s = accumulated.clone();
-                s.unique_address_count = unique_address_count;
-                s
-            }
-        };
-        let key = keys::encode_stats_key(keys::stats_prefix::ACTIVITY_HOURLY, hour_key.as_bytes());
-        let value = bincode::serialize(&merged)?;
-        batch.put_stats(&key, &value);
-        Ok(())
-    }
-
-    /// Load an existing persistent address set from CF_STATS_CHAIN, merge in
-    /// new addresses from the current batch, store back, and return the total
-    /// unique address count as u32.
+    /// Apply one block's activity counts to its bucket of `kind` (the
+    /// block's UTC+8 day or hour) on top of the row the previous block left,
+    /// and record the block's addresses the bucket has not seen yet.
     ///
-    /// Row encoding and count derivation come from the shared store-level
-    /// helpers, so reorg rollback repair rebuilds byte-identical rows.
-    fn merge_persistent_addr_set(
+    /// A bucket's unique addresses are its bulk-written address-set blob
+    /// (frozen: live sync never rewrites it) plus one `ACTIVITY_*_ADDR_ROW`
+    /// row per address live sync saw first in it. An address is new iff it is
+    /// in neither; each new one gets its row in this block's scope and raises
+    /// `unique_address_count` by one. So a block journals one small entry per
+    /// new address and its bucket row, never the bucket-wide set.
+    pub fn update_activity_bucket_stats(
         &self,
-        prefix: u8,
-        bucket: &[u8],
-        batch_addrs: &HashSet<[u8; 32]>,
+        kind: keys::ActivityBucketKind,
+        bucket: &str,
+        block_stats: &DailyActivityStats,
+        block_addrs: &BTreeSet<[u8; 32]>,
+        frozen: &mut FrozenActivityAddrSets,
         batch: &mut StoreBatch,
-    ) -> Result<u32> {
-        let set_key = keys::encode_stats_key(prefix, bucket);
-        let bucket_label = String::from_utf8_lossy(bucket).into_owned();
-        let mut addrs: HashSet<[u8; 32]> = match self.store.get_stats_key(&set_key)? {
-            Some(raw) => ckbadger_store::decode_activity_addr_set(&raw, &bucket_label)?,
-            None => HashSet::new(),
+    ) -> Result<()> {
+        let key = kind.stats_key(bucket)?;
+        let existing: Option<DailyActivityStats> = batch
+            .get_stats(&key)?
+            .map(|raw| deserialize_stats(&raw, "activity bucket stats"))
+            .transpose()
+            .with_context(|| format!("{kind:?} activity bucket {bucket}"))?;
+        let blob = frozen.get(&self.store, kind, bucket)?;
+        if existing.is_none() && !blob.is_empty() {
+            bail!(
+                "{kind:?} activity bucket {bucket} has an address-set blob of {} addresses but no stats row",
+                blob.len()
+            );
+        }
+        let mut new_addrs = 0u32;
+        for lock_hash in block_addrs {
+            if blob.contains(lock_hash) {
+                continue;
+            }
+            let row_key = kind.addr_row_key(bucket, lock_hash)?;
+            if batch.get_stats(&row_key)?.is_some() {
+                continue;
+            }
+            batch.put_stats(&row_key, &[]);
+            new_addrs = new_addrs.checked_add(1).ok_or_else(|| {
+                anyhow!("{kind:?} activity bucket {bucket}: new address count overflow")
+            })?;
+        }
+        let merged = match existing {
+            Some(mut row) => {
+                let previous_unique = row.unique_address_count;
+                row.add_counts(block_stats).with_context(|| {
+                    format!("merging {kind:?} activity stats for bucket {bucket}")
+                })?;
+                row.unique_address_count =
+                    previous_unique.checked_add(new_addrs).ok_or_else(|| {
+                        anyhow!(
+                            "{kind:?} activity bucket {bucket}: unique_address_count overflow: {previous_unique} + {new_addrs}"
+                        )
+                    })?;
+                row
+            }
+            None => {
+                let mut row = block_stats.clone();
+                row.unique_address_count = new_addrs;
+                row
+            }
         };
-        addrs.extend(batch_addrs);
-        let flat = ckbadger_store::encode_activity_addr_set(addrs.iter().copied());
-        batch.put_stats(&set_key, &flat);
-        ckbadger_store::activity_addr_set_count(addrs.len(), &bucket_label)
+        batch.put_stats(&key, &bincode::serialize(&merged)?);
+        Ok(())
     }
 
     /// Hours of per-entity hourly transfer counters the read path relies on.
@@ -4046,7 +4044,7 @@ mod activity_stats_tests {
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
-        let addrs: HashSet<[u8; 32]> = (0..3u8)
+        let addrs: BTreeSet<[u8; 32]> = (0..3u8)
             .map(|i| {
                 let mut h = [0u8; 32];
                 h[0] = i;
@@ -4054,7 +4052,14 @@ mod activity_stats_tests {
             })
             .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &stats, &addrs, &mut batch)
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030912",
+                &stats,
+                &addrs,
+                &mut FrozenActivityAddrSets::default(),
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -4079,7 +4084,7 @@ mod activity_stats_tests {
             total_ckb_moved: 50_00000000,
             ..Default::default()
         };
-        let addrs1: HashSet<[u8; 32]> = (0..3u8)
+        let addrs1: BTreeSet<[u8; 32]> = (0..3u8)
             .map(|i| {
                 let mut h = [0u8; 32];
                 h[0] = i;
@@ -4087,7 +4092,14 @@ mod activity_stats_tests {
             })
             .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &s1, &addrs1, &mut batch)
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030912",
+                &s1,
+                &addrs1,
+                &mut FrozenActivityAddrSets::default(),
+                &mut batch,
+            )
             .unwrap();
         batch.commit().unwrap();
 
@@ -4099,7 +4111,7 @@ mod activity_stats_tests {
             total_ckb_moved: 100_00000000,
             ..Default::default()
         };
-        let addrs2: HashSet<[u8; 32]> = (1..8u8)
+        let addrs2: BTreeSet<[u8; 32]> = (1..8u8)
             .map(|i| {
                 let mut h = [0u8; 32];
                 h[0] = i;
@@ -4107,7 +4119,14 @@ mod activity_stats_tests {
             })
             .collect();
         writer
-            .update_hourly_activity_stats("2026030912", &s2, &addrs2, &mut batch2)
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Hourly,
+                "2026030912",
+                &s2,
+                &addrs2,
+                &mut FrozenActivityAddrSets::default(),
+                &mut batch2,
+            )
             .unwrap();
         batch2.commit().unwrap();
 
@@ -4120,6 +4139,178 @@ mod activity_stats_tests {
         assert_eq!(got.total_ckb_moved, 150_00000000);
         // Cross-batch dedup: {0,1,2} ∪ {1,2,3,4,5,6,7} = 8 unique addresses
         assert_eq!(got.unique_address_count, 8);
+    }
+
+    fn addr(byte: u8) -> [u8; 32] {
+        [byte; 32]
+    }
+
+    /// One block's write to one daily bucket through a journaled batch of a
+    /// live batch overlay; returns the bucket row after it.
+    fn write_block_bucket(
+        writer: &BatchWriter,
+        batch: &mut StoreBatch,
+        frozen: &mut FrozenActivityAddrSets,
+        block: i64,
+        addrs: &[[u8; 32]],
+    ) -> DailyActivityStats {
+        let block_stats = DailyActivityStats {
+            transfer_count: 1,
+            ..Default::default()
+        };
+        let addrs: BTreeSet<[u8; 32]> = addrs.iter().copied().collect();
+        writer
+            .update_activity_bucket_stats(
+                keys::ActivityBucketKind::Daily,
+                "20260309",
+                &block_stats,
+                &addrs,
+                frozen,
+                &mut batch.at(block),
+            )
+            .unwrap();
+        let key = keys::ActivityBucketKind::Daily
+            .stats_key("20260309")
+            .unwrap();
+        bincode::deserialize(&batch.get_stats(&key).unwrap().unwrap()).unwrap()
+    }
+
+    /// The four shapes of a bucket's address set when live sync writes to
+    /// it: a new bucket, a bulk blob only, live rows only, and both. An
+    /// address is new iff it is in neither part; only new addresses get a
+    /// row and raise `unique_address_count`, and the blob is never rewritten.
+    #[test]
+    fn activity_bucket_addresses_merge_blob_and_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let kind = keys::ActivityBucketKind::Daily;
+        let bucket_addrs =
+            |store: &CkbadgerStore| store.get_activity_bucket_addrs(kind, "20260309").unwrap();
+        let rows = |store: &CkbadgerStore| {
+            store
+                .prefix_iterator_cf(
+                    store.cf_stats_chain(),
+                    &kind.addr_row_bucket_prefix("20260309").unwrap(),
+                )
+                .count()
+        };
+        let commit = |mut batch: StoreBatch| {
+            let mut counters = HashMap::new();
+            batch
+                .stage_journal(&mut |block| {
+                    ckbadger_store::block_overlay::journal_seq(&mut counters, block)
+                })
+                .unwrap();
+            batch.commit().unwrap();
+        };
+
+        // 1. A new bucket: blocks 10 and 11 of one batch; 11 repeats an
+        //    address of 10 (seen through the overlay, not the store).
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store);
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        let mut frozen = FrozenActivityAddrSets::default();
+        let row = write_block_bucket(&writer, &mut batch, &mut frozen, 10, &[addr(1), addr(2)]);
+        assert_eq!(row.unique_address_count, 2);
+        let row = write_block_bucket(&writer, &mut batch, &mut frozen, 11, &[addr(2), addr(3)]);
+        assert_eq!(row.unique_address_count, 3);
+        assert_eq!(row.transfer_count, 2);
+        commit(batch);
+        assert_eq!(
+            bucket_addrs(&store),
+            HashSet::from([addr(1), addr(2), addr(3)])
+        );
+        assert_eq!(rows(&store), 3);
+
+        // 2. Rows present (a later batch): only addresses without a row count.
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&store);
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        let mut frozen = FrozenActivityAddrSets::default();
+        let row = write_block_bucket(&writer, &mut batch, &mut frozen, 12, &[addr(3), addr(4)]);
+        assert_eq!(row.unique_address_count, 4);
+        commit(batch);
+        assert_eq!(rows(&store), 4);
+
+        // 3. A bulk blob only (another day, bulk-built): the blob's addresses
+        //    are not new and the blob is left as it was.
+        let blob_dir = tempfile::tempdir().unwrap();
+        let bulk_store = Arc::new(CkbadgerStore::open_domain(blob_dir.path()).unwrap());
+        let bulk_writer = BatchWriter::new(bulk_store.clone(), bulk_store.clone());
+        let blob = ckbadger_store::encode_activity_addr_set([addr(1), addr(2)]);
+        bulk_store
+            .put_stats_key(&kind.addr_set_key("20260309").unwrap(), &blob)
+            .unwrap();
+        let bulk_row = DailyActivityStats {
+            transfer_count: 7,
+            unique_address_count: 2,
+            ..Default::default()
+        };
+        bulk_store
+            .put_stats_key(
+                &kind.stats_key("20260309").unwrap(),
+                &bincode::serialize(&bulk_row).unwrap(),
+            )
+            .unwrap();
+        let overlay = ckbadger_store::block_overlay::SharedBlockOverlay::new(&bulk_store);
+        let mut batch = StoreBatch::journaled(&bulk_store, &overlay, 0);
+        let mut frozen = FrozenActivityAddrSets::default();
+        let row = write_block_bucket(&bulk_writer, &mut batch, &mut frozen, 20, &[addr(2)]);
+        assert_eq!(row.unique_address_count, 2, "a blob address is not new");
+        assert_eq!(row.transfer_count, 8);
+        // 4. Both: a new address beside the blob gets a row.
+        let row = write_block_bucket(
+            &bulk_writer,
+            &mut batch,
+            &mut frozen,
+            21,
+            &[addr(1), addr(5)],
+        );
+        assert_eq!(row.unique_address_count, 3);
+        commit(batch);
+        assert_eq!(rows(&bulk_store), 1);
+        assert_eq!(
+            bulk_store
+                .get_stats_key(&kind.addr_set_key("20260309").unwrap())
+                .unwrap(),
+            Some(blob),
+            "live sync never rewrites the bulk blob"
+        );
+        assert_eq!(
+            bulk_store
+                .get_activity_bucket_addrs(kind, "20260309")
+                .unwrap(),
+            HashSet::from([addr(1), addr(2), addr(5)])
+        );
+        let next = DailyActivityStats::default();
+        bulk_writer
+            .update_activity_bucket_stats(
+                kind,
+                "20260310",
+                &next,
+                &BTreeSet::new(),
+                &mut FrozenActivityAddrSets::default(),
+                &mut StoreBatch::new(&bulk_store),
+            )
+            .expect("a new bucket without a blob is valid");
+        // A blob without its stats row is a broken invariant.
+        bulk_store
+            .put_stats_key(
+                &kind.addr_set_key("20260311").unwrap(),
+                &ckbadger_store::encode_activity_addr_set([addr(9)]),
+            )
+            .unwrap();
+        let err = bulk_writer
+            .update_activity_bucket_stats(
+                kind,
+                "20260311",
+                &next,
+                &BTreeSet::new(),
+                &mut FrozenActivityAddrSets::default(),
+                &mut StoreBatch::new(&bulk_store),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("but no stats row"), "{err}");
     }
 
     #[test]

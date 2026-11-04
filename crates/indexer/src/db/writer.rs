@@ -235,6 +235,7 @@ pub use reorg::ReorgResult;
 pub use spore::IdentityTransition;
 pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;
+pub use statistics::FrozenActivityAddrSets;
 
 #[cfg(test)]
 mod undo_seq_tests {

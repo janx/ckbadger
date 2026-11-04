@@ -859,6 +859,16 @@ pub mod stats_prefix {
     /// root AccountCell with its all-zero account id, or data too short to
     /// name one). Suffix: outpoint. Value: empty.
     pub const DOTBIT_UNINDEXED_OUTPOINT: u8 = 0x25;
+    /// One address of a daily activity bucket that live sync saw first in
+    /// that bucket: neither in the bucket's bulk-written `ACTIVITY_DAILY_ADDR_SET`
+    /// blob nor in an earlier row. Suffix: `%Y%m%d` (UTC+8) + 32B lock hash.
+    /// Value: empty. One row per address keeps a live block's journal to one
+    /// small entry per new address instead of a rewritten bucket-wide blob.
+    pub const ACTIVITY_DAILY_ADDR_ROW: u8 = 0x26;
+    /// One address of an hourly activity bucket that live sync saw first in
+    /// that bucket (see `ACTIVITY_DAILY_ADDR_ROW`). Suffix: `%Y%m%d%H` on the
+    /// **UTC+8** clock + 32B lock hash. Value: empty.
+    pub const ACTIVITY_HOURLY_ADDR_ROW: u8 = 0x27;
 }
 
 // Flat re-exports for convenience
@@ -900,6 +910,111 @@ pub const STATS_PREFIX_ADDR_COHORT: u8 = stats_prefix::ADDR_COHORT;
 pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_SET;
 pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_SET;
 pub const STATS_PREFIX_DOTBIT_UNINDEXED_OUTPOINT: u8 = stats_prefix::DOTBIT_UNINDEXED_OUTPOINT;
+pub const STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_DAILY_ADDR_ROW;
+pub const STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW: u8 = stats_prefix::ACTIVITY_HOURLY_ADDR_ROW;
+
+/// The two activity bucket families and their three row kinds: the bucket's
+/// `DailyActivityStats`, the bulk-written address-set blob, and the live
+/// per-address rows. A bucket's unique addresses are the blob's addresses
+/// plus the rows' addresses; live sync never rewrites the blob and writes a
+/// row only for an address in neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ActivityBucketKind {
+    /// UTC+8 calendar day, `%Y%m%d`.
+    Daily,
+    /// UTC+8 hour, `%Y%m%d%H`.
+    Hourly,
+}
+
+impl ActivityBucketKind {
+    /// Prefix of the bucket's `DailyActivityStats` row.
+    pub const fn stats_prefix(self) -> u8 {
+        match self {
+            Self::Daily => stats_prefix::ACTIVITY_DAILY,
+            Self::Hourly => stats_prefix::ACTIVITY_HOURLY,
+        }
+    }
+
+    /// Prefix of the bucket's bulk-written address-set blob.
+    pub const fn addr_set_prefix(self) -> u8 {
+        match self {
+            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_SET,
+            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_SET,
+        }
+    }
+
+    /// Prefix of the bucket's live per-address rows.
+    pub const fn addr_row_prefix(self) -> u8 {
+        match self {
+            Self::Daily => stats_prefix::ACTIVITY_DAILY_ADDR_ROW,
+            Self::Hourly => stats_prefix::ACTIVITY_HOURLY_ADDR_ROW,
+        }
+    }
+
+    /// Byte length of the bucket label (`%Y%m%d` or `%Y%m%d%H`).
+    pub const fn bucket_len(self) -> usize {
+        match self {
+            Self::Daily => 8,
+            Self::Hourly => 10,
+        }
+    }
+
+    fn check_bucket(self, bucket: &str) -> anyhow::Result<()> {
+        if bucket.len() != self.bucket_len() || !bucket.bytes().all(|b| b.is_ascii_digit()) {
+            anyhow::bail!(
+                "invalid {:?} activity bucket label {:?}: expected {} ASCII digits",
+                self,
+                bucket,
+                self.bucket_len()
+            );
+        }
+        Ok(())
+    }
+
+    /// Key of the bucket's `DailyActivityStats` row.
+    pub fn stats_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        Ok(encode_stats_key(self.stats_prefix(), bucket.as_bytes()))
+    }
+
+    /// Key of the bucket's bulk-written address-set blob.
+    pub fn addr_set_key(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        Ok(encode_stats_key(self.addr_set_prefix(), bucket.as_bytes()))
+    }
+
+    /// Key of one live per-address row: prefix ‖ bucket ‖ lock hash.
+    pub fn addr_row_key(self, bucket: &str, lock_hash: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        let mut key = Vec::with_capacity(1 + self.bucket_len() + HASH32_LEN);
+        key.push(self.addr_row_prefix());
+        key.extend_from_slice(bucket.as_bytes());
+        key.extend_from_slice(lock_hash);
+        Ok(key)
+    }
+
+    /// Prefix of every per-address row of one bucket (for a prefix scan).
+    pub fn addr_row_bucket_prefix(self, bucket: &str) -> anyhow::Result<Vec<u8>> {
+        self.check_bucket(bucket)?;
+        Ok(encode_stats_key(self.addr_row_prefix(), bucket.as_bytes()))
+    }
+
+    /// The lock hash of a per-address row key of `bucket`.
+    pub fn decode_addr_row_key(self, bucket: &str, key: &[u8]) -> anyhow::Result<[u8; 32]> {
+        let prefix = self.addr_row_bucket_prefix(bucket)?;
+        if key.len() != prefix.len() + HASH32_LEN || !key.starts_with(&prefix) {
+            anyhow::bail!(
+                "invalid {:?} activity address row key for bucket {}: key=0x{}",
+                self,
+                bucket,
+                hex::encode(key)
+            );
+        }
+        let mut lock_hash = [0u8; 32];
+        lock_hash.copy_from_slice(&key[prefix.len()..]);
+        Ok(lock_hash)
+    }
+}
 
 /// Token transfers total count key: prefix(1B) + type_hash(32B) = 33 bytes
 pub fn encode_token_transfers_key(type_hash: &[u8]) -> Vec<u8> {

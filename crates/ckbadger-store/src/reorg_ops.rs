@@ -901,8 +901,9 @@ struct CutoffAddrSets {
 /// the surviving TxActions using the same bucket assignment and participant
 /// filter as the live write path (`SyncBatch`): non-cellbase transactions,
 /// 32-byte participant lock hashes, UTC+8 date / UTC+8 hour of the tx
-/// timestamp. Replay then merges the new branch into these rebuilt rows
-/// through `BatchWriter::merge_persistent_addr_set` as usual.
+/// timestamp. The rebuilt sets are persisted as `ACTIVITY_*_ADDR_ROW` rows
+/// (stage 7a-0); replay then adds the new branch's addresses through
+/// `BatchWriter::update_activity_bucket_stats` as usual.
 ///
 /// Scan bound: block headers are walked backwards from `rollback_to` while
 /// they still carry the cutoff date, which gives the first block of the cutoff
@@ -1052,7 +1053,7 @@ fn parse_cutoff_date_yyyymmdd(cutoff_yyyymmdd: &[u8]) -> anyhow::Result<u32> {
 /// main-chain part, which replay never rebuilds because it only re-applies
 /// blocks after the fork point. They are restored exactly, per block, by the
 /// `EntityStats` undo log instead (POSTMORTEM STATS-010).
-const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 13] = [
+const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 15] = [
     keys::STATS_PREFIX_DAILY,
     keys::STATS_PREFIX_DAILY_BLOCK,
     keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT,
@@ -1063,8 +1064,10 @@ const STATS_REPLAY_CANDIDATE_PREFIXES: [u8; 13] = [
     keys::STATS_PREFIX_MINER,
     keys::STATS_PREFIX_ACTIVITY_DAILY,
     keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET,
+    keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW,
     keys::STATS_PREFIX_ACTIVITY_HOURLY,
     keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+    keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW,
     keys::STATS_PREFIX_EPOCH,
 ];
 
@@ -1126,18 +1129,27 @@ fn should_delete_stats_for_replay(
         keys::STATS_PREFIX_ACTIVITY_DAILY => {
             Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
         }
-        // Strict > : preserve cutoff-date addr set for dedup continuity
+        // Strict > : the cutoff bucket's blob is replaced by rows in 7a-0
         keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET => {
             Ok(suffix.len() >= 8 && &suffix[..8] > cutoff_yyyymmdd)
+        }
+        // Live per-address rows: the cutoff bucket's are rebuilt in 7a-0 from
+        // the surviving chain, later buckets' are rolled back whole.
+        keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW => {
+            Ok(suffix.len() >= 8 && &suffix[..8] >= cutoff_yyyymmdd)
         }
         // activity hourly: YYYYMMDDHH on the UTC+8 clock
         // (`block_datetime_from_ms` convention)
         keys::STATS_PREFIX_ACTIVITY_HOURLY => {
             Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc8)
         }
-        // Strict > : preserve cutoff-hour addr set for dedup continuity
+        // Strict > : the cutoff bucket's blob is replaced by rows in 7a-0
         keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET => {
             Ok(suffix.len() >= 10 && &suffix[..10] > cutoff_yyyymmddhh_utc8)
+        }
+        // Live per-address rows, on the UTC+8 hour clock (see the daily arm).
+        keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW => {
+            Ok(suffix.len() >= 10 && &suffix[..10] >= cutoff_yyyymmddhh_utc8)
         }
         // Per-entity hourly transfer counters: NEVER deleted here, for the
         // same reason as the daily families above. Restored by the
@@ -3574,33 +3586,33 @@ impl CkbadgerStore {
                 );
             }
 
-            // 7a-0. Persist the rebuilt cutoff-bucket address sets. Written
-            // after the sweep so the rebuilt rows win, and encoded through the
-            // same helper as the live write path so replay's merge reads back
-            // exactly what it would have written itself. An empty surviving
-            // portion means the row must go, not be left stale.
+            // 7a-0. Persist the rebuilt cutoff-bucket address sets, in the
+            // live layout: the bucket's blob goes and every surviving address
+            // becomes one `ACTIVITY_*_ADDR_ROW` row, the form the live writer
+            // reads back (blob plus rows) when replay merges the new branch.
+            // Written after the sweep, which deleted the cutoff bucket's rows,
+            // so the rebuilt rows win. An empty surviving portion leaves the
+            // bucket with neither.
             {
-                let addr_set_rows: [(u8, &str, &HashSet<[u8; 32]>); 2] = [
+                let addr_set_rows: [(keys::ActivityBucketKind, &str, &HashSet<[u8; 32]>); 2] = [
                     (
-                        keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET,
+                        keys::ActivityBucketKind::Daily,
                         cutoff,
                         &rollback_deltas.activity_addr_date,
                     ),
                     (
-                        keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET,
+                        keys::ActivityBucketKind::Hourly,
                         cutoff_hour_str_utc8,
                         &rollback_deltas.activity_addr_hour,
                     ),
                 ];
-                for (prefix, bucket, addrs) in addr_set_rows {
-                    let key = keys::encode_stats_key(prefix, bucket.as_bytes());
-                    let cf = self.stats_cf_by_prefix(prefix)?;
-                    if addrs.is_empty() {
-                        batch.delete_cf(cf, &key);
-                    } else {
-                        let encoded =
-                            crate::stats_ops::encode_activity_addr_set(addrs.iter().copied());
-                        batch.put_cf(cf, &key, &encoded);
+                for (kind, bucket, addrs) in addr_set_rows {
+                    let cf = self.cf_stats_chain();
+                    batch.delete_cf(cf, kind.addr_set_key(bucket)?);
+                    let mut sorted: Vec<&[u8; 32]> = addrs.iter().collect();
+                    sorted.sort_unstable();
+                    for lock_hash in sorted {
+                        batch.put_cf(cf, kind.addr_row_key(bucket, lock_hash)?, []);
                     }
                 }
                 info!(
@@ -6530,6 +6542,24 @@ mod tests {
             crate::keys::STATS_PREFIX_ACTIVITY_HOURLY,
             b"2026021015"
         ));
+
+        // Live per-address rows follow their bucket's clock and include the
+        // cutoff bucket (rebuilt from the surviving chain afterwards).
+        let row = |kind: crate::keys::ActivityBucketKind, bucket: &str| {
+            kind.addr_row_key(bucket, &[0xAB; 32]).unwrap()
+        };
+        let delete = |key: Vec<u8>| {
+            should_delete_stats_for_replay(&key, cutoff, cutoff_hh_utc8, cutoff_hh_utc, 0, false)
+                .unwrap()
+        };
+        use crate::keys::ActivityBucketKind::{Daily, Hourly};
+        assert!(!delete(row(Daily, "20260209")));
+        assert!(delete(row(Daily, "20260210")));
+        assert!(delete(row(Daily, "20260211")));
+        assert!(!delete(row(Hourly, "2026021007")));
+        assert!(!delete(row(Hourly, "2026021014")));
+        assert!(delete(row(Hourly, "2026021015")));
+        assert!(delete(row(Hourly, "2026021016")));
     }
 
     /// The HOURLY repair branch must compare against the UTC cutoff hour and
@@ -12304,7 +12334,7 @@ mod tests {
             EntityStatsUndo,
         }
 
-        let table: [(u8, Owner); 21] = [
+        let table: [(u8, Owner); 23] = [
             (keys::STATS_PREFIX_DAILY, Owner::Sweep),
             (keys::STATS_PREFIX_DAILY_BLOCK, Owner::Sweep),
             (keys::STATS_PREFIX_HOURLY, Owner::Sweep),
@@ -12313,6 +12343,8 @@ mod tests {
             (keys::STATS_PREFIX_ACTIVITY_HOURLY, Owner::Sweep),
             (keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_SET, Owner::Sweep),
             (keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_SET, Owner::Sweep),
+            (keys::STATS_PREFIX_ACTIVITY_DAILY_ADDR_ROW, Owner::Sweep),
+            (keys::STATS_PREFIX_ACTIVITY_HOURLY_ADDR_ROW, Owner::Sweep),
             (keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, Owner::Sweep),
             (keys::STATS_PREFIX_EPOCH, Owner::Sweep),
             (keys::STATS_PREFIX_HODL_WAVE, Owner::Sweep),

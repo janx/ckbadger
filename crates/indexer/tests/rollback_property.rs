@@ -512,6 +512,12 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::store::CF_SCRIPT_VERSIONS_BY_LABEL, None),
     (ckbadger_store::store::CF_SCRIPT_REFERENCE_TO_VERSION, None),
     (ckbadger_store::store::CF_SCRIPT_FAMILY_BY_NAME, None),
+    // B-3 statistics.rs: the chain statistics (daily, hourly, daily block,
+    // miner, epoch, block / epoch time histograms) and the activity buckets
+    // (with their live per-address rows) are written per block. `stats_dao`
+    // is not covered: the DAO daily snapshot is still written once per batch
+    // (lane B record, design findings).
+    (ckbadger_store::CF_STATS_CHAIN, None),
 ];
 
 fn is_covered(cf: &str, key: &[u8]) -> bool {

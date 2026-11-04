@@ -683,6 +683,35 @@ mod tests {
         assert!(err.to_string().contains("two sub-batches"), "{err:#}");
     }
 
+    /// A journaled batch reads a stats key through the overlay: the latest
+    /// write of the live batch (from any sub-batch), else the committed
+    /// value; an unjournaled batch reads the committed value only.
+    #[test]
+    fn get_stats_reads_the_overlay_of_a_journaled_batch() {
+        let (store, _dir) = store();
+        let key = crate::keys::encode_stats_key(crate::keys::STATS_PREFIX_DAILY, b"20260210");
+        store.put_stats_key(&key, b"committed").unwrap();
+        let overlay = SharedBlockOverlay::new(&store);
+        let mut writer = StoreBatch::journaled(&store, &overlay, 1);
+        let reader = StoreBatch::journaled(&store, &overlay, 2);
+        assert_eq!(reader.get_stats(&key).unwrap(), Some(b"committed".to_vec()));
+        writer.at(7).put_stats(&key, b"after block 7");
+        assert_eq!(
+            reader.get_stats(&key).unwrap(),
+            Some(b"after block 7".to_vec()),
+            "another sub-batch's write of the same live batch is visible"
+        );
+        writer.at(8).delete_stats(&key);
+        assert_eq!(reader.get_stats(&key).unwrap(), None);
+        let plain = StoreBatch::new(&store);
+        assert_eq!(
+            plain.get_stats(&key).unwrap(),
+            Some(b"committed".to_vec()),
+            "an unjournaled batch sees committed values only"
+        );
+        assert!(reader.get_stats(&[]).is_err());
+    }
+
     /// A write no block scope claimed is staged but journals nothing, and
     /// its CF is reported (transitional, B-3).
     #[test]

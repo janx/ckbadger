@@ -27,14 +27,16 @@ use super::helpers::{checked_usize_to_i16, parsed_input_outpoint_index_i16};
 use super::types::TxData;
 
 // ---------------------------------------------------------------------------
-// BatchStats (DAO accumulator)
+// BlockChainStats (per block) and BatchStats (DAO snapshot inputs)
 // ---------------------------------------------------------------------------
 
-/// Accumulated statistics across a batch of blocks (avoids per-block DB writes)
+/// One block's contribution to the chain statistics (`stats_chain`: daily,
+/// hourly, daily block, miner, epoch, block / epoch time histograms). The live
+/// writer fills one per block and writes it in that block's scope of the block
+/// overlay, each row on top of the row the previous block left, so every row's
+/// value at the end of every block is journaled.
 #[derive(Default)]
-pub(crate) struct BatchStats {
-    pub(crate) sync_totals: (i64, i64, i64),
-    pub(crate) last_block: Option<(i64, Vec<u8>)>,
+pub(crate) struct BlockChainStats {
     pub(crate) hourly_stats: HashMap<chrono::DateTime<chrono::Utc>, (i32, i32, i32, i32, i128)>,
     pub(crate) daily_stats: HashMap<NaiveDate, (i32, i32, i32, i32, i128, i128, i128, i64, i64)>,
     pub(crate) daily_block_stats: HashMap<NaiveDate, (u128, i32, i32)>,
@@ -42,8 +44,19 @@ pub(crate) struct BatchStats {
     pub(crate) epoch_stats: HashMap<i64, EpochAccum>,
     pub(crate) block_time_dist: HashMap<i32, i32>,
     pub(crate) epoch_time_dist: HashMap<i32, i32>,
-    pub(crate) dao_snapshot_dates: std::collections::HashSet<NaiveDate>,
     pub(crate) daily_block_times: HashMap<NaiveDate, (i64, i32)>,
+    /// The block's DAO field, for its day's knowledge size.
+    pub(crate) daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
+}
+
+/// Accumulated statistics across a batch of blocks: the sync totals and the
+/// inputs of the DAO daily snapshots, which are written once per batch.
+#[derive(Default)]
+pub(crate) struct BatchStats {
+    pub(crate) sync_totals: (i64, i64, i64),
+    pub(crate) last_block: Option<(i64, Vec<u8>)>,
+    pub(crate) dao_snapshot_dates: std::collections::HashSet<NaiveDate>,
+    /// The DAO field of each day's last block in the batch.
     pub(crate) daily_dao_fields: HashMap<NaiveDate, Vec<u8>>,
     /// Chain time of the end header supplying each day's DAO field.
     pub(crate) daily_dao_end_chain_time_ms: HashMap<NaiveDate, i64>,
@@ -207,7 +220,7 @@ pub(crate) fn derive_pre_batch_live_cells(post_live_cells: i32, live_delta: i32)
 /// Buckets: 0 (<1s), 1..29 (per-second), 30 (>=30s).
 pub(crate) use ckbadger_common::stats_bucket::block_time_to_bucket;
 
-impl BatchStats {
+impl BlockChainStats {
     /// Accumulate one monotonic chain-time interval into the per-day sum and
     /// per-second bucket histogram. A negative interval violates the writer's
     /// canonical chain-time invariant.
@@ -2227,7 +2240,7 @@ mod tests {
         );
     }
 
-    // -- BatchStats::accumulate_block_time -----------------------------------
+    // -- BlockChainStats::accumulate_block_time ------------------------------
 
     #[test]
     fn test_accumulate_block_time_preserves_subsecond_precision() {
@@ -2238,7 +2251,7 @@ mod tests {
         let curr_ts = prev_ts + chrono::Duration::milliseconds(7945);
         let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
 
-        let mut stats = BatchStats::default();
+        let mut stats = BlockChainStats::default();
         stats.accumulate_block_time(prev_ts, curr_ts, date).unwrap();
 
         let (sum_ms, count) = stats.daily_block_times[&date];
@@ -2258,7 +2271,7 @@ mod tests {
         let prev_ts = curr_ts + chrono::Duration::milliseconds(500);
         let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
 
-        let mut stats = BatchStats::default();
+        let mut stats = BlockChainStats::default();
         let err = stats
             .accumulate_block_time(prev_ts, curr_ts, date)
             .unwrap_err();
@@ -2273,7 +2286,7 @@ mod tests {
         let base = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
         let date = NaiveDate::from_ymd_opt(2024, 6, 1).unwrap();
 
-        let mut stats = BatchStats::default();
+        let mut stats = BlockChainStats::default();
         // Three deltas: 7945ms, 8123ms, 9999ms = 26067ms total.
         stats
             .accumulate_block_time(base, base + chrono::Duration::milliseconds(7945), date)
