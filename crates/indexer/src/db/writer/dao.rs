@@ -109,8 +109,9 @@ pub(crate) struct LiveDaoBatch {
     /// is the pre-commit snapshot overlay; every other touched deposit is a
     /// completion of a request committed by an earlier batch.
     lifecycle_in_batch: HashSet<[u8; 34]>,
-    /// `dao_by_withdraw_tx` rows to stage: request outpoint → deposit outpoint.
-    request_rows: Vec<(Vec<u8>, i16, [u8; 34])>,
+    /// `dao_by_withdraw_tx` rows to stage, in chain order: the request's
+    /// block, request outpoint → deposit outpoint.
+    request_rows: Vec<(i64, Vec<u8>, i16, [u8; 34])>,
     /// Withdraw requests this batch created and has not yet consumed.
     open_requests: HashMap<[u8; 34], [u8; 34]>,
     /// Withdraw-request outpoints this batch consumed.
@@ -202,14 +203,39 @@ impl LiveDaoBatch {
         i128::from(self.deposits_created) - i128::from(self.withdrawals_completed)
     }
 
-    /// Stage the resolved lifecycle into the batch's domain write batch.
-    pub(crate) fn stage(&self, batch: &mut StoreBatch) {
+    /// Stage the resolved lifecycle into the batch's domain write batch,
+    /// every transition in its own block's scope and in chain order: the
+    /// deposit row and its `dao_by_block` / `dao_by_lock_block` /
+    /// `dao_by_status_block` rows as the transition leaves them (a deposit,
+    /// its request and its completion inside one batch reach the block
+    /// overlay in ascending block order), and each request's
+    /// `dao_by_withdraw_tx` row at the request's block.
+    pub(crate) fn stage(&self, batch: &mut StoreBatch) -> Result<()> {
+        let mut last_staged: HashMap<[u8; 34], &DaoDepositCacheEntry> = HashMap::new();
+        for transition in &self.transitions {
+            batch
+                .at(transition.block)
+                .put_dao_deposit(&transition.deposit_key, &transition.new);
+            last_staged.insert(transition.deposit_key, &transition.new);
+        }
+        for (block, request_tx, request_index, deposit_key) in &self.request_rows {
+            batch
+                .at(*block)
+                .put_dao_by_withdraw_tx(request_tx, *request_index, deposit_key);
+        }
+        // Every touched deposit's post-batch entry is its last transition.
         for (deposit_key, entry) in &self.entries {
-            batch.put_dao_deposit(deposit_key, entry);
+            if last_staged.get(deposit_key) != Some(&entry) {
+                let (tx_hash, output_index) = keys::decode_outpoint(deposit_key);
+                bail!(
+                    "DAO deposit's post-batch entry is not its last transition: deposit=0x{}:{}, status={}",
+                    hex::encode(tx_hash),
+                    output_index,
+                    entry.status
+                );
+            }
         }
-        for (request_tx, request_index, deposit_key) in &self.request_rows {
-            batch.put_dao_by_withdraw_tx(request_tx, *request_index, deposit_key);
-        }
+        Ok(())
     }
 
     /// Post-batch entries of the deposits this batch created or moved to
@@ -500,6 +526,7 @@ impl LiveDaoBatch {
             );
         }
         self.request_rows.push((
+            tx.block_number,
             request_output.tx_hash.clone(),
             request_output.output_index,
             deposit_key,
@@ -1255,7 +1282,7 @@ mod tests {
         );
 
         let mut batch = StoreBatch::new(&fx.store);
-        resolved.stage(&mut batch);
+        resolved.stage(&mut batch).unwrap();
         batch.commit().unwrap();
         assert_eq!(fx.stored(DEPOSIT), *entry);
         assert_eq!(
@@ -1326,8 +1353,75 @@ mod tests {
         );
         assert_eq!(resolved.live_dao_cell_delta(), -1);
         let mut batch = StoreBatch::new(&fx.store);
-        resolved.stage(&mut batch);
+        resolved.stage(&mut batch).unwrap();
         batch.commit().unwrap();
+        assert_eq!(fx.stored(DEPOSIT).status, 2);
+    }
+
+    /// The request and the completion of one deposit inside one live batch:
+    /// staging writes each transition in its own block's scope, so the block
+    /// journal holds the deposit row as the previous block left it — the
+    /// committed active entry before block 102, the requested entry before
+    /// block 103 — and the request row's creation at block 102 (store
+    /// refactor lane B, B-3; B-0 finding 7).
+    #[test]
+    fn test_live_dao_batch_stages_each_transition_in_its_block() {
+        use crate::db::writer::journal_test_support::journal_entries;
+        use crate::sync::undo::SharedUndoSeq;
+        use ckbadger_store::block_overlay::SharedBlockOverlay;
+        use ckbadger_store::keys::UndoSeqScope;
+
+        let mut fx = Fixture::new();
+        fx.commit_cell(DEPOSIT, &deposit_cell(DEPOSIT_CAPACITY, &LOCK), 101);
+        fx.commit_entry(DEPOSIT, &active_entry(101));
+        let resolved = fx
+            .resolve(
+                &[request_tx(102), completion_tx(103)],
+                &ars(&[(102, AR_REQUEST), (103, AR_COMPLETION)]),
+            )
+            .unwrap();
+        let requested = resolved.transitions()[0].new.clone();
+        assert_eq!(
+            (resolved.transitions()[0].block, requested.status),
+            (102, 1)
+        );
+
+        let overlay = SharedBlockOverlay::new(&fx.store);
+        let undo_seq = SharedUndoSeq::default();
+        let mut batch = StoreBatch::journaled(&fx.store, &overlay, 0);
+        resolved.stage(&mut batch).unwrap();
+        batch
+            .stage_journal(&mut |block| Ok(undo_seq.next(block, UndoSeqScope::Journal)))
+            .unwrap();
+        batch.commit().unwrap();
+
+        let deposit_key = keys::encode_outpoint(&DEPOSIT.0, DEPOSIT.1).to_vec();
+        let row = |entry: &DaoDepositCacheEntry| Some(bincode::serialize(entry).unwrap());
+        assert_eq!(
+            journal_entries(&fx.store, ckbadger_store::CF_DAO_DEPOSITS),
+            vec![
+                (102, deposit_key.clone(), row(&active_entry(101))),
+                (103, deposit_key.clone(), row(&requested)),
+            ],
+            "the deposit row is journaled at the request and at the completion"
+        );
+        assert_eq!(
+            journal_entries(&fx.store, ckbadger_store::CF_DAO_BY_WITHDRAW_TX),
+            vec![(
+                102,
+                keys::encode_outpoint(&REQUEST.0, REQUEST.1).to_vec(),
+                None
+            )]
+        );
+        let status_rows: Vec<i64> =
+            journal_entries(&fx.store, ckbadger_store::CF_DAO_BY_STATUS_BLOCK)
+                .into_iter()
+                .map(|(block, ..)| block)
+                .collect();
+        assert!(
+            status_rows.contains(&102) && status_rows.contains(&103),
+            "each transition moves the status index in its own block: {status_rows:?}"
+        );
         assert_eq!(fx.stored(DEPOSIT).status, 2);
     }
 

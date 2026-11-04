@@ -608,6 +608,15 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     // count is the object_activity_acc.rs step.
     (ckbadger_store::CF_DOTCELL_NAME_BY_OWNER, None),
     (ckbadger_store::CF_DOTCELL_RING, None),
+    // B-3 dao.rs: every DAO lifecycle transition (deposit, withdraw request,
+    // completion) stages the deposit row and its three secondary index rows
+    // in its own block, in chain order, and a request's dao_by_withdraw_tx
+    // row at the request's block.
+    (ckbadger_store::CF_DAO_DEPOSITS, None),
+    (ckbadger_store::CF_DAO_BY_WITHDRAW_TX, None),
+    (ckbadger_store::CF_DAO_BY_BLOCK, None),
+    (ckbadger_store::CF_DAO_BY_LOCK_BLOCK, None),
+    (ckbadger_store::CF_DAO_BY_STATUS_BLOCK, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a

@@ -2254,8 +2254,9 @@ impl Indexer {
             })
         })?;
 
-        // Group A: DAO lifecycle — stage exactly what `live_dao` resolved.
-        live_dao.stage(&mut data_batch);
+        // Group A: DAO lifecycle — stage exactly what `live_dao` resolved,
+        // each transition in its own block's scope.
+        live_dao.stage(&mut data_batch)?;
         // Post-batch DAO lifecycle view of everything this batch stages, used to
         // materialize completed-day snapshots exactly before the atomic commit.
         let staged_dao_entries = live_dao.staged_entries();
