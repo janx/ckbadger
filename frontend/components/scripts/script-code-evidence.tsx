@@ -176,7 +176,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
       ref={ref}
       role="img"
       aria-label="CKB under lock scripts by who can change their code"
-      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden rounded-[3px] tabular-nums"
+      className="text-small flex h-[28px] w-full min-w-0 gap-[2px] overflow-hidden rounded tabular-nums"
     >
       {held.map((row, i) => {
         const inside = fits(words(row), i) ? words(row) : '';
@@ -186,7 +186,7 @@ export function ScriptCodeClassBar({ classes }: { classes: readonly ScriptCodeCl
             data-code-class-segment={row.class}
             title={`${scriptClassLabel(row.class)}: ${scriptShare(BigInt(row.lockOwnedCapacitySum), total)}`}
             className={cn(
-              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded-[3px]',
+              'flex min-w-[3px] items-center overflow-hidden whitespace-nowrap rounded',
               inside && 'px-2.5',
               SEGMENT_INK[row.class] ?? 'text-text-bright'
             )}

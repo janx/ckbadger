@@ -13,9 +13,9 @@ import { cn } from '@/lib/utils';
  */
 export type RowTagVariant = 'default' | 'ghost' | 'accent' | 'warn';
 
-/** The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, 3 px corners, 5 px sides. */
+/** The boards' tag (table-rows T5): 11 px, 16 px line, 1 px border, 2 px corners, 5 px sides. */
 const BASE =
-  'text-meta text-text-dim border-base-border inline-block whitespace-nowrap rounded-[3px] border px-[5px] align-middle leading-4';
+  'text-meta text-text-dim border-base-border inline-block whitespace-nowrap rounded-sm border px-[5px] align-middle leading-4';
 const VARIANT: Record<RowTagVariant, string> = {
   default: '',
   ghost: 'border-dashed',

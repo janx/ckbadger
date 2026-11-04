@@ -86,7 +86,7 @@ function NetworkSwitcherControl({ networks, className, onSwitch }: NetworkSwitch
           <div
             role="menu"
             aria-label="CKB network"
-            className="border-base-border bg-base-surface min-w-[11rem] overflow-hidden rounded-md border shadow-lg"
+            className="border-base-border bg-base-surface min-w-[11rem] overflow-hidden rounded border shadow-lg"
           >
             <div className="eyebrow border-base-border/70 text-text-ghost text-meta border-b px-3 py-2 font-mono">
               CKB network

@@ -82,7 +82,7 @@ export function MnftRenderer({ renderer }: { renderer: string | null }) {
           ? 'a Bitcoin inscription'
           : null;
   return (
-    <figure className="border-base-border min-w-0 space-y-3 rounded-md border p-5 text-center">
+    <figure className="border-base-border min-w-0 space-y-3 rounded border p-5 text-center">
       {renderer ? (
         <>
           <div className="text-text-bright text-body">

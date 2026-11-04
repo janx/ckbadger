@@ -497,7 +497,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
         {(activeNode || activeEdge) && (
           <div
             data-role="party-or-pair"
-            className="border-base-border-subtle mt-3 rounded-md border px-3.5 py-3"
+            className="border-base-border-subtle mt-3 rounded border px-3.5 py-3"
           >
             {activeNode ? (
               <PartyPanel node={activeNode} partners={data.neighbours.get(activeNode.id)!.size} />

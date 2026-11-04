@@ -197,7 +197,7 @@ export function Header() {
                 <Link
                   href="/"
                   onClick={() => setIsMenuOpen(false)}
-                  className={`text-body block rounded-md border px-3 py-2.5 font-mono transition ${
+                  className={`text-body block rounded border px-3 py-2.5 font-mono transition ${
                     pathname === '/'
                       ? 'border-jade/40 bg-jade/8 text-jade'
                       : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -223,7 +223,7 @@ export function Header() {
                         <Link
                           href={item.href}
                           onClick={() => setIsMenuOpen(false)}
-                          className={`text-body block rounded-md border px-3 py-2.5 font-mono transition ${
+                          className={`text-body block rounded border px-3 py-2.5 font-mono transition ${
                             isDropdownActive(item)
                               ? 'border-jade/40 bg-jade/8 text-jade'
                               : 'text-text hover:text-jade hover:border-jade/20 border-transparent'
@@ -238,7 +238,7 @@ export function Header() {
                             key={child.href}
                             href={child.href}
                             onClick={() => setIsMenuOpen(false)}
-                            className={`text-small block rounded-md px-3 py-2 font-mono transition ${
+                            className={`text-small block rounded px-3 py-2 font-mono transition ${
                               isLinkActive(child.href)
                                 ? 'text-jade bg-jade/8'
                                 : 'text-text-dim hover:text-jade'
@@ -254,7 +254,7 @@ export function Header() {
                       key={item.href}
                       href={item.href}
                       onClick={() => setIsMenuOpen(false)}
-                      className={`text-body block rounded-md border px-3 py-2.5 font-mono transition ${
+                      className={`text-body block rounded border px-3 py-2.5 font-mono transition ${
                         isLinkActive(item.href)
                           ? 'border-jade/40 bg-jade/8 text-jade'
                           : 'text-text hover:text-jade hover:border-jade/20 border-transparent'

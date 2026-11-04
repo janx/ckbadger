@@ -447,7 +447,7 @@ function InflowSource({ txHash, inflow }: { txHash: string; inflow: TxInflow }) 
       data-inflow={inflow.tone}
       data-testid="tx-inflow"
       className={cn(
-        'text-small rounded-md border border-dashed px-3 py-2',
+        'text-small rounded border border-dashed px-3 py-2',
         inflow.tone === 'dao' ? 'border-gold/60 text-gold' : 'border-text-dim/60 text-text'
       )}
     >

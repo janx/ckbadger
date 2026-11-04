@@ -594,7 +594,7 @@ export function PeersTable() {
           aria-expanded={filtersOpen}
           aria-controls={filtersId}
           onClick={() => setFiltersOpen((open) => !open)}
-          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 rounded-md border px-2.5 font-mono md:hidden"
+          className="border-base-border bg-base-surface text-text hover:text-text-bright text-small h-8 rounded border px-2.5 font-mono md:hidden"
         >
           filters{activeFilters > 0 ? ` · ${activeFilters}` : ''}{' '}
           <span aria-hidden="true" className="text-text-dim">

@@ -144,7 +144,7 @@ function Allocation({ data, error }: { data: CkbytesAllocation | undefined; erro
     return (
       <div aria-hidden="true" className="flex flex-col gap-3.5">
         <div className="bg-base-surface h-9 w-2/3 animate-pulse rounded" />
-        <div className="bg-base-surface h-2.5 animate-pulse rounded-[5px]" />
+        <div className="bg-base-surface h-2.5 animate-pulse rounded-full" />
       </div>
     );
   }
@@ -238,7 +238,7 @@ function AllocationReady({ view }: { view: AllocationView }) {
       <div
         role="img"
         aria-label={`Knowledge ${pct(knowledge)} percent, free ${pct(free)} percent, Nervos DAO ${pct(daoFree)} percent`}
-        className="bg-base-surface flex h-2.5 overflow-hidden rounded-[5px]"
+        className="bg-base-surface flex h-2.5 overflow-hidden rounded-full"
       >
         {knowledge > BigInt(0) && (
           <span

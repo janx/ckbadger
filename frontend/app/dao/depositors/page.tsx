@@ -177,7 +177,7 @@ export default function DaoDepositorsPage() {
                   <button
                     type="button"
                     onClick={() => setCursors((c) => c.slice(0, -1))}
-                    className="border-base-border text-text hover:text-text-bright text-small h-9 rounded-md border px-4"
+                    className="border-base-border text-text hover:text-text-bright text-small h-9 rounded border px-4"
                   >
                     ← Previous
                   </button>
@@ -188,7 +188,7 @@ export default function DaoDepositorsPage() {
                   <button
                     type="button"
                     onClick={() => setCursors((c) => [...c, page.nextCursor ?? undefined])}
-                    className="border-base-border text-text hover:text-text-bright text-small h-9 rounded-md border px-4"
+                    className="border-base-border text-text hover:text-text-bright text-small h-9 rounded border px-4"
                   >
                     Next {pageSize} →
                   </button>

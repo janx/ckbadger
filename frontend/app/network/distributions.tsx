@@ -52,10 +52,10 @@ function Bars({ items, attr }: { items: LabelCount[]; attr: string }) {
           >
             {it.label}
           </span>
-          <span aria-hidden="true" className="bg-base-elevated flex h-1.5 rounded-[3px]">
+          <span aria-hidden="true" className="bg-base-elevated flex h-1.5 rounded-full">
             <span
               {...{ [attr]: '' }}
-              className="rounded-[3px]"
+              className="rounded-full"
               style={{
                 width: `${(100 * it.count) / max}%`,
                 backgroundColor: DATA_COLOR,
@@ -187,14 +187,14 @@ function HostingSection({
         role="img"
         aria-label="Verified nodes by hosting network"
         title={segments.map(([org, count]) => `${org} ${share(count)}`).join(' · ')}
-        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden rounded-[3px] tabular-nums"
+        className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden rounded tabular-nums"
       >
         {segments.map(([org, count], i) => (
           <span
             key={org}
             data-provider={org}
             className={cn(
-              'flex items-center overflow-hidden whitespace-nowrap rounded-[3px] px-2.5',
+              'flex items-center overflow-hidden whitespace-nowrap rounded px-2.5',
               PROVIDER_OPACITY[i] >= 0.6 ? 'text-base-bg' : 'text-text-bright'
             )}
             style={{ width: `${spans[i].width}%`, backgroundColor: dataHue(PROVIDER_OPACITY[i]) }}

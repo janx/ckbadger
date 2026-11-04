@@ -30,7 +30,7 @@ export function CapacityRangeSelector({
               aria-pressed={active}
               onClick={() => onChange(option.key)}
               className={cn(
-                'text-small inline-flex h-7 items-center rounded-[4px] border px-2.5 font-mono',
+                'text-small inline-flex h-7 items-center rounded border px-2.5 font-mono',
                 i > 0 && 'ml-1',
                 active
                   ? 'border-base-border bg-base-border-subtle text-text-bright'

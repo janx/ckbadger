@@ -965,7 +965,7 @@ export function Chart({
                 <span
                   aria-hidden="true"
                   data-swatch
-                  className="inline-block h-2.5 w-2.5 shrink-0 self-center rounded-[2px]"
+                  className="inline-block h-2.5 w-2.5 shrink-0 self-center rounded-sm"
                   style={{ backgroundColor: color(i) }}
                 />
                 <span className="text-text">{s.label}</span>

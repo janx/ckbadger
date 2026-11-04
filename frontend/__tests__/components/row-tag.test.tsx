@@ -5,7 +5,7 @@ import { render, screen } from '@testing-library/react';
 import { RowTag, rowTagClass } from '@/components/ui/row-tag';
 
 describe('RowTag (table-rows R3)', () => {
-  it("is the boards' 11 px bordered chip by default: dim ink, base border, 3 px corners", () => {
+  it("is the boards' 11 px bordered chip by default: dim ink, base border, 2 px corners (rounded-sm, visual finish V10)", () => {
     render(<RowTag>lock</RowTag>);
     const tag = screen.getByText('lock');
     expect(tag.tagName).toBe('SPAN');
@@ -15,7 +15,7 @@ describe('RowTag (table-rows R3)', () => {
       'text-text-dim',
       'border',
       'border-base-border',
-      'rounded-[3px]',
+      'rounded-sm',
       'px-[5px]',
       'leading-4',
       'inline-block',

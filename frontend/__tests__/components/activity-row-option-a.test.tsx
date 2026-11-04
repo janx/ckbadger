@@ -286,7 +286,7 @@ describe('option A: every participant, one line each (D1)', () => {
       );
       expect(line.querySelector('[data-role="lock-kind"]')).not.toHaveClass(
         'border',
-        'rounded-[3px]',
+        'rounded-sm',
         'text-meta'
       );
     }

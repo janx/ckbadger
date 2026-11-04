@@ -238,7 +238,7 @@ function Plate({
     <div
       ref={plateRef}
       data-flow-plate
-      className="bg-base-bg/95 text-small flex max-w-full flex-col items-center gap-0.5 whitespace-nowrap rounded-md border px-3 py-1.5"
+      className="bg-base-bg/95 text-small flex max-w-full flex-col items-center gap-0.5 whitespace-nowrap rounded border px-3 py-1.5"
       style={{ borderColor: colorOf(asset) }}
     >
       <span className="text-text-bright flex items-center gap-1.5 font-medium">

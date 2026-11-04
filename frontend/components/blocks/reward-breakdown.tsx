@@ -143,7 +143,7 @@ export function RewardBreakdown({
         <div
           role="img"
           aria-label={`Reward shares: ${parts.map((p) => `${p.spoken} ${share(p.value)}%`).join(', ')}`}
-          className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden rounded-[5px]"
+          className="bg-base-surface flex h-2.5 gap-0.5 overflow-hidden rounded-full"
         >
           {parts
             .filter((p) => p.value > BigInt(0))

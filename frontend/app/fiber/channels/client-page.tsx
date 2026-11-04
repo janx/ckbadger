@@ -331,7 +331,7 @@ export default function FiberChannelsPage() {
                       pagination.reset();
                     }}
                     className={cn(
-                      'text-small h-[30px] rounded-md border px-[11px]',
+                      'text-small h-[30px] rounded border px-[11px]',
                       on
                         ? 'bg-base-elevated text-text-bright border-[#2c3348]'
                         : 'border-base-border-subtle text-text hover:text-text-bright'

@@ -309,7 +309,7 @@ describe('move 2 on the frame and the tier boundary', () => {
       </TerminalPanel>
     );
     const frame = screen.getByTestId('frame');
-    expect(frame).toHaveClass('glass', 'border-base-border', 'neon-edge-top', 'rounded-md');
+    expect(frame).toHaveClass('glass', 'border-base-border', 'neon-edge-top', 'rounded');
     expect(frame).not.toHaveClass('bg-base-surface');
     const eyebrow = screen.getByText('Cells');
     expect(eyebrow).toHaveClass('eyebrow', 'text-small', 'text-text-dim');
@@ -333,7 +333,7 @@ describe('move 2 on the frame and the tier boundary', () => {
     const { container } = render(<TintedJson text='{"a": 1}' />);
     const pre = container.querySelector('pre')!;
     expect(pre).toHaveClass('well');
-    expect(pre).not.toHaveClass('bg-[#10131c]', 'rounded-md');
+    expect(pre).not.toHaveClass('bg-[#10131c]', 'rounded');
   });
 });
 
@@ -429,7 +429,7 @@ describe('move 5 on the activity row', () => {
       const kind = line.querySelector('[data-role="lock-kind"]') as HTMLElement;
       expect(kind).toHaveTextContent('Default Lock');
       expect(kind).toHaveClass('small-caps', 'lowercase', 'text-text-dim', 'whitespace-nowrap');
-      expect(kind).not.toHaveClass('border', 'rounded-[3px]', 'text-meta');
+      expect(kind).not.toHaveClass('border', 'rounded-sm', 'text-meta');
     }
     expect(container.querySelector('[data-row-tag]')).toBeNull();
   });
@@ -461,6 +461,6 @@ describe('move 5 on the activity row', () => {
     expect(screen.getByText('JoyID')).toHaveClass('small-caps', 'lowercase', 'text-text-dim');
     rerender(<LockKind lockKind="JoyID" lockCodeHash={code} className={rowTagClass()} />);
     expect(screen.getByText('JoyID')).not.toHaveClass('small-caps', 'lowercase');
-    expect(screen.getByText('JoyID')).toHaveClass('border', 'rounded-[3px]');
+    expect(screen.getByText('JoyID')).toHaveClass('border', 'rounded-sm');
   });
 });

@@ -65,7 +65,7 @@ describe('NetworkMapView', () => {
     const frame = map.closest('[data-instrument-frame]') as HTMLElement;
     expect(frame).not.toBeNull();
     expect(frame).toHaveAttribute('aria-label', 'Map of verified peers');
-    expect(frame).toHaveClass('neon-edge-top', 'rounded-md', 'border', 'border-base-border');
+    expect(frame).toHaveClass('neon-edge-top', 'rounded', 'border', 'border-base-border');
     expect(frame).not.toContainElement(
       screen.getByRole('complementary', { name: 'Selected peer evidence' })
     );

@@ -299,7 +299,7 @@ function FieldDetail({
       aria-label={`${title} field detail`}
       aria-live="polite"
       data-detail={reading.key}
-      className="min-h-[96px] min-w-0 rounded-md border border-[#1a1f30] px-3.5 py-3"
+      className="min-h-[96px] min-w-0 rounded border border-[#1a1f30] px-3.5 py-3"
     >
       <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
         <span className="text-text-bright text-body min-w-0 [overflow-wrap:anywhere]">

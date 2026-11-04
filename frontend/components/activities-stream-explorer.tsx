@@ -215,7 +215,7 @@ function ActivityStreamToolbar({
             aria-pressed={selectedFilter === option.value}
             onClick={() => onFilterChange(option.value)}
             className={cn(
-              'text-small flex items-center gap-2 rounded-md border px-3 py-2 transition-colors',
+              'text-small flex items-center gap-2 rounded border px-3 py-2 transition-colors',
               selectedFilter === option.value
                 ? 'border-base-border text-text-bright bg-base-surface'
                 : 'text-text-dim hover:text-text border-transparent'
@@ -571,7 +571,7 @@ export function ActivitiesStreamExplorer({
                 <button
                   type="button"
                   onClick={() => void fetchNextPage()}
-                  className="border-base-border text-text hover:text-text-bright text-small rounded-md border px-5 py-2"
+                  className="border-base-border text-text hover:text-text-bright text-small rounded border px-5 py-2"
                 >
                   Older
                 </button>

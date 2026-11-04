@@ -555,7 +555,7 @@ function Issuance({ statistics }: Pick<Props, 'statistics'>) {
 /** A mechanism tile (the "Two names for the same script" chain's tile, `script-byte-map.tsx`). */
 function MechanismTile({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="text-small text-text-dim min-w-0 flex-1 rounded-md border border-[#1a1f30] px-3 py-2.5">
+    <div className="text-small text-text-dim min-w-0 flex-1 rounded border border-[#1a1f30] px-3 py-2.5">
       <b className="text-text-bright mb-0.5 block font-medium">{title}</b>
       {children}
     </div>
@@ -702,7 +702,7 @@ function CapacityUse({ statistics }: { statistics: DaoStatistics }) {
             <div
               key={part.key}
               title={`${part.title}: ${formatCapacity(part.value)}`}
-              className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap rounded-[3px] ${part.key === 'other' ? 'text-text flex-1 px-2.5' : 'text-base-bg shrink-0 justify-center'}`}
+              className={`flex min-w-0 items-center overflow-hidden whitespace-nowrap rounded ${part.key === 'other' ? 'text-text flex-1 px-2.5' : 'text-base-bg shrink-0 justify-center'}`}
               style={{
                 width: part.key === 'other' ? undefined : `${percent}%`,
                 background: part.color,
@@ -878,14 +878,14 @@ function Windows({ evidence }: { evidence: DaoEvidence }) {
               className="text-small flex h-[28px] w-full gap-0.5 overflow-hidden"
             >
               <span
-                className="bg-gold/45 text-text flex items-center overflow-hidden whitespace-nowrap rounded-[3px] px-3"
+                className="bg-gold/45 text-text flex items-center overflow-hidden whitespace-nowrap rounded px-3"
                 style={{ width: `${readyPercent}%` }}
               >
                 {/* One flex item, so the spaces between its words stay. */}
                 {claimableInside ? <span>{claimable}</span> : null}
               </span>
               <span
-                className="bg-gold rounded-[3px]"
+                className="bg-gold rounded"
                 style={{ width: `${formatPercent(waitingShannons, requested, 4)}%` }}
               />
             </div>

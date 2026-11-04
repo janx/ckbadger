@@ -197,7 +197,7 @@ export function HistoryRangeToggle({
           aria-pressed={range === choice}
           onClick={() => onChange(choice)}
           className={cn(
-            'text-small inline-flex h-7 items-center rounded-[4px] border px-2.5 font-mono',
+            'text-small inline-flex h-7 items-center rounded border px-2.5 font-mono',
             i > 0 && 'ml-1',
             range === choice
               ? 'border-base-border bg-base-border-subtle text-text-bright'

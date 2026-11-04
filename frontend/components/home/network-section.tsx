@@ -352,7 +352,7 @@ function TransactionsFigure() {
         <span
           role="group"
           aria-label="Transactions range"
-          className="border-base-border flex overflow-hidden rounded-md border"
+          className="border-base-border flex overflow-hidden rounded border"
         >
           {(Object.keys(TX_RANGES) as TxRange[]).map((r) => (
             <button

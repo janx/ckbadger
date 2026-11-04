@@ -74,7 +74,7 @@ export function ConcentrationBar({
         aria-label={`${label}: ${groups.map((g) => `${g.label} ${formatPercent(g.value, total)}%`).join(', ')}`}
         className={cn(
           'flex w-full gap-0.5 overflow-hidden',
-          labelsInside ? 'text-small h-[28px] rounded-[3px] tabular-nums' : 'h-3 rounded-md'
+          labelsInside ? 'text-small h-[28px] rounded tabular-nums' : 'h-3 rounded-full'
         )}
       >
         {groups.map((g, i) =>
@@ -83,7 +83,7 @@ export function ConcentrationBar({
               key={g.label}
               data-segment={g.label}
               className={cn(
-                'flex items-center overflow-hidden whitespace-nowrap rounded-[3px] px-2.5',
+                'flex items-center overflow-hidden whitespace-nowrap rounded px-2.5',
                 OPACITY[i] >= 0.7 ? 'text-base-bg' : 'text-text-bright'
               )}
               style={{

@@ -8,11 +8,11 @@ import {
 
 // Midnight, continued (review 2026-11-03, item 5, move 3): "instruments are framed, text is
 // flat". TerminalPanel is the one instrument frame — a #222840 hairline (`border-base-border`),
-// a 6 px radius, glass (material pass v2, move 2: `.glass` replaces the flat surface colour, so
-// the sky's pool shows through), the jade top edge (`.neon-edge-top`) and inset scanlines — with
-// an uppercase 12 px eyebrow led by the section mark.
+// a 4 px radius (visual finish V10: `rounded-md` → `rounded`), glass (material pass v2, move 2:
+// `.glass` replaces the flat surface colour, so the sky's pool shows through), the jade top edge
+// (`.neon-edge-top`) and inset scanlines — with an uppercase 12 px eyebrow led by the section mark.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
-  it('frames its content: hairline, 6 px radius, glass, jade top edge, scanlines', () => {
+  it('frames its content: hairline, 4 px radius, glass, jade top edge, scanlines', () => {
     const { container } = render(
       <TerminalPanel aria-label="An instrument" data-testid="frame">
         <TerminalPanelContent>inside</TerminalPanelContent>
@@ -25,7 +25,7 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
       'neon-edge-top',
       'relative',
       'overflow-hidden',
-      'rounded-md',
+      'rounded',
       'border',
       'border-base-border',
       'glass'

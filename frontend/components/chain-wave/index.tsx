@@ -166,7 +166,7 @@ function StageFlowPill({
   stage: FlowStage;
 }) {
   return (
-    <div className={`rounded-xl border px-3 py-2 ${stagePillClass(stage)}`}>
+    <div className={`rounded-lg border px-3 py-2 ${stagePillClass(stage)}`}>
       <div className="eyebrow text-text/70 text-meta">{title}</div>
       <div className="mt-1 flex items-center justify-between gap-3">
         <div className="text-text-bright text-hero font-semibold">{value.toLocaleString()}</div>
@@ -212,7 +212,7 @@ function TxMetricScatter({
 
   return (
     <div
-      className={`border-base-border/60 bg-base-bg/50 relative overflow-hidden rounded-xl border ${
+      className={`border-base-border/60 bg-base-bg/50 relative overflow-hidden rounded-lg border ${
         compact ? 'h-28' : 'h-52'
       }`}
     >
@@ -302,7 +302,7 @@ function StageScatterCard({
   const medianCycles = useMemo(() => median(items.map((item) => item.cycles)), [items]);
 
   return (
-    <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
+    <div className="border-base-border/50 bg-base-surface/60 rounded-lg border p-4">
       <div className="mb-3 flex items-start justify-between gap-3">
         <div>
           <h3 className="text-text-bright text-body sm:text-section font-semibold">{title}</h3>
@@ -333,14 +333,14 @@ function StageScatterCard({
 function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
   if (blocks.length === 0) {
     return (
-      <div className="border-base-border/50 bg-base-surface/60 text-text-dim text-body rounded-2xl border p-4">
+      <div className="border-base-border/50 bg-base-surface/60 text-text-dim text-body rounded-lg border p-4">
         No committed blocks yet
       </div>
     );
   }
 
   return (
-    <div className="border-base-border/50 bg-base-surface/60 rounded-2xl border p-4">
+    <div className="border-base-border/50 bg-base-surface/60 rounded-lg border p-4">
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-text-bright text-body sm:text-section font-semibold">
@@ -358,14 +358,14 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
           <Link
             key={entry.block.number}
             href={`/blocks/${entry.block.number}`}
-            className="hover:border-gold/50 border-base-border/60 bg-base-bg/60 block rounded-xl border p-3 transition-colors"
+            className="hover:border-gold/50 border-base-border/60 bg-base-bg/60 block rounded-lg border p-3 transition-colors"
           >
             <div className="text-small mb-2 flex items-center justify-between">
               <div className="text-text-bright font-medium">
                 {formatBlockNumber(entry.block.number)}
               </div>
               {index === 0 ? (
-                <span className="eyebrow border-gold/40 bg-gold/20 text-gold text-meta rounded-md border px-1.5 py-0.5">
+                <span className="eyebrow border-gold/40 bg-gold/20 text-gold text-meta rounded border px-1.5 py-0.5">
                   New
                 </span>
               ) : (
@@ -387,7 +387,7 @@ function CommittedBlocksStrip({ blocks }: { blocks: CommittedBlock[] }) {
 
 function TriMetricLegend() {
   return (
-    <div className="border-base-border/60 bg-base-bg/40 mt-4 rounded-xl border p-3">
+    <div className="border-base-border/60 bg-base-bg/40 mt-4 rounded-lg border p-3">
       <div className="eyebrow text-text-dim text-small">Tri-metric encoding</div>
       <div className="text-text text-small mt-2 grid gap-2 sm:grid-cols-3">
         <div className="border-base-border/50 bg-base-surface/60 rounded-lg border px-2 py-1.5">
@@ -480,8 +480,8 @@ export function ChainWave({ initialBlocks, showHeader = true, chrome = 'card' }:
 
   const containerClassName =
     chrome === 'flat'
-      ? 'rounded-2xl bg-gradient-to-br from-base-surface via-base-surface to-base-elevated/80 p-4 sm:p-6'
-      : 'rounded-2xl border border-base-border/50 bg-gradient-to-br from-base-surface via-base-surface to-base-elevated p-4 shadow-xl sm:p-6';
+      ? 'rounded-lg bg-gradient-to-br from-base-surface via-base-surface to-base-elevated/80 p-4 sm:p-6'
+      : 'rounded-lg border border-base-border/50 bg-gradient-to-br from-base-surface via-base-surface to-base-elevated p-4 shadow-xl sm:p-6';
 
   return (
     <div className={containerClassName}>

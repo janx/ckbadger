@@ -256,7 +256,7 @@ describe('Collection holders on the row rules (table-rows L2-4)', () => {
       '[&_a]:leading-[18px]',
       'flex-nowrap'
     );
-    expect(within(first).getByText('JoyID')).toHaveClass('border', 'rounded-[3px]', 'text-meta');
+    expect(within(first).getByText('JoyID')).toHaveClass('border', 'rounded-sm', 'text-meta');
     const scale = resourceScale([6, 6]);
     expect(first.querySelector('[data-track]')).toHaveStyle({ height: '8px' });
     expect(first.querySelector('[data-segment]')).toHaveStyle({

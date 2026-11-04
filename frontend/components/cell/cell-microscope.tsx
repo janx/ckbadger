@@ -604,7 +604,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
                 data-region={region.id}
                 title={`${region.label} · ${fmt(region.end - region.start)} B`}
                 {...handlers({ kind: 'region', id: region.id })}
-                className="text-meta flex items-center justify-center overflow-hidden rounded-[1px] text-[#0c0e15]"
+                className="text-meta flex items-center justify-center overflow-hidden rounded-sm text-[#0c0e15]"
                 style={{
                   flex: `${region.end - region.start} 0 0`,
                   minWidth: 3,
@@ -759,7 +759,7 @@ export function CellMicroscope({ cell, lockName, typeName }: CellMicroscopeProps
           aria-label="Field detail"
           aria-live="polite"
           className={cn(
-            'text-small min-h-[260px] rounded-md border border-[#1a1f30] px-3.5 py-3',
+            'text-small min-h-[260px] rounded border border-[#1a1f30] px-3.5 py-3',
             STICKY_RAIL
           )}
         >

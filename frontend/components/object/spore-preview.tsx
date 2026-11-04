@@ -45,7 +45,7 @@ export function SporePreview({ preview, physicality = 'default' }: SporePreviewP
 function StaticPreview({ preview }: { preview: NonNullable<PreviewKind> }) {
   return (
     <div
-      className="flex items-center justify-center rounded-md p-8"
+      className="flex items-center justify-center rounded p-8"
       style={{
         background: '#070b10',
         boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.7), inset 0 0 1px rgba(255,255,255,0.04)',
@@ -97,7 +97,7 @@ function PhysicalPreview({
 
   return (
     <div
-      className="flex items-center justify-center rounded-md p-8"
+      className="flex items-center justify-center rounded p-8"
       style={{
         background: '#070b10',
         boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.7), inset 0 0 1px rgba(255,255,255,0.04)',

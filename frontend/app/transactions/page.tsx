@@ -429,7 +429,7 @@ export default function TransactionsPage() {
                 id="transactions-kind"
                 value={kind}
                 onChange={(e) => chooseKind(e.target.value as TransactionKind)}
-                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 rounded-md border px-2"
+                className="border-base-border bg-base-surface text-text-bright text-small h-8 min-w-0 rounded border px-2"
               >
                 {KINDS.map((option) => (
                   <option key={option.value} value={option.value}>
@@ -445,7 +445,7 @@ export default function TransactionsPage() {
                   aria-pressed={tab === 'pool'}
                   onClick={() => setTab(tab === 'pool' ? 'committed' : 'pool')}
                   className={cn(
-                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5',
+                    'text-small flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded border px-2.5',
                     tab === 'pool'
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'border-base-border-subtle text-text'
@@ -469,7 +469,7 @@ export default function TransactionsPage() {
                   aria-pressed={kind === option.value}
                   onClick={() => chooseKind(option.value)}
                   className={cn(
-                    'text-small flex min-h-[34px] items-center gap-2 rounded-md border px-3',
+                    'text-small flex min-h-[34px] items-center gap-2 rounded border px-3',
                     kind === option.value
                       ? 'border-base-border bg-base-surface text-text-bright'
                       : 'text-text-dim hover:text-text border-transparent'
@@ -573,7 +573,7 @@ export default function TransactionsPage() {
                 <button
                   type="button"
                   onClick={() => setTab('pool')}
-                  className="border-base-border text-text hover:text-text-bright rounded-md border px-3 py-2"
+                  className="border-base-border text-text hover:text-text-bright rounded border px-3 py-2"
                 >
                   Open the pool →
                 </button>

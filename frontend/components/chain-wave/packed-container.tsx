@@ -194,7 +194,7 @@ function TxBox({ item, boxSize, x, y, type, isCommitted }: TxBoxProps) {
         ref={boxRef}
         data-testid={`tx-box-${item.id}`}
         className={cn(
-          'absolute cursor-pointer rounded-[2px] border border-black/30 transition-colors duration-100',
+          'absolute cursor-pointer rounded-sm border border-black/30 transition-colors duration-100',
           CATEGORY_COLORS[item.category][type]
         )}
         style={{
@@ -283,7 +283,7 @@ export function PackedContainer({
   const content = (
     <div
       className={cn(
-        'flex h-full min-h-[180px] flex-col rounded-xl border-2 bg-gradient-to-br p-3 transition-all duration-200 sm:min-h-[220px] sm:p-4',
+        'flex h-full min-h-[180px] flex-col rounded-lg border-2 bg-gradient-to-br p-3 transition-all duration-200 sm:min-h-[220px] sm:p-4',
         config.borderColor,
         config.bgGradient,
         type === 'tip' &&

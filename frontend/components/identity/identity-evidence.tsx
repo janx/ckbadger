@@ -113,7 +113,7 @@ function WitnessKey({ k, note }: { k: { algorithm: number; argsHex: string }; no
     <>
       <span
         data-role="algorithm"
-        className="text-meta text-text-dim border-base-border whitespace-nowrap rounded-[3px] border px-[5px] leading-4"
+        className="text-meta text-text-dim border-base-border whitespace-nowrap rounded-sm border px-[5px] leading-4"
       >
         algorithm {k.algorithm}
       </span>{' '}
@@ -360,7 +360,7 @@ export function DidStored({ protocol }: { protocol: Of<'did_ckb'> }) {
           ['data layout', `V${d.documentVersion} (union variant 0)`],
         ]}
       />
-      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap rounded-md px-3.5 py-3 [overflow-wrap:anywhere]">
+      <pre className="bg-base-elevated text-text text-meta whitespace-pre-wrap rounded px-3.5 py-3 [overflow-wrap:anywhere]">
         {JSON.stringify(d.document, null, 2)}
       </pre>
     </Tier2Section>

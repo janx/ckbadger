@@ -20,12 +20,7 @@ describe('LockKind (R-2)', () => {
     const { rerender } = render(<LockKind lockKind="JoyID" lockCodeHash={CODE} />);
     expect(screen.getByText('JoyID')).toHaveClass('text-text-dim', 'whitespace-nowrap');
     rerender(<LockKind lockKind="JoyID" lockCodeHash={CODE} className={rowTagClass()} />);
-    expect(screen.getByText('JoyID')).toHaveClass(
-      'text-meta',
-      'border',
-      'rounded-[3px]',
-      'leading-4'
-    );
+    expect(screen.getByText('JoyID')).toHaveClass('text-meta', 'border', 'rounded-sm', 'leading-4');
     expect(screen.getByText('JoyID')).toHaveAttribute('title', CODE);
   });
 

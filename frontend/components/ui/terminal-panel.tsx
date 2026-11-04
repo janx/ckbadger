@@ -29,7 +29,7 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
 
 /**
  * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"):
- * a #222840 hairline, a 6 px radius, glass (material pass v2, move 2: `.glass` — 72 % opaque over
+ * a #222840 hairline, a 4 px radius, glass (material pass v2, move 2: `.glass` — 72 % opaque over
  * the night sky, a 1 px highlight on the top edge, a dark line on the bottom edge; no
  * backdrop-filter, see globals.css), a jade edge along the top (`.neon-edge-top`) and inset
  * scanlines. The transaction pipeline, the tx page's cells diagram, the cell page's byte dump,
@@ -55,7 +55,7 @@ export function TerminalPanel({
       {...props}
       data-instrument-frame=""
       className={cn(
-        'neon-edge-top relative overflow-hidden rounded-md border transition-shadow duration-300',
+        'neon-edge-top relative overflow-hidden rounded border transition-shadow duration-300',
         accentClass[accentColor],
         variantClasses[variant],
         glow && 'hover:shadow-glow',

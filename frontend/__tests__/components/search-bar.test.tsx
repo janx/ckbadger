@@ -105,7 +105,7 @@ describe('SearchBar', () => {
     // material pass v2 (move 2): the field is a well (`.well`: dark inset glass, the row-rule
     // border; its corners stay the board's 6 px through --well-radius)
     expect(input).toHaveClass('well', '[--well-radius:6px]', 'h-9');
-    expect(input).not.toHaveClass('bg-base-surface', 'rounded-md', 'border-base-border');
+    expect(input).not.toHaveClass('bg-base-surface', 'rounded', 'border-base-border');
     expect(input).toHaveClass(
       // the jade-tinted focus border and its soft ring
       'focus:border-jade/50',

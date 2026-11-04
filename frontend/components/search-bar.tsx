@@ -162,8 +162,8 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
         <div
           className={cn(
             'group relative',
-            isHome && 'overflow-hidden rounded-xl',
-            isCompact && 'rounded-md'
+            isHome && 'overflow-hidden rounded-lg',
+            isCompact && 'rounded'
           )}
         >
           <input
@@ -198,7 +198,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               'text-text-bright w-full font-mono transition-colors focus-visible:outline-none',
               isInputFocused && 'caret-transparent',
               isHome
-                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-xl border pl-8 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
+                ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-lg border pl-8 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'
                 : isCompact
                   ? // TX-03 (Main.dc.html): a 36 px rounded field on the surface colour, one "/" key.
                     'well placeholder:text-text-dim focus:border-jade/50 text-body h-9 pl-7 pr-9 [--well-radius:6px] focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]'
@@ -235,11 +235,11 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
             <>
               <span
                 data-testid="home-search-focus-glow"
-                className="border-jade/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 rounded-xl border opacity-100"
+                className="border-jade/55 animate-terminal-glow-pulse pointer-events-none absolute inset-0 rounded-lg border opacity-100"
               />
               <span
                 data-testid="home-search-focus-border-scan"
-                className="pointer-events-none absolute inset-0 overflow-hidden rounded-xl"
+                className="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
               >
                 <span className="via-jade absolute bottom-0 left-0 h-[2px] w-24 -translate-x-full bg-gradient-to-r from-transparent to-transparent [animation:terminal-border-scan-ltr_2.4s_linear_infinite]" />
               </span>

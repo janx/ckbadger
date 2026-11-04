@@ -29,7 +29,7 @@ function RecordValue({ value, label }: { value: IdentityRecordValue; label?: str
           <span
             data-accent-swatch
             aria-hidden="true"
-            className="h-3 w-3 shrink-0 rounded-[3px]"
+            className="h-3 w-3 shrink-0 rounded-sm"
             // The owner's own colour value, validated as #rgb / #rrggbb before it gets here.
             style={{ backgroundColor: value.text }}
           />

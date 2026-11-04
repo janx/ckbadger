@@ -746,7 +746,7 @@ function ArrowLink({ href, label, d }: { href: string; label: string; d: string 
     <Link
       href={href}
       aria-label={label}
-      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center rounded-md border"
+      className="border-base-border text-text-dim hover:text-jade flex h-9 w-9 shrink-0 items-center justify-center rounded border"
     >
       <svg
         aria-hidden="true"

@@ -159,7 +159,7 @@ function Chain({ from, to, words }: { from: string; to: string; words: string })
               <span className="hidden sm:inline">→</span>
             </span>
           )}
-          <div className="text-small text-text-dim min-w-0 flex-1 rounded-md border border-[#1a1f30] px-3 py-2.5">
+          <div className="text-small text-text-dim min-w-0 flex-1 rounded border border-[#1a1f30] px-3 py-2.5">
             <b className="text-text-bright mb-0.5 block font-medium">{tile.title}</b>
             {tile.body}
           </div>

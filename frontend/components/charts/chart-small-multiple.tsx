@@ -186,7 +186,7 @@ export function ChartSmallMultiple({ definition }: { definition: ChartDefinition
             <li key={entry.key} className="flex items-center gap-1.5">
               <span
                 aria-hidden="true"
-                className="h-[7px] w-[7px] rounded-[2px]"
+                className="h-[7px] w-[7px] rounded-sm"
                 style={{ backgroundColor: entry.color }}
               />
               <span>{entry.label}</span>

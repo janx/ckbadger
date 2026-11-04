@@ -996,9 +996,9 @@ function AddressCollections({ holdings }: { holdings: AddressHoldings }) {
                   <span className="text-text-bright text-body min-w-0 truncate">{label}</span>
                 )}
               </span>
-              <span aria-hidden="true" className="bg-base-border hidden h-2 rounded-[1px] sm:block">
+              <span aria-hidden="true" className="bg-base-border hidden h-2 rounded-sm sm:block">
                 <span
-                  className="bg-text block h-full rounded-[1px]"
+                  className="bg-text block h-full rounded-sm"
                   style={{ width: `${max === 0 ? 0 : (g.itemCount / max) * 100}%` }}
                 />
               </span>

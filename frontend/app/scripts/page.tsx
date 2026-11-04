@@ -697,7 +697,7 @@ export default function ScriptsPage() {
                       type="button"
                       aria-pressed={bar === field.value}
                       onClick={() => chooseBar(field.value)}
-                      className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l-[4px]' : '-ml-px rounded-r-[4px]'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
+                      className={`text-small inline-flex h-6 items-center border px-2 ${i === 0 ? 'rounded-l' : '-ml-px rounded-r'} ${bar === field.value ? 'border-base-border bg-base-border-subtle text-text-bright' : 'border-base-border-subtle text-text hover:text-text-bright'}`}
                     >
                       {field.label}
                     </button>

@@ -141,7 +141,7 @@ describe('activity lock kind at every width (A8 → T7: the tag is on every line
     expect(kind.previousElementSibling).toHaveAttribute('data-party');
     expect([...kind.classList].filter((c) => /hidden|^(sm|md|lg):/.test(c))).toEqual([]);
     expect(kind).toHaveClass('whitespace-nowrap', 'small-caps', 'text-text-dim');
-    expect(kind).not.toHaveClass('rounded-[3px]', 'border');
+    expect(kind).not.toHaveClass('rounded-sm', 'border');
     // Not repeated in the party cell.
     expect(container.querySelector('[data-party]')).not.toHaveTextContent('JoyID');
   });

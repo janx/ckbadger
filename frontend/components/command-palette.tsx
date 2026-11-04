@@ -338,7 +338,7 @@ export function CommandPalette() {
       role="presentation"
     >
       <div
-        className="border-base-border bg-base-surface w-full max-w-2xl rounded-xl border shadow-2xl"
+        className="border-base-border bg-base-surface w-full max-w-2xl rounded-lg border shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
         {mode === 'commands' ? (
@@ -363,7 +363,7 @@ export function CommandPalette() {
                     <li key={command.id}>
                       <button
                         type="button"
-                        className={`text-body w-full rounded-md px-3 py-2 text-left font-mono transition-colors ${
+                        className={`text-body w-full rounded px-3 py-2 text-left font-mono transition-colors ${
                           index === selectedIndex
                             ? 'text-jade bg-base-elevated'
                             : 'text-text hover:bg-base-elevated/60'
@@ -380,7 +380,7 @@ export function CommandPalette() {
                   ))}
                 </ul>
               ) : (
-                <div className="text-text-dim text-body rounded-md px-3 py-2 font-mono">
+                <div className="text-text-dim text-body rounded px-3 py-2 font-mono">
                   No command matched. Press Enter to run search.
                 </div>
               )}
@@ -397,7 +397,7 @@ export function CommandPalette() {
                 {SHORTCUT_HINTS.map((shortcut) => (
                   <li
                     key={shortcut.keys}
-                    className="flex items-center justify-between gap-4 rounded-md px-3 py-2"
+                    className="flex items-center justify-between gap-4 rounded px-3 py-2"
                   >
                     <span className="text-text">{shortcut.description}</span>
                     <span className="border-base-border text-text text-small rounded border px-2 py-0.5 font-mono">

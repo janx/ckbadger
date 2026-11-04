@@ -609,7 +609,7 @@ function partyKey(p: ParticipantInfo, i: number): string {
 const LOCK_KIND = 'text-text-dim small-caps lowercase whitespace-nowrap';
 /** A control on a participant line, as tall as its tag (16 px line + border = the 18 px line). */
 const LINE_BUTTON =
-  'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap rounded-[3px] border bg-transparent px-[5px] leading-4';
+  'border-base-border text-text hover:text-text-bright text-meta whitespace-nowrap rounded-sm border bg-transparent px-[5px] leading-4';
 
 /** One Layer-2 fact as one item of the participant line: it wraps whole, never inside. */
 function ItemOnLine({

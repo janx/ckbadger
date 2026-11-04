@@ -31,7 +31,7 @@ function ViewImage({ href }: { href: string }) {
         target="_blank"
         rel="noopener noreferrer"
         title="Opens the object's picture on Omiga in a new tab"
-        className="bg-jade text-base-bg text-body focus-visible:outline-jade inline-flex h-9 items-center rounded-md px-4 font-mono font-medium transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+        className="bg-jade text-base-bg text-body focus-visible:outline-jade inline-flex h-9 items-center rounded px-4 font-mono font-medium transition-opacity hover:opacity-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
       >
         View image ↗
       </a>
@@ -110,7 +110,7 @@ export function ObjectMedia({ object, contentHex, decoded, omigaLink = true }: O
         // picture, and the way to see it is its centre.
         <figure
           aria-label="No picture shown here"
-          className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 rounded-md border p-6 text-center"
+          className="border-base-border m-0 flex aspect-square flex-col items-center justify-center gap-4 rounded border p-6 text-center"
         >
           <ClassMark kind="objects" size={24} />
           <p className="text-text-dim text-meta">
