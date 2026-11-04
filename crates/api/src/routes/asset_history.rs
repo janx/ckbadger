@@ -162,17 +162,12 @@ pub(crate) fn canonical_version_at(
     // fields), so there is no stored hash to cross-check here.
     let lock = script(&cell.lock_code_hash, cell.lock_hash_type, &cell.lock_args)
         .with_context(|| format!("owner address script invalid: {context}"))?;
-    let type_script = match (&cell.type_code_hash, cell.type_hash_type, &cell.type_args) {
-        (Some(code), Some(ht), Some(args)) => {
-            Some(script(code, ht, args).with_context(|| context.clone())?)
-        }
-        (None, None, None) => None,
-        _ => {
-            return Err(anyhow!(
-                "partial type script (missing or invalid hash_type): {context}"
-            ))
-        }
-    };
+    // A decoded payload holds its whole type script or none.
+    let type_script = cell
+        .type_script()
+        .map(|(code, hash_type, args)| script(code, hash_type, args))
+        .transpose()
+        .with_context(|| context.clone())?;
     let data_bytes = usize::try_from(cell.data_size)
         .with_context(|| format!("negative data length: {context}"))?;
     let lock_bytes = 33 + cell.lock_args.len();

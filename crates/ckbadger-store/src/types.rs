@@ -195,21 +195,27 @@ impl LiveCellInfo {
         )
     }
 
-    /// The type script hash, `None` for a cell without a type script.
-    pub fn type_script_hash(&self) -> Option<[u8; 32]> {
+    /// The type script's `(code_hash, hash_type, args)`, `None` for a cell
+    /// without one. A stored payload holds all three fields or none
+    /// (`check_fields`), so this only panics for a value built in memory with
+    /// a partial type script.
+    pub fn type_script(&self) -> Option<(&[u8; 32], i16, &[u8])> {
         match (&self.type_code_hash, self.type_hash_type, &self.type_args) {
             (None, None, None) => None,
-            (Some(code_hash), Some(hash_type), Some(args)) => Some(ckbadger_common::script_hash(
-                code_hash,
-                script_hash_type_byte(hash_type, "type"),
-                args,
-            )),
+            (Some(code_hash), Some(hash_type), Some(args)) => Some((code_hash, hash_type, args)),
             (code_hash, hash_type, args) => panic!(
                 "LiveCellInfo type script is partial: code_hash present={}, hash_type={hash_type:?}, args present={}",
                 code_hash.is_some(),
                 args.is_some()
             ),
         }
+    }
+
+    /// The type script hash, `None` for a cell without a type script.
+    pub fn type_script_hash(&self) -> Option<[u8; 32]> {
+        self.type_script().map(|(code_hash, hash_type, args)| {
+            ckbadger_common::script_hash(code_hash, script_hash_type_byte(hash_type, "type"), args)
+        })
     }
 }
 
@@ -4289,6 +4295,26 @@ mod tests {
                 "{what}: error names the byte length: {error}"
             );
         }
+    }
+
+    /// The one accessor every reader of the type script goes through: the
+    /// whole script or none, never a partial one.
+    #[test]
+    fn type_script_is_the_whole_script_or_none() {
+        let typed = v2_cell(true, false, true);
+        let (code_hash, hash_type, args) = typed.type_script().unwrap();
+        assert_eq!(code_hash, &[0x5e; 32]);
+        assert_eq!(hash_type, 0);
+        assert_eq!(args, [0x3c; 32].as_slice());
+        assert_eq!(v2_cell(false, false, true).type_script(), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "LiveCellInfo type script is partial")]
+    fn type_script_panics_on_a_partial_script_built_in_memory() {
+        let mut partial = v2_cell(true, false, true);
+        partial.type_args = None;
+        let _ = partial.type_script();
     }
 
     /// The candA2 (`899f756e`) layout, which still stored the occupied
