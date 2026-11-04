@@ -22,6 +22,7 @@ import { parseShannons, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatCount } from '@/lib/format-count';
 import { u64Hex } from '@/lib/hex-bytes';
 import { formatUtc8Date } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { OutpointIndex } from '@/components/ui/outpoint-index';
 
 type Party = FiberChannel['observedParties'][number];
@@ -48,6 +49,9 @@ export function formatEpochDelay(delay: FiberEpochDelay, raw: string): string {
     throw new Error(`Fiber delay ${raw}: invalid decoded epoch ${JSON.stringify(delay)}`);
   return `${relative ? 'relative' : 'absolute'} · ${epochs.toLocaleString('en-US')} + ${index}/${length} epoch${epochs === 1 && index === 0 ? '' : 's'}`;
 }
+
+/** A hash or output link in the boards' link cyan; the global `a:hover` jade still wins. */
+const LINK = inkStyle(BOARD_INKS.link);
 
 const shortAddress = (party: Party) =>
   party.address
@@ -463,7 +467,10 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                 {second && (
                   <>
                     {' '}
-                    <span className="text-[#4b5266]">↔</span> <PartyLink party={second} />
+                    <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
+                      ↔
+                    </span>{' '}
+                    <PartyLink party={second} />
                   </>
                 )}
                 {channel.udtTypeHash && channel.udtAmount !== null && token && (
@@ -559,7 +566,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         </div>
                         <Link
                           href={`/script/${evidence.funding.lockCodeHash}?hashType=${evidence.funding.lockHashType}`}
-                          className="break-all text-[#6aa9c4]"
+                          className="break-all text-[color:var(--ink)]"
+                          style={LINK}
                         >
                           {evidence.funding.lockCodeHash}
                         </Link>
@@ -574,7 +582,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                             <span className="text-text-dim">Current commitment</span>
                             <Link
                               href={`/cell/${tracked.txHash}-${tracked.outputIndex}`}
-                              className="min-w-0 break-all text-[#6aa9c4]"
+                              className="min-w-0 break-all text-[color:var(--ink)]"
+                              style={LINK}
                             >
                               {tracked.txHash}
                               <OutpointIndex index={tracked.outputIndex} />
@@ -602,7 +611,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                             <span className="text-text-dim">Commitment script</span>
                             <Link
                               href={`/script/${tracked.lockCodeHash}?hashType=${tracked.lockHashType}`}
-                              className="min-w-0 break-all text-[#6aa9c4]"
+                              className="min-w-0 break-all text-[color:var(--ink)]"
+                              style={LINK}
                             >
                               {tracked.lockCodeHash}
                             </Link>
@@ -707,7 +717,8 @@ export function FiberChannelBoard({ channel, evidence, evidenceError, token }: P
                         <span key={output.outputIndex} className="contents">
                           <Link
                             href={`/cell/${output.txHash}-${output.outputIndex}`}
-                            className="text-[#6aa9c4]"
+                            className="text-[color:var(--ink)]"
+                            style={LINK}
                           >
                             out #{output.outputIndex}
                           </Link>

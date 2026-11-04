@@ -76,6 +76,16 @@ describe('FiberChannelStep (one txviz per on-chain step, FF-C4)', () => {
     );
     // script groups stay out of tier 1 (FF-C5)
     expect(screen.queryByText('Script groups')).toBeNull();
+    // Visual finish V11: the tx link in the link cyan through --ink (so `a:hover` jade still
+    // wins), the box's dashed edge in the quiet slate; no bracket-hex class
+    const tx = within(step).getByRole('link', { name: /^0x/ });
+    expect(tx).toHaveClass('text-[color:var(--ink)]', 'hover:underline');
+    expect(tx.style.getPropertyValue('--ink')).toBe('#6aa9c4');
+    expect(tx.style.color).toBe('');
+    expect(screen.getByText('→ step 3, after 6 epochs').parentElement).toHaveStyle({
+      borderColor: '#4b5266',
+    });
+    expect(container.innerHTML).not.toMatch(/(text|bg|border)-\[#/);
   });
 
   it('fails loudly when the channel cell it follows is not an input of the step', async () => {

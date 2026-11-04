@@ -17,7 +17,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatCount } from '@/lib/format-count';
-import { FORK_COLORS } from '@/lib/design-tokens';
+import { BOARD_INKS, FORK_COLORS, inkStyle } from '@/lib/design-tokens';
 import {
   UNCLE_RATE_TARGET,
   forkEventHref,
@@ -234,7 +234,9 @@ function Miners({ event }: { event: ReorgEvent }): ReactNode {
   return (
     <span>
       {side(dropped, oldMinerAddress, oldMinerPool, 'witness unavailable')}{' '}
-      <span className="text-[#4b5266]">vs</span>{' '}
+      <span className="text-[color:var(--ink)]" style={inkStyle(BOARD_INKS.quiet)}>
+        vs
+      </span>{' '}
       {side(
         winner,
         competingMinerAddress,

@@ -20,6 +20,7 @@ import { DEFAULT_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
 import { formatCount } from '@/lib/format-count';
 import { cn, formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
+import { BOARD_INKS, FIBER_COLORS, inkStyle } from '@/lib/design-tokens';
 import { FIBER_STATE_WORDS, fiberDuration } from '@/lib/fiber-format';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ListTable, type ListColumn } from '@/components/ui/list-table';
@@ -188,7 +189,8 @@ function ChannelPhoneRow({ channel, wide }: { channel: FiberChannel; wide: boole
   const id = (
     <Link
       href={`/fiber/channels/${channel.channelId}`}
-      className="text-[#6aa9c4] hover:underline"
+      className="text-[color:var(--ink)] hover:underline"
+      style={inkStyle(BOARD_INKS.link)}
       title={channel.channelId}
     >
       {shortId(channel.channelId)}
@@ -333,9 +335,10 @@ export default function FiberChannelsPage() {
                     className={cn(
                       'text-small h-[30px] rounded border px-[11px]',
                       on
-                        ? 'bg-base-elevated text-text-bright border-[#2c3348]'
+                        ? 'bg-base-elevated text-text-bright'
                         : 'border-base-border-subtle text-text hover:text-text-bright'
                     )}
+                    style={on ? { borderColor: FIBER_COLORS.filterOn } : undefined}
                   >
                     {filter.label}
                     {summary && (
@@ -398,7 +401,14 @@ export default function FiberChannelsPage() {
                         <span className="flex min-w-0 flex-wrap gap-x-1.5">
                           {channel.observedParties.map((party, index) => (
                             <span key={party.lockScriptHash}>
-                              {index > 0 && <span className="text-[#4b5266]">↔ </span>}
+                              {index > 0 && (
+                                <span
+                                  className="text-[color:var(--ink)]"
+                                  style={inkStyle(BOARD_INKS.quiet)}
+                                >
+                                  ↔{' '}
+                                </span>
+                              )}
                               <Party party={party} />
                             </span>
                           ))}

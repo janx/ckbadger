@@ -33,6 +33,7 @@ import {
 import { MinerLink, minerName } from '@/components/forks/miner-link';
 import { forkTreeModel } from '@/lib/fork-tree';
 import { formatUtc8Date, formatUtc8DateTime, formatUtc8Time } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { DocumentTitle } from '@/lib/use-document-title';
 
 type MinerBlock = {
@@ -546,7 +547,11 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                 label: 'Hash',
                 minWidth: 170,
                 render: (row) => (
-                  <span className="text-[#6aa9c4]" title={row.hash}>
+                  <span
+                    className="text-[color:var(--ink)]"
+                    style={inkStyle(BOARD_INKS.link)}
+                    title={row.hash}
+                  >
                     {hashShort(row.hash)}
                   </span>
                 ),
@@ -586,7 +591,11 @@ function ForkEvidence({ data }: { data: ReorgDetail }) {
                         <span className="font-medium">
                           {row.dropped ? `${formatBlockNumber(row.number)}′` : blockAt(row.number)}
                         </span>{' '}
-                        <span className="text-small text-[#6aa9c4]" title={row.hash}>
+                        <span
+                          className="text-small text-[color:var(--ink)]"
+                          style={inkStyle(BOARD_INKS.link)}
+                          title={row.hash}
+                        >
                           {hashShort(row.hash)}
                         </span>
                       </>

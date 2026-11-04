@@ -8,6 +8,7 @@ import { cellTiles } from '@/components/transaction/transaction-cell-tiles';
 import { api, type TransactionDetail } from '@/lib/api';
 import { formatBlockNumber } from '@/lib/format-block';
 import { formatUtc8DateTime } from '@/lib/utils';
+import { BOARD_INKS, inkStyle } from '@/lib/design-tokens';
 import { stageEpoch } from '@/lib/fiber-format';
 
 export interface FiberStepBox {
@@ -77,7 +78,12 @@ export function FiberChannelStep({
         {n} · {title}
       </span>
       <span className="text-text-dim text-small">
-        <Link href={`/tx/${txHash}`} className="text-[#6aa9c4] hover:underline" title={txHash}>
+        <Link
+          href={`/tx/${txHash}`}
+          className="text-[color:var(--ink)] hover:underline"
+          style={inkStyle(BOARD_INKS.link)}
+          title={txHash}
+        >
           {short(txHash)}
         </Link>
         {' · '}
@@ -156,7 +162,10 @@ export function FiberChannelStep({
             onward="the channel, onward"
             hideGroups
           />
-          <div className="text-small flex flex-col items-start gap-1 rounded border border-dashed border-[#4b5266] px-3 py-2.5">
+          <div
+            className="text-small flex flex-col items-start gap-1 rounded border border-dashed px-3 py-2.5"
+            style={{ borderColor: BOARD_INKS.quiet }}
+          >
             <span className="text-text-bright">{box.head}</span>
             {box.lines.map((line, index) => (
               <span key={index} className="text-text-dim">

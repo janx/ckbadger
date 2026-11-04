@@ -203,7 +203,7 @@ describe('FiberChannelsPage', () => {
     const id = within(table).getAllByRole('link')[0];
     expect(id).toHaveAttribute('href', expect.stringMatching(/^\/mainnet\/fiber\/channels\/0x/));
     expect(id).toHaveClass('text-text-bright');
-    expect(id).not.toHaveClass('text-[#6aa9c4]');
+    expect(id).not.toHaveClass('text-[color:var(--ink)]'); // the link cyan (BOARD_INKS.link)
     expect(Array.from(table.querySelectorAll('tbody .text-text-bright'))).toEqual([id]);
     expect(sorts.every((sort) => sort === 'capacity')).toBe(true);
     expect(screen.getByText('sorted by capacity')).toHaveClass('text-meta');
