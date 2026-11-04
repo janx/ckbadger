@@ -70,7 +70,9 @@ describe('the rules in globals.css', () => {
     );
     const grain = css.match(/\.crt-grain\s*\{([^}]*)\}/)!;
     expect(grain[1]).toContain("background-image: url('/noise.png')");
-    expect(grain[1]).toContain('opacity: 0.035');
+    // visual finish V3: a 128 px high-frequency tile at 3 %, drawn at its own size
+    expect(grain[1]).toContain('opacity: 0.03;');
+    expect(grain[1]).toContain('background-size: 128px 128px');
     expect(grain[1]).toContain('mix-blend-mode: screen');
     expect(grain[1]).toContain('pointer-events: none');
     // under the scanlines (9999), over the content
@@ -89,6 +91,16 @@ describe('the rules in globals.css', () => {
     expect(vignette[1]).toContain('position: fixed');
     expect(vignette[1]).toContain('inset: 0');
     expect(vignette[1]).toContain('pointer-events: none');
+  });
+
+  // Visual finish V3: the grain tile is regenerated as 128 × 128 Gaussian white noise (grain, not
+  // the old 256 px fractal clouds); the PNG's IHDR carries the size (bytes 16–24, big-endian).
+  it('move 1 (visual finish V3): the noise tile is 128 × 128', () => {
+    const png = readFileSync(resolve(__dirname, '../../public/noise.png'));
+    expect(png.subarray(1, 4).toString('ascii')).toBe('PNG');
+    expect(png.subarray(12, 16).toString('ascii')).toBe('IHDR');
+    expect(png.readUInt32BE(16)).toBe(128);
+    expect(png.readUInt32BE(20)).toBe(128);
   });
 
   // Visual finish V2: the scanlines stay over the content but draw 1 px in 3, in a blue-black at

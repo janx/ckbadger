@@ -598,14 +598,17 @@ body * {
   --pool-2: rgba(104, 204, 240, 0.07);
   --pool-3: rgba(46, 219, 163, 0.07);
 }
-/* The grain of a CRT: a 256 px fractal-noise tile (public/noise.png) screened over the page at
-   3.5 %, under the scanlines. */
+/* The grain of a CRT (visual finish V3): a 128 px tile of Gaussian white noise (public/noise.png,
+   8-bit grey, mean 128, sigma 28, fixed seed — one value per pixel, so it reads as grain, not the
+   clouds of the old fractal tile), drawn at its own size and screened over the page at 3 %,
+   under the scanlines. */
 .crt-grain {
   position: fixed;
   inset: 0;
   background-image: url('/noise.png');
   background-repeat: repeat;
-  opacity: 0.035;
+  background-size: 128px 128px;
+  opacity: 0.03;
   mix-blend-mode: screen;
   pointer-events: none;
   z-index: 9997;
