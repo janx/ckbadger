@@ -279,7 +279,7 @@ describe('move 3 on the tx page’s cells diagram', () => {
     expect(frame).toHaveAttribute('data-instrument-frame');
     expect(frame).toHaveAttribute('aria-label', 'Cells consumed and created');
     // material pass v2 (move 2): the frame's surface is glass (`.glass`), not the flat colour
-    expect(frame).toHaveClass('neon-edge-top', 'rounded', 'border', 'glass');
+    expect(frame).toHaveClass('neon-edge-top', 'rounded-lg', 'border', 'glass');
     expect(frame).toContainElement(container.querySelector('[data-tx-canvas]') as HTMLElement);
     // the column heads are the frame's eyebrows
     expect(frame).toHaveTextContent('1 cell consumed');

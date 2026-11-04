@@ -29,7 +29,7 @@ interface TerminalPanelProps extends HTMLAttributes<HTMLDivElement> {
 
 /**
  * The one instrument frame (Midnight, continued, move 3: "instruments are framed, text is flat"):
- * a #222840 hairline, a 4 px radius, glass (material pass v2, move 2: `.glass` — 72 % opaque over
+ * a #222840 hairline, an 8 px radius, glass (material pass v2, move 2: `.glass` — 72 % opaque over
  * the night sky, a 1 px highlight on the top edge, a dark line on the bottom edge; no
  * backdrop-filter, see globals.css), a jade edge along the top (`.neon-edge-top`) and inset
  * scanlines. The transaction pipeline, the tx page's cells diagram, the cell page's byte dump,
@@ -45,9 +45,11 @@ export function TerminalPanel({
   ...props
 }: TerminalPanelProps) {
   const variantClasses = {
-    default: 'glass border-base-border',
-    elevated: 'bg-base-elevated border-base-border',
-    inset: 'bg-base-bg border-base-border shadow-glow-inset',
+    // Glass frames take the glass radius (visual finish V10: `rounded-lg`, 8 px); the flat
+    // variants keep the default 4 px.
+    default: 'glass border-base-border rounded-lg',
+    elevated: 'bg-base-elevated border-base-border rounded',
+    inset: 'bg-base-bg border-base-border shadow-glow-inset rounded',
   };
 
   return (
@@ -55,7 +57,7 @@ export function TerminalPanel({
       {...props}
       data-instrument-frame=""
       className={cn(
-        'neon-edge-top relative overflow-hidden rounded border transition-shadow duration-300',
+        'neon-edge-top relative overflow-hidden border transition-shadow duration-300',
         accentClass[accentColor],
         variantClasses[variant],
         glow && 'hover:shadow-glow',

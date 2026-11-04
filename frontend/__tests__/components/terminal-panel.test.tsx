@@ -8,11 +8,11 @@ import {
 
 // Midnight, continued (review 2026-11-03, item 5, move 3): "instruments are framed, text is
 // flat". TerminalPanel is the one instrument frame — a #222840 hairline (`border-base-border`),
-// a 4 px radius (visual finish V10: `rounded-md` → `rounded`), glass (material pass v2, move 2:
+// an 8 px radius (visual finish V10: glass frames take `rounded-lg`), glass (material pass v2, move 2:
 // `.glass` replaces the flat surface colour, so the sky's pool shows through), the jade top edge
 // (`.neon-edge-top`) and inset scanlines — with an uppercase 12 px eyebrow led by the section mark.
 describe('TerminalPanel, the one instrument frame (move 3)', () => {
-  it('frames its content: hairline, 4 px radius, glass, jade top edge, scanlines', () => {
+  it('frames its content: hairline, 8 px radius, glass, jade top edge, scanlines', () => {
     const { container } = render(
       <TerminalPanel aria-label="An instrument" data-testid="frame">
         <TerminalPanelContent>inside</TerminalPanelContent>
@@ -25,12 +25,24 @@ describe('TerminalPanel, the one instrument frame (move 3)', () => {
       'neon-edge-top',
       'relative',
       'overflow-hidden',
-      'rounded',
+      'rounded-lg',
       'border',
       'border-base-border',
       'glass'
     );
-    expect(frame).not.toHaveClass('rounded-lg', 'bg-base-surface');
+    expect(frame).not.toHaveClass('bg-base-surface');
+    // only the glass frame takes the glass radius; the flat variants keep the default 4 px
+    for (const variant of ['elevated', 'inset'] as const) {
+      const { getByTestId, unmount } = render(
+        <TerminalPanel data-testid={`flat-${variant}`} variant={variant}>
+          flat
+        </TerminalPanel>
+      );
+      expect(getByTestId(`flat-${variant}`)).toHaveClass('rounded');
+      expect(getByTestId(`flat-${variant}`)).not.toHaveClass('rounded-lg');
+      expect(getByTestId(`flat-${variant}`)).not.toHaveClass('glass');
+      unmount();
+    }
     // the jade edge's colour, at the approved .45, as a class: the frame carries no inline ink
     expect(frame).toHaveClass('[--neon-color:rgba(46,219,163,0.45)]');
     expect(frame).not.toHaveAttribute('style');
