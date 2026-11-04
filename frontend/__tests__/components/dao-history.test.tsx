@@ -13,6 +13,7 @@ import {
 } from '@/components/dao/dao-history';
 import { usePinnedReadout } from '@/hooks/usePinnedReadout';
 import type { ChartResponse } from '@/lib/api';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 
 const DAY = 86_400_000;
 const START = Date.UTC(2024, 0, 1);
@@ -124,6 +125,47 @@ describe('DaoHistory picture (hierarchy v3, R13; DAO-11, DAO-18)', () => {
     expect(weekEnd).toHaveClass('fill-positive');
     // The two multiples sit side by side from sm up and stack below it.
     expect(share.parentElement!.parentElement).toHaveClass('grid-cols-1', 'sm:grid-cols-2');
+  });
+
+  // Visual finish V13 (plan 2026-11-04): the gold area is light that fades to the baseline, not a
+  // flat paint, and the grid is solid — a dash means a reference, never the grid.
+  it('fills deposited with gold fading from .28 to 0 at the baseline, and draws the grids solid', () => {
+    stubChartWidth(1200);
+    const { deposited, ratio } = series();
+    const { container } = render(<Picture deposited={deposited} ratio={ratio} />);
+    const main = container.querySelector('svg[data-panel="deposited"]')!;
+    const areas = [...main.querySelectorAll('path[fill^="url(#"]')];
+    expect(areas).toHaveLength(1);
+    const [area] = areas;
+    expect(area).not.toHaveClass('fill-gold');
+    expect(area).not.toHaveAttribute('fill-opacity');
+    const gradient = main.querySelector(
+      `linearGradient[id="${area.getAttribute('fill')!.slice(5, -1)}"]`
+    )!;
+    expect(gradient).toHaveAttribute('x1', '0');
+    expect(gradient).toHaveAttribute('y1', '0');
+    expect(gradient).toHaveAttribute('x2', '0');
+    expect(gradient).toHaveAttribute('y2', '1');
+    expect(
+      [...gradient.querySelectorAll('stop')].map((stop) => [
+        stop.getAttribute('offset'),
+        stop.getAttribute('stop-color'),
+        stop.getAttribute('stop-opacity'),
+      ])
+    ).toEqual([
+      // the DAO gold of the line over it (stroke-gold), from the design tokens
+      ['0', CLASS_COLORS.dao, '0.28'],
+      ['1', CLASS_COLORS.dao, '0'],
+    ]);
+    // the gold line over it is unchanged
+    expect(main.querySelector('path.stroke-gold')).toHaveAttribute('fill', 'none');
+    // the grid of deposited and the share multiple's half-scale line: solid hairlines
+    const share = container.querySelector('svg[data-panel="share"]')!;
+    for (const panel of [main, share]) {
+      const grid = [...panel.querySelectorAll('line.stroke-base-border-subtle')];
+      expect(grid.length).toBeGreaterThan(0);
+      for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
+    }
   });
 
   it('reads the last complete day in one row under the picture: deposited, share, depositors, the week and the peak, exact', () => {

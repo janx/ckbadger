@@ -321,7 +321,14 @@ describe('Network board (F2 charts)', () => {
     render(wrap(<NetworkTrends />));
     const svg = await screen.findByRole('img', { name: 'Verified and reachable peers, peers' });
     expect(svg.querySelectorAll('path[fill="#dee2ec"]')).toHaveLength(0);
-    expect(svg.querySelector('path[fill="#2edba3"]')).not.toBeNull();
+    // visual finish V13: the reachable area is a jade gradient (light, not paint); verified,
+    // the bare line, has none
+    const areas = [...svg.querySelectorAll('path[fill^="url(#"]')];
+    expect(areas).toHaveLength(1);
+    const gradient = svg.querySelector(
+      `linearGradient[id="${areas[0].getAttribute('fill')!.slice(5, -1)}"]`
+    )!;
+    expect(gradient.querySelector('stop')).toHaveAttribute('stop-color', '#2edba3');
     const ticks = [...svg.querySelectorAll('[data-x-tick]')].map((n) => n.textContent);
     expect(ticks).toEqual(['07-01', '07-03']);
     // The daily share tables are developer evidence, not part of "Over time".

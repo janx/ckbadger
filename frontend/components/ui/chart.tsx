@@ -1,5 +1,5 @@
 'use client';
-import { Fragment, useState, type CSSProperties, type ReactNode } from 'react';
+import { Fragment, useId, useState, type CSSProperties, type ReactNode } from 'react';
 import Link from '@/components/ui/link';
 import { ReadoutRow } from '@/components/ui/readout-row';
 import { useElementWidth } from '@/hooks/useElementWidth';
@@ -303,6 +303,8 @@ export function Chart({
 }: ChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const own = usePinnedReadout<number>();
+  // Visual finish V13: an area's fill gradient, one per chart instance and series.
+  const areaFillId = `chart-area-${useId().replace(/:/g, '')}`;
   if (pin && controlledActive !== undefined)
     throw new Error(
       `${title}: a chart takes its active point from its pin or its caller, not both`
@@ -566,14 +568,8 @@ export function Chart({
                   i > 0 &&
                   yTick(v) >= top + 12 && (
                     <g key={v}>
-                      <line
-                        x1={left}
-                        x2={right}
-                        y1={yTick(v)}
-                        y2={yTick(v)}
-                        stroke="#1a1f30"
-                        strokeDasharray="3 5"
-                      />
+                      {/* Visual finish V13: the grid is solid; a dash means a reference. */}
+                      <line x1={left} x2={right} y1={yTick(v)} y2={yTick(v)} stroke="#1a1f30" />
                       {insideYTicks !== 'over' && insideTickLabel(v)}
                     </g>
                   )
@@ -673,8 +669,21 @@ export function Chart({
                       )}
                     </g>
                   );
+                // Visual finish V13: a single (not stacked) area is light, not paint — its colour
+                // at .22 at the top of the fill fading to 0 at its foot; a stacked area keeps its
+                // flat 60 %, since its bands must read as the parts of one whole.
+                const lit = kind === 'area' && !s.lineOnly;
+                const fillId = `${areaFillId}-${si}`;
                 return (
                   <g key={s.key}>
+                    {lit && (
+                      <defs>
+                        <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0" stopColor={color(si)} stopOpacity="0.22" />
+                          <stop offset="1" stopColor={color(si)} stopOpacity="0" />
+                        </linearGradient>
+                      </defs>
+                    )}
                     {(kind === 'area' || kind === 'stacked') && (
                       <path
                         d={runs
@@ -688,8 +697,8 @@ export function Chart({
                                 .join(' ')} Z`
                           )
                           .join(' ')}
-                        fill={kind === 'area' && s.lineOnly ? 'none' : color(si)}
-                        fillOpacity={kind === 'stacked' ? 0.6 : 0.12}
+                        fill={kind === 'stacked' ? color(si) : lit ? `url(#${fillId})` : 'none'}
+                        fillOpacity={kind === 'stacked' ? 0.6 : undefined}
                       />
                     )}
                     {projectedAfter === undefined ? (

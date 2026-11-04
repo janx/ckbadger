@@ -156,7 +156,15 @@ describe('shared Chart encodings for the charts boards', () => {
     expect(filled).toHaveLength(0);
     const dashed = container.querySelector('path[stroke="#dee2ec"]')!;
     expect(dashed.getAttribute('stroke-dasharray')).toBe('4 3');
-    expect(container.querySelector('path[fill="#2edba3"]')).not.toBeNull();
+    // visual finish V13: the filled series is a jade light (a gradient), the bare one has none
+    const areas = [...container.querySelectorAll('path[fill^="url(#"]')];
+    expect(areas).toHaveLength(1);
+    const id = areas[0].getAttribute('fill')!.slice(5, -1);
+    const stops = container.querySelectorAll(`linearGradient[id="${id}"] stop`);
+    expect([...stops].map((stop) => stop.getAttribute('stop-color'))).toEqual([
+      '#2edba3',
+      '#2edba3',
+    ]);
   });
 
   it('gives a few labelled buckets slot-wide bars (CH-09)', () => {
@@ -462,5 +470,148 @@ describe('in-plot values over a filled chart', () => {
     expect(over.lastIndexOf('area')).toBeLessThan(over.indexOf('tick'));
     const under = order(true);
     expect(under.lastIndexOf('tick')).toBeLessThan(under.indexOf('area'));
+  });
+});
+
+// Visual finish V13 (plan 2026-11-04): a chart's fill reads as light, not paint, and a dash means
+// a reference, never the grid.
+describe('chart material (visual finish V13)', () => {
+  beforeEach(() => stubChartWidth(600));
+  afterEach(() => vi.restoreAllMocks());
+
+  const gradientOf = (container: HTMLElement, path: Element) => {
+    const fill = path.getAttribute('fill')!;
+    expect(fill).toMatch(/^url\(#[^)]+\)$/);
+    return container.querySelector(`linearGradient[id="${fill.slice(5, -1)}"]`)!;
+  };
+
+  it('fills a single-series area with its colour at .22 at the top fading to 0 at the baseline', () => {
+    const { container } = render(
+      <Chart
+        title="Peers"
+        subtitle="daily"
+        data={daily}
+        series={series}
+        unit="peers"
+        kind="area"
+        formatValue={(v) => v}
+      />
+    );
+    const area = container.querySelector('svg[role="img"] path[fill^="url(#"]')!;
+    expect(area).not.toBeNull();
+    expect(area).not.toHaveAttribute('fill-opacity');
+    const gradient = gradientOf(container, area);
+    expect(gradient).not.toBeNull();
+    // vertical, over the area's own box: the top of the fill to its foot
+    expect(gradient).toHaveAttribute('x1', '0');
+    expect(gradient).toHaveAttribute('y1', '0');
+    expect(gradient).toHaveAttribute('x2', '0');
+    expect(gradient).toHaveAttribute('y2', '1');
+    const stops = [...gradient.querySelectorAll('stop')].map((stop) => [
+      stop.getAttribute('offset'),
+      stop.getAttribute('stop-color'),
+      stop.getAttribute('stop-opacity'),
+    ]);
+    expect(stops).toEqual([
+      ['0', '#2edba3', '0.22'],
+      ['1', '#2edba3', '0'],
+    ]);
+  });
+
+  it('gives every chart and every filled series its own gradient', () => {
+    const two = [
+      { key: 'primary', label: 'Rate', color: '#2edba3' },
+      { key: 'real', label: 'Real', color: '#68ccf0' },
+    ];
+    const { container } = render(
+      <>
+        <Chart
+          title="A"
+          subtitle="a"
+          data={daily}
+          series={two}
+          unit="%"
+          kind="area"
+          formatValue={(v) => v}
+        />
+        <Chart
+          title="B"
+          subtitle="b"
+          data={daily}
+          series={series}
+          unit="%"
+          kind="area"
+          formatValue={(v) => v}
+        />
+      </>
+    );
+    const fills = [...container.querySelectorAll('path[fill^="url(#"]')].map((p) =>
+      p.getAttribute('fill')
+    );
+    expect(fills).toHaveLength(3);
+    expect(new Set(fills).size).toBe(3);
+    const ids = [...container.querySelectorAll('linearGradient')].map((g) => g.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    const second = container
+      .querySelectorAll('svg[role="img"]')[0]
+      .querySelectorAll('path[fill^="url(#"]')[1];
+    expect(gradientOf(container, second).querySelector('stop')).toHaveAttribute(
+      'stop-color',
+      '#68ccf0'
+    );
+  });
+
+  it('keeps a stacked area a flat 60 % paint, with no gradient', () => {
+    const { container } = render(
+      <Chart
+        title="Held"
+        subtitle="occupied and free"
+        data={daily}
+        series={[
+          { key: 'primary', label: 'Occupied', color: '#2edba3' },
+          { key: 'real', label: 'Free', color: '#3a4258' },
+        ]}
+        unit="CKB"
+        kind="stacked"
+        formatValue={(v) => v}
+      />
+    );
+    const areas = [...container.querySelectorAll('path[fill-opacity]')];
+    expect(areas.map((a) => [a.getAttribute('fill'), a.getAttribute('fill-opacity')])).toEqual([
+      ['#2edba3', '0.6'],
+      ['#3a4258', '0.6'],
+    ]);
+    expect(container.querySelector('linearGradient')).toBeNull();
+  });
+
+  it('draws the grid solid, in or beside the plot; a target and a hardfork keep their dash', () => {
+    for (const insideYTicks of [false, true]) {
+      const { container, unmount } = render(
+        <Chart
+          title="Uncle rate"
+          subtitle="daily"
+          data={daily}
+          series={series}
+          unit="%"
+          height={280}
+          insideYTicks={insideYTicks}
+          referenceLines={[{ value: 4, label: 'target 4 %' }]}
+          markers={[{ index: 2, label: 'Meepo', plotLabel: 'Meepo', href: '/hardforks' }]}
+          formatValue={(v) => v}
+        />
+      );
+      const grid = [...container.querySelectorAll('svg line[stroke="#1a1f30"]')];
+      expect(grid.length).toBeGreaterThan(1);
+      for (const line of grid) expect(line).not.toHaveAttribute('stroke-dasharray');
+      expect(container.querySelector('[data-reference-line="target 4 %"] line')).toHaveAttribute(
+        'stroke-dasharray',
+        '3 3'
+      );
+      const marker = [...container.querySelectorAll('svg g')].find(
+        (g) => g.querySelector('title')?.textContent === 'Meepo'
+      )!;
+      expect(marker.querySelector('line')).toHaveAttribute('stroke-dasharray', '3 3');
+      unmount();
+    }
   });
 });

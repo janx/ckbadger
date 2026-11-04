@@ -1,6 +1,6 @@
 'use client';
 
-import type { MouseEvent, PointerEvent, ReactNode } from 'react';
+import { useId, type MouseEvent, type PointerEvent, type ReactNode } from 'react';
 import type { ChartResponse } from '@/lib/api';
 import { useElementWidth } from '@/hooks/useElementWidth';
 import type { PinnedReadout } from '@/hooks/usePinnedReadout';
@@ -8,6 +8,7 @@ import { ReadoutRow } from '@/components/ui/readout-row';
 import { formatSignedCkbInteger, parseCkbDecimal, splitCkbAmount } from '@/lib/ckb-decimal';
 import { formatTick, niceCeil, niceTicks } from '@/lib/chart-ticks';
 import { exactUnsignedInteger, formatExactDecimal } from '@/lib/exact-integer';
+import { CLASS_COLORS } from '@/lib/design-tokens';
 import { cn } from '@/lib/utils';
 import { usePinWord } from '@/hooks/usePinWord';
 
@@ -249,6 +250,7 @@ function DepositedPlot({
   width: number;
 }) {
   const { days } = series;
+  const fillId = `dao-deposited-${useId().replace(/:/g, '')}`;
   const last = days.length - 1;
   const x = (i: number) => (i / last) * width;
   const ckb = (v: bigint) => Number(v) / 1e8;
@@ -275,14 +277,8 @@ function DepositedPlot({
         .filter((v) => v > 0 && y(v) >= MAIN_NAME_BAND + 12)
         .map((v) => (
           <g key={v}>
-            <line
-              x1={0}
-              x2={width}
-              y1={y(v)}
-              y2={y(v)}
-              className="stroke-base-border-subtle"
-              strokeDasharray="3 5"
-            />
+            {/* Visual finish V13: the grid is solid; a dash means a reference. */}
+            <line x1={0} x2={width} y1={y(v)} y2={y(v)} className="stroke-base-border-subtle" />
             <text
               data-role="y-tick"
               x={8}
@@ -294,10 +290,17 @@ function DepositedPlot({
             </text>
           </g>
         ))}
+      {/* Visual finish V13: the gold is light, not paint — .28 at the top of the fill fading to 0
+          at the baseline (the DAO gold the line's stroke-gold is). */}
+      <defs>
+        <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor={CLASS_COLORS.dao} stopOpacity="0.28" />
+          <stop offset="1" stopColor={CLASS_COLORS.dao} stopOpacity="0" />
+        </linearGradient>
+      </defs>
       <path
         d={`${path} L${x(last)},${MAIN_PLOT_H} L${x(0)},${MAIN_PLOT_H} Z`}
-        className="fill-gold"
-        fillOpacity={0.18}
+        fill={`url(#${fillId})`}
       />
       <path d={path} fill="none" className="stroke-gold" strokeWidth={1.5} />
       <line x1={0} x2={width} y1={MAIN_PLOT_H} y2={MAIN_PLOT_H} className="stroke-base-border" />
@@ -406,13 +409,13 @@ function SharePanel({ series, pin }: { series: HistorySeries; pin: PinnedReadout
               className="block cursor-crosshair overflow-visible font-mono"
               {...plotHandlers(pin, last)}
             >
+              {/* The half-scale guide is grid, not a reference: solid (visual finish V13). */}
               <line
                 x1={0}
                 x2={width}
                 y1={y(top / 2)}
                 y2={y(top / 2)}
                 className="stroke-base-border-subtle"
-                strokeDasharray="3 5"
               />
               <path d={path} fill="none" className="stroke-text" strokeWidth={1.25} />
               <text
