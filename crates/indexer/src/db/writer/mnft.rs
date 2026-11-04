@@ -83,15 +83,41 @@ impl MnftBatchState {
             .insert(collection_id.to_vec(), Some(agg));
     }
 
-    pub(crate) fn extend_pending_collection_aggregates(
-        &self,
-        target: &mut HashMap<Vec<u8>, MnftCollectionAggregate>,
+    /// Add `rows` collection activity rows of `block` to the collection's
+    /// `activities_count`, on top of the aggregate this batch left (else the
+    /// committed one), in the block's scope (`batch`). `false` when the
+    /// collection has no mNFT aggregate.
+    pub(crate) fn add_collection_activities(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+        rows: i64,
+        block: i64,
+        batch: &mut StoreBatch,
+    ) -> Result<bool> {
+        let Some(mut agg) = self.get_collection_aggregate(store, collection_id)? else {
+            return Ok(false);
+        };
+        agg.activities_count = super::object_activity_acc::added_activities(
+            agg.activities_count,
+            rows,
+            "object",
+            collection_id,
+            block,
+        )?;
+        self.put_collection_aggregate(collection_id, agg, batch);
+        Ok(true)
+    }
+
+    /// Test seam: an aggregate this batch already wrote.
+    #[cfg(test)]
+    pub(crate) fn seed_collection_aggregate(
+        &mut self,
+        collection_id: &[u8],
+        agg: MnftCollectionAggregate,
+        batch: &mut StoreBatch,
     ) {
-        for (collection_id, agg) in &self.collection_aggs {
-            if let Some(agg) = agg {
-                target.insert(collection_id.clone(), agg.clone());
-            }
-        }
+        self.put_collection_aggregate(collection_id, agg, batch);
     }
 
     fn get_collection_owner_count(

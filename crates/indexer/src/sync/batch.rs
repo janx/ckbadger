@@ -15,14 +15,16 @@ use tracing::{debug, info, warn};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::block_overlay::SharedBlockOverlay;
 use ckbadger_store::types::{
-    DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
-    MnftTypeIndex, ParticipantId, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
-    DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
+    DailyActivityStats, DaoDailySnapshot, LiveCellSummary, MnftTypeIndex, ParticipantId,
+    PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex, DOTCELL_SENTINEL_COLLECTION,
+    SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::CkbadgerStore;
 
 use crate::db::writer::dotbit::resolve_dotbit_tx_activity;
-use crate::db::writer::object_activity_acc::ObjectCollectionActivityAccumulator;
+use crate::db::writer::object_activity_acc::{
+    BlockCollectionActivityCounts, ObjectCollectionActivityAccumulator,
+};
 use crate::db::writer::DaoSnapshotBoundary;
 use crate::db::writer::LiveDaoBatch;
 use crate::db::BatchWriter;
@@ -772,122 +774,6 @@ fn correct_dao_withdrawal_fees(
             );
         }
         tx_data.fee = fee;
-    }
-    Ok(())
-}
-
-fn apply_object_collection_activity_count_deltas_with_pending(
-    store: &CkbadgerStore,
-    batch: &mut StoreBatch,
-    deltas: HashMap<Vec<u8>, i64>,
-    pending_aggregates: &HashMap<Vec<u8>, ckbadger_store::types::MnftCollectionAggregate>,
-    pending_cluster_ids: &HashSet<Vec<u8>>,
-) -> Result<()> {
-    if deltas.is_empty() {
-        return Ok(());
-    }
-
-    let mut aggregates: HashMap<Vec<u8>, ckbadger_store::types::MnftCollectionAggregate> =
-        HashMap::new();
-
-    for (collection_id, delta) in deltas {
-        if delta == 0 {
-            continue;
-        }
-        let agg = if let Some(cached) = aggregates.get_mut(&collection_id) {
-            cached
-        } else {
-            let loaded = if let Some(pending) = pending_aggregates.get(&collection_id) {
-                Some(pending.clone())
-            } else {
-                store.get_mnft_collection_aggregate(&collection_id)?
-            };
-            match loaded {
-                Some(loaded) => aggregates.entry(collection_id.clone()).or_insert(loaded),
-                None => {
-                    if store.get_cluster_aggregate(&collection_id)?.is_some()
-                        || pending_cluster_ids.contains(&collection_id)
-                    {
-                        // Spore cluster activities share the same append-only CF but do not
-                        // belong to object_collection_agg.
-                        continue;
-                    }
-                    bail!(
-                        "missing collection aggregate while applying activity_count delta: collection_id=0x{}",
-                        hex::encode(&collection_id)
-                    );
-                }
-            }
-        };
-
-        let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
-            anyhow!(
-                "object collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
-                hex::encode(&collection_id),
-                agg.activities_count,
-                delta
-            )
-        })?;
-        if next < 0 {
-            bail!(
-                "object collection activities_count underflow: collection_id=0x{}, current={}, delta={}",
-                hex::encode(&collection_id),
-                agg.activities_count,
-                delta
-            );
-        }
-        agg.activities_count = next;
-    }
-
-    for (collection_id, agg) in aggregates {
-        batch.put_mnft_collection_aggregate(&collection_id, &agg);
-    }
-    Ok(())
-}
-
-fn apply_identity_collection_activity_count_deltas(
-    store: &CkbadgerStore,
-    batch: &mut StoreBatch,
-    deltas: HashMap<Vec<u8>, i64>,
-    pending_identity_aggs: &HashMap<Vec<u8>, IdentityCollectionAggregate>,
-) -> Result<()> {
-    if deltas.is_empty() {
-        return Ok(());
-    }
-    for (collection_id, delta) in deltas {
-        if delta == 0 {
-            continue;
-        }
-        let mut agg = if let Some(pending) = pending_identity_aggs.get(&collection_id) {
-            pending.clone()
-        } else {
-            store
-                .get_identity_collection_aggregate(&collection_id)?
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing identity collection aggregate while applying activity_count delta: collection_id=0x{}",
-                        hex::encode(&collection_id)
-                    )
-                })?
-        };
-        let next = agg.activities_count.checked_add(delta).ok_or_else(|| {
-            anyhow!(
-                "identity collection activities_count overflow: collection_id=0x{}, current={}, delta={}",
-                hex::encode(&collection_id),
-                agg.activities_count,
-                delta
-            )
-        })?;
-        if next < 0 {
-            bail!(
-                "identity collection activities_count underflow: collection_id=0x{}, current={}, delta={}",
-                hex::encode(&collection_id),
-                agg.activities_count,
-                delta
-            );
-        }
-        agg.activities_count = next;
-        batch.put_identity_collection_aggregate(&collection_id, &agg);
     }
     Ok(())
 }
@@ -2508,7 +2394,6 @@ impl Indexer {
 
         let mut object_activity_batch =
             StoreBatch::journaled(self.writer.store(), &block_overlay, 3);
-        let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // `(collection id, block)` of every object collection activity row,
         // for the derived per-collection row count.
         let mut derive_collection_activity_rows: Vec<(Vec<u8>, i64)> = Vec::new();
@@ -2517,7 +2402,6 @@ impl Indexer {
             Vec::new();
         let mut identity_activity_batch =
             StoreBatch::journaled(self.writer.store(), &block_overlay, 4);
-        let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Every collection activity row this batch writes, folded per block
         // and (collection, UTC+8 day of its block's chain time): staged into
         // `collection_activity_daily` block by block, beside the rows, before
@@ -2530,10 +2414,21 @@ impl Indexer {
             ckbadger_store::keys::stats_day_yyyymmdd(*chain_time)
         };
 
-        let mut pending_object_collection_aggs = HashMap::new();
-        let mut pending_cluster_ids = HashSet::new();
-        let mut pending_identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate> =
-            HashMap::new();
+        // Activity writes (live sync)
+        #[allow(unused_mut)]
+        let mut protocol_detectors: Vec<
+            Box<dyn crate::db::writer::activities::ProtocolDetector>,
+        > = crate::db::writer::activities::production_detectors(self.config.is_mainnet())
+            .into_iter()
+            .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
+            .collect();
+        #[cfg(test)]
+        protocol_detectors
+            .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
+        let mut activity_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 5);
+        // Standalone protocol-named participations counted per block and
+        // 20-byte prefix, staged block by block after the loop.
+        let mut prefix_tx_counts: BTreeMap<i64, BTreeMap<[u8; 20], i64>> = BTreeMap::new();
 
         // DAS ActionData actions of every non-cellbase tx in the batch, parsed
         // once from its witnesses: the `.bit` collection feed below and the
@@ -2576,10 +2471,6 @@ impl Indexer {
             let mut mnft_state = self
                 .writer
                 .new_mnft_batch_state(entity_stats.clone(), batch_undo_seq.clone());
-            let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
-            let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
-            let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
-                HashMap::new();
 
             // --- Pre-pass: collect all input outpoints for batch DB lookup ---
             let bulk_sync_active = self.is_bulk_sync_active();
@@ -2696,6 +2587,13 @@ impl Indexer {
                 let parsed = &all_parsed_blocks[block_idx];
                 // Every protocol write of this block belongs to it.
                 let mut data_batch = data_batch.at(parsed.number);
+                // The block's object / identity lifecycle events and `.bit`
+                // transactions, resolved into collection activity rows at the
+                // end of the block.
+                let mut object_activity_acc = ObjectCollectionActivityAccumulator::new();
+                let mut identity_activity_acc = ObjectCollectionActivityAccumulator::new();
+                let mut dotbit_tx_activity_data: HashMap<[u8; 32], DotbitTxActivityData> =
+                    HashMap::new();
                 let tx_count_for_block =
                     checked_tx_count(parsed.transactions_count, parsed.number)?;
                 let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count_for_block];
@@ -3261,123 +3159,65 @@ impl Indexer {
                         &mut spore_state,
                     )?;
                 }
-                block_tx_idx += tx_count_for_block;
-            }
 
-            // Write .bit collection activities directly (bypassing accumulator)
-            for (tx_hash, activity) in &dotbit_tx_activity_data {
-                let inserted = resolve_dotbit_tx_activity(
-                    activity.das_action.as_deref(),
-                    &activity.created_account_ids,
-                    &activity.consumed_account_ids,
-                    tx_hash,
-                    &activity.block_hash,
-                    activity.block_number,
-                    activity.tx_idx,
-                    activity.timestamp_ms,
-                    collection_day_of_block(activity.block_number)?,
-                    &mut identity_activity_batch,
-                    &mut collection_daily,
-                )?;
-                // identity collection activities are now in domain store;
-                // rollback deletes entries directly (no undo log needed)
-                if inserted {
-                    let delta = identity_activity_count_deltas
-                        .entry(DOTBIT_SENTINEL_COLLECTION.to_vec())
-                        .or_insert(0);
-                    *delta = delta.checked_add(1).ok_or_else(|| {
-                        anyhow!(
-                            "dotbit identity activity delta overflow while writing grouped batch"
-                        )
-                    })?;
+                // The block's collection activity rows, in its scope, counted
+                // per collection for the aggregates' activity counts.
+                let mut block_activity_counts = BlockCollectionActivityCounts::new(parsed.number);
+                {
+                    let mut object_activity_batch = object_activity_batch.at(parsed.number);
+                    let mut identity_activity_batch = identity_activity_batch.at(parsed.number);
+                    // .bit collection activities, written directly (no accumulator).
+                    for (tx_hash, activity) in &dotbit_tx_activity_data {
+                        let inserted = resolve_dotbit_tx_activity(
+                            activity.das_action.as_deref(),
+                            &activity.created_account_ids,
+                            &activity.consumed_account_ids,
+                            tx_hash,
+                            &activity.block_hash,
+                            activity.block_number,
+                            activity.tx_idx,
+                            activity.timestamp_ms,
+                            collection_day_of_block(activity.block_number)?,
+                            &mut identity_activity_batch,
+                            &mut collection_daily,
+                        )?;
+                        if inserted {
+                            block_activity_counts.add_identity_row(
+                                &DOTBIT_SENTINEL_COLLECTION,
+                                activity.block_number,
+                            )?;
+                        }
+                    }
+                    for (collection_id, block_number, _tx_idx, _block_hash, _tx_hash) in
+                        object_activity_acc.flush(
+                            &mut object_activity_batch,
+                            &mut collection_daily,
+                            &collection_day_of_block,
+                        )?
+                    {
+                        block_activity_counts.add_object_row(&collection_id, block_number)?;
+                        derive_collection_activity_rows.push((collection_id, block_number));
+                    }
+                    for (collection_id, block_number, _tx_idx, _block_hash, _tx_hash) in
+                        identity_activity_acc.flush_identity(
+                            &mut identity_activity_batch,
+                            &mut collection_daily,
+                            &collection_day_of_block,
+                        )?
+                    {
+                        block_activity_counts.add_identity_row(&collection_id, block_number)?;
+                    }
                 }
-            }
-            // Object/identity collection activities are now in domain store;
-            // rollback deletes entries directly (no undo log needed)
-            for (collection_id, block_number, _tx_idx, _block_hash, _tx_hash) in object_activity_acc
-                .flush(
-                    &mut object_activity_batch,
-                    &mut collection_daily,
-                    &collection_day_of_block,
-                )?
-            {
-                derive_collection_activity_rows.push((collection_id.clone(), block_number));
-                let delta = object_activity_count_deltas
-                    .entry(collection_id)
-                    .or_insert(0);
-                *delta = delta.checked_add(1).ok_or_else(|| {
-                    anyhow!("object activity delta overflow while writing grouped batch")
-                })?;
-            }
-            for (collection_id, _block_number, _tx_idx, _block_hash, _tx_hash) in
-                identity_activity_acc.flush_identity(
-                    &mut identity_activity_batch,
-                    &mut collection_daily,
-                    &collection_day_of_block,
-                )?
-            {
-                let delta = identity_activity_count_deltas
-                    .entry(collection_id)
-                    .or_insert(0);
-                *delta = delta.checked_add(1).ok_or_else(|| {
-                    anyhow!("identity activity delta overflow while writing grouped batch")
-                })?;
-            }
 
-            mnft_state.extend_pending_collection_aggregates(&mut pending_object_collection_aggs);
-            spore_state.extend_pending_cluster_ids(&mut pending_cluster_ids);
-            derive_identity_transitions.extend(spore_state.take_bit_cell_transitions());
-
-            pending_identity_aggs.extend(
-                spore_state
-                    .pending_identity_aggs()
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone())),
-            );
-            pending_identity_aggs.extend(
-                dotbit_state
-                    .pending_identity_aggs()
-                    .iter()
-                    .map(|(k, v)| (k.clone(), v.clone())),
-            );
-        }
-        apply_object_collection_activity_count_deltas_with_pending(
-            self.writer.store(),
-            &mut data_batch,
-            object_activity_count_deltas,
-            &pending_object_collection_aggs,
-            &pending_cluster_ids,
-        )?;
-
-        // Activity writes (live sync)
-        #[allow(unused_mut)]
-        let mut protocol_detectors: Vec<
-            Box<dyn crate::db::writer::activities::ProtocolDetector>,
-        > = crate::db::writer::activities::production_detectors(self.config.is_mainnet())
-            .into_iter()
-            .filter(|d| d.might_apply_batch(&batch_lock_code_hashes, &batch_type_code_hashes))
-            .collect();
-        #[cfg(test)]
-        protocol_detectors
-            .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
-        let mut activity_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 5);
-        // Standalone protocol-named participations counted per block and
-        // 20-byte prefix, staged block by block after the loop.
-        let mut prefix_tx_counts: BTreeMap<i64, BTreeMap<[u8; 20], i64>> = BTreeMap::new();
-        {
-            let mut block_tx_idx = 0usize;
-            for parsed in all_parsed_blocks {
-                // Every write of this block's activity pass belongs to it:
-                // its addr_txs / addr_txs_by_prefix rows, its TxActions rows
-                // and their bucket index rows, its `.cell` collection feed
-                // rows, the Fiber channel lifecycle its transactions carry and
-                // its activity bucket stats.
+                // The block's activity pass, right after its protocol writes
+                // (it reads what they resolved). Every write belongs to the
+                // block: its addr_txs / addr_txs_by_prefix rows, its TxActions
+                // rows and their bucket index rows, its `.cell` collection
+                // feed rows, the Fiber channel lifecycle its transactions
+                // carry and its activity bucket stats.
                 let mut append_history_batch = append_history_batch.at(parsed.number);
                 let mut activity_batch = activity_batch.at(parsed.number);
                 let mut identity_activity_batch = identity_activity_batch.at(parsed.number);
-                let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
-                let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
-                block_tx_idx += tx_count;
                 // This block's activity counts and unique `Lock` participants,
                 // applied to its UTC+8 day and hour buckets once its
                 // transactions are done. Activity hour keys are UTC+8 (unlike
@@ -3501,12 +3341,10 @@ impl Indexer {
                             collection_day_of_block(tx_actions.block_number)?,
                             &entry.actions,
                         )?;
-                        let delta = identity_activity_count_deltas
-                            .entry(DOTCELL_SENTINEL_COLLECTION.to_vec())
-                            .or_insert(0);
-                        *delta = delta
-                            .checked_add(1)
-                            .ok_or_else(|| anyhow!("dotcell identity activity delta overflow"))?;
+                        block_activity_counts.add_identity_row(
+                            &DOTCELL_SENTINEL_COLLECTION,
+                            tx_actions.block_number,
+                        )?;
                     }
 
                     // Accumulate this block's activity stats.
@@ -3579,18 +3417,21 @@ impl Indexer {
                         )?;
                     }
                 }
-            }
-        }
 
-        // The `.cell` collection feed is derived from the protocol actions the
-        // activity loop just wrote, so its counter is applied here rather than
-        // beside the create/consume accumulators above.
-        apply_identity_collection_activity_count_deltas(
-            self.writer.store(),
-            &mut data_batch,
-            identity_activity_count_deltas,
-            &pending_identity_aggs,
-        )?;
+                // The block's activity rows per collection, on top of the
+                // aggregate rows its protocol writes left, in its scope.
+                block_activity_counts.apply(
+                    self.writer.store(),
+                    &mut mnft_state,
+                    &mut spore_state,
+                    &mut dotbit_state,
+                    &mut data_batch,
+                )?;
+                block_tx_idx += tx_count_for_block;
+            }
+
+            derive_identity_transitions.extend(spore_state.take_bit_cell_transitions());
+        }
 
         // Per-prefix participation counters, block by block: each block's
         // counts on top of the value the previous block left, in that block's
@@ -5071,130 +4912,6 @@ mod tests {
         );
 
         assert_eq!(resolved, Some(expected_account_id));
-    }
-
-    #[test]
-    fn test_apply_object_collection_activity_count_deltas_updates_only_object_collections() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let object_collection_id = vec![0x11; 32];
-        let cluster_id = vec![0x22; 32];
-
-        let mut seed = StoreBatch::new(&store);
-        seed.put_mnft_collection_aggregate(
-            &object_collection_id,
-            &ckbadger_store::types::MnftCollectionAggregate {
-                standard: ckbadger_store::types::ObjectStandard::MnftClass,
-                activities_count: 3,
-                ..Default::default()
-            },
-        );
-        seed.put_cluster_aggregate(
-            &cluster_id,
-            &ckbadger_store::types::ClusterAggregate {
-                name: Some("cluster".to_string()),
-                ..Default::default()
-            },
-        );
-        seed.commit().unwrap();
-
-        let mut deltas = HashMap::new();
-        deltas.insert(object_collection_id.clone(), 2);
-        deltas.insert(cluster_id, 4);
-
-        let mut batch = StoreBatch::new(&store);
-        apply_object_collection_activity_count_deltas_with_pending(
-            &store,
-            &mut batch,
-            deltas,
-            &HashMap::new(),
-            &HashSet::new(),
-        )
-        .unwrap();
-        batch.commit().unwrap();
-
-        let agg = store
-            .get_mnft_collection_aggregate(&object_collection_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(agg.activities_count, 5);
-    }
-
-    #[test]
-    fn test_apply_object_collection_activity_count_deltas_uses_pending_batch_aggregate() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let collection_id = vec![0x33; 32];
-        let pending_agg = ckbadger_store::types::MnftCollectionAggregate {
-            standard: ckbadger_store::types::ObjectStandard::MnftClass,
-            name: Some("fresh collection".to_string()),
-            ..Default::default()
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_mnft_collection_aggregate(&collection_id, &pending_agg);
-
-        let mut pending = HashMap::new();
-        pending.insert(collection_id.clone(), pending_agg);
-
-        let mut deltas = HashMap::new();
-        deltas.insert(collection_id.clone(), 1);
-
-        apply_object_collection_activity_count_deltas_with_pending(
-            &store,
-            &mut batch,
-            deltas,
-            &pending,
-            &HashSet::new(),
-        )
-        .unwrap();
-        batch.commit().unwrap();
-
-        let agg = store
-            .get_mnft_collection_aggregate(&collection_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(agg.activities_count, 1);
-        assert_eq!(agg.name.as_deref(), Some("fresh collection"));
-    }
-
-    #[test]
-    fn test_apply_object_collection_activity_count_deltas_uses_pending_cluster_ids() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let cluster_id = vec![0x44; 32];
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_cluster_aggregate(
-            &cluster_id,
-            &ckbadger_store::types::ClusterAggregate {
-                name: Some("fresh cluster".to_string()),
-                ..Default::default()
-            },
-        );
-
-        let mut pending_cluster_ids = HashSet::new();
-        pending_cluster_ids.insert(cluster_id.clone());
-
-        let mut deltas = HashMap::new();
-        deltas.insert(cluster_id.clone(), 1);
-
-        apply_object_collection_activity_count_deltas_with_pending(
-            &store,
-            &mut batch,
-            deltas,
-            &HashMap::new(),
-            &pending_cluster_ids,
-        )
-        .unwrap();
-        batch.commit().unwrap();
-
-        let cluster = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
-        assert_eq!(cluster.name.as_deref(), Some("fresh cluster"));
-        assert!(store
-            .get_mnft_collection_aggregate(&cluster_id)
-            .unwrap()
-            .is_none());
     }
 
     #[test]

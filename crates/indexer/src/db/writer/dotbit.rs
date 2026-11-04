@@ -469,6 +469,29 @@ impl DotbitBatchState {
     pub(crate) fn pending_identity_aggs(&self) -> &HashMap<Vec<u8>, IdentityCollectionAggregate> {
         &self.identity_aggs
     }
+
+    /// Add `rows` identity collection activity rows of `block` to the
+    /// collection's `activities_count`, on top of the aggregate this batch
+    /// left (else the committed one, which must exist), in the block's scope
+    /// (`batch`).
+    pub(crate) fn add_identity_collection_activities(
+        &mut self,
+        store: &CkbadgerStore,
+        collection_id: &[u8],
+        rows: i64,
+        block: i64,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        let agg = super::object_activity_acc::identity_aggregate_with_activities(
+            self.identity_aggs.get(collection_id),
+            store,
+            collection_id,
+            rows,
+            block,
+        )?;
+        self.put_identity_agg(collection_id, agg, batch);
+        Ok(())
+    }
 }
 
 impl BatchWriter {

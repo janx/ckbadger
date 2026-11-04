@@ -11,11 +11,18 @@
 //! Then groups them by `(collection_id, tx_hash)` and writes one entry per
 //! unique (collection, block, tx) triple.
 
+use anyhow::{anyhow, bail, Result};
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::types::{
-    AssetAction, CollectionActivityDailyBlockDeltas, ObjectCollectionActivityEntry,
+    AssetAction, CollectionActivityDailyBlockDeltas, IdentityCollectionAggregate,
+    ObjectCollectionActivityEntry, DOTBIT_SENTINEL_COLLECTION,
 };
-use std::collections::HashMap;
+use ckbadger_store::CkbadgerStore;
+use std::collections::{BTreeMap, HashMap};
+
+use super::dotbit::DotbitBatchState;
+use super::mnft::MnftBatchState;
+use super::spore::SporeBatchState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RawAction {
@@ -234,6 +241,189 @@ impl ObjectCollectionActivityAccumulator {
         }
         Ok(inserted)
     }
+}
+
+/// One block's collection activity rows, counted per collection: what the
+/// block adds to each collection aggregate's `activities_count`.
+///
+/// The live writer applies it at the end of the block — after the block's
+/// protocol writes and its activity pass, which writes the `.cell` feed — so
+/// every `mnft_collection_agg` / `identity_agg` row reaches the block overlay
+/// in ascending block order, and its value at the end of every block carries
+/// that block's activity count (store refactor lane B, B-3).
+#[derive(Debug)]
+pub(crate) struct BlockCollectionActivityCounts {
+    block: i64,
+    object: BTreeMap<Vec<u8>, i64>,
+    identity: BTreeMap<Vec<u8>, i64>,
+}
+
+impl BlockCollectionActivityCounts {
+    pub(crate) fn new(block: i64) -> Self {
+        Self {
+            block,
+            object: BTreeMap::new(),
+            identity: BTreeMap::new(),
+        }
+    }
+
+    /// One `object_collection_activities` row of the block.
+    pub(crate) fn add_object_row(&mut self, collection_id: &[u8], row_block: i64) -> Result<()> {
+        Self::add_row(
+            &mut self.object,
+            self.block,
+            collection_id,
+            row_block,
+            "object",
+        )
+    }
+
+    /// One `identity_collection_activities` row of the block.
+    pub(crate) fn add_identity_row(&mut self, collection_id: &[u8], row_block: i64) -> Result<()> {
+        Self::add_row(
+            &mut self.identity,
+            self.block,
+            collection_id,
+            row_block,
+            "identity",
+        )
+    }
+
+    fn add_row(
+        counts: &mut BTreeMap<Vec<u8>, i64>,
+        block: i64,
+        collection_id: &[u8],
+        row_block: i64,
+        what: &str,
+    ) -> Result<()> {
+        if row_block != block {
+            bail!(
+                "{what} collection activity row of block {row_block} counted in block {block}: collection_id=0x{}",
+                hex::encode(collection_id)
+            );
+        }
+        let count = counts.entry(collection_id.to_vec()).or_insert(0);
+        *count = count.checked_add(1).ok_or_else(|| {
+            anyhow!(
+                "{what} collection activity row count overflow: collection_id=0x{}, block={block}",
+                hex::encode(collection_id)
+            )
+        })?;
+        Ok(())
+    }
+
+    /// Add the block's rows to their collections' `activities_count`, each
+    /// on top of the aggregate the batch's writers left (their per-batch
+    /// states hold it), in the block's scope (`batch`).
+    ///
+    /// Object rows of an mNFT class go to `mnft_collection_agg`; a Spore
+    /// cluster's rows share the activity CF but have no such aggregate. The
+    /// `.bit` AccountCell collection's identity aggregate is the `.bit`
+    /// writer's, every other identity collection's (did:ckb, `.bit Cell`,
+    /// `.cell`) the Spore writer's; a collection cached by the other writer
+    /// is an error, never a silently stale count.
+    pub(crate) fn apply(
+        self,
+        store: &CkbadgerStore,
+        mnft_state: &mut MnftBatchState,
+        spore_state: &mut SporeBatchState,
+        dotbit_state: &mut DotbitBatchState,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        let block = self.block;
+        for (collection_id, rows) in &self.object {
+            if mnft_state.add_collection_activities(store, collection_id, *rows, block, batch)? {
+                continue;
+            }
+            if spore_state.knows_cluster(store, collection_id)? {
+                continue;
+            }
+            bail!(
+                "missing collection aggregate while applying activity_count delta: collection_id=0x{}, block={block}",
+                hex::encode(collection_id)
+            );
+        }
+        for (collection_id, rows) in &self.identity {
+            let dotbit_owned = collection_id.as_slice() == DOTBIT_SENTINEL_COLLECTION.as_slice();
+            let (owner, other) = if dotbit_owned {
+                (".bit", spore_state.pending_identity_aggs())
+            } else {
+                ("Spore", dotbit_state.pending_identity_aggs())
+            };
+            if other.contains_key(collection_id) {
+                bail!(
+                    "identity collection aggregate cached outside its writer ({owner}): collection_id=0x{}, block={block}",
+                    hex::encode(collection_id)
+                );
+            }
+            if dotbit_owned {
+                dotbit_state.add_identity_collection_activities(
+                    store,
+                    collection_id,
+                    *rows,
+                    block,
+                    batch,
+                )?;
+            } else {
+                spore_state.add_identity_collection_activities(
+                    store,
+                    collection_id,
+                    *rows,
+                    block,
+                    batch,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `current` activities count plus `rows` rows of `block`.
+pub(crate) fn added_activities(
+    current: i64,
+    rows: i64,
+    what: &str,
+    collection_id: &[u8],
+    block: i64,
+) -> Result<i64> {
+    if rows <= 0 {
+        bail!(
+            "{what} collection activity count of a block must be positive: collection_id=0x{}, block={block}, rows={rows}",
+            hex::encode(collection_id)
+        );
+    }
+    current.checked_add(rows).ok_or_else(|| {
+        anyhow!(
+            "{what} collection activities_count overflow: collection_id=0x{}, block={block}, current={current}, rows={rows}",
+            hex::encode(collection_id)
+        )
+    })
+}
+
+/// An identity collection aggregate with `rows` more activity rows of
+/// `block`: on top of `cached` (the batch's current value), else the
+/// committed one, which must exist.
+pub(crate) fn identity_aggregate_with_activities(
+    cached: Option<&IdentityCollectionAggregate>,
+    store: &CkbadgerStore,
+    collection_id: &[u8],
+    rows: i64,
+    block: i64,
+) -> Result<IdentityCollectionAggregate> {
+    let mut agg = match cached {
+        Some(agg) => agg.clone(),
+        None => store
+            .get_identity_collection_aggregate(collection_id)?
+            .ok_or_else(|| {
+                anyhow!(
+                    "missing identity collection aggregate while applying activity_count delta: collection_id=0x{}, block={block}",
+                    hex::encode(collection_id)
+                )
+            })?,
+    };
+    agg.activities_count =
+        added_activities(agg.activities_count, rows, "identity", collection_id, block)?;
+    Ok(agg)
 }
 
 #[cfg(test)]
@@ -598,5 +788,232 @@ mod tests {
             .list_object_collection_activities(&coll_b, 10, None, None)
             .unwrap();
         assert_eq!(results_b.len(), 1);
+    }
+
+    // ---- BlockCollectionActivityCounts: one block's activity counts ----
+
+    struct States {
+        writer: super::super::BatchWriter,
+        mnft: MnftBatchState,
+        spore: SporeBatchState,
+        dotbit: DotbitBatchState,
+    }
+
+    fn states(store: &std::sync::Arc<CkbadgerStore>) -> States {
+        use super::super::entity_stats::SharedEntityStatsOverlay;
+        use crate::sync::undo::SharedUndoSeq;
+        let writer = super::super::BatchWriter::new(store.clone(), store.clone());
+        let mnft =
+            writer.new_mnft_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let spore =
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let dotbit = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        States {
+            writer,
+            mnft,
+            spore,
+            dotbit,
+        }
+    }
+
+    fn apply(
+        counts: BlockCollectionActivityCounts,
+        states: &mut States,
+        batch: &mut StoreBatch,
+    ) -> anyhow::Result<()> {
+        counts.apply(
+            states.writer.store(),
+            &mut states.mnft,
+            &mut states.spore,
+            &mut states.dotbit,
+            batch,
+        )
+    }
+
+    /// Was `test_apply_object_collection_activity_count_deltas_updates_only_object_collections`
+    /// (sync/batch.rs) before the counts became per block: an mNFT class
+    /// counts its rows, a Spore cluster's rows leave it without an mNFT
+    /// aggregate.
+    #[test]
+    fn test_block_activity_counts_update_only_object_collections() {
+        let dir = TempDir::new().unwrap();
+        let store = std::sync::Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let object_collection_id = vec![0x11; 32];
+        let cluster_id = vec![0x22; 32];
+
+        let mut seed = StoreBatch::new(&store);
+        seed.put_mnft_collection_aggregate(
+            &object_collection_id,
+            &ckbadger_store::types::MnftCollectionAggregate {
+                standard: ckbadger_store::types::ObjectStandard::MnftClass,
+                activities_count: 3,
+                ..Default::default()
+            },
+        );
+        seed.put_cluster_aggregate(
+            &cluster_id,
+            &ckbadger_store::types::ClusterAggregate {
+                name: Some("cluster".to_string()),
+                ..Default::default()
+            },
+        );
+        seed.commit().unwrap();
+
+        let mut states = states(&store);
+        let mut counts = BlockCollectionActivityCounts::new(7);
+        for _ in 0..2 {
+            counts.add_object_row(&object_collection_id, 7).unwrap();
+        }
+        for _ in 0..4 {
+            counts.add_object_row(&cluster_id, 7).unwrap();
+        }
+        let mut batch = StoreBatch::new(&store);
+        apply(counts, &mut states, &mut batch).unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_mnft_collection_aggregate(&object_collection_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.activities_count, 5);
+        assert!(store
+            .get_mnft_collection_aggregate(&cluster_id)
+            .unwrap()
+            .is_none());
+    }
+
+    /// Was `test_apply_object_collection_activity_count_deltas_uses_pending_batch_aggregate`:
+    /// the count lands on the aggregate this batch already wrote, never on a
+    /// stale committed one.
+    #[test]
+    fn test_block_activity_counts_use_the_batch_aggregate() {
+        let dir = TempDir::new().unwrap();
+        let store = std::sync::Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let collection_id = vec![0x33; 32];
+        let pending_agg = ckbadger_store::types::MnftCollectionAggregate {
+            standard: ckbadger_store::types::ObjectStandard::MnftClass,
+            name: Some("fresh collection".to_string()),
+            ..Default::default()
+        };
+
+        let mut states = states(&store);
+        let mut batch = StoreBatch::new(&store);
+        states
+            .mnft
+            .seed_collection_aggregate(&collection_id, pending_agg, &mut batch);
+        let mut counts = BlockCollectionActivityCounts::new(9);
+        counts.add_object_row(&collection_id, 9).unwrap();
+        apply(counts, &mut states, &mut batch).unwrap();
+        batch.commit().unwrap();
+
+        let agg = store
+            .get_mnft_collection_aggregate(&collection_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(agg.activities_count, 1);
+        assert_eq!(agg.name.as_deref(), Some("fresh collection"));
+    }
+
+    /// Was `test_apply_object_collection_activity_count_deltas_uses_pending_cluster_ids`:
+    /// a cluster this batch created is a cluster, not a missing aggregate.
+    #[test]
+    fn test_block_activity_counts_know_the_batch_clusters() {
+        let dir = TempDir::new().unwrap();
+        let store = std::sync::Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let cluster_id = vec![0x44; 32];
+        let cluster = ckbadger_store::types::ClusterAggregate {
+            name: Some("fresh cluster".to_string()),
+            ..Default::default()
+        };
+
+        let mut states = states(&store);
+        let mut batch = StoreBatch::new(&store);
+        batch.put_cluster_aggregate(&cluster_id, &cluster);
+        states.spore.seed_cluster_aggregate(&cluster_id, cluster);
+        let mut counts = BlockCollectionActivityCounts::new(4);
+        counts.add_object_row(&cluster_id, 4).unwrap();
+        apply(counts, &mut states, &mut batch).unwrap();
+        batch.commit().unwrap();
+
+        let cluster = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(cluster.name.as_deref(), Some("fresh cluster"));
+        assert!(store
+            .get_mnft_collection_aggregate(&cluster_id)
+            .unwrap()
+            .is_none());
+    }
+
+    /// A collection activity row of a collection with no aggregate at all is
+    /// a lost fact: the batch fails with the collection and block.
+    #[test]
+    fn test_block_activity_counts_fail_on_a_collection_without_aggregate() {
+        let dir = TempDir::new().unwrap();
+        let store = std::sync::Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let mut states = states(&store);
+        let mut batch = StoreBatch::new(&store);
+        let mut counts = BlockCollectionActivityCounts::new(5);
+        counts.add_object_row(&[0x55; 32], 5).unwrap();
+        let err = apply(counts, &mut states, &mut batch)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("missing collection aggregate") && err.contains("block=5"),
+            "{err}"
+        );
+
+        let mut counts = BlockCollectionActivityCounts::new(5);
+        counts
+            .add_identity_row(&DOTBIT_SENTINEL_COLLECTION, 5)
+            .unwrap();
+        let err = apply(counts, &mut states, &mut batch)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("missing identity collection aggregate") && err.contains("block=5"),
+            "{err}"
+        );
+    }
+
+    /// Identity rows count into their collection's committed aggregate, and
+    /// a row of another block is refused.
+    #[test]
+    fn test_block_activity_counts_add_identity_rows_to_their_aggregates() {
+        let dir = TempDir::new().unwrap();
+        let store = std::sync::Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let did = ckbadger_store::types::DID_CKB_SENTINEL_COLLECTION;
+        let mut seed = StoreBatch::new(&store);
+        for (collection, count) in [(DOTBIT_SENTINEL_COLLECTION, 10), (did, 20)] {
+            seed.put_identity_collection_aggregate(
+                &collection,
+                &IdentityCollectionAggregate {
+                    activities_count: count,
+                    ..Default::default()
+                },
+            );
+        }
+        seed.commit().unwrap();
+
+        let mut states = states(&store);
+        let mut counts = BlockCollectionActivityCounts::new(12);
+        counts
+            .add_identity_row(&DOTBIT_SENTINEL_COLLECTION, 12)
+            .unwrap();
+        counts.add_identity_row(&did, 12).unwrap();
+        counts.add_identity_row(&did, 12).unwrap();
+        assert!(counts.add_identity_row(&did, 13).is_err());
+        let mut batch = StoreBatch::new(&store);
+        apply(counts, &mut states, &mut batch).unwrap();
+        batch.commit().unwrap();
+
+        let count = |collection: &[u8]| {
+            store
+                .get_identity_collection_aggregate(collection)
+                .unwrap()
+                .unwrap()
+                .activities_count
+        };
+        assert_eq!(count(&DOTBIT_SENTINEL_COLLECTION), 11);
+        assert_eq!(count(&did), 22);
     }
 }

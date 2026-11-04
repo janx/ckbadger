@@ -623,6 +623,17 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_DAO_LIVE_AGG, None),
     (ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITY_COUNT, None),
     (ckbadger_store::CF_BIT_CELL_BY_ACCOUNT, None),
+    // B-3 object_activity_acc.rs: the activity pass runs per block right
+    // after the block's protocol writes; the block's object / identity
+    // collection activity rows (and the `.bit` and `.cell` feeds) are written
+    // in its scope and its per-collection activity counts are added to the
+    // aggregate rows the block's protocol writes left, in the same block.
+    (ckbadger_store::CF_OBJECT_COLLECTION_ACTIVITIES, None),
+    (ckbadger_store::CF_IDENTITY_COLLECTION_ACTIVITIES, None),
+    (ckbadger_store::CF_MNFT_COLLECTION_AGG, None),
+    (ckbadger_store::CF_IDENTITY_AGG, None),
+    // `stats_script` holds only the SCRIPT_DAILY family (above).
+    (ckbadger_store::CF_STATS_SCRIPT, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
@@ -644,6 +655,17 @@ const JOURNAL_COVERED_KEYS: &[(&str, &[u8])] = &[
     (
         ckbadger_store::CF_SYNC_META,
         keys::LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX,
+    ),
+    // B-3 statistics.rs: the entity-stats undo contract and the hourly
+    // retention states depend only on the committed tip and are written in
+    // the batch's first block's scope.
+    (
+        ckbadger_store::CF_SYNC_META,
+        sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+    ),
+    (
+        ckbadger_store::CF_SYNC_META,
+        sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX,
     ),
 ];
 
