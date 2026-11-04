@@ -5,8 +5,9 @@ use std::collections::HashMap;
 
 use ckbadger_common::TokenBalance;
 
+use crate::block_overlay::{JournalStats, SharedBlockOverlay};
 use crate::keys;
-use crate::store::{CkbadgerStore, StoreWriteIntent};
+use crate::store::{cf_spec, CkbadgerStore, RollbackClass, StoreWriteIntent};
 use crate::types::*;
 
 /// How many keys one append-only existence probe reads at a time.
@@ -39,6 +40,48 @@ pub struct StoreBatch<'a> {
     /// Transaction-local commitment-hash index with the same shadowing rules as
     /// `pending_fiber_channels`.
     pending_fiber_channel_by_commitment: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    /// A journaled batch routes every write to a `Journal`-class domain CF into
+    /// the live batch's block overlay instead of its own `WriteBatch`.
+    journal: Option<Journal>,
+}
+
+/// The journaled side of a [`StoreBatch`]: the shared overlay, which
+/// sub-batch this is, and the block the current writes belong to.
+struct Journal {
+    overlay: SharedBlockOverlay,
+    origin: u32,
+    block: Option<i64>,
+    /// The first error a routed write raised; `commit` and `stage_journal`
+    /// return it (the typed writers cannot).
+    error: Option<anyhow::Error>,
+}
+
+/// A [`StoreBatch`] whose writes belong to one block. Created by
+/// [`StoreBatch::at`]; restores the previous block scope when dropped.
+pub struct BlockScope<'b, 'a> {
+    batch: &'b mut StoreBatch<'a>,
+    previous: Option<i64>,
+}
+
+impl<'a> std::ops::Deref for BlockScope<'_, 'a> {
+    type Target = StoreBatch<'a>;
+    fn deref(&self) -> &Self::Target {
+        self.batch
+    }
+}
+
+impl std::ops::DerefMut for BlockScope<'_, '_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.batch
+    }
+}
+
+impl Drop for BlockScope<'_, '_> {
+    fn drop(&mut self) {
+        if let Some(journal) = self.batch.journal.as_mut() {
+            journal.block = self.previous;
+        }
+    }
 }
 
 impl<'a> StoreBatch<'a> {
@@ -50,7 +93,95 @@ impl<'a> StoreBatch<'a> {
             pending_dao_deposits: HashMap::new(),
             pending_fiber_channels: HashMap::new(),
             pending_fiber_channel_by_commitment: HashMap::new(),
+            journal: None,
         }
+    }
+
+    /// A domain batch of a live write: its writes to `Journal`-class CFs go
+    /// into `overlay` (which journals them per block and stages each key once
+    /// in [`Self::stage_journal`]); `origin` tells the overlay which of the
+    /// live batch's sub-batches wrote a key.
+    pub fn journaled(store: &'a CkbadgerStore, overlay: &SharedBlockOverlay, origin: u32) -> Self {
+        let mut batch = Self::new(store);
+        batch.journal = Some(Journal {
+            overlay: overlay.clone(),
+            origin,
+            block: None,
+            error: None,
+        });
+        batch
+    }
+
+    /// The writes made through the returned scope belong to `block`. On an
+    /// unjournaled batch this is only a reborrow.
+    pub fn at(&mut self, block: i64) -> BlockScope<'_, 'a> {
+        let previous = self
+            .journal
+            .as_mut()
+            .and_then(|journal| journal.block.replace(block));
+        BlockScope {
+            batch: self,
+            previous,
+        }
+    }
+
+    /// Whether this batch routes its `Journal`-class writes into an overlay.
+    pub fn is_journaled(&self) -> bool {
+        self.journal.is_some()
+    }
+
+    /// Stage the overlay's final values and journal entries into this batch.
+    /// Call once, on the batch that commits, after every sub-batch's writes.
+    pub fn stage_journal(
+        &mut self,
+        next_seq: &mut dyn FnMut(i64) -> anyhow::Result<u64>,
+    ) -> anyhow::Result<JournalStats> {
+        let Some(journal) = self.journal.as_mut() else {
+            anyhow::bail!("stage_journal on a batch that is not journaled");
+        };
+        if let Some(error) = journal.error.take() {
+            return Err(error);
+        }
+        let overlay = journal.overlay.clone();
+        self.stage_overlay(&overlay, next_seq)
+    }
+
+    /// Stage `overlay`'s final values and journal entries into this batch.
+    pub fn stage_overlay(
+        &mut self,
+        overlay: &SharedBlockOverlay,
+        next_seq: &mut dyn FnMut(i64) -> anyhow::Result<u64>,
+    ) -> anyhow::Result<JournalStats> {
+        overlay.with(|overlay| overlay.finish(self.store, &mut self.batch, next_seq))
+    }
+
+    /// Route a write into the overlay when this batch is journaled and `cf`
+    /// is a `Journal`-class CF. Returns false when the caller must write it
+    /// to the `WriteBatch` itself.
+    fn route_to_journal(&mut self, cf: &ColumnFamily, key: &[u8], value: Option<&[u8]>) -> bool {
+        let Some(journal) = self.journal.as_mut() else {
+            return false;
+        };
+        let name = match self.store.cf_name_for_handle(cf) {
+            Ok(name) => name,
+            Err(error) => {
+                journal.error.get_or_insert(error);
+                return true;
+            }
+        };
+        let journaled =
+            cf_spec(name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal);
+        if !journaled {
+            return false;
+        }
+        let (block, origin) = (journal.block, journal.origin);
+        let result = journal
+            .overlay
+            .with(|overlay| overlay.write(block, name, key, value.map(<[u8]>::to_vec), origin));
+        if let Err(error) = result {
+            journal.error.get_or_insert(error);
+        }
+        true
     }
 
     /// Commit all accumulated writes atomically (WAL enabled, no fsync).
@@ -176,9 +307,28 @@ impl<'a> StoreBatch<'a> {
             .extend(other.pending_fiber_channels);
         self.pending_fiber_channel_by_commitment
             .extend(other.pending_fiber_channel_by_commitment);
+
+        if let Some(error) = other.journal.and_then(|journal| journal.error) {
+            match self.journal.as_mut() {
+                Some(journal) => {
+                    journal.error.get_or_insert(error);
+                }
+                None => panic!("StoreBatch::merge_from: journaled batch merged into an unjournaled one: {error:#}"),
+            }
+        }
     }
 
-    fn commit_inner(self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
+    fn commit_inner(mut self, no_wal: bool, sync: bool) -> anyhow::Result<()> {
+        if let Some(journal) = self.journal.as_mut() {
+            if let Some(error) = journal.error.take() {
+                return Err(error);
+            }
+            if !journal.overlay.with(|overlay| overlay.is_finished()) {
+                anyhow::bail!(
+                    "journaled batch committed before its block overlay was staged (stage_journal)"
+                );
+            }
+        }
         debug_assert!(
             !(no_wal && sync),
             "commit_inner: no_wal and sync are mutually exclusive"
@@ -317,7 +467,7 @@ impl<'a> StoreBatch<'a> {
                 key: key_ref.to_vec(),
                 value: Some(value_ref.to_vec()),
             });
-        } else {
+        } else if !self.route_to_journal(cf, key_ref, Some(value_ref)) {
             self.batch.put_cf(cf, key_ref, value_ref);
         }
     }
@@ -361,6 +511,14 @@ impl<'a> StoreBatch<'a> {
         if crate::store::is_append_only_cf_name(cf_name) || self.store.is_append_only_store() {
             anyhow::bail!("range delete refused on append-only CF '{}'", cf_name);
         }
+        if self.journal.is_some()
+            && cf_spec(cf_name).is_some_and(|spec| spec.rollback_class == RollbackClass::Journal)
+        {
+            anyhow::bail!(
+                "range delete refused on Journal-class CF '{}' in a journaled batch: the journal needs every key",
+                cf_name
+            );
+        }
         let cf = self.store.cf(cf_name);
         self.batch.delete_range_cf(cf, start, end);
         Ok(())
@@ -383,7 +541,7 @@ impl<'a> StoreBatch<'a> {
                 key: key_ref.to_vec(),
                 value: None,
             });
-        } else {
+        } else if !self.route_to_journal(cf, key_ref, None) {
             self.batch.delete_cf(cf, key_ref);
         }
     }

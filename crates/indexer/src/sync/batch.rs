@@ -13,6 +13,7 @@ use rayon::prelude::*;
 use tracing::{debug, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::block_overlay::SharedBlockOverlay;
 use ckbadger_store::types::{
     DailyActivityStats, DaoDailySnapshot, IdentityCollectionAggregate, LiveCellSummary,
     MnftTypeIndex, ParticipantId, PositionedCellInfo, ScriptReferenceInfo, SporeTypeIndex,
@@ -2035,7 +2036,12 @@ impl Indexer {
         let mut daily_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
         let mut hourly_activity_accum: HashMap<String, DailyActivityStats> = HashMap::new();
         let mut hourly_activity_addrs: HashMap<String, HashSet<[u8; 32]>> = HashMap::new();
-        let mut data_batch = StoreBatch::new(self.writer.store());
+        // ONE block overlay for the batch: every write to a `Journal`-class
+        // domain CF, from any of the batch's sub-batches, goes through it, is
+        // journaled per block (`UndoSeqScope::Journal`) and staged once, just
+        // before the commit (store refactor lane B).
+        let block_overlay = SharedBlockOverlay::new(self.writer.store());
+        let mut data_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 0);
         // Live sync: serial writes in a single batch.
         //
         // ONE block-scoped undo sequence counter for the whole batch. Every
@@ -2116,8 +2122,10 @@ impl Indexer {
         let need_script_references = !reference_keys.is_empty();
         let mut updated_script_references: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> =
             HashMap::new();
-        let mut domain_analytics_batch = StoreBatch::new(self.writer.store());
-        let mut append_history_batch = StoreBatch::new(self.writer.store());
+        let mut domain_analytics_batch =
+            StoreBatch::journaled(self.writer.store(), &block_overlay, 1);
+        let mut append_history_batch =
+            StoreBatch::journaled(self.writer.store(), &block_overlay, 2);
 
         if need_balances || need_scripts || need_script_references {
             let writer = &self.writer;
@@ -2171,7 +2179,7 @@ impl Indexer {
         // ONE overlay for the batch. Every entity daily/hourly mutation goes
         // through it, so each key is read once, carries one undo pre-image per
         // block that moves it, and is written exactly once in `stage_final`.
-        let entity_stats = SharedEntityStatsOverlay::new();
+        let entity_stats = SharedEntityStatsOverlay::sharing(&block_overlay);
         let chain_day_key = |block: i64| -> Result<u32> {
             let chain_time = *chain_time_by_block.get(&block).ok_or_else(|| {
                 anyhow!("entity daily delta references block outside live batch: block={block}")
@@ -2491,7 +2499,8 @@ impl Indexer {
             })
         })?;
 
-        let mut object_activity_batch = StoreBatch::new(self.writer.store());
+        let mut object_activity_batch =
+            StoreBatch::journaled(self.writer.store(), &block_overlay, 3);
         let mut object_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // `(collection id, block)` of every object collection activity row,
         // for the derived per-collection row count.
@@ -2499,7 +2508,8 @@ impl Indexer {
         // `.bit Cell` identity transitions, for the derived account index.
         let mut derive_identity_transitions: Vec<crate::db::writer::IdentityTransition> =
             Vec::new();
-        let mut identity_activity_batch = StoreBatch::new(self.writer.store());
+        let mut identity_activity_batch =
+            StoreBatch::journaled(self.writer.store(), &block_overlay, 4);
         let mut identity_activity_count_deltas: HashMap<Vec<u8>, i64> = HashMap::new();
         // Every collection activity row this batch writes, folded per
         // (collection, UTC+8 day of its block's chain time): staged into
@@ -3331,7 +3341,7 @@ impl Indexer {
         #[cfg(test)]
         protocol_detectors
             .extend(crate::db::writer::activities::test_detector_override::extra_detectors());
-        let mut activity_batch = StoreBatch::new(self.writer.store());
+        let mut activity_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 5);
         // Standalone protocol-named participations counted per 20-byte prefix
         // over this whole batch. Rollback reverses the counter from the prefix
         // rows it deletes, so no per-block bookkeeping is needed here.
@@ -3963,10 +3973,10 @@ impl Indexer {
         let t_finalize = Instant::now();
         self.perf.mark_writer_phase();
         {
-            let mut core_batch = StoreBatch::new(self.writer.store());
+            let mut core_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 6);
             self.writer
                 .insert_blocks_batch(&block_refs, &chain_times_ms, &mut core_batch)?;
-            let mut stats_batch = StoreBatch::new(self.writer.store());
+            let mut stats_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 7);
             self.write_batch_stats_to_batch(
                 &batch_stats,
                 &staged_dao_entries,
@@ -4239,6 +4249,25 @@ impl Indexer {
             // A single `db.write()` cannot be marked from inside — RocksDB
             // gives no progress callback — so a genuinely wedged commit still
             // trips the watchdog, which is exactly what it is for.
+            let journal = data_batch
+                .stage_journal(&mut |block| {
+                    Ok(batch_undo_seq.next(block, super::types::UndoSeqScope::Journal))
+                })
+                .map_err(|source| {
+                    PreCommitInvariantError::new(
+                        "block journal",
+                        source.context(format!("live batch {}-{}", first_block, last_block)),
+                    )
+                })?;
+            debug!(
+                batch_start = first_block,
+                batch_end = last_block,
+                journal_entries = journal.entries,
+                journal_bytes = journal.bytes,
+                journal_keys_written = journal.keys_written,
+                unattributed_cfs = ?block_overlay.with(|overlay| overlay.unattributed_cfs().clone()),
+                "Live batch journal staged"
+            );
             let domain_commit_started = Instant::now();
             self.perf.mark_writer_phase();
             data_batch.commit().with_context(|| {

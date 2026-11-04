@@ -914,6 +914,9 @@ pub struct CkbadgerStore {
     runtime_config: StoreRuntimeConfig,
     /// `(measured_at, files)` for [`Self::sst_files_total_cached`].
     sst_file_count_cache: Mutex<Option<(Instant, u64)>>,
+    /// Column family name by handle address, built on first use. Handles
+    /// live in the DB's own map for the store's lifetime.
+    cf_names_by_handle: std::sync::OnceLock<std::collections::HashMap<usize, &'static str>>,
     /// Test-only read-call counters, so a test can prove a hot path issues one
     /// batched read instead of N point reads. Never compiled into the binary.
     #[cfg(any(test, feature = "read-call-counters"))]
@@ -1141,6 +1144,7 @@ impl CkbadgerStore {
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
+            cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -1230,6 +1234,7 @@ impl CkbadgerStore {
             memory_profile,
             runtime_config,
             sst_file_count_cache: Mutex::new(None),
+            cf_names_by_handle: std::sync::OnceLock::new(),
             #[cfg(any(test, feature = "read-call-counters"))]
             read_calls: ReadCallCounters::default(),
         })
@@ -1939,6 +1944,29 @@ impl CkbadgerStore {
             .get(cf_name)
             .copied()
             .unwrap_or(0)
+    }
+
+    /// The name of the column family `cf` is a handle of.
+    pub(crate) fn cf_name_for_handle(&self, cf: &ColumnFamily) -> anyhow::Result<&'static str> {
+        let names = self.cf_names_by_handle.get_or_init(|| {
+            Self::cfs_for_class(self.store_class)
+                .iter()
+                .filter_map(|name| {
+                    self.db
+                        .cf_handle(name)
+                        .map(|handle| (handle as *const ColumnFamily as usize, *name))
+                })
+                .collect()
+        });
+        names
+            .get(&(cf as *const ColumnFamily as usize))
+            .copied()
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "column family handle does not belong to this {:?} store",
+                    self.store_class
+                )
+            })
     }
 
     /// The name of the column family `cf` is a handle of (test counters only).

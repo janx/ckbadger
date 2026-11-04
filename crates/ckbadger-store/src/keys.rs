@@ -293,6 +293,10 @@ pub enum UndoSeqScope {
     /// indexer's background derivations. Pruned behind the same coverage
     /// floor as `EntityStats`.
     Derived = 0x0005,
+    /// The block journal (`block_overlay::BlockOverlay`): one entry per
+    /// `(block, key)` of every `Journal`-class column family a live batch
+    /// writes, holding the key's value at the end of the previous block.
+    Journal = 0x0006,
 }
 
 impl UndoSeqScope {
@@ -329,7 +333,7 @@ pub fn encode_composite(parts: &[&[u8]]) -> Vec<u8> {
     key
 }
 
-fn encode_desc_block_num(block_num: i64) -> [u8; 8] {
+pub fn encode_desc_block_num(block_num: i64) -> [u8; 8] {
     assert!(
         block_num >= 0,
         "encode_desc_block_num: expected non-negative block_num, got {}",

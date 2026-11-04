@@ -97,6 +97,11 @@ pub(crate) fn undo_scope_overlaps(
         if block > to_block {
             break;
         }
+        // The block journal records every key a block writes alongside the
+        // per-writer scopes and is replayed on its own, so it is no overlap.
+        if UndoSeqScope::Journal.owns(seq) {
+            continue;
+        }
         let entry: ckbadger_store::types::UndoLogEntry =
             bincode::deserialize(&value).map_err(|e| {
                 anyhow!("undo log entry at block {block} seq {seq} is not decodable: {e}")

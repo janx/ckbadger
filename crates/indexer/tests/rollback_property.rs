@@ -20,7 +20,7 @@ use ckbadger_indexer::rpc::{
 use ckbadger_indexer::sync::live_test_support::{indexer_with_stores, reorg_to, write_live_batch};
 use ckbadger_indexer::sync::Indexer;
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState};
-use ckbadger_store::keys::sync_meta_keys;
+use ckbadger_store::keys::{self, sync_meta_keys};
 use ckbadger_store::types::SyncStatus;
 use ckbadger_store::{CkbadgerStore, DOMAIN_CFS};
 
@@ -436,6 +436,205 @@ async fn assert_rollback_properties(
     let mut failures = Vec::new();
     for &fork in forks {
         if let Err(report) = rollback_property(chain, plan, tip, fork).await {
+            failures.push(report);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+}
+
+// ---------------------------------------------------------------------------
+// The journal oracle (store refactor lane B, B-2 … B-4)
+// ---------------------------------------------------------------------------
+
+/// Rows whose every live write is attributed to its block, so the journal
+/// alone restores them: a whole column family, or one key prefix of a `stats_*`
+/// CF. Grows writer by writer through B-3; at B-5 it is every domain CF and
+/// the production rollback is the journal.
+const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
+    // RangeByBlock: the key starts with the block number.
+    (ckbadger_store::CF_BLOCK_HEADERS, None),
+    (ckbadger_store::CF_TX_INDEX, None),
+    (ckbadger_store::CF_TX_ACTIONS, None),
+    (ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK, None),
+    // B-2: the eight entity stats families, through the stats side of the
+    // block overlay.
+    (
+        ckbadger_store::CF_STATS_SCRIPT,
+        Some(keys::STATS_PREFIX_SCRIPT_DAILY),
+    ),
+    (
+        ckbadger_store::CF_STATS_TOKEN,
+        Some(keys::STATS_PREFIX_TOKEN_DAILY),
+    ),
+    (
+        ckbadger_store::CF_STATS_TOKEN,
+        Some(keys::STATS_PREFIX_TOKEN_HOURLY),
+    ),
+    (
+        ckbadger_store::CF_STATS_SPORE,
+        Some(keys::STATS_PREFIX_CLUSTER_DAILY),
+    ),
+    (
+        ckbadger_store::CF_STATS_SPORE,
+        Some(keys::STATS_PREFIX_SPORE_DAILY),
+    ),
+    (
+        ckbadger_store::CF_STATS_SPORE,
+        Some(keys::STATS_PREFIX_SPORE_HOURLY),
+    ),
+    (
+        ckbadger_store::CF_STATS_MNFT,
+        Some(keys::STATS_PREFIX_OBJECT_DAILY),
+    ),
+    (
+        ckbadger_store::CF_STATS_MNFT,
+        Some(keys::STATS_PREFIX_OBJECT_HOURLY),
+    ),
+];
+
+fn is_covered(cf: &str, key: &[u8]) -> bool {
+    JOURNAL_COVERED.iter().any(|(covered, prefix)| {
+        *covered == cf && prefix.is_none_or(|prefix| key.first() == Some(&prefix))
+    })
+}
+
+const RANGE_BY_BLOCK_CFS: &[&str] = &[
+    ckbadger_store::CF_BLOCK_HEADERS,
+    ckbadger_store::CF_TX_INDEX,
+    ckbadger_store::CF_TX_ACTIONS,
+    ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK,
+];
+
+type JournalEntry = (u64, String, Vec<u8>, Option<Vec<u8>>);
+
+/// Every `UndoSeqScope::Journal` row, by block: `(seq, cf, key, previous)`.
+fn read_journal(store: &CkbadgerStore) -> BTreeMap<i64, Vec<JournalEntry>> {
+    let mut journal: BTreeMap<i64, Vec<JournalEntry>> = BTreeMap::new();
+    for row in store.iterator_cf(
+        store.cf_reorg_undo_log_by_block(),
+        rocksdb::IteratorMode::Start,
+    ) {
+        let (key, value) = row.expect("iterate the undo log");
+        let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+        if !ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) {
+            continue;
+        }
+        match bincode::deserialize::<ckbadger_store::types::UndoLogEntry>(&value)
+            .expect("decode a journal row")
+        {
+            ckbadger_store::types::UndoLogEntry::KeyMutation {
+                cf_name,
+                key,
+                previous_value,
+                ..
+            } => journal
+                .entry(block)
+                .or_default()
+                .push((seq, cf_name, key, previous_value)),
+            other => panic!("journal row at block {block} is not a key mutation: {other:?}"),
+        }
+    }
+    journal
+}
+
+/// The B-5 rollback, applied to a dump: for each block from the tip down to
+/// `fork + 1`, delete its `RangeByBlock` rows and write its journal entries'
+/// previous values back in reverse sequence order.
+fn simulate_journal_rollback(
+    at_tip: &Dump,
+    journal: &BTreeMap<i64, Vec<JournalEntry>>,
+    tip: usize,
+    fork: usize,
+) -> Dump {
+    let mut dump = at_tip.clone();
+    for block in (fork + 1..=tip).rev() {
+        // `activities` keys open with the block number descending.
+        let ascending = (block as i64).to_be_bytes();
+        let descending = ckbadger_store::keys::encode_desc_block_num(block as i64);
+        dump.retain(|(cf, key), _| {
+            let prefix: &[u8] = if *cf == ckbadger_store::CF_TX_ACTIONS {
+                &descending
+            } else {
+                &ascending
+            };
+            !(RANGE_BY_BLOCK_CFS.contains(cf) && key.starts_with(prefix))
+        });
+        let mut entries = journal.get(&(block as i64)).cloned().unwrap_or_default();
+        entries.sort_by_key(|(seq, ..)| std::cmp::Reverse(*seq));
+        for (_, cf, key, previous) in entries {
+            let cf: &'static str = DOMAIN_CFS
+                .iter()
+                .copied()
+                .find(|name| *name == cf)
+                .unwrap_or_else(|| panic!("journal entry names unknown CF {cf}"));
+            match previous {
+                Some(value) => {
+                    dump.insert((cf, key), value);
+                }
+                None => {
+                    dump.remove(&(cf, key));
+                }
+            }
+        }
+    }
+    dump
+}
+
+fn only_covered(mut dump: Dump) -> Dump {
+    dump.retain(|(cf, key), _| is_covered(cf, key));
+    dump
+}
+
+/// The journal alone restores every covered CF to the store that never saw
+/// the rolled-back blocks.
+async fn journal_property(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    fork: usize,
+) -> Result<(), String> {
+    let stores = open_stores();
+    sync_prefix(&stores, chain, plan, 0, tip).await;
+    let at_tip = dump_domain(&stores.domain);
+    let journal = read_journal(&stores.domain);
+    let simulated = simulate_journal_rollback(&at_tip, &journal, tip, fork);
+    let reference = open_stores();
+    sync_prefix(&reference, chain, plan, 0, fork).await;
+    // Not vacuous: the covered rows the rolled-back blocks changed outside
+    // their own block keys are restored by journal entries, not by luck.
+    let changed_journaled_rows = only_covered(at_tip.clone())
+        .into_iter()
+        .filter(|((cf, key), value)| {
+            !RANGE_BY_BLOCK_CFS.contains(cf)
+                && only_covered(dump_domain(&reference.domain)).get(&(*cf, key.clone()))
+                    != Some(value)
+        })
+        .count();
+    let rolled_back_entries: usize = journal
+        .range(fork as i64 + 1..)
+        .map(|(_, entries)| entries.len())
+        .sum();
+    if changed_journaled_rows > 0 && rolled_back_entries == 0 {
+        return Err(format!(
+            "journal replay {tip} -> {fork}: {changed_journaled_rows} covered rows changed above the fork but the journal has no entry there"
+        ));
+    }
+    compare_dumps(
+        &only_covered(simulated),
+        &only_covered(dump_domain(&reference.domain)),
+        &format!("journal replay {tip} -> {fork}"),
+    )
+}
+
+async fn assert_journal_properties(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    forks: &[usize],
+) {
+    let mut failures = Vec::new();
+    for &fork in forks {
+        if let Err(report) = journal_property(chain, plan, tip, fork).await {
             failures.push(report);
         }
     }
@@ -1235,6 +1434,33 @@ async fn derived_aggregates_running_are_reset() {
     rollback_property_with_derive(&chain, &plan, 16, 12, Some(Derive::RunningAt(8)))
         .await
         .unwrap_or_else(|report| panic!("{report}"));
+}
+
+#[tokio::test]
+async fn journal_restores_covered_cfs_single_block_batches() {
+    let chain = protocol_chain(0);
+    let plan = single_block_plan(chain.len());
+    assert_journal_properties(&chain, &plan, 16, &[13, 10, 5, 0]).await;
+}
+
+#[tokio::test]
+async fn journal_restores_covered_cfs_forks_inside_batches() {
+    let chain = protocol_chain(0);
+    let mut plan: Vec<RangeInclusive<usize>> = single_block_plan(1);
+    plan.extend(
+        chunked_plan(16, 4)
+            .into_iter()
+            .map(|r| r.start() + 1..=r.end() + 1),
+    );
+    assert_journal_properties(&chain, &plan, 16, &[14, 10, 6, 2]).await;
+}
+
+#[tokio::test]
+async fn journal_restores_covered_cfs_36_blocks_deep() {
+    let chain = protocol_chain(30);
+    let tip = chain.len() - 1;
+    let plan = chunked_plan(chain.len(), 7);
+    assert_journal_properties(&chain, &plan, tip, &[tip - 36]).await;
 }
 
 #[tokio::test]

@@ -21,6 +21,7 @@
 //! ```
 
 pub mod batch;
+pub mod block_overlay;
 pub mod dao_snapshot;
 pub mod global_bucket;
 pub mod keys;
@@ -69,7 +70,8 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
     out
 }
 
-pub use batch::{merge_write_batches, StoreBatch};
+pub use batch::{merge_write_batches, BlockScope, StoreBatch};
+pub use block_overlay::{BlockOverlay, JournalStats, SharedBlockOverlay};
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
 pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBucket};
@@ -78,9 +80,10 @@ pub use reorg_ops::RollbackResult;
 pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 pub use stats_ops::{activity_addr_set_count, decode_activity_addr_set, encode_activity_addr_set};
 pub use store::{
-    cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
-    known_domain_secondary_store_paths, secondary_store_path, CfWritePolicy, CkbadgerStore,
-    FlushStats, MemoryProfile, SecondaryStoreOwner, StoreRuntimeConfig, ALL_CFS,
+    cf_spec, cf_write_policy, is_append_only_cf_name, known_append_only_secondary_store_paths,
+    known_domain_secondary_store_paths, secondary_store_path, BufferTier, CfCompaction,
+    CfCompression, CfSpec, CfStore, CfWritePolicy, CkbadgerStore, FlushStats, MemoryProfile,
+    RollbackClass, SecondaryStoreOwner, StoreRuntimeConfig, ALL_CFS, CF_SPECS,
 };
 pub use store::{
     APPEND_CFS, CF_ADDR_BALANCE, CF_ADDR_FIBER_CHANNELS, CF_ADDR_PREFIX_STATS,

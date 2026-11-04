@@ -25,76 +25,96 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{bail, Result};
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::block_overlay::SharedBlockOverlay;
 use ckbadger_store::types::{TokenDailyDelta, UndoLogEntry, UndoLogStoreTarget};
 use ckbadger_store::CkbadgerStore;
 
 use crate::sync::types::UndoSeqScope;
 use crate::sync::undo::{next_undo_seq, SharedUndoSeq};
 
-/// Batch-scoped view of the entity stats keys a batch touches.
-#[derive(Default)]
+/// The sub-batch id the entity stats writes carry in the batch's block
+/// overlay: only this overlay writes these keys.
+pub(crate) const ENTITY_STATS_ORIGIN: u32 = 100;
+
+/// Batch-scoped view of the entity stats keys a batch touches: the stats side
+/// of the batch's [`ckbadger_store::BlockOverlay`], which holds the values,
+/// journals each `(block, key)` once and stages each key once.
 pub struct EntityStatsOverlay {
-    /// Full stats key → current encoded value (`None` = the row does not exist).
-    values: HashMap<Vec<u8>, Option<Vec<u8>>>,
-    /// `(block, key)` pairs whose pre-image this batch has already recorded.
+    overlay: SharedBlockOverlay,
+    /// Whether this overlay owns `overlay` (and `stage_final` stages it) or
+    /// shares the live batch's (which the batch stages).
+    owns_overlay: bool,
+    /// `(block, key)` pairs whose `EntityStats`-scope pre-image this batch has
+    /// already recorded (the per-writer scope the pre-journal rollback
+    /// replays; removed with it in B-5).
     touched: HashSet<(i64, Vec<u8>)>,
-    /// Keys `stage_final` must write.
-    dirty: HashSet<Vec<u8>>,
-    /// Highest block that has mutated each key, so the per-block pre-image
-    /// contract can be enforced rather than assumed from caller loop order.
-    last_block_by_key: HashMap<Vec<u8>, i64>,
+}
+
+impl Default for EntityStatsOverlay {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EntityStatsOverlay {
+    /// A standalone overlay: it keeps its own values and writes them in
+    /// [`Self::stage_final`].
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            overlay: SharedBlockOverlay::default(),
+            owns_overlay: true,
+            touched: HashSet::new(),
+        }
     }
 
-    /// Current value of `key`: the overlay if this batch has seen it, otherwise
-    /// one read from the store, cached.
+    /// The stats side of a live batch's block overlay, which the batch
+    /// stages.
+    pub fn sharing(overlay: &SharedBlockOverlay) -> Self {
+        Self {
+            overlay: overlay.clone(),
+            owns_overlay: false,
+            touched: HashSet::new(),
+        }
+    }
+
+    fn cf_of(key: &[u8]) -> Result<&'static str> {
+        let Some(prefix) = key.first().copied() else {
+            bail!("empty entity stats key in overlay");
+        };
+        CkbadgerStore::stats_cf_name_by_prefix(prefix)
+    }
+
+    /// Current value of `key`: this batch's latest write, otherwise one read
+    /// from the store, cached.
     pub fn current(&mut self, store: &CkbadgerStore, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        if let Some(cached) = self.values.get(key) {
-            return Ok(cached.clone());
-        }
-        let loaded = store.get_stats_key(key)?;
-        self.values.insert(key.to_vec(), loaded.clone());
-        Ok(loaded)
+        let cf = Self::cf_of(key)?;
+        self.overlay.with(|overlay| overlay.current(store, cf, key))
     }
 
-    /// Warm the overlay with one `multi_get` instead of N point reads. Keys
-    /// already in the overlay keep their (newer) value — a prefetch must never
-    /// overwrite a value this batch has already computed.
+    /// Warm the overlay with one `multi_get` per CF instead of N point reads.
+    /// Keys already in the overlay keep their (newer) value.
     pub fn prefetch(&mut self, store: &CkbadgerStore, keys: &[Vec<u8>]) -> Result<()> {
-        let missing: Vec<&Vec<u8>> = keys
-            .iter()
-            .filter(|key| !self.values.contains_key(key.as_slice()))
-            .collect();
-        if missing.is_empty() {
-            return Ok(());
+        let mut by_cf: HashMap<&'static str, Vec<Vec<u8>>> = HashMap::new();
+        for key in keys {
+            by_cf
+                .entry(Self::cf_of(key)?)
+                .or_default()
+                .push(key.clone());
         }
-        let cf_keys = missing
-            .iter()
-            .map(|key| Ok((store.cf_for_stats_key(key)?, key.as_slice())))
-            .collect::<Result<Vec<_>>>()?;
-        let results = store.multi_get_cf(cf_keys);
-        for (key, result) in missing.into_iter().zip(results) {
-            let value = result.map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to prefetch entity stats key=0x{}: {}",
-                    hex::encode(key),
-                    e
-                )
-            })?;
-            self.values.insert(key.clone(), value);
-        }
-        Ok(())
+        self.overlay.with(|overlay| {
+            by_cf
+                .iter()
+                .try_for_each(|(cf, keys)| overlay.prefetch(store, cf, keys))
+        })
     }
 
     /// Set `key` to `next` as part of `block`.
     ///
-    /// The first mutation of `key` inside `block` records a `KeyMutation` undo
-    /// entry holding the value as of the end of the previous block. Bulk sync
-    /// records nothing (`BULK_SYNC.md` rule: bulk never rolls back).
+    /// The block overlay journals the value at the end of the previous block
+    /// once per `(block, key)` and enforces ascending blocks per key. The
+    /// first mutation of `key` inside `block` also records the
+    /// `EntityStats`-scope undo entry the pre-journal rollback replays. Bulk
+    /// sync records nothing (`BULK_SYNC.md` rule 12).
     pub fn mutate(
         &mut self,
         store: &CkbadgerStore,
@@ -104,64 +124,41 @@ impl EntityStatsOverlay {
         key: &[u8],
         next: Option<Vec<u8>>,
     ) -> Result<()> {
-        // Block N's pre-image must be the value at the end of N-1, which only
-        // holds while blocks arrive in ascending order. Several call sites
-        // (`spore.rs`, `mnft.rs`, `dotbit.rs`, the token hourly flush) get that
-        // order from their own loops; a future reordering there would silently
-        // record a pre-image from the future.
-        if let Some(last_block) = self.last_block_by_key.get(key) {
-            if block < *last_block {
-                bail!(
-                    "entity stats overlay requires ascending block order per key: \
-                     key=0x{}, last_block={}, block={}",
-                    hex::encode(key),
-                    last_block,
-                    block
-                );
-            }
-        }
+        let cf = Self::cf_of(key)?;
         let previous_value = self.current(store, key)?;
+        self.overlay
+            .with(|overlay| overlay.write(Some(block), cf, key, next, ENTITY_STATS_ORIGIN))?;
         if self.touched.insert((block, key.to_vec())) && !store.is_bulk_sync_mode() {
-            let Some(prefix) = key.first().copied() else {
-                bail!("empty entity stats key in overlay mutate: block={block}");
-            };
-            let cf_name = CkbadgerStore::stats_cf_name_by_prefix(prefix)?;
             let seq = next_undo_seq(undo_seq, block, UndoSeqScope::EntityStats);
             batch.put_reorg_undo_log_by_block(
                 block,
                 seq,
                 &UndoLogEntry::KeyMutation {
                     target_store: UndoLogStoreTarget::Domain,
-                    cf_name: cf_name.to_string(),
+                    cf_name: cf.to_string(),
                     key: key.to_vec(),
                     previous_value,
                 },
             );
         }
-        self.values.insert(key.to_vec(), next);
-        self.dirty.insert(key.to_vec());
-        self.last_block_by_key.insert(key.to_vec(), block);
         Ok(())
     }
 
-    /// Write the final value of every mutated key — once each.
-    pub fn stage_final(&self, batch: &mut StoreBatch) -> Result<()> {
-        for key in &self.dirty {
-            match self.values.get(key) {
-                Some(Some(value)) => batch.put_stats(key, value),
-                Some(None) => batch.delete_stats(key),
-                None => bail!(
-                    "entity stats overlay marked key=0x{} dirty without a value",
-                    hex::encode(key)
-                ),
-            }
+    /// Write the final value of every mutated key — once each — when this
+    /// overlay owns its values; a shared overlay is staged by its batch.
+    pub fn stage_final(&mut self, batch: &mut StoreBatch) -> Result<()> {
+        if !self.owns_overlay {
+            return Ok(());
         }
+        batch.stage_overlay(&self.overlay, &mut |block| {
+            bail!("a standalone entity stats overlay journals nothing: block={block}")
+        })?;
         Ok(())
     }
 
     #[cfg(test)]
     pub(crate) fn dirty_len(&self) -> usize {
-        self.dirty.len()
+        self.overlay.with(|overlay| overlay.len())
     }
 }
 
@@ -173,7 +170,7 @@ impl EntityStatsOverlay {
 /// inside `SporeBatchState` / `MnftBatchState` / `DotbitBatchState` /
 /// `UdtBatchState`, so they hold a clone of this handle instead of threading
 /// two more parameters through a dozen signatures. Either way there is exactly
-/// one overlay per batch and one `stage_final`.
+/// one overlay per batch.
 ///
 /// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the batch write future must
 /// stay `Send`.
@@ -181,8 +178,14 @@ impl EntityStatsOverlay {
 pub struct SharedEntityStatsOverlay(Arc<Mutex<EntityStatsOverlay>>);
 
 impl SharedEntityStatsOverlay {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The stats side of a live batch's block overlay.
+    pub fn sharing(overlay: &SharedBlockOverlay) -> Self {
+        Self(Arc::new(Mutex::new(EntityStatsOverlay::sharing(overlay))))
     }
 
     pub fn with<R>(&self, f: impl FnOnce(&mut EntityStatsOverlay) -> R) -> R {
@@ -192,6 +195,7 @@ impl SharedEntityStatsOverlay {
 
     /// Bump an hourly transfer counter through the overlay, recording this
     /// block's pre-image the first time the block touches the key.
+    #[allow(clippy::too_many_arguments)]
     pub fn mutate_hourly(
         &self,
         store: &CkbadgerStore,

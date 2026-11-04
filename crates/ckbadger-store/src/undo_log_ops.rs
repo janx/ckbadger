@@ -122,7 +122,10 @@ impl CkbadgerStore {
             }
             // Only `EntityStats` and `Derived` entries are retention's to
             // prune; one coverage floor governs both.
-            if keys::UndoSeqScope::EntityStats.owns(seq) || keys::UndoSeqScope::Derived.owns(seq) {
+            if keys::UndoSeqScope::EntityStats.owns(seq)
+                || keys::UndoSeqScope::Derived.owns(seq)
+                || keys::UndoSeqScope::Journal.owns(seq)
+            {
                 batch.delete_reorg_undo_log_key(&key);
                 pruned += 1;
             }
@@ -209,6 +212,7 @@ impl CkbadgerStore {
         );
 
         let mut pending: Vec<(Vec<u8>, UndoLogEntry)> = Vec::new();
+        let mut journal_rows: Vec<Vec<u8>> = Vec::new();
         for item in iter {
             let (key, value) = item.map_err(|e| {
                 anyhow::anyhow!(
@@ -224,8 +228,14 @@ impl CkbadgerStore {
                     key.len()
                 );
             }
-            let (block_num, _) = keys::decode_reorg_undo_log_key(&key);
+            let (block_num, seq) = keys::decode_reorg_undo_log_key(&key);
             if block_num <= rollback_to {
+                continue;
+            }
+            if keys::UndoSeqScope::Journal.owns(seq) {
+                // The block journal is replayed only by the journal rollback
+                // (store refactor lane B); this replay drops its rows.
+                journal_rows.push(key.to_vec());
                 continue;
             }
             let entry: UndoLogEntry = bincode::deserialize(&value).map_err(|e| {
@@ -238,12 +248,15 @@ impl CkbadgerStore {
             pending.push((key.to_vec(), entry));
         }
 
-        if pending.is_empty() {
+        if pending.is_empty() && journal_rows.is_empty() {
             return Ok(UndoRollbackResult::default());
         }
 
         let mut domain_batch = WriteBatch::default();
         let mut result = UndoRollbackResult::default();
+        for row in journal_rows {
+            domain_batch.delete_cf(self.cf_reorg_undo_log_by_block(), &row);
+        }
 
         for (undo_key, entry) in pending.into_iter().rev() {
             match entry {
