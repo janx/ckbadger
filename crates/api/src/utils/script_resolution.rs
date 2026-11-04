@@ -340,8 +340,8 @@ fn read_dep_cell_info(
     let key = ckbadger_store::keys::encode_outpoint(tx_hash, output_index);
     let info = cells_store.get_cell_by_outpoint_key(&key).ok()??;
     Some(DepCellInfo {
-        type_script_hash: info.type_script_hash,
-        data_hash: info.data_hash,
+        type_script_hash: info.type_script_hash().map(|hash| hash.to_vec()),
+        data_hash: info.data_hash.map(|hash| hash.to_vec()),
     })
 }
 
@@ -439,7 +439,7 @@ pub fn resolve_live_type_reference_matches(
     for (tx_hash, output_index, cell) in
         store.list_cells_by_type(reference_hash, usize::MAX, None, cells_store)?
     {
-        let version_hash = cell.cell.data_hash.clone().ok_or_else(|| {
+        let version_hash = cell.cell.data_hash.map(|hash| hash.to_vec()).ok_or_else(|| {
             anyhow::anyhow!(
                 "live type-referenced code cell is missing data_hash: reference_hash=0x{}, outpoint=0x{}:{}",
                 hex::encode(reference_hash),
@@ -452,9 +452,13 @@ pub fn resolve_live_type_reference_matches(
             output_index,
             version_hash,
             native_type_id: cell.type_hash_type == Some(1)
-                && cell.type_code_hash.as_deref().is_some_and(|hash| {
-                    hash.len() == 32 && hash[..25] == [0; 25] && &hash[25..] == b"TYPE_ID"
-                }),
+                && cell
+                    .type_code_hash
+                    .as_ref()
+                    .map(|hash| hash.as_slice())
+                    .is_some_and(|hash| {
+                        hash.len() == 32 && hash[..25] == [0; 25] && &hash[25..] == b"TYPE_ID"
+                    }),
         });
     }
     Ok(matches)
@@ -894,18 +898,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference.to_vec()),
-                type_code_hash: Some(vec![0x13; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(binary.to_vec()),
+                data_hash: Some(binary.to_vec().try_into().unwrap()),
             },
             10,
         );
@@ -919,7 +921,7 @@ mod tests {
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference = vec![0x31; 32];
         let historical_binary = vec![0x41; 32];
-        let replacement_data = vec![0x51; 32];
+        let replacement_data = [0x51; 32];
         let tx = vec![0x61; 32];
         let history = ScriptVersionInfo {
             version_hash: historical_binary.clone(),
@@ -934,17 +936,18 @@ mod tests {
             &tx,
             0,
             &LiveCellInfo {
-                type_script_hash: Some(reference.clone()),
                 data_hash: Some(replacement_data),
                 data_size: 31_560,
                 capacity: 3_200_000_000_000,
                 occupied_capacity: 3_164_000_000_000,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
                 type_code_hash: Some(
-                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                    hex::decode(ckbadger_indexer::parser::script::TYPE_ID_CODE_HASH)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
                 ),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x13; 32]),
@@ -1079,8 +1082,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x33; 32];
-        let version_hash_a = vec![0x44; 32];
-        let version_hash_b = vec![0x55; 32];
+        let version_hash_a = [0x44; 32];
+        let version_hash_b = [0x55; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(
@@ -1088,18 +1091,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x13; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(version_hash_a.clone()),
+                data_hash: Some(version_hash_a),
             },
             10,
         );
@@ -1109,18 +1110,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x21; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x23; 32]),
+                type_code_hash: Some([0x23; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(version_hash_b.clone()),
+                data_hash: Some(version_hash_b),
             },
             11,
         );
@@ -1144,8 +1143,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x63; 32];
-        let mapped_version_hash = vec![0x74; 32];
-        let conflicting_version_hash = vec![0x85; 32];
+        let mapped_version_hash = [0x74; 32];
+        let conflicting_version_hash = [0x85; 32];
 
         store
             .put_script_reference_to_version_direct(1, &reference_hash, &mapped_version_hash)
@@ -1154,7 +1153,7 @@ mod tests {
             .put_script_version(
                 &mapped_version_hash,
                 &ScriptVersionInfo {
-                    version_hash: mapped_version_hash.clone(),
+                    version_hash: mapped_version_hash.to_vec(),
                     name: Some("Mapped Version".to_string()),
                     ..Default::default()
                 },
@@ -1167,18 +1166,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x13; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(mapped_version_hash.clone()),
+                data_hash: Some(mapped_version_hash),
             },
             10,
         );
@@ -1188,18 +1185,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x21; 32],
-                lock_code_hash: vec![0x22; 32],
+                lock_code_hash: [0x22; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x23; 32]),
+                type_code_hash: Some([0x23; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(conflicting_version_hash.clone()),
+                data_hash: Some(conflicting_version_hash),
             },
             11,
         );
@@ -1243,7 +1238,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x47; 32];
-        let version_hash = vec![0x58; 32];
+        let version_hash = [0x58; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(
@@ -1251,18 +1246,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x13; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(version_hash.clone()),
+                data_hash: Some(version_hash),
             },
             10,
         );
@@ -1333,7 +1326,7 @@ mod tests {
         // with matching data hash) must stay resolvable.
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x70; 32];
+        let reference_hash = [0x70; 32];
         let code_cell_tx = vec![0x77; 32];
 
         store
@@ -1346,18 +1339,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: None,
                 type_code_hash: None,
                 type_hash_type: None,
                 type_args: None,
                 data_size: 4,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(reference_hash.clone()),
+                data_hash: Some(reference_hash),
             },
             5,
         );
@@ -1411,7 +1402,7 @@ mod tests {
     fn test_resolve_script_form_resolves_data_form_backed_by_code_cell() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let reference_hash = vec![0x70; 32];
+        let reference_hash = [0x70; 32];
         let code_cell_tx = vec![0x77; 32];
 
         let mut batch = StoreBatch::new(&store);
@@ -1420,18 +1411,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: None,
                 type_code_hash: None,
                 type_hash_type: None,
                 type_args: None,
                 data_size: 4,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(reference_hash.clone()),
+                data_hash: Some(reference_hash),
             },
             5,
         );
@@ -1451,7 +1440,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
         let reference_hash = vec![0x47; 32];
-        let version_hash = vec![0x58; 32];
+        let version_hash = [0x58; 32];
 
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(
@@ -1459,18 +1448,16 @@ mod tests {
             0,
             &LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference_hash.clone()),
-                type_code_hash: Some(vec![0x13; 32]),
+                type_code_hash: Some([0x13; 32]),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 0,
                 occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(version_hash.clone()),
+                data_hash: Some(version_hash),
             },
             10,
         );

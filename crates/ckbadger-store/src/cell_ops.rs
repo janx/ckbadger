@@ -131,7 +131,7 @@ impl CkbadgerStore {
     ) -> anyhow::Result<Option<LiveCellInfo>> {
         match self.get_cf(self.cf_cells(), outpoint_key)? {
             Some(value) => {
-                let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                let info = LiveCellInfo::decode(&value).map_err(|e| {
                     anyhow::anyhow!(
                         "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
                         bytes_to_hex(outpoint_key),
@@ -167,15 +167,13 @@ impl CkbadgerStore {
             .into_iter()
             .zip(&keys)
             .map(|(value, key)| match value {
-                Ok(Some(value)) => bincode::deserialize::<LiveCellInfo>(&value)
-                    .map(Some)
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
-                            bytes_to_hex(key),
-                            e
-                        )
-                    }),
+                Ok(Some(value)) => LiveCellInfo::decode(&value).map(Some).map_err(|e| {
+                    anyhow::anyhow!(
+                        "failed to deserialize canonical cell payload: outpoint=0x{}, error={}",
+                        bytes_to_hex(key),
+                        e
+                    )
+                }),
                 Ok(None) => Ok(None),
                 Err(e) => Err(anyhow::anyhow!(
                     "rocksdb multi_get failed for cell payload: outpoint=0x{}, error={}",
@@ -275,7 +273,7 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let info = LiveCellInfo::decode(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize canonical cell payload in get_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -407,7 +405,7 @@ impl CkbadgerStore {
             let outpoint_key = &keys[outpoint_idx];
             match value_result {
                 Ok(Some(value)) => {
-                    let cell = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let cell = LiveCellInfo::decode(&value).map_err(|e| {
                         anyhow::anyhow!(
                             "failed to deserialize canonical cell payload in get_consumed_cells_batch: outpoint=0x{}, error={}",
                             bytes_to_hex(outpoint_key),
@@ -1015,7 +1013,8 @@ impl CkbadgerStore {
                             && cell.lock_hash_type == i16::from(hash_type)
                     }
                     CodeIndexSide::Type => {
-                        cell.type_code_hash.as_deref() == Some(&code_hash[..32])
+                        cell.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                            == Some(&code_hash[..32])
                             && cell.type_hash_type == Some(i16::from(hash_type))
                     }
                 };
@@ -1121,17 +1120,16 @@ mod tests {
         (dir, store)
     }
 
-    fn make_cell(capacity: i64, occupied: i64, type_hash: &[u8]) -> LiveCellInfo {
+    /// The type script's args tell fixtures apart: its hash is derived.
+    fn make_cell(capacity: i64, occupied: i64, type_args: &[u8]) -> LiveCellInfo {
         LiveCellInfo {
             capacity,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0xBB; 32],
+            lock_code_hash: [0xBB; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.to_vec()),
-            type_code_hash: Some(vec![0xCC; 32]),
+            type_code_hash: Some([0xCC; 32]),
             type_hash_type: Some(1),
-            type_args: Some(vec![]),
+            type_args: Some(type_args.to_vec()),
             data_size: 0,
             occupied_capacity: occupied,
             udt_amount: None,
@@ -1177,7 +1175,7 @@ mod tests {
     ) {
         // Write canonical payload + live marker
         let outpoint_key = keys::encode_outpoint(tx_hash, output_index);
-        let value = bincode::serialize(cell).unwrap();
+        let value = cell.encode();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &value)
             .unwrap();
@@ -1228,14 +1226,12 @@ mod tests {
         batch.commit().unwrap();
     }
 
-    fn code_form_cell(lock_code_hash: &[u8], lock_hash_type: i16) -> LiveCellInfo {
+    fn code_form_cell(lock_code_hash: &[u8; 32], lock_hash_type: i16) -> LiveCellInfo {
         LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: lock_code_hash.to_vec(),
+            lock_code_hash: *lock_code_hash,
             lock_hash_type,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -1359,7 +1355,7 @@ mod tests {
     /// same code hash: `data` (0, sorts before it) and `data1` (2, sorts after
     /// it). Several rows share a block and a tx, so the key's block, tx hash
     /// and output index all decide the order.
-    fn seed_three_lock_forms(store: &CkbadgerStore, code_hash: &[u8]) {
+    fn seed_three_lock_forms(store: &CkbadgerStore, code_hash: &[u8; 32]) {
         let rows: [(u8, i16, i64); 7] = [
             (0x20, 0, 300),
             (0x21, 0, 301),
@@ -1520,8 +1516,7 @@ mod tests {
         let type_code_hash = [0x77; 32];
         for (tx_byte, block) in [(0x31u8, 400i64), (0x32, 402), (0x33, 401)] {
             let mut typed = code_form_cell(&[0xBB; 32], 1);
-            typed.type_script_hash = Some(vec![0x55; 32]);
-            typed.type_code_hash = Some(type_code_hash.to_vec());
+            typed.type_code_hash = Some(type_code_hash);
             typed.type_hash_type = Some(1);
             typed.type_args = Some(vec![]);
             insert_code_indexed_cell(&store, &[tx_byte; 32], 0, block, &typed);
@@ -1572,8 +1567,7 @@ mod tests {
         let type_code_hash = [0x77; 32];
 
         let mut typed = code_form_cell(&[0xBB; 32], 1);
-        typed.type_script_hash = Some(vec![0x55; 32]);
-        typed.type_code_hash = Some(type_code_hash.to_vec());
+        typed.type_code_hash = Some(type_code_hash);
         typed.type_hash_type = Some(1);
         typed.type_args = Some(vec![]);
         insert_code_indexed_cell(&store, &[0x31; 32], 0, 400, &typed);
@@ -1850,15 +1844,16 @@ mod tests {
         let tx_hash = [0xEF; 32];
         let outpoint_key = keys::encode_outpoint(&tx_hash, 0);
         let cell = make_cell(200_00000000, 61_00000000, &[0x01; 32]);
-        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&cell, 123, None, 100);
+        let legacy = crate::types::v1_layout::ConsumedCellInfoV1 {
+            cell: crate::types::v1_layout::LiveCellInfoV1::from_v2(&cell),
+            consumed_at_block: 123,
+            consumed_by_tx: None,
+            created_at_block: 100,
+        };
         let legacy_payload = bincode::serialize(&legacy).unwrap();
 
         store
-            .put_cf(
-                store.cf_cells(),
-                &outpoint_key,
-                &bincode::serialize(&cell).unwrap(),
-            )
+            .put_cf(store.cf_cells(), &outpoint_key, &cell.encode())
             .unwrap();
         store
             .put_cf(store.cf_consumed_cells(), &outpoint_key, &legacy_payload)
@@ -1882,11 +1877,9 @@ mod tests {
         let tx2 = vec![0x02; 32];
         let cell = LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -1926,12 +1919,10 @@ mod tests {
     fn plain_cell(type_hash: Option<&[u8]>) -> LiveCellInfo {
         LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: type_hash.map(<[u8]>::to_vec),
-            type_code_hash: type_hash.map(|_| vec![0x44; 32]),
+            type_code_hash: type_hash.map(|_| [0x44; 32]),
             type_hash_type: type_hash.map(|_| 1),
             type_args: type_hash.map(|_| vec![]),
             data_size: 50,

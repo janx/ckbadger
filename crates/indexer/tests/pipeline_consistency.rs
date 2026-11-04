@@ -8,7 +8,7 @@
 use ckbadger_indexer::db::BatchWriter;
 use ckbadger_indexer::parser::cell::ParsedCell;
 use ckbadger_indexer::parser::udt::SUDT_CODE_HASH;
-use ckbadger_indexer::parser::CellParser;
+use ckbadger_indexer::parser::{CellParser, ScriptParser};
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
@@ -26,17 +26,23 @@ use std::sync::Arc;
 /// `CellbaseWitness`.
 const TEST_CELLBASE_WITNESS: &str = "0x7a0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce801140000008211f1b938a107cd53b6302cc752a6fc3965638d210000000000000020302e3131332e3020283832383731613320323032342d30312d303929";
 
-fn make_cell(capacity: i64, data_size: i32, lock_hash_byte: u8) -> ParsedCell {
+/// `lock_seed` fills the lock args, so each seed is a distinct owner; the
+/// script hashes are the parser's, computed from the script fields.
+fn make_cell(capacity: i64, data_size: i32, lock_seed: u8) -> ParsedCell {
     ParsedCell {
         capacity,
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
-        lock_args: vec![0x22u8; 20],
-        lock_script_hash: vec![lock_hash_byte; 32],
+        lock_args: vec![lock_seed; 20],
+        lock_script_hash: ScriptParser::compute_script_hash_raw(&[0x11; 32], 0, &[lock_seed; 20]),
         type_code_hash: Some(vec![0x44u8; 32]),
         type_hash_type: Some(1),
         type_args: Some(vec![0x55u8; 20]),
-        type_script_hash: Some(vec![0x66u8; 32]),
+        type_script_hash: Some(ScriptParser::compute_script_hash_raw(
+            &[0x44; 32],
+            1,
+            &[0x55; 20],
+        )),
         data_hash: [0x77u8; 32],
         data_size,
         data: vec![0u8; data_size as usize],
@@ -154,25 +160,8 @@ fn precomputed_infos_for_insert(
             (
                 ((*tx_hash).to_vec(), *output_index),
                 PositionedCellInfo::new(
-                    LiveCellInfo {
-                        capacity: cell.capacity,
-                        lock_script_hash: cell.lock_script_hash.clone(),
-                        lock_code_hash: cell.lock_code_hash.clone(),
-                        lock_hash_type: cell.lock_hash_type,
-                        lock_args: cell.lock_args.clone(),
-                        type_script_hash: cell.type_script_hash.clone(),
-                        type_code_hash: cell.type_code_hash.clone(),
-                        type_hash_type: cell.type_hash_type,
-                        type_args: cell.type_args.clone(),
-                        data_size: cell.data_size,
-                        occupied_capacity: occupied_capacity_from_cell(cell),
-                        udt_amount: None,
-                        data_hash: if cell.data_hash.is_empty() {
-                            None
-                        } else {
-                            Some(cell.data_hash.to_vec())
-                        },
-                    },
+                    cell.to_live_cell_info(occupied_capacity_from_cell(cell), None)
+                        .unwrap(),
                     *created_at_block,
                 ),
             )
@@ -217,7 +206,7 @@ fn test_cell_info_lookup_returns_all_fields() {
 
     assert_eq!(info.capacity, 500_00000000);
     assert_eq!(info.created_at_block, 1000);
-    assert_eq!(info.lock_script_hash, vec![0xAAu8; 32]);
+    assert_eq!(info.lock_script_hash().to_vec(), cell.lock_script_hash);
     assert_eq!(info.data_size, 256);
 }
 
@@ -318,7 +307,7 @@ fn test_chunked_batch_lookup_matches_single_call_across_chunk_boundary() {
             "created_at_block mismatch for {:?}",
             k
         );
-        assert_eq!(s.lock_script_hash, c.lock_script_hash);
+        assert_eq!(s.lock_script_hash(), c.lock_script_hash());
         assert_eq!(s.data_size, c.data_size);
     }
 }
@@ -332,11 +321,15 @@ fn test_full_cells_info_returns_lock_and_type() {
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
-        lock_script_hash: vec![0x33u8; 32],
+        lock_script_hash: ScriptParser::compute_script_hash_raw(&[0x11; 32], 0, &[0x22; 20]),
         type_code_hash: Some(vec![0x44u8; 32]),
         type_hash_type: Some(1),
         type_args: Some(vec![0x55u8; 20]),
-        type_script_hash: Some(vec![0x66u8; 32]),
+        type_script_hash: Some(ScriptParser::compute_script_hash_raw(
+            &[0x44; 32],
+            1,
+            &[0x55; 20],
+        )),
         data_hash: [0x77u8; 32],
         data_size: 100,
         data: vec![0u8; 100],
@@ -349,9 +342,9 @@ fn test_full_cells_info_returns_lock_and_type() {
     assert_eq!(result.len(), 1);
     let info = result.get(&(tx_hash.clone(), 0)).unwrap();
 
-    assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
+    assert_eq!(info.lock_code_hash, [0x11u8; 32]);
     assert_eq!(info.lock_hash_type, 0);
-    assert_eq!(info.type_code_hash, Some(vec![0x44u8; 32]));
+    assert_eq!(info.type_code_hash, Some([0x44u8; 32]));
     assert_eq!(info.type_hash_type, Some(1));
     assert_eq!(info.capacity, 300_00000000);
     assert_eq!(info.created_at_block, 1000);
@@ -366,7 +359,7 @@ fn test_full_cells_info_no_type_script() {
         lock_code_hash: vec![0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
-        lock_script_hash: vec![0x33u8; 32],
+        lock_script_hash: ScriptParser::compute_script_hash_raw(&[0x11; 32], 0, &[0x22; 20]),
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
@@ -383,7 +376,7 @@ fn test_full_cells_info_no_type_script() {
     assert_eq!(result.len(), 1);
     let info = result.get(&(tx_hash.clone(), 0)).unwrap();
 
-    assert_eq!(info.lock_code_hash, vec![0x11u8; 32]);
+    assert_eq!(info.lock_code_hash, [0x11u8; 32]);
     assert_eq!(info.type_code_hash, None);
 }
 
@@ -394,12 +387,10 @@ fn test_full_cells_info_errors_on_zero_occupied_capacity_from_live_cell() {
 
     let legacy_like = LiveCellInfo {
         capacity: 300_00000000,
-        lock_script_hash: vec![0x33u8; 32],
-        lock_code_hash: vec![0x11u8; 32],
+        lock_code_hash: [0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
-        type_script_hash: Some(vec![0x66u8; 32]),
-        type_code_hash: Some(vec![0x44u8; 32]),
+        type_code_hash: Some([0x44u8; 32]),
         type_hash_type: Some(0),
         type_args: Some(vec![0x55u8; 20]),
         data_size: 100,
@@ -425,12 +416,10 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
 
     let bad = LiveCellInfo {
         capacity: 300_00000000,
-        lock_script_hash: vec![0x33u8; 32],
-        lock_code_hash: vec![0x11u8; 32],
+        lock_code_hash: [0x11u8; 32],
         lock_hash_type: 0,
         lock_args: vec![0x22u8; 20],
-        type_script_hash: Some(vec![0x66u8; 32]),
-        type_code_hash: Some(vec![0x44u8; 32]),
+        type_code_hash: Some([0x44u8; 32]),
         type_hash_type: Some(0),
         type_args: None,
         data_size: 100,
@@ -443,10 +432,13 @@ fn test_full_cells_info_errors_when_typed_cell_lacks_type_args_and_occupied_miss
     batch.put_cell(&tx_hash, 0, &bad, 1000);
     batch.commit().unwrap();
 
+    // The v2 payload holds a whole type script or none: a typed payload
+    // without args is rejected where it is decoded, with its outpoint.
     let err = writer
         .get_full_cells_info_batch(&[(&tx_hash, 0)])
         .unwrap_err();
-    assert!(err.to_string().contains("missing type_args"));
+    assert!(err.to_string().contains("type script is partial"), "{err}");
+    assert!(err.to_string().contains(&hex::encode(&tx_hash)), "{err}");
 }
 
 #[test]

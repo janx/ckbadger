@@ -1,6 +1,5 @@
 use bech32::primitives::decode::{CheckedHrpstring, CheckedHrpstringError};
 use bech32::{Bech32, Bech32m};
-use ckb_hash::new_blake2b;
 
 /// A lock script decoded from an RFC-0021 full CKB address.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,56 +101,10 @@ pub fn address_to_lock_script_hash(address: &str) -> Result<Vec<u8>, String> {
     ))
 }
 
-/// Compute script hash using Molecule serialization (RFC-0022).
-///
-/// Script structure (Molecule table):
-/// ```text
-/// table Script {
-///     code_hash: Byte32,  // 32 bytes fixed
-///     hash_type: byte,    // 1 byte
-///     args: Bytes,        // variable: 4-byte length prefix + data
-/// }
-/// ```
-///
-/// Molecule table encoding:
-/// - Header: 4 bytes (total size) + 4 bytes per field (offsets)
-/// - Body: fields in declaration order
+/// Compute script hash using Molecule serialization (RFC-0022), with the
+/// workspace's one script-hash routine, [`ckbadger_common::script_hash`].
 pub fn compute_script_hash(code_hash: &[u8], hash_type: u8, args: &[u8]) -> Vec<u8> {
-    let encoded = molecule_encode_script(code_hash, hash_type, args);
-
-    let mut hasher = new_blake2b();
-    hasher.update(&encoded);
-
-    let mut hash = vec![0u8; 32];
-    hasher.finalize(&mut hash);
-    hash
-}
-
-fn molecule_encode_script(code_hash: &[u8], hash_type: u8, args: &[u8]) -> Vec<u8> {
-    const HEADER_SIZE: u32 = 4 + 3 * 4;
-    const CODE_HASH_SIZE: u32 = 32;
-    const HASH_TYPE_SIZE: u32 = 1;
-
-    let args_size = 4 + args.len() as u32;
-    let total_size = HEADER_SIZE + CODE_HASH_SIZE + HASH_TYPE_SIZE + args_size;
-
-    let offset_code_hash = HEADER_SIZE;
-    let offset_hash_type = offset_code_hash + CODE_HASH_SIZE;
-    let offset_args = offset_hash_type + HASH_TYPE_SIZE;
-
-    let mut buf = Vec::with_capacity(total_size as usize);
-
-    buf.extend_from_slice(&total_size.to_le_bytes());
-    buf.extend_from_slice(&offset_code_hash.to_le_bytes());
-    buf.extend_from_slice(&offset_hash_type.to_le_bytes());
-    buf.extend_from_slice(&offset_args.to_le_bytes());
-
-    buf.extend_from_slice(code_hash);
-    buf.push(hash_type);
-    buf.extend_from_slice(&(args.len() as u32).to_le_bytes());
-    buf.extend_from_slice(args);
-
-    buf
+    ckbadger_common::script_hash(code_hash, hash_type, args).to_vec()
 }
 
 /// Address-vs-hash routing: does `s` carry a CKB address HRP (`ckb1`/`ckt1`)?

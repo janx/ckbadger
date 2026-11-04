@@ -10,6 +10,7 @@ pub mod hex;
 pub mod label_import;
 pub mod network;
 pub mod proposal;
+pub mod script_hash;
 pub mod stats_bucket;
 pub mod sync;
 #[cfg(any(test, feature = "testing"))]
@@ -26,6 +27,7 @@ pub use hash_type::{hash_type_from_label, hash_type_label};
 pub use hex::{parse_capacity, parse_hex_to_bytes, parse_hex_to_hash, parse_hex_u32};
 pub use label_import::*;
 pub use proposal::*;
+pub use script_hash::script_hash;
 pub use sync::*;
 pub use token::*;
 pub use types::*;

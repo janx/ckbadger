@@ -1122,18 +1122,16 @@ async fn indexed_calendar_shares_the_response_byte_budget_with_daily_rows() {
 fn data_cell(data_size: i32, data_hash: &[u8]) -> ckbadger_store::LiveCellInfo {
     ckbadger_store::LiveCellInfo {
         capacity: 100_00000000,
-        lock_script_hash: vec![0x11; 32],
-        lock_code_hash: vec![0x22; 32],
+        lock_code_hash: [0x22; 32],
         lock_hash_type: 1,
         lock_args: vec![],
-        type_script_hash: None,
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
         data_size,
         occupied_capacity: 61_00000000,
         udt_amount: None,
-        data_hash: Some(data_hash.to_vec()),
+        data_hash: Some(data_hash.to_vec().try_into().unwrap()),
     }
 }
 

@@ -271,8 +271,9 @@ fn stage(
                 .checked_add(capacity)
                 .ok_or_else(|| anyhow!("Fiber {stage} channel input overflow"))?;
         }
+        let previous_lock_hash = previous.cell.lock_script_hash();
         for (party, sum) in participants.iter().zip(party_in.iter_mut()) {
-            if &previous.cell.lock_script_hash == party {
+            if previous_lock_hash.as_slice() == party.as_slice() {
                 *sum = sum
                     .checked_add(capacity)
                     .ok_or_else(|| anyhow!("Fiber {stage} party input overflow"))?;
@@ -477,7 +478,7 @@ fn build_evidence(
             let prev_hash = parse_hex(&input.previous_output.tx_hash)?;
             let prev_index = i16::try_from(parse_u64(&input.previous_output.index)?)?;
             let previous = canonical_version_at(state, id, &prev_hash, prev_index)?;
-            if &previous.cell.lock_script_hash == party {
+            if previous.cell.lock_script_hash().as_slice() == party.as_slice() {
                 inputs = inputs
                     .checked_add(u128::try_from(previous.cell.capacity)?)
                     .ok_or_else(|| anyhow!("Fiber opening input capacity overflow"))?;

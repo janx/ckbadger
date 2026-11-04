@@ -158,31 +158,15 @@ pub(crate) fn canonical_version_at(
             consumer.1
         );
     }
+    // The payload stores no script hashes (they are derived from these
+    // fields), so there is no stored hash to cross-check here.
     let lock = script(&cell.lock_code_hash, cell.lock_hash_type, &cell.lock_args)
         .with_context(|| format!("owner address script invalid: {context}"))?;
-    ensure!(
-        crate::utils::address::compute_script_hash(
-            &cell.lock_code_hash,
-            u8::try_from(cell.lock_hash_type)?,
-            &cell.lock_args
-        ) == cell.lock_script_hash,
-        "lock script hash mismatch: {context}"
-    );
-    let type_script = match (
-        &cell.type_code_hash,
-        cell.type_hash_type,
-        &cell.type_args,
-        &cell.type_script_hash,
-    ) {
-        (Some(code), Some(ht), Some(args), Some(hash)) => {
-            let response = script(code, ht, args).with_context(|| context.clone())?;
-            ensure!(
-                crate::utils::address::compute_script_hash(code, u8::try_from(ht)?, args) == *hash,
-                "type script hash mismatch: {context}"
-            );
-            Some(response)
+    let type_script = match (&cell.type_code_hash, cell.type_hash_type, &cell.type_args) {
+        (Some(code), Some(ht), Some(args)) => {
+            Some(script(code, ht, args).with_context(|| context.clone())?)
         }
-        (None, None, None, None) => None,
+        (None, None, None) => None,
         _ => {
             return Err(anyhow!(
                 "partial type script (missing or invalid hash_type): {context}"
@@ -203,7 +187,7 @@ pub(crate) fn canonical_version_at(
         cell.capacity
     );
     let owner_address = crate::utils::address::encode_lock_address(
-        &cell.lock_script_hash,
+        &cell.lock_script_hash(),
         &cell.lock_code_hash,
         cell.lock_hash_type,
         &cell.lock_args,
@@ -221,7 +205,7 @@ pub(crate) fn canonical_version_at(
                 .as_ref()
                 .map(|h| format!("0x{}", hex::encode(h))),
             consumed_at_block,
-            owner_lock_hash: format!("0x{}", hex::encode(&cell.lock_script_hash)),
+            owner_lock_hash: format!("0x{}", hex::encode(cell.lock_script_hash())),
             owner_address,
             capacity: cell.capacity.to_string(),
             occupied_capacity: occupied.to_string(),
@@ -361,8 +345,8 @@ pub(crate) fn checked_versions(
         let actual = data
             .iter()
             .find(|v| v.response.is_live)
-            .map(|v| v.cell.lock_script_hash.as_slice());
-        if actual != expected_owner.as_deref() {
+            .map(|v| v.cell.lock_script_hash());
+        if actual.as_ref().map(|hash| hash.as_slice()) != expected_owner.as_deref() {
             return Err(ApiError::internal(format!(
                 "item current owner disagrees with canonical cell: 0x{}",
                 hex::encode(id)
@@ -513,7 +497,10 @@ pub(crate) fn canonical_live_type_version(
         ensure!(
             version.response.is_live
                 && version.response.block_number == block
-                && version.cell.type_script_hash.as_deref() == Some(type_hash),
+                && version
+                    .cell
+                    .type_script_hash()
+                    .is_some_and(|hash| hash.as_slice() == type_hash),
             "live type index disagrees with canonical cell: reference=0x{} outpoint=0x{}:{index}",
             hex::encode(type_hash),
             hex::encode(tx)

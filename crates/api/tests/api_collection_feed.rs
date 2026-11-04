@@ -52,16 +52,14 @@ struct FeedTx {
 
 /// A plain output payload owned by `lock` (no type script).
 fn plain_cell(lock: u8) -> LiveCellInfo {
-    let code = vec![0x41; 32];
+    let code = [0x41; 32];
     let args = vec![lock; 20];
     LiveCellInfo {
         capacity: 200_00000000,
         occupied_capacity: 61_00000000,
-        lock_script_hash: compute_script_hash(&code, 1, &args),
         lock_code_hash: code,
         lock_hash_type: 1,
         lock_args: args,
-        type_script_hash: None,
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,

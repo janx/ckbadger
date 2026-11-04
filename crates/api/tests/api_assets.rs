@@ -1414,17 +1414,15 @@ fn seed_did_live_cell(batch: &mut StoreBatch<'_>, id: &[u8], hash: &[u8], block:
         &LiveCellInfo {
             capacity: 320_00000000,
             occupied_capacity: (94 + id.len() as i64) * 100_000000,
-            lock_script_hash: compute_script_hash(&[0x51; 32], 1, &[0x61; 20]),
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![0x61; 20],
-            type_script_hash: Some(compute_script_hash(&[0x81; 32], 1, id)),
-            type_code_hash: Some(vec![0x81; 32]),
+            type_code_hash: Some([0x81; 32]),
             type_hash_type: Some(1),
             type_args: Some(id.to_vec()),
             data_size: 0,
             udt_amount: None,
-            data_hash: Some(vec![0; 32]),
+            data_hash: Some([0; 32]),
         },
         block,
     );
@@ -1526,12 +1524,10 @@ async fn test_assets_did_ckb_20_byte_item_activities_resolve() {
         0,
         &LiveCellInfo {
             capacity: 521_00000000,
-            lock_script_hash: vec![0x41; 32],
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![0x61; 22],
-            type_script_hash: Some(vec![0x71; 32]),
-            type_code_hash: Some(vec![0x81; 32]),
+            type_code_hash: Some([0x81; 32]),
             type_hash_type: Some(1),
             type_args: Some(did_id.clone()),
             data_size: 205,
@@ -1648,12 +1644,10 @@ async fn test_assets_did_ckb_item_detail_and_activities() {
         0,
         &LiveCellInfo {
             capacity: 128_00000000,
-            lock_script_hash: compute_script_hash(&[0x51; 32], 1, &[0x61; 20]),
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![0x61; 20],
-            type_script_hash: Some(compute_script_hash(&[0x81; 32], 1, &did_id)),
-            type_code_hash: Some(vec![0x81; 32]),
+            type_code_hash: Some([0x81; 32]),
             type_hash_type: Some(1),
             type_args: Some(did_id.to_vec()),
             data_size: 0,
@@ -1868,12 +1862,10 @@ async fn test_assets_nft_collection_items_dotbit_human_readable_and_pagination()
         nft_a_output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x41; 32],
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(nft_a_type_hash.clone()),
-            type_code_hash: Some(dotbit_code_hash.clone()),
+            type_code_hash: Some(dotbit_code_hash.clone().try_into().unwrap()),
             type_hash_type: Some(1),
             type_args: Some(nft_a.to_vec()),
             data_size: 64,
@@ -2131,12 +2123,10 @@ async fn test_assets_bit_cell_item_activities() {
         0,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x31; 32],
-            lock_code_hash: vec![0x41; 32],
+            lock_code_hash: [0x41; 32],
             lock_hash_type: 1,
             lock_args: vec![0x51; 20],
-            type_script_hash: Some(vec![0x61; 32]),
-            type_code_hash: Some(vec![0x71; 32]),
+            type_code_hash: Some([0x71; 32]),
             type_hash_type: Some(1),
             type_args: Some(identity_id.clone()),
             data_size: 72,
@@ -2289,12 +2279,10 @@ async fn test_assets_bit_cell_collection_and_detail_keep_independent_identity() 
         output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x31; 32],
-            lock_code_hash: vec![0x41; 32],
+            lock_code_hash: [0x41; 32],
             lock_hash_type: 1,
             lock_args: vec![0x51; 20],
-            type_script_hash: Some(vec![0x61; 32]),
-            type_code_hash: Some(vec![0x71; 32]),
+            type_code_hash: Some([0x71; 32]),
             type_hash_type: Some(1),
             type_args: Some(Vec::new()),
             data_size: 72,
@@ -2393,12 +2381,10 @@ async fn test_assets_nft_collection_items_dotbit_requires_outpoint_index_even_wi
         output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x41; 32],
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(nft_type_hash.clone()),
-            type_code_hash: Some(dotbit_code_hash.clone()),
+            type_code_hash: Some(dotbit_code_hash.clone().try_into().unwrap()),
             type_hash_type: Some(1),
             type_args: Some(nft_id.to_vec()),
             data_size: 64,
@@ -2558,12 +2544,10 @@ async fn test_assets_nft_collection_items_mnft_live_outpoint() {
         output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x41; 32],
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(vec![0x61; 32]),
-            type_code_hash: Some(vec![0x62; 32]),
+            type_code_hash: Some([0x62; 32]),
             type_hash_type: Some(1),
             type_args: Some(token_id.to_vec()),
             data_size: 64,
@@ -2784,12 +2768,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x31; 32],
-            lock_code_hash: vec![0x41; 32],
+            lock_code_hash: [0x41; 32],
             lock_hash_type: 1,
             lock_args: vec![0x51; 20],
-            type_script_hash: Some(vec![0x61; 32]),
-            type_code_hash: Some(vec![0x62; 32]),
+            type_code_hash: Some([0x62; 32]),
             type_hash_type: Some(1),
             type_args: Some(account_id.to_vec()),
             data_size: 0,
@@ -2806,12 +2788,10 @@ async fn test_assets_nft_collection_activities_supports_action_filter() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x32; 32],
-            lock_code_hash: vec![0x42; 32],
+            lock_code_hash: [0x42; 32],
             lock_hash_type: 1,
             lock_args: vec![0x52; 20],
-            type_script_hash: Some(vec![0x63; 32]),
-            type_code_hash: Some(vec![0x64; 32]),
+            type_code_hash: Some([0x64; 32]),
             type_hash_type: Some(1),
             type_args: Some(account_id.to_vec()),
             data_size: 0,
@@ -3080,12 +3060,10 @@ async fn test_assets_nft_item_detail_mnft() {
         output_index,
         &LiveCellInfo {
             capacity: 300_00000000,
-            lock_script_hash: vec![0x31; 32],
-            lock_code_hash: vec![0x32; 32],
+            lock_code_hash: [0x32; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(vec![0x33; 32]),
-            type_code_hash: Some(vec![0x34; 32]),
+            type_code_hash: Some([0x34; 32]),
             type_hash_type: Some(1),
             type_args: Some(token_id.to_vec()),
             data_size: 64,
@@ -3130,7 +3108,6 @@ async fn test_assets_nft_item_activities_mnft() {
     let class_id = [0x31u8; 24];
     let token_id = [0x41u8; 28];
     let owner_lock_hash = vec![0x77u8; 32];
-    let previous_owner_lock_hash = vec![0x66u8; 32];
     let mint_tx = vec![0x93; 32];
     let transfer_tx = vec![0x91; 32];
 
@@ -3162,12 +3139,10 @@ async fn test_assets_nft_item_activities_mnft() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: previous_owner_lock_hash,
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: Some(vec![0x44; 32]),
-            type_code_hash: Some(vec![0x55; 32]),
+            type_code_hash: Some([0x55; 32]),
             type_hash_type: Some(1),
             type_args: Some(token_id.to_vec()),
             data_size: 0,
@@ -3296,8 +3271,8 @@ async fn test_assets_nft_item_activities_mnft() {
 async fn test_assets_nft_item_activities_dotbit() {
     let store = test_store();
     let account_id = [0x11u8; 20];
-    let owner_a = vec![0x88u8; 32];
-    let owner_b = vec![0x77u8; 32];
+    // The two consumed cells' owners are their locks' derived hashes (args
+    // 0x32.. / 0x42..), both different from the current owner `owner_c`.
     let owner_c = vec![0x66u8; 32];
     let mint_tx = vec![0xa2; 32];
     let transfer_tx_1 = vec![0xa1; 32];
@@ -3331,12 +3306,10 @@ async fn test_assets_nft_item_activities_dotbit() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: owner_a,
-            lock_code_hash: vec![0x31; 32],
+            lock_code_hash: [0x31; 32],
             lock_hash_type: 1,
             lock_args: vec![0x32; 20],
-            type_script_hash: Some(vec![0x33; 32]),
-            type_code_hash: Some(vec![0x34; 32]),
+            type_code_hash: Some([0x34; 32]),
             type_hash_type: Some(1),
             type_args: Some(account_id.to_vec()),
             data_size: 0,
@@ -3353,12 +3326,10 @@ async fn test_assets_nft_item_activities_dotbit() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: owner_b,
-            lock_code_hash: vec![0x41; 32],
+            lock_code_hash: [0x41; 32],
             lock_hash_type: 1,
             lock_args: vec![0x42; 20],
-            type_script_hash: Some(vec![0x43; 32]),
-            type_code_hash: Some(vec![0x44; 32]),
+            type_code_hash: Some([0x44; 32]),
             type_hash_type: Some(1),
             type_args: Some(account_id.to_vec()),
             data_size: 0,
@@ -3512,8 +3483,8 @@ async fn test_assets_nft_item_activities_dotbit() {
 async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
     let store = test_store();
     let account_id = [0x31u8; 20];
-    let owner_a = vec![0x21u8; 32];
-    let owner_b = vec![0x22u8; 32];
+    // The two consumed cells' owners are their locks' derived hashes (args
+    // 0x52.. / 0x62..).
     let mint_tx = vec![0xb1; 32];
     let transfer_tx = vec![0xb2; 32];
     let burn_tx = vec![0xb3; 32];
@@ -3544,12 +3515,10 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: owner_a,
-            lock_code_hash: vec![0x51; 32],
+            lock_code_hash: [0x51; 32],
             lock_hash_type: 1,
             lock_args: vec![0x52; 20],
-            type_script_hash: Some(vec![0x53; 32]),
-            type_code_hash: Some(vec![0x54; 32]),
+            type_code_hash: Some([0x54; 32]),
             type_hash_type: Some(1),
             type_args: Some(account_id.to_vec()),
             data_size: 0,
@@ -3566,12 +3535,10 @@ async fn test_assets_nft_item_activities_dotbit_recycled_has_recycle_history() {
         0,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: owner_b,
-            lock_code_hash: vec![0x61; 32],
+            lock_code_hash: [0x61; 32],
             lock_hash_type: 1,
             lock_args: vec![0x62; 20],
-            type_script_hash: Some(vec![0x63; 32]),
-            type_code_hash: Some(vec![0x64; 32]),
+            type_code_hash: Some([0x64; 32]),
             type_hash_type: Some(1),
             type_args: Some(account_id.to_vec()),
             data_size: 0,
@@ -4215,16 +4182,19 @@ fn seed_dotcell_name(
         batch.put_spore_outpoint(&create_tx, 1, &id);
         let name_cell = LiveCellInfo {
             capacity: 240_00000000,
-            lock_script_hash: vec![0x0A; 32],
             lock_code_hash: hex::decode(
                 DOTCELL_ACCOUNT_LOCK_CODE_HASH_MAINNET.trim_start_matches("0x"),
             )
+            .unwrap()
+            .try_into()
             .unwrap(),
             lock_hash_type: 1,
             lock_args: Vec::new(),
-            type_script_hash: Some(vec![0x0B; 32]),
             type_code_hash: Some(
-                hex::decode(DOTCELL_ACCOUNT_CODE_HASH_MAINNET.trim_start_matches("0x")).unwrap(),
+                hex::decode(DOTCELL_ACCOUNT_CODE_HASH_MAINNET.trim_start_matches("0x"))
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
             ),
             type_hash_type: Some(1),
             type_args: Some(hex20(DOTCELL_NAMESPACE_MAINNET).to_vec()),

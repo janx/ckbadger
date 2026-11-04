@@ -17,24 +17,24 @@ fn setup_store() -> Arc<CkbadgerStore> {
     store
 }
 
+/// The seed bytes go into the script args, so distinct seeds are distinct
+/// locks / types; the script hashes are derived from them.
 fn make_live_cell(
     capacity: i64,
     block: i64,
-    lock_hash_byte: u8,
-    type_hash_byte: Option<u8>,
+    lock_seed: u8,
+    type_seed: Option<u8>,
     data_size: i32,
 ) -> PositionedCellInfo {
     PositionedCellInfo::new(
         LiveCellInfo {
             capacity,
-            lock_script_hash: vec![lock_hash_byte; 32],
-            lock_code_hash: vec![0x11u8; 32],
+            lock_code_hash: [0x11u8; 32],
             lock_hash_type: 1,
-            lock_args: vec![0x22u8; 20],
-            type_script_hash: type_hash_byte.map(|b| vec![b; 32]),
-            type_code_hash: type_hash_byte.map(|_| vec![0x44u8; 32]),
-            type_hash_type: type_hash_byte.map(|_| 1),
-            type_args: type_hash_byte.map(|_| vec![]),
+            lock_args: vec![lock_seed; 20],
+            type_code_hash: type_seed.map(|_| [0x44u8; 32]),
+            type_hash_type: type_seed.map(|_| 1),
+            type_args: type_seed.map(|seed| vec![seed]),
             data_size,
             occupied_capacity: 0,
             udt_amount: None,
@@ -65,9 +65,10 @@ fn test_insert_cell_visible_in_live_cells() {
     let raw = store.get_cf(store.cf_cells(), &key).unwrap();
     assert!(raw.is_some(), "cell payload should be present in cells CF");
 
-    let decoded: LiveCellInfo = bincode::deserialize(&raw.unwrap()).unwrap();
+    let decoded = LiveCellInfo::decode(&raw.unwrap()).unwrap();
+    assert_eq!(decoded, cell.cell);
     assert_eq!(decoded.capacity, 100_00000000);
-    assert_eq!(decoded.lock_script_hash, vec![0xAAu8; 32]);
+    assert_eq!(decoded.lock_script_hash(), cell.lock_script_hash());
     assert_eq!(decoded.data_size, 256);
 }
 

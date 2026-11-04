@@ -56,13 +56,47 @@ fn cell_bytes_config_with_capacity(
     data: Vec<u8>,
     node_capacity: Option<u64>,
 ) -> AppConfig {
+    cell_bytes_config_with_node_output(store, hash, index, data, node_capacity, None)
+}
+
+/// The node's original output is the indexed payload unless `node_capacity`
+/// / `node_lock_args` say otherwise.
+fn cell_bytes_config_with_node_output(
+    store: Arc<CkbadgerStore>,
+    hash: &[u8],
+    index: usize,
+    data: Vec<u8>,
+    node_capacity: Option<u64>,
+    node_lock_args: Option<&[u8]>,
+) -> AppConfig {
+    let indexed = store.get_cell(hash, index as i16, &store).unwrap().unwrap();
+    cell_bytes_config_for(
+        store,
+        hash,
+        index,
+        data,
+        &indexed,
+        node_capacity,
+        node_lock_args,
+    )
+}
+
+/// The node's original output is `indexed` (with the given overrides).
+fn cell_bytes_config_for(
+    store: Arc<CkbadgerStore>,
+    hash: &[u8],
+    index: usize,
+    data: Vec<u8>,
+    indexed: &LiveCellInfo,
+    node_capacity: Option<u64>,
+    node_lock_args: Option<&[u8]>,
+) -> AppConfig {
     use ckb_types::{
         bytes::Bytes,
         core::{BlockBuilder, TransactionBuilder},
         packed,
         prelude::*,
     };
-    let indexed = store.get_cell(hash, index as i16, &store).unwrap().unwrap();
     seed_cell_transaction(&store, hash, 123, i16::try_from(index + 1).unwrap());
     let script = |code_hash: &[u8], hash_type: i16, args: &[u8]| {
         packed::Script::new_builder()
@@ -76,7 +110,7 @@ fn cell_bytes_config_with_capacity(
         .lock(script(
             &indexed.lock_code_hash,
             indexed.lock_hash_type,
-            &indexed.lock_args,
+            node_lock_args.unwrap_or(&indexed.lock_args),
         ))
         .type_(
             indexed
@@ -280,18 +314,16 @@ async fn test_get_cell_returns_occupied_capacity_breakdown() {
         output_index,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: Some(compute_script_hash(&[0x55; 32], 1, &[0xaa, 0xbb])),
-            type_code_hash: Some(vec![0x55; 32]),
+            type_code_hash: Some([0x55; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0xaa, 0xbb]),
             data_size: 42,
             occupied_capacity: 138_00000000,
             udt_amount: None,
-            data_hash: Some(fixture_data_hash(&[0; 42])),
+            data_hash: Some((fixture_data_hash(&[0; 42])).try_into().unwrap()),
         },
         123,
     );
@@ -389,7 +421,7 @@ async fn cell_rejects_same_length_node_data_mutation() {
     let store = test_store();
     let tx = [0xa1; 32];
     let mut cell = cell_with(1, Some(1));
-    cell.data_hash = Some(fixture_data_hash(&[0x11; 42]));
+    cell.data_hash = Some((fixture_data_hash(&[0x11; 42])).try_into().unwrap());
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(&tx, 1, &cell, 123);
     batch.commit().unwrap();
@@ -421,21 +453,33 @@ async fn cell_rejects_original_output_capacity_mismatch() {
 }
 
 #[tokio::test]
-async fn cell_rejects_mutated_stored_args_even_with_unchanged_stored_script_hash() {
+/// The payload stores no script hash any more (v2: it is derived from the
+/// script fields), so mutated stored args cannot disagree with a stored hash;
+/// they are caught against the chain's original CellOutput instead.
+async fn cell_rejects_mutated_stored_args_that_differ_from_the_chain_output() {
     let store = test_store();
     let tx = [0xa3; 32];
-    let mut cell = cell_with(1, Some(1));
+    let original = cell_with(1, Some(1));
+    let mut cell = original.clone();
     cell.lock_args[0] ^= 0xff;
     let mut batch = StoreBatch::new(store.as_ref());
     batch.put_cell(&tx, 1, &cell, 123);
     batch.commit().unwrap();
-    let app = create_router(cell_bytes_config(store, &tx, 1, vec![0; 42])).await;
+    let config = cell_bytes_config_with_node_output(
+        store,
+        &tx,
+        1,
+        vec![0; 42],
+        None,
+        Some(&original.lock_args),
+    );
+    let app = create_router(config).await;
     let (status, json) = get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx))).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
     assert!(json["message"]
         .as_str()
         .unwrap()
-        .contains("lock script hash mismatch"));
+        .contains("indexed output differs"));
 }
 
 #[tokio::test]
@@ -448,11 +492,9 @@ async fn test_dao_cell_missing_deposit_header_is_error() {
         0,
         &LiveCellInfo {
             capacity: 20_000_000_000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -510,12 +552,10 @@ fn dotcell_name_cell_info(data_size: i32) -> LiveCellInfo {
         (8 + 33 + 33 + type_args.len() as i64 + i64::from(data_size)) * 100_000_000;
     LiveCellInfo {
         capacity: 240_00000000,
-        lock_script_hash: compute_script_hash(&lock_code_hash, 1, &[]),
-        lock_code_hash,
+        lock_code_hash: lock_code_hash.try_into().unwrap(),
         lock_hash_type: 1,
         lock_args: vec![],
-        type_script_hash: Some(compute_script_hash(&type_code_hash, 1, &type_args)),
-        type_code_hash: Some(type_code_hash),
+        type_code_hash: Some(type_code_hash.try_into().unwrap()),
         type_hash_type: Some(1),
         type_args: Some(type_args),
         data_size,
@@ -588,7 +628,7 @@ async fn dotcell_name_cell_app(data: Vec<u8>) -> (axum::Router, [u8; 32], TestCk
     let store = test_store();
     let mut batch = StoreBatch::new(store.as_ref());
     let mut indexed = dotcell_name_cell_info(data_size);
-    indexed.data_hash = Some(fixture_data_hash(&data));
+    indexed.data_hash = Some(fixture_data_hash(&data).try_into().unwrap());
     batch.put_cell(&tx_hash, 0, &indexed, 123);
     batch.commit().unwrap();
     seed_cell_transaction(&store, &tx_hash, 123, 1);
@@ -671,11 +711,9 @@ async fn test_dead_cell_exposes_consumer_metadata_in_cell_and_graph() {
         output_index,
         &LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -827,12 +865,10 @@ fn insert_by_script_cell(
 ) {
     let cell = LiveCellInfo {
         capacity: 100_00000000,
-        lock_script_hash: vec![tx_hash[0]; 32],
-        lock_code_hash: lock_code_hash.to_vec(),
+        lock_code_hash: lock_code_hash.to_vec().try_into().unwrap(),
         lock_hash_type,
         lock_args: vec![],
-        type_script_hash: type_code_hash.map(|_| vec![tx_hash[0].wrapping_add(1); 32]),
-        type_code_hash: type_code_hash.map(|h| h.to_vec()),
+        type_code_hash: (type_code_hash.map(|h| h.to_vec())).map(|hash| hash.try_into().unwrap()),
         type_hash_type,
         type_args: type_code_hash.map(|_| vec![]),
         data_size: 0,
@@ -1434,7 +1470,7 @@ async fn test_get_address_keeps_exact_hash_type_for_live_address() {
     // Control: an address that still has live cells resolves identically, and the
     // stored hash_type (data1 == 2) is reported exactly, never a canonical guess.
     let store = test_store();
-    let code_hash = vec![0x9c; 32];
+    let code_hash = [0x9c; 32];
     let args = vec![0x44; 20];
     let lock_hash = compute_script_hash(&code_hash, 2, &args);
     let expected_address =
@@ -1444,7 +1480,7 @@ async fn test_get_address_keeps_exact_hash_type_for_live_address() {
     batch.put_lock_script(
         &lock_hash,
         &ckbadger_store::types::LockScriptEntry {
-            code_hash: code_hash.clone(),
+            code_hash: code_hash.to_vec(),
             hash_type: 2,
             args: args.clone(),
         },
@@ -1454,11 +1490,9 @@ async fn test_get_address_keeps_exact_hash_type_for_live_address() {
         0,
         &LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: code_hash.clone(),
+            lock_code_hash: code_hash,
             lock_hash_type: 2,
             lock_args: args.clone(),
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -1545,30 +1579,22 @@ async fn test_get_address_fails_fast_on_invalid_stored_hash_type() {
 
 /// A live cell whose fields the individual tests perturb.
 fn cell_with(lock_hash_type: i16, type_hash_type: Option<i16>) -> LiveCellInfo {
-    let lock_code_hash = vec![0x22; 32];
+    let lock_code_hash = [0x22; 32];
     let lock_args = vec![0x33; 20];
-    let type_code_hash = vec![0x55; 32];
+    let type_code_hash = [0x55; 32];
     let type_args = vec![0xaa, 0xbb];
     LiveCellInfo {
         capacity: 200_00000000,
-        lock_script_hash: if matches!(lock_hash_type, 0 | 1 | 2 | 4) {
-            compute_script_hash(&lock_code_hash, lock_hash_type as u8, &lock_args)
-        } else {
-            vec![0x11; 32]
-        },
         lock_code_hash,
         lock_hash_type,
         lock_args,
-        type_script_hash: type_hash_type
-            .filter(|hash_type| matches!(hash_type, 0 | 1 | 2 | 4))
-            .map(|hash_type| compute_script_hash(&type_code_hash, hash_type as u8, &type_args)),
         type_code_hash: Some(type_code_hash),
         type_hash_type,
         type_args: Some(type_args),
         data_size: 42,
         occupied_capacity: 138_00000000,
         udt_amount: None,
-        data_hash: Some(fixture_data_hash(&[0; 42])),
+        data_hash: Some((fixture_data_hash(&[0; 42])).try_into().unwrap()),
     }
 }
 
@@ -1578,7 +1604,9 @@ async fn get_cell_json(tx_hash: &[u8], cell: LiveCellInfo) -> (StatusCode, serde
     batch.put_cell(tx_hash, 1, &cell, 123);
     batch.commit().unwrap();
 
-    let config = cell_bytes_config(store, tx_hash, 1, vec![0; 42]);
+    // The node side is built from `cell` itself: a payload the store refuses
+    // to decode must still reach the endpoint, which reports it.
+    let config = cell_bytes_config_for(store, tx_hash, 1, vec![0; 42], &cell, None, None);
     let app = create_router(config).await;
     get_json(&app, &format!("/cells/0x{}/1", hex::encode(tx_hash))).await
 }
@@ -1718,7 +1746,9 @@ async fn test_get_cell_fails_fast_when_address_cannot_be_encoded() {
     // there is no such cell.
     let tx_hash = vec![0xc4; 32];
     let mut cell = cell_with(1, Some(1));
-    cell.lock_code_hash = vec![0x22; 31]; // RFC-0021 requires exactly 32 bytes
+    // The payload's code hash is always 32 bytes now; an unknown hash_type is
+    // the remaining way RFC-0021 refuses to encode a lock.
+    cell.lock_hash_type = 3;
 
     let (status, json) = get_cell_json(&tx_hash, cell).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "got {json}");
@@ -2433,11 +2463,9 @@ async fn redesign_cell_data_requires_node_bytes() {
         0,
         &LiveCellInfo {
             capacity: 10000000000,
-            lock_script_hash: compute_script_hash(&[0x22; 32], 1, &[0x33; 20]),
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2556,20 +2584,17 @@ async fn one_output_cell_app(
         0,
         &LiveCellInfo {
             capacity: capacity as i64,
-            lock_script_hash: lock.calc_script_hash().as_slice().to_vec(),
-            lock_code_hash: lock.code_hash().as_slice().to_vec(),
+            lock_code_hash: lock.code_hash().as_slice().to_vec().try_into().unwrap(),
             lock_hash_type: hash_type(&lock),
             lock_args,
-            type_script_hash: type_
-                .as_ref()
-                .map(|t| t.calc_script_hash().as_slice().to_vec()),
-            type_code_hash: type_.as_ref().map(|t| t.code_hash().as_slice().to_vec()),
+            type_code_hash: (type_.as_ref().map(|t| t.code_hash().as_slice().to_vec()))
+                .map(|hash| hash.try_into().unwrap()),
             type_hash_type: type_.as_ref().map(hash_type),
             type_args,
             data_size: data.len() as i32,
             occupied_capacity: occupied_bytes * 100_000_000,
             udt_amount: None,
-            data_hash: Some(fixture_data_hash(&data)),
+            data_hash: Some(fixture_data_hash(&data).try_into().unwrap()),
         },
         123,
     );

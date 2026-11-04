@@ -330,7 +330,7 @@ fn owner_cell(
             .context("owner index points to missing live marker")?;
         ensure!(info.created_at_block >= 0, "negative cell creation height");
         ensure!(
-            info.lock_script_hash == owner,
+            info.lock_script_hash() == owner,
             "owner index disagrees with immutable lock hash"
         );
         ensure!(
@@ -364,19 +364,17 @@ fn classify(
         item: None,
         dao: None,
     };
-    let Some(code) = info.type_code_hash.as_deref() else {
+    let Some(code) = info.type_code_hash.as_ref().map(|hash| hash.as_slice()) else {
         ensure!(
-            info.type_script_hash.is_none()
-                && info.type_hash_type.is_none()
-                && info.type_args.is_none(),
+            info.type_hash_type.is_none() && info.type_args.is_none(),
             "incomplete untyped cell metadata"
         );
         return Ok(result);
     };
     let type_hash = info
-        .type_script_hash
-        .as_deref()
+        .type_script_hash()
         .context("typed cell missing type hash")?;
+    let type_hash = type_hash.as_slice();
     ensure!(
         code.len() == 32 && type_hash.len() == 32,
         "invalid typed cell hash widths"
@@ -424,7 +422,7 @@ fn classify(
                 entry.status
             );
             ensure!(
-                entry.lock_script_hash == info.lock_script_hash
+                entry.lock_script_hash == info.lock_script_hash()
                     && entry.capacity == info.capacity
                     && entry.occupied_capacity == info.occupied_capacity
                     && entry.deposit_block_number == info.created_at_block,
@@ -552,7 +550,7 @@ fn classify(
         Item::Object(entry) => {
             ensure!(
                 entry.is_live
-                    && entry.owner_lock_hash.as_deref() == Some(info.lock_script_hash.as_slice()),
+                    && entry.owner_lock_hash.as_deref() == Some(info.lock_script_hash().as_slice()),
                 "indexed object liveness/owner contradicts current cell"
             );
             result.class = Class::Object;
@@ -561,7 +559,7 @@ fn classify(
             ensure!(entry.is_live, "indexed identity is not live");
             if entry.standard != IdentityStandard::DotCell {
                 ensure!(
-                    entry.owner_lock_hash.as_deref() == Some(info.lock_script_hash.as_slice()),
+                    entry.owner_lock_hash.as_deref() == Some(info.lock_script_hash().as_slice()),
                     "indexed identity owner contradicts current cell"
                 );
             }
@@ -668,11 +666,7 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
         // The existing token balance list contains only positive balances.
         // Zero-amount cells still belong to the token capacity/class partition.
         if evidence.class == Class::Token && info.udt_amount.is_some_and(|amount| amount > 0) {
-            tokens.insert(
-                info.type_script_hash
-                    .clone()
-                    .context("token lacks type hash")?,
-            );
+            tokens.insert(info.type_script_hash().context("token lacks type hash")?);
         }
         if let Some((id, item)) = evidence.item {
             ensure!(
@@ -1035,7 +1029,8 @@ fn cell_response(
     let lock = script(&info.lock_code_hash, info.lock_hash_type, &info.lock_args)?;
     let typed = info
         .type_code_hash
-        .as_deref()
+        .as_ref()
+        .map(|hash| hash.as_slice())
         .map(|code| {
             script(
                 code,
@@ -1140,9 +1135,9 @@ fn cell_response(
         output_index: i32::from(index),
         capacity: info.capacity.to_string(),
         occupied_capacity: info.occupied_capacity.to_string(),
-        lock_script_hash: format!("0x{}", hex::encode(&info.lock_script_hash)),
+        lock_script_hash: format!("0x{}", hex::encode(info.lock_script_hash())),
         type_script_hash: info
-            .type_script_hash
+            .type_script_hash()
             .as_ref()
             .map(|h| format!("0x{}", hex::encode(h))),
         type_code_hash: info
@@ -1234,7 +1229,7 @@ fn identity_held_since(
             previous.consumed_at_block == since && previous.created_at_block <= since,
             "identity predecessor heights contradict consume→recreate link"
         );
-        if previous.cell.lock_script_hash != info.lock_script_hash {
+        if previous.cell.lock_script_hash() != info.lock_script_hash() {
             break;
         }
         since = previous.created_at_block;

@@ -141,11 +141,9 @@ fn seed_append_only_witness(append: &CkbadgerStore) -> (Vec<u8>, Vec<u8>) {
         0,
         &LiveCellInfo {
             capacity: 10_000_000_000,
-            lock_script_hash: vec![0xC1; 32],
-            lock_code_hash: CODE_A.to_vec(),
+            lock_code_hash: CODE_A,
             lock_hash_type: 1,
             lock_args: vec![0xC3; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

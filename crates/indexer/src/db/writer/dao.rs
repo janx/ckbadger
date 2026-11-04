@@ -334,7 +334,8 @@ impl LiveDaoBatch {
             if !cell
                 .cell
                 .type_code_hash
-                .as_deref()
+                .as_ref()
+                .map(|hash| hash.as_slice())
                 .is_some_and(DaoParser::is_dao_code_hash)
             {
                 continue;
@@ -959,7 +960,6 @@ mod tests {
 
     use crate::parser::cell::ParsedCell;
     use crate::parser::transaction::ParsedInput;
-    use ckbadger_store::types::LiveCellInfo;
 
     const AR_DEPOSIT: i64 = 10_000_000_000_000_000;
     const AR_REQUEST: i64 = 10_100_000_000_000_000;
@@ -1051,21 +1051,7 @@ mod tests {
 
     fn cell_info(cell: &ParsedCell, created_at_block: i64) -> PositionedCellInfo {
         PositionedCellInfo::new(
-            LiveCellInfo {
-                capacity: cell.capacity,
-                lock_script_hash: cell.lock_script_hash.clone(),
-                lock_code_hash: cell.lock_code_hash.clone(),
-                lock_hash_type: cell.lock_hash_type,
-                lock_args: cell.lock_args.clone(),
-                type_script_hash: cell.type_script_hash.clone(),
-                type_code_hash: cell.type_code_hash.clone(),
-                type_hash_type: cell.type_hash_type,
-                type_args: cell.type_args.clone(),
-                data_size: cell.data_size,
-                occupied_capacity: 102_00000000,
-                udt_amount: None,
-                data_hash: Some(cell.data_hash.to_vec()),
-            },
+            cell.to_live_cell_info(102_00000000, None).unwrap(),
             created_at_block,
         )
     }

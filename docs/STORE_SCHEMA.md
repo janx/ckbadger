@@ -20,11 +20,25 @@ DAO refresh reads this field rather than reloading every deposit header. The raw
 `deposit_timestamp` remains available for display. This domain-store serialization change
 requires re-sync from genesis; there is no default, migration, or append-only payload mutation.
 
+`cells` values are the `LiveCellInfo` v2 layout (2026-11-04), in this field order:
+`capacity` i64, `lock_code_hash` `[u8; 32]`, `lock_hash_type` i16, `lock_args` bytes,
+`type_code_hash` `Option<[u8; 32]>`, `type_hash_type` `Option<i16>`, `type_args` `Option<bytes>`,
+`data_size` i32, `occupied_capacity` i64, `udt_amount` `Option<u128>`, `data_hash`
+`Option<[u8; 32]>`. They are written only by `LiveCellInfo::encode` and read only by
+`LiveCellInfo::decode` (bincode `DefaultOptions`: varint integers, little endian, trailing bytes
+rejected; the type implements no serde traits, so no second codec exists). The lock and type
+script hashes are not stored: `lock_script_hash()` / `type_script_hash()` derive them with
+`ckbadger_common::script_hash`, the routine the parser uses for every index key that embeds a
+script hash, so those keys are unchanged. A type script is stored whole or not at all; a short,
+padded, partial or v1 payload is a decode error carrying its byte length. The CF is
+lz4-compressed (universal compaction). Changing this layout requires re-sync from genesis; there
+is no migration.
+
 ## Column Families
 
 | Column Family                    | Key                                                                           | Value                                                                          | Purpose                                                                                                                                                                                                                                                    |
 | -------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cells` **(append-only store)**  | tx_hash + output_index (34B)                                                  | LiveCellInfo                                                                   | Immutable cell payload store (write-once, content-addressed)                                                                                                                                                                                               |
+| `cells` **(append-only store)**  | tx_hash + output_index (34B)                                                  | LiveCellInfo v2 (see `cells` payload above)                                    | Immutable cell payload store (write-once, content-addressed)                                                                                                                                                                                               |
 | `live_cells`                     | tx_hash + output_index (34B)                                                  | empty                                                                          | Live UTXO pointer set                                                                                                                                                                                                                                      |
 | `consumed_cells`                 | tx_hash + output_index (34B)                                                  | ConsumedCellMeta                                                               | Consumed pointer + consume metadata                                                                                                                                                                                                                        |
 | `reorg_undo_log_by_block`        | block + seq                                                                   | UndoLogEntry                                                                   | Unified rollback undo-log journal                                                                                                                                                                                                                          |

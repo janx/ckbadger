@@ -142,30 +142,24 @@ impl BatchWriter {
                 .get_cell(tx_hash, output_index, &self.append_only_store)?;
 
             if let Some(info) = cell_info {
-                // Only include cells that have a type script hash (UDT cells always have one).
-                let Some(type_script_hash) = info.type_script_hash.as_ref() else {
+                // Only include cells that have a type script (UDT cells always have one).
+                // A payload has either its whole type script or none of it, so the
+                // derived hash and the code hash are present together.
+                let (Some(type_script_hash), Some(type_code_hash)) =
+                    (info.type_script_hash(), info.type_code_hash)
+                else {
                     continue;
                 };
 
                 // Token metadata is the source of truth for whether this typed cell should be
                 // treated as UDT input.
                 // Without this guard, arbitrary typed cells can be misclassified as UDT burns.
-                let Some(token_info) = self.store.get_token(type_script_hash)? else {
+                let Some(token_info) = self.store.get_token(&type_script_hash)? else {
                     continue;
                 };
                 let Some(standard) =
                     crate::parser::UdtStandard::from_standard_hint(&token_info.standard)
                 else {
-                    continue;
-                };
-
-                // LiveCellInfo from older schema versions may miss type_code_hash, so fall back
-                // to token metadata before dropping the input from UDT matching.
-                let type_code_hash = info
-                    .type_code_hash
-                    .clone()
-                    .or_else(|| Some(token_info.type_code_hash.clone()));
-                let Some(type_code_hash) = type_code_hash else {
                     continue;
                 };
 
@@ -188,11 +182,11 @@ impl BatchWriter {
                 result.insert(
                     (tx_hash.to_vec(), output_index),
                     (
-                        type_script_hash.clone(),
-                        type_code_hash,
+                        type_script_hash.to_vec(),
+                        type_code_hash.to_vec(),
                         hash_type,
                         type_args,
-                        info.lock_script_hash.clone(),
+                        info.lock_script_hash().to_vec(),
                         amount,
                         standard.as_str().to_string(),
                     ),
@@ -852,43 +846,24 @@ mod tests {
         );
     }
 
+    /// A live cell whose payload carries type args but no type code hash (the
+    /// shape a pre-v2 payload could decode to through `#[serde(default)]`) is
+    /// no longer resolved through the token's metadata: the v2 payload has its
+    /// whole type script or none, so this payload fails to decode, with its
+    /// outpoint, instead of entering UDT matching.
     #[test]
-    fn test_get_udt_cells_info_batch_falls_back_to_token_type_code_hash() {
+    fn test_get_udt_cells_info_batch_rejects_a_payload_without_type_code_hash() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let type_hash = vec![0xAB; 32];
-        let type_code_hash = vec![0xCD; 32];
         let tx_hash = vec![0xEF; 32];
         let output_index = 0i16;
-
-        // Token metadata exists, but the live cell intentionally misses type_code_hash.
-        let token = TokenInfo {
-            type_code_hash: type_code_hash.clone(),
-            hash_type: 1,
-            type_args: vec![0x11; 20],
-            standard: "sudt".to_string(),
-            name: None,
-            symbol: None,
-            decimals: None,
-            max_supply: None,
-            first_seen_block: 0,
-            icon_url: None,
-            description: None,
-            transfers_count: 0,
-            metadata_source: None,
-            chain_metadata: None,
-        };
-        store.put_token_direct(&type_hash, &token).unwrap();
-
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            lock_script_hash: vec![0x22; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![0x44; 20],
-            type_script_hash: Some(type_hash.clone()),
             type_code_hash: None,
             type_hash_type: None,
             type_args: Some(vec![0x11; 20]),
@@ -902,18 +877,12 @@ mod tests {
         batch.commit().unwrap();
 
         let outpoints = vec![(tx_hash.as_slice(), output_index)];
-        let result = writer.get_udt_cells_info_batch(&outpoints).unwrap();
-        let entry = result
-            .get(&(tx_hash.clone(), output_index))
-            .expect("udt input should be resolved");
-
-        assert_eq!(entry.0, type_hash);
-        assert_eq!(entry.1, type_code_hash);
-        assert_eq!(entry.2, 1i16);
-        assert_eq!(entry.3, vec![0x11; 20]);
-        assert_eq!(entry.4, vec![0x22; 32]);
-        assert_eq!(entry.5, 1234u128);
-        assert_eq!(entry.6, "sudt".to_string());
+        let error = writer
+            .get_udt_cells_info_batch(&outpoints)
+            .expect_err("a partial type script payload must not resolve")
+            .to_string();
+        assert!(error.contains("type script is partial"), "{error}");
+        assert!(error.contains(&hex::encode(&tx_hash)), "{error}");
     }
 
     #[test]
@@ -922,13 +891,12 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let type_hash = vec![0xBA; 32];
-        let type_code_hash = vec![0xCB; 32];
+        let type_code_hash = [0xCB; 32];
         let tx_hash = vec![0xDC; 32];
         let output_index = 0i16;
 
         let token = TokenInfo {
-            type_code_hash: type_code_hash.clone(),
+            type_code_hash: type_code_hash.to_vec(),
             hash_type: 1,
             type_args: vec![0x11; 20],
             standard: "sudt".to_string(),
@@ -943,17 +911,14 @@ mod tests {
             metadata_source: None,
             chain_metadata: None,
         };
-        store.put_token_direct(&type_hash, &token).unwrap();
 
         // The outpoint exists only in consumed_cells (already spent), not live_cells.
         // UDT input lookup must ignore it to avoid replaying historical spend deltas.
         let consumed_cell = LiveCellInfo {
             capacity: 100_000_000,
-            lock_script_hash: vec![0x22; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![0x44; 20],
-            type_script_hash: Some(type_hash),
             type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x11; 20]),
@@ -962,6 +927,9 @@ mod tests {
             udt_amount: Some(1234),
             data_hash: None,
         };
+        // The token is registered under the cell's own type script hash.
+        let type_hash = consumed_cell.type_script_hash().unwrap().to_vec();
+        store.put_token_direct(&type_hash, &token).unwrap();
         let mut batch = StoreBatch::new(&store);
         batch.put_consumed_cell(&tx_hash, output_index, &consumed_cell, 1, 2);
         batch.commit().unwrap();
@@ -986,12 +954,10 @@ mod tests {
         // Typed cell exists, but token metadata does not. This must NOT be treated as UDT input.
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            lock_script_hash: vec![0x22; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![0x44; 20],
-            type_script_hash: Some(vec![0x77; 32]),
-            type_code_hash: Some(vec![0x88; 32]),
+            type_code_hash: Some([0x88; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x99; 32]),
             data_size: 16,
@@ -1017,7 +983,6 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let type_hash = vec![0xAC; 32];
         let tx_hash = vec![0xDD; 32];
         let output_index = 1i16;
 
@@ -1037,16 +1002,13 @@ mod tests {
             metadata_source: None,
             chain_metadata: None,
         };
-        store.put_token_direct(&type_hash, &token).unwrap();
 
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            lock_script_hash: vec![0x22; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![0x44; 20],
-            type_script_hash: Some(type_hash),
-            type_code_hash: Some(vec![0x50; 32]),
+            type_code_hash: Some([0x50; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x11; 32]),
             data_size: 0,
@@ -1054,6 +1016,9 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
+        // The token is registered under the cell's own type script hash.
+        let type_hash = cell.type_script_hash().unwrap().to_vec();
+        store.put_token_direct(&type_hash, &token).unwrap();
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell, 1);
         batch.commit().unwrap();
@@ -1073,7 +1038,6 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
 
-        let type_hash = vec![0xAD; 32];
         let tx_hash = vec![0xCC; 32];
         let output_index = 2i16;
 
@@ -1093,16 +1057,13 @@ mod tests {
             metadata_source: None,
             chain_metadata: None,
         };
-        store.put_token_direct(&type_hash, &token).unwrap();
 
         let cell = LiveCellInfo {
             capacity: 100_000_000,
-            lock_script_hash: vec![0x22; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![0x44; 20],
-            type_script_hash: Some(type_hash),
-            type_code_hash: Some(vec![0x60; 32]),
+            type_code_hash: Some([0x60; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x21; 32]),
             data_size: 0,
@@ -1110,6 +1071,9 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
+        // The token is registered under the cell's own type script hash.
+        let type_hash = cell.type_script_hash().unwrap().to_vec();
+        store.put_token_direct(&type_hash, &token).unwrap();
         let mut batch = StoreBatch::new(&store);
         batch.put_cell(&tx_hash, output_index, &cell, 1);
         batch.commit().unwrap();

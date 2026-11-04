@@ -147,25 +147,25 @@ impl Indexer {
                                     input.previous_output_index
                                 )
                             })?;
-                        let lock_hash = &info.cell.lock_script_hash;
-                        let old_live = live_cells_by_lock.get(lock_hash).copied().unwrap_or(0);
+                        let lock_hash = info.cell.lock_script_hash().to_vec();
+                        let old_live = live_cells_by_lock.get(&lock_hash).copied().unwrap_or(0);
                         let new_live = old_live.checked_add(-1).ok_or_else(|| {
                             anyhow!(
                                 "holder_count live_cells overflow (consume) in HODL tracker: lock_hash=0x{}, old_live={}",
-                                hex::encode(lock_hash),
+                                hex::encode(&lock_hash),
                                 old_live
                             )
                         })?;
                         if new_live < 0 {
                             anyhow::bail!(
                                 "holder_count live_cells underflow in HODL tracker: lock_hash=0x{}, old_live={}, new_live={}",
-                                hex::encode(lock_hash),
+                                hex::encode(&lock_hash),
                                 old_live,
                                 new_live
                             );
                         }
                         tracker.update_holder_count(old_live, new_live)?;
-                        live_cells_by_lock.insert(lock_hash.clone(), new_live);
+                        live_cells_by_lock.insert(lock_hash, new_live);
                         tracker.cell_consumed(info.created_at_block, info.capacity)?;
                     }
                 }
@@ -300,8 +300,8 @@ impl Indexer {
                             })?;
                         tracker.cell_consumed(info.occupied_capacity)?;
 
-                        let lock_hash = &info.cell.lock_script_hash;
-                        let entry = tx_addr_deltas.entry(lock_hash.clone()).or_insert((0, 0));
+                        let lock_hash = info.cell.lock_script_hash().to_vec();
+                        let entry = tx_addr_deltas.entry(lock_hash).or_insert((0, 0));
                         entry.0 -= info.occupied_capacity as i128; // used_capacity_delta
                         entry.1 -= info.capacity as i128; // balance_delta
                     }

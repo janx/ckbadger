@@ -53,23 +53,9 @@ pub(crate) struct XudtExtensionScript {
 
 // ── Cell caches ────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-pub(crate) struct CachedCellInfo {
-    pub(crate) capacity: i64,
-    pub(crate) created_at_block: i64,
-    pub(crate) lock_script_hash: Vec<u8>,
-    pub(crate) lock_code_hash: Vec<u8>,
-    pub(crate) lock_hash_type: i16,
-    pub(crate) lock_args: Vec<u8>,
-    pub(crate) type_script_hash: Option<Vec<u8>>,
-    pub(crate) type_code_hash: Option<Vec<u8>>,
-    pub(crate) type_hash_type: Option<i16>,
-    pub(crate) type_args: Option<Vec<u8>>,
-    pub(crate) data_size: i32,
-    pub(crate) occupied_capacity: i64,
-    pub(crate) udt_amount: Option<u128>,
-    pub(crate) data_hash: Option<Vec<u8>>,
-}
+/// The parser's input-cell cache entry: the `cells` payload and the block
+/// that created it, exactly as the writer holds a resolved input cell.
+pub(crate) type CachedCellInfo = ckbadger_store::PositionedCellInfo;
 
 #[derive(Clone)]
 pub(crate) struct CachedUdtCellInfo {

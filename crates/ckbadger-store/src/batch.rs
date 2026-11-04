@@ -409,9 +409,8 @@ impl<'a> StoreBatch<'a> {
     /// separate batches: `put_cell_payload` on append-only batch +
     /// `put_live_cell_marker` on domain batch.
     pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo, created_at_block: i64) {
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
-        self.put_cf(self.store.cf_cells(), raw_key, &value);
+        self.put_cell_payload(raw_key, info);
         self.put_live_cell_marker(raw_key, created_at_block);
     }
 
@@ -419,8 +418,7 @@ impl<'a> StoreBatch<'a> {
 
     /// Write cell payload to CF_CELLS. Call on append-only store batch.
     pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.put_cf(self.store.cf_cells(), raw_key, &value);
+        self.put_cf(self.store.cf_cells(), raw_key, info.encode());
     }
 
     /// Write cell payload using tx_hash + output_index. Call on append-only store batch.
@@ -520,8 +518,7 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
-        let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.put_cf(self.store.cf_cells(), raw_key, &cell_value);
+        self.put_cell_payload(raw_key, info);
         let consumed = ConsumedCellMeta {
             created_at_block,
             consumed_at_block,
@@ -1912,11 +1909,9 @@ mod tests {
         let tx_hash = [42u8; 32];
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -1948,11 +1943,9 @@ mod tests {
         let tx_hash = [0x33u8; 32];
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2058,11 +2051,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2187,11 +2178,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2265,11 +2254,9 @@ mod tests {
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let info = LiveCellInfo {
             capacity: 10_000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2324,11 +2311,9 @@ mod tests {
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let info = LiveCellInfo {
             capacity: 10_000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2383,11 +2368,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2419,11 +2402,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2444,7 +2425,7 @@ mod tests {
 
         let key = keys::encode_outpoint(&[0xB1; 32], 0);
         let stored = store.get_cf(store.cf_cells(), &key).unwrap().unwrap();
-        let payload: LiveCellInfo = bincode::deserialize(&stored).unwrap();
+        let payload = LiveCellInfo::decode(&stored).unwrap();
         assert_eq!(payload, info);
     }
 
@@ -2459,12 +2440,10 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 50000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: Some(vec![4u8; 32]),
-            type_code_hash: Some(vec![5u8; 32]),
+            type_code_hash: Some([5u8; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![6u8; 32]),
             data_size: 64,
@@ -2504,11 +2483,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2540,7 +2517,7 @@ mod tests {
             .unwrap();
         assert_eq!(cell_a.capacity, cell_b.capacity);
         assert_eq!(cell_a.created_at_block, cell_b.created_at_block);
-        assert_eq!(cell_a.lock_script_hash, cell_b.lock_script_hash);
+        assert_eq!(cell_a.lock_script_hash(), cell_b.lock_script_hash());
 
         // Both should have live markers
         let key_a = keys::encode_outpoint(&tx_hash_a, output_index);
@@ -2565,11 +2542,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 20000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2615,9 +2590,9 @@ mod tests {
 
         // Verify canonical cell payload is still present in CF_CELLS
         let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();
-        let cell: LiveCellInfo = bincode::deserialize(&cell_bytes).unwrap();
+        let cell = LiveCellInfo::decode(&cell_bytes).unwrap();
         assert_eq!(cell.capacity, 20000);
-        assert_eq!(cell.lock_script_hash, info.lock_script_hash);
+        assert_eq!(cell.lock_script_hash(), info.lock_script_hash());
     }
 
     #[test]
@@ -2631,11 +2606,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 30000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -2840,11 +2813,9 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,

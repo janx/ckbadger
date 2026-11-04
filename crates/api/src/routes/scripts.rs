@@ -302,7 +302,7 @@ fn custody_without_witness(
 ) -> ScriptCustodyResponse {
     ScriptCustodyResponse {
         class: class.to_string(),
-        lock_code_hash: cell.map(|c| format!("0x{}", hex::encode(&c.lock_code_hash))),
+        lock_code_hash: cell.map(|c| format!("0x{}", hex::encode(c.lock_code_hash))),
         lock_hash_type: cell
             .and_then(|c| u8::try_from(c.lock_hash_type).ok())
             .and_then(hash_type_to_string)
@@ -382,11 +382,11 @@ fn mark_never_signed_if_proven(
     }
     let balance = state
         .store
-        .get_addr_balance(&cell.lock_script_hash)
+        .get_addr_balance(&cell.lock_script_hash())
         .map_err(|e| {
             ApiError::internal(format!(
                 "custodian address balance 0x{}: {e}",
-                hex::encode(&cell.lock_script_hash)
+                hex::encode(cell.lock_script_hash())
             ))
         })?;
     if let Some(balance) = balance {
@@ -395,7 +395,7 @@ fn mark_never_signed_if_proven(
         {
             return Err(ApiError::internal(format!(
                 "invalid custodian cell counts at lock 0x{}: total={} live={}",
-                hex::encode(&cell.lock_script_hash),
+                hex::encode(cell.lock_script_hash()),
                 balance.total_cells_count,
                 balance.live_cells_count
             )));
@@ -560,7 +560,7 @@ fn attach_multisig_witness(
                     hex::encode(consuming_tx)
                 ))
             })?;
-        if input_cell.lock_script_hash == cell.lock_script_hash && first_group_input.is_none() {
+        if input_cell.lock_script_hash() == cell.lock_script_hash() && first_group_input.is_none() {
             first_group_input = Some(index);
         }
     }
@@ -646,13 +646,14 @@ fn reference_custody(
             let Some(current) = current else {
                 if cells.iter().any(|(_, _, cell)| {
                     cell.type_hash_type == Some(1)
-                        && cell.type_code_hash.as_deref() == Some(native_type_id_hash.as_slice())
+                        && cell.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                            == Some(native_type_id_hash.as_slice())
                 }) {
                     return Ok(custody_without_witness("retired", None));
                 }
-                let unique: HashSet<Vec<u8>> = cells
+                let unique: HashSet<[u8; 32]> = cells
                     .iter()
-                    .filter_map(|(_, _, cell)| cell.data_hash.clone())
+                    .filter_map(|(_, _, cell)| cell.data_hash)
                     .collect();
                 return Ok(custody_without_witness(
                     if unique.len() > 1 {
@@ -681,7 +682,8 @@ fn reference_custody(
                         hex::encode(reference_hash)
                     ))
                 })?;
-                if cell.type_code_hash.as_deref() == Some(native_type_id_hash.as_slice())
+                if cell.type_code_hash.as_ref().map(|hash| hash.as_slice())
+                    == Some(native_type_id_hash.as_slice())
                     && cell.type_hash_type == Some(1)
                     && current != *data_hash
                 {
@@ -697,11 +699,11 @@ fn reference_custody(
                 {
                     return Ok(custody_without_witness("ambiguous", None));
                 }
-                version = Some(data_hash.clone());
+                version = Some(*data_hash);
                 let mut custody = classify_code_cell_lock(&cell.cell)?;
                 mark_never_signed_if_proven(state, &cell.cell, &mut custody)?;
                 let key = (
-                    cell.lock_code_hash.clone(),
+                    cell.lock_code_hash.to_vec(),
                     cell.lock_hash_type,
                     cell.lock_args.clone(),
                 );
@@ -1477,7 +1479,7 @@ pub(crate) fn first_code_cell_deployment(
 ) -> anyhow::Result<Option<FirstCodeCellDeployment>> {
     let mut ordered = Vec::with_capacity(code_cells.len());
     for (tx_hash, output_index, cell, _) in code_cells {
-        if cell.data_hash.as_deref() != Some(version_hash) {
+        if cell.data_hash.as_ref().map(|hash| hash.as_slice()) != Some(version_hash) {
             anyhow::bail!(
                 "script deployment data hash mismatch: version_hash=0x{}, code_cell=0x{}:{}, block={}, cell_data_hash={:?}",
                 hex::encode(version_hash),
@@ -1558,15 +1560,14 @@ fn script_version_deployments(
     code_cells
         .iter()
         .map(|(tx_hash, output_index, cell, is_live)| {
-            let hash_type = if cell.type_script_hash.is_some() {
+            let type_script_hash = cell.type_script_hash();
+            let hash_type = if type_script_hash.is_some() {
                 "type".to_string()
             } else {
                 "data".to_string()
             };
-            let type_reference_hash = cell
-                .type_script_hash
-                .as_ref()
-                .map(|hash| format!("0x{}", hex::encode(hash)));
+            let type_reference_hash =
+                type_script_hash.map(|hash| format!("0x{}", hex::encode(hash)));
 
             let consumed = if *is_live {
                 None
@@ -2377,7 +2378,9 @@ fn build_lookup_info(
         .into_iter()
         .filter(|(_, _, cell, _)| {
             reference_hash == version_hash
-                || cell.type_script_hash.as_deref() == Some(reference_hash)
+                || cell
+                    .type_script_hash()
+                    .is_some_and(|hash| hash.as_slice() == reference_hash)
         })
         .collect();
     sort_code_cells(&mut code_cells);
@@ -3719,11 +3722,9 @@ mod tests {
         let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
         let cell_info = LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -3733,7 +3734,7 @@ mod tests {
             data_hash: None,
         };
         let marker = ckbadger_store::types::encode_live_cell_marker(block_num);
-        let payload = bincode::serialize(&cell_info).unwrap();
+        let payload = cell_info.encode();
         store
             .put_cf(store.cf_live_cells(), &outpoint_key, &marker)
             .unwrap();
@@ -3783,11 +3784,9 @@ mod tests {
         let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, output_index);
         let cell_info = LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
@@ -3796,7 +3795,7 @@ mod tests {
             udt_amount: None,
             data_hash: None,
         };
-        let payload = bincode::serialize(&cell_info).unwrap();
+        let payload = cell_info.encode();
         store
             .put_cf(store.cf_cells(), &outpoint_key, &payload)
             .unwrap();

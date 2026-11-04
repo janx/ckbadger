@@ -848,8 +848,8 @@ pub(crate) fn load_activity_token_info_cache(
                 .get(&key)
                 .or_else(|| batch_cell_infos.get(&key));
             if let Some(info) = cell_info {
-                if let Some(type_script_hash) = &info.type_script_hash {
-                    type_hashes.insert(type_script_hash.clone());
+                if let Some(type_script_hash) = info.type_script_hash() {
+                    type_hashes.insert(type_script_hash.to_vec());
                 }
             }
         }

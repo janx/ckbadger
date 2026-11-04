@@ -211,14 +211,13 @@ mod tests {
                 |script: &packed::Script| script.calc_script_hash().as_slice().to_vec();
             let payload = LiveCellInfo {
                 capacity: i64::try_from(capacity).unwrap(),
-                lock_script_hash: script_hash(&lock),
-                lock_code_hash: lock.code_hash().as_slice().to_vec(),
+                lock_code_hash: lock.code_hash().as_slice().to_vec().try_into().unwrap(),
                 lock_hash_type: lock.hash_type().as_slice()[0] as i16,
                 lock_args: lock.args().raw_data().to_vec(),
-                type_script_hash: type_script.as_ref().map(script_hash),
-                type_code_hash: type_script
+                type_code_hash: (type_script
                     .as_ref()
-                    .map(|script| script.code_hash().as_slice().to_vec()),
+                    .map(|script| script.code_hash().as_slice().to_vec()))
+                .map(|hash| hash.try_into().unwrap()),
                 type_hash_type: type_script
                     .as_ref()
                     .map(|script| script.hash_type().as_slice()[0] as i16),

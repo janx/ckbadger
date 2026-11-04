@@ -254,7 +254,7 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
         packed,
         prelude::*,
     };
-    let owner_code = vec![0x11; 32];
+    let owner_code = [0x11; 32];
     let owner_args = vec![0xaa; 20];
     let funding_code = hex::decode(
         ckbadger_indexer::parser::fiber::FUNDING_LOCK_CODE_HASH_MAINNET.trim_start_matches("0x"),
@@ -332,32 +332,28 @@ async fn fiber_open_evidence_uses_canonical_node_bytes_and_party_flows() {
     let previous_cell = LiveCellInfo {
         capacity: 100_000_000_000,
         occupied_capacity: 6_100_000_000,
-        lock_script_hash: owner_hash.clone(),
         lock_code_hash: owner_code,
         lock_hash_type: 1,
         lock_args: owner_args,
-        type_script_hash: None,
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
         data_size: 0,
         udt_amount: None,
-        data_hash: Some(empty_data_hash.clone()),
+        data_hash: Some(empty_data_hash.clone().try_into().unwrap()),
     };
     let funding_cell = LiveCellInfo {
         capacity: 30_000_000_000,
         occupied_capacity: 6_100_000_000,
-        lock_script_hash: compute_script_hash(&funding_code, 1, &funding_args),
-        lock_code_hash: funding_code,
+        lock_code_hash: funding_code.try_into().unwrap(),
         lock_hash_type: 1,
         lock_args: funding_args.clone(),
-        type_script_hash: None,
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
         data_size: 0,
         udt_amount: None,
-        data_hash: Some(empty_data_hash),
+        data_hash: Some(empty_data_hash.try_into().unwrap()),
     };
     let channel_id = [0xf0; 32];
     let channel = FiberChannel {
@@ -584,17 +580,15 @@ async fn fiber_force_close_evidence_serializes_decoded_commitment_delay() {
     let cell = |code: &[u8], args: &[u8], capacity: i64| LiveCellInfo {
         capacity,
         occupied_capacity: i64::try_from(8 + 33 + args.len()).unwrap() * 100_000_000,
-        lock_script_hash: compute_script_hash(code, 1, args),
-        lock_code_hash: code.to_vec(),
+        lock_code_hash: code.to_vec().try_into().unwrap(),
         lock_hash_type: 1,
         lock_args: args.to_vec(),
-        type_script_hash: None,
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
         data_size: 0,
         udt_amount: None,
-        data_hash: Some(empty_data_hash.clone()),
+        data_hash: Some(empty_data_hash.clone().try_into().unwrap()),
     };
     let owner_hash = compute_script_hash(&owner_code, 1, &owner_args);
     let channel_id = [0xf1; 32];

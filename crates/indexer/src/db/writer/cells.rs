@@ -65,25 +65,19 @@ fn expected_occupied_capacity_for_cell(
         );
     }
 
-    let has_type_script = info.type_script_hash.is_some() || info.type_code_hash.is_some();
-    let type_args_len = if has_type_script {
+    // A type script is present iff its code hash is; its hash is derived from
+    // the three fields, so it is not consulted (or computed) here.
+    let type_args_len = if let Some(type_code_hash) = &info.type_code_hash {
         Some(
             info.type_args
                 .as_ref()
                 .ok_or_else(|| {
                     anyhow!(
-                        "missing type_args for typed {} cell: outpoint=0x{}:{}, type_script_hash={}, type_code_hash=0x{}",
+                        "missing type_args for typed {} cell: outpoint=0x{}:{}, type_code_hash=0x{}",
                         source,
                         hex::encode(tx_hash),
                         output_index,
-                        info.type_script_hash
-                            .as_ref()
-                            .map(|v| format!("0x{}", hex::encode(v)))
-                            .unwrap_or_else(|| "none".to_string()),
-                        info.type_code_hash
-                            .as_ref()
-                            .map(hex::encode)
-                            .unwrap_or_else(|| "none".to_string())
+                        hex::encode(type_code_hash)
                     )
                 })?
                 .len(),
@@ -207,16 +201,16 @@ impl BatchWriter {
             domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
             // Lock script mapping (idempotent, survives cell consumption)
             domain_batch.put_lock_script(
-                &info.lock_script_hash,
+                &info.lock_script_hash(),
                 &LockScriptEntry {
-                    code_hash: info.lock_code_hash.clone(),
+                    code_hash: info.lock_code_hash.to_vec(),
                     hash_type: info.lock_hash_type,
                     args: info.lock_args.clone(),
                 },
             );
             if !skip_cell_indices {
                 domain_batch.put_cell_by_lock(
-                    &info.lock_script_hash,
+                    &info.lock_script_hash(),
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -228,7 +222,7 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = info.type_script_hash {
+                if let Some(ref type_hash) = info.type_script_hash() {
                     domain_batch.put_cell_by_type(
                         type_hash,
                         info.created_at_block,
@@ -333,7 +327,7 @@ impl BatchWriter {
             let (tx_hash, output_index) = outpoints[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let info = LiveCellInfo::decode(&value).map_err(|e| {
                         anyhow!(
                             "failed to decode live cell payload: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),
@@ -434,7 +428,7 @@ impl BatchWriter {
             domain_batch.delete_cell_raw_key(&raw_key);
             if !skip_cell_indices {
                 domain_batch.delete_cell_by_lock(
-                    &info.lock_script_hash,
+                    &info.lock_script_hash(),
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -446,7 +440,7 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = info.type_script_hash {
+                if let Some(ref type_hash) = info.type_script_hash() {
                     domain_batch.delete_cell_by_type(
                         type_hash,
                         info.created_at_block,
@@ -515,24 +509,14 @@ mod tests {
         HashMap::from([(
             (tx_hash.to_vec(), output_index),
             PositionedCellInfo::new(
-                LiveCellInfo {
-                    capacity: cell.capacity,
-                    lock_script_hash: cell.lock_script_hash.clone(),
-                    lock_code_hash: cell.lock_code_hash.clone(),
-                    lock_hash_type: cell.lock_hash_type,
-                    lock_args: cell.lock_args.clone(),
-                    type_script_hash: cell.type_script_hash.clone(),
-                    type_code_hash: cell.type_code_hash.clone(),
-                    type_hash_type: cell.type_hash_type,
-                    type_args: cell.type_args.clone(),
-                    data_size: cell.data_size,
-                    occupied_capacity: occupied_capacity_from_parsed_cell(cell),
-                    udt_amount,
-                    data_hash: if cell.data_size > 0 {
-                        Some(cell.data_hash.to_vec())
-                    } else {
-                        None
-                    },
+                {
+                    let mut info = cell
+                        .to_live_cell_info(occupied_capacity_from_parsed_cell(cell), udt_amount)
+                        .unwrap();
+                    if cell.data_size == 0 {
+                        info.data_hash = None;
+                    }
+                    info
                 },
                 created_at_block,
             ),

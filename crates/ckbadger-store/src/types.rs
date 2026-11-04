@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::ops::Deref;
 
+use bincode::Options;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -12,26 +13,235 @@ use serde::{Deserialize, Serialize};
 // Group A: Core cell data (ported from LiveCellStorage)
 // ============================================
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Canonical cell payload: the value of the append-only `cells` CF, keyed by
+/// outpoint (layout v2, 2026-11-04).
+///
+/// Persisted only through [`Self::encode`] / [`Self::encode_into`] and read
+/// only through [`Self::decode`]. The type deliberately implements neither
+/// `Serialize` nor `Deserialize`, so no second codec (a plain
+/// `bincode::serialize`, JSON, …) can write or read a payload.
+///
+/// The lock and type script hashes are not stored: [`Self::lock_script_hash`]
+/// and [`Self::type_script_hash`] derive them from the script fields with the
+/// workspace's one script-hash routine, [`ckbadger_common::script_hash`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveCellInfo {
     pub capacity: i64,
-    pub lock_script_hash: Vec<u8>,
-    pub lock_code_hash: Vec<u8>,
+    pub lock_code_hash: [u8; 32],
     pub lock_hash_type: i16,
     pub lock_args: Vec<u8>,
-    pub type_script_hash: Option<Vec<u8>>,
-    pub type_code_hash: Option<Vec<u8>>,
-    #[serde(default)]
+    pub type_code_hash: Option<[u8; 32]>,
     pub type_hash_type: Option<i16>,
-    #[serde(default)]
     pub type_args: Option<Vec<u8>>,
     pub data_size: i32,
-    #[serde(default)]
     pub occupied_capacity: i64,
-    #[serde(default)]
     pub udt_amount: Option<u128>,
-    #[serde(default)]
-    pub data_hash: Option<Vec<u8>>,
+    pub data_hash: Option<[u8; 32]>,
+}
+
+/// Wire layout of [`LiveCellInfo`]: a serde remote definition, so the field
+/// order here is the byte order and the compiler checks that it names every
+/// field of the type. Encoded with [`cell_payload_codec`].
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "LiveCellInfo")]
+struct LiveCellInfoWire {
+    capacity: i64,
+    lock_code_hash: [u8; 32],
+    lock_hash_type: i16,
+    lock_args: Vec<u8>,
+    type_code_hash: Option<[u8; 32]>,
+    type_hash_type: Option<i16>,
+    type_args: Option<Vec<u8>>,
+    data_size: i32,
+    occupied_capacity: i64,
+    udt_amount: Option<u128>,
+    data_hash: Option<[u8; 32]>,
+}
+
+struct EncodeLiveCellInfo<'a>(&'a LiveCellInfo);
+
+impl Serialize for EncodeLiveCellInfo<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        LiveCellInfoWire::serialize(self.0, serializer)
+    }
+}
+
+struct DecodeLiveCellInfo(LiveCellInfo);
+
+impl<'de> Deserialize<'de> for DecodeLiveCellInfo {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        LiveCellInfoWire::deserialize(deserializer).map(Self)
+    }
+}
+
+/// The `cells` payload codec: bincode varint integers (a `Vec<u8>` length is
+/// 1 byte below 251, an `i16` hash type 1 byte), little endian, trailing bytes
+/// rejected; `[u8; 32]` carries no length prefix. Chosen over a hand-written
+/// codec because it meets the size target (≤ 140 B average on real-shaped
+/// cells, against 219 B for the v1 fixint layout) with no code of our own.
+fn cell_payload_codec() -> impl bincode::Options + Copy {
+    bincode::DefaultOptions::new()
+}
+
+impl LiveCellInfo {
+    /// The `cells` value bytes of this payload.
+    pub fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(self.encoded_len());
+        self.encode_into(&mut bytes);
+        bytes
+    }
+
+    /// Appends the `cells` value bytes of this payload to `out`.
+    pub fn encode_into(&self, out: &mut Vec<u8>) {
+        cell_payload_codec()
+            .serialize_into(out, &EncodeLiveCellInfo(self))
+            .expect("encoding a LiveCellInfo into a Vec cannot fail");
+    }
+
+    /// Length of [`Self::encode`]'s output, without encoding.
+    pub fn encoded_len(&self) -> usize {
+        let len = cell_payload_codec()
+            .serialized_size(&EncodeLiveCellInfo(self))
+            .expect("sizing a LiveCellInfo encoding cannot fail");
+        usize::try_from(len).expect("a LiveCellInfo encoding fits in memory")
+    }
+
+    /// Decodes a `cells` value. A payload that is short, long, or not this
+    /// layout (a v1 payload included) is an error, never a default; so is one
+    /// whose script fields cannot be hashed (a hash type outside `u8`, or a
+    /// type script with some but not all of its three fields). The caller
+    /// adds the outpoint.
+    pub fn decode(bytes: &[u8]) -> anyhow::Result<Self> {
+        let DecodeLiveCellInfo(cell) = cell_payload_codec()
+            .deserialize::<DecodeLiveCellInfo>(bytes)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to decode LiveCellInfo v2 payload of {} bytes: {e}",
+                    bytes.len()
+                )
+            })?;
+        cell.check_script_fields().map_err(|e| {
+            anyhow::anyhow!(
+                "invalid LiveCellInfo v2 payload of {} bytes: {e}",
+                bytes.len()
+            )
+        })?;
+        Ok(cell)
+    }
+
+    fn check_script_fields(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            u8::try_from(self.lock_hash_type).is_ok(),
+            "lock hash_type {} is not a byte",
+            self.lock_hash_type
+        );
+        match (&self.type_code_hash, self.type_hash_type, &self.type_args) {
+            (None, None, None) => Ok(()),
+            (Some(_), Some(hash_type), Some(_)) => {
+                anyhow::ensure!(
+                    u8::try_from(hash_type).is_ok(),
+                    "type hash_type {hash_type} is not a byte"
+                );
+                Ok(())
+            }
+            (code_hash, hash_type, args) => anyhow::bail!(
+                "type script is partial: code_hash present={}, hash_type={hash_type:?}, args present={}",
+                code_hash.is_some(),
+                args.is_some()
+            ),
+        }
+    }
+
+    /// The lock script hash, as the indexer computes it for every index key
+    /// that embeds it (`cell_by_lock`, `addr_*`, …).
+    pub fn lock_script_hash(&self) -> [u8; 32] {
+        ckbadger_common::script_hash(
+            &self.lock_code_hash,
+            script_hash_type_byte(self.lock_hash_type, "lock"),
+            &self.lock_args,
+        )
+    }
+
+    /// The type script hash, `None` for a cell without a type script.
+    pub fn type_script_hash(&self) -> Option<[u8; 32]> {
+        match (&self.type_code_hash, self.type_hash_type, &self.type_args) {
+            (None, None, None) => None,
+            (Some(code_hash), Some(hash_type), Some(args)) => Some(ckbadger_common::script_hash(
+                code_hash,
+                script_hash_type_byte(hash_type, "type"),
+                args,
+            )),
+            (code_hash, hash_type, args) => panic!(
+                "LiveCellInfo type script is partial: code_hash present={}, hash_type={hash_type:?}, args present={}",
+                code_hash.is_some(),
+                args.is_some()
+            ),
+        }
+    }
+}
+
+/// A decoded payload has passed `check_script_fields`, so this only fails for
+/// a value built in memory with an impossible hash type.
+fn script_hash_type_byte(hash_type: i16, script: &str) -> u8 {
+    u8::try_from(hash_type)
+        .unwrap_or_else(|_| panic!("LiveCellInfo {script} hash_type {hash_type} is not a byte"))
+}
+
+/// The pre-2026-11-04 (v1) layouts of the `cells` payload and of the legacy
+/// `consumed_cells` row, kept only so tests can build those bytes and prove
+/// that today's decoders reject them.
+#[cfg(test)]
+pub(crate) mod v1_layout {
+    use serde::Serialize;
+
+    /// v1 `cells` payload: plain `bincode::serialize` (fixint), every hash a
+    /// `Vec<u8>`, both script hashes stored.
+    #[derive(Serialize)]
+    pub(crate) struct LiveCellInfoV1 {
+        capacity: i64,
+        lock_script_hash: Vec<u8>,
+        lock_code_hash: Vec<u8>,
+        lock_hash_type: i16,
+        lock_args: Vec<u8>,
+        type_script_hash: Option<Vec<u8>>,
+        type_code_hash: Option<Vec<u8>>,
+        type_hash_type: Option<i16>,
+        type_args: Option<Vec<u8>>,
+        data_size: i32,
+        occupied_capacity: i64,
+        udt_amount: Option<u128>,
+        data_hash: Option<Vec<u8>>,
+    }
+
+    impl LiveCellInfoV1 {
+        pub(crate) fn from_v2(cell: &super::LiveCellInfo) -> Self {
+            Self {
+                capacity: cell.capacity,
+                lock_script_hash: cell.lock_script_hash().to_vec(),
+                lock_code_hash: cell.lock_code_hash.to_vec(),
+                lock_hash_type: cell.lock_hash_type,
+                lock_args: cell.lock_args.clone(),
+                type_script_hash: cell.type_script_hash().map(|hash| hash.to_vec()),
+                type_code_hash: cell.type_code_hash.map(|hash| hash.to_vec()),
+                type_hash_type: cell.type_hash_type,
+                type_args: cell.type_args.clone(),
+                data_size: cell.data_size,
+                occupied_capacity: cell.occupied_capacity,
+                udt_amount: cell.udt_amount,
+                data_hash: cell.data_hash.map(|hash| hash.to_vec()),
+            }
+        }
+    }
+
+    /// The legacy `consumed_cells` row: the whole consumed cell (v1 payload
+    /// plus consumption metadata) instead of `ConsumedCellMeta`.
+    #[derive(Serialize)]
+    pub(crate) struct ConsumedCellInfoV1 {
+        pub(crate) cell: LiveCellInfoV1,
+        pub(crate) consumed_at_block: i64,
+        pub(crate) consumed_by_tx: Option<Vec<u8>>,
+        pub(crate) created_at_block: i64,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +267,9 @@ impl Deref for PositionedCellInfo {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A consumed cell as readers see it: the `cells` payload joined with its
+/// `consumed_cells` metadata. Built in memory only, never persisted.
+#[derive(Debug, Clone)]
 pub struct ConsumedCellInfo {
     pub cell: LiveCellInfo,
     pub consumed_at_block: i64,
@@ -3150,12 +3362,10 @@ mod tests {
     fn sample_live_cell_info() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 1_000_000_000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: Some(vec![0x44; 32]),
-            type_code_hash: Some(vec![0x55; 32]),
+            type_code_hash: Some([0x55; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x66; 8]),
             data_size: 16,
@@ -3239,7 +3449,12 @@ mod tests {
     #[test]
     fn test_decode_consumed_cell_meta_rejects_legacy_info_schema() {
         let info = sample_live_cell_info();
-        let legacy = ConsumedCellInfo::from_live_cell_info_with_consumer(&info, 888, None, 123);
+        let legacy = v1_layout::ConsumedCellInfoV1 {
+            cell: v1_layout::LiveCellInfoV1::from_v2(&info),
+            consumed_at_block: 888,
+            consumed_by_tx: None,
+            created_at_block: 123,
+        };
         let bytes = bincode::serialize(&legacy).unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
@@ -3247,7 +3462,7 @@ mod tests {
     #[test]
     fn test_decode_consumed_cell_meta_rejects_live_cell_schema() {
         let info = sample_live_cell_info();
-        let bytes = bincode::serialize(&info).unwrap();
+        let bytes = info.encode();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
     }
 
@@ -3975,6 +4190,103 @@ mod tests {
             &bincode::serialize(&without_field).unwrap()
         )
         .is_err());
+    }
+
+    // ---- LiveCellInfo v2: the `cells` payload codec ----
+
+    const SECP256K1_BLAKE160_CODE_HASH: [u8; 32] = [
+        0x9b, 0xd7, 0xe0, 0x6f, 0x3e, 0xcf, 0x4b, 0xe0, 0xf2, 0xfc, 0xd2, 0x18, 0x8b, 0x23, 0xf1,
+        0xb9, 0xfc, 0xc8, 0x8e, 0x5d, 0x4b, 0x65, 0xa8, 0x63, 0x7b, 0x17, 0x72, 0x3b, 0xbd, 0xa3,
+        0xcc, 0xe8,
+    ];
+
+    fn v2_cell(with_type: bool, with_udt: bool, with_data_hash: bool) -> LiveCellInfo {
+        LiveCellInfo {
+            capacity: 142_00000000,
+            lock_code_hash: SECP256K1_BLAKE160_CODE_HASH,
+            lock_hash_type: 1,
+            lock_args: vec![0x0c; 20],
+            type_code_hash: with_type.then_some([0x5e; 32]),
+            type_hash_type: with_type.then_some(0),
+            type_args: with_type.then(|| vec![0x3c; 32]),
+            data_size: if with_udt { 16 } else { 0 },
+            occupied_capacity: if with_type { 142_00000000 } else { 61_00000000 },
+            udt_amount: with_udt.then_some(1_000_000_000_000_000_000_000_000u128),
+            data_hash: with_data_hash.then_some([0x44; 32]),
+        }
+    }
+
+    #[test]
+    fn live_cell_info_round_trips_with_and_without_type_udt_and_data_hash() {
+        for with_type in [false, true] {
+            for with_udt in [false, true] {
+                for with_data_hash in [false, true] {
+                    let cell = v2_cell(with_type, with_udt, with_data_hash);
+                    let bytes = cell.encode();
+                    assert_eq!(
+                        LiveCellInfo::decode(&bytes).unwrap(),
+                        cell,
+                        "type={with_type} udt={with_udt} data_hash={with_data_hash}"
+                    );
+                    assert_eq!(cell.encoded_len(), bytes.len());
+                    let mut appended = vec![0xEE];
+                    cell.encode_into(&mut appended);
+                    assert_eq!(&appended[1..], bytes.as_slice());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn decode_rejects_v1_truncated_and_padded_payloads_instead_of_defaulting() {
+        let cell = v2_cell(true, true, true);
+        let v1 = bincode::serialize(&v1_layout::LiveCellInfoV1::from_v2(&cell)).unwrap();
+        let v2 = cell.encode();
+        // An old-layout payload missing its trailing field: v2 without `data_hash`.
+        let truncated = &v2[..v2.len() - 33];
+        let mut padded = v2.clone();
+        padded.push(0);
+        for (what, bytes) in [
+            ("v1 payload", v1.as_slice()),
+            ("payload missing its trailing field", truncated),
+            ("payload with a trailing byte", padded.as_slice()),
+        ] {
+            let error = LiveCellInfo::decode(bytes).expect_err(what).to_string();
+            assert!(
+                error.contains(&format!("{} bytes", bytes.len())),
+                "{what}: error names the byte length: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn decode_rejects_a_partial_type_script() {
+        let mut cell = v2_cell(true, false, true);
+        cell.type_args = None;
+        let error = LiveCellInfo::decode(&cell.encode())
+            .expect_err("partial type script")
+            .to_string();
+        assert!(error.contains("type script is partial"), "{error}");
+    }
+
+    /// The derived hashes are the CKB script hashes of the stored fields:
+    /// the secp256k1/blake160 lock with these args is mainnet lock hash
+    /// 0xfc72c0f5… (also pinned by the API address tests), and a cell with
+    /// no type script has no type script hash.
+    #[test]
+    fn script_hashes_are_derived_from_the_script_fields() {
+        let mut cell = v2_cell(false, false, true);
+        cell.lock_args = hex::decode("0ce4053321ee9cda31640bf38b32768b3fc4f2b3").unwrap();
+        assert_eq!(
+            hex::encode(cell.lock_script_hash()),
+            "fc72c0f5d59f3191db00b946e0c28e398d954288f54e80f1460ea38a55e269d1"
+        );
+        assert_eq!(cell.type_script_hash(), None);
+        let typed = v2_cell(true, true, true);
+        assert_eq!(
+            typed.type_script_hash(),
+            Some(ckbadger_common::script_hash(&[0x5e; 32], 0, &[0x3c; 32]))
+        );
     }
 }
 

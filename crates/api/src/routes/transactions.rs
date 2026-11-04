@@ -2236,7 +2236,7 @@ fn build_inputs_outputs_from_ckb(
                         ))
                     })?;
                 let lock_resp = ScriptResponse {
-                    code_hash: format!("0x{}", hex::encode(&info.lock_code_hash)),
+                    code_hash: format!("0x{}", hex::encode(info.lock_code_hash)),
                     hash_type: lock_hash_type_str.to_string(),
                     args: format!("0x{}", hex::encode(&info.lock_args)),
                 };

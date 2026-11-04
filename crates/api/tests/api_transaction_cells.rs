@@ -203,12 +203,11 @@ async fn display_fixture(
         let t = output.type_().to_opt();
         let cell = LiveCellInfo {
             capacity: 100_000_000_000,
-            lock_script_hash: lock.calc_script_hash().as_slice().to_vec(),
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 2,
             lock_args: vec![0x22; 20],
-            type_script_hash: t.as_ref().map(|s| s.calc_script_hash().as_slice().to_vec()),
-            type_code_hash: t.as_ref().map(|s| s.code_hash().as_slice().to_vec()),
+            type_code_hash: (t.as_ref().map(|s| s.code_hash().as_slice().to_vec()))
+                .map(|hash| hash.try_into().unwrap()),
             type_hash_type: t.as_ref().and_then(|_| (!missing_hash_type).then_some(2)),
             type_args: t.as_ref().map(|s| s.args().raw_data().to_vec()),
             data_size: data[i].len() as i32,
@@ -382,8 +381,12 @@ async fn transaction_cells_reject_missing_immutable_type_hash_type_despite_label
     let (status, body) = get_json(&app, &url).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
     let message = body["message"].as_str().unwrap();
+    // A v2 payload holds its whole type script or none: one without its
+    // hash_type is refused where the store decodes it, before any label.
     assert!(
-        message.contains("stored type hash_type") && message.contains("prev_outpoint"),
+        message.contains("type script is partial")
+            && message.contains("hash_type=None")
+            && message.contains("prev_outpoint"),
         "{message}"
     );
 }
