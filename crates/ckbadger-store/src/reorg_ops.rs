@@ -908,7 +908,6 @@ struct CutoffAddrSets {
 /// Scan bound: block headers are walked backwards from `rollback_to` while
 /// they still carry the cutoff date, which gives the first block of the cutoff
 /// day; TxActions are then scanned over `[first_block_of_day, rollback_to]`.
-/// This mirrors the forward walk in `recompute_dao_daily_snapshot_for_date`.
 fn rebuild_cutoff_activity_addr_sets(
     store: &CkbadgerStore,
     rollback_to: i64,
@@ -929,8 +928,7 @@ fn rebuild_cutoff_activity_addr_sets(
     let mut bn = rollback_to;
     while bn >= 0 {
         let Some(header) = store.get_block_header(bn)? else {
-            // Sparse header range — stop, exactly like the forward walk in
-            // recompute_dao_daily_snapshot_for_date.
+            // Sparse header range — stop.
             break;
         };
         let date = stats_date_key(header.chain_time_ms)?;

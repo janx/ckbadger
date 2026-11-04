@@ -471,6 +471,7 @@ impl CkbadgerStore {
             Some((end_block, end_ar)),
             &StagedDaoEntries::new(),
             &StagedDaoCompletions::new(),
+            &mut |_| Ok(()),
         )?;
         Ok(historical.expect("historical observation was requested"))
     }
@@ -735,6 +736,7 @@ impl CkbadgerStore {
                 None,
                 staged_entries,
                 staged_completions,
+                &mut |_| Ok(()),
             )?
             .0)
     }
@@ -756,11 +758,34 @@ impl CkbadgerStore {
             Some((historical_block, historical_ar)),
             &StagedDaoEntries::new(),
             &StagedDaoCompletions::new(),
+            &mut |_| Ok(()),
         )?;
         Ok((
             current,
             historical.expect("historical observation was requested"),
         ))
+    }
+
+    /// The DAO tip summary's one committed lifecycle scan: the exact
+    /// compensation partition at `end_block` (at `end_ar`), the historical
+    /// state at `historical` when asked for, and every entry handed to
+    /// `visit` on the way. The tip summary collects the open day's lifecycle
+    /// facts through `visit`, so one tip change reads `dao_deposits` once.
+    pub fn scan_dao_tip_observations(
+        &self,
+        end_block: i64,
+        end_ar: u64,
+        historical: Option<(i64, u64)>,
+        visit: &mut dyn FnMut(&DaoDepositCacheEntry) -> anyhow::Result<()>,
+    ) -> anyhow::Result<(DaoCompensationBreakdown, Option<DaoHistoricalState>)> {
+        self.compute_dao_observations_at_with_staged(
+            end_block,
+            end_ar,
+            historical,
+            &StagedDaoEntries::new(),
+            &StagedDaoCompletions::new(),
+            visit,
+        )
     }
 
     fn compute_dao_observations_at_with_staged(
@@ -770,6 +795,7 @@ impl CkbadgerStore {
         historical: Option<(i64, u64)>,
         staged_entries: &StagedDaoEntries,
         staged_completions: &StagedDaoCompletions,
+        visit: &mut dyn FnMut(&DaoDepositCacheEntry) -> anyhow::Result<()>,
     ) -> anyhow::Result<(DaoCompensationBreakdown, Option<DaoHistoricalState>)> {
         let mut total = DaoCompensationBreakdown::default();
         let mut historical = historical
@@ -777,6 +803,7 @@ impl CkbadgerStore {
         let mut accumulate = |outpoint: &[u8],
                               entry: &DaoDepositCacheEntry|
          -> anyhow::Result<()> {
+            visit(entry)?;
             let contribution = dao_compensation_for_entry_at(entry, end_block, end_ar)?;
             add_dao_compensation(&mut total, contribution, end_block)?;
             if let Some((block, ar, state, depositors)) = historical.as_mut() {
@@ -1340,6 +1367,57 @@ mod tests {
         assert_eq!(baseline.depositors_count, 1);
         assert_eq!(tip.claimed, 15_80000000);
         assert_eq!(tip.unclaimed, 31_60000000);
+    }
+
+    /// The tip summary's scan is the same observation as the two exact
+    /// views, and hands every committed entry to its visitor exactly once.
+    #[test]
+    fn tip_observation_scan_visits_every_entry_once_and_matches_the_exact_views() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        let mut active = lifecycle_entry();
+        active.status = 0;
+        active.withdraw_request_tx = None;
+        active.withdraw_request_output_index = None;
+        active.withdraw_request_block = None;
+        active.withdraw_request_ar = None;
+        active.withdraw_block = None;
+        active.withdraw_tx = None;
+        active.withdraw_request_occupied_capacity = None;
+        active.withdraw_to_output_index = None;
+        active.compensation = None;
+        active.lock_script_hash = vec![0x12; 32];
+        batch.put_dao_deposit(&keys::encode_outpoint(&[0xA1; 32], 0), &lifecycle_entry());
+        batch.put_dao_deposit(&keys::encode_outpoint(&[0xA2; 32], 0), &active);
+        batch.commit().unwrap();
+
+        for historical in [None, Some((15, 10_500))] {
+            let mut visited = Vec::new();
+            let (tip, baseline) = store
+                .scan_dao_tip_observations(30, 12_000, historical, &mut |entry| {
+                    visited.push(entry.lock_script_hash.clone());
+                    Ok(())
+                })
+                .unwrap();
+            visited.sort();
+            assert_eq!(visited, vec![vec![0x11; 32], vec![0x12; 32]]);
+            assert_eq!(
+                tip,
+                store
+                    .compute_dao_compensation_breakdown_at(30, 12_000)
+                    .unwrap()
+            );
+            assert_eq!(
+                baseline,
+                historical
+                    .map(|(block, ar)| store.compute_dao_historical_state_at(block, ar).unwrap())
+            );
+        }
+        let error = store
+            .scan_dao_tip_observations(30, 12_000, None, &mut |_| anyhow::bail!("visitor refused"))
+            .unwrap_err();
+        assert!(error.to_string().contains("visitor refused"), "{error:#}");
     }
 
     /// Real mainnet vector: deposit consumed by phase-1 at block 6012563,
