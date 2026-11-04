@@ -1703,7 +1703,7 @@ impl Indexer {
         spore_type_index_changes: super::types::BlockIndexChanges<SporeTypeIndex>,
         spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
-        object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
+        object_type_index_changes: super::types::BlockIndexChanges<MnftTypeIndex>,
         object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
         chain_tip: u64,
     ) -> Result<BatchWriteMetrics> {
@@ -2232,9 +2232,10 @@ impl Indexer {
                 )
             })
         })?;
-        if !object_type_index_changes.is_empty() {
+        // Each object type-index row at the block whose output carried it.
+        for (block, changes) in &object_type_index_changes {
             self.writer
-                .update_object_type_index_batch(&object_type_index_changes, &mut data_batch)?;
+                .update_object_type_index_batch(changes, &mut data_batch.at(*block))?;
         }
         entity_stats.with(|overlay| -> Result<()> {
             batch_undo_seq.with(|undo_seq| {
@@ -7241,10 +7242,10 @@ mod tests {
             input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         ) -> Result<(
-            HashMap<Vec<u8>, MnftTypeIndex>,
+            crate::sync::types::BlockIndexChanges<MnftTypeIndex>,
             EntityDailyChanges<UndatedEntityKey>,
         )> {
-            let mut indexes = HashMap::new();
+            let mut indexes = crate::sync::types::BlockIndexChanges::new();
             let mut changes = EntityDailyChanges::new();
             for tx in all_tx_data {
                 for cell in &tx.cells {
@@ -7256,7 +7257,7 @@ mod tests {
                         if let Some(collection_id) =
                             crate::sync::dao_helpers::classify_object_collection_id(code_hash, args)
                         {
-                            indexes.insert(
+                            indexes.entry(tx.block_number).or_default().insert(
                                 type_hash.clone(),
                                 MnftTypeIndex {
                                     collection_id: collection_id.clone(),

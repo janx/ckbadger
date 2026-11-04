@@ -594,6 +594,14 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_ADDR_TOKENS_BY_BALANCE, None),
     (ckbadger_store::store::CF_TOKEN_TRANSFERS, None),
     (ckbadger_store::CF_STATS_TOKEN, None),
+    // B-3 mnft.rs: the object type-index rows (`stats_mnft` 0x16) carry the
+    // block whose output carried them; the mNFT entity rows were scoped with
+    // the object loop (96802ea4). `stats_mnft` holds the object entity stats,
+    // the type index, the mNFT / `.bit` outpoint indexes and the collection
+    // owner counts, all written per block now.
+    (ckbadger_store::CF_MNFT_DATA, None),
+    (ckbadger_store::CF_MNFT_BY_COLLECTION, None),
+    (ckbadger_store::CF_STATS_MNFT, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a

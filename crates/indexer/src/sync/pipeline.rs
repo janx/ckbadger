@@ -942,7 +942,7 @@ pub(crate) struct LiveBatchPrecompute {
     pub(crate) spore_type_index_changes: BlockIndexChanges<SporeTypeIndex>,
     pub(crate) spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
     pub(crate) cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
-    pub(crate) object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
+    pub(crate) object_type_index_changes: BlockIndexChanges<MnftTypeIndex>,
     pub(crate) object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
     phase_metrics: ParserPrecomputePhaseMetrics,
 }
@@ -1103,7 +1103,7 @@ pub(crate) fn precompute_live_batch(
     let mut spore_type_index_changes: BlockIndexChanges<SporeTypeIndex> = BlockIndexChanges::new();
     let mut spore_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
     let mut cluster_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
-    let mut object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex> = HashMap::new();
+    let mut object_type_index_changes: BlockIndexChanges<MnftTypeIndex> = BlockIndexChanges::new();
     let mut object_daily_changes = EntityDailyChanges::<UndatedEntityKey>::new();
     let mut spore_type_index_cache: HashMap<Vec<u8>, Option<SporeTypeIndex>> = HashMap::new();
     let mut object_type_index_cache: HashMap<Vec<u8>, Option<MnftTypeIndex>> = HashMap::new();
@@ -1362,7 +1362,10 @@ pub(crate) fn precompute_live_batch(
                         collection_id: collection_id.clone(),
                     };
                     object_type_index_cache.insert(type_script_hash.clone(), Some(index.clone()));
-                    object_type_index_changes.insert(type_script_hash.clone(), index);
+                    object_type_index_changes
+                        .entry(tx_data.block_number)
+                        .or_default()
+                        .insert(type_script_hash.clone(), index);
 
                     accumulate_daily!(
                         object_daily_changes,
@@ -1675,7 +1678,7 @@ impl Indexer {
             spore_type_index_changes: BlockIndexChanges<SporeTypeIndex>,
             spore_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             cluster_daily_changes: EntityDailyChanges<UndatedEntityKey>,
-            object_type_index_changes: HashMap<Vec<u8>, MnftTypeIndex>,
+            object_type_index_changes: BlockIndexChanges<MnftTypeIndex>,
             object_daily_changes: EntityDailyChanges<UndatedEntityKey>,
             parser_perf_sample: ParserBatchPerfSample,
         }
