@@ -126,11 +126,12 @@ fn append_script(
         bytes.len() == start + size,
         "{prefix} serialized size mismatch"
     );
-    let mut digest = [0u8; 32];
-    let mut hasher = ckb_hash::new_blake2b();
-    hasher.update(&bytes[start..]);
-    hasher.finalize(&mut digest);
-    Ok(format!("0x{}", hex::encode(digest)))
+    // The byte map above is for display; the hash comes from the workspace's
+    // one script-hash routine, the same one `LiveCellInfo` derives with.
+    Ok(format!(
+        "0x{}",
+        hex::encode(ckbadger_common::script_hash(code_hash, hash_type, args))
+    ))
 }
 
 pub fn cell_output(info: &PositionedCellInfo) -> Result<MoleculeCellOutput> {

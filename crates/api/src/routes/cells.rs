@@ -4216,20 +4216,6 @@ async fn get_cell(
             )));
         }
     }
-    let indexed_lock_hash = format!("0x{}", hex::encode(info.lock_script_hash()));
-    if cell_output_molecule.lock_script_hash != indexed_lock_hash {
-        return Err(ApiError::internal(format!(
-            "cell {outpoint} lock script hash mismatch: serialized={} indexed={indexed_lock_hash}",
-            cell_output_molecule.lock_script_hash
-        )));
-    }
-    let indexed_type_hash = info
-        .type_script_hash()
-        .as_ref()
-        .map(|hash| format!("0x{}", hex::encode(hash)));
-    if cell_output_molecule.type_script_hash != indexed_type_hash {
-        return Err(ApiError::internal(format!("cell {outpoint} type script hash mismatch: serialized={:?} indexed={indexed_type_hash:?}", cell_output_molecule.type_script_hash)));
-    }
     match (info.data_hash.as_ref(), data_hash.as_ref()) {
         (Some(indexed), Some(actual)) if indexed.as_slice() != actual.as_slice() => {
             return Err(ApiError::internal(format!(

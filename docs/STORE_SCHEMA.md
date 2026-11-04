@@ -28,8 +28,9 @@ requires re-sync from genesis; there is no default, migration, or append-only pa
 `LiveCellInfo::decode` (bincode `DefaultOptions`: varint integers, little endian, trailing bytes
 rejected; the type implements no serde traits, so no second codec exists). The lock and type
 script hashes are not stored: `lock_script_hash()` / `type_script_hash()` derive them with
-`ckbadger_common::script_hash`, the routine the parser uses for every index key that embeds a
-script hash, so those keys are unchanged. A type script is stored whole or not at all; a short,
+`ckbadger_common::script_hash`. Index keys that embed a script hash are unchanged: the live
+writer takes them from the parser, which uses that same routine; bulk takes them from ckb-types
+`calc_script_hash()` over the raw script bytes (`binary_facts.rs`). A type script is stored whole or not at all; a short,
 padded, partial or v1 payload is a decode error carrying its byte length. The CF is
 lz4-compressed (universal compaction). Changing this layout requires re-sync from genesis; there
 is no migration.
