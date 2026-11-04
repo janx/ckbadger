@@ -6516,23 +6516,12 @@ mod tests {
 
     mod live_dao_fee {
         use super::*;
-        use crate::config::Config;
-        use crate::db::writer::cell_distribution::CellDistributionTracker;
-        use crate::db::writer::hodl_wave::HodlWaveTracker;
-        use crate::db::Repository;
         use crate::rpc::{
             BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script, TransactionView,
         };
-        use crate::runtime_diag::FlightRecorder;
         use crate::sync::pipeline::compute_parser_input_capacities_and_fees;
-        use crate::sync::progress::SyncProgress;
-        use crate::sync::shutdown::ShutdownSignal;
-        use crate::sync::types::CachedCellInfo;
         use crate::sync::TEST_CELLBASE_WITNESS;
         use ckbadger_store::types::LiveCellInfo;
-        use ckbadger_store::StoreRuntimeConfig;
-        use std::path::PathBuf;
-        use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8};
 
         const SECP_CODE_HASH: &str =
             "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8";
@@ -6875,70 +6864,13 @@ mod tests {
             startup_tip: i64,
             startup_hash: Option<Vec<u8>>,
         ) -> Indexer {
-            let config = Config {
-                domain_data_path: "unused-domain".to_string(),
-                append_only_data_path: "unused-append".to_string(),
-                bulk_sync_perf_output_root: String::new(),
-                build_version: "test".to_string(),
-                ckb_rpc_url: "http://127.0.0.1:1".to_string(),
-                poll_interval_ms: 1000,
-                start_block: None,
-                bulk_sync_threshold: 72,
-                bulk_memory_budget_gb: None,
-                fast_sync_mode: true,
-                ckb_db_path: "unused-ckb-db".to_string(),
-                metadata_path: None,
-                network: "mainnet".to_string(),
-                force_startup_cleanup: false,
-                store_runtime_config: StoreRuntimeConfig::default(),
-                decoder_cache_path: "unused-decoder-cache".to_string(),
-                dob_decode_dir: "unused-dob-decode".to_string(),
-                cycles_request_dir: None,
-            };
-            let cache_invalidator = crate::cache::CacheInvalidator::new(store.clone());
-            Indexer {
-                run_id: "live-dao-fee-test".to_string(),
-                config,
-                rpc: CkbRpcClient::new("http://127.0.0.1:1"),
-                repo: Repository::new(store.clone()),
-                writer: BatchWriter::new(store.clone(), store.clone()),
-                append_only_store: store.clone(),
-                progress: Arc::new(SyncProgress::new(0, 0)),
-                cell_cache: Arc::new(DashMap::<([u8; 32], i16), CachedCellInfo>::new()),
-                udt_cell_cache: Arc::new(DashMap::new()),
-                perf: PerfStats::default(),
-                parser_cell_lookup_stats: Arc::new(ParserCellLookupStats::default()),
-                pipeline_perf: Arc::new(PipelinePerfStats::default()),
-                bulk_build_perf: Arc::new(BulkBuildPerfStats::default()),
-                adaptive_batch_controller: Arc::new(LiveBatchController::new()),
-                cache_invalidator,
-                last_cache_invalidation: tokio::sync::Mutex::new(0),
-                was_bulk_sync_active: AtomicBool::new(false),
-                bulk_sync_allowed: AtomicBool::new(false),
-                startup_decision: crate::sync::decide_startup_sync(
-                    0,
-                    startup_tip,
-                    &startup_hash,
-                    72,
-                )
-                .expect("live-write fixture startup decision"),
-                rebuild_pause_flag: Arc::new(AtomicBool::new(false)),
-                pipeline_reset_notify_flag: Arc::new(AtomicBool::new(false)),
-                pipeline_reset_reason_code: Arc::new(AtomicU8::new(0)),
-                startup_phase: AtomicU8::new(STARTUP_PHASE_NONE),
-                pipeline_reset_epoch: Arc::new(AtomicU64::new(0)),
-                incident_seq: AtomicU64::new(0),
-                flight_recorder: FlightRecorder::new(FLIGHT_RECORDER_CAPACITY),
-                repeated_warning_tracker: RepeatedWarningTracker::default(),
-                incident_dir: PathBuf::from("unused-incidents"),
-                bulk_sync_perf_run: std::sync::Mutex::new(None),
-                shutdown: ShutdownSignal::default(),
-                unrecoverable_exit: Arc::new(AtomicBool::new(false)),
-                ckb_store: None,
-                hodl_tracker: std::sync::Mutex::new(HodlWaveTracker::new()),
-                cell_dist_tracker: std::sync::Mutex::new(CellDistributionTracker::new()),
-                hourly_retention_requested: Arc::new(AtomicBool::new(false)),
-            }
+            crate::sync::live_test_support::indexer_with_stores(
+                store.clone(),
+                store,
+                "mainnet",
+                startup_tip,
+                startup_hash,
+            )
         }
 
         /// Mirror of the parser Pass 3 address-delta accumulation for the
