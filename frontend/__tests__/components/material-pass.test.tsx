@@ -91,6 +91,18 @@ describe('the rules in globals.css', () => {
     expect(vignette[1]).toContain('pointer-events: none');
   });
 
+  // Visual finish V2: the scanlines stay over the content but draw 1 px in 3, in a blue-black at
+  // 6 % — glass, not dirt.
+  it('move 1 (visual finish V2): the scanlines, 1 px in 3 at 6 %', () => {
+    const scan = css.match(/\.crt-scanlines\s*\{([^}]*)\}/)!;
+    expect(scan[1]).toMatch(
+      /background: repeating-linear-gradient\(\s*0deg,\s*transparent 0px,\s*transparent 2px,\s*rgba\(10, 14, 28, 0\.06\) 2px,\s*rgba\(10, 14, 28, 0\.06\) 3px\s*\);/
+    );
+    expect(scan[1]).not.toContain('rgba(0, 0, 0, 0.09)');
+    expect(scan[1]).toContain('z-index: 9999');
+    expect(scan[1]).toContain('pointer-events: none');
+  });
+
   it('move 2: glass, the well and the tier-2 ground', () => {
     const glass = css.match(/\.glass\s*\{([^}]*)\}/)!;
     expect(glass[1]).toContain('background: rgba(16, 19, 28, 0.72)');

@@ -92,8 +92,9 @@ describe('the rules in globals.css', () => {
     // the doubled atmosphere is gone: no body::before / body::after
     expect(css).not.toMatch(/\nbody::after\s*\{/);
     expect(css).not.toMatch(/\nbody::before\s*\{/);
+    // visual finish V2 (2026-11-04): 1 px in 3, blue-black at 6 %
     expect(css).toMatch(
-      /\.crt-scanlines\s*\{[^}]*rgba\(0, 0, 0, 0\.09\) 1px,\s*rgba\(0, 0, 0, 0\.09\) 3px/
+      /\.crt-scanlines\s*\{[^}]*rgba\(10, 14, 28, 0\.06\) 2px,\s*rgba\(10, 14, 28, 0\.06\) 3px/
     );
     // visual finish V1 (2026-11-04): the vignette moved under the content, lighter and wider
     expect(css).toMatch(

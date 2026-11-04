@@ -533,15 +533,16 @@ body * {
  * are declared on :root and redefined per tint below.
  */
 
+/* The scanlines (visual finish V2): 1 px in every 3, a blue-black at 6 % — glass, not dirt. */
 .crt-scanlines {
   position: fixed;
   inset: 0;
   background: repeating-linear-gradient(
     0deg,
     transparent 0px,
-    transparent 1px,
-    rgba(0, 0, 0, 0.09) 1px,
-    rgba(0, 0, 0, 0.09) 3px
+    transparent 2px,
+    rgba(10, 14, 28, 0.06) 2px,
+    rgba(10, 14, 28, 0.06) 3px
   );
   pointer-events: none;
   z-index: 9999;
