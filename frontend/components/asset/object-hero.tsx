@@ -89,7 +89,7 @@ export function ObjectTraits({
               onFocus={() => onActive(t.name)}
               onBlur={() => onActive(null)}
               className={cn(
-                'border-base-elevated flex min-w-0 justify-between gap-3 border-b py-2 outline-none transition-colors',
+                'border-base-elevated flex min-w-0 justify-between gap-3 border-b py-2 transition-colors',
                 lit && 'bg-base-surface'
               )}
             >

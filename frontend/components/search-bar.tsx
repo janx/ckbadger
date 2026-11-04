@@ -194,7 +194,7 @@ export function SearchBar({ className, variant = 'default' }: SearchBarProps) {
               // compact and default fields are wells (material pass v2, move 2: `.well`, dark
               // glass inset, the board's 6 px corners); the home hero field keeps its approved
               // jade border and glow.
-              'text-text-bright w-full font-mono transition-colors focus:outline-none',
+              'text-text-bright w-full font-mono transition-colors',
               isInputFocused && 'caret-transparent',
               isHome
                 ? 'border-base-border border-jade/50 focus:ring-jade/25 bg-base-surface/95 placeholder:text-text-dim focus:border-jade text-body h-10 rounded-xl border pl-8 pr-20 shadow-[0_0_0_1px_rgba(46,219,163,0.18),0_6px_20px_rgba(46,219,163,0.18)] focus:ring-2 sm:pr-28'

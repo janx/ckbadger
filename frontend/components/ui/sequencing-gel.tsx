@@ -269,7 +269,7 @@ function WideGel({ layout, subject, width, lit, bind }: FormProps) {
             opacity={lit && lit !== g.name ? 0.12 : 1}
             aria-label={`${g.name}, ${bytesOf(g)}`}
             {...bind(g.name)}
-            className="cursor-pointer outline-none transition-opacity"
+            className="cursor-pointer transition-opacity"
           >
             <title>{`${g.name} · ${bytesOf(g)} · ${g.rule} · 0x${g.raw} → ${valueOf(g)}`}</title>
             <rect x={LX} y={r(y1)} width={16 * LANE} height={r(y2 - y1)} fill="transparent" />
@@ -522,7 +522,7 @@ function NarrowGel({ layout, subject, width, lit, bind }: FormProps) {
                 aria-label={`${g.name}, ${bytesOf(g)}, ${g.rule}, ${shortRaw(g.raw)} → ${valueOf(g)}`}
                 {...bind(g.name)}
                 className={cn(
-                  '-mx-2 grid cursor-pointer items-baseline gap-x-2.5 px-2 py-2 outline-none',
+                  '-mx-2 grid cursor-pointer items-baseline gap-x-2.5 px-2 py-2',
                   oneLine
                     ? 'grid-cols-[88px_84px_minmax(0,1fr)]'
                     : 'grid-cols-[minmax(0,1fr)_auto] gap-y-0.5',

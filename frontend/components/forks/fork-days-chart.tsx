@@ -93,7 +93,7 @@ export function ForkDaysPlot({ days, pin }: { days: readonly Day[]; pin: PinnedR
         role="img"
         aria-label="Uncles the chain recorded each day, and this node's branch switches; ← → step through the days"
         tabIndex={0}
-        className="block h-auto w-full outline-none"
+        className="block h-auto w-full"
         onKeyDown={(event) => {
           if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
           event.preventDefault();

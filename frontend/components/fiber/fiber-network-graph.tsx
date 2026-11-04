@@ -333,7 +333,7 @@ export function FiberNetworkPicture({ network, pin }: Props) {
         : true;
   const handlers = (target: FiberGraphTarget) => ({
     ...pin.bind(target),
-    className: 'cursor-pointer outline-none',
+    className: 'cursor-pointer',
   });
   const picture = model ? fiberPictureBox(model) : null;
   const shift = picture?.shift ?? 0;

@@ -111,6 +111,34 @@ body * {
   scrollbar-width: thin;
 }
 
+/*
+ * The browser's own details in the palette (visual finish V9): a dark colour scheme (form
+ * controls, the page's scrollbar), jade for form accents, the text selection, the keyboard focus
+ * ring and the caret. Base styles on purpose: a control whose own class string designs its focus
+ * (`focus-visible:ring-…` with `outline-none`) keeps that design, and every other focusable
+ * thing shows this ring. `:focus-visible` is the keyboard's focus (and a text field's), never a
+ * mouse click on a link or a button.
+ */
+@layer base {
+  :root {
+    color-scheme: dark;
+    accent-color: #2edba3;
+  }
+  ::selection {
+    background: rgba(46, 219, 163, 0.28);
+    color: #e9fff6;
+  }
+  :focus-visible {
+    outline: 1px solid #2edba3;
+    outline-offset: 2px;
+    box-shadow: 0 0 6px rgba(46, 219, 163, 0.45);
+  }
+  input,
+  textarea {
+    caret-color: #2edba3;
+  }
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

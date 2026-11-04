@@ -374,7 +374,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           value={props.statusFilter}
           onChange={(e) => props.onStatusFilterChange!(e.target.value as ItemStatusFilter)}
           aria-label="Status Filter"
-          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright text-small rounded border px-2.5 py-1.5 font-mono outline-none transition-colors"
+          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright text-small rounded border px-2.5 py-1.5 font-mono transition-colors"
         >
           <option value="all">All</option>
           <option value="live">Live</option>
@@ -386,7 +386,7 @@ export function ObjectGalleryPanel(props: ObjectGalleryPanelProps) {
           onChange={(e) => props.onSearchInputChange!(e.target.value)}
           placeholder={props.searchLabel || 'Search...'}
           aria-label={props.searchLabel || 'Search'}
-          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim text-small w-44 rounded border px-2.5 py-1.5 font-mono outline-none transition-colors"
+          className="focus:border-emphasis border-base-border bg-base-surface text-text-bright placeholder:text-text-dim text-small w-44 rounded border px-2.5 py-1.5 font-mono transition-colors"
         />
         {isFetching && <span className="text-text-dim text-small font-mono">Searching...</span>}
       </>

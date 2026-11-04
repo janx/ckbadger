@@ -420,7 +420,7 @@ export function NetworkMapPicture({ map }: { map: NetworkMapState }) {
                           point.reachable ? 'reachable now' : 'verified before, not reachable now'
                         }${point.localSessionObserved ? ', a session with this node in the latest round' : ''}`}
                         opacity={selectedId === null || selectedId === point.peerId ? 1 : 0.35}
-                        className="cursor-pointer outline-none"
+                        className="cursor-pointer"
                       >
                         <circle cx={x} cy={y} r="5.5" fill="transparent" />
                         {point.localSessionObserved && (

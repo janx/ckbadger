@@ -119,7 +119,9 @@ describe('FiberNetworkGraph', () => {
     // the selected pair stays jade/grey as drawn, never repainted grey at 4 px (FF-F7)
     const selected = container.querySelector('[data-edge][data-lit="true"]')!;
     expect(selected.querySelector('[stroke-width="4"]')).toBeNull();
-    expect(edge).toHaveClass('outline-none');
+    // visual finish V9: no outline-none — the keyboard focus shows the global jade ring
+    expect(edge).toHaveClass('cursor-pointer');
+    expect(edge).not.toHaveClass('outline-none');
   });
 
   it('says in tier 2 how to read the graph, what a party is, and which channels it cannot draw', () => {
