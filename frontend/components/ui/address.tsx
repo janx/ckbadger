@@ -27,7 +27,7 @@ export function Address({
     <Link
       href={`/address/${address}`}
       className={cn(
-        'text-aqua hover:text-interactive-hover text-body font-mono transition-colors',
+        'text-text-bright decoration-aqua/35 text-body font-mono underline underline-offset-[3px] transition-colors',
         !truncate && 'inline-block max-w-full break-all',
         className
       )}

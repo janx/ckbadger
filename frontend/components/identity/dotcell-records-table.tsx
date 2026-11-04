@@ -39,7 +39,7 @@ export function DotCellRecordsTable({ records }: Props) {
                 {record.decodedAddress ? (
                   <Link
                     href={`/address/${record.decodedAddress.address}`}
-                    className="text-aqua hover:underline"
+                    className="text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors"
                   >
                     {record.decodedAddress.address}
                   </Link>

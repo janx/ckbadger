@@ -126,7 +126,7 @@ function ObjectCard({
             <CardLink
               className={`text-body min-w-0 truncate font-mono font-semibold hover:underline ${
                 isIdentity
-                  ? 'text-aqua hover:text-interactive-hover'
+                  ? 'text-text-bright decoration-aqua/35 underline underline-offset-[3px] transition-colors'
                   : 'text-text-bright hover:text-emphasis'
               }`}
             >

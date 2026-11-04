@@ -73,7 +73,7 @@ export function ParticipantRefView({
                 ? 'text-text hover:text-jade'
                 : isCkbAddr
                   ? 'text-jade/80 hover:text-jade'
-                  : 'text-text-dim hover:text-aqua'
+                  : 'text-text-dim hover:text-jade'
             )}
             title={address}
             onClick={(e) => e.stopPropagation()}
@@ -107,7 +107,7 @@ export function ParticipantRefView({
         <Link
           href={`/address/${lockHash}`}
           className={cn(
-            'text-text-dim hover:text-aqua font-mono transition-colors',
+            'text-text-dim hover:text-jade font-mono transition-colors',
             compact ? 'text-small shrink-0' : 'text-body'
           )}
           title={lockHash}

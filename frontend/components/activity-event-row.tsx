@@ -257,7 +257,7 @@ function getItemDeltaEventParts(item: ItemDelta): EventParts {
         value: (
           <Link
             href={getIdentityItemDetailHref(item.standard, item.identityId)}
-            className="text-aqua/80 hover:text-aqua text-small font-mono transition-colors"
+            className="text-text-bright decoration-aqua/35 text-small font-mono underline underline-offset-[3px] transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
             {truncateHash(item.identityId, 8, 6)}
@@ -594,7 +594,7 @@ export function ActivityEventGroup({
       <div className="border-base-border/50 border-b px-4 py-2 last:border-b-0 md:hidden">
         <div className="flex items-center justify-between gap-2">
           <div className="text-small flex items-center gap-1.5 font-mono">
-            <Link href={txLink} className="text-text hover:text-aqua transition-colors">
+            <Link href={txLink} className="text-text hover:text-jade transition-colors">
               {truncateHash(activity.txHash, 8, 6)}
             </Link>
             <span className="text-text-dim">{'\u00B7'}</span>
@@ -630,7 +630,7 @@ export function ActivityEventGroup({
           <div className={cn('hidden items-center pl-4 md:flex', cellPy(i))}>
             {i === 0 ? (
               <div className="text-small flex items-center gap-1.5 font-mono">
-                <Link href={txLink} className="text-text hover:text-aqua transition-colors">
+                <Link href={txLink} className="text-text hover:text-jade transition-colors">
                   {truncateHash(activity.txHash, 8, 6)}
                 </Link>
                 <span className="text-text-dim">{'\u00B7'}</span>
@@ -706,7 +706,7 @@ function InlineItemDelta({ item }: { item: ItemDelta }) {
       return (
         <Link
           href={getIdentityItemDetailHref(item.standard, item.identityId)}
-          className="text-aqua/80 hover:text-aqua text-small font-mono transition-colors"
+          className="text-text-bright decoration-aqua/35 text-small font-mono underline underline-offset-[3px] transition-colors"
           onClick={(e) => e.stopPropagation()}
         >
           {prefix}
