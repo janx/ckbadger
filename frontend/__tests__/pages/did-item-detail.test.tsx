@@ -139,6 +139,17 @@ it('starts a new identity on its own first cursor page', async () => {
     })
   );
 });
+// Visual finish V8: the page loads as the shared detail skeleton, not the asset shell with a
+// "Loading identity…" line.
+it('shows the detail skeleton while the identity loads', () => {
+  vi.mocked(api.getDidCkbItemDetail).mockReturnValue(new Promise(() => {}));
+  render(<Page identityId={evidence.itemId} />);
+  const skeleton = screen.getByRole('status', { name: 'Loading …' });
+  expect(skeleton.children).toHaveLength(3);
+  expect(screen.queryByText('Loading identity…')).toBeNull();
+  expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+});
+
 it('reports missing identity and unavailable raw evidence without inventing a document', async () => {
   vi.mocked(api.getDidCkbItemDetail).mockRejectedValue(
     new ApiRequestError(404, 'not_found', 'Identity not found')

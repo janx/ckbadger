@@ -8,6 +8,7 @@ import { AppLink } from '@/components/ui/app-link';
 import { ExactCkb } from '@/components/activity-event-row';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { NamedParty } from '@/components/asset/identity-document';
 import { ENTITY_PAGE_SIZE } from '@/lib/pagination';
 import { usePageSize } from '@/hooks/usePageSize';
@@ -109,6 +110,7 @@ function ScopedName({ itemRef }: { itemRef: string }) {
       />
     );
   }
+  if (!item && detail.isLoading) return <DetailSkeletonPage />;
   if (!item)
     return (
       <AssetDetailShell

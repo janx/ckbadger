@@ -8,6 +8,7 @@ import { formatUtc8Date, formatUtc8DateTime } from '@/lib/utils';
 import { getMnftClassDetailHref } from '@/lib/detail-routes';
 import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
+import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetCount } from '@/components/asset/inventory-table';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { CellVersions } from '@/components/asset/cell-versions';
@@ -138,6 +139,7 @@ export function MnftDetail({ objectId }: MnftDetailProps) {
       />
     );
   }
+  if (!detail.data && detail.isLoading) return <DetailSkeletonPage />;
   if (!detail.data) {
     return (
       <div className="min-h-screen">

@@ -287,6 +287,28 @@ it('only a real object 404 permits probing the collection namespace', async () =
   expect(await screen.findByRole('heading', { level: 1, name: 'Genes' })).toBeInTheDocument();
   expect(api.getObjectCollection).toHaveBeenCalledWith(id);
 });
+// Visual finish V8: the page loads as the shared detail skeleton — while the object is read, and
+// while an absent object's id is tried as a collection — not a "Loading object…" line.
+it('shows the detail skeleton while the object loads', () => {
+  vi.mocked(api.getSporeObject).mockReturnValue(new Promise(() => {}));
+  render(<SporeDetailPage sporeId={id} />);
+  const skeleton = screen.getByRole('status', { name: 'Loading …' });
+  expect(skeleton.children).toHaveLength(3);
+  expect(screen.queryByText('Loading object…')).toBeNull();
+  expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+});
+it('shows the detail skeleton while an absent object is tried as a collection', async () => {
+  vi.mocked(api.getSporeObject).mockRejectedValue(
+    new ApiRequestError(404, 'not_found', 'Spore not found')
+  );
+  vi.mocked(api.getObjectCollection).mockReturnValue(new Promise(() => {}));
+  render(<SporeDetailPage sporeId={id} />);
+  await waitFor(() => expect(api.getObjectCollection).toHaveBeenCalledWith(id));
+  const skeleton = screen.getByRole('status', { name: 'Loading …' });
+  expect(skeleton.children).toHaveLength(3);
+  expect(screen.queryByText('Loading object…')).toBeNull();
+});
+
 it('does not turn a corrupt object read into an alternative collection lookup', async () => {
   vi.mocked(api.getSporeObject).mockRejectedValue(new Error('corrupt cell'));
   render(<SporeDetailPage sporeId={id} />);

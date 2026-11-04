@@ -9,6 +9,7 @@ import { Hash } from '@/components/ui/hash';
 import { Address } from '@/components/ui/address';
 import { MinerLink } from '@/components/forks/miner-link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { ActivityRow } from '@/components/activity/activity-row';
 import { ExactCkb } from '@/components/activity-event-row';
 import { ResourceBar, resourceScale } from '@/components/blocks/block-visual';
@@ -138,7 +139,7 @@ export default function BlockDetailPage() {
     return (
       <div>
         <main className="container mx-auto py-8">
-          <p role="status">Loading block…</p>
+          <DetailSkeleton />
         </main>
       </div>
     );

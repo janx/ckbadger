@@ -159,6 +159,15 @@ describe('BlockDetailPage', () => {
     expect(screen.getByText('no block at this address.')).toBeInTheDocument();
   });
 
+  // Visual finish V8: the page loads as the shared detail skeleton, not a "Loading…" line.
+  it('shows the detail skeleton while the block loads', () => {
+    vi.mocked(api.getBlock).mockReturnValue(new Promise(() => {}));
+    render(<BlockDetailPage />);
+    const skeleton = screen.getByRole('status', { name: 'Loading …' });
+    expect(skeleton.children).toHaveLength(3);
+    expect(screen.queryByText('Loading block…')).toBeNull();
+  });
+
   it('keeps block invariant failures as errors rather than absence evidence', async () => {
     vi.mocked(api.getBlock).mockRejectedValue(
       Object.assign(new Error('missing canonical header'), { status: 500 })

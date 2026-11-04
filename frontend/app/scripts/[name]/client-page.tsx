@@ -9,6 +9,7 @@ import { ExactCkb } from '@/components/activity-event-row';
 import { CellBar } from '@/components/ui/cell-bar';
 import { CapacityRangeSelector } from '@/components/ui/capacity-range-selector';
 import { DetailSection, DetailLayout } from '@/components/ui/detail-layout';
+import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { ListTable } from '@/components/ui/list-table';
 import {
   ScriptCustodyEvidence,
@@ -1025,11 +1026,7 @@ export default function ScriptDetailPage({
     return (
       <div className="min-h-screen">
         <main className="container mx-auto py-8">
-          <div className="animate-pulse space-y-8">
-            <div className="bg-base-surface h-20 w-full rounded" />
-            <div className="bg-base-surface h-64 rounded" />
-            <div className="bg-base-surface h-96 rounded" />
-          </div>
+          <DetailSkeleton />
         </main>
       </div>
     );

@@ -3,6 +3,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { CellMicroscope } from '@/components/cell/cell-microscope';
 import { CodeCellBoard } from '@/components/cell/code-cell-board';
 import { CellTransactions } from '@/components/cell/cell-transactions';
@@ -515,9 +516,7 @@ export default function CellDetailPage() {
       </p>
     </DetailLayout>
   ) : query.isPending ? (
-    <DetailLayout title="Cell">
-      <p className="text-text-dim text-small">Loading cell evidence…</p>
-    </DetailLayout>
+    <DetailSkeleton />
   ) : query.error && !query.data ? (
     <DetailLayout title="Cell data unavailable">
       <p role="alert" className="text-rouge text-small break-all">

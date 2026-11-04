@@ -109,9 +109,12 @@ describe('CellDetailPage', () => {
       })
     );
     view();
-    expect(screen.getByText('Loading cell evidence…')).toBeInTheDocument();
+    // Visual finish V8: the shared detail skeleton, not a "Loading cell evidence…" line
+    expect(screen.getByRole('status', { name: 'Loading …' }).children).toHaveLength(3);
+    expect(screen.queryByText('Loading cell evidence…')).toBeNull();
     resolve(base);
     expect(await screen.findByText('The cell, byte by byte')).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
     // Consistency plan C1: the tab names the page.
     // Lane U (U3): the tab names a cell — "Cell 0xabab…abab:0 · CKBadger".
     expect(document.title).toMatch(/^Cell 0x[0-9a-f]{4}…[0-9a-f]{4}:\d+ · CKBadger$/);

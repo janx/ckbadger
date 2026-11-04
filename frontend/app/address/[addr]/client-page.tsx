@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useQueries, useQuery, keepPreviousData } from '@tanstack/react-query';
 import { NotFoundPage } from '@/components/not-found-page';
 import { DetailLayout, DetailSection } from '@/components/ui/detail-layout';
+import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Hash } from '@/components/ui/hash';
 import Link from '@/components/ui/link';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -231,8 +232,10 @@ function AddressDetailPageContent({ addr }: { addr: string }) {
   return (
     <div className="min-h-screen">
       <main className="container mx-auto py-8">
-        {!a ? (
-          <AddressLoadState label="address" error={address.error} loading={address.isLoading} />
+        {!a && address.isLoading ? (
+          <DetailSkeleton />
+        ) : !a ? (
+          <AddressLoadState label="address" error={address.error} loading={false} />
         ) : (
           <DetailLayout
             // C13: the page is named by its short address; the full one and its copy are beneath.

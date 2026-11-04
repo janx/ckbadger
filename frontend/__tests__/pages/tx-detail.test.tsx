@@ -318,6 +318,23 @@ describe('TransactionDetailPage', () => {
     vi.useRealTimers();
   });
 
+  // Visual finish V8: the page loads as the shared detail skeleton, not a bare block.
+  it('shows the detail skeleton while the transaction loads, then the page', async () => {
+    let resolve!: (value: ReturnType<typeof createCommittedTransactionDetail>) => void;
+    vi.mocked(api.getTransactionDetail).mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      })
+    );
+    render(<TransactionDetailPage />);
+    const skeleton = screen.getByRole('status', { name: 'Loading …' });
+    expect(skeleton.children).toHaveLength(3);
+    expect(document.querySelector('.h-72')).toBeNull();
+    resolve(createCommittedTransactionDetail());
+    expect(await screen.findByRole('heading', { level: 1 })).toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
+  });
+
   it('requests missing executed-group cycles without discarding the measured transaction total', async () => {
     render(<TransactionDetailPage />);
     await waitFor(() => {

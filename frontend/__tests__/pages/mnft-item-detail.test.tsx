@@ -241,6 +241,17 @@ describe('MnftItemDetailPage', () => {
     expect(api.getItemProtocol).not.toHaveBeenCalled();
   });
 
+  // Visual finish V8: the page loads as the shared detail skeleton, not an "m-NFT" h1 and a
+  // "Loading m-NFT…" line.
+  it('shows the detail skeleton while the item loads', () => {
+    vi.mocked(api.getMnftItemDetail).mockReturnValue(new Promise(() => {}));
+    render(<MnftItemDetailPage objectId={id} />);
+    const skeleton = screen.getByRole('status', { name: 'Loading …' });
+    expect(skeleton.children).toHaveLength(3);
+    expect(screen.queryByText('Loading m-NFT…')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
   it('preserves a read error instead of calling the item missing', async () => {
     vi.mocked(api.getMnftItemDetail).mockRejectedValue(
       new ApiRequestError(500, 'internal_error', 'canonical item mismatch')

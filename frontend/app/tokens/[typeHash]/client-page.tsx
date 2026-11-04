@@ -7,6 +7,7 @@ import { CursorPagination } from '@/components/ui/cursor-pagination';
 import { api, isNotFoundApiError, type Token } from '@/lib/api';
 import { NotFoundPage } from '@/components/not-found-page';
 import { AssetDetailShell, AssetMetrics, AssetReadState } from '@/components/asset/detail-shell';
+import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { AssetHistory } from '@/components/asset/asset-history';
 import { AssetFeed } from '@/components/asset/asset-feed';
 import { AssetAmount, AssetCount } from '@/components/asset/inventory-table';
@@ -87,6 +88,7 @@ export default function TokenDetailPage({ typeHash }: { typeHash: string }) {
       />
     );
   }
+  if (!t && token.isLoading) return <DetailSkeletonPage />;
   if (!t)
     return (
       <AssetDetailShell

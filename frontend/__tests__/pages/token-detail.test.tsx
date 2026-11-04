@@ -143,6 +143,18 @@ describe('TokenDetailPage', () => {
     expect(screen.getByText('no token at this address.')).toBeInTheDocument();
   });
 
+  // Visual finish V8: the page loads as the shared detail skeleton, in the page's main, not the
+  // asset shell with a "Loading token…" line.
+  it('shows the detail skeleton while the token loads', () => {
+    vi.mocked(api.getToken).mockReturnValue(new Promise(() => {}));
+    render(<TokenDetailPage typeHash={hash} />);
+    const skeleton = screen.getByRole('status', { name: 'Loading …' });
+    expect(skeleton.children).toHaveLength(3);
+    expect(screen.getByRole('main')).toContainElement(skeleton);
+    expect(screen.queryByText('Loading token…')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
   it('shows a token invariant failure as an error', async () => {
     vi.mocked(api.getToken).mockRejectedValue(
       new ApiRequestError(500, 'internal_error', 'token index mismatch')

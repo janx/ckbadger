@@ -482,6 +482,16 @@ describe('ScriptDetailPage', () => {
     });
   });
 
+  // Visual finish V8: the page loads as the shared detail skeleton, not three bare pulsing blocks.
+  it('shows the detail skeleton while the script loads', () => {
+    vi.mocked(api.getScriptFamilyDetail).mockReturnValue(new Promise(() => {}));
+    render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);
+    const skeleton = screen.getByRole('status', { name: 'Loading …' });
+    expect(skeleton.children).toHaveLength(3);
+    expect(document.querySelector('.h-96')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
   it('follows the board order: the hero with its history, code versions, cells; references in the developer tier', async () => {
     setViewportWidth(900);
     render(<ScriptDetailPage name="SECP256K1_BLAKE160" />);

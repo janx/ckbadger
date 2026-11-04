@@ -10,6 +10,7 @@ import { isNotFoundApiError } from '@/lib/api';
 import { normalizeAssetId } from '@/lib/asset-utils';
 import { CanonicalIdentityDetail } from '@/components/asset/identity-detail';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { NotFoundPage } from '@/components/not-found-page';
 import { retryTransientOnly } from '@/lib/query-client';
 export interface IdentityItemDetailConfig {
@@ -72,6 +73,7 @@ function ScopedIdentity({ config, identityId }: Props) {
       />
     );
   }
+  if (!item && detail.isLoading) return <DetailSkeletonPage />;
   if (!item)
     return (
       <AssetDetailShell

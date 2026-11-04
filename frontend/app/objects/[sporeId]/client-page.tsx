@@ -5,6 +5,7 @@ import { api, isNotFoundApiError } from '@/lib/api';
 import { useRouter } from '@/src/navigation';
 import { resolveObjectRouteTarget } from '@/lib/detail-routes';
 import { AssetDetailShell, AssetReadState } from '@/components/asset/detail-shell';
+import { DetailSkeletonPage } from '@/components/ui/detail-skeleton';
 import { NotFoundPage } from '@/components/not-found-page';
 import { SporeDetailView } from '@/components/asset/spore-detail';
 import { CollectionDetail } from '@/components/asset/collection-detail';
@@ -58,6 +59,8 @@ export default function SporeDetailPage({ sporeId }: SporeDetailPageProps) {
       />
     );
   }
+  if (!invalidIdentifier && (object.isLoading || (collectionEnabled && collection.isLoading)))
+    return <DetailSkeletonPage />;
   return (
     <AssetDetailShell
       title={invalidIdentifier ? 'Invalid object identifier' : 'Object'}

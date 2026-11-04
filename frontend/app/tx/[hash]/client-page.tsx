@@ -5,6 +5,7 @@ import { useParams, usePathname, useRouter, useSearchParams } from '@/src/naviga
 import { NotFoundPage } from '@/components/not-found-page';
 import Link from '@/components/ui/link';
 import { DetailLayout, DetailSection, DetailTier2 } from '@/components/ui/detail-layout';
+import { DetailSkeleton } from '@/components/ui/detail-skeleton';
 import { Prose } from '@/components/ui/prose';
 import { HexMap } from '@/components/ui/hex-map';
 import { ClassMark } from '@/components/ui/class-mark';
@@ -695,7 +696,7 @@ export default function TransactionDetailPage() {
       <main className="container mx-auto py-8">{children}</main>
     </div>
   );
-  if (isLoading) return shell(<div className="bg-base-surface h-72 animate-pulse" />);
+  if (isLoading) return shell(<DetailSkeleton />);
   if (awaitingInputs && !tx)
     return shell(
       <DetailLayout

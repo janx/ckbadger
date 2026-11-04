@@ -181,6 +181,23 @@ describe('Address v3', () => {
     expect(screen.getByText('no address at this address.')).toBeInTheDocument();
   });
 
+  // Visual finish V8: the page loads as the shared detail skeleton, not a "Loading…" line.
+  it('shows the detail skeleton while the address loads, then the page', async () => {
+    let resolve!: (value: typeof addressFixture) => void;
+    vi.mocked(api.getAddress).mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      })
+    );
+    render(<AddressDetailPage />);
+    const skeleton = screen.getByRole('status', { name: 'Loading …' });
+    expect(skeleton.children).toHaveLength(3);
+    expect(screen.queryByText('Loading address…')).toBeNull();
+    resolve(addressFixture);
+    await loaded();
+    expect(screen.queryByRole('status', { name: 'Loading …' })).toBeNull();
+  });
+
   it('keeps an invalid address 400 as a read error', async () => {
     vi.mocked(api.getAddress).mockRejectedValue(
       new ApiRequestError(400, 'bad_request', 'invalid address')

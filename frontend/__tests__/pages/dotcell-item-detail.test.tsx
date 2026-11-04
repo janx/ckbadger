@@ -16,6 +16,17 @@ it('routes only an actual name 404 to exact endpoint evidence', async () => {
   ).toBeInTheDocument();
   expect(screen.getByText('no identity at this address.')).toBeInTheDocument();
 });
+// Visual finish V8: the page loads as the shared detail skeleton, not the asset shell with a
+// "Loading .cell name…" line.
+it('shows the detail skeleton while the name loads', () => {
+  vi.mocked(api.getDotCellItemDetail).mockReturnValue(new Promise(() => {}));
+  render(<Page identityId="alice.cell" />);
+  const skeleton = screen.getByRole('status', { name: 'Loading …' });
+  expect(skeleton.children).toHaveLength(3);
+  expect(screen.queryByText('Loading .cell name…')).toBeNull();
+  expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+});
+
 it('shows current name state, exact protocol, physical cell history and both feed layers', async () => {
   render(<Page identityId="alice.cell" />);
   // The name's own title replaces the loading one once its detail arrives.
