@@ -2713,19 +2713,65 @@ impl CkbadgerStore {
     /// memtables, unflushed active memtables require O(n) linear scan per
     /// read — flushing converts them to sorted SSTs with bloom filters.
     pub fn flush_all_memtables(&self) -> anyhow::Result<()> {
+        self.flush_memtables(true)
+    }
+
+    /// Start flushing every column family memtable of this store, without
+    /// waiting for the flushes to finish.
+    ///
+    /// Before it returns, each CF's active memtable has been switched to
+    /// immutable and its flush handed to RocksDB's flush threads; a later
+    /// [`Self::flush_all_memtables`] waits for those in-flight flushes (and
+    /// flushes anything written since). Bulk finalize calls this on the
+    /// append-only store the moment its last `cells` write lands, so the
+    /// single-threaded `cells` flush runs while the domain-only finalize
+    /// phases do instead of after them.
+    ///
+    /// Same RocksDB call as the waiting flush, with `FlushOptions::wait`
+    /// false. RocksDB may still hold the call until one more immutable
+    /// memtable would not put the CF into a write stall, and it answers
+    /// `TryAgain` while the DB's writes are stopped; both reach the caller
+    /// as is.
+    pub fn flush_all_memtables_background(&self) -> anyhow::Result<()> {
+        self.flush_memtables(false)
+    }
+
+    /// The one implementation behind [`Self::flush_all_memtables`] (`wait`)
+    /// and [`Self::flush_all_memtables_background`] (`!wait`).
+    fn flush_memtables(&self, wait: bool) -> anyhow::Result<()> {
         let started = std::time::Instant::now();
+        let operation = if wait {
+            "flush_all_memtables"
+        } else {
+            "flush_all_memtables_background"
+        };
+        let mut flush_options = rocksdb::FlushOptions::default();
+        flush_options.set_wait(wait);
 
         let cfs = Self::cfs_for_class(self.store_class);
         for &cf_name in cfs {
             if let Some(cf) = self.db.cf_handle(cf_name) {
-                self.db.flush_cf(cf).map_err(|e| {
-                    anyhow::anyhow!("flush_all_memtables failed on CF '{}': {}", cf_name, e)
+                self.db.flush_cf_opt(cf, &flush_options).map_err(|e| {
+                    anyhow::anyhow!(
+                        "{operation} failed on CF '{}' (path={}): {}",
+                        cf_name,
+                        self.db_path.display(),
+                        e
+                    )
                 })?;
             }
         }
 
         let elapsed_ms = started.elapsed().as_millis();
-        info!(elapsed_ms, cfs = cfs.len(), "Flushed all memtables to SST");
+        if wait {
+            info!(elapsed_ms, cfs = cfs.len(), "Flushed all memtables to SST");
+        } else {
+            info!(
+                elapsed_ms,
+                cfs = cfs.len(),
+                "Started flushing all memtables to SST without waiting"
+            );
+        }
         Ok(())
     }
 
@@ -4223,6 +4269,60 @@ mod tests {
         // Verify data is readable after flush
         let val = store.get_cf(cf, b"nowal-key").unwrap();
         assert_eq!(val.as_deref(), Some(b"nowal-value".as_slice()));
+    }
+
+    fn cells_cf_property(store: &CkbadgerStore, property: &str) -> u64 {
+        store
+            .db
+            .property_int_value_cf(store.cf_cells(), property)
+            .unwrap()
+            .unwrap_or_else(|| panic!("{property} unavailable on cells"))
+    }
+
+    /// Bulk finalize starts the append-only flush early and waits for it in
+    /// phase 12. The non-waiting call must switch every memtable written so
+    /// far and hand it to RocksDB's flush threads before it returns; the
+    /// waiting call that follows must leave nothing in memory.
+    #[test]
+    fn background_flush_switches_memtables_and_waiting_flush_finishes_them() {
+        let dir = TempDir::new().unwrap();
+        let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
+        let cf = store.cf_cells();
+        let value = vec![0x5A_u8; 256];
+        let mut batch = WriteBatch::default();
+        for i in 0u32..1_000 {
+            batch.put_cf(cf, i.to_be_bytes(), &value);
+        }
+        store.write_batch_no_wal_bulk(batch).unwrap();
+        assert_eq!(
+            cells_cf_property(&store, "rocksdb.num-entries-active-mem-table"),
+            1_000
+        );
+        assert_eq!(cells_cf_property(&store, "rocksdb.total-sst-files-size"), 0);
+
+        store.flush_all_memtables_background().unwrap();
+        assert_eq!(
+            cells_cf_property(&store, "rocksdb.num-entries-active-mem-table"),
+            0,
+            "the background flush must switch the active memtable before it returns"
+        );
+        assert!(
+            cells_cf_property(&store, "rocksdb.num-immutable-mem-table") == 1
+                || cells_cf_property(&store, "rocksdb.total-sst-files-size") > 0,
+            "the switched memtable must be queued for flush or already flushed"
+        );
+
+        store.flush_all_memtables().unwrap();
+        assert_eq!(
+            cells_cf_property(&store, "rocksdb.num-immutable-mem-table"),
+            0,
+            "the waiting flush must wait for the in-flight background flush"
+        );
+        assert!(cells_cf_property(&store, "rocksdb.total-sst-files-size") > 0);
+        assert_eq!(
+            store.get_cf(cf, &7u32.to_be_bytes()).unwrap().as_deref(),
+            Some(value.as_slice())
+        );
     }
 
     #[test]
