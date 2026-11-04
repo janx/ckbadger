@@ -86,7 +86,6 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
     let mut current = cell(&id, 320_00000000, 2);
     match corrupt {
         Some("lock") => current.lock_args[0] ^= 1,
-        Some("type") => current.type_args.as_mut().unwrap()[0] ^= 1,
         None => {}
         Some(other) => panic!("invalid fixture corruption {other}"),
     }
