@@ -151,6 +151,27 @@ fn scale_clamp(base: u64, scale: f64, min: u64, max: u64) -> usize {
     value.clamp(min, max) as usize
 }
 
+/// Thread counts of the process-wide RocksDB `Env` pools.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BackgroundThreads {
+    /// HIGH-priority pool: memtable flushes of every store in the process.
+    pub flush: i32,
+    /// LOW-priority pool: compactions.
+    pub compaction: i32,
+}
+
+/// Splits a background-job count into the two `Env` pools. The flush pool is
+/// the profile's fixed `flush_threads`, never derived from `jobs`: the bulk
+/// controller moves `jobs` to trade compaction CPU against build/fetch, and a
+/// flush pool that followed it shrank to one thread shared by both stores.
+/// Compaction gets the rest, at least one thread.
+fn background_thread_split(flush_threads: i32, jobs: i32) -> BackgroundThreads {
+    BackgroundThreads {
+        flush: flush_threads,
+        compaction: (jobs - flush_threads).max(1),
+    }
+}
+
 /// Auto-detected system memory profile that drives RocksDB memory parameters.
 #[derive(Debug, Clone)]
 pub struct MemoryProfile {
@@ -170,6 +191,12 @@ pub struct MemoryProfile {
     pub write_buffer_low_bytes: usize,
     pub write_buffer_hot_cf_bytes: usize,
     pub max_background_jobs: i32,
+    /// Size of the process-wide RocksDB HIGH-priority (flush) pool, shared by
+    /// every store the process opens: `max(2, max_background_jobs / 4)`.
+    /// Set once at primary open and never moved by the bulk controller; the
+    /// floor of 2 keeps the domain and append-only stores from sharing one
+    /// flush thread.
+    pub flush_threads: i32,
     pub max_subcompactions: u32,
     pub bulk_max_bytes_for_level_base: u64,
     pub bulk_target_file_size_base: u64,
@@ -235,6 +262,7 @@ impl MemoryProfile {
         // RocksDB compaction benefits from SMT — use logical cores.
         let logical = logical_cpu_count.max(1);
         let max_background_jobs = logical.clamp(4, 32) as i32;
+        let flush_threads = (max_background_jobs / 4).max(2);
         let max_subcompactions = (logical / 4).clamp(2, 8) as u32;
 
         let budget_scale = budget_u64 as f64 / (16.0 * GB as f64);
@@ -270,6 +298,7 @@ impl MemoryProfile {
             write_buffer_low_bytes: write_buffer_low,
             write_buffer_hot_cf_bytes: write_buffer_hot,
             max_background_jobs,
+            flush_threads,
             max_subcompactions,
             bulk_max_bytes_for_level_base: bulk_level_base,
             bulk_target_file_size_base: bulk_file_base,
@@ -1067,6 +1096,7 @@ impl CkbadgerStore {
             })
             .collect();
 
+        Self::size_flush_pool(&memory_profile)?;
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
 
         Ok(Self {
@@ -2475,6 +2505,7 @@ impl CkbadgerStore {
             l0_slowdown_bulk = 64,
             l0_stop_bulk = 128,
             max_background_jobs = p.max_background_jobs,
+            flush_threads = p.flush_threads,
             max_subcompactions = p.max_subcompactions,
             block_cache_normal_mb = p.block_cache_normal_bytes / (1024 * 1024),
             block_cache_bulk_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
@@ -2520,21 +2551,36 @@ impl CkbadgerStore {
         self.runtime_config
     }
 
-    /// Dynamically adjust the number of RocksDB background compaction/flush
+    /// Dynamically adjust the number of RocksDB background compaction
     /// threads.  Used by the bottleneck controller to shift CPU between
     /// compaction and build/fetch work.
     ///
     /// RocksDB's `SetDBOptions` is not exposed through the C API, so we
-    /// adjust the default `Env` thread pools directly:
-    ///   - HIGH priority pool → flush threads (max(1, jobs/4))
-    ///   - LOW  priority pool → compaction threads (the rest)
-    pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<()> {
+    /// adjust the default `Env` thread pools directly, split by
+    /// [`background_thread_split`]:
+    ///   - HIGH priority pool → flush threads: NOT touched here. It is the
+    ///     profile's fixed `flush_threads`, set at primary open, so the
+    ///     domain and append-only stores always have their own flush threads
+    ///     (idle unless a memtable is pending).
+    ///   - LOW  priority pool → compaction threads: `max(1, jobs - flush_threads)`.
+    ///
+    /// Returns the split it applied.
+    pub fn set_max_background_jobs(&self, jobs: i32) -> anyhow::Result<BackgroundThreads> {
         let mut env = rocksdb::Env::new()
             .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
-        let flush_threads = (jobs / 4).max(1);
-        let compaction_threads = (jobs - flush_threads).max(1);
-        env.set_high_priority_background_threads(flush_threads);
-        env.set_background_threads(compaction_threads);
+        let split = background_thread_split(self.memory_profile.flush_threads, jobs);
+        env.set_low_priority_background_threads(split.compaction);
+        Ok(split)
+    }
+
+    /// Size the process-wide HIGH-priority (flush) pool from the profile.
+    /// Called at every primary open (idempotent: same profile, same size);
+    /// RocksDB only ever raises the pool at open to `max_background_jobs / 4`,
+    /// which never exceeds `flush_threads`.
+    fn size_flush_pool(profile: &MemoryProfile) -> anyhow::Result<()> {
+        let mut env = rocksdb::Env::new()
+            .map_err(|e| anyhow::anyhow!("failed to get default RocksDB env: {}", e))?;
+        env.set_high_priority_background_threads(profile.flush_threads);
         Ok(())
     }
 
@@ -4140,6 +4186,8 @@ mod tests {
         let profile = MemoryProfile::compute(32 * GB, 12, 24, false);
         assert_eq!(profile.rocksdb_budget_bytes, 16 * GB as usize);
         assert_eq!(profile.wbm_normal_bytes, 8 * GB as usize);
+        assert_eq!(profile.max_background_jobs, 24);
+        assert_eq!(profile.flush_threads, 6);
         assert_eq!(profile.block_cache_normal_bytes, 8 * GB as usize);
         assert_eq!(profile.write_buffer_mega_bytes, 256 * MB as usize);
         assert_eq!(profile.write_buffer_high_bytes, 128 * MB as usize);
@@ -4308,14 +4356,66 @@ mod tests {
     fn test_set_max_background_jobs_succeeds() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
+        let flush_threads = store.memory_profile.flush_threads;
         // This previously failed with "Extra option not recognized: max_background_jobs"
         // because set_options() targets CF options, not DB options.
-        store
-            .set_max_background_jobs(4)
-            .expect("dynamic background jobs adjustment should succeed");
-        store
-            .set_max_background_jobs(8)
-            .expect("should succeed with different value");
+        // The controller's job count moves only the compaction pool; the
+        // flush pool stays at the profile's size.
+        for jobs in [4, 8, 24] {
+            let applied = store
+                .set_max_background_jobs(jobs)
+                .expect("dynamic background jobs adjustment should succeed");
+            assert_eq!(
+                applied,
+                BackgroundThreads {
+                    flush: flush_threads,
+                    compaction: (jobs - flush_threads).max(1),
+                },
+                "jobs={jobs}"
+            );
+        }
+    }
+
+    /// The bottleneck controller keeps `bg_jobs` at its floor (6 on a
+    /// 24-thread host) for most of a bulk run. Deriving the flush pool from
+    /// it (`jobs / 4`) left ONE flush thread shared by the domain store's
+    /// atomic multi-CF flushes and the `cells` flushes: in base46-1, 66 s of
+    /// the 89 s finalize `cells` flush was queueing behind domain flushes.
+    #[test]
+    fn background_thread_split_keeps_the_flush_pool_whatever_the_job_count() {
+        let low = background_thread_split(6, 4);
+        let floor = background_thread_split(6, 6);
+        let high = background_thread_split(6, 24);
+        assert_eq!(low.flush, 6);
+        assert_eq!(floor.flush, 6);
+        assert_eq!(high.flush, 6);
+        assert_eq!(low.compaction, 1);
+        assert_eq!(floor.compaction, 1);
+        assert_eq!(high.compaction, 18);
+    }
+
+    /// The flush pool is sized once from the profile and never below 2, so
+    /// the domain and append-only stores never share one flush thread.
+    #[test]
+    fn memory_profile_flush_threads_are_a_quarter_of_background_jobs_floor_two() {
+        for (logical_cpus, max_background_jobs, flush_threads) in [
+            (1, 4, 2),
+            (4, 4, 2),
+            (8, 8, 2),
+            (12, 12, 3),
+            (24, 24, 6),
+            (64, 32, 8),
+        ] {
+            let profile = MemoryProfile::compute(32 * GB, 12, logical_cpus, false);
+            assert_eq!(
+                profile.max_background_jobs, max_background_jobs,
+                "logical_cpus={logical_cpus}"
+            );
+            assert_eq!(
+                profile.flush_threads, flush_threads,
+                "logical_cpus={logical_cpus}"
+            );
+        }
     }
 
     #[test]
