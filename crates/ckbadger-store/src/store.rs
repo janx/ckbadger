@@ -1437,34 +1437,6 @@ impl CkbadgerStore {
     /// Universal compaction reduces cross-level rewrite amplification for this write pattern.
     const HISTORICAL_APPEND_CFS: &'static [&'static str] = &[CF_CELLS];
 
-    /// Bulk-sync memtable size of the historical append CFs (`cells`): fixed,
-    /// never scaled by the memory budget.
-    ///
-    /// `cells` is append-only and universally compacted, so a large memtable
-    /// buys nothing: every byte is written once and flushed once, and there
-    /// is no overwrite for a big memtable to absorb. What it does cost is the
-    /// flush: RocksDB flushes a memtable in one single-threaded job, and the
-    /// 2026-11-01 LOG shows the `cells` flushes running one after another. The
-    /// budget-scaled hot-CF buffer (1.57 GB at a 46 GB budget) made each
-    /// `cells` flush 14-45 s and left 4.4 GB of `cells` memtables for that
-    /// run's finalize, whose phase-12 flush of this one CF took 104.6 s.
-    const BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES: usize = 512 * MB as usize;
-
-    /// Bulk-sync `max_write_buffer_number` of the historical append CFs: 16 x
-    /// [`Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`] = 8 GiB of
-    /// unflushed `cells` memtables, whatever the budget.
-    ///
-    /// The count is slack, not tail. What finalize waits for is the bytes
-    /// still unflushed when the last batch lands, and the small memtable plus
-    /// the flush started at the end of the finalize drain already bound that.
-    /// The count only decides when RocksDB throttles `cells` writes while a
-    /// dense range (blocks 6.65M-12M) outruns the flush: it delays them once
-    /// `count - 1` memtables are unflushed and stops them at `count`. The
-    /// append-only memtables peaked at 5.75 GiB in the 2026-11-01 run (block
-    /// 11.56M), so 4 buffers (2 GiB) would stall there, while 16 keep both the
-    /// delay point (15 unflushed, 7.5 GiB) and the stop above that peak.
-    const BULK_HISTORICAL_APPEND_MAX_WRITE_BUFFER_NUMBER: i32 = 16;
-
     fn is_mega_write_cf(name: &str) -> bool {
         Self::MEGA_WRITE_CFS.contains(&name)
     }
@@ -1498,11 +1470,10 @@ impl CkbadgerStore {
         }
     }
 
-    /// Domain CFs whose bulk-sync memtable is
-    /// `MemoryProfile::write_buffer_hot_cf_bytes`. `cells` is not one: its
-    /// bulk buffer is [`Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`].
+    /// CFs whose bulk-sync memtable is `MemoryProfile::write_buffer_hot_cf_bytes`.
     const BULK_HOT_WRITE_CFS: &'static [&'static str] = &[
         CF_TX_INDEX,
+        CF_CELLS,
         CF_LIVE_CELLS,
         CF_CONSUMED_CELLS,
         CF_CELL_BY_LOCK,
@@ -1518,11 +1489,7 @@ impl CkbadgerStore {
     fn bulk_cf_options(cf_name: &str, profile: &MemoryProfile) -> Vec<(&'static str, String)> {
         // More write buffers = more memtable headroom before flush stall.
         // With WBM controlling global budget, per-CF limits are a safety net.
-        // The historical append CFs are the exception: fixed and small, see
-        // `BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`.
-        let max_write_buffer_number = if Self::is_historical_append_cf(cf_name) {
-            Self::BULK_HISTORICAL_APPEND_MAX_WRITE_BUFFER_NUMBER
-        } else if Self::is_mega_write_cf(cf_name) {
+        let max_write_buffer_number = if Self::is_mega_write_cf(cf_name) {
             12
         } else if Self::is_high_write_cf(cf_name) {
             8
@@ -1545,12 +1512,7 @@ impl CkbadgerStore {
                 profile.bulk_target_file_size_base.to_string(),
             ),
         ];
-        if Self::is_historical_append_cf(cf_name) {
-            options.push((
-                "write_buffer_size",
-                Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES.to_string(),
-            ));
-        } else if Self::BULK_HOT_WRITE_CFS.contains(&cf_name) {
+        if Self::BULK_HOT_WRITE_CFS.contains(&cf_name) {
             options.push((
                 "write_buffer_size",
                 profile.write_buffer_hot_cf_bytes.to_string(),
@@ -2596,9 +2558,7 @@ impl CkbadgerStore {
     /// The default per-CF `max_write_buffer_number=4` can cause flush stalls when
     /// memtables fill faster than background flush can drain. Increasing to
     /// 12 (mega) / 8 (high) / 6 (low) gives more headroom before stalling.
-    /// The append-only `cells` CF is the exception: a fixed 512 MiB x 16, see
-    /// [`Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES`]. Per-CF values come
-    /// from [`Self::bulk_cf_options`].
+    /// Per-CF values come from [`Self::bulk_cf_options`].
     ///
     /// Also expands the global WriteBufferManager budget and shrinks block cache
     /// to shift memory from reads to writes during the write-heavy bulk phase.
@@ -2647,13 +2607,8 @@ impl CkbadgerStore {
             fail,
             wbm_budget_mb = p.wbm_bulk_sync_bytes / (1024 * 1024),
             block_cache_mb = p.block_cache_bulk_sync_bytes / (1024 * 1024),
-            hot_cf_write_buffer_mb = p.write_buffer_hot_cf_bytes / (1024 * 1024),
-            historical_append_write_buffer_mb =
-                Self::BULK_HISTORICAL_APPEND_WRITE_BUFFER_BYTES / (1024 * 1024),
-            historical_append_max_write_buffers =
-                Self::BULK_HISTORICAL_APPEND_MAX_WRITE_BUFFER_NUMBER,
             "Bulk sync compaction options set: l0_slowdown=96, l0_stop=192, \
-             write_buffers mega=12/high=8/low=6, historical append (cells) fixed"
+             write_buffers mega=12/high=8/low=6"
         );
     }
 
@@ -3972,59 +3927,43 @@ mod tests {
         );
     }
 
-    fn bulk_option(options: &[(&'static str, String)], name: &str) -> Option<String> {
-        options
-            .iter()
-            .find(|(option, _)| *option == name)
-            .map(|(_, value)| value.clone())
-    }
-
-    /// The bulk `cells` memtable must not follow the memory budget. A
-    /// budget-scaled buffer (1.57 GB at a 46 GB budget) made every `cells`
-    /// flush one 14-45 s single-threaded job and left 4.4 GB of `cells`
-    /// memtables for finalize phase 12 (104.6 s) on 2026-11-01.
+    /// `cells` keeps base's bulk profile: the budget-scaled hot-CF buffer and
+    /// the mega tier's 12 buffers. A fixed 512 MiB x 16 buffer (task 0-b,
+    /// reverted in 0-e) cut each flush short, but the 512 MiB L0 files made
+    /// universal compaction rewrite `cells` almost twice: 73.3 GiB of
+    /// compaction output against 42.0 / 40.1 GiB in base (cand2-1 vs
+    /// base46-1 / base46-2), +555 s of background CPU, and a build 12-19 %
+    /// slower per cell from block 5M on.
     #[test]
-    fn bulk_cells_write_buffer_is_fixed_whatever_the_memory_budget() {
-        // The two budgets the bulk history ran with: ~23 GB (48 GB host) and
-        // ~46 GB (96 GB host).
+    fn bulk_cells_keeps_base_buffer_because_512_mib_l0_files_doubled_universal_compaction_output() {
         for system_ram in [48 * GB, 96 * GB] {
             let profile = MemoryProfile::compute(system_ram, 12, 24, false);
-            assert_ne!(
-                profile.write_buffer_hot_cf_bytes,
-                512 * MB as usize,
-                "fixture must use a budget whose hot-CF buffer differs from the cells buffer"
-            );
-
-            let cells = CkbadgerStore::bulk_cf_options(CF_CELLS, &profile);
             assert_eq!(
-                bulk_option(&cells, "write_buffer_size"),
-                Some((512 * MB).to_string()),
-                "cells bulk write_buffer_size at system_ram={system_ram}"
-            );
-            assert_eq!(
-                bulk_option(&cells, "max_write_buffer_number"),
-                Some("16".to_string()),
-                "cells bulk max_write_buffer_number at system_ram={system_ram}"
-            );
-
-            // A domain hot CF keeps the budget-scaled hot buffer.
-            let tx_index = CkbadgerStore::bulk_cf_options(CF_TX_INDEX, &profile);
-            assert_eq!(
-                bulk_option(&tx_index, "write_buffer_size"),
-                Some(profile.write_buffer_hot_cf_bytes.to_string()),
-                "tx_index bulk write_buffer_size at system_ram={system_ram}"
-            );
-            assert_eq!(
-                bulk_option(&tx_index, "max_write_buffer_number"),
-                Some("12".to_string()),
-                "tx_index bulk max_write_buffer_number at system_ram={system_ram}"
+                CkbadgerStore::bulk_cf_options(CF_CELLS, &profile),
+                vec![
+                    ("level0_slowdown_writes_trigger", "96".to_string()),
+                    ("level0_stop_writes_trigger", "192".to_string()),
+                    ("max_write_buffer_number", "12".to_string()),
+                    (
+                        "max_bytes_for_level_base",
+                        profile.bulk_max_bytes_for_level_base.to_string(),
+                    ),
+                    (
+                        "target_file_size_base",
+                        profile.bulk_target_file_size_base.to_string(),
+                    ),
+                    (
+                        "write_buffer_size",
+                        profile.write_buffer_hot_cf_bytes.to_string(),
+                    ),
+                ],
+                "cells bulk options at system_ram={system_ram}"
             );
         }
     }
 
-    /// Every CF except `cells` keeps the bulk profile it had before the
-    /// fixed `cells` buffer: the domain CFs flush in parallel and their
-    /// finalize tail was 14 s.
+    /// Every CF other than `cells` (pinned by its own test above) keeps its
+    /// base bulk profile.
     #[test]
     fn bulk_options_of_every_other_cf_are_unchanged() {
         let domain_hot_cfs = [
@@ -4115,14 +4054,17 @@ mod tests {
     /// The setter applies `bulk_cf_options` to a real append-only store, and
     /// the live restore puts `cells` back on its live tier afterwards.
     #[test]
-    fn append_only_store_applies_fixed_bulk_cells_buffer_and_restores_live_tier() {
+    fn append_only_store_applies_bulk_cells_options_and_restores_live_tier() {
         let dir = TempDir::new().unwrap();
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
 
         store.set_bulk_sync_compaction_options();
         let bulk = persisted_cf_options(dir.path(), CF_CELLS);
-        assert_eq!(bulk["write_buffer_size"], (512 * MB).to_string());
-        assert_eq!(bulk["max_write_buffer_number"], "16");
+        assert_eq!(
+            bulk["write_buffer_size"],
+            store.memory_profile.write_buffer_hot_cf_bytes.to_string()
+        );
+        assert_eq!(bulk["max_write_buffer_number"], "12");
 
         store.restore_normal_compaction_options();
         let live = persisted_cf_options(dir.path(), CF_CELLS);
