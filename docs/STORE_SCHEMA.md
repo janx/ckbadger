@@ -30,7 +30,9 @@ rejected; the type implements no serde traits, so no second codec exists). The l
 script hashes are not stored: `lock_script_hash()` / `type_script_hash()` derive them with
 `ckbadger_common::script_hash`. Index keys that embed a script hash are unchanged: the live
 writer takes them from the parser, which uses that same routine; bulk takes them from ckb-types
-`calc_script_hash()` over the raw script bytes (`binary_facts.rs`). A type script is stored whole or not at all; a short,
+`calc_script_hash()` over the raw script bytes (`binary_facts.rs`), which bulk requires to be the
+canonical Molecule encoding of those fields (anything else fails with its block, tx index and
+output index), so both give the same bytes. A type script is stored whole or not at all; a short,
 padded, partial or v1 payload is a decode error carrying its byte length. The CF is
 lz4-compressed (universal compaction). Changing this layout requires re-sync from genesis; there
 is no migration.
