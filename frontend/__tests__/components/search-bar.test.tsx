@@ -70,6 +70,30 @@ describe('SearchBar', () => {
     expect(screen.queryByRole('button', { name: 'Search' })).not.toBeInTheDocument();
   });
 
+  // Visual finish V9 follow-up (one focus ring per control): every variant of the field designs
+  // its own focus — the jade-tinted border with its soft ring (compact / default), the jade border
+  // and 2 px ring (home) — so it opts out of the global jade outline.
+  it('draws one focus line in every variant: its own jade border and ring, no global outline', () => {
+    const own = {
+      compact: [
+        'focus:border-jade/50',
+        'focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]',
+      ],
+      default: [
+        'focus:border-jade/50',
+        'focus:shadow-[0_0_0_1px_rgba(46,219,163,0.12),0_0_12px_rgba(46,219,163,0.1)]',
+      ],
+      home: ['focus:border-jade', 'focus:ring-2', 'focus:ring-jade/25'],
+    } as const;
+    for (const variant of ['compact', 'default', 'home'] as const) {
+      const { unmount } = render(<SearchBar variant={variant} />);
+      const input = screen.getByPlaceholderText(SHARED_PLACEHOLDER);
+      expect(input).toHaveClass('focus-visible:outline-none', ...own[variant]);
+      expect(input).not.toHaveClass('outline-none', 'focus:outline-none');
+      unmount();
+    }
+  });
+
   // TX-03 (Main.dc.html header): the compact search is a 36 px rounded field with one "/" key,
   // and the typed text is the input's own (no simulated command line). Review 2026-11-03, item 5,
   // move 4 ("the terminal speaks") gives the field its prompt back by design: a jade ">" before

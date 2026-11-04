@@ -37,6 +37,16 @@ describe('CommandPalette', () => {
     expect(pushMock).toHaveBeenCalledWith('/blocks');
   });
 
+  // Visual finish V9 follow-up (one focus ring per control): the input designs its own focus — a
+  // 1 px jade ring — so it opts out of the global jade outline.
+  it('draws one focus ring: its own jade ring, no global outline', () => {
+    render(<CommandPalette />);
+    fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
+    const input = screen.getByLabelText('Command palette input');
+    expect(input).toHaveClass('focus-visible:outline-none', 'focus:ring-1', 'focus:ring-jade');
+    expect(input).not.toHaveClass('outline-none');
+  });
+
   it('places the fixed overlay outside a backdrop-filter containing block', () => {
     render(
       <header className="backdrop-blur-sm">
