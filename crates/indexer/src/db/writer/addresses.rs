@@ -354,7 +354,7 @@ pub(crate) fn build_script_reference_rollup_state(
 
 pub(crate) fn build_script_reference_rollup_state_with_lineage(
     store: &ckbadger_store::CkbadgerStore,
-    mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
     reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
     lineage: &[TypeIdCodeChange],
 ) -> Result<ScriptReferenceRollupState> {
@@ -362,7 +362,31 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         store.list_script_versions()?.into_iter().collect();
     let existing_families: HashMap<String, ScriptFamilyInfo> =
         store.list_script_families()?.into_iter().collect();
+    build_script_reference_rollup_state_over(
+        store,
+        existing_versions,
+        existing_families,
+        reference_mappings,
+        &reference_info_map,
+        lineage,
+        &HashMap::new(),
+    )
+}
 
+/// The rollup of `reference_info_map` under `reference_mappings`, on top of
+/// the version and family rows `existing_versions` / `existing_families`
+/// (their metadata; usage is recomputed from the references). The one
+/// computation behind every rollup the indexer writes: the per-block live
+/// rollup passes the rows the previous block left.
+pub(crate) fn build_script_reference_rollup_state_over(
+    store: &ckbadger_store::CkbadgerStore,
+    existing_versions: HashMap<Vec<u8>, ScriptVersionInfo>,
+    existing_families: HashMap<String, ScriptFamilyInfo>,
+    mut reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)>,
+    reference_info_map: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
+    lineage: &[TypeIdCodeChange],
+    prior_type_id_mappings: &HashMap<Vec<u8>, Option<Vec<u8>>>,
+) -> Result<ScriptReferenceRollupState> {
     let mut version_map: HashMap<Vec<u8>, ScriptVersionInfo> = existing_versions.clone();
     let templates = type_id_family_templates(&existing_versions)?;
     let mut lineage_undo = Vec::new();
@@ -370,7 +394,10 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
     for observation in lineage {
         let mapping_key =
             keys::encode_script_reference_key(1, &observation.reference_hash).to_vec();
-        let previous_mapping = match lineage_mappings.get(&observation.reference_hash) {
+        let previous_mapping = match lineage_mappings
+            .get(&observation.reference_hash)
+            .or_else(|| prior_type_id_mappings.get(&observation.reference_hash))
+        {
             Some(value) => value.clone(),
             None => store.get_script_reference_version_hash(1, &observation.reference_hash)?,
         };
@@ -652,6 +679,15 @@ pub(crate) fn build_script_reference_rollup_state_with_lineage(
         existing_families,
         lineage_undo,
     })
+}
+
+/// The rollup inputs a live batch advances block by block.
+struct RollupSteps {
+    reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
+    versions: HashMap<Vec<u8>, ScriptVersionInfo>,
+    families: HashMap<String, ScriptFamilyInfo>,
+    /// Reference -> binary, read once per batch and moved by Type ID lineage.
+    mappings: HashMap<(Vec<u8>, u8), Option<Vec<u8>>>,
 }
 
 pub(crate) fn collect_current_script_reference_rollup_state(
@@ -1221,25 +1257,25 @@ impl BatchWriter {
     }
 
     /// Apply a live batch's script reference usage block by block (see
-    /// [`Self::apply_address_balance_changes`]); returns every row written,
-    /// with its final value.
+    /// [`Self::apply_address_balance_changes`]); returns the rows each block
+    /// wrote.
     pub(crate) fn apply_script_reference_usage_changes(
         &self,
         mut current: HashMap<(Vec<u8>, u8), Option<ScriptReferenceInfo>>,
         changes: &crate::sync::types::ScriptReferenceUsageChanges,
         batch: &mut StoreBatch,
-    ) -> Result<HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> {
-        let mut written = HashMap::new();
+    ) -> Result<Vec<(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)>> {
+        let mut written = Vec::new();
         for (block, block_changes) in changes.by_block() {
             let updated = self.apply_script_reference_usage_deltas(
                 &current,
                 block_changes,
                 &mut batch.at(*block),
             )?;
-            for (key, info) in updated {
+            for (key, info) in &updated {
                 current.insert(key.clone(), Some(info.clone()));
-                written.insert(key, info);
             }
+            written.push((*block, updated));
         }
         Ok(written)
     }
@@ -1524,27 +1560,24 @@ impl BatchWriter {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Materialize the script version / family rollups block by block.
+    ///
+    /// `updated_references` holds, per block, the reference rows that block
+    /// wrote (`apply_script_reference_usage_changes`). For every block that
+    /// changes a reference or a Type ID binding, the rollup is recomputed with
+    /// the one builder over the reference rows as of the end of that block,
+    /// and the version / family rows it changes are written in that block's
+    /// scope — so the journal restores the rollup at any fork point.
     pub(crate) fn materialize_script_versions_and_families_with_chain(
         &self,
-        updated_references: &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>,
+        updated_references: &[(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)],
         txs: &[crate::sync::types::TxData],
         input_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
         batch_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
         undo_seq: &crate::sync::undo::SharedUndoSeq,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        // Build complete reference info map: committed state + batch-pending updates.
-        // This ensures the rollup reflects post-delta state for references modified
-        // in the current batch, rather than reading stale pre-commit values.
-        let mut reference_info_map: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> = self
-            .store
-            .list_script_reference_infos()?
-            .into_iter()
-            .collect();
-        for (key, info) in updated_references {
-            reference_info_map.insert(key.clone(), info.clone());
-        }
-
+        // Type ID bindings this batch observes, in chain order.
         let mut lineage = Vec::new();
         let mut chain_mappings: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
         for tx in txs {
@@ -1616,82 +1649,157 @@ impl BatchWriter {
                 chain_mappings.insert(reference.clone(), Some(cell.data_hash.to_vec()));
             }
         }
-        let reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)> = reference_info_map
+
+        let mut blocks: std::collections::BTreeSet<i64> =
+            updated_references.iter().map(|(block, _)| *block).collect();
+        blocks.extend(lineage.iter().map(|change| change.block_number));
+
+        // The committed state, then advanced block by block.
+        let mut state = RollupSteps {
+            reference_info_map: self
+                .store
+                .list_script_reference_infos()?
+                .into_iter()
+                .collect(),
+            versions: self.store.list_script_versions()?.into_iter().collect(),
+            families: self.store.list_script_families()?.into_iter().collect(),
+            mappings: HashMap::new(),
+        };
+        let updated_by_block: HashMap<i64, &HashMap<(Vec<u8>, u8), ScriptReferenceInfo>> =
+            updated_references
+                .iter()
+                .map(|(block, updated)| (*block, updated))
+                .collect();
+        if blocks.is_empty() {
+            // Nothing moved: the rollup of the committed state must equal the
+            // committed rows, so this stages nothing (a difference is drift,
+            // and a journaled batch refuses an unscoped write).
+            return self.rollup_step(&mut state, &[], undo_seq, batch);
+        }
+        for block in blocks {
+            if let Some(updated) = updated_by_block.get(&block) {
+                for (key, info) in updated.iter() {
+                    state.reference_info_map.insert(key.clone(), info.clone());
+                }
+            }
+            let block_lineage: Vec<TypeIdCodeChange> = lineage
+                .iter()
+                .filter(|change| change.block_number == block)
+                .cloned()
+                .collect();
+            self.rollup_step(&mut state, &block_lineage, undo_seq, &mut batch.at(block))?;
+        }
+        Ok(())
+    }
+
+    /// One rollup step: apply `lineage`'s bindings, recompute the rollup over
+    /// the references as `state` holds them, write the rows that changed and
+    /// advance `state` to them.
+    fn rollup_step(
+        &self,
+        state: &mut RollupSteps,
+        lineage: &[TypeIdCodeChange],
+        undo_seq: &crate::sync::undo::SharedUndoSeq,
+        batch: &mut StoreBatch,
+    ) -> Result<()> {
+        // Each binding's value before this step, for its pre-image.
+        let mut prior_type_id_mappings: HashMap<Vec<u8>, Option<Vec<u8>>> = HashMap::new();
+        for change in lineage {
+            if let Some(prior) = state.mappings.get(&(change.reference_hash.clone(), 1)) {
+                prior_type_id_mappings
+                    .entry(change.reference_hash.clone())
+                    .or_insert_with(|| prior.clone());
+            }
+        }
+        for change in lineage {
+            state.mappings.insert(
+                (change.reference_hash.clone(), 1),
+                change.version_hash.clone(),
+            );
+            match &change.version_hash {
+                Some(hash) => {
+                    batch.put_script_reference_to_version(1, &change.reference_hash, hash)
+                }
+                None => batch.delete_script_reference_to_version(1, &change.reference_hash),
+            }
+        }
+        let reference_mappings: Vec<((Vec<u8>, u8), Option<Vec<u8>>)> = state
+            .reference_info_map
             .keys()
-            .map(|(reference_hash, hash_type)| {
-                let version_hash = if *hash_type == 1 && chain_mappings.contains_key(reference_hash)
-                {
-                    chain_mappings.get(reference_hash).cloned().flatten()
-                } else {
-                    self.store
-                        .get_script_reference_version_hash(*hash_type, reference_hash)?
+            .map(|key| {
+                let version_hash = match state.mappings.get(key) {
+                    Some(version_hash) => version_hash.clone(),
+                    None => {
+                        let version_hash = self
+                            .store
+                            .get_script_reference_version_hash(key.1, &key.0)?;
+                        state.mappings.insert(key.clone(), version_hash.clone());
+                        version_hash
+                    }
                 };
-                Ok(((reference_hash.clone(), *hash_type), version_hash))
+                Ok((key.clone(), version_hash))
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let rollups = build_script_reference_rollup_state_with_lineage(
+        let rollups = build_script_reference_rollup_state_over(
             self.store.as_ref(),
+            state.versions.clone(),
+            state.families.clone(),
             reference_mappings,
-            reference_info_map,
-            &lineage,
+            &state.reference_info_map,
+            lineage,
+            &prior_type_id_mappings,
         )?;
 
-        for (block, cf, key, previous) in &rollups.lineage_undo {
-            self.record_object_undo(batch, *block, cf, key, previous.clone(), undo_seq);
+        for (undo_block, cf, key, previous) in &rollups.lineage_undo {
+            self.record_object_undo(batch, *undo_block, cf, key, previous.clone(), undo_seq);
         }
-        for (reference, hash) in &chain_mappings {
-            if let Some(hash) = hash {
-                batch.put_script_reference_to_version(1, reference, hash);
-            } else {
-                batch.delete_script_reference_to_version(1, reference);
-            }
-        }
-        for (version_hash, info) in rollups.versions {
-            if rollups.existing_versions.get(&version_hash) == Some(&info) {
+        for (version_hash, info) in &rollups.versions {
+            if rollups.existing_versions.get(version_hash) == Some(info) {
                 continue;
             }
-            batch.put_script_version(&version_hash, &info);
-            let previous = rollups.existing_versions.get(&version_hash);
+            batch.put_script_version(version_hash, info);
+            let previous = rollups.existing_versions.get(version_hash);
             // Type ID lineage (or any family rebind) must drop the old
             // by-family / by-label index rows; leaving them makes the next
             // label-import preflight see a contradictory family index.
             let prev_family = previous.and_then(|info| info.family_id.as_ref());
             match (prev_family, info.family_id.as_ref()) {
                 (Some(old), Some(new)) if old != new => {
-                    batch.delete_script_version_by_family(old, &version_hash);
-                    batch.put_script_version_by_family(new, &version_hash);
+                    batch.delete_script_version_by_family(old, version_hash);
+                    batch.put_script_version_by_family(new, version_hash);
                 }
                 (Some(old), None) => {
-                    batch.delete_script_version_by_family(old, &version_hash);
+                    batch.delete_script_version_by_family(old, version_hash);
                 }
                 (None, Some(new)) => {
-                    batch.put_script_version_by_family(new, &version_hash);
+                    batch.put_script_version_by_family(new, version_hash);
                 }
                 _ => {}
             }
             let prev_name = previous.and_then(|info| info.name.as_ref());
             match (prev_name, info.name.as_ref()) {
                 (Some(old), Some(new)) if old != new => {
-                    batch.delete_script_version_by_label(old, &version_hash);
-                    batch.put_script_version_by_label(new, &version_hash);
+                    batch.delete_script_version_by_label(old, version_hash);
+                    batch.put_script_version_by_label(new, version_hash);
                 }
                 (Some(old), None) => {
-                    batch.delete_script_version_by_label(old, &version_hash);
+                    batch.delete_script_version_by_label(old, version_hash);
                 }
                 (None, Some(new)) => {
-                    batch.put_script_version_by_label(new, &version_hash);
+                    batch.put_script_version_by_label(new, version_hash);
                 }
                 _ => {}
             }
         }
-        for (family_id, info) in rollups.families {
-            if rollups.existing_families.get(&family_id) == Some(&info) {
+        for (family_id, info) in &rollups.families {
+            if rollups.existing_families.get(family_id) == Some(info) {
                 continue;
             }
-            batch.put_script_family(&family_id, &info);
+            batch.put_script_family(family_id, info);
         }
-
+        state.versions = rollups.versions.into_iter().collect();
+        state.families = rollups.families.into_iter().collect();
         Ok(())
     }
 
@@ -2706,7 +2814,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
@@ -2885,7 +2993,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
@@ -3013,7 +3121,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
@@ -3085,7 +3193,7 @@ mod tests {
         let mut inactive_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&retired),
                 &inactive,
                 &HashMap::new(),
@@ -3103,7 +3211,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&retired),
                 &input_cells,
                 &HashMap::new(),
@@ -3167,7 +3275,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&retired),
                 &input_cells,
                 &HashMap::new(),
@@ -3236,7 +3344,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 std::slice::from_ref(&retired),
                 &HashMap::new(),
                 &batch_cells,
@@ -3457,7 +3565,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &txs,
                 &HashMap::new(),
                 &inputs,
@@ -3658,7 +3766,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
@@ -3806,7 +3914,7 @@ mod tests {
         let mut batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
@@ -3915,7 +4023,7 @@ mod tests {
         let mut unchanged_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &HashMap::new(),
+                &[],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
@@ -3966,7 +4074,7 @@ mod tests {
         let mut changed_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
-                &updated_references,
+                &[(1, updated_references)],
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),

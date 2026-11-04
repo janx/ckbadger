@@ -2116,8 +2116,8 @@ impl Indexer {
         let need_balances = !lock_hash_keys.is_empty();
         let need_scripts = !code_hash_refs.is_empty();
         let need_script_references = !reference_keys.is_empty();
-        let mut updated_script_references: HashMap<(Vec<u8>, u8), ScriptReferenceInfo> =
-            HashMap::new();
+        let mut updated_script_references: Vec<(i64, HashMap<(Vec<u8>, u8), ScriptReferenceInfo>)> =
+            Vec::new();
         let mut domain_analytics_batch =
             StoreBatch::journaled(self.writer.store(), &block_overlay, 1);
         let mut append_history_batch =

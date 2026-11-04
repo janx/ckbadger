@@ -504,6 +504,14 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_ADDR_BALANCE, None),
     (ckbadger_store::store::CF_SCRIPT_INFO, None),
     (ckbadger_store::store::CF_SCRIPT_REFERENCE_INFO, None),
+    // B-3 addresses.rs: the script version / family rollups are recomputed
+    // and written per block that moves a reference or a Type ID binding.
+    (ckbadger_store::store::CF_SCRIPT_VERSIONS, None),
+    (ckbadger_store::store::CF_SCRIPT_FAMILIES, None),
+    (ckbadger_store::store::CF_SCRIPT_VERSIONS_BY_FAMILY, None),
+    (ckbadger_store::store::CF_SCRIPT_VERSIONS_BY_LABEL, None),
+    (ckbadger_store::store::CF_SCRIPT_REFERENCE_TO_VERSION, None),
+    (ckbadger_store::store::CF_SCRIPT_FAMILY_BY_NAME, None),
 ];
 
 fn is_covered(cf: &str, key: &[u8]) -> bool {
