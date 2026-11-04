@@ -48,13 +48,13 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     expect(
       await screen.findByRole(
         'heading',
-        { level: 1, name: 'The road ends here.' },
+        { level: 1, name: 'all that is was worked for. this was not.' },
         // the route's page is a lazy chunk; under the full suite it can take over a second
         { timeout: 5000 }
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Not found · 404')).toBeInTheDocument();
-    expect(screen.queryByText(/The page fell/)).toBeNull();
+    expect(screen.queryByText(/the chain keeps/)).toBeNull();
     expect(screen.queryByText('notFound')).toBeNull();
     // The address is refused by its shape: no API request is made for it.
     expect(getForkAt).not.toHaveBeenCalled();
@@ -67,11 +67,11 @@ describe('a route that names no page renders the 404 design (C2)', () => {
     expect(
       await screen.findByRole(
         'heading',
-        { level: 1, name: 'The road ends here.' },
+        { level: 1, name: 'all that is was worked for. this was not.' },
         // the route's page is a lazy chunk; under the full suite it can take over a second
         { timeout: 5000 }
       )
     ).toBeInTheDocument();
-    expect(screen.queryByText(/The page fell/)).toBeNull();
+    expect(screen.queryByText(/the chain keeps/)).toBeNull();
   });
 });

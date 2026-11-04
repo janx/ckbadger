@@ -1,34 +1,69 @@
 'use client';
 
-import { useRef, type ReactNode, type RefObject } from 'react';
+// The not-found and error pages, direction Z: the sign over the night of ink.
+//
+//   all that is / was worked for. / this was not.        — a route that names no page
+//   a hash / is a fact. / a name, a guess.                — an entity known as something else
+//   known to some, / perhaps. / to all, not yet.          — an entity nothing answers
+//   the chain keeps / what succeeded. / this did not.     — a page that fell
+//
+// Two things on the page and nothing else. The sign is the title: one thought from the worldview
+// cut into three tubes, two lit and the third never lit — the dark line is where this page falls
+// outside the law the lit lines state. The night is WebGL (components/error-night.tsx): every
+// block the new hash is poured in as what it is, 256 bits in a grid of ink that holds for a
+// second and then dissolves in a current the hash itself seeded; the 1-bits leave as motes. The
+// honest tier is two or three small lines bottom-left. No card, no serif, nothing depicted.
+
+import { useCallback, useState, type ReactNode } from 'react';
+import { clsx } from 'clsx';
 import { Header } from '@/components/layout/header';
 import { SiteFooter } from '@/components/layout/site-footer';
+import { CssNight, ErrorNight } from '@/components/error-night';
+import { ErrorSign, type SignLines } from '@/components/error-sign';
+import type { Block } from '@/hooks/useRealtimeStore';
 
 interface ErrorPageShellProps {
   status: string;
   path: string;
-  title: ReactNode;
+  sign: SignLines;
+  readings?: readonly SignLines[];
+  brownout?: boolean;
+  /** The hash this page is about: the night's first grid. Null: the first block's. */
+  hash?: string | null;
+  /** The facts: two or three lines bottom-left, the actions among them. */
   children: ReactNode;
-  artwork?: (avoidRef: RefObject<HTMLElement | null>) => ReactNode;
-  caption?: ReactNode;
   footer?: boolean;
+  /** The outer boundary renders without Router or QueryClient: no realtime night, no ticks. */
   contextSafe?: boolean;
 }
+
+const EYEBROW_EGG = 'You are (not) here';
 
 /** Route errors replace AppFrame, while ordinary 404 routes render inside it. */
 export function ErrorPageShell({
   status,
   path,
-  title,
+  sign,
+  readings,
+  brownout = false,
+  hash = null,
   children,
-  artwork,
-  caption,
   footer = false,
   contextSafe = false,
 }: ErrorPageShellProps) {
-  const cardRef = useRef<HTMLElement>(null);
+  const [block, setBlock] = useState<Block | null>(null);
+  const [inverted, setInverted] = useState(false);
+  const [eyebrowEgg, setEyebrowEgg] = useState(false);
+  const onBlock = useCallback((next: Block) => setBlock(next), []);
+  const eggOn = () => setEyebrowEgg(true);
+  const eggOff = () => setEyebrowEgg(false);
   return (
-    <div className="bg-base-bg relative flex min-h-screen min-w-0 flex-col overflow-x-hidden">
+    <div
+      className={clsx(
+        'bg-base-bg relative flex min-h-screen min-w-0 flex-col overflow-x-hidden',
+        inverted && 'sign-inverted'
+      )}
+    >
       {contextSafe ? (
         <header className="border-base-border-subtle bg-base-bg/95 relative z-20 border-b px-4 py-3 sm:px-8 lg:px-20">
           <a href="/" aria-label="CKBadger Home" className="inline-flex items-center">
@@ -44,48 +79,39 @@ export function ErrorPageShell({
       ) : (
         <Header />
       )}
-      <main className="relative isolate flex min-w-0 flex-1 flex-col overflow-hidden px-4 pb-10 pt-12 sm:px-8 lg:px-20 lg:pt-20">
-        {artwork && (
-          <div className="pointer-events-none absolute inset-0 -z-10 opacity-70" aria-hidden="true">
-            {artwork(cardRef)}
+      <main className="relative isolate flex min-h-[34rem] min-w-0 flex-1 flex-col overflow-hidden">
+        {contextSafe ? (
+          <div className="error-night" aria-hidden="true" data-night="static">
+            <CssNight hash={null} />
           </div>
+        ) : (
+          <ErrorNight hash={hash} onBlock={onBlock} />
         )}
-        <div className="relative z-10 flex w-full min-w-0 flex-1 flex-col justify-between gap-16">
-          <section
-            ref={cardRef}
-            className="bg-base-bg/85 w-full min-w-0 max-w-[47rem] py-3 backdrop-blur-[2px] sm:pr-4"
+        <p className="absolute left-4 top-[52px] z-[2] m-0 flex min-w-0 max-w-[calc(100%-2rem)] flex-wrap items-baseline gap-x-3.5 gap-y-1 lg:left-24 lg:top-32 lg:max-w-[calc(100%-12rem)]">
+          <span
+            className="eyebrow text-text-dim"
+            data-eyebrow
+            onPointerEnter={eggOn}
+            onPointerLeave={eggOff}
+            onPointerDown={eggOn}
+            onPointerUp={eggOff}
           >
-            <div className="mb-5 flex min-w-0 flex-wrap items-baseline gap-x-4 gap-y-1">
-              <p
-                className="text-text-bright text-hero sm:text-index uppercase tracking-[0.1em]"
-                style={{ fontFamily: 'var(--font-error-display)' }}
-              >
-                {status}
-              </p>
-              <p className="text-text-dim text-meta min-w-0 break-all font-mono">{path}</p>
-            </div>
-            <h1
-              className="text-text-bright max-w-full break-words uppercase leading-[0.94] tracking-[-0.045em]"
-              style={{ fontFamily: 'var(--font-error-display)' }}
-            >
-              {title}
-            </h1>
-            <div className="mt-8 min-w-0">{children}</div>
-          </section>
-          {caption && (
-            <section
-              aria-label="Common knowledge cells artwork source"
-              className="bg-base-bg/85 text-text-dim min-w-0 max-w-[47rem] py-3 backdrop-blur-[2px]"
-            >
-              <h2
-                className="text-text-bright text-body mb-2 uppercase tracking-[0.12em]"
-                style={{ fontFamily: 'var(--font-error-display)' }}
-              >
-                Common knowledge cells
-              </h2>
-              <p className="text-small break-words leading-relaxed">{caption}</p>
-            </section>
-          )}
+            {eyebrowEgg ? EYEBROW_EGG : status}
+          </span>
+          <span className="text-text-dim text-meta min-w-0 break-all font-mono">{path}</span>
+        </p>
+        <div className="absolute left-4 top-24 z-[2] lg:left-24 lg:top-44">
+          <ErrorSign
+            lines={sign}
+            readings={readings}
+            brownout={brownout}
+            blockKey={block?.hash ?? null}
+            epochTurn={block?.epochIndex === 0}
+            onInverted={setInverted}
+          />
+        </div>
+        <div className="error-facts text-text-dim text-meta absolute bottom-6 left-4 right-4 z-[2] flex min-w-0 flex-col gap-0.5 font-mono leading-[1.8] lg:bottom-11 lg:left-24 lg:right-24">
+          {children}
         </div>
       </main>
       {footer && <SiteFooter />}

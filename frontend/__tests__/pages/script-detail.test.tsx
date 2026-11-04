@@ -562,7 +562,7 @@ describe('ScriptDetailPage', () => {
 
   it.each([
     { status: 500, expectedTitle: 'Script data unavailable' },
-    { status: 404, expectedTitle: 'An unanswered name.' },
+    { status: 404, expectedTitle: 'known to some, perhaps. to all, not yet.' },
   ])(
     'distinguishes named script HTTP $status from not found',
     async ({ status, expectedTitle }) => {
@@ -609,9 +609,7 @@ describe('ScriptDetailPage', () => {
       await screen.findByRole('heading', { name: 'Script data unavailable' })
     ).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('reference missing');
-    expect(
-      screen.queryByText('This explorer could not open the script at this address.')
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('no script at this address.')).not.toBeInTheDocument();
   });
 
   it('marks deprecated family and versions without calling them unlabeled', async () => {

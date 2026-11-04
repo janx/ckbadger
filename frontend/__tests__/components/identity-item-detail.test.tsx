@@ -75,9 +75,7 @@ it('retains configuration-specific not-found semantics', async () => {
   mockFetchDetail.mockRejectedValue(new ApiRequestError(404, 'NOT_FOUND', 'missing'));
   const view = render(<IdentityItemDetail config={dotbitConfig} identityId="0xabc" />);
   expect(await screen.findByText('/assets/identities/dotbit/items/0xabc')).toBeInTheDocument();
-  expect(
-    screen.getByText('This explorer could not open the identity at this address.')
-  ).toBeInTheDocument();
+  expect(screen.getByText('no identity at this address.')).toBeInTheDocument();
   view.unmount();
   render(<IdentityItemDetail config={didCkbConfig} identityId="0xabc" />);
   expect(await screen.findByText('/assets/identities/did/items/0xabc')).toBeInTheDocument();

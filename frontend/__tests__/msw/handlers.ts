@@ -1,7 +1,6 @@
 import { http, HttpResponse, ws } from 'msw';
 import { pipelineSnapshot } from '@/__tests__/msw/fixtures/pipeline-snapshot';
 import { blockUncle } from '@/__tests__/msw/fixtures/block-uncle';
-import vesselSnapshot from '@/__tests__/fixtures/vessels-api-producer/vessels-snapshot.json';
 // F2 group `fiber`: the D7 fork detail fixture
 import forkUncleDetail from '@/__tests__/fixtures/fork-api-producer/fork-uncle-detail.json';
 import {
@@ -32,7 +31,6 @@ const realtimeSocket = ws.link('ws://localhost:3000/ws/:network');
 export const handlers = [
   realtimeSocket.addEventListener('connection', () => {}),
   // Error-page artwork reads this bounded, Rust-producer-backed sample in page tests.
-  http.get(`${API_BASE}/vessels/snapshot`, () => HttpResponse.json(vesselSnapshot)),
   http.get(`${API_BASE}/pipeline`, () => HttpResponse.json(pipelineSnapshot)),
 
   http.get(`${API_BASE}/blocks`, ({ request }) => {

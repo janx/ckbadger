@@ -16,10 +16,12 @@ it('keeps class/copper encodings separate and bundles fonts without runtime requ
   expect(HUE_RAMP).not.toContain(CLASS_COLORS.dao);
   const html = readFileSync(resolve('index.html'), 'utf8');
   expect(html).not.toMatch(/fonts\.googleapis|fonts\.gstatic/);
-  for (const font of ['jetbrains-mono-regular', 'jetbrains-mono-medium', 'noto-serif-display'])
+  for (const font of ['jetbrains-mono-regular', 'jetbrains-mono-medium'])
     expect(statSync(resolve(`public/fonts/${font}.woff2`)).size).toBeGreaterThan(1000);
   const css = readFileSync(resolve('app/globals.css'), 'utf8');
-  expect(css).toContain('Noto Serif Display');
+  // the serif left with the vessels: the error pages are the mono sign over the night
+  expect(css).not.toContain('Noto Serif Display');
+  expect(statSync(resolve('public/fonts')).isDirectory()).toBe(true);
   expect(css).toContain('.crt-screen::before');
 });
 it('paints every scrollbar in the palette, thin inside the page, so a region that scrolls inside itself shows no platform-grey bar', () => {

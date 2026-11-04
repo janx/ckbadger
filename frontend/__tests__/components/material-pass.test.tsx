@@ -110,9 +110,9 @@ describe('the rules in globals.css', () => {
           `@font-face \\{\\s*font-family: 'JetBrains Mono';\\s*font-style: ${style};\\s*font-weight: ${weight};\\s*font-display: swap;\\s*src: url\\('/fonts/jetbrains-mono-${file}\\.woff2'\\) format\\('woff2'\\);`
         )
       );
-    // no second family: every @font-face but the pre-existing error-page serif is JetBrains Mono
+    // no second family: every @font-face is JetBrains Mono (the error pages' serif left with the vessels)
     const families = [...css.matchAll(/@font-face \{\s*font-family: '([^']+)'/g)].map((m) => m[1]);
-    expect(families.filter((f) => f !== 'JetBrains Mono')).toEqual(['Noto Serif Display']);
+    expect(families.filter((f) => f !== 'JetBrains Mono')).toEqual([]);
     expect(css).toMatch(/\n\.text-display\s*\{\s*font-weight: 300;\s*\}/);
     expect(css).toMatch(
       /@media \(min-width: 640px\)\s*\{\s*\.sm\\:text-display\s*\{\s*font-weight: 300;\s*\}\s*\}/

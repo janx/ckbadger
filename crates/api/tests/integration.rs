@@ -36,7 +36,6 @@ mod api_transactions;
 mod api_verify;
 mod api_verify_asset_contract;
 mod api_verify_calendar_contract;
-mod api_vessels;
 mod api_warmup;
 mod frontend_server_spa;
 mod metadata_object_tiers;

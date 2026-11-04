@@ -1,58 +1,103 @@
 import { MemoryRouter } from 'react-router-dom';
 import { render as bareRender } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@/__tests__/utils/test-utils';
+import { fireEvent, render, screen, waitFor, within } from '@/__tests__/utils/test-utils';
 import { CrashPage } from '@/components/crash-page';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ErrorPageShell } from '@/components/error-page-shell';
 
 vi.mock('@/src/navigation', async () => await vi.importActual('@/src/navigation'));
-vi.mock('@/components/error-vessels', () => ({
-  ErrorVessels: () => <div data-testid="error-vessels" />,
-  VesselsCaption: () => <span>Bounded live cell sample</span>,
-}));
+
+const HASH = '0xbbb655aefa778c0856e702030e9f8e9f6171daa392c90b3d9abe3d69c74b386b';
+const ROUTE = ['all that is', 'was worked for.', 'this was not.'] as const;
 
 describe('ErrorPageShell', () => {
-  it('renders the self-hosted serif title card and wraps a long path at mobile width', () => {
+  it('is the sign over the night: the thought as the h1 in the mono, the eyebrow and the path, no card', () => {
     const path = '/tx/' + 'a'.repeat(128);
     render(
-      <ErrorPageShell status="Not found · 404" path={path} title="An unanswered name." contextSafe>
-        <p>Find another route.</p>
+      <ErrorPageShell status="Not found · 404" path={path} sign={ROUTE} contextSafe>
+        <span>no page at this path.</span>
       </ErrorPageShell>
     );
-    expect(screen.getByRole('heading', { name: 'An unanswered name.' })).toHaveStyle({
-      fontFamily: 'var(--font-error-display)',
+    const sign = screen.getByRole('heading', {
+      level: 1,
+      name: 'all that is was worked for. this was not.',
     });
+    expect(sign).toHaveClass('sign');
+    expect(sign).not.toHaveAttribute('style');
+    const tubes = sign.querySelectorAll('[data-tube]');
+    expect(tubes).toHaveLength(3);
+    expect(tubes[2]).toHaveClass('off');
+    expect(screen.getByText('Not found · 404')).toHaveClass('eyebrow');
     expect(screen.getByText(path)).toHaveClass('break-all');
+    expect(screen.getByText('no page at this path.').parentElement).toHaveClass('error-facts');
     expect(screen.getByRole('main').parentElement).toHaveClass('overflow-x-hidden');
     expect(screen.queryByRole('contentinfo')).toBeNull();
+    // provider-safe: the static CSS night, no canvas, no realtime feed
+    expect(screen.getByTestId('css-night')).toBeInTheDocument();
+    expect(document.querySelector('canvas')).toBeNull();
+    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'static');
   });
 
-  it('shows crash context and one footer without claiming the chain is healthy', () => {
+  it('the eyebrow says what it means while the pointer is on it', () => {
+    render(
+      <ErrorPageShell status="Not found · 404" path="/nowhere" sign={ROUTE} contextSafe>
+        <span>facts</span>
+      </ErrorPageShell>
+    );
+    const eyebrow = screen.getByText('Not found · 404');
+    fireEvent.pointerEnter(eyebrow);
+    expect(eyebrow).toHaveTextContent('You are (not) here');
+    fireEvent.pointerLeave(eyebrow);
+    expect(eyebrow).toHaveTextContent('Not found · 404');
+  });
+
+  it('with providers it mounts the night; without WebGL2 (jsdom) the CSS night shows the page’s hash as 256 squares', () => {
+    render(
+      <MemoryRouter initialEntries={[`/mainnet/tx/${HASH}`]}>
+        <ErrorPageShell status="Not found · 404" path={`/tx/${HASH}`} sign={ROUTE} hash={HASH}>
+          <span>facts</span>
+        </ErrorPageShell>
+      </MemoryRouter>
+    );
+    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'failed');
+    expect(document.querySelector('canvas')).toHaveClass('hidden');
+    const squares = screen.getByTestId('css-night').querySelectorAll('.error-night-bits i');
+    expect(squares).toHaveLength(256);
+    expect(squares[0]).toHaveClass('one');
+    expect(squares[1]).toHaveClass('zero');
+  });
+
+  it('the crash page: the thought of the failed transition, the error in red, one footer, and no claim about the chain', () => {
     render(
       <MemoryRouter initialEntries={['/mainnet/fiber/channels/0x01']}>
         <CrashPage message="TypeError: missing channel output" />
       </MemoryRouter>
     );
     expect(
-      screen.getByRole('heading', { name: 'The page fell. The cause is unclear.' })
-    ).toBeInTheDocument();
-    expect(screen.getByRole('alert')).toHaveTextContent('TypeError: missing channel output');
+      screen.getByRole('heading', { name: 'the chain keeps what succeeded. this did not.' })
+    ).toHaveClass('sign-brownout');
+    expect(screen.getByText('Error · not a 404')).toHaveClass('eyebrow');
+    expect(screen.getByRole('alert')).toHaveTextContent('✗ TypeError: missing channel output');
     expect(screen.getAllByText('/mainnet/fiber/channels/0x01')).toHaveLength(2);
+    expect(
+      screen.getByText(
+        'the chain was not checked in this view — this says nothing about what it holds'
+      )
+    ).toBeInTheDocument();
     expect(
       screen.queryByText(/nothing is wrong with the chain|reloading will not mend/i)
     ).toBeNull();
-    expect(screen.getByRole('button', { name: 'Try again →' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '↻ try again' })).toBeInTheDocument();
     expect(
-      screen.getByRole('button', { name: 'Copy details for a bug report' })
+      screen.getByRole('button', { name: '→ copy details for a bug report' })
     ).toBeInTheDocument();
-    expect(screen.getByText('Not checked in this error view')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to Fiber channels →' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '← Fiber channels' })).toHaveAttribute(
       'href',
       '/mainnet/fiber/channels'
     );
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
-    expect(screen.getByTestId('error-vessels')).toBeInTheDocument();
+    expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'failed');
   });
 
   it('renders a provider-safe fallback when the app itself throws', () => {
@@ -67,12 +112,13 @@ describe('ErrorPageShell', () => {
         </ErrorBoundary>
       );
       expect(screen.getByRole('alert')).toHaveTextContent('block 12: invalid DAO field');
-      expect(screen.getByRole('link', { name: 'Back to the explorer →' })).toHaveAttribute(
+      expect(screen.getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
         'href',
         '/mainnet'
       );
       expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull();
-      expect(screen.queryByTestId('error-vessels')).toBeNull();
+      expect(document.querySelector('canvas')).toBeNull();
+      expect(document.querySelector('.error-night')).toHaveAttribute('data-night', 'static');
       expect(screen.getByRole('link', { name: 'CKBadger Home' })).toHaveAttribute('href', '/');
     } finally {
       consoleError.mockRestore();
@@ -92,8 +138,10 @@ describe('ErrorPageShell', () => {
           <CrashPage message="block 12: invalid DAO field" />
         </MemoryRouter>
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Copy details for a bug report' }));
-      await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('copied'));
+      fireEvent.click(screen.getByRole('button', { name: '→ copy details for a bug report' }));
+      await waitFor(() =>
+        expect(within(screen.getByRole('main')).getByRole('status')).toHaveTextContent('copied')
+      );
       expect(writeText).toHaveBeenCalledWith(
         expect.stringContaining('Error: block 12: invalid DAO field')
       );

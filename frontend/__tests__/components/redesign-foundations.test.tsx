@@ -468,8 +468,8 @@ describe('transaction and activity foundations', () => {
   it('prints crash context and recovery actions without claiming a missing chain entity', () => {
     render(<CrashPage message="block 12: invalid DAO field" />);
     expect(screen.getByRole('alert')).toHaveTextContent('block 12: invalid DAO field');
-    expect(screen.getByRole('button', { name: 'Try again →' })).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Back to the explorer →' })).toHaveAttribute(
+    expect(screen.getByRole('button', { name: '↻ try again' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '← back to the explorer' })).toHaveAttribute(
       'href',
       '/mainnet'
     );

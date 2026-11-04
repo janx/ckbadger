@@ -158,10 +158,12 @@ it('reports missing identity and unavailable raw evidence without inventing a do
     new ApiRequestError(404, 'not_found', 'Identity not found')
   );
   const { unmount } = render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
-  expect(screen.getByText('checked').nextElementSibling).toHaveTextContent(
-    `/assets/identities/dotbit/items/${evidence.itemId}`
-  );
+  expect(
+    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+  ).toBeInTheDocument();
+  expect(
+    screen.getByText(`/assets/identities/dotbit/items/${evidence.itemId}`)
+  ).toBeInTheDocument();
   unmount();
   vi.mocked(api.getDotbitItemDetail).mockResolvedValue({ ...identityItem('dotbit'), bitCells: [] });
   vi.mocked(api.getItemProtocol).mockRejectedValue(new Error('missing local cell bytes'));
@@ -179,7 +181,7 @@ it('keeps a failed identity source distinct from an absent identity', async () =
   );
   render(<Page identityId={evidence.itemId} />);
   expect(await screen.findByRole('alert')).toHaveTextContent('identity index mismatch');
-  expect(screen.queryByText('An unanswered name.')).not.toBeInTheDocument();
+  expect(screen.queryByText('known to some, perhaps. to all, not yet.')).not.toBeInTheDocument();
 });
 
 // ── F2 identities (round 2): the IdentityBit board's tier 1 (ID-C5/C6/C7/C10, ID-B1/B2/B4) ──

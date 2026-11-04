@@ -152,12 +152,11 @@ describe('BlockDetailPage', () => {
     paramsIdRef.current = BLOCK_HASH;
     vi.mocked(api.getBlock).mockRejectedValue(Object.assign(new Error('absent'), { status: 404 }));
     render(<BlockDetailPage />);
-    expect((await screen.findByText('checked')).nextElementSibling).toHaveTextContent(
-      `/blocks/${BLOCK_HASH}`
-    );
+    // the checked endpoint stands in the facts (the eyebrow shows the route, which here reads the same)
     expect(
-      screen.getByText('This explorer could not open the block at this address.')
-    ).toBeInTheDocument();
+      (await screen.findAllByText(`/blocks/${BLOCK_HASH}`)).some((el) => el.closest('.error-facts'))
+    ).toBe(true);
+    expect(screen.getByText('no block at this address.')).toBeInTheDocument();
   });
 
   it('keeps block invariant failures as errors rather than absence evidence', async () => {
@@ -166,9 +165,7 @@ describe('BlockDetailPage', () => {
     );
     render(<BlockDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('missing canonical header');
-    expect(
-      screen.queryByText('This explorer could not open the block at this address.')
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('no block at this address.')).not.toBeInTheDocument();
   });
 
   it('shows exact decoded DAO fields alongside the raw 32-byte header', async () => {

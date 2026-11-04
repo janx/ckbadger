@@ -234,7 +234,9 @@ describe('MnftItemDetailPage', () => {
       new ApiRequestError(404, 'not_found', 'missing')
     );
     render(<MnftItemDetailPage objectId={id} />);
-    expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+    ).toBeInTheDocument();
     expect(screen.getByText(`/assets/objects/items/${id}`)).toBeInTheDocument();
     expect(api.getItemProtocol).not.toHaveBeenCalled();
   });
@@ -245,7 +247,7 @@ describe('MnftItemDetailPage', () => {
     );
     render(<MnftItemDetailPage objectId={id} />);
     expect(await screen.findByRole('alert')).toHaveTextContent('canonical item mismatch');
-    expect(screen.queryByText('An unanswered name.')).not.toBeInTheDocument();
+    expect(screen.queryByText('known to some, perhaps. to all, not yet.')).not.toBeInTheDocument();
   });
 
   it('retains item content while showing a background read failure', async () => {

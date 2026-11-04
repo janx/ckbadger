@@ -4,13 +4,21 @@ import { useContext, useState } from 'react';
 import { UNSAFE_LocationContext } from 'react-router-dom';
 import Link from '@/components/ui/link';
 import { ErrorPageShell } from '@/components/error-page-shell';
-import { ErrorVessels, VesselsCaption } from '@/components/error-vessels';
+import type { SignLines } from '@/components/error-sign';
 import { usePathname } from '@/src/navigation';
 import { resolveBuildVersion } from '@/lib/runtime-config';
 import { isKnownNetwork } from '@/lib/active-network';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const ERROR_TITLE = ['Error'] as const;
+
+/** A page that fell: the world keeps only what succeeded; a failed transition leaves no state. */
+const ERROR_READINGS: readonly SignLines[] = [
+  ['the chain keeps', 'what succeeded.', 'this did not.'],
+  ['a transition', 'that failed', 'leaves no state.'],
+  ['work was spent,', 'and nothing', 'came of it.'],
+  ['our fault.', 'the chain', 'was not asked.'],
+];
 
 interface CrashPageProps {
   message: string;
@@ -34,12 +42,12 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
   const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
   useDocumentTitle(ERROR_TITLE);
   const recovery = pathname.startsWith('/fiber/')
-    ? { href: '/fiber/channels', label: 'Back to Fiber channels' }
+    ? { href: '/fiber/channels', label: 'Fiber channels' }
     : pathname.startsWith('/tx/')
-      ? { href: '/transactions', label: 'Back to transactions' }
+      ? { href: '/transactions', label: 'transactions' }
       : pathname.startsWith('/blocks/')
-        ? { href: '/blocks', label: 'Back to blocks' }
-        : { href: '/', label: 'Back to the explorer' };
+        ? { href: '/blocks', label: 'blocks' }
+        : { href: '/', label: 'back to the explorer' };
 
   async function copyDetails() {
     const report = [
@@ -61,76 +69,45 @@ export function CrashPage({ message, contextSafe = false }: CrashPageProps) {
     <ErrorPageShell
       status="Error · not a 404"
       path={fullRoute}
-      title={
-        <>
-          <span className="block text-[clamp(2.4rem,7vw,5.75rem)]">The page fell.</span>{' '}
-          <span className="block text-[clamp(1.9rem,6.4vw,3.75rem)]">The cause is unclear.</span>
-        </>
-      }
+      sign={ERROR_READINGS[0]}
+      readings={ERROR_READINGS}
+      brownout
       footer
       contextSafe={contextSafe}
-      artwork={contextSafe ? undefined : (avoidRef) => <ErrorVessels avoidRef={avoidRef} />}
-      caption={contextSafe ? undefined : <VesselsCaption />}
     >
-      <p
-        className="text-text-bright max-w-xl text-[clamp(1.25rem,3vw,1.7rem)] leading-snug"
-        style={{ fontFamily: 'var(--font-error-display)' }}
-      >
-        We could not complete this page.
-      </p>
-      <p className="text-text-dim text-body mt-3 max-w-xl leading-relaxed">
-        This error does not establish whether the requested entity or chain data is available.
-      </p>
-      <dl className="border-base-border-subtle text-small mt-8 min-w-0 border-t font-mono">
-        <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
-          <dt className="text-text-dim">error</dt>
-          <dd role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">
-            {message}
-          </dd>
-        </div>
-        <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
-          <dt className="text-text-dim">page</dt>
-          <dd className="text-text min-w-0 break-all">{fullRoute}</dd>
-        </div>
-        <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
-          <dt className="text-text-dim">network</dt>
-          <dd className="text-text min-w-0 break-all">{network}</dd>
-        </div>
-        <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
-          <dt className="text-text-dim">build</dt>
-          <dd className="text-text min-w-0 break-all">CKBadger {build}</dd>
-        </div>
-        <div className="border-base-border-subtle grid min-w-0 grid-cols-[4rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[7rem_minmax(0,1fr)]">
-          <dt className="text-text-dim">chain tip</dt>
-          <dd className="text-text min-w-0 break-words">Not checked in this error view</dd>
-        </div>
-      </dl>
-      <div className="text-small mt-8 flex flex-wrap gap-3 font-mono">
+      <span role="alert" className="text-negative min-w-0 whitespace-pre-wrap break-all">
+        ✗ {message}
+      </span>
+      <span className="min-w-0 break-all">
+        page <span>{fullRoute}</span> · network {network} · CKBadger {build} ·{' '}
+        <span>the chain was not checked in this view — this says nothing about what it holds</span>
+      </span>
+      <div className="flex flex-wrap gap-x-4 gap-y-1">
         <button
           type="button"
-          className="border-jade text-jade hover:bg-jade/10 focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
-          onClick={copyDetails}
+          className="text-jade focus-visible:outline-jade whitespace-nowrap underline-offset-4 hover:underline focus-visible:outline"
+          onClick={() => window.location.reload()}
         >
-          Copy details for a bug report
+          ↻ try again
         </button>
         <button
           type="button"
-          className="border-base-border text-text hover:text-jade focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
-          onClick={() => window.location.reload()}
+          className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+          onClick={copyDetails}
         >
-          Try again →
+          → copy details for a bug report
         </button>
         <Link
           href={recovery.href}
-          className="border-base-border text-text hover:text-jade focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
+          className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
         >
-          {recovery.label} →
+          ← {recovery.label}
         </Link>
       </div>
       {copyState !== 'idle' && (
-        <p role="status" className="text-text-dim text-small mt-3">
-          {copyState === 'copied' ? 'Error details copied.' : 'Could not copy details.'}
-        </p>
+        <span role="status">
+          {copyState === 'copied' ? 'error details copied.' : 'could not copy details.'}
+        </span>
       )}
     </ErrorPageShell>
   );

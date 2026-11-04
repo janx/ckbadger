@@ -1079,9 +1079,7 @@ describe('TransactionDetailPage', () => {
     render(<TransactionDetailPage />);
 
     expect(await screen.findByText(`/transactions/${TX_HASH}/detail`)).toBeInTheDocument();
-    expect(
-      screen.getByText('This explorer could not open the transaction at this address.')
-    ).toBeInTheDocument();
+    expect(screen.getByText('no transaction at this address.')).toBeInTheDocument();
     expect(screen.queryByText('Failed to load transaction')).not.toBeInTheDocument();
   });
 
@@ -1091,9 +1089,7 @@ describe('TransactionDetailPage', () => {
     );
     render(<TransactionDetailPage />);
     expect(await screen.findByText('Failed to load transaction')).toBeInTheDocument();
-    expect(
-      screen.queryByText('This explorer could not open the transaction at this address.')
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('no transaction at this address.')).not.toBeInTheDocument();
   });
 
   it('shows detailed message for non-404 transaction errors', async () => {

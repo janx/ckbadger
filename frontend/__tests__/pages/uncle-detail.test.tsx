@@ -61,12 +61,13 @@ describe('Uncle detail page', () => {
   it('shows the checked endpoint for an index the block does not have', async () => {
     params.current = { id: '8775638', index: '3' };
     render(<UncleDetailPage />);
-    expect((await screen.findByText('checked')).nextElementSibling).toHaveTextContent(
-      '/blocks/8775638/uncles/3'
-    );
+    // the checked endpoint stands in the facts (the eyebrow shows the route, which here reads the same)
     expect(
-      screen.getByText('This explorer could not open the uncle at this address.')
-    ).toBeInTheDocument();
+      (await screen.findAllByText('/blocks/8775638/uncles/3')).some((el) =>
+        el.closest('.error-facts')
+      )
+    ).toBe(true);
+    expect(screen.getByText('no uncle at this address.')).toBeInTheDocument();
   });
 
   it('refuses decoded DAO fields that disagree with the raw header bytes', async () => {

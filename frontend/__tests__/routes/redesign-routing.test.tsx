@@ -69,9 +69,10 @@ describe('redesign routes', () => {
   it('shows a crash for a failed loader, never a fabricated missing entity', async () => {
     render(<RouteErrorBoundary />);
     expect(
-      await screen.findByRole('heading', { name: 'The page fell. The cause is unclear.' })
+      await screen.findByRole('heading', { name: 'the chain keeps what succeeded. this did not.' })
     ).toBeInTheDocument();
-    expect(screen.getByText('transaction 0xabc: invalid capacity')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('transaction 0xabc: invalid capacity');
+    expect(screen.getByRole('alert')).toBeInTheDocument();
     expect(screen.queryByText(/cell_not_found/)).toBeNull();
   });
 
@@ -88,7 +89,9 @@ describe('redesign routes', () => {
       routeError.current = signal;
     }
     const route = render(<RouteErrorBoundary />);
-    expect(screen.getByRole('heading', { name: 'The road ends here.' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'all that is was worked for. this was not.' })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     route.unmount();
 
@@ -99,14 +102,18 @@ describe('redesign routes', () => {
       'No fork event at #20894012 dropped a block starting 0xc121e093'
     );
     render(<RouteErrorBoundary />);
-    expect(screen.getByRole('heading', { name: 'The road ends here.' })).toBeInTheDocument();
-    expect(screen.queryByText(/The page fell/)).toBeNull();
+    expect(
+      screen.getByRole('heading', { name: 'all that is was worked for. this was not.' })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/the chain keeps/)).toBeNull();
   });
 
   it('keeps route HTTP 404 distinct from HTTP 500', () => {
     routeError.current = { status: 404, statusText: 'Not Found', data: null, internal: true };
     const notFound = render(<RouteErrorBoundary />);
-    expect(screen.getByRole('heading', { name: 'The road ends here.' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { name: 'all that is was worked for. this was not.' })
+    ).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
     notFound.unmount();
 
@@ -118,7 +125,7 @@ describe('redesign routes', () => {
     };
     render(<RouteErrorBoundary />);
     expect(
-      screen.getByRole('heading', { name: 'The page fell. The cause is unclear.' })
+      screen.getByRole('heading', { name: 'the chain keeps what succeeded. this did not.' })
     ).toBeInTheDocument();
     expect(screen.getByRole('alert')).toHaveTextContent('Index read failed');
   });

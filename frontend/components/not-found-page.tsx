@@ -2,12 +2,60 @@
 
 import Link from '@/components/ui/link';
 import { ErrorPageShell } from '@/components/error-page-shell';
-import { ErrorVessels, VesselsCaption } from '@/components/error-vessels';
+import type { SignLines } from '@/components/error-sign';
 import { usePathname } from '@/src/navigation';
+import { HASH32 } from '@/lib/night/bits';
 import { useNotFoundEvidence, type NotFoundEntity } from '@/lib/not-found-evidence';
 import { useDocumentTitle } from '@/lib/use-document-title';
 
 const NOT_FOUND_TITLE = ['Not found'] as const;
+
+/** A route that names no page: existence is proof of work; this road never was. */
+const ROUTE_READINGS: readonly SignLines[] = [
+  ['all that is', 'was worked for.', 'this was not.'],
+  ['nothing is lost,', 'for nothing', 'was ever here.'],
+  ['emptiness', 'is capacity,', 'not loss.'],
+  ['time confirms.', 'it does not', 'invent.'],
+];
+/** An entity known as something else: the hash is a fact, the name it was asked by an opinion. */
+const NAMED_READINGS: readonly SignLines[] = [
+  ['a hash', 'is a fact.', 'a name, a guess.'],
+  ['what it is', 'outlasts', 'its name.'],
+  ['known', 'by what it is,', 'not by its name.'],
+  ['one hash', 'names one thing.', 'not this one.'],
+];
+/** An entity nothing answers: common knowledge is what all hold; absence here is not denial. */
+const UNANSWERED_READINGS: readonly SignLines[] = [
+  ['known to some,', 'perhaps.', 'to all, not yet.'],
+  ['the chain keeps', 'what was proven.', 'this, unproven.'],
+  ['unknown here', 'is not', 'untrue.'],
+  ['silence', 'is not', 'denial.'],
+];
+
+const OUTPOINT = /^(0x[0-9a-fA-F]{64})-(0|[1-9][0-9]*)$/;
+
+/** The hash the page is about, for the night's first grid: a 32-byte hash, or an out point's. */
+export function entityHash(entity: NotFoundEntity | undefined): string | null {
+  if (!entity) return null;
+  if (HASH32.test(entity.identifier)) return entity.identifier.toLowerCase();
+  const outpoint = OUTPOINT.exec(entity.identifier);
+  return outpoint ? outpoint[1].toLowerCase() : null;
+}
+
+const RETURNS: Partial<Record<NotFoundEntity['kind'], { href: string; label: string }>> = {
+  transaction: { href: '/transactions', label: 'transactions' },
+  block: { href: '/blocks', label: 'blocks' },
+  uncle: { href: '/blocks', label: 'blocks' },
+  address: { href: '/activities', label: 'activities' },
+  token: { href: '/inventory/tokens', label: 'tokens' },
+  object: { href: '/inventory/objects', label: 'objects' },
+  collection: { href: '/inventory/objects', label: 'objects' },
+  identity: { href: '/inventory/identities', label: 'identities' },
+  'fiber-channel': { href: '/fiber/channels', label: 'Fiber channels' },
+  script: { href: '/scripts', label: 'scripts' },
+  'script-family': { href: '/scripts', label: 'scripts' },
+  fork: { href: '/forks', label: 'forks' },
+};
 
 interface NotFoundPageProps {
   entity?: NotFoundEntity;
@@ -20,104 +68,89 @@ export function NotFoundPage({ entity, errMessage, footer = false }: NotFoundPag
   const pathname = usePathname();
   const lookup = useNotFoundEvidence(entity);
   useDocumentTitle(NOT_FOUND_TITLE);
-  const title = entity ? (
-    lookup.evidence?.alternative ? (
-      <>
-        <span className="block text-[clamp(3rem,8vw,7rem)]">A name,</span>{' '}
-        <span className="block text-[clamp(2rem,7vw,4.25rem)]">
-          not a {entity.kind.replace('-', ' ')}.
-        </span>
-      </>
-    ) : (
-      <>
-        <span className="block text-[clamp(2.5rem,7vw,5rem)]">An unanswered</span>{' '}
-        <span className="block text-[clamp(3rem,8vw,7rem)]">name.</span>
-      </>
-    )
-  ) : (
-    <>
-      <span className="block text-[clamp(2.5rem,7vw,5.5rem)]">The road ends</span>{' '}
-      <span className="block text-[clamp(3rem,8vw,7rem)]">here.</span>
-    </>
-  );
+  const readings = entity
+    ? lookup.evidence?.alternative
+      ? NAMED_READINGS
+      : UNANSWERED_READINGS
+    : ROUTE_READINGS;
+  const back = entity ? RETURNS[entity.kind] : undefined;
 
   return (
     <ErrorPageShell
       status="Not found · 404"
       path={pathname}
-      title={title}
+      sign={readings[0]}
+      readings={readings}
+      hash={entityHash(entity)}
       footer={footer}
-      artwork={(avoidRef) => <ErrorVessels avoidRef={avoidRef} />}
-      caption={<VesselsCaption />}
     >
-      <p
-        className="text-text-bright max-w-xl text-[clamp(1.25rem,3vw,1.7rem)] leading-snug"
-        style={{ fontFamily: 'var(--font-error-display)' }}
-      >
-        {entity
-          ? `This explorer could not open the ${entity.kind} at this address.`
-          : 'This route does not lead to a page.'}
-      </p>
-      {entity && (
-        <dl className="border-base-border-subtle text-small mt-8 min-w-0 border-t font-mono">
-          <div className="border-base-border-subtle grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
-            <dt className="text-text-dim">requested</dt>
-            <dd className="text-text min-w-0 break-all">{entity.identifier}</dd>
-          </div>
-          <div className="border-base-border-subtle grid min-w-0 grid-cols-[5rem_minmax(0,1fr)] gap-3 border-b py-3 sm:grid-cols-[8rem_minmax(0,1fr)]">
-            <dt className="text-text-dim">checked</dt>
-            <dd className="text-text min-w-0 break-all">{entity.checkedEndpoint}</dd>
-          </div>
-        </dl>
+      {entity ? (
+        <span className="min-w-0 break-all">
+          <span className="text-text">no {entity.kind.replace('-', ' ')} at this address.</span>{' '}
+          checked <span>{entity.checkedEndpoint}</span> → 404 · requested{' '}
+          <span className="break-all">{entity.identifier}</span>
+        </span>
+      ) : (
+        <span>
+          <span className="text-text">no page at this path.</span> the chain was not asked · nothing
+          on it is lost
+        </span>
       )}
       {lookup.status === 'loading' && (
-        <p role="status" className="text-text-dim text-small mt-4 max-w-xl">
-          Checking the local /search index for an exact alternative…
-        </p>
+        <span role="status">checking the local /search index for an exact alternative…</span>
       )}
       {lookup.status === 'checked' && lookup.evidence && (
-        <div className="text-text-dim text-body mt-4 min-w-0 max-w-xl leading-relaxed">
-          <p className="break-all">{lookup.evidence.finding}</p>
+        <span className="min-w-0">
+          <span className="break-all">{lookup.evidence.finding}</span>
           {lookup.evidence.alternative && (
-            <Link
-              href={lookup.evidence.alternative.href}
-              className="text-jade focus-visible:outline-jade mt-3 inline-block break-all underline-offset-4 hover:underline focus-visible:outline"
-            >
-              Open {lookup.evidence.alternative.label} →
-            </Link>
+            <>
+              {' '}
+              <Link
+                href={lookup.evidence.alternative.href}
+                className="text-jade focus-visible:outline-jade whitespace-nowrap underline-offset-4 hover:underline focus-visible:outline"
+              >
+                → open {lookup.evidence.alternative.label}
+              </Link>
+            </>
           )}
-        </div>
+        </span>
       )}
       {lookup.status === 'error' && lookup.error && (
-        <p role="status" className="text-text-dim text-small mt-4 min-w-0 max-w-xl break-all">
-          The separate /search check could not complete: {lookup.error}
-        </p>
+        <span role="status" className="min-w-0 break-all">
+          the separate /search check could not complete: {lookup.error}
+        </span>
       )}
-      {errMessage && (
-        <p className="text-text-dim text-small mt-4 max-w-xl break-all font-mono">{errMessage}</p>
-      )}
-      <nav
-        aria-label="Find another route"
-        className="text-small mt-8 flex flex-wrap gap-3 font-mono"
-      >
+      {errMessage && <span className="min-w-0 break-all">{errMessage}</span>}
+      <nav aria-label="Find another route" className="flex flex-wrap gap-x-4 gap-y-1">
         <Link
           href="/"
-          className="border-jade text-jade hover:bg-jade/10 focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
+          className="text-jade focus-visible:outline-jade whitespace-nowrap underline-offset-4 hover:underline focus-visible:outline"
         >
-          Back to the explorer →
+          ← back to the explorer
         </Link>
-        <Link
-          href="/blocks"
-          className="border-base-border text-text hover:text-jade focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
-        >
-          Browse blocks
-        </Link>
-        <Link
-          href="/inventory/tokens"
-          className="border-base-border text-text hover:text-jade focus-visible:outline-jade rounded border px-4 py-2 focus-visible:outline"
-        >
-          Inventory
-        </Link>
+        {back ? (
+          <Link
+            href={back.href}
+            className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+          >
+            ← {back.label}
+          </Link>
+        ) : (
+          <>
+            <Link
+              href="/blocks"
+              className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+            >
+              browse blocks
+            </Link>
+            <Link
+              href="/inventory/tokens"
+              className="text-text hover:text-jade focus-visible:outline-jade whitespace-nowrap focus-visible:outline"
+            >
+              inventory
+            </Link>
+          </>
+        )}
       </nav>
     </ErrorPageShell>
   );

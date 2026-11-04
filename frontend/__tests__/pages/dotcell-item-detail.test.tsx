@@ -14,9 +14,7 @@ it('routes only an actual name 404 to exact endpoint evidence', async () => {
   expect(
     await screen.findByText('/assets/identities/dotcell/items/alice.cell')
   ).toBeInTheDocument();
-  expect(
-    screen.getByText('This explorer could not open the identity at this address.')
-  ).toBeInTheDocument();
+  expect(screen.getByText('no identity at this address.')).toBeInTheDocument();
 });
 it('shows current name state, exact protocol, physical cell history and both feed layers', async () => {
   render(<Page identityId="alice.cell" />);
@@ -257,7 +255,9 @@ it('resets item paging on name navigation and reports an unknown name', async ()
     new ApiRequestError(404, 'not_found', 'Name not found')
   );
   render(<Page identityId="unknown" />);
-  expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
+  expect(
+    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+  ).toBeInTheDocument();
   expect(screen.getByText('/assets/identities/dotcell/items/unknown')).toBeInTheDocument();
 });
 

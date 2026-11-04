@@ -23,7 +23,7 @@ interface SyncStatus {
   totalTime: string | null;
 }
 
-interface Block {
+export interface Block {
   number: number;
   hash: string;
   timestamp: string;

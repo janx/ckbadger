@@ -34,7 +34,6 @@ pub(crate) mod tx_lookup;
 /// Public so the verifier's own wire types can be kept in step with the
 /// endpoint's, and so the export's shape is part of the crate's API surface.
 pub mod verify;
-mod vessels;
 
 use axum::Router;
 use std::sync::Arc;
@@ -82,7 +81,6 @@ pub fn store_routes() -> Router<Arc<AppState>> {
         .merge(scripts::routes())
         .merge(forks::routes())
         .merge(verify::routes())
-        .merge(vessels::routes())
 }
 
 /// Routes that read only the node's RPC and process memory — no secondary

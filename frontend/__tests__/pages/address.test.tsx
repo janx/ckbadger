@@ -178,9 +178,7 @@ describe('Address v3', () => {
     vi.mocked(api.getAddress).mockRejectedValue(new ApiRequestError(404, 'not_found', 'absent'));
     render(<AddressDetailPage />);
     expect(await screen.findByText(`/addresses/${addressText}`)).toBeInTheDocument();
-    expect(
-      screen.getByText('This explorer could not open the address at this address.')
-    ).toBeInTheDocument();
+    expect(screen.getByText('no address at this address.')).toBeInTheDocument();
   });
 
   it('keeps an invalid address 400 as a read error', async () => {
@@ -189,9 +187,7 @@ describe('Address v3', () => {
     );
     render(<AddressDetailPage />);
     expect(await screen.findByRole('alert')).toHaveTextContent('invalid address');
-    expect(
-      screen.queryByText('This explorer could not open the address at this address.')
-    ).not.toBeInTheDocument();
+    expect(screen.queryByText('no address at this address.')).not.toBeInTheDocument();
   });
   it('uses one holdings snapshot for balance and the exact three-way partition', async () => {
     vi.mocked(api.getAddress).mockResolvedValue({

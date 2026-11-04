@@ -147,7 +147,9 @@ it('reports missing identity and unavailable raw evidence without inventing a do
     new ApiRequestError(404, 'not_found', 'Identity not found')
   );
   const { unmount } = render(<Page identityId={evidence.itemId} />);
-  expect(await screen.findByRole('heading', { name: 'An unanswered name.' })).toBeInTheDocument();
+  expect(
+    await screen.findByRole('heading', { name: 'known to some, perhaps. to all, not yet.' })
+  ).toBeInTheDocument();
   expect(
     screen.getByText(`/assets/identities/bit-cell/items/${evidence.itemId}`)
   ).toBeInTheDocument();

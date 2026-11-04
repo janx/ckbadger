@@ -44,14 +44,12 @@ const eyebrow = (el: HTMLElement) => {
 };
 
 describe('the eyebrow sweep: every uppercase meta label is the one .eyebrow', () => {
-  it('leaves no ad-hoc uppercase or tracked label in app/ or components/ (the error pages excepted)', () => {
+  it('leaves no ad-hoc uppercase or tracked label in app/ or components/', () => {
     const offenders: string[] = [];
     for (const file of [
       ...sourceFiles(join(root, 'app')),
       ...sourceFiles(join(root, 'components')),
     ]) {
-      // The error pages (vessels artwork) are their own design.
-      if (file.endsWith('error-page-shell.tsx')) continue;
       const lines = readFileSync(file, 'utf-8').split('\n');
       lines.forEach((line, i) => {
         // `normal-case` / `tracking-normal` reset a glyph inside an eyebrow (the pipeline's "?");

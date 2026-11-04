@@ -425,9 +425,10 @@ describe('ForkDetailPage (D7 route /forks/<height>/<orphan8>)', () => {
       Object.assign(new Error('absent fork'), { status: 404 })
     );
     render(<ForkDetailPage />);
-    expect((await screen.findByText('checked')).nextElementSibling).toHaveTextContent(
-      '/forks/10/17404795'
-    );
+    // the checked endpoint stands in the facts (the eyebrow shows the route, which here reads the same)
+    expect(
+      (await screen.findAllByText('/forks/10/17404795')).some((el) => el.closest('.error-facts'))
+    ).toBe(true);
   });
 
   it('sends a malformed address (the old millisecond id) to not-found without a request', () => {

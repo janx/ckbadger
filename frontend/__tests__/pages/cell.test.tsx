@@ -199,9 +199,7 @@ describe('CellDetailPage', () => {
     getCell.mockRejectedValue(Object.assign(new Error('not found'), { status: 404 }));
     const rendered = view();
     expect(await screen.findByText(`${hash}-0`)).toBeInTheDocument();
-    expect(
-      screen.getByText('This explorer could not open the cell at this address.')
-    ).toBeInTheDocument();
+    expect(screen.getByText('no cell at this address.')).toBeInTheDocument();
     rendered.unmount();
     getCell.mockRejectedValue(new Error('node unavailable'));
     view();
