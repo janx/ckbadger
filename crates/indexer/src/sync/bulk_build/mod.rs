@@ -803,24 +803,23 @@ impl BulkBuildEngine {
             ..
         } = runtime;
 
-        let materialize_handle = tokio::task::spawn_blocking(move || {
-            materialize_finalize_phases(
-                domain_store_arc.as_ref(),
-                append_only_arc.as_ref(),
-                prepared_finalize,
-                owners,
-                sequencer,
-                interner,
-                hodl_tracker,
-                cell_dist_tracker,
-                &perf_stats,
-                finalize_started_copy,
-                materialize_shutdown.as_ref(),
-            )
-        });
-
         let (drain_result, materialize_result) =
-            tokio::join!(flush_drain.wait(), materialize_handle,);
+            drain_flush_and_materialize_finalize(flush_drain, move || {
+                materialize_finalize_phases(
+                    domain_store_arc.as_ref(),
+                    append_only_arc.as_ref(),
+                    prepared_finalize,
+                    owners,
+                    sequencer,
+                    interner,
+                    hodl_tracker,
+                    cell_dist_tracker,
+                    &perf_stats,
+                    finalize_started_copy,
+                    materialize_shutdown.as_ref(),
+                )
+            })
+            .await;
 
         if indexer.is_shutdown_requested() {
             let mut cleanup_errors = Vec::new();
@@ -1123,6 +1122,25 @@ fn flush_bulk_build_materialized_state(
         )
     })?;
     Ok(())
+}
+
+type MaterializeJoinResult =
+    std::result::Result<Result<materialize::MaterializationReport>, tokio::task::JoinError>;
+
+/// Finalize phase 1 (drain the flush channel) and phases 2-11 (materialize),
+/// run concurrently. They write disjoint CF sets; see the caller.
+async fn drain_flush_and_materialize_finalize<M>(
+    flush_drain: materialize::FlushDrainHandle,
+    materialize: M,
+) -> (
+    Result<materialize::FlushChannelStats>,
+    MaterializeJoinResult,
+)
+where
+    M: FnOnce() -> Result<materialize::MaterializationReport> + Send + 'static,
+{
+    let materialize_handle = tokio::task::spawn_blocking(materialize);
+    tokio::join!(flush_drain.wait(), materialize_handle)
 }
 
 /// Executes finalize phases 1-11: writes sealed aggregates, final snapshot,
