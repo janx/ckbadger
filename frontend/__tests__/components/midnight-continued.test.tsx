@@ -95,8 +95,9 @@ describe('the rules in globals.css', () => {
     expect(css).toMatch(
       /\.crt-scanlines\s*\{[^}]*rgba\(0, 0, 0, 0\.09\) 1px,\s*rgba\(0, 0, 0, 0\.09\) 3px/
     );
+    // visual finish V1 (2026-11-04): the vignette moved under the content, lighter and wider
     expect(css).toMatch(
-      /\.crt-vignette\s*\{[^}]*radial-gradient\(ellipse at center, transparent 30%, rgba\(0, 0, 0, 0\.6\) 100%\)/
+      /\.crt-vignette\s*\{[^}]*radial-gradient\(ellipse at center, transparent 45%, rgba\(0, 0, 0, 0\.35\) 100%\)/
     );
     expect(css).toMatch(
       /\.chart-line-halo\s*\{\s*filter: drop-shadow\(0 0 2\.5px var\(--halo-color, rgba\(46, 219, 163, 0\.55\)\)\);/

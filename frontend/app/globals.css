@@ -521,14 +521,16 @@ body * {
 }
 
 /*
- * === Atmosphere (Midnight, continued: move 5; material pass v2: move 1) ===
+ * === Atmosphere (Midnight, continued: move 5; material pass v2: move 1; visual finish V1–V3) ===
  * The fixed layers of components/layout/atmosphere.tsx, mounted once at the route root (AppFrame
- * in src/routes/router.tsx — app/layout.tsx is the Next-era shell the SPA never renders): the
- * night sky (.ambient-glow: a vertical gradient under three pools in the page's hue), the grain
- * (.crt-grain), then one pair of CRT layers (.crt-scanlines, .crt-vignette) at the combined
- * strength the doubled pair had (body::before / body::after painted a second scanline and
- * vignette over them; those are gone). The pools are read by the page root's data-tint: the
- * variables are declared on :root and redefined per tint below.
+ * in src/routes/router.tsx — app/layout.tsx is the Next-era shell the SPA never renders), in this
+ * DOM order: the night sky (.ambient-glow, z −1: a vertical gradient under three pools in the
+ * page's hue), the vignette (.crt-vignette, also z −1 and after the sky in the DOM, so it darkens
+ * the sky and its pools toward the corners and paints under every page element — the ink never
+ * darkens with its position on the screen), then over the content the grain (.crt-grain) and the
+ * scanlines (.crt-scanlines). The doubled pair is gone (body::before / body::after painted a
+ * second scanline and vignette). The pools are read by the page root's data-tint: the variables
+ * are declared on :root and redefined per tint below.
  */
 
 .crt-scanlines {
@@ -548,9 +550,9 @@ body * {
 .crt-vignette {
   position: fixed;
   inset: 0;
-  background: radial-gradient(ellipse at center, transparent 30%, rgba(0, 0, 0, 0.6) 100%);
+  background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%);
   pointer-events: none;
-  z-index: 9998;
+  z-index: -1;
 }
 
 /* The night sky (material pass v2, move 1): the ground is a gradient — #0b0d17 at the top,

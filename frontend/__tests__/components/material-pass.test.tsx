@@ -73,8 +73,22 @@ describe('the rules in globals.css', () => {
     expect(grain[1]).toContain('opacity: 0.035');
     expect(grain[1]).toContain('mix-blend-mode: screen');
     expect(grain[1]).toContain('pointer-events: none');
-    // under the scanlines (9999) and the vignette (9998)
+    // under the scanlines (9999), over the content
     expect(grain[1]).toContain('z-index: 9997');
+  });
+
+  // Visual finish V1 (plan 2026-11-04): the vignette darkens the sky toward the corners, never the
+  // ink — it sits under the content (z −1, after the sky in the DOM), lighter and wider.
+  it('move 1 (visual finish V1): the vignette under the content', () => {
+    const vignette = css.match(/\.crt-vignette\s*\{([^}]*)\}/)!;
+    expect(vignette[1]).toContain('z-index: -1');
+    expect(vignette[1]).not.toContain('z-index: 9998');
+    expect(vignette[1]).toContain(
+      'background: radial-gradient(ellipse at center, transparent 45%, rgba(0, 0, 0, 0.35) 100%)'
+    );
+    expect(vignette[1]).toContain('position: fixed');
+    expect(vignette[1]).toContain('inset: 0');
+    expect(vignette[1]).toContain('pointer-events: none');
   });
 
   it('move 2: glass, the well and the tier-2 ground', () => {
@@ -168,10 +182,12 @@ describe('move 1 on the page root', () => {
     return useRoutes(createAppRouter());
   }
 
-  it('mounts the four atmosphere layers, sky first, scanlines last', () => {
+  it('mounts the four atmosphere layers: sky, vignette, grain, scanlines', () => {
     const { container } = render(<Atmosphere />);
     const layers = [...container.children].map((e) => e.className);
-    expect(layers).toEqual(['ambient-glow', 'crt-grain', 'crt-vignette', 'crt-scanlines']);
+    // visual finish V1: the vignette right after the sky, so at the same z −1 it paints over the
+    // sky and its pools and under every page element
+    expect(layers).toEqual(['ambient-glow', 'crt-vignette', 'crt-grain', 'crt-scanlines']);
     for (const layer of container.children) expect(layer).toHaveAttribute('aria-hidden', 'true');
   });
 
