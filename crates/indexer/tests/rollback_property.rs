@@ -583,6 +583,17 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_CELL_BY_TYPE, None),
     (ckbadger_store::CF_CELL_BY_TYPE_CODE, None),
     (ckbadger_store::CF_CELL_BY_DATA_HASH, None),
+    // B-3 udt.rs: a token row and its `stats_token` transfer counter are
+    // written at every block that moves them, holder rows and both
+    // balance-ordered indexes block by block on top of the previous block's
+    // balance, transfer records in their block's scope. `stats_token` holds
+    // only the transfer counter and the two entity stats families.
+    (ckbadger_store::CF_TOKENS, None),
+    (ckbadger_store::CF_TOKEN_HOLDERS, None),
+    (ckbadger_store::CF_TOKEN_HOLDERS_BY_BALANCE, None),
+    (ckbadger_store::CF_ADDR_TOKENS_BY_BALANCE, None),
+    (ckbadger_store::store::CF_TOKEN_TRANSFERS, None),
+    (ckbadger_store::CF_STATS_TOKEN, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a

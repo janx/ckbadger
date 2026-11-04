@@ -13594,7 +13594,21 @@ mod tests {
         }
 
         /// The pre-images of the `CF_TOKENS` rows block `block` recorded.
+        /// The token writer's own (pre-journal) undo pre-images of `block`.
         fn token_pre_images(store: &CkbadgerStore, block: i64) -> Vec<Option<Vec<u8>>> {
+            token_undo_entries(store, block, false)
+        }
+
+        /// The block journal's `CF_TOKENS` entries of `block`.
+        fn token_journal_entries(store: &CkbadgerStore, block: i64) -> Vec<Option<Vec<u8>>> {
+            token_undo_entries(store, block, true)
+        }
+
+        fn token_undo_entries(
+            store: &CkbadgerStore,
+            block: i64,
+            journal: bool,
+        ) -> Vec<Option<Vec<u8>>> {
             let start = ckbadger_store::keys::encode_reorg_undo_log_key(block, 0);
             let mut pre_images = Vec::new();
             for item in store.iterator_cf(
@@ -13602,8 +13616,12 @@ mod tests {
                 rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
             ) {
                 let (key, value) = item.unwrap();
-                if ckbadger_store::keys::decode_reorg_undo_log_key(&key).0 != block {
+                let (key_block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+                if key_block != block {
                     break;
+                }
+                if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) != journal {
+                    continue;
                 }
                 if let ckbadger_store::types::UndoLogEntry::KeyMutation {
                     cf_name,
@@ -14077,12 +14095,21 @@ mod tests {
                 Vec::<Option<Vec<u8>>>::new(),
                 "a transfer that changes no metadata records nothing"
             );
-
-            rollback_to(&store, 101);
-
+            // The block journal (store refactor lane B) records the row at
+            // every block that changes it, transfer count included: its
+            // creation at 101, its value at the end of 101 before 102.
             let reference =
                 write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
                     .await;
+            let row_after_101 = reference.get_token(&ext_type_hash()).unwrap().unwrap();
+            assert_eq!(token_journal_entries(&store, 101), vec![None]);
+            assert_eq!(
+                token_journal_entries(&store, 102),
+                vec![Some(bincode::serialize(&row_after_101).unwrap())]
+            );
+
+            rollback_to(&store, 101);
+
             assert_eq!(
                 token_state(&store, &ext_type_hash()),
                 token_state(&reference, &ext_type_hash())

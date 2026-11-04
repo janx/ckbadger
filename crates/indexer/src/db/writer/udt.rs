@@ -226,15 +226,14 @@ impl BatchWriter {
             all_keys.extend(onchain_token_info.keys());
             for type_hash in all_keys {
                 if let Some(info) = self.store.get_token(type_hash)? {
-                    let updated = TokenRowThroughBatch {
+                    TokenRowThroughBatch {
                         type_hash,
                         base: TokenRowBase::Stored(Box::new(info)),
                         transfers: None,
                         max_supply: max_supply_observations.get(type_hash).copied(),
                         onchain: onchain_token_info.get(type_hash),
                     }
-                    .stage(self, batch, &state.undo_seq)?;
-                    batch.put_token(type_hash, &updated);
+                    .write(self, batch, &state.undo_seq)?;
                 }
             }
             return Ok(());
@@ -286,8 +285,9 @@ impl BatchWriter {
                 .or_insert(0) += 1;
         }
 
-        // Step 2: Upsert token metadata and transfer counts. Live supply and holder count
-        // are derived exclusively from CF_TOKEN_HOLDERS.
+        // Step 2: Upsert token metadata and transfer counts, each at every
+        // block that moves them. Live supply and holder count are derived
+        // exclusively from CF_TOKEN_HOLDERS.
         for (type_hash, update) in &token_updates {
             let base = match self.store.get_token(type_hash)? {
                 Some(info) => TokenRowBase::Stored(Box::new(info)),
@@ -298,20 +298,26 @@ impl BatchWriter {
             };
             // The stats CF counter is the source of truth for accumulation;
             // the row's `transfers_count` is its copy.
-            let transfers_before = self.store.get_token_transfers_count(type_hash)?;
-            let updated = TokenRowThroughBatch {
+            let transfers = TokenTransfersThroughBatch {
+                before: self.store.get_token_transfers_count(type_hash)?,
+                by_block: &update.transfers_by_block,
+            };
+            TokenRowThroughBatch {
                 type_hash,
                 base,
-                transfers: Some(TokenTransfersThroughBatch {
-                    before: transfers_before,
-                    by_block: &update.transfers_by_block,
-                }),
+                transfers: Some(transfers),
                 max_supply: max_supply_observations.get(type_hash).copied(),
                 onchain: onchain_token_info.get(type_hash),
             }
-            .stage(self, batch, &state.undo_seq)?;
-            batch.put_token(type_hash, &updated);
-            batch.put_token_transfers_count(type_hash, updated.transfers_count);
+            .write(self, batch, &state.undo_seq)?;
+            // The counter as of the end of every block that moves it, in
+            // that block's scope.
+            for &block_number in update.transfers_by_block.keys() {
+                batch.at(block_number).put_token_transfers_count(
+                    type_hash,
+                    transfers.through(type_hash, block_number)?,
+                );
+            }
         }
 
         // Step 2.5: Apply observed max_supply to tokens not touched by transfers in this batch.
@@ -321,18 +327,14 @@ impl BatchWriter {
             }
 
             if let Some(info) = self.store.get_token(type_hash)? {
-                let before = info.max_supply;
-                let updated = TokenRowThroughBatch {
+                TokenRowThroughBatch {
                     type_hash,
                     base: TokenRowBase::Stored(Box::new(info)),
                     transfers: None,
                     max_supply: max_supply_observations.get(type_hash).copied(),
                     onchain: None,
                 }
-                .stage(self, batch, &state.undo_seq)?;
-                if updated.max_supply != before {
-                    batch.put_token(type_hash, &updated);
-                }
+                .write(self, batch, &state.undo_seq)?;
             }
         }
 
@@ -362,17 +364,20 @@ impl BatchWriter {
             )?;
         }
 
-        // Step 3: Aggregate balance changes per (type_hash, lock_hash) as exact
-        // `(received, sent)` TokenBalance sums.
-        let mut balance_changes: HashMap<(Vec<u8>, Vec<u8>), (TokenBalance, TokenBalance)> =
-            HashMap::new();
+        // Step 3: Aggregate balance changes per block and (type_hash,
+        // lock_hash) as exact `(received, sent)` TokenBalance sums.
+        let mut balance_changes: BTreeMap<
+            i64,
+            HashMap<(Vec<u8>, Vec<u8>), (TokenBalance, TokenBalance)>,
+        > = BTreeMap::new();
 
-        for (transfer, tx_hash, _block_number) in transfers {
+        for (transfer, tx_hash, block_number) in transfers {
             let type_hash = &transfer.type_script_hash;
+            let block_changes = balance_changes.entry(*block_number).or_default();
 
             if let Some(ref from_lock) = transfer.from_lock_hash {
                 if !from_lock.is_empty() {
-                    let entry = balance_changes
+                    let entry = block_changes
                         .entry((type_hash.clone(), from_lock.clone()))
                         .or_default();
                     let current_sent = entry.1.clone();
@@ -380,10 +385,11 @@ impl BatchWriter {
                         .checked_add(&TokenBalance::from(transfer.amount))
                         .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "token holder sent-amount overflow: type_hash=0x{}, lock_hash=0x{}, tx_hash=0x{}, sent={}, amount={}",
+                            "token holder sent-amount overflow: type_hash=0x{}, lock_hash=0x{}, tx_hash=0x{}, block={}, sent={}, amount={}",
                             hex::encode(type_hash),
                             hex::encode(from_lock),
                             hex::encode(tx_hash),
+                            block_number,
                             current_sent,
                             transfer.amount
                         )
@@ -392,7 +398,7 @@ impl BatchWriter {
             }
 
             if !transfer.to_lock_hash.is_empty() {
-                let entry = balance_changes
+                let entry = block_changes
                     .entry((type_hash.clone(), transfer.to_lock_hash.clone()))
                     .or_default();
                 let current_received = entry.0.clone();
@@ -400,10 +406,11 @@ impl BatchWriter {
                     .checked_add(&TokenBalance::from(transfer.amount))
                     .ok_or_else(|| {
                     anyhow::anyhow!(
-                        "token holder received-amount overflow: type_hash=0x{}, lock_hash=0x{}, tx_hash=0x{}, received={}, amount={}",
+                        "token holder received-amount overflow: type_hash=0x{}, lock_hash=0x{}, tx_hash=0x{}, block={}, received={}, amount={}",
                         hex::encode(type_hash),
                         hex::encode(&transfer.to_lock_hash),
                         hex::encode(tx_hash),
+                        block_number,
                         current_received,
                         transfer.amount
                     )
@@ -411,58 +418,76 @@ impl BatchWriter {
             }
         }
 
-        // Step 4: Apply balance changes. Holder count is read from the resulting holder CF.
-        for ((type_hash, lock_hash), (received, sent)) in &balance_changes {
-            let existing = self.store.get_token_holder_balance(type_hash, lock_hash)?;
-            let old_balance = existing.unwrap_or_else(TokenBalance::zero);
-            // Net-difference apply; checked_sub None is the preserved balance-underflow
-            // guard (was `new_balance < 0`).
-            let new_balance = if received >= sent {
-                let net = received
-                    .checked_sub(sent)
-                    .expect("ordered TokenBalance subtraction");
-                old_balance.checked_add(&net).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "token holder balance overflow: type_hash=0x{}, lock_hash=0x{}, balance={}, received={}, sent={}",
-                        hex::encode(type_hash),
-                        hex::encode(lock_hash),
-                        old_balance,
-                        received,
-                        sent
-                    )
-                })?
-            } else {
-                let net = sent
-                    .checked_sub(received)
-                    .expect("ordered TokenBalance subtraction");
-                old_balance.checked_sub(&net).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "token holder balance underflow: type_hash=0x{}, lock_hash=0x{}, balance={}, received={}, sent={}",
-                        hex::encode(type_hash),
-                        hex::encode(lock_hash),
-                        old_balance,
-                        received,
-                        sent
-                    )
-                })?
-            };
+        // Step 4: Apply each block's balance changes on top of the balances
+        // the previous block left, in that block's scope, so the holder rows
+        // and both balance-ordered indexes are journaled per block. Holder
+        // count is read from the resulting holder CF.
+        let mut balances: HashMap<(Vec<u8>, Vec<u8>), TokenBalance> = HashMap::new();
+        for (block_number, block_changes) in &balance_changes {
+            let mut batch = batch.at(*block_number);
+            for (holder, (received, sent)) in block_changes {
+                let (type_hash, lock_hash) = holder;
+                let old_balance = match balances.get(holder) {
+                    Some(balance) => balance.clone(),
+                    // A holder without a row holds nothing (rows are deleted at zero).
+                    None => self
+                        .store
+                        .get_token_holder_balance(type_hash, lock_hash)?
+                        .unwrap_or_else(TokenBalance::zero),
+                };
+                // Net-difference apply; checked_sub None is the preserved balance-underflow
+                // guard (was `new_balance < 0`).
+                let new_balance = if received >= sent {
+                    let net = received
+                        .checked_sub(sent)
+                        .expect("ordered TokenBalance subtraction");
+                    old_balance.checked_add(&net).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token holder balance overflow: type_hash=0x{}, lock_hash=0x{}, block={}, balance={}, received={}, sent={}",
+                            hex::encode(type_hash),
+                            hex::encode(lock_hash),
+                            block_number,
+                            old_balance,
+                            received,
+                            sent
+                        )
+                    })?
+                } else {
+                    let net = sent
+                        .checked_sub(received)
+                        .expect("ordered TokenBalance subtraction");
+                    old_balance.checked_sub(&net).ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "token holder balance underflow: type_hash=0x{}, lock_hash=0x{}, block={}, balance={}, received={}, sent={}",
+                            hex::encode(type_hash),
+                            hex::encode(lock_hash),
+                            block_number,
+                            old_balance,
+                            received,
+                            sent
+                        )
+                    })?
+                };
 
-            if !old_balance.is_zero() {
-                batch.delete_token_holder_by_balance(type_hash, lock_hash, &old_balance);
-                batch.delete_addr_token_by_balance(lock_hash, type_hash, &old_balance);
-            }
+                if !old_balance.is_zero() {
+                    batch.delete_token_holder_by_balance(type_hash, lock_hash, &old_balance);
+                    batch.delete_addr_token_by_balance(lock_hash, type_hash, &old_balance);
+                }
 
-            if !new_balance.is_zero() {
-                batch.put_token_holder(type_hash, lock_hash, &new_balance);
-                batch.put_token_holder_by_balance(type_hash, lock_hash, &new_balance);
-                batch.put_addr_token_by_balance(lock_hash, type_hash, &new_balance);
-            } else {
-                batch.delete_token_holder(type_hash, lock_hash);
+                if !new_balance.is_zero() {
+                    batch.put_token_holder(type_hash, lock_hash, &new_balance);
+                    batch.put_token_holder_by_balance(type_hash, lock_hash, &new_balance);
+                    batch.put_addr_token_by_balance(lock_hash, type_hash, &new_balance);
+                } else {
+                    batch.delete_token_holder(type_hash, lock_hash);
+                }
+                balances.insert(holder.clone(), new_balance);
             }
         }
 
-        // Step 6: Write individual transfer records for the token transfers tab.
-        // Use a per-(type_hash, block_number) counter as tx_idx to generate unique keys.
+        // Step 6: Write individual transfer records for the token transfers tab,
+        // each in its block's scope. Use a per-(type_hash, block_number) counter
+        // as tx_idx to generate unique keys.
         let mut transfer_idx: HashMap<(Vec<u8>, i64), i32> = HashMap::new();
         for (transfer, tx_hash, block_number) in transfers {
             let idx = transfer_idx
@@ -489,7 +514,12 @@ impl BatchWriter {
                 is_burn: transfer.is_burn,
                 timestamp,
             };
-            batch.put_token_transfer(&transfer.type_script_hash, *block_number, *idx, &record);
+            batch.at(*block_number).put_token_transfer(
+                &transfer.type_script_hash,
+                *block_number,
+                *idx,
+                &record,
+            );
             *idx += 1;
         }
 
@@ -545,6 +575,7 @@ enum TokenRowBase<'a> {
 
 /// The `CF_STATS_TOKEN` transfer counter before the batch, plus this batch's
 /// transfers per block.
+#[derive(Clone, Copy)]
 struct TokenTransfersThroughBatch<'a> {
     before: i64,
     by_block: &'a BTreeMap<i64, i64>,
@@ -570,14 +601,15 @@ impl TokenTransfersThroughBatch<'_> {
 
 /// One token's row through one live batch (J4).
 ///
-/// The live writer applies a batch's metadata observations batch-flat, but a
-/// shallow rollback can land on any block inside the batch. [`Self::row_through`]
-/// is the one rule for "the row as of the end of block N": the forward write
-/// stores `row_through(last block)`, and every block that changes the row's
-/// metadata — or creates it — records `row_through(N - 1)` as its undo pre-image,
-/// so undo replay restores the row exactly. A block that changes only the
-/// transfer count records nothing: rollback stage 9d reverses the count from
-/// the deleted transfer rows.
+/// A shallow rollback can land on any block inside the batch.
+/// [`Self::row_through`] is the one rule for "the row as of the end of block
+/// N": [`Self::write`] writes `row_through(N)` in the scope of every block N
+/// that changes the row — creates it, moves its metadata or its transfer
+/// count — so the block journal restores the row as of the end of any block.
+/// For the pre-journal rollback, every block that changes the row's metadata
+/// — or creates it — still records `row_through(N - 1)` as its undo
+/// pre-image; a block that changes only the transfer count records none:
+/// rollback stage 9d reverses the count from the deleted transfer rows.
 struct TokenRowThroughBatch<'a> {
     type_hash: &'a [u8],
     base: TokenRowBase<'a>,
@@ -641,14 +673,15 @@ impl TokenRowThroughBatch<'_> {
         Ok(Some(row))
     }
 
-    /// Record one undo pre-image per block that changes the row's metadata or
-    /// creates it, and return the row after the whole batch.
-    fn stage(
+    /// Write the row in the scope of every block of the batch that changes
+    /// it (its value at the end of that block), recording the pre-journal
+    /// undo pre-image of every block that changes its metadata or creates it.
+    fn write(
         &self,
         writer: &BatchWriter,
         batch: &mut StoreBatch,
         undo_seq: &SharedUndoSeq,
-    ) -> Result<TokenInfo> {
+    ) -> Result<()> {
         let mut change_blocks = BTreeSet::new();
         if let TokenRowBase::CreatedBy { block_number, .. } = &self.base {
             change_blocks.insert(*block_number);
@@ -659,30 +692,53 @@ impl TokenRowThroughBatch<'_> {
         if let Some(timeline) = self.onchain {
             change_blocks.extend(timeline.blocks());
         }
+        if let Some(transfers) = &self.transfers {
+            change_blocks.extend(transfers.by_block.keys().copied());
+        }
+        let mut last_written: Option<TokenInfo> = None;
         for block_number in change_blocks {
             let before = self.row_through(block_number - 1, false)?;
             let after = self.row_through(block_number, false)?;
-            if without_transfer_count(&before) == without_transfer_count(&after) {
+            if before == after {
                 continue;
             }
-            let pre_image = before
-                .map(|row| super::undo_pre_image(&row, "token", self.type_hash, block_number))
-                .transpose()?;
-            writer.record_object_undo(
-                batch,
-                block_number,
-                ckbadger_store::CF_TOKENS,
-                self.type_hash,
-                pre_image,
-                undo_seq,
-            );
+            if without_transfer_count(&before) != without_transfer_count(&after) {
+                let pre_image = before
+                    .as_ref()
+                    .map(|row| super::undo_pre_image(row, "token", self.type_hash, block_number))
+                    .transpose()?;
+                writer.record_object_undo(
+                    batch,
+                    block_number,
+                    ckbadger_store::CF_TOKENS,
+                    self.type_hash,
+                    pre_image,
+                    undo_seq,
+                );
+            }
+            let after = after.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "token row disappears inside the batch that writes it: type_hash=0x{}, block={}",
+                    hex::encode(self.type_hash),
+                    block_number
+                )
+            })?;
+            batch.at(block_number).put_token(self.type_hash, &after);
+            last_written = Some(after);
         }
-        self.row_through(i64::MAX, true)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "token row missing after the batch that writes it: type_hash=0x{}",
-                hex::encode(self.type_hash)
-            )
-        })
+        // The row after the whole batch, computed once with reporting on so
+        // each conflict or divergence is logged once; the last block's write
+        // must be exactly that row.
+        let final_row = self.row_through(i64::MAX, true)?;
+        if let Some(last_written) = last_written {
+            if final_row.as_ref() != Some(&last_written) {
+                anyhow::bail!(
+                    "token row after the batch differs from its last block's row: type_hash=0x{}",
+                    hex::encode(self.type_hash)
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1343,6 +1399,163 @@ mod tests {
                 .unwrap(),
             vec![(type_hash.clone(), TokenBalance::from(40))]
         );
+    }
+
+    /// One live batch mints to one holder in two blocks: the holder row, its
+    /// balance-ordered index rows, the token row and its transfer counter are
+    /// journaled at each block with the value the previous block left, and
+    /// each transfer record at its own block, so the journal restores the
+    /// rows as of the end of either block (store refactor lane B, B-3).
+    #[test]
+    fn test_process_udt_transfers_batch_journals_every_row_per_block() {
+        use crate::db::writer::journal_test_support::journal_entries;
+        use ckbadger_store::block_overlay::SharedBlockOverlay;
+        use ckbadger_store::keys::UndoSeqScope;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let type_hash = vec![0xB7; 32];
+        let lock = vec![0x41; 32];
+        let token = TokenInfo {
+            type_code_hash: vec![0xCD; 32],
+            hash_type: 1,
+            type_args: vec![0x11; 20],
+            standard: "sudt".to_string(),
+            name: None,
+            symbol: None,
+            decimals: Some(8),
+            max_supply: None,
+            first_seen_block: 100,
+            icon_url: None,
+            description: None,
+            transfers_count: 0,
+            metadata_source: Some(ckbadger_store::types::TokenMetadataSource::Label),
+            chain_metadata: None,
+        };
+        store.put_token_direct(&type_hash, &token).unwrap();
+        let mint = |amount: u128| ParsedUdtTransfer {
+            type_script_hash: type_hash.clone(),
+            type_code_hash: vec![0xCD; 32],
+            type_hash_type: 1,
+            type_args: vec![0x11; 20],
+            from_lock_hash: None,
+            to_lock_hash: lock.clone(),
+            amount,
+            standard: crate::parser::UdtStandard::Sudt,
+            is_mint: true,
+            is_burn: false,
+        };
+        let (first, second) = (mint(30), mint(12));
+        let (tx_a, tx_b) = ([0x01u8; 32], [0x02u8; 32]);
+        let transfers = vec![
+            (&first, tx_a.as_slice(), 101i64),
+            (&second, tx_b.as_slice(), 102i64),
+        ];
+        let block_times: HashMap<i64, i64> =
+            HashMap::from([(101, 1_700_000_000_000), (102, 1_700_000_010_000)]);
+
+        let overlay = SharedBlockOverlay::new(&store);
+        let undo_seq = SharedUndoSeq::default();
+        let mut state = writer.new_udt_batch_state(
+            SharedEntityStatsOverlay::sharing(&overlay),
+            undo_seq.clone(),
+        );
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        writer
+            .process_udt_transfers_batch_with_state(
+                &transfers,
+                &HashMap::new(),
+                &HashMap::new(),
+                &block_times,
+                &block_times,
+                &mut batch,
+                &mut state,
+            )
+            .unwrap();
+        batch
+            .stage_journal(&mut |block| Ok(undo_seq.next(block, UndoSeqScope::Journal)))
+            .unwrap();
+        batch.commit().unwrap();
+
+        let holder_key = keys::encode_token_holder_key(&type_hash, &lock);
+        let balance = |amount: u128| TokenBalance::from(amount).to_be_bytes().to_vec();
+        assert_eq!(
+            journal_entries(&store, ckbadger_store::CF_TOKEN_HOLDERS),
+            vec![
+                (101, holder_key.to_vec(), None),
+                (102, holder_key.to_vec(), Some(balance(30))),
+            ],
+            "the holder row is journaled per block on the previous block's balance"
+        );
+        let by_balance = |amount: u128| {
+            keys::encode_token_holder_balance_key(&type_hash, &TokenBalance::from(amount), &lock)
+                .to_vec()
+        };
+        let mut ranked = vec![
+            (101, by_balance(30), None),
+            (102, by_balance(30), Some(Vec::new())),
+            (102, by_balance(42), None),
+        ];
+        ranked.sort();
+        assert_eq!(
+            journal_entries(&store, ckbadger_store::CF_TOKEN_HOLDERS_BY_BALANCE),
+            ranked,
+            "block 102 moves the ranked row from 30 to 42"
+        );
+        assert_eq!(
+            journal_entries(&store, ckbadger_store::CF_ADDR_TOKENS_BY_BALANCE).len(),
+            3
+        );
+        let row = |transfers_count: i64| {
+            bincode::serialize(&TokenInfo {
+                transfers_count,
+                ..token.clone()
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            journal_entries(&store, ckbadger_store::CF_TOKENS),
+            vec![
+                (101, type_hash.clone(), Some(row(0))),
+                (102, type_hash.clone(), Some(row(1))),
+            ],
+            "the token row is written at every block that moves its transfer count"
+        );
+        let counter_key = keys::encode_token_transfers_key(&type_hash).to_vec();
+        assert_eq!(
+            journal_entries(&store, ckbadger_store::CF_STATS_TOKEN)
+                .into_iter()
+                .filter(|(_, key, _)| *key == counter_key)
+                .collect::<Vec<_>>(),
+            vec![
+                (101, counter_key.clone(), None),
+                (102, counter_key.clone(), Some(1i64.to_le_bytes().to_vec())),
+            ]
+        );
+        let transfer_blocks: Vec<i64> =
+            journal_entries(&store, ckbadger_store::store::CF_TOKEN_TRANSFERS)
+                .into_iter()
+                .map(|(block, _, previous)| {
+                    assert_eq!(previous, None);
+                    block
+                })
+                .collect();
+        assert_eq!(transfer_blocks, vec![101, 102]);
+
+        assert_eq!(
+            store.get_token(&type_hash).unwrap().unwrap(),
+            TokenInfo {
+                transfers_count: 2,
+                ..token.clone()
+            }
+        );
+        assert_eq!(
+            store.get_token_holder_balance(&type_hash, &lock).unwrap(),
+            Some(TokenBalance::from(42))
+        );
+        assert_eq!(store.get_token_transfers_count(&type_hash).unwrap(), 2);
     }
 
     #[test]

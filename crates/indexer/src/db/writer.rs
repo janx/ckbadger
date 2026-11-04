@@ -237,6 +237,45 @@ pub use statistics::calculate_knowledge_size;
 pub(crate) use statistics::DaoSnapshotBoundary;
 pub use statistics::FrozenActivityAddrSets;
 
+/// Test support: the block journal a live batch committed (store refactor
+/// lane B).
+#[cfg(test)]
+pub(crate) mod journal_test_support {
+    use ckbadger_store::CkbadgerStore;
+
+    /// Every block journal entry of `cf`, as `(block, key, previous value)`,
+    /// sorted.
+    pub(crate) fn journal_entries(
+        store: &CkbadgerStore,
+        cf: &str,
+    ) -> Vec<(i64, Vec<u8>, Option<Vec<u8>>)> {
+        let mut out = Vec::new();
+        for item in store.iterator_cf(
+            store.cf_reorg_undo_log_by_block(),
+            rocksdb::IteratorMode::Start,
+        ) {
+            let (key, value) = item.expect("iterate the undo log");
+            let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
+            if !ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) {
+                continue;
+            }
+            if let ckbadger_store::types::UndoLogEntry::KeyMutation {
+                cf_name,
+                key,
+                previous_value,
+                ..
+            } = bincode::deserialize(&value).expect("decode a journal row")
+            {
+                if cf_name == cf {
+                    out.push((block, key, previous_value));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+}
+
 #[cfg(test)]
 mod undo_seq_tests {
     use std::sync::Arc;
