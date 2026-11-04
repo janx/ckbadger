@@ -568,6 +568,10 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
     (ckbadger_store::CF_FIBER_CHANNELS, None),
     (ckbadger_store::CF_ADDR_FIBER_CHANNELS, None),
     (ckbadger_store::CF_FIBER_CHANNEL_BY_COMMITMENT, None),
+    // B-3 chain.rs: each block header's `block_hash_index` row and each
+    // transaction's `tx_hash_map` row are written in their block's scope.
+    (ckbadger_store::CF_BLOCK_HASH_INDEX, None),
+    (ckbadger_store::CF_TX_HASH_MAP, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
