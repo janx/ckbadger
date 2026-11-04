@@ -16,6 +16,7 @@ mod live_cells;
 mod object_protocol_state;
 mod pipeline_consistency;
 mod reorg_handling;
+mod rollback_property;
 mod script_usage_stats;
 mod udt_cells;
 mod verify_entity_statistics;
