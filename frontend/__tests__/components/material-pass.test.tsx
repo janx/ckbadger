@@ -117,16 +117,31 @@ describe('the rules in globals.css', () => {
 
   it('move 2: glass, the well and the tier-2 ground', () => {
     const glass = css.match(/\.glass\s*\{([^}]*)\}/)!;
-    expect(glass[1]).toContain('background: rgba(16, 19, 28, 0.72)');
-    expect(glass[1]).toContain('inset 0 1px 0 rgba(255, 255, 255, 0.06)');
-    expect(glass[1]).toContain('inset 0 -1px 0 rgba(0, 0, 0, 0.5)');
+    // visual finish V4, the bezel: a 3 % white sheen over the top 56 px of the 72 % glass, a lit
+    // top edge, a dark bottom edge, and a 1 px dark line just outside the border — no drop shadow
+    expect(glass[1]).toMatch(
+      /background:\s*linear-gradient\(180deg, rgba\(255, 255, 255, 0\.03\), transparent 56px\),\s*rgba\(16, 19, 28, 0\.72\);/
+    );
+    // exactly these three, split at the commas outside the colours' parentheses
+    const shadows = glass[1]
+      .match(/box-shadow:([^;]*);/)![1]
+      .split(/,(?![^(]*\))/)
+      .map((v) => v.trim());
+    expect(shadows).toEqual([
+      'inset 0 1px 0 rgba(255, 255, 255, 0.1)',
+      'inset 0 -1px 0 rgba(0, 0, 0, 0.55)',
+      '0 0 0 1px rgba(0, 0, 0, 0.45)',
+    ]);
     // no backdrop-filter: nothing behind a frame has detail to blur (see the comment)
     expect(glass[1]).not.toContain('backdrop-filter');
     const well = css.match(/\.well\s*\{([^}]*)\}/)!;
     expect(well[1]).toContain('background: #0a0c12');
     expect(well[1]).toContain('border: 1px solid #1a1f30');
     expect(well[1]).toContain('border-radius: var(--well-radius, 3px)');
-    expect(well[1]).toContain('box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.65)');
+    // visual finish V4: the well keeps its inset and gains a 4 % lower lip
+    expect(well[1]).toMatch(
+      /box-shadow:\s*inset 0 1px 3px rgba\(0, 0, 0, 0\.65\),\s*0 1px 0 rgba\(255, 255, 255, 0\.04\);/
+    );
     const ground = css.match(/\.tier2-ground\s*\{([^}]*)\}/)!;
     expect(ground[1]).toContain('background: rgba(6, 7, 11, 0.9)');
     expect(ground[1]).toMatch(

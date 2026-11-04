@@ -989,26 +989,33 @@ svg a:hover {
  * Nothing here adds a colour token.
  */
 
-/* Move 2a — the instrument frame's glass: 72 % opaque over the sky (the pool shows through), a
-   1 px white highlight on the top edge and a dark line on the bottom edge, the way a bezel
-   catches light. No backdrop-filter: nothing behind a frame has detail to blur (the ground is a
-   gradient, the pools 300 px soft, the grain 3.5 %), so a blur would buy a compositing layer and
-   a re-blur on every scroll for no visible gain. */
+/* Move 2a — the instrument frame's glass, read as a bezel (visual finish V4): 72 % opaque over the
+   sky (the pool shows through) under a 3 % white sheen that fades out over the top 56 px; a 10 %
+   white highlight on the top edge, a dark line on the bottom edge, and a 1 px dark line just
+   outside the border (a spread-only shadow), the way a bezel catches light and sits in its case.
+   No drop shadow: nothing casts one at night. No backdrop-filter: nothing behind a frame has
+   detail to blur (the ground is a gradient, the pools 300 px soft, the grain 3 %), so a blur
+   would buy a compositing layer and a re-blur on every scroll for no visible gain. */
 .glass {
-  background: rgba(16, 19, 28, 0.72);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 56px), rgba(16, 19, 28, 0.72);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
 /* Move 2b — a well: dark glass, inset, for what is typed into (the search field, a filter, the
    command palette) and what is read as bytes (a hex dump, raw JSON). 3 px corners, the row-rule
-   ink; `--well-radius` lets the header's search field keep the board's 6 px. */
+   ink; `--well-radius` lets the header's search field keep the board's 6 px. Its lower lip (visual
+   finish V4) is a 4 % white line under the border: the light the inset edge catches. */
 .well {
   background: #0a0c12;
   border: 1px solid #1a1f30;
   border-radius: var(--well-radius, 3px);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.65);
+  box-shadow:
+    inset 0 1px 3px rgba(0, 0, 0, 0.65),
+    0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 /* Move 2c — tier-2 ground: the evidence tier sits one step deeper, its ground bleeding through
