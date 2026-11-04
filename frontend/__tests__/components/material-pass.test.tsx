@@ -199,6 +199,18 @@ describe('the rules in globals.css', () => {
     );
   });
 
+  // Visual finish V7 (plan 2026-11-04): a page arrives — it fades in over 160 ms from 2 px below
+  // (only `from` is written, so it ends on the element's own); under reduced motion it just is.
+  it('visual finish V7: the arrival fade, and none under reduced motion', () => {
+    expect(css).toMatch(/\n\.arrive\s*\{\s*animation: arrive 160ms ease-out both;\s*\}/);
+    const arrive = css.match(/@keyframes arrive\s*\{([\s\S]*?)\n\}/)!;
+    expect(arrive[1]).toMatch(/from\s*\{\s*opacity: 0;\s*transform: translateY\(2px\);\s*\}/);
+    expect(arrive[1]).not.toMatch(/\bto\b|100%/);
+    expect(css).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.arrive\s*\{\s*animation: none;\s*\}\s*\}/
+    );
+  });
+
   it('move 5: small caps and the jade underline', () => {
     expect(css).toMatch(
       /\.small-caps\s*\{\s*font-variant: small-caps;\s*letter-spacing: 0\.04em;\s*\}/

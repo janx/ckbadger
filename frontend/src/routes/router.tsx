@@ -44,7 +44,9 @@ function AppFrame() {
         <div className="flex min-h-screen flex-1 flex-col">
           <NetworkQueryScope>
             <Header />
-            <div className="flex flex-1 flex-col">
+            {/* Visual finish V7: keyed by the path, so each route change mounts the new page and it
+                fades in (`.arrive`); the header, outside, stays. */}
+            <div key={pathname} className="arrive flex flex-1 flex-col">
               <Outlet />
             </div>
           </NetworkQueryScope>

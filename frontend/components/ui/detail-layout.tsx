@@ -77,7 +77,8 @@ export function DetailLayout({
 }: DetailLayoutProps) {
   useDocumentTitle(documentTitleParts(title, documentTitle));
   return (
-    <div className={cn('text-body min-w-0 font-mono', className)}>
+    // `.arrive` (visual finish V7): the content fades in when the data arrives and this mounts.
+    <div className={cn('arrive text-body min-w-0 font-mono', className)}>
       {/* An index page's title row closes on a tube (Midnight, continued, move 2; BlocksAfter):
           h1 and legend, 14 px, the lit hairline, then the list. */}
       <header className={kind === 'index' ? 'mb-5' : 'mb-8'}>

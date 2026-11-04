@@ -1127,6 +1127,24 @@ h1.text-index {
   }
 }
 
+/* Arrival (visual finish V7): a new page fades in over 160 ms, rising 2 px — the frame's page
+   wrapper (keyed by the path) on every route change, and an entity page's DetailLayout when its
+   data arrives. Only `from` is written, so it ends on the element's own. */
+.arrive {
+  animation: arrive 160ms ease-out both;
+}
+@keyframes arrive {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .arrive {
+    animation: none;
+  }
+}
+
 /* Material pass v2, leftovers — tier-2 prose (components/ui/prose.tsx): an explanation reads at
    14 px on a 1.7 line, a 64-character measure, dim ink, paragraphs 14 px apart; `em` is the true
    italic (the 400 italic face above). The piece carries the class; its paragraphs carry nothing. */

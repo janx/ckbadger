@@ -19,6 +19,17 @@ describe('DetailLayout identity', () => {
   });
 });
 
+// Visual finish V7: an entity page's content fades in when its data arrives and the layout mounts.
+describe('DetailLayout arrival (visual finish V7)', () => {
+  it('carries the arrival fade on its root', () => {
+    const { container } = render(<DetailLayout title="Transaction" children="tx" />);
+    expect(container.firstElementChild).toHaveClass('arrive');
+    expect(container.firstElementChild).toContainElement(
+      screen.getByRole('heading', { level: 1, name: 'Transaction' })
+    );
+  });
+});
+
 describe('DetailLayout anatomy (hierarchy plan R1, R6)', () => {
   it('sets the h1 by page kind: index for topic and list pages, entity for entity pages', () => {
     const { rerender } = render(<DetailLayout title="Blocks" kind="index" children="rows" />);

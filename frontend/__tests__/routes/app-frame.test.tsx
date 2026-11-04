@@ -6,7 +6,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@/__tests__/utils/test-utils';
+import { act, render, screen } from '@/__tests__/utils/test-utils';
 import { createAppRouter } from '@/src/routes/router';
 
 const gates = vi.hoisted(() => {
@@ -151,6 +151,51 @@ describe('the header is part of the frame (visual finish V6)', () => {
     expect(document.querySelector('[data-tint]')).toBeNull();
     expect(screen.getAllByRole('banner')).toHaveLength(1);
     expect(screen.getAllByRole('contentinfo')).toHaveLength(1);
+  });
+});
+
+// Visual finish V7: the element holding the page is keyed by the path, so each route change mounts
+// a new one and the page fades in; the header, outside it, stays. A search-only change (a tab) is
+// the same page and does not fade again.
+describe('the page arrives (visual finish V7)', () => {
+  it('wraps the page in .arrive and replaces the wrapper on navigation; the header stays', async () => {
+    const router = mount('/mainnet/dao');
+    const wrapper = (await screen.findByText('dao page', {}, LAZY)).parentElement!;
+    expect(wrapper).toHaveClass('arrive');
+    const header = screen.getByRole('banner');
+    expect(header).not.toContainElement(wrapper);
+
+    await act(() => router.navigate('/mainnet?tab=blocks'));
+    expect(await screen.findByText('home page', {}, LAZY)).toBeInTheDocument();
+    const next = screen.getByText('home page').parentElement!;
+    expect(next).toHaveClass('arrive');
+    expect(next).not.toBe(wrapper);
+    expect(wrapper.isConnected).toBe(false);
+    expect(screen.getByRole('banner')).toBe(header);
+
+    // the same path with another search: the same page, the same wrapper, no second fade
+    await act(() => router.navigate('/mainnet?tab=transactions'));
+    expect(screen.getByText('home page').parentElement).toBe(next);
+  });
+
+  it('wraps the chunk fallback in it too', async () => {
+    mount('/mainnet/blocks');
+    await screen.findAllByRole('banner');
+    expect(document.querySelector('.min-h-\\[60vh\\]')!.parentElement).toHaveClass('arrive');
+  });
+
+  it('lets the not-found night fill what the header leaves: a flex column down to the shell', async () => {
+    mount('/mainnet/no-such-page');
+    await screen.findByRole('heading', {
+      level: 1,
+      name: 'all that is was worked for. this was not.',
+    });
+    const shell = screen.getByRole('main').parentElement!;
+    expect(shell).toHaveClass('flex-1');
+    const wrapper = shell.parentElement!;
+    expect(wrapper).toHaveClass('arrive', 'flex', 'flex-1', 'flex-col');
+    expect(wrapper.parentElement).toHaveClass('flex', 'min-h-screen', 'flex-col');
+    expect(wrapper.parentElement).toContainElement(screen.getByRole('banner'));
   });
 });
 
