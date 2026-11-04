@@ -1094,15 +1094,8 @@ impl CkbadgerStore {
             }
         }
 
-        let cf_descriptors: Vec<ColumnFamilyDescriptor> = allowed
-            .iter()
-            .map(|name| {
-                ColumnFamilyDescriptor::new(
-                    *name,
-                    Self::cf_options(name, &block_cache, &memory_profile, runtime_config),
-                )
-            })
-            .collect();
+        let cf_descriptors =
+            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
 
         Self::size_flush_pool(&memory_profile)?;
         let db = DB::open_cf_descriptors(&opts, path, cf_descriptors)?;
@@ -1193,8 +1186,17 @@ impl CkbadgerStore {
                 );
             }
         }
-        let cf_refs: Vec<&str> = allowed.to_vec();
-        let db = DB::open_cf_as_secondary(&opts, primary_path, secondary_path, cf_refs)?;
+        // The same per-CF options as the primary: opened by name, every CF
+        // got RocksDB's defaults instead (a private 32 MB block cache and no
+        // bloom filter), so a point get read a data block in every sorted run.
+        let cf_descriptors =
+            Self::cf_descriptors(allowed, &block_cache, &memory_profile, runtime_config);
+        let db = DB::open_cf_descriptors_as_secondary(
+            &opts,
+            primary_path,
+            secondary_path,
+            cf_descriptors,
+        )?;
 
         Ok(Self {
             db,
@@ -1626,6 +1628,26 @@ impl CkbadgerStore {
         opts.set_write_buffer_manager(&write_buffer_manager);
 
         (opts, block_cache, write_buffer_manager)
+    }
+
+    /// The descriptors every open (primary or secondary) passes to RocksDB:
+    /// each allowed CF with its [`Self::cf_options`], so both read through the
+    /// process's shared block cache and the CF's bloom filter.
+    fn cf_descriptors(
+        allowed: &[&str],
+        block_cache: &rocksdb::Cache,
+        profile: &MemoryProfile,
+        runtime_config: StoreRuntimeConfig,
+    ) -> Vec<ColumnFamilyDescriptor> {
+        allowed
+            .iter()
+            .map(|name| {
+                ColumnFamilyDescriptor::new(
+                    *name,
+                    Self::cf_options(name, block_cache, profile, runtime_config),
+                )
+            })
+            .collect()
     }
 
     /// Per-CF options with 3 tiers:
@@ -3728,6 +3750,52 @@ mod tests {
         let cf = secondary.cf_sync_meta();
         let val = secondary.get_cf(cf, b"key").unwrap();
         assert_eq!(val.as_deref(), Some(b"value".as_slice()));
+    }
+
+    /// A secondary reads every CF through the primary's own per-CF options
+    /// (the process's shared block cache, the bloom filter), not RocksDB's
+    /// defaults. Opened by name, each CF of a secondary got a private 32 MB
+    /// LRU cache and no filter, so an API point get read a data block in
+    /// every sorted run of `cells`, and a list page cycled through more
+    /// blocks than 32 MB holds (A-5).
+    #[test]
+    fn secondary_reads_every_cf_through_the_primary_table_options() {
+        let block_cache_capacity = |store: &CkbadgerStore, cf: &ColumnFamily| {
+            store
+                .db
+                .property_int_value_cf(cf, "rocksdb.block-cache-capacity")
+                .unwrap()
+                .expect("a block-based CF reports its block cache capacity")
+        };
+        let rocksdb_default_capacity = 32 * MB;
+
+        let append_dir = TempDir::new().unwrap();
+        let append_secondary_dir = TempDir::new().unwrap();
+        let append = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
+        let append_secondary = CkbadgerStore::open_append_only_secondary(
+            append_dir.path(),
+            append_secondary_dir.path(),
+        )
+        .unwrap();
+        let primary_cells = block_cache_capacity(&append, append.cf_cells());
+        assert_ne!(primary_cells, rocksdb_default_capacity);
+        assert_eq!(
+            block_cache_capacity(&append_secondary, append_secondary.cf_cells()),
+            primary_cells,
+            "the secondary's cells CF reads through the shared block cache"
+        );
+
+        let domain_dir = TempDir::new().unwrap();
+        let domain_secondary_dir = TempDir::new().unwrap();
+        let domain = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
+        let domain_secondary =
+            CkbadgerStore::open_domain_secondary(domain_dir.path(), domain_secondary_dir.path())
+                .unwrap();
+        assert_eq!(
+            block_cache_capacity(&domain_secondary, domain_secondary.cf_cell_by_lock()),
+            block_cache_capacity(&domain, domain.cf_cell_by_lock()),
+            "the secondary's index CFs read through the shared block cache"
+        );
     }
 
     #[test]
