@@ -1254,14 +1254,17 @@ impl<'a> HourlyRetentionRequest<'a> {
     }
 }
 
-/// Stage the coverage-floor advance and the matching undo deletions.
+/// Stage the coverage-floor advance and the matching undo deletions (every
+/// undo-log row of the blocks that fall behind the new floor, one range
+/// delete).
 ///
-/// Returns the number of undo entries staged for deletion.
+/// Returns the blocks whose undo-log rows were staged for deletion, `None`
+/// when the floor does not move.
 pub fn stage_entity_stats_undo_retention(
     store: &CkbadgerStore,
     batch: &mut StoreBatch,
     committed_tip: i64,
-) -> Result<u64> {
+) -> Result<Option<std::ops::RangeInclusive<i64>>> {
     let existing = store.get_entity_stats_undo_contract()?;
     let current_floor = existing
         .as_ref()
@@ -1273,11 +1276,12 @@ pub fn stage_entity_stats_undo_retention(
         // Nothing to prune and nothing to promise that is not already
         // promised. The floor never moves backwards: a shorter chain after a
         // rollback does not resurrect entries this store already deleted.
-        return Ok(0);
+        return Ok(None);
     }
 
     let effective_floor = target_floor.max(current_floor);
-    let pruned = store.prune_entity_stats_undo_below(batch, current_floor, effective_floor)?;
+    store.prune_journal_below(batch, current_floor, effective_floor)?;
+    let pruned = (effective_floor > current_floor).then(|| current_floor + 1..=effective_floor);
     batch.put_entity_stats_undo_contract(&ckbadger_store::types::EntityStatsUndoContract {
         version: ckbadger_store::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
         coverage_floor_block: effective_floor,
@@ -8140,9 +8144,7 @@ mod tests {
             // inside the 100..=102 batch included).
             for (fork_point, expected) in [(101, &after_deposit), (100, &Vec::new())] {
                 crate::derive::invalidate_for_rollback(batched.as_ref(), fork_point).unwrap();
-                batched
-                    .rollback_via_undo_log(batched.as_ref(), fork_point)
-                    .unwrap();
+                batched.rollback_to_block(fork_point).unwrap();
                 assert!(
                     dao_live_agg_meta(&batched)
                         .is_complete(&ckbadger_store::derive_ops::DAO_LIVE_AGG),
@@ -8483,7 +8485,7 @@ mod tests {
             assert!(!immutable_cells_before.is_empty());
             batched_indexer
                 .writer
-                .cleanup_batch_range(batched.as_ref(), 102, 103)
+                .cleanup_batch_range(102, 103)
                 .expect("roll back request and backward-time completion");
             let dao_code =
                 hex::decode(crate::parser::dao::DAO_CODE_HASH.trim_start_matches("0x")).unwrap();
@@ -8842,16 +8844,7 @@ mod tests {
                     .collect::<Vec<_>>()
             };
             let append_before = cells(&batch_store);
-            let undo = batch_store
-                .rollback_via_undo_log(batch_store.as_ref(), 101)
-                .unwrap();
-            batch_store
-                .rollback_to_block_with_tx_contexts(
-                    101,
-                    Some(batch_store.as_ref()),
-                    undo.tx_contexts,
-                )
-                .unwrap();
+            batch_store.rollback_to_block(101).unwrap();
             assert_eq!(
                 cells(&batch_store),
                 append_before,
@@ -9118,13 +9111,12 @@ mod tests {
             );
         }
 
-        /// Plan Task 5.7: `cleanup_batch_range` replayed the undo log (which
-        /// consumes the tx-context entries) and then asked for the canonical
-        /// rollback WITHOUT the contexts that replay returned, so every
-        /// CleanupAndRetry fell back to whole-CF scans. It must hand them over,
-        /// exactly like `execute_reorg`.
+        /// Plan Task 5.7: a `cleanup_batch_range` (CleanupAndRetry) once fell
+        /// back to whole-CF scans of `addr_txs`. The journal rollback reads no
+        /// `addr_txs` row at all: the rolled-back block's rows go with its
+        /// journal entries.
         #[tokio::test]
-        async fn cleanup_batch_range_reuses_the_undo_tx_contexts_instead_of_scanning() {
+        async fn cleanup_batch_range_reads_no_addr_txs_rows() {
             let _guard =
                 crate::db::writer::activities::test_detector_override::without_extra_detectors();
             let dir = tempfile::tempdir().unwrap();
@@ -9177,16 +9169,17 @@ mod tests {
                 write_live_block(&indexer, b).await.unwrap();
             }
 
+            store.reset_read_call_counters();
             let result = indexer
                 .writer
-                .cleanup_batch_range(store.as_ref(), 102, 102)
+                .cleanup_batch_range(102, 102)
                 .expect("cleanup of the last batch");
             assert_eq!(result.blocks_removed, 1);
+            let scanned = store.iterated_rows(ckbadger_store::CF_ADDR_TXS);
             assert!(
-                result.addr_txs_scanned < NOISE,
-                "the cleanup read {} CF_ADDR_TXS rows; with the replayed tx contexts it reads \
-                 only the rolled-back participants' rows, not the {NOISE} unrelated ones",
-                result.addr_txs_scanned
+                scanned < NOISE,
+                "the cleanup read {scanned} CF_ADDR_TXS rows; it must not scan the {NOISE} \
+                 unrelated ones"
             );
             assert!(
                 !addr_tx_keys(&store)
@@ -9278,18 +9271,14 @@ mod tests {
             );
             assert!(prefix_rows(&store).is_empty(), "and it is not a prefix row");
 
-            // PINNED DEFECT (latent: no production detector names a full lock
-            // today). Rollback derives the CF_ADDR_TXS keys to delete from the
-            // rolled-back cells' locks; X holds none, so its row survives,
-            // pointing at an orphaned block. Changing this is plan 5.4's
-            // follow-up, not this test's job: update the assertion with it.
-            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
-                .expect("today the rollback itself succeeds");
+            // The defect this test pinned (the old rollback derived the
+            // CF_ADDR_TXS keys to delete from the rolled-back cells' locks, so
+            // a row of a lock that holds no cell outlived its block) is gone:
+            // the row is journaled in its block like every addr_txs row.
+            store.rollback_to_block(100).unwrap();
             assert!(
-                addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
-                "today: the Lock-named row outlives the rollback of its block"
+                !addr_tx_keys(&store).contains(&(named.clone(), 101, 1)),
+                "the Lock-named row goes with the rollback of its block"
             );
             assert!(store.get_addr_balance(&named).unwrap().is_none());
         }
@@ -9561,10 +9550,7 @@ mod tests {
             );
 
             // Fork at 102: block 103's row goes, block 101's stays.
-            let undo = store.rollback_via_undo_log(store.as_ref(), 102).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(102, Some(store.as_ref()), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(102).unwrap();
 
             assert_eq!(
                 prefix_rows(&store)
@@ -9585,10 +9571,7 @@ mod tests {
             );
 
             // Fork at 100: the last row goes, and a zero counter is no row.
-            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(100).unwrap();
             assert!(
                 prefix_rows(&store).is_empty(),
                 "every prefix row is rolled back"
@@ -9846,10 +9829,7 @@ mod tests {
 
             // Fork at 101: the registration is undone, the predecessor goes
             // back to the `next` it had before it was relinked.
-            let undo = store.rollback_via_undo_log(store.as_ref(), 101).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(101, Some(store.as_ref()), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(101).unwrap();
 
             assert!(
                 store.get_identity(&joaom_id()).unwrap().is_none(),
@@ -9933,10 +9913,7 @@ mod tests {
             assert_eq!(ring.created_at_block, 101);
 
             // Fork at 100: nothing `.cell` is left.
-            let undo = store.rollback_via_undo_log(store.as_ref(), 100).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(100, Some(store.as_ref()), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(100).unwrap();
             assert!(store.get_identity(&maria_id()).unwrap().is_none());
             assert!(store
                 .list_dotcell_names_by_owner20(&maria_owner, None, 10)
@@ -10946,10 +10923,7 @@ mod tests {
 
             // Shallow rollback of block 102: the undo pre-image restores the
             // end-of-block-101 row, count included.
-            indexer
-                .writer
-                .cleanup_batch_range(store.as_ref(), 102, 102)
-                .unwrap();
+            indexer.writer.cleanup_batch_range(102, 102).unwrap();
             let rolled_back: TokenDailyDelta =
                 bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
             assert_eq!(rolled_back, after_mint);
@@ -11063,10 +11037,7 @@ mod tests {
                 "live and bulk token_transfers rows"
             );
 
-            indexer
-                .writer
-                .cleanup_batch_range(store.as_ref(), 103, 103)
-                .unwrap();
+            indexer.writer.cleanup_batch_range(103, 103).unwrap();
             let rolled_back: TokenDailyDelta =
                 bincode::deserialize(&store.get_stats_key(&daily_key).unwrap().unwrap()).unwrap();
             assert_eq!(rolled_back, before_burn, "the burn is rolled back");
@@ -11165,10 +11136,7 @@ mod tests {
                     .collect::<Vec<_>>()
             };
             let payloads_before = payloads(store.as_ref());
-            indexer
-                .writer
-                .cleanup_batch_range(store.as_ref(), 103, 103)
-                .unwrap();
+            indexer.writer.cleanup_batch_range(103, 103).unwrap();
             assert_eq!(
                 payloads(store.as_ref()),
                 payloads_before,
@@ -11620,10 +11588,7 @@ mod tests {
         }
 
         fn rollback_to(store: &CkbadgerStore, fork_point: i64) {
-            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(fork_point, Some(store), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(fork_point).unwrap();
         }
 
         /// Block 103 burns the token (0xe2:0) into a plain cell.
@@ -11839,39 +11804,6 @@ mod tests {
                 "day two reached zero and is deleted"
             );
             assert_eq!(cells_dump(&single), cells_before, "CF_CELLS untouched");
-        }
-
-        /// A rollback that would take a day below zero — a day row the
-        /// forward writer never wrote — fails naming the collection and day.
-        #[tokio::test]
-        async fn collection_daily_rollback_fails_on_a_day_without_its_counts() {
-            let _guard =
-                crate::db::writer::activities::test_detector_override::without_extra_detectors();
-            let store = indexed_through(transfer_block()).await;
-            let transfer_day = ckbadger_store::keys::stats_day_yyyymmdd(
-                store.get_block_header(102).unwrap().unwrap().chain_time_ms,
-            )
-            .unwrap();
-            store
-                .delete_cf(
-                    store.cf_collection_activity_daily(),
-                    &ckbadger_store::keys::encode_collection_activity_daily_key(
-                        &class_id(),
-                        transfer_day,
-                    ),
-                )
-                .unwrap();
-            let undo = store.rollback_via_undo_log(store.as_ref(), 101).unwrap();
-            let error = store
-                .rollback_to_block_with_tx_contexts(101, Some(store.as_ref()), undo.tx_contexts)
-                .unwrap_err()
-                .to_string();
-            assert!(
-                error.contains("collection_activity_daily underflow during rollback")
-                    && error.contains(&hex::encode(class_id()))
-                    && error.contains(&format!("day={transfer_day}")),
-                "{error}"
-            );
         }
 
         #[tokio::test]
@@ -13544,10 +13476,7 @@ mod tests {
         }
 
         fn rollback_to(store: &CkbadgerStore, fork_point: i64) {
-            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
-            store
-                .rollback_to_block_with_tx_contexts(fork_point, Some(store), undo.tx_contexts)
-                .unwrap();
+            store.rollback_to_block(fork_point).unwrap();
         }
 
         /// The token row and its `CF_STATS_TOKEN` transfer counter, as stored.
@@ -14232,18 +14161,8 @@ mod tests {
             store
         }
 
-        /// Roll back by the undo log's tx-contexts, or — `use_tx_contexts =
-        /// false` — by the full-scan fallback (no contexts handed over).
-        fn rollback_to(store: &CkbadgerStore, fork_point: i64, use_tx_contexts: bool) {
-            let undo = store.rollback_via_undo_log(store, fork_point).unwrap();
-            let contexts = if use_tx_contexts {
-                undo.tx_contexts
-            } else {
-                Vec::new()
-            };
-            store
-                .rollback_to_block_with_tx_contexts(fork_point, Some(store), contexts)
-                .unwrap();
+        fn rollback_to(store: &CkbadgerStore, fork_point: i64) {
+            store.rollback_to_block(fork_point).unwrap();
         }
 
         /// Every row of every cell-state CF.
@@ -14272,7 +14191,8 @@ mod tests {
                 .count()
         }
 
-        async fn assert_rollback_matches_reference(use_tx_contexts: bool) {
+        #[tokio::test]
+        async fn rollback_removes_a_created_and_consumed_cells_data_hash_row() {
             let all = blocks();
             let store = write_live(&all).await;
             assert_eq!(
@@ -14282,34 +14202,24 @@ mod tests {
             );
 
             // Fork after block 101: the cell survives, its consumption does not.
-            rollback_to(&store, 101, use_tx_contexts);
+            rollback_to(&store, 101);
             let through_101 = write_live(&all[..2]).await;
             assert_eq!(
                 cell_rows(&store),
                 cell_rows(&through_101),
-                "use_tx_contexts={use_tx_contexts}: rollback to 101"
+                "rollback to 101"
             );
 
             // Fork after block 100 on a fresh store: the cell was created AND
             // consumed in the rolled-back range, so nothing of it may remain.
             let store = write_live(&all).await;
-            rollback_to(&store, 100, use_tx_contexts);
+            rollback_to(&store, 100);
             let through_100 = write_live(&all[..1]).await;
             assert_eq!(
                 cell_rows(&store),
                 cell_rows(&through_100),
-                "use_tx_contexts={use_tx_contexts}: rollback to 100"
+                "rollback to 100"
             );
-        }
-
-        #[tokio::test]
-        async fn rollback_by_tx_contexts_removes_a_created_and_consumed_cells_data_hash_row() {
-            assert_rollback_matches_reference(true).await;
-        }
-
-        #[tokio::test]
-        async fn rollback_by_full_scan_removes_a_created_and_consumed_cells_data_hash_row() {
-            assert_rollback_matches_reference(false).await;
         }
 
         /// D-2: a `cell_by_data_hash` row exists iff the cell has data, on both
@@ -14589,10 +14499,7 @@ mod tests {
                     hex::encode(key),
                 );
             }
-            multi_indexer
-                .writer
-                .cleanup_batch_range(multi.as_ref(), 2, 3)
-                .unwrap();
+            multi_indexer.writer.cleanup_batch_range(2, 3).unwrap();
             multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
             multi_indexer
                 .reconcile_cell_dist_tracker_with_tip(1)
@@ -14710,10 +14617,7 @@ mod tests {
             assert_eq!(bucket_rows(&multi), expected, "bulk vs multi live");
 
             let immutable_before = cell_payload_rows(&multi);
-            multi_indexer
-                .writer
-                .cleanup_batch_range(multi.as_ref(), 2, 3)
-                .unwrap();
+            multi_indexer.writer.cleanup_batch_range(2, 3).unwrap();
             let surviving: Vec<Vec<u8>> = expected
                 .iter()
                 .filter(|k| {
@@ -14856,10 +14760,7 @@ mod tests {
             assert_eq!(folded, expected, "days are the fold of the collection rows");
 
             let immutable_before = cell_payload_rows(&multi);
-            multi_indexer
-                .writer
-                .cleanup_batch_range(multi.as_ref(), 2, 3)
-                .unwrap();
+            multi_indexer.writer.cleanup_batch_range(2, 3).unwrap();
             multi_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
             multi_indexer
                 .reconcile_cell_dist_tracker_with_tip(1)
@@ -14995,10 +14896,7 @@ mod tests {
             assert_eq!(addr_balance_rows(&multi), expected, "bulk vs multi live");
 
             let immutable_before = cell_payload_rows(&multi);
-            multi_indexer
-                .writer
-                .cleanup_batch_range(multi.as_ref(), 2, 3)
-                .unwrap();
+            multi_indexer.writer.cleanup_batch_range(2, 3).unwrap();
             let surviving_rows = live_addr_tx_counts(&multi);
             let surviving_cellbases: i64 = surviving_rows.values().map(|(_, cb)| *cb).sum();
             let all_cellbases: i64 = bulk_rows.values().map(|(_, cb)| *cb).sum();
@@ -15087,10 +14985,7 @@ mod tests {
                 2
             );
             let immutable_before = cell_payload_rows(&replayed);
-            replay_indexer
-                .writer
-                .cleanup_batch_range(replayed.as_ref(), 2, 2)
-                .unwrap();
+            replay_indexer.writer.cleanup_batch_range(2, 2).unwrap();
             replay_indexer.reconcile_hodl_tracker_with_tip(1).unwrap();
             replay_indexer
                 .reconcile_cell_dist_tracker_with_tip(1)

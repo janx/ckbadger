@@ -2270,52 +2270,6 @@ impl CkbadgerStore {
         self.write_batch_no_wal_with_intent(batch, StoreWriteIntent::Normal)
     }
 
-    pub(crate) fn apply_batch_op_by_cf_name(
-        &self,
-        batch: &mut WriteBatch,
-        cf_name: &str,
-        key: &[u8],
-        value: Option<&[u8]>,
-    ) -> anyhow::Result<()> {
-        self.apply_batch_op_by_cf_name_with_intent(
-            batch,
-            cf_name,
-            key,
-            value,
-            StoreWriteIntent::Normal,
-        )
-    }
-
-    pub(crate) fn apply_batch_op_by_cf_name_with_intent(
-        &self,
-        batch: &mut WriteBatch,
-        cf_name: &str,
-        key: &[u8],
-        value: Option<&[u8]>,
-        intent: StoreWriteIntent,
-    ) -> anyhow::Result<()> {
-        if !Self::cf_allowed(self.store_class, cf_name) {
-            anyhow::bail!(
-                "CF '{}' is not allowed in {:?} store",
-                cf_name,
-                self.store_class
-            );
-        }
-
-        let cf = self
-            .db
-            .cf_handle(cf_name)
-            .ok_or_else(|| anyhow::anyhow!("CF '{}' not found", cf_name))?;
-        if let Some(v) = value {
-            self.validate_append_put_by_cf_name(cf_name, key, v, intent)?;
-            batch.put_cf(cf, key, v);
-        } else {
-            self.validate_append_delete_by_cf_name(cf_name, key, intent)?;
-            batch.delete_cf(cf, key);
-        }
-        Ok(())
-    }
-
     /// Resolve the target stats CF by stats key prefix.
     pub fn stats_cf_by_prefix(&self, prefix: u8) -> anyhow::Result<&ColumnFamily> {
         match prefix {
@@ -2362,8 +2316,7 @@ impl CkbadgerStore {
         }
     }
 
-    /// Resolve a column family handle by its name, the way
-    /// `rollback_via_undo_log` does when replaying a `KeyMutation` entry.
+    /// Resolve a column family handle by its name.
     pub fn cf_handle_by_name(&self, cf_name: &str) -> Option<&ColumnFamily> {
         self.db.cf_handle(cf_name)
     }
@@ -2372,8 +2325,8 @@ impl CkbadgerStore {
     ///
     /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which an
     /// undo-log entry cannot carry: `UndoLogEntry::KeyMutation` is CF-name
-    /// addressed so `rollback_via_undo_log` can re-resolve the handle in
-    /// whichever process replays it. Both must stay in step — a prefix that
+    /// addressed so the rollback can re-resolve the handle in whichever
+    /// process replays it. Both must stay in step — a prefix that
     /// resolves to a handle here but not to a name would silently lose its
     /// pre-images.
     pub fn stats_cf_name_by_prefix(prefix: u8) -> anyhow::Result<&'static str> {
@@ -3615,15 +3568,8 @@ mod tests {
         let cf = store.cf_cells();
         store.put_cf(cf, b"k1", b"v1").unwrap();
 
-        let mut batch = WriteBatch::default();
         let err = store
-            .apply_batch_op_by_cf_name_with_intent(
-                &mut batch,
-                CF_CELLS,
-                b"k1",
-                None,
-                StoreWriteIntent::AppendValidated,
-            )
+            .validate_append_delete_by_cf_name(CF_CELLS, b"k1", StoreWriteIntent::AppendValidated)
             .unwrap_err();
         assert!(err.to_string().contains("append-only delete blocked"));
     }

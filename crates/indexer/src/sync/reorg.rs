@@ -584,7 +584,6 @@ impl Indexer {
 
         self.writer
             .execute_reorg(
-                self.append_only_store.as_ref(),
                 i64::try_from(fork_point)
                     .map_err(|_| anyhow!("fork point exceeds i64 range: {}", fork_point))?,
                 &fork_hash,

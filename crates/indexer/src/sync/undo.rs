@@ -125,46 +125,6 @@ pub(crate) fn undo_scope_overlaps(
         .collect())
 }
 
-#[cfg(test)]
-pub(crate) fn put_append_delete_undo_entry(
-    domain_batch: &mut StoreBatch<'_>,
-    undo_seq_by_block: &mut HashMap<i64, u64>,
-    scope: UndoSeqScope,
-    block_num: i64,
-    cf_name: &str,
-    key: &[u8],
-) {
-    put_delete_undo_entry(
-        domain_batch,
-        undo_seq_by_block,
-        ckbadger_store::types::UndoLogStoreTarget::AppendOnly,
-        scope,
-        block_num,
-        cf_name,
-        key,
-    );
-}
-
-#[cfg(test)]
-fn put_delete_undo_entry(
-    domain_batch: &mut StoreBatch<'_>,
-    undo_seq_by_block: &mut HashMap<i64, u64>,
-    target_store: ckbadger_store::types::UndoLogStoreTarget,
-    scope: UndoSeqScope,
-    block_num: i64,
-    cf_name: &str,
-    key: &[u8],
-) {
-    let seq = next_undo_seq(undo_seq_by_block, block_num, scope);
-    let undo = ckbadger_store::types::UndoLogEntry::KeyMutation {
-        target_store,
-        cf_name: cf_name.to_string(),
-        key: key.to_vec(),
-        previous_value: None,
-    };
-    domain_batch.put_reorg_undo_log_by_block(block_num, seq, &undo);
-}
-
 pub(crate) fn put_tx_context_undo_entries(
     domain_batch: &mut StoreBatch<'_>,
     undo_seq_by_block: &mut HashMap<i64, u64>,
@@ -270,25 +230,6 @@ pub(crate) fn put_tx_actions(
 
 #[cfg(test)]
 mod tests {
-    fn rollback_undo_log_after_batch_cleanup(
-        store: &CkbadgerStore,
-        append_only_store: &CkbadgerStore,
-        cleanup_tip: i64,
-        context: &str,
-    ) -> anyhow::Result<()> {
-        let _ = store
-            .rollback_via_undo_log(append_only_store, cleanup_tip)
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "failed to rollback undo log after batch cleanup: cleanup_tip={}, context={}, error={:#}",
-                    cleanup_tip,
-                    context,
-                    e
-                )
-            })?;
-        Ok(())
-    }
-
     use super::*;
     use chrono::Utc;
     use ckbadger_store::batch::StoreBatch;
@@ -422,53 +363,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_via_undo_log_preserves_append_only_cells() {
-        // After dual-store refactor, CF_CELLS is the only append-only CF.
-        // Undo log entries targeting AppendOnly are skipped during rollback,
-        // so cells written to append-only store survive rollback.
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
-
-        let cell_key_keep = ckbadger_store::keys::encode_outpoint(&[0xA1; 32], 0);
-        let cell_key_drop = ckbadger_store::keys::encode_outpoint(&[0xA2; 32], 0);
-        append_store
-            .put_cf(append_store.cf_cells(), &cell_key_keep, &[0x01])
-            .unwrap();
-        append_store
-            .put_cf(append_store.cf_cells(), &cell_key_drop, &[0x02])
-            .unwrap();
-
-        // Write an undo entry targeting append-only store for CF_CELLS
-        let mut domain_batch = StoreBatch::new(&domain_store);
-        let mut undo_seq_by_block = HashMap::new();
-        put_append_delete_undo_entry(
-            &mut domain_batch,
-            &mut undo_seq_by_block,
-            UndoSeqScope::TxContext, // scope is just for sequence partitioning
-            20,
-            ckbadger_store::CF_CELLS,
-            &cell_key_drop,
-        );
-        domain_batch.commit().unwrap();
-
-        domain_store
-            .rollback_via_undo_log(&append_store, 15)
-            .unwrap();
-
-        // Both cells survive because append-only entries are skipped during rollback
-        assert!(append_store
-            .get_cf(append_store.cf_cells(), &cell_key_keep)
-            .unwrap()
-            .is_some());
-        assert!(append_store
-            .get_cf(append_store.cf_cells(), &cell_key_drop)
-            .unwrap()
-            .is_some());
-    }
-
-    #[test]
     fn test_put_tx_actions_writes_to_domain_without_undo() {
         let domain_dir = tempfile::tempdir().unwrap();
         let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
@@ -506,63 +400,6 @@ mod tests {
             .get_tx_actions(42, 3, &actions.tx_hash)
             .unwrap()
             .is_some());
-    }
-
-    #[test]
-    fn test_rollback_undo_log_after_batch_cleanup_prunes_valid_entries() {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
-
-        let mut batch = StoreBatch::new(&domain_store);
-        batch.put_reorg_undo_log_by_block(
-            6,
-            0,
-            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
-                tx_hash: vec![0x88; 32],
-                outputs_count: 0,
-                inputs: vec![],
-            }),
-        );
-        batch.commit().unwrap();
-
-        rollback_undo_log_after_batch_cleanup(&domain_store, &append_store, 5, "unit-test")
-            .unwrap();
-
-        let undo_key = keys::encode_reorg_undo_log_key(6, 0);
-        assert!(domain_store
-            .get_cf(domain_store.cf_reorg_undo_log_by_block(), &undo_key)
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn test_rollback_undo_log_after_batch_cleanup_fails_on_malformed_undo_key() {
-        let domain_dir = tempfile::tempdir().unwrap();
-        let append_dir = tempfile::tempdir().unwrap();
-        let domain_store = CkbadgerStore::open_domain(domain_dir.path()).unwrap();
-        let append_store = CkbadgerStore::open_append_only(append_dir.path()).unwrap();
-
-        domain_store
-            .put_cf(
-                domain_store.cf_reorg_undo_log_by_block(),
-                b"bad-key",
-                b"bad-value",
-            )
-            .unwrap();
-
-        let err = rollback_undo_log_after_batch_cleanup(
-            &domain_store,
-            &append_store,
-            -1,
-            "unit-test malformed key",
-        )
-        .unwrap_err();
-
-        assert!(err
-            .to_string()
-            .contains("failed to rollback undo log after batch cleanup"));
     }
 
     #[test]

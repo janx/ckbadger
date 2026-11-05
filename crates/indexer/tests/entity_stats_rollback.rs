@@ -22,9 +22,10 @@ use ckbadger_indexer::sync::types::{
     EntityDailyChanges, EntityDateKey, ScriptDailyKey, TokenDailyChanges,
 };
 use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::block_overlay::journal_seq;
 use ckbadger_store::keys::UndoSeqScope;
 use ckbadger_store::types::{EpochStats, HourlyRetentionFamily};
-use ckbadger_store::{keys, CachedBlockHeader, CkbadgerStore, LiveCellInfo};
+use ckbadger_store::{keys, CachedBlockHeader, CkbadgerStore, LiveCellInfo, SharedBlockOverlay};
 use rocksdb::{Direction, IteratorMode};
 
 // ---------------------------------------------------------------------------
@@ -309,8 +310,11 @@ fn blk(n: i64) -> BlockChanges {
 /// `undo_seq_by_block` map, per-block undo pre-images and one final write per
 /// touched key.
 fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockChanges]) {
-    let mut batch = StoreBatch::new(domain);
-    let mut overlay = EntityStatsOverlay::new();
+    // The live batch's shape: one block overlay journals every block's
+    // pre-images, the entity stats overlay is its stats side.
+    let block_overlay = SharedBlockOverlay::new(domain);
+    let mut batch = StoreBatch::journaled(domain, &block_overlay, 0);
+    let mut overlay = EntityStatsOverlay::sharing(&block_overlay);
     let mut undo_seq: HashMap<i64, u64> = HashMap::new();
 
     let mut script = EntityDailyChanges::<ScriptDailyKey>::new();
@@ -385,8 +389,11 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
         header.chain_time_ms =
             previous_chain_time.map_or(b.timestamp, |prior| prior.max(b.timestamp));
         previous_chain_time = Some(header.chain_time_ms);
-        batch.put_block_header(b.block, &header);
+        batch.at(b.block).put_block_header(b.block, &header);
     }
+    batch
+        .stage_journal(&mut |block| journal_seq(&mut undo_seq, block))
+        .unwrap();
     batch.commit().unwrap();
     seed_epoch_rows(domain, blocks.iter().map(|b| (b.block, b.timestamp)));
 }
@@ -448,10 +455,8 @@ fn seed_forward_histogram(domain: &CkbadgerStore) {
 
 fn rollback(domain: &CkbadgerStore, append: &CkbadgerStore, fork_point: i64) {
     seed_forward_histogram(domain);
-    let undo = domain.rollback_via_undo_log(append, fork_point).unwrap();
-    domain
-        .rollback_to_block_with_tx_contexts(fork_point, Some(append), undo.tx_contexts)
-        .unwrap();
+    let _ = append;
+    domain.rollback_to_block(fork_point).unwrap();
 }
 
 /// Byte-exact dump of the eight entity stats families, keyed by full stats key.
@@ -934,7 +939,7 @@ async fn two_consecutive_reorgs() {
         "two consecutive reorgs must not double-undo, double-count, or collide on undo seq"
     );
     assert!(
-        !domain.has_undo_log_entries_after(4).unwrap(),
+        !domain.has_journal_after(4).unwrap(),
         "every replayed undo entry must be consumed"
     );
 }
@@ -1244,8 +1249,9 @@ async fn prune_keeps_window_and_updates_floor() {
             .unwrap();
     batch.commit().unwrap();
     assert_eq!(
-        pruned, 200,
-        "blocks 1..=200 fall out of the 1000-block window"
+        pruned,
+        Some(0..=200),
+        "blocks up to 200 fall out of the 1000-block window"
     );
 
     let mut entity_blocks = Vec::new();
@@ -1264,8 +1270,8 @@ async fn prune_keeps_window_and_updates_floor() {
     assert_eq!(*entity_blocks.iter().min().unwrap(), 201);
     assert_eq!(*entity_blocks.iter().max().unwrap(), 1_200);
     assert_eq!(
-        tx_context_entries, 1_200,
-        "retention must not touch the TxContext scope"
+        tx_context_entries, 1_000,
+        "retention prunes every undo-log scope below the floor (one range delete)"
     );
 
     let contract = domain.get_entity_stats_undo_contract().unwrap().unwrap();
@@ -1277,7 +1283,7 @@ async fn prune_keeps_window_and_updates_floor() {
     assert_eq!(
         ckbadger_indexer::sync::stage_entity_stats_undo_retention(&domain, &mut batch, 900)
             .unwrap(),
-        0
+        None
     );
     batch.commit().unwrap();
     assert_eq!(
@@ -1315,15 +1321,7 @@ async fn reorg_below_floor_fails_fast() {
     assert!(!before.is_empty());
 
     let result = writer
-        .execute_reorg(
-            append.as_ref(),
-            150,
-            &[0x96; 32],
-            1_200,
-            &[0x11; 32],
-            1_201,
-            &[0x22; 32],
-        )
+        .execute_reorg(150, &[0x96; 32], 1_200, &[0x11; 32], 1_201, &[0x22; 32])
         .await;
     let err = match result {
         Ok(_) => panic!("a fork point below the coverage floor must fail fast"),
@@ -1700,148 +1698,6 @@ async fn clock_rollback_does_not_lower_executed_cutoff() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2.7 — interrupted rollback recovery
-// ---------------------------------------------------------------------------
-
-/// `execute_reorg` replays the undo log and THEN runs the domain rollback. A
-/// crash between the two leaves the entity stats already restored and their
-/// undo entries already consumed. The startup cleanup path must finish the same
-/// rollback without undoing anything a second time.
-#[tokio::test]
-async fn crash_between_undo_replay_and_domain_rollback_is_recoverable() {
-    let original = vec![vec![
-        blk(1)
-            .token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000)
-            .script(CODE_A, false, DAY, 9_000_000_000, 6_100_000_000)
-            .token_hour(TOKEN_X, TS_DAY, 2),
-        blk(2)
-            .token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000)
-            .object(COLLECTION_ID, DAY, 5_000_000_000, 4_800_000_000),
-        // Orphans from here.
-        blk(3)
-            .token(TOKEN_X, DAY, 100_000_000_000, 90_000_000_000)
-            .token(TOKEN_Y, DAY, 6_000_000_000, 5_000_000_000)
-            .token_hour(TOKEN_X, TS_DAY, 4),
-        blk(4)
-            .object(COLLECTION_ID, DAY, -5_000_000_000, -4_800_000_000)
-            .spore(SPORE_ID, DAY, 1_000_000_000, 800_000_000),
-    ]];
-
-    // Branch A: apply everything, replay the undo log, then CRASH — no
-    // `rollback_to_block`, no refreshes. Recovery runs the startup path.
-    let (domain_a, append_a) = setup_split_stores();
-    let writer_a = BatchWriter::new(domain_a.clone(), append_a.clone());
-    let (cell_key, cell_bytes) = seed_append_only_witness(&append_a);
-    for commit in &original {
-        apply_commit(&writer_a, &domain_a, commit);
-    }
-    // The startup cleanup path ends with the DAO tip summary, which builds the
-    // open day on the previous day's row. Seed it on a day BEFORE the cutoff,
-    // the way a real chain would have it; it is untouched by this rollback.
-    seed_dao_tip_summary_inputs(&domain_a);
-
-    let undo = domain_a.rollback_via_undo_log(&append_a, 2).unwrap();
-    assert!(
-        undo.undo_entries_applied > 0,
-        "the fixture must exercise the undo path"
-    );
-    let after_undo_only = dump_entity_stats(&domain_a);
-    assert!(
-        !domain_a.has_undo_log_entries_after(2).unwrap(),
-        "the replayed entries are consumed before the crash"
-    );
-
-    // Recovery: the startup cleanup path with the same target.
-    seed_forward_histogram(&domain_a);
-    writer_a
-        .init_sync_start_with_options(append_a.as_ref(), 2, false, true)
-        .expect("startup cleanup must finish the interrupted rollback");
-
-    assert_eq!(
-        dump_entity_stats(&domain_a),
-        after_undo_only,
-        "recovery must not undo the already-applied restoration a second time"
-    );
-    assert_eq!(
-        append_a.get_cf(append_a.cf_cells(), &cell_key).unwrap(),
-        Some(cell_bytes),
-        "append-only payload bytes must be unchanged by crash recovery"
-    );
-
-    // Branch B: the same surviving history, synced directly.
-    let (domain_b, append_b) = setup_split_stores();
-    let writer_b = BatchWriter::new(domain_b.clone(), append_b.clone());
-    seed_append_only_witness(&append_b);
-    let surviving: Vec<BlockChanges> = original[0]
-        .iter()
-        .filter(|b| b.block <= 2)
-        .cloned()
-        .collect();
-    apply_commit(&writer_b, &domain_b, &surviving);
-
-    assert_eq!(
-        dump_entity_stats(&domain_a),
-        dump_entity_stats(&domain_b),
-        "a crash between undo replay and domain rollback must still land on the \
-         same eight entity stats families as a node that never saw the orphans"
-    );
-}
-
-/// If the domain rollback fails after the undo log was replayed, the restored
-/// values must stay visible and the cleanup marker must stay set, so the next
-/// start finishes the same rollback instead of publishing an inconsistent tip.
-#[tokio::test]
-async fn rollback_to_block_failure_leaves_undo_replay_visible_and_marker_set() {
-    let (domain, append) = setup_split_stores();
-    let writer = BatchWriter::new(domain.clone(), append.clone());
-
-    apply_commit(
-        &writer,
-        &domain,
-        &[
-            blk(1).token(TOKEN_X, DAY, 9_000_000_000, 6_100_000_000),
-            blk(2).token(TOKEN_X, DAY, 3_000_000_000, 2_000_000_000),
-            blk(3).token(TOKEN_X, DAY, 100_000_000_000, 90_000_000_000),
-        ],
-    );
-    let key = keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec();
-    let after_block_3 = read_stats(&domain, &key).unwrap();
-
-    // Corrupt block 3's header so the domain rollback cannot decode it.
-    domain
-        .put_cf(
-            domain.cf_block_headers(),
-            &keys::encode_block_num(3),
-            b"invalid-header-payload",
-        )
-        .unwrap();
-
-    let undo = domain.rollback_via_undo_log(&append, 2).unwrap();
-    assert!(undo.undo_entries_applied > 0);
-    let restored = read_stats(&domain, &key).unwrap();
-    assert_ne!(
-        restored, after_block_3,
-        "the undo replay must have rolled the row back to its end-of-block-2 value"
-    );
-
-    let err = domain
-        .rollback_to_block_with_tx_contexts(2, Some(append.as_ref()), undo.tx_contexts)
-        .expect_err("a corrupt header must fail the domain rollback");
-    assert!(!err.to_string().is_empty());
-
-    assert_eq!(
-        read_stats(&domain, &key),
-        Some(restored),
-        "a failed domain rollback must leave the undo replay's result intact — the next \
-         start finishes the same rollback, it does not redo it"
-    );
-    assert!(
-        !domain.has_undo_log_entries_after(2).unwrap(),
-        "consumed undo entries must not reappear and be applied twice"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Review M2 — every rollback entry point must honour the coverage floor
 // ---------------------------------------------------------------------------
 
@@ -1899,7 +1755,7 @@ async fn startup_cleanup_below_coverage_floor_fails_fast() {
     assert!(!before.is_empty());
 
     let err = writer
-        .init_sync_start_with_options(append.as_ref(), 3_000, false, true)
+        .init_sync_start_with_options(3_000, false, true)
         .expect_err("a cleanup below the coverage floor must fail fast");
     assert!(
         ckbadger_indexer::lifecycle::is_rebuild_required(&err),
@@ -1936,7 +1792,7 @@ async fn cleanup_batch_range_below_coverage_floor_fails_fast() {
 
     let before = dump_entity_stats(&domain);
     let err = writer
-        .cleanup_batch_range(append.as_ref(), 100, 200)
+        .cleanup_batch_range(100, 200)
         .expect_err("a batch-range cleanup below the coverage floor must fail fast");
     assert!(
         ckbadger_indexer::lifecycle::is_rebuild_required(&err),
@@ -1969,7 +1825,7 @@ async fn cleanup_at_or_above_coverage_floor_still_runs() {
     seed_dao_tip_summary_inputs(&domain);
     seed_forward_histogram(&domain);
     writer
-        .cleanup_batch_range(append.as_ref(), 2, 2)
+        .cleanup_batch_range(2, 2)
         .expect("a store with no contract has nothing to protect");
 
     domain
@@ -1980,7 +1836,7 @@ async fn cleanup_at_or_above_coverage_floor_still_runs() {
         })
         .unwrap();
     writer
-        .cleanup_batch_range(append.as_ref(), 2, 2)
+        .cleanup_batch_range(2, 2)
         .expect("a target exactly at the floor is inside coverage");
 }
 
@@ -2005,15 +1861,7 @@ async fn reorg_without_a_contract_fails_fast() {
 
     let before = dump_entity_stats(&domain);
     let result = writer
-        .execute_reorg(
-            append.as_ref(),
-            1,
-            &[0x01; 32],
-            2,
-            &[0x02; 32],
-            3,
-            &[0x03; 32],
-        )
+        .execute_reorg(1, &[0x01; 32], 2, &[0x02; 32], 3, &[0x03; 32])
         .await;
     let err = match result {
         Ok(_) => panic!("a reorg without a coverage contract must fail fast"),

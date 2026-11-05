@@ -2,44 +2,25 @@
 
 use ckbadger_common::TokenBalance;
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys;
 use ckbadger_store::types::{
-    AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, HourlyStats, ParticipantDelta,
-    ParticipantId, ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
+    AddrTxValue, AddressBalance, FiberChannel, FiberChannelState, ParticipantDelta, ParticipantId,
+    ScriptInfo, ScriptReferenceInfo, TokenInfo, TxActions,
 };
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{commit_journaled_block, CkbadgerStore};
 use ckbadger_store::{
     CachedBlockHeader, DeepForkInfo, LiveCellInfo, PositionedCellInfo, RollbackResult, TxIndexEntry,
 };
 use std::sync::Arc;
 
-/// Rollback consumes the forward writer's block-time histogram. Synthetic
-/// headers in this suite must provide the same exact rows before rollback.
+/// The production rollback (the block journal) to `fork_point`.
 fn rollback_fixture(
     domain: &CkbadgerStore,
     fork_point: i64,
     append: Option<&CkbadgerStore>,
 ) -> anyhow::Result<RollbackResult> {
-    let mut headers = domain.list_blocks_desc(None, 10_000)?;
-    headers.reverse();
-    let mut counts = std::collections::BTreeMap::<i32, i32>::new();
-    for pair in headers.windows(2) {
-        let [(prev_number, prev), (number, current)] = pair else {
-            unreachable!()
-        };
-        if *number != prev_number + 1 {
-            continue;
-        }
-        let delta_ms = current.chain_time_ms - prev.chain_time_ms;
-        assert!(delta_ms >= 0, "fixture chain time must be monotone");
-        let bucket = ckbadger_common::stats_bucket::block_time_to_bucket(delta_ms / 1_000)?;
-        *counts.entry(bucket).or_default() += 1;
-    }
-    for (bucket, count) in counts {
-        let key = keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &bucket.to_be_bytes());
-        domain.put_cf(domain.cf_stats_chain(), &key, &count.to_le_bytes())?;
-    }
-    domain.rollback_to_block_with_append_only_store(fork_point, append)
+    // The append-only store holds cell payloads, which a rollback never touches.
+    let _ = append;
+    domain.rollback_to_block(fork_point)
 }
 
 fn setup_store() -> Arc<CkbadgerStore> {
@@ -188,13 +169,6 @@ fn insert_full_block(
 
     let cell = make_cell(block_num, lock_args);
 
-    let mut domain_batch = StoreBatch::new(domain_store);
-    domain_batch.put_block_header(block_num, &header);
-    domain_batch.put_tx_index(block_num, 0, &cellbase);
-    domain_batch.put_tx_index(block_num, 1, &normal_tx);
-    domain_batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
-    domain_batch.put_tx_hash_map(&tx_hash, block_num, 1);
-
     if let Some(cs) = cells_store {
         // Split stores: payload to append-only, marker to domain
         let mut cells_batch = StoreBatch::new(cs);
@@ -202,19 +176,31 @@ fn insert_full_block(
             .put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell)
             .unwrap();
         cells_batch.commit().unwrap();
-        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
-    } else {
-        // Unified test store: combined write
-        domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     }
-    domain_batch.put_cell_by_lock(&cell.lock_script_hash(), block_num, &tx_hash, 0);
-    domain_batch.commit().unwrap();
+    // The block's domain rows as the live writer commits them: journaled in
+    // the block's scope.
+    commit_journaled_block(domain_store, block_num, |domain_batch| {
+        domain_batch.put_block_header(block_num, &header);
+        domain_batch.put_tx_index(block_num, 0, &cellbase);
+        domain_batch.put_tx_index(block_num, 1, &normal_tx);
+        domain_batch.put_tx_hash_map(&cellbase_hash, block_num, 0);
+        domain_batch.put_tx_hash_map(&tx_hash, block_num, 1);
+        if cells_store.is_some() {
+            domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
+        } else {
+            // Unified test store: combined write
+            domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
+        }
+        domain_batch.put_cell_by_lock(&cell.lock_script_hash(), block_num, &tx_hash, 0);
+    })
+    .unwrap();
     seed_epoch_rows(domain_store, [block_num]);
 }
 
 /// Write the derived CF records (address and both script rollups) that forward sync
-/// would have produced. Rollback's inline delta code reads these CFs, so they
-/// must exist before `rollback_to_block_with_append_only_store` is called.
+/// would have produced for blocks `1..=block_count` (one `make_cell` per block):
+/// each block's values in that block's journaled scope, as the live writer
+/// leaves them, so a rollback restores the values of its target block.
 fn populate_derived_cfs(store: &CkbadgerStore, lock_args: &[u8], block_count: i64) {
     let lock_hash = owner_lock_hash(lock_args);
     let lock_hash = lock_hash.as_slice();
@@ -223,51 +209,53 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_args: &[u8], block_count: i6
                                              // make_cell's occupied capacity, derived from its lock args.
     let occupied_per_cell = i128::from(make_cell(0, lock_args).occupied_capacity());
 
-    let mut batch = StoreBatch::new(store);
+    for block in 1..=block_count {
+        let cells = block;
+        commit_journaled_block(store, block, |batch| {
+            let addr_bal = AddressBalance {
+                balance: cells as i128 * cap_per_cell,
+                used_capacity: cells as i128 * occupied_per_cell,
+                live_cells_count: cells as i32,
+                total_cells_count: cells,
+                txs_count: cells,
+                cellbase_txs_count: 0,
+                first_seen_block: 1,
+                first_seen_tx: vec![0u8; 32],
+                last_activity_block: block,
+                last_activity_tx: vec![0u8; 32],
+            };
+            batch.put_addr_balance(lock_hash, &addr_bal);
 
-    let addr_bal = AddressBalance {
-        balance: block_count as i128 * cap_per_cell,
-        used_capacity: block_count as i128 * occupied_per_cell,
-        live_cells_count: block_count as i32,
-        total_cells_count: block_count,
-        txs_count: block_count,
-        cellbase_txs_count: 0,
-        first_seen_block: 1,
-        first_seen_tx: vec![0u8; 32],
-        last_activity_block: block_count,
-        last_activity_tx: vec![0u8; 32],
-    };
-    batch.put_addr_balance(lock_hash, &addr_bal);
-
-    let lock_si = ScriptInfo {
-        code_hash: lock_code_hash.clone(),
-        hash_type: 1,
-        lock_cells_count: block_count,
-        lock_live_cells_count: block_count,
-        lock_capacity_sum: block_count as i128 * cap_per_cell,
-        lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
-        lock_used_capacity_sum: block_count as i128 * occupied_per_cell,
-        lock_owned_knowledge_sum: block_count as i128 * occupied_per_cell,
-        ..Default::default()
-    };
-    batch.put_script_info(&lock_code_hash, &lock_si);
-    batch.put_script_reference_info(
-        1,
-        &lock_code_hash,
-        &ScriptReferenceInfo {
-            reference_hash: lock_code_hash.clone(),
-            hash_type: 1,
-            lock_cells_count: block_count,
-            lock_live_cells_count: block_count,
-            lock_capacity_sum: block_count as i128 * cap_per_cell,
-            lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
-            lock_used_capacity_sum: block_count as i128 * occupied_per_cell,
-            lock_owned_knowledge_sum: block_count as i128 * occupied_per_cell,
-            ..Default::default()
-        },
-    );
-
-    batch.commit().unwrap();
+            let lock_si = ScriptInfo {
+                code_hash: lock_code_hash.clone(),
+                hash_type: 1,
+                lock_cells_count: cells,
+                lock_live_cells_count: cells,
+                lock_capacity_sum: cells as i128 * cap_per_cell,
+                lock_owned_capacity_sum: cells as i128 * cap_per_cell,
+                lock_used_capacity_sum: cells as i128 * occupied_per_cell,
+                lock_owned_knowledge_sum: cells as i128 * occupied_per_cell,
+                ..Default::default()
+            };
+            batch.put_script_info(&lock_code_hash, &lock_si);
+            batch.put_script_reference_info(
+                1,
+                &lock_code_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: lock_code_hash.clone(),
+                    hash_type: 1,
+                    lock_cells_count: cells,
+                    lock_live_cells_count: cells,
+                    lock_capacity_sum: cells as i128 * cap_per_cell,
+                    lock_owned_capacity_sum: cells as i128 * cap_per_cell,
+                    lock_used_capacity_sum: cells as i128 * occupied_per_cell,
+                    lock_owned_knowledge_sum: cells as i128 * occupied_per_cell,
+                    ..Default::default()
+                },
+            );
+        })
+        .unwrap();
+    }
 }
 
 #[test]
@@ -602,28 +590,30 @@ fn insert_udt_cell(
     let type_hash = &cell.type_script_hash().unwrap();
     let type_code_hash = cell.type_code_hash.as_ref().unwrap();
 
-    let mut domain_batch = StoreBatch::new(domain_store);
-
     if let Some(cs) = cells_store {
         let mut cells_batch = StoreBatch::new(cs);
         cells_batch
             .put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell)
             .unwrap();
         cells_batch.commit().unwrap();
-        domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
-    } else {
-        domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     }
-    domain_batch.put_cell_by_lock(&cell.lock_script_hash(), block_num, &tx_hash, 0);
-    domain_batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
-    domain_batch.put_cell_by_type_code(
-        type_code_hash,
-        cell.type_hash_type.unwrap() as u8,
-        block_num,
-        &tx_hash,
-        0,
-    );
-    domain_batch.commit().unwrap();
+    commit_journaled_block(domain_store, block_num, |domain_batch| {
+        if cells_store.is_some() {
+            domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
+        } else {
+            domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
+        }
+        domain_batch.put_cell_by_lock(&cell.lock_script_hash(), block_num, &tx_hash, 0);
+        domain_batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
+        domain_batch.put_cell_by_type_code(
+            type_code_hash,
+            cell.type_hash_type.unwrap() as u8,
+            block_num,
+            &tx_hash,
+            0,
+        );
+    })
+    .unwrap();
 }
 
 #[test]
@@ -656,105 +646,117 @@ fn test_rollback_updates_derived_cfs_inline() {
     insert_udt_cell(&store, Some(append_store.as_ref()), 3, &lock_args);
     insert_udt_cell(&store, Some(append_store.as_ref()), 4, &lock_args);
 
-    // 3. Write initial derived CF state.
-    let mut batch = StoreBatch::new(&store);
-
-    // addr_balance: 4 regular cells + 2 UDT cells = 6 live cells
-    let addr_bal = AddressBalance {
-        balance: 4 * reg_cap + 2 * udt_cap,
-        used_capacity: 4 * reg_occ + 2 * udt_cap,
-        live_cells_count: 6,
-        total_cells_count: 6,
-        txs_count: 4,
-        cellbase_txs_count: 0,
-        first_seen_block: 1,
-        first_seen_tx: vec![0u8; 32],
-        last_activity_block: 4,
-        last_activity_tx: vec![0u8; 32],
-    };
-    batch.put_addr_balance(&lock_hash, &addr_bal);
-
-    // script_info for lock_code_hash [0xAA;32]
-    let lock_si = ScriptInfo {
-        code_hash: lock_code_hash.clone(),
-        hash_type: 1,
-        lock_cells_count: 6,
-        lock_live_cells_count: 6,
-        lock_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-        lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-        lock_used_capacity_sum: 4 * reg_occ + 2 * udt_cap,
-        lock_owned_knowledge_sum: 4 * reg_occ + 2 * udt_cap,
-        ..Default::default()
-    };
-    batch.put_script_info(&lock_code_hash, &lock_si);
-    batch.put_script_reference_info(
-        1,
-        &lock_code_hash,
-        &ScriptReferenceInfo {
-            reference_hash: lock_code_hash.clone(),
-            hash_type: 1,
-            lock_cells_count: 6,
-            lock_live_cells_count: 6,
-            lock_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-            lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-            lock_used_capacity_sum: 4 * reg_occ + 2 * udt_cap,
-            lock_owned_knowledge_sum: 4 * reg_occ + 2 * udt_cap,
-            ..Default::default()
-        },
-    );
-
-    // script_info for type_code_hash [0xDD;32]
-    let type_si = ScriptInfo {
-        code_hash: type_code_hash.clone(),
-        hash_type: 1,
-        type_cells_count: 2,
-        type_live_cells_count: 2,
-        type_capacity_sum: 2 * udt_cap,
-        type_owned_capacity_sum: 2 * udt_cap,
-        type_used_capacity_sum: 2 * udt_cap,
-        type_owned_knowledge_sum: 2 * udt_cap,
-        ..Default::default()
-    };
-    batch.put_script_info(&type_code_hash, &type_si);
-    batch.put_script_reference_info(
-        1,
-        &type_code_hash,
-        &ScriptReferenceInfo {
-            reference_hash: type_code_hash.clone(),
-            hash_type: 1,
-            type_cells_count: 2,
-            type_live_cells_count: 2,
-            type_capacity_sum: 2 * udt_cap,
-            type_owned_capacity_sum: 2 * udt_cap,
-            type_used_capacity_sum: 2 * udt_cap,
-            type_owned_knowledge_sum: 2 * udt_cap,
-            ..Default::default()
-        },
-    );
-
-    // token_holder: (type_script_hash, lock_hash) -> balance = 2 * udt_amount
-    batch.put_token_holder(&type_script_hash, &lock_hash, 2 * udt_amount);
-
-    // token_info for type_script_hash
-    let token_info = TokenInfo {
-        type_code_hash: type_code_hash.clone(),
-        hash_type: 1,
-        type_args: vec![0xEE; 20],
-        standard: "xudt".to_string(),
-        name: None,
-        symbol: None,
-        decimals: None,
-        max_supply: None,
-        first_seen_block: 3,
-        icon_url: None,
-        description: None,
-        transfers_count: 0,
-        metadata_source: None,
-        chain_metadata: None,
-    };
-    batch.put_token(&type_script_hash, &token_info);
-
-    batch.commit().unwrap();
+    // 3. The derived CF state at the end of every block, written in that
+    //    block's journaled scope as the live writer leaves it: block b holds
+    //    b regular cells and, from block 3 on, b - 2 UDT cells.
+    for block in 1..=4i64 {
+        let reg = i128::from(block);
+        let udt = i128::from(block - 2).max(0);
+        let cells = reg + udt;
+        commit_journaled_block(&store, block, |batch| {
+            batch.put_addr_balance(
+                &lock_hash,
+                &AddressBalance {
+                    balance: reg * reg_cap + udt * udt_cap,
+                    used_capacity: reg * reg_occ + udt * udt_cap,
+                    live_cells_count: cells as i32,
+                    total_cells_count: cells as i64,
+                    txs_count: block,
+                    cellbase_txs_count: 0,
+                    first_seen_block: 1,
+                    first_seen_tx: vec![0u8; 32],
+                    last_activity_block: block,
+                    last_activity_tx: vec![0u8; 32],
+                },
+            );
+            // script_info for lock_code_hash [0xAA;32]
+            batch.put_script_info(
+                &lock_code_hash,
+                &ScriptInfo {
+                    code_hash: lock_code_hash.clone(),
+                    hash_type: 1,
+                    lock_cells_count: cells as i64,
+                    lock_live_cells_count: cells as i64,
+                    lock_capacity_sum: reg * reg_cap + udt * udt_cap,
+                    lock_owned_capacity_sum: reg * reg_cap + udt * udt_cap,
+                    lock_used_capacity_sum: reg * reg_occ + udt * udt_cap,
+                    lock_owned_knowledge_sum: reg * reg_occ + udt * udt_cap,
+                    ..Default::default()
+                },
+            );
+            batch.put_script_reference_info(
+                1,
+                &lock_code_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: lock_code_hash.clone(),
+                    hash_type: 1,
+                    lock_cells_count: cells as i64,
+                    lock_live_cells_count: cells as i64,
+                    lock_capacity_sum: reg * reg_cap + udt * udt_cap,
+                    lock_owned_capacity_sum: reg * reg_cap + udt * udt_cap,
+                    lock_used_capacity_sum: reg * reg_occ + udt * udt_cap,
+                    lock_owned_knowledge_sum: reg * reg_occ + udt * udt_cap,
+                    ..Default::default()
+                },
+            );
+            if udt == 0 {
+                return;
+            }
+            // script_info for type_code_hash [0xDD;32], first seen at block 3
+            batch.put_script_info(
+                &type_code_hash,
+                &ScriptInfo {
+                    code_hash: type_code_hash.clone(),
+                    hash_type: 1,
+                    type_cells_count: udt as i64,
+                    type_live_cells_count: udt as i64,
+                    type_capacity_sum: udt * udt_cap,
+                    type_owned_capacity_sum: udt * udt_cap,
+                    type_used_capacity_sum: udt * udt_cap,
+                    type_owned_knowledge_sum: udt * udt_cap,
+                    ..Default::default()
+                },
+            );
+            batch.put_script_reference_info(
+                1,
+                &type_code_hash,
+                &ScriptReferenceInfo {
+                    reference_hash: type_code_hash.clone(),
+                    hash_type: 1,
+                    type_cells_count: udt as i64,
+                    type_live_cells_count: udt as i64,
+                    type_capacity_sum: udt * udt_cap,
+                    type_owned_capacity_sum: udt * udt_cap,
+                    type_used_capacity_sum: udt * udt_cap,
+                    type_owned_knowledge_sum: udt * udt_cap,
+                    ..Default::default()
+                },
+            );
+            // token_holder: (type_script_hash, lock_hash) -> balance
+            batch.put_token_holder(&type_script_hash, &lock_hash, udt as u128 * udt_amount);
+            // token_info for type_script_hash
+            batch.put_token(
+                &type_script_hash,
+                &TokenInfo {
+                    type_code_hash: type_code_hash.clone(),
+                    hash_type: 1,
+                    type_args: vec![0xEE; 20],
+                    standard: "xudt".to_string(),
+                    name: None,
+                    symbol: None,
+                    decimals: None,
+                    max_supply: None,
+                    first_seen_block: 3,
+                    icon_url: None,
+                    description: None,
+                    transfers_count: 0,
+                    metadata_source: None,
+                    chain_metadata: None,
+                },
+            );
+        })
+        .unwrap();
+    }
 
     // 4. Rollback to block 2 — removes cells from blocks 3 and 4:
     //    2 regular cells + 2 UDT cells removed.
@@ -799,18 +801,13 @@ fn test_rollback_updates_derived_cfs_inline() {
         "lock script_info: capacity of 2 regular cells"
     );
 
-    // script_info for type_code_hash: both UDT cells removed
-    let type_si = store.get_script_info(&type_code_hash).unwrap().unwrap();
-    assert_eq!(
-        type_si.type_live_cells_count, 0,
-        "type script_info: 2 - 2 = 0 live cells"
-    );
-    assert_eq!(type_si.type_cells_count, 0);
-    assert_eq!(type_si.type_capacity_sum, 0);
-    assert_eq!(type_si.type_used_capacity_sum, 0);
-    assert_eq!(
-        type_si.type_owned_capacity_sum, 0,
-        "type script_info: capacity 0 after all UDT cells removed"
+    // script_info for type_code_hash: the script was first seen in a
+    // rolled-back block, so its row is gone, as in a store that never saw
+    // blocks 3-4 (B-0 finding 3: the reverse-counted rollback left an
+    // all-zero row behind, which this test used to pin).
+    assert!(
+        store.get_script_info(&type_code_hash).unwrap().is_none(),
+        "type script_info first written at block 3 must be gone"
     );
 
     // token_holder: balance reached 0, should be deleted
@@ -910,12 +907,18 @@ fn test_rollback_deletes_fiber_channels_opened_after_fork_point() {
         vec![0xFB; 20],
     );
 
-    batch.put_fiber_channel(&channel_id_a, &channel_a);
-    batch.put_addr_fiber_channel(&participant_a, &channel_id_a);
-
-    batch.put_fiber_channel(&channel_id_b, &channel_b);
-    batch.put_addr_fiber_channel(&participant_b, &channel_id_b);
     batch.commit().unwrap();
+    // Each channel opens in its block's journaled scope.
+    commit_journaled_block(&domain, 3, |batch| {
+        batch.put_fiber_channel(&channel_id_a, &channel_a);
+        batch.put_addr_fiber_channel(&participant_a, &channel_id_a);
+    })
+    .unwrap();
+    commit_journaled_block(&domain, 5, |batch| {
+        batch.put_fiber_channel(&channel_id_b, &channel_b);
+        batch.put_addr_fiber_channel(&participant_b, &channel_id_b);
+    })
+    .unwrap();
 
     // Sanity: both channels exist
     assert!(domain.get_fiber_channel(&channel_id_a).unwrap().is_some());
@@ -970,30 +973,43 @@ fn test_rollback_resets_fiber_channel_closed_after_fork_point_to_open() {
     }
     seed_epoch_rows(&domain, 1..=6i64);
 
-    // Channel opened at block 2, cooperatively closed at block 5
+    batch.commit().unwrap();
+
+    // Channel opened at block 2, cooperatively closed at block 5, each state
+    // in its block's journaled scope.
     let funding_tx = vec![0x03; 32];
     let channel_id = ckbadger_store::keys::encode_fiber_channel_id(&funding_tx, 0);
-    let mut channel = make_fiber_channel(
+    let open = make_fiber_channel(
         &funding_tx,
         0,
-        FiberChannelState::CooperativelyClosed,
+        FiberChannelState::Open,
         400_00000000,
         2,
         vec![participant.clone()],
         vec![0xFC; 20],
     );
+    let mut channel = open.clone();
+    channel.state = FiberChannelState::CooperativelyClosed;
     channel.close_tx_hash = Some(vec![0xCC; 32]);
     channel.close_block = Some(5);
     channel.close_timestamp = Some(5000);
     channel.commitment_tx_hash = Some(vec![0xDD; 32]);
     channel.commitment_output_index = Some(0);
 
-    batch.put_fiber_channel(&channel_id, &channel);
-    batch.put_addr_fiber_channel(&participant, &channel_id);
-    // Write commitment index
-    batch
-        .put_fiber_channel_by_commitment(channel.commitment_tx_hash.as_ref().unwrap(), &channel_id);
-    batch.commit().unwrap();
+    commit_journaled_block(&domain, 2, |batch| {
+        batch.put_fiber_channel(&channel_id, &open);
+        batch.put_addr_fiber_channel(&participant, &channel_id);
+    })
+    .unwrap();
+    commit_journaled_block(&domain, 5, |batch| {
+        batch.put_fiber_channel(&channel_id, &channel);
+        // Write commitment index
+        batch.put_fiber_channel_by_commitment(
+            channel.commitment_tx_hash.as_ref().unwrap(),
+            &channel_id,
+        );
+    })
+    .unwrap();
 
     // Rollback to block 4 — channel was opened at 2, closed at 5
     rollback_fixture(&domain, 4, Some(&append)).unwrap();
@@ -1313,697 +1329,6 @@ fn test_rollback_deletes_multi_participant_activities() {
     );
 }
 
-// ============================================================
-// B2b regression: chain-level hourly stats (STATS_PREFIX_HOURLY)
-// are keyed by UTC hour strings, while the reorg cutoff used to be
-// derived on the UTC+8 clock — so rollback never touched them and
-// rolled-back residue accumulated monotonically.
-// ============================================================
-
-#[test]
-fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
-    let (domain, append) = setup_split_stores();
-    let lock_args = vec![0xEC; 32];
-
-    // make_header timestamps (1_000_000 + n*1000 ms) all sit inside the UTC
-    // hour 1970-01-01T00:00 → chain-hourly key "1970010100". The UTC+8 hour
-    // string for the same instant is "1970010108" — a cutoff computed on the
-    // UTC+8 clock can never match these keys.
-    for n in 1..=5 {
-        insert_full_block(&domain, Some(append.as_ref()), n, &lock_args);
-    }
-    populate_derived_cfs(&domain, &lock_args, 5);
-
-    // Pre-rollback bucket state consistent with 5 blocks × (2 txs, 3 outputs
-    // per tx, 2 inputs per non-cellbase tx) from the fixtures above, including
-    // the capacity actually created by those blocks (one 10 CKB cell each on
-    // the non-cellbase tx) — a zero here would let a stale capacity slip
-    // through unnoticed.
-    domain
-        .put_hourly_stats(
-            "1970010100",
-            &HourlyStats {
-                hour: 0,
-                blocks_count: 5,
-                transactions_count: 10,
-                cells_created: 30,
-                cells_consumed: 10,
-                capacity_transferred: 5 * 10_000_000_000,
-            },
-        )
-        .unwrap();
-    // A later UTC-hour bucket: everything at/after the replay hour except the
-    // (repaired) cutoff bucket itself must be deleted outright.
-    domain
-        .put_hourly_stats(
-            "1970010101",
-            &HourlyStats {
-                hour: 3600,
-                blocks_count: 1,
-                transactions_count: 2,
-                cells_created: 6,
-                cells_consumed: 2,
-                capacity_transferred: 0,
-            },
-        )
-        .unwrap();
-    // An earlier bucket that must survive untouched.
-    domain
-        .put_hourly_stats(
-            "1969123123",
-            &HourlyStats {
-                hour: -3600,
-                blocks_count: 7,
-                transactions_count: 14,
-                cells_created: 42,
-                cells_consumed: 14,
-                capacity_transferred: 0,
-            },
-        )
-        .unwrap();
-
-    // Shallow reorg: fork point block 3, blocks 4-5 rolled back. The fork
-    // splits the "1970010100" hour, so that bucket must be repaired by delta
-    // subtraction (2 blocks, 4 txs, 12 created, 4 consumed), not deleted.
-    let result = rollback_fixture(&domain, 3, Some(append.as_ref())).unwrap();
-    assert_eq!(result.blocks_removed, 2);
-
-    let hourly: std::collections::HashMap<String, HourlyStats> = domain
-        .list_hourly_stats_with_keys()
-        .unwrap()
-        .into_iter()
-        .collect();
-
-    let cutoff_bucket = hourly
-        .get("1970010100")
-        .expect("cutoff-hour bucket must be repaired, not deleted");
-    assert_eq!(
-        cutoff_bucket.blocks_count, 3,
-        "cutoff-hour bucket must have the 2 rolled-back blocks subtracted"
-    );
-    assert_eq!(cutoff_bucket.transactions_count, 6);
-    assert_eq!(cutoff_bucket.cells_created, 18);
-    assert_eq!(cutoff_bucket.cells_consumed, 6);
-    assert_eq!(
-        cutoff_bucket.capacity_transferred,
-        3 * 10_000_000_000,
-        "cutoff-hour capacity_transferred must drop the 2 rolled-back blocks' cells"
-    );
-
-    assert!(
-        !hourly.contains_key("1970010101"),
-        "post-cutoff UTC-hour bucket must be deleted by rollback"
-    );
-
-    let earlier = hourly
-        .get("1969123123")
-        .expect("pre-cutoff bucket must survive");
-    assert_eq!(earlier.blocks_count, 7);
-    assert_eq!(earlier.transactions_count, 14);
-}
-
-// ============================================================
-// F2 regression: after a shallow partial-day reorg the cutoff-hour
-// HourlyStats row must equal a recomputation from the surviving chain on
-// EVERY field — including capacity_transferred, which the repair used to
-// leave untouched ("not tracked per-hour"). The cutoff-day DailyStats
-// capacity flow fields must likewise account for cells that were created
-// AND consumed inside the rolled-back range (the "pair" case), which the
-// pre-fix cell walk skipped on both the creation and consumption side.
-// ============================================================
-
-#[test]
-fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
-    use ckbadger_store::types::DailyStats;
-
-    let (domain, append) = setup_split_stores();
-    let lock_args = vec![0xF2; 32];
-
-    const CAP_STD: i64 = 10_000_000_000; // make_cell capacity
-    const CAP_PAIR: i64 = 700_000_000;
-    const DATA_PAIR: i32 = 16;
-    const CAP_RST: i64 = 900_000_000;
-    const DATA_RST: i32 = 32;
-    // Derived occupied capacity: 8 + 33 + 32 lock args, no type, plus data.
-    const OCC_STD: i64 = (8 + 33 + 32) * 100_000_000; // make_cell, no data
-    const OCC_PAIR: i64 = (8 + 33 + 32 + DATA_PAIR as i64) * 100_000_000;
-    const OCC_RST: i64 = (8 + 33 + 32 + DATA_RST as i64) * 100_000_000;
-
-    // Blocks 1..=5: make_header timestamps (1_000_000 + n*1000 ms) all sit in
-    // UTC hour "1970010100" and UTC+8 date "19700101". Each block has a
-    // cellbase + one normal tx whose output 0 is a live cell of CAP_STD.
-    for n in 1..=5 {
-        insert_full_block(&domain, Some(append.as_ref()), n, &lock_args);
-    }
-    populate_derived_cfs(&domain, &lock_args, 5);
-
-    // Normal (non-cellbase) tx hash of block n — matches insert_full_block.
-    let normal_tx_hash = |n: i64| {
-        let mut h = vec![0u8; 32];
-        h[0..8].copy_from_slice(&n.to_le_bytes());
-        h[8] = 0x01;
-        h
-    };
-    let make_extra_cell = |capacity: i64, data_size: i32| LiveCellInfo {
-        capacity,
-        lock_code_hash: [0xAA; 32],
-        lock_hash_type: 1,
-        lock_args: lock_args.clone(),
-        type_code_hash: None,
-        type_hash_type: None,
-        type_args: None,
-        data_size,
-        udt_amount: None,
-        data_hash: None,
-    };
-
-    // Pair cell: created by block 4's normal tx (output 1), consumed in
-    // block 5 — created AND consumed inside the rolled-back range.
-    let pair_cell = make_extra_cell(CAP_PAIR, DATA_PAIR);
-    // Restore cell: created by block 2's normal tx (output 1), consumed in
-    // block 5 — consumption is rolled back, the cell returns to live.
-    let restore_cell = make_extra_cell(CAP_RST, DATA_RST);
-
-    let mut cells_batch = StoreBatch::new(&append);
-    cells_batch
-        .put_cell_payload_by_outpoint(&normal_tx_hash(4), 1, &pair_cell)
-        .unwrap();
-    cells_batch
-        .put_cell_payload_by_outpoint(&normal_tx_hash(2), 1, &restore_cell)
-        .unwrap();
-    cells_batch.commit().unwrap();
-    let mut domain_batch = StoreBatch::new(&domain);
-    domain_batch.put_consumed_cell_meta(&normal_tx_hash(4), 1, 4, 5, Some(&normal_tx_hash(5)));
-    domain_batch.put_consumed_cell_meta(&normal_tx_hash(2), 1, 2, 5, Some(&normal_tx_hash(5)));
-    // Both extra cells were created, then consumed before the fork tip. The
-    // base fixture already recorded five live standard cells; the two extra
-    // creations increase cumulative script counts/capacity and used capacity,
-    // while their net live ownership is zero.
-    let lock_code_hash = vec![0xAA; 32];
-    let total_capacity = 5 * CAP_STD as i128 + CAP_PAIR as i128 + CAP_RST as i128;
-    let total_used = (5 * OCC_STD + OCC_PAIR + OCC_RST) as i128;
-    let mut script = domain.get_script_info(&lock_code_hash).unwrap().unwrap();
-    script.lock_cells_count = 7;
-    script.lock_capacity_sum = total_capacity;
-    script.lock_used_capacity_sum = total_used;
-    domain_batch.put_script_info(&lock_code_hash, &script);
-    let mut reference = domain
-        .get_script_reference_info(1, &lock_code_hash)
-        .unwrap()
-        .unwrap();
-    reference.lock_cells_count = 7;
-    reference.lock_capacity_sum = total_capacity;
-    reference.lock_used_capacity_sum = total_used;
-    domain_batch.put_script_reference_info(1, &lock_code_hash, &reference);
-    domain_batch.commit().unwrap();
-
-    // Seed the cutoff-hour and cutoff-day stats rows exactly as forward sync
-    // would have written them for the fixture chain:
-    // capacity_transferred = all non-cellbase output capacities by creating
-    // block; used capacity from all seven creations, consumption and data
-    // from the two extra cells (std cells have no data and are not consumed).
-    let seeded_capacity: i128 = 5 * CAP_STD as i128 + CAP_PAIR as i128 + CAP_RST as i128;
-    domain
-        .put_hourly_stats(
-            "1970010100",
-            &HourlyStats {
-                hour: 0,
-                blocks_count: 5,
-                transactions_count: 10,
-                cells_created: 30,
-                cells_consumed: 10,
-                capacity_transferred: seeded_capacity,
-            },
-        )
-        .unwrap();
-    let daily_key = ckbadger_store::keys::encode_stats_key(
-        ckbadger_store::keys::STATS_PREFIX_DAILY,
-        b"19700101",
-    );
-    let seeded_daily = DailyStats {
-        blocks_count: 5,
-        transactions_count: 10,
-        cells_created: 30,
-        cells_consumed: 10,
-        capacity_transferred: seeded_capacity,
-        used_capacity_created: (5 * OCC_STD + OCC_PAIR + OCC_RST) as i128,
-        used_capacity_consumed: (OCC_PAIR + OCC_RST) as i128,
-        total_live_cells: 20,
-        total_dead_cells: 10,
-        total_all_cells: 30,
-        total_data_size: 0,
-        knowledge_size: None,
-        // `make_header` puts blocks 1..=5 exactly 1000 ms apart; block 1 has no
-        // predecessor in this fixture, so forward sync accumulated four gaps.
-        block_time_sum_ms: 4 * 1_000,
-        block_time_count: 4,
-    };
-    domain
-        .put_cf(
-            domain.cf_stats_chain(),
-            &daily_key,
-            &bincode::serialize(&seeded_daily).unwrap(),
-        )
-        .unwrap();
-
-    // Shallow partial-day, partial-hour reorg: fork point block 3.
-    let result = rollback_fixture(&domain, 3, Some(append.as_ref())).unwrap();
-    assert_eq!(result.blocks_removed, 2);
-    assert_eq!(result.cells_removed, 2, "std cells of blocks 4-5 removed");
-    assert_eq!(result.cells_restored, 1, "restore cell returns to live");
-    let script = domain.get_script_info(&lock_code_hash).unwrap().unwrap();
-    assert_eq!(script.lock_cells_count, 4);
-    assert_eq!(script.lock_live_cells_count, 4);
-    assert_eq!(
-        script.lock_capacity_sum,
-        3 * CAP_STD as i128 + CAP_RST as i128
-    );
-    assert_eq!(
-        script.lock_owned_capacity_sum,
-        3 * CAP_STD as i128 + CAP_RST as i128
-    );
-    assert_eq!(
-        script.lock_used_capacity_sum,
-        (3 * OCC_STD + OCC_RST) as i128
-    );
-    assert_eq!(
-        script.lock_owned_knowledge_sum,
-        (3 * OCC_STD + OCC_RST) as i128
-    );
-    let reference = domain
-        .get_script_reference_info(1, &lock_code_hash)
-        .unwrap()
-        .unwrap();
-    assert_eq!(reference.lock_cells_count, script.lock_cells_count);
-    assert_eq!(
-        reference.lock_live_cells_count,
-        script.lock_live_cells_count
-    );
-    assert_eq!(reference.lock_capacity_sum, script.lock_capacity_sum);
-    assert_eq!(
-        reference.lock_owned_capacity_sum,
-        script.lock_owned_capacity_sum
-    );
-    assert_eq!(
-        reference.lock_used_capacity_sum,
-        script.lock_used_capacity_sum
-    );
-    assert_eq!(
-        reference.lock_owned_knowledge_sum,
-        script.lock_owned_knowledge_sum
-    );
-
-    // Recompute the expected cutoff-hour row directly from the surviving
-    // chain (blocks 1..=3): 2 txs per block, cellbase outputs 3 + normal
-    // outputs 3, normal inputs 2; capacity = surviving non-cellbase output
-    // capacities (3 std cells + the restore cell created in block 2).
-    let expected_hour = HourlyStats {
-        hour: 0,
-        blocks_count: 3,
-        transactions_count: 6,
-        cells_created: 18,
-        cells_consumed: 6,
-        capacity_transferred: 3 * CAP_STD as i128 + CAP_RST as i128,
-    };
-    let hourly: std::collections::HashMap<String, HourlyStats> = domain
-        .list_hourly_stats_with_keys()
-        .unwrap()
-        .into_iter()
-        .collect();
-    let repaired_hour = hourly
-        .get("1970010100")
-        .expect("cutoff-hour bucket must be repaired, not deleted");
-    assert_eq!(repaired_hour.hour, expected_hour.hour);
-    assert_eq!(repaired_hour.blocks_count, expected_hour.blocks_count);
-    assert_eq!(
-        repaired_hour.transactions_count,
-        expected_hour.transactions_count
-    );
-    assert_eq!(repaired_hour.cells_created, expected_hour.cells_created);
-    assert_eq!(repaired_hour.cells_consumed, expected_hour.cells_consumed);
-    assert_eq!(
-        repaired_hour.capacity_transferred, expected_hour.capacity_transferred,
-        "cutoff-hour capacity_transferred must equal a recomputation from the surviving chain"
-    );
-
-    // Cutoff-day flows recomputed from the surviving chain: creations from
-    // blocks 1..=3 (3 std cells + restore cell), zero surviving consumption
-    // (both consumptions happened in rolled-back block 5).
-    let repaired_daily: DailyStats = bincode::deserialize(
-        &domain
-            .get_stats_key(&daily_key)
-            .unwrap()
-            .expect("cutoff-day daily stats must be repaired, not deleted"),
-    )
-    .unwrap();
-    assert_eq!(repaired_daily.blocks_count, 3);
-    assert_eq!(repaired_daily.transactions_count, 6);
-    assert_eq!(repaired_daily.cells_created, 18);
-    assert_eq!(repaired_daily.cells_consumed, 6);
-    assert_eq!(
-        repaired_daily.capacity_transferred,
-        3 * CAP_STD as i128 + CAP_RST as i128,
-        "pair-cell creation must be subtracted from cutoff-day capacity_transferred"
-    );
-    assert_eq!(
-        repaired_daily.used_capacity_created,
-        (3 * OCC_STD + OCC_RST) as i128,
-        "pair-cell and rolled-back std-cell occupied capacity must be subtracted from used_capacity_created"
-    );
-    assert_eq!(
-        repaired_daily.used_capacity_consumed, 0,
-        "all rolled-back consumption (pair + restored cell) must be subtracted"
-    );
-    assert_eq!(
-        repaired_daily.total_data_size, DATA_RST as i64,
-        "surviving data = restore cell's data (its rolled-back consumption is reversed)"
-    );
-    assert_eq!(
-        (
-            repaired_daily.block_time_sum_ms,
-            repaired_daily.block_time_count
-        ),
-        (2 * 1_000, 2),
-        "blocks 4 and 5 each contributed a 1000 ms gap; both must be reversed"
-    );
-}
-
-// ============================================================
-// F3 regression: reorg must reset the cutoff day/hour unique-address sets
-// (and their unique_address_count) to the surviving portion of the bucket,
-// then let replay merge the new branch through the same live-path merge
-// function. The pre-fix rollback preserved the whole old-branch set, so an
-// address exclusive to the orphaned branch inflated the bucket forever.
-// ============================================================
-
-#[test]
-fn test_rollback_resets_cutoff_bucket_unique_addr_sets() {
-    use ckbadger_indexer::db::{BatchWriter, FrozenActivityAddrSets};
-    use ckbadger_store::keys as store_keys;
-    use ckbadger_store::types::DailyActivityStats;
-    use std::collections::HashSet;
-
-    let (domain, append) = setup_split_stores();
-    let writer = BatchWriter::new(domain.clone(), append.clone());
-
-    let addr_a = [0xA1u8; 32];
-    let addr_b = [0xB2u8; 32]; // exclusive to the orphaned branch
-    let addr_c = [0xC3u8; 32]; // introduced by the new branch
-    let addr_d = [0xD4u8; 32]; // earlier hour, same day
-
-    // 2024-03-24 12:00:00 UTC+8 = 1_711_252_800_000 ms. Block 1 sits in the
-    // 11:00 UTC+8 hour; blocks 2..=5 in the 12:00 hour. All share the UTC+8
-    // date 20240324.
-    let base_ts_ms: i64 = 1_711_252_800_000;
-    let block_ts = |b: i64| {
-        if b == 1 {
-            base_ts_ms - 3_600_000
-        } else {
-            base_ts_ms + b * 1000
-        }
-    };
-    const DATE: &str = "20240324";
-    const HOUR_EARLY: &str = "2024032411";
-    const HOUR_CUTOFF: &str = "2024032412";
-
-    let make_header_at = |b: i64| CachedBlockHeader {
-        hash: vec![b as u8; 32],
-        parent_hash: vec![0u8; 32],
-        timestamp: block_ts(b),
-        epoch_number: if b >= 4 { 1 } else { 0 },
-        epoch_index: if b >= 4 {
-            (b - 4) as i32
-        } else {
-            (b - 1) as i32
-        },
-        epoch_length: 1800,
-        dao: vec![0u8; 32],
-        transactions_count: 2,
-        uncles_count: 0,
-        proposals_count: 0,
-        compact_target: 0x1a08a97e,
-        miner_lock_hash: None,
-        cycles: None,
-        chain_time_ms: block_ts(b),
-    };
-    let make_actions = |b: i64, tx_seed: u8, participants: &[[u8; 32]]| TxActions {
-        tx_hash: vec![tx_seed; 32],
-        block_hash: make_header_at(b).hash,
-        block_number: b,
-        tx_index: 1,
-        timestamp: block_ts(b),
-        is_cellbase: false,
-        protocol_actions: vec![],
-        type_calls: vec![],
-        lock_calls: vec![],
-        participants: participants
-            .iter()
-            .map(|lh| ParticipantDelta {
-                id: ParticipantId::lock(lh).unwrap(),
-                ckb_delta: 100_000_000,
-                used_delta: 0,
-                item_deltas: vec![],
-                tags: 0,
-                roles: 0,
-            })
-            .collect(),
-    };
-    let make_cellbase_actions = |b: i64| TxActions {
-        tx_hash: vec![0xE0 | b as u8; 32],
-        block_hash: make_header_at(b).hash,
-        block_number: b,
-        tx_index: 0,
-        timestamp: block_ts(b),
-        is_cellbase: true,
-        protocol_actions: vec![],
-        type_calls: vec![],
-        lock_calls: vec![],
-        participants: vec![],
-    };
-
-    // Old branch: block 1 → {D} (11:00 hour), blocks 2,3 → {A},
-    // block 4 → {A,B}, block 5 → {B}. B is exclusive to blocks 4-5.
-    let tx_rows = vec![
-        make_actions(1, 0x11, &[addr_d]),
-        make_actions(2, 0x22, &[addr_a]),
-        make_actions(3, 0x33, &[addr_a]),
-        make_actions(4, 0x44, &[addr_a, addr_b]),
-        make_actions(5, 0x55, &[addr_b]),
-    ];
-
-    let mut batch = StoreBatch::new(&domain);
-    for b in 1..=5i64 {
-        batch.put_block_header(b, &make_header_at(b));
-    }
-    for row in &tx_rows {
-        batch.put_tx_actions(row);
-    }
-    batch.commit().unwrap();
-    // Boundary epoch (epoch 0, blocks 1..=3) row; epoch 1 starts at
-    // replay_start (block 4) so rollback deletes it wholesale.
-    domain
-        .put_epoch_stats(
-            0,
-            &ckbadger_store::types::EpochStats {
-                epoch_number: 0,
-                start_block: 1,
-                end_block: Some(3),
-                blocks_count: 3,
-                length: 1800,
-                start_timestamp: chrono::DateTime::from_timestamp_millis(block_ts(1)).unwrap(),
-                end_timestamp: None,
-                transactions_count: 6,
-            },
-        )
-        .unwrap();
-    // The new epoch at block 4 is one rounded hour after epoch 0's start.
-    let epoch_bucket =
-        keys::encode_stats_key(keys::STATS_PREFIX_EPOCH_TIME_DIST, &60i32.to_be_bytes());
-    domain
-        .put_cf(domain.cf_stats_chain(), &epoch_bucket, &1i32.to_le_bytes())
-        .unwrap();
-
-    // Write the pre-reorg activity stats + addr sets through the live write
-    // path (accumulate per bucket incl. the in-memory cellbase rows, then
-    // update_*_activity_stats), exactly as SyncBatch does.
-    let mut day_accum = DailyActivityStats::default();
-    let mut hour_accums: std::collections::HashMap<String, DailyActivityStats> =
-        std::collections::HashMap::new();
-    let mut day_addrs: HashSet<[u8; 32]> = HashSet::new();
-    let mut hour_addrs: std::collections::HashMap<String, HashSet<[u8; 32]>> =
-        std::collections::HashMap::new();
-    for b in 1..=5i64 {
-        let hour_key = if b == 1 { HOUR_EARLY } else { HOUR_CUTOFF };
-        let cellbase = make_cellbase_actions(b);
-        BatchWriter::accumulate_tx_activity_stats(&cellbase, &mut day_accum);
-        BatchWriter::accumulate_tx_activity_stats(
-            &cellbase,
-            hour_accums.entry(hour_key.to_string()).or_default(),
-        );
-        let row = &tx_rows[(b - 1) as usize];
-        BatchWriter::accumulate_tx_activity_stats(row, &mut day_accum);
-        BatchWriter::accumulate_tx_activity_stats(
-            row,
-            hour_accums.entry(hour_key.to_string()).or_default(),
-        );
-        for p in &row.participants {
-            let mut lh = [0u8; 32];
-            lh.copy_from_slice(p.id.as_bytes());
-            day_addrs.insert(lh);
-            hour_addrs
-                .entry(hour_key.to_string())
-                .or_default()
-                .insert(lh);
-        }
-    }
-    let mut stats_batch = StoreBatch::new(&domain);
-    let as_sorted = |addrs: &HashSet<[u8; 32]>| -> std::collections::BTreeSet<[u8; 32]> {
-        addrs.iter().copied().collect()
-    };
-    writer
-        .update_activity_bucket_stats(
-            store_keys::ActivityBucketKind::Daily,
-            DATE,
-            &day_accum,
-            &as_sorted(&day_addrs),
-            &mut FrozenActivityAddrSets::default(),
-            &mut stats_batch,
-        )
-        .unwrap();
-    for (hour_key, accum) in &hour_accums {
-        writer
-            .update_activity_bucket_stats(
-                store_keys::ActivityBucketKind::Hourly,
-                hour_key,
-                accum,
-                &as_sorted(hour_addrs.get(hour_key).unwrap()),
-                &mut FrozenActivityAddrSets::default(),
-                &mut stats_batch,
-            )
-            .unwrap();
-    }
-    stats_batch.commit().unwrap();
-
-    // Sanity: pre-reorg state as forward sync produced it.
-    let pre_day = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
-    assert_eq!(pre_day.unique_address_count, 3, "{{A,B,D}} before reorg");
-    assert_eq!(pre_day.coinbase_count, 5);
-    assert_eq!(pre_day.transfer_count, 5);
-
-    // A bucket's address set: the bulk blob's addresses plus the live
-    // per-address rows (`ACTIVITY_*_ADDR_ROW`).
-    let read_addr_set = |kind: store_keys::ActivityBucketKind, bucket: &str| -> HashSet<[u8; 32]> {
-        domain.get_activity_bucket_addrs(kind, bucket).unwrap()
-    };
-
-    // Shallow partial-day reorg: fork point block 3, blocks 4-5 orphaned.
-    rollback_fixture(&domain, 3, Some(append.as_ref())).unwrap();
-
-    // Cutoff-day bucket: reset to the surviving portion {A, D}.
-    let day_after = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
-    assert_eq!(
-        day_after.unique_address_count, 2,
-        "cutoff-day unique addrs must be reset to survivors {{A,D}} (B must not linger)"
-    );
-    assert_eq!(
-        day_after.coinbase_count, 3,
-        "rolled-back blocks' coinbase activities must be subtracted"
-    );
-    assert_eq!(day_after.transfer_count, 3);
-    let day_set = read_addr_set(store_keys::ActivityBucketKind::Daily, DATE);
-    assert_eq!(
-        day_set,
-        HashSet::from([addr_a, addr_d]),
-        "cutoff-day addr set must contain exactly the surviving addresses"
-    );
-
-    // Cutoff-hour bucket: reset to survivors {A}.
-    let hour_after = domain
-        .get_hourly_activity_stats(HOUR_CUTOFF)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        hour_after.unique_address_count, 1,
-        "cutoff-hour unique addrs must be reset to survivors {{A}}"
-    );
-    assert_eq!(hour_after.coinbase_count, 2);
-    assert_eq!(hour_after.transfer_count, 2);
-    let hour_set = read_addr_set(store_keys::ActivityBucketKind::Hourly, HOUR_CUTOFF);
-    assert_eq!(hour_set, HashSet::from([addr_a]));
-
-    // Earlier hour on the same day is untouched.
-    let early_after = domain
-        .get_hourly_activity_stats(HOUR_EARLY)
-        .unwrap()
-        .unwrap();
-    assert_eq!(early_after.unique_address_count, 1);
-    assert_eq!(early_after.coinbase_count, 1);
-    let early_set = read_addr_set(store_keys::ActivityBucketKind::Hourly, HOUR_EARLY);
-    assert_eq!(early_set, HashSet::from([addr_d]));
-
-    // Replay the new branch (blocks 4'-5' in the cutoff hour, address C)
-    // through the same live write path.
-    let mut replay_day = DailyActivityStats::default();
-    let mut replay_hour = DailyActivityStats::default();
-    let replay_rows = [
-        make_actions(4, 0x66, &[addr_c]),
-        make_actions(5, 0x77, &[addr_c]),
-    ];
-    for b in 4..=5i64 {
-        let cellbase = make_cellbase_actions(b);
-        BatchWriter::accumulate_tx_activity_stats(&cellbase, &mut replay_day);
-        BatchWriter::accumulate_tx_activity_stats(&cellbase, &mut replay_hour);
-        let row = &replay_rows[(b - 4) as usize];
-        BatchWriter::accumulate_tx_activity_stats(row, &mut replay_day);
-        BatchWriter::accumulate_tx_activity_stats(row, &mut replay_hour);
-    }
-    let replay_addrs = std::collections::BTreeSet::from([addr_c]);
-    let mut replay_batch = StoreBatch::new(&domain);
-    writer
-        .update_activity_bucket_stats(
-            store_keys::ActivityBucketKind::Daily,
-            DATE,
-            &replay_day,
-            &replay_addrs,
-            &mut FrozenActivityAddrSets::default(),
-            &mut replay_batch,
-        )
-        .unwrap();
-    writer
-        .update_activity_bucket_stats(
-            store_keys::ActivityBucketKind::Hourly,
-            HOUR_CUTOFF,
-            &replay_hour,
-            &replay_addrs,
-            &mut FrozenActivityAddrSets::default(),
-            &mut replay_batch,
-        )
-        .unwrap();
-    replay_batch.commit().unwrap();
-
-    // Final state must be exactly {survivors ∪ new branch}, without B.
-    let final_day = domain.get_daily_activity_stats(DATE).unwrap().unwrap();
-    assert_eq!(
-        final_day.unique_address_count, 3,
-        "final day bucket = {{A,C,D}}; the orphaned-branch-only address B must be gone"
-    );
-    assert_eq!(final_day.coinbase_count, 5);
-    assert_eq!(final_day.transfer_count, 5);
-    let final_day_set = read_addr_set(store_keys::ActivityBucketKind::Daily, DATE);
-    assert_eq!(final_day_set, HashSet::from([addr_a, addr_c, addr_d]));
-    assert!(!final_day_set.contains(&addr_b));
-
-    let final_hour = domain
-        .get_hourly_activity_stats(HOUR_CUTOFF)
-        .unwrap()
-        .unwrap();
-    assert_eq!(final_hour.unique_address_count, 2, "final hour = {{A,C}}");
-    assert_eq!(final_hour.coinbase_count, 4);
-    let final_hour_set = read_addr_set(store_keys::ActivityBucketKind::Hourly, HOUR_CUTOFF);
-    assert_eq!(final_hour_set, HashSet::from([addr_a, addr_c]));
-    assert!(!final_hour_set.contains(&addr_b));
-}
-
 /// The DAO singleton aggregates (`dao_latest_stats`, `dao_top_depositors`) are
 /// tip-scoped derived rows that the indexer rewrites unconditionally right
 /// after a rollback commits. Deleting them inside the rollback batch opens a
@@ -2147,54 +1472,42 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     seed_epoch_rows(&domain, 1..=3i64);
 
     // Both transactions sit at tx position 1: position 0 of a block is its
-    // cellbase, which has no TxActions row.
-    let mut batch = StoreBatch::new(&domain);
-    // Block 2 survives: lock A only.
-    batch.put_tx_actions(&prefix_participant_actions(2, 1, &tx_hash_2, &lock_a));
-    batch.put_addr_tx(
-        &lock_a,
-        2,
-        1,
-        &tx_hash_2,
-        &AddrTxValue::new(0, true, false, 0),
-    );
-    batch.put_addr_tx_by_prefix(
-        &ROLLED_BACK_PREFIX,
-        2,
-        1,
-        &tx_hash_2,
-        &AddrTxValue::new(0, false, false, 0),
-    );
-    // Block 3 is rolled back.
-    batch.put_tx_actions(&prefix_participant_actions(3, 1, &tx_hash_3, &lock_a));
-    batch.put_addr_tx(
-        &lock_a,
-        3,
-        1,
-        &tx_hash_3,
-        &AddrTxValue::new(0, true, false, 0),
-    );
-    batch.put_addr_tx_by_prefix(
-        &ROLLED_BACK_PREFIX,
-        3,
-        1,
-        &tx_hash_3,
-        &AddrTxValue::new(0, false, false, 0),
-    );
-    batch.put_addr_balance(
-        &lock_a,
-        &AddressBalance {
-            txs_count: 2,
-            ..Default::default()
-        },
-    );
-    batch.put_addr_prefix_stats(
-        &ROLLED_BACK_PREFIX,
-        &ckbadger_store::types::AddrPrefixStats { txs_count: 2 },
-    );
-    batch.commit().unwrap();
+    // cellbase, which has no TxActions row. Each block's rows, and the two
+    // counters as that block leaves them, in the block's journaled scope.
+    for (block, tx_hash) in [(2i64, &tx_hash_2), (3, &tx_hash_3)] {
+        commit_journaled_block(&domain, block, |batch| {
+            batch.put_tx_actions(&prefix_participant_actions(block, 1, tx_hash, &lock_a));
+            batch.put_addr_tx(
+                &lock_a,
+                block,
+                1,
+                tx_hash,
+                &AddrTxValue::new(0, true, false, 0),
+            );
+            batch.put_addr_tx_by_prefix(
+                &ROLLED_BACK_PREFIX,
+                block,
+                1,
+                tx_hash,
+                &AddrTxValue::new(0, false, false, 0),
+            );
+            batch.put_addr_balance(
+                &lock_a,
+                &AddressBalance {
+                    txs_count: block - 1,
+                    ..Default::default()
+                },
+            );
+            batch.put_addr_prefix_stats(
+                &ROLLED_BACK_PREFIX,
+                &ckbadger_store::types::AddrPrefixStats {
+                    txs_count: block - 1,
+                },
+            );
+        })
+        .unwrap();
+    }
 
-    domain.rollback_via_undo_log(&append, 2).unwrap();
     rollback_fixture(&domain, 2, Some(&append)).unwrap();
 
     // Block 3's rows are gone from both indexes; block 2's survive.
@@ -2217,8 +1530,8 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
         "the rolled-back prefix row must be deleted"
     );
 
-    // The counter is reversed by the rows stage 8c' deleted — it owns no undo
-    // pre-images, so it must end equal to the rows that survive.
+    // The counters end at the value block 2 left: equal to the rows that
+    // survive.
     assert_eq!(
         domain
             .get_addr_prefix_stats(&ROLLED_BACK_PREFIX)
@@ -2230,66 +1543,5 @@ fn test_rollback_deletes_prefix_participant_rows_and_reverses_prefix_stats() {
     assert_eq!(
         domain.get_addr_balance(&lock_a).unwrap().unwrap().txs_count,
         1
-    );
-}
-
-#[test]
-fn test_rollback_bails_when_prefix_participant_row_is_missing() {
-    let (domain, append) = setup_split_stores();
-    let lock_a = vec![0xA0u8; 32];
-    let tx_hash_3 = {
-        let mut h = vec![0u8; 32];
-        h[0] = 0x30;
-        h
-    };
-
-    let mut batch = StoreBatch::new(&domain);
-    for b in 1..=3i64 {
-        batch.put_block_header(b, &make_header(b));
-    }
-    batch.commit().unwrap();
-    seed_epoch_rows(&domain, 1..=3i64);
-
-    let mut batch = StoreBatch::new(&domain);
-    batch.put_tx_actions(&prefix_participant_actions(3, 0, &tx_hash_3, &lock_a));
-    batch.put_tx_index(
-        3,
-        0,
-        &TxIndexEntry {
-            tx_hash: [0u8; 32],
-            is_cellbase: false,
-            timestamp: 1_003_000,
-            inputs_count: 0,
-            outputs_count: 1,
-            fee: 0,
-            tx_size: 1,
-            cycles: None,
-            semantic_tags: 0,
-        },
-    );
-    batch.put_tx_hash_map(&tx_hash_3, 3, 0);
-    batch.put_addr_tx(
-        &lock_a,
-        3,
-        0,
-        &tx_hash_3,
-        &AddrTxValue::new(0, true, false, 0),
-    );
-    // Deliberately NOT writing the addr_txs_by_prefix row.
-    batch.put_reorg_undo_log_by_block(
-        3,
-        0,
-        &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
-            tx_hash: tx_hash_3.clone(),
-            outputs_count: 0,
-            inputs: vec![],
-        }),
-    );
-    batch.commit().unwrap();
-
-    let err = rollback_fixture(&domain, 2, Some(&append)).unwrap_err();
-    assert!(
-        err.to_string().contains("missing addr_txs_by_prefix row"),
-        "{err}"
     );
 }

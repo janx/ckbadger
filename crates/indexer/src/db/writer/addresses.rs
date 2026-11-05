@@ -2907,6 +2907,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 100..=100);
         let binary = vec![0x42; 32];
         let registered = vec![0x52; 32];
         let type_id = hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap();
@@ -2997,23 +2998,24 @@ mod tests {
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             semantic_tags: 0,
         };
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                std::slice::from_ref(&tx),
-                &HashMap::new(),
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&tx),
                     &HashMap::new(),
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&tx),
+                        &HashMap::new(),
+                        &HashMap::new(),
+                    ),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
 
         assert_eq!(
             store
@@ -3024,7 +3026,7 @@ mod tests {
                 .as_deref(),
             Some("template-family")
         );
-        store.rollback_via_undo_log(&append, 99).unwrap();
+        store.rollback_to_block(99).unwrap();
 
         let restored = store.get_script_version(&binary).unwrap().unwrap();
         assert_eq!(
@@ -3061,6 +3063,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 20..=23);
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
@@ -3136,23 +3139,24 @@ mod tests {
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             semantic_tags: 0,
         };
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                std::slice::from_ref(&tx),
-                &HashMap::new(),
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&tx),
                     &HashMap::new(),
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&tx),
+                        &HashMap::new(),
+                        &HashMap::new(),
+                    ),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         let version = store.get_script_version(&new_hash).unwrap().unwrap();
         assert_eq!(version.family_id.as_deref(), Some("cells-account"));
         assert_eq!(version.type_id_deployments, vec![(reference.clone(), 20)]);
@@ -3215,46 +3219,48 @@ mod tests {
             .unwrap()
             .cell
             .data_hash = Some([0xee; 32]);
-        let mut inactive_batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                std::slice::from_ref(&retired),
-                &inactive,
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |inactive_batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &inactive,
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut inactive_batch,
-            )
-            .unwrap();
-        inactive_batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &inactive,
+                        &HashMap::new(),
+                    ),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    inactive_batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
                 .unwrap(),
             Some(new_hash.to_vec())
         );
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                std::slice::from_ref(&retired),
-                &input_cells,
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &input_cells,
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &input_cells,
+                        &HashMap::new(),
+                    ),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3307,23 +3313,24 @@ mod tests {
         let reactivated_hash =
             crate::parser::ScriptParser::compute_data_hash(&retired.cells[0].data);
         retired.cells[0].data_hash = reactivated_hash;
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                std::slice::from_ref(&retired),
-                &input_cells,
-                &HashMap::new(),
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &input_cells,
                     &HashMap::new(),
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &input_cells,
+                        &HashMap::new(),
+                    ),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3381,23 +3388,24 @@ mod tests {
         retired.inputs[0].previous_tx_hash = previous_hash;
         retired.cells.clear();
         retired.outputs_count = 0;
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                std::slice::from_ref(&retired),
-                &HashMap::new(),
-                &batch_cells,
-                &crate::sync::types::derive_input_script_hashes(
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
                     std::slice::from_ref(&retired),
                     &HashMap::new(),
                     &batch_cells,
-                ),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+                    &crate::sync::types::derive_input_script_hashes(
+                        std::slice::from_ref(&retired),
+                        &HashMap::new(),
+                        &batch_cells,
+                    ),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3428,8 +3436,7 @@ mod tests {
                 .cells_count,
             254
         );
-        store.rollback_via_undo_log(&append, 22).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(22).unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3444,8 +3451,7 @@ mod tests {
                 .type_live_cells_count,
             72
         );
-        store.rollback_via_undo_log(&append, 21).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(21).unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3468,16 +3474,14 @@ mod tests {
                 .versions_count,
             2
         );
-        store.rollback_via_undo_log(&append, 20).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(20).unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
                 .unwrap(),
             Some(new_hash.to_vec())
         );
-        store.rollback_via_undo_log(&append, 19).unwrap();
-        writer.refresh_script_reference_rollups().unwrap();
+        store.rollback_to_block(19).unwrap();
         assert!(store.get_script_version(&new_hash).unwrap().is_none());
         assert!(!store
             .list_script_version_hashes_by_family("cells-account")
@@ -3507,6 +3511,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
+        crate::db::writer::journal_test_support::journaled_headers(&store, 21..=24);
         // The type-id reference is the derived hash of the cells' own type
         // script (TYPE_ID, `type`, these args), as the parser computes it.
         let reference = crate::parser::ScriptParser::compute_script_hash_raw(
@@ -3546,6 +3551,10 @@ mod tests {
             },
         );
         seed.commit().unwrap();
+        // The seeded state's version / family rollups, as the store holds
+        // them before the batch (the forward writer journals the batch's
+        // changes on top of them).
+        writer.refresh_script_reference_rollups().unwrap();
         let mut previous = ckbadger_store::LiveCellInfo {
             capacity: 10000,
             lock_code_hash: [0x12; 32],
@@ -3615,19 +3624,20 @@ mod tests {
                 semantic_tags: 0,
             });
         }
-        let mut batch = StoreBatch::new(&store);
-        writer
-            .materialize_script_versions_and_families_with_chain(
-                &[],
-                &txs,
-                &HashMap::new(),
-                &inputs,
-                &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
-                &crate::sync::undo::SharedUndoSeq::default(),
-                &mut batch,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+        ckbadger_store::commit_journaled(&store, |batch| {
+            writer
+                .materialize_script_versions_and_families_with_chain(
+                    &[],
+                    &txs,
+                    &HashMap::new(),
+                    &inputs,
+                    &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
+                    &crate::sync::undo::SharedUndoSeq::default(),
+                    batch,
+                )
+                .unwrap();
+        })
+        .unwrap();
         assert_eq!(
             store
                 .get_script_reference_version_hash(1, &reference)
@@ -3648,8 +3658,7 @@ mod tests {
             (21, None),
             (20, Some(old_hash.to_vec())),
         ] {
-            store.rollback_via_undo_log(&append, fork).unwrap();
-            writer.refresh_script_reference_rollups().unwrap();
+            store.rollback_to_block(fork).unwrap();
             assert_eq!(
                 store
                     .get_script_reference_version_hash(1, &reference)

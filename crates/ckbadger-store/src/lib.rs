@@ -58,7 +58,6 @@ mod token_metadata;
 mod token_ops;
 mod tracker_ops;
 mod tx_ops;
-mod undo_log_ops;
 
 /// Convert bytes to lowercase hex string (no `0x` prefix).
 pub fn bytes_to_hex(bytes: &[u8]) -> String {
@@ -72,12 +71,14 @@ pub fn bytes_to_hex(bytes: &[u8]) -> String {
 }
 
 pub use batch::{merge_write_batches, BlockScope, StoreBatch};
-pub use block_overlay::{BlockOverlay, JournalStats, SharedBlockOverlay};
+pub use block_overlay::{
+    commit_journaled, commit_journaled_block, BlockOverlay, JournalStats, SharedBlockOverlay,
+};
 pub use cell_ops::{DataHashIndexPage, DataHashIndexRow};
 pub use dao_ops::{dao_compensation_for_entry_at, dao_frozen_request_compensation};
 pub use global_bucket::{classify_global_bucket, tx_actions_bucket_key, GlobalBucket};
 pub use network_types::*;
-pub use reorg_ops::RollbackResult;
+pub use reorg_ops::{JournalEntry, RollbackResult};
 pub use script_reference_ops::{ScriptFamilyMembershipIndex, ScriptFamilyUsage};
 pub use stats_ops::{
     activity_addr_set_count, decode_activity_addr_set, encode_activity_addr_set, DaoDayFacts,
@@ -112,4 +113,3 @@ pub use token_ops::token_live_cells_from_daily;
 pub use tracker_ops::TrackerBlobConversion;
 pub use tx_ops::TxCyclesWrite;
 pub use types::*;
-pub use undo_log_ops::UndoRollbackResult;

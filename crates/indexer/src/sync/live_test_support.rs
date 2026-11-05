@@ -214,7 +214,6 @@ pub async fn reorg_to(indexer: &Indexer, fork_point: i64) -> Result<()> {
     indexer
         .writer
         .execute_reorg(
-            indexer.append_only_store.as_ref(),
             fork_point,
             &fork_hash,
             old_tip,

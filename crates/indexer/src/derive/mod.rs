@@ -208,10 +208,10 @@ pub(crate) fn invalidate_registered_for_rollback(
     let tip = committed_tip(store)?;
     let mut batch = StoreBatch::new(store);
     let mut reset = Vec::new();
-    // Undo replay owns an aggregate's rollback only while it is complete at
-    // or below the target; every other aggregate's `Derived` pre-images above
-    // the target would write stale rows into a CF that is (or is about to be)
-    // empty, so they are dropped with the reset.
+    // The journal owns an aggregate's rollback only while it is complete at
+    // or below the target; every other aggregate's journal entries above the
+    // target would write stale rows into a CF that is (or is about to be)
+    // empty, so they are dropped in the same write as the reset.
     let mut not_replayed: Vec<&'static str> = Vec::new();
     for aggregate in aggregates {
         let id = aggregate.id();
@@ -235,7 +235,7 @@ pub(crate) fn invalidate_registered_for_rollback(
             not_replayed.push(id.cf_name);
         }
     }
-    let dropped = store.stage_delete_derived_undo_above(&mut batch, &not_replayed, rollback_to)?;
+    let dropped = store.stage_delete_journal_above(&mut batch, &not_replayed, rollback_to)?;
     if !reset.is_empty() || dropped > 0 {
         batch.commit()?;
         tracing::info!(
@@ -243,7 +243,7 @@ pub(crate) fn invalidate_registered_for_rollback(
             rollback_to,
             tip,
             aggregates = ?reset,
-            dropped_undo_entries = dropped,
+            dropped_journal_entries = dropped,
             "derived aggregates reset before rollback; they are derived again"
         );
     }
@@ -548,10 +548,10 @@ mod tests {
     }
 
     /// Review P2: a reset must leave the aggregate's CF empty through the
-    /// rollback that follows it — undo replay must not write the aggregate's
-    /// `Derived` pre-images above the target back into the cleared CF.
+    /// rollback that follows it — the rollback must not write the aggregate's
+    /// journal entries above the target back into the cleared CF.
     #[test]
-    fn a_reset_aggregate_stays_empty_through_the_undo_replay() {
+    fn a_reset_aggregate_stays_empty_through_the_rollback() {
         let (_dir, store) = toy_store();
         commit_headers(&store, 0..=10);
         crate::derive::derive_to_completion_with(&store, toy()).unwrap();
@@ -563,11 +563,11 @@ mod tests {
             stored_rows(&store, &TOY).is_empty(),
             "the reset cleared the rows"
         );
-        store.rollback_via_undo_log(&store, 13).unwrap();
+        store.rollback_to_block(13).unwrap();
         assert_eq!(
             stored_rows(&store, &TOY),
             Vec::new(),
-            "undo replay wrote stale derived rows into a reset aggregate"
+            "the rollback wrote stale derived rows into a reset aggregate"
         );
     }
 

@@ -243,6 +243,38 @@ pub use statistics::FrozenActivityAddrSets;
 pub(crate) mod journal_test_support {
     use ckbadger_store::CkbadgerStore;
 
+    /// A header for each of `blocks`, each written in its block's journaled
+    /// scope (its `block_hash_index` row is journaled), so a fixture whose
+    /// rows are journaled at those blocks can be rolled back
+    /// (`CkbadgerStore::rollback_to_block` rolls back the blocks up to the
+    /// highest stored header).
+    pub(crate) fn journaled_headers(store: &CkbadgerStore, blocks: std::ops::RangeInclusive<i64>) {
+        for block in blocks {
+            let mut hash = vec![0x4b; 32];
+            hash[..8].copy_from_slice(&block.to_be_bytes());
+            let header = ckbadger_store::CachedBlockHeader {
+                hash,
+                parent_hash: vec![0; 32],
+                timestamp: 1_700_000_000_000 + block * 1_000,
+                epoch_number: 0,
+                epoch_index: 0,
+                epoch_length: 1_800,
+                dao: vec![0; 32],
+                transactions_count: 1,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: 1_700_000_000_000 + block * 1_000,
+            };
+            ckbadger_store::commit_journaled_block(store, block, |batch| {
+                batch.put_block_header(block, &header)
+            })
+            .expect("journaled fixture header");
+        }
+    }
+
     /// Every block journal entry of `cf`, as `(block, key, previous value)`,
     /// sorted.
     pub(crate) fn journal_entries(

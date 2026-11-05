@@ -457,6 +457,45 @@ pub fn journal_seq(counters: &mut HashMap<i64, u64>, block: i64) -> Result<u64> 
     Ok(seq)
 }
 
+/// Fixture support (tests and test harnesses of every crate): commit `write`
+/// the way a live batch commits — a journaled [`crate::StoreBatch`] over a
+/// fresh overlay, whose `Journal`-class writes `write` attributes to blocks
+/// with [`crate::StoreBatch::at`], the journal staged (each block's sequence
+/// numbers continue after the journal rows the store already holds for it)
+/// and everything committed in one write. A fixture that seeds rows this way
+/// can be rolled back by the journal like rows the live writer wrote.
+#[doc(hidden)]
+pub fn commit_journaled(
+    store: &CkbadgerStore,
+    write: impl FnOnce(&mut crate::StoreBatch),
+) -> Result<JournalStats> {
+    let overlay = SharedBlockOverlay::new(store);
+    let mut batch = crate::StoreBatch::journaled(store, &overlay, 0);
+    write(&mut batch);
+    let mut counters: HashMap<i64, u64> = HashMap::new();
+    let stats = batch.stage_journal(&mut |block| {
+        if let std::collections::hash_map::Entry::Vacant(slot) = counters.entry(block) {
+            slot.insert(match store.journal_entries(block)?.last() {
+                Some(entry) => (entry.seq & UNDO_SEQ_LOCAL_MAX) + 1,
+                None => 0,
+            });
+        }
+        journal_seq(&mut counters, block)
+    })?;
+    batch.commit()?;
+    Ok(stats)
+}
+
+/// [`commit_journaled`] with every write in `block`'s scope.
+#[doc(hidden)]
+pub fn commit_journaled_block(
+    store: &CkbadgerStore,
+    block: i64,
+    write: impl FnOnce(&mut crate::StoreBatch),
+) -> Result<JournalStats> {
+    commit_journaled(store, |batch| write(&mut batch.at(block)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

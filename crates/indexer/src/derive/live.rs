@@ -222,26 +222,23 @@ pub(crate) mod tests {
         range: std::ops::RangeInclusive<i64>,
     ) {
         let points = blocks(range.clone());
-        let mut batch = StoreBatch::new(store);
-        for number in range {
-            batch.put_block_header(number, &header(number, epoch_of(number)));
-        }
-        let ctx = LiveDeriveCtx {
-            store,
-            blocks: &points,
-            dao_transitions: &[],
-            object_collection_activity_rows: &[],
-            identity_transitions: &[],
-        };
-        apply_live_batch(
-            store,
-            aggregates,
-            &ctx,
-            &mut batch,
-            &SharedUndoSeq::default(),
-        )
+        // One live batch: journaled, each header in its block's scope.
+        ckbadger_store::commit_journaled(store, |batch| {
+            for number in range {
+                batch
+                    .at(number)
+                    .put_block_header(number, &header(number, epoch_of(number)));
+            }
+            let ctx = LiveDeriveCtx {
+                store,
+                blocks: &points,
+                dao_transitions: &[],
+                object_collection_activity_rows: &[],
+                identity_transitions: &[],
+            };
+            apply_live_batch(store, aggregates, &ctx, batch, &SharedUndoSeq::default()).unwrap();
+        })
         .unwrap();
-        batch.commit().unwrap();
     }
 
     fn toy() -> Vec<Box<dyn DerivedAggregate>> {
@@ -279,17 +276,17 @@ pub(crate) mod tests {
         assert!(stored_rows(&store, &TOY).is_empty());
     }
 
-    /// The fork point may land inside a multi-block live batch: undo replay
+    /// The fork point may land inside a multi-block live batch: the rollback
     /// must restore the value at the end of the fork block, not the value
-    /// before the batch (per-block pre-images).
+    /// before the batch (per-block journal entries).
     #[test]
-    fn undo_replay_restores_the_rows_at_any_fork_point_inside_a_batch() {
+    fn rollback_restores_the_rows_at_any_fork_point_inside_a_batch() {
         for fork_point in [10, 12, 13, 15] {
             let (_dir, store) = toy_store();
             commit_headers(&store, 0..=10);
             complete(&store);
             write_live_batch(&store, &toy(), 11..=16);
-            store.rollback_via_undo_log(&store, fork_point).unwrap();
+            store.rollback_to_block(fork_point).unwrap();
             assert_eq!(
                 stored_rows(&store, &TOY),
                 expected_rows(fork_point),

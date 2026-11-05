@@ -4,7 +4,6 @@
 //! can be detected and corrected by rolling back to the last consistent block.
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::keys;
 use ckbadger_store::CkbadgerStore;
 use ckbadger_store::{CachedBlockHeader, RollbackResult, TxIndexEntry};
 use std::sync::Arc;
@@ -162,7 +161,7 @@ fn test_detect_partial_block_header_only() {
 
 #[test]
 fn test_rollback_restores_consistency() {
-    let (store, append_store) = setup_split_stores();
+    let (store, _append_store) = setup_split_stores();
 
     // Insert complete blocks 1-5
     for i in 1..=5 {
@@ -171,22 +170,13 @@ fn test_rollback_restores_consistency() {
 
     // Insert partial block 6 (header only)
     insert_header_only(&store, 6);
-    // The synthetic forward chain has five 8-second inter-block intervals
-    // (1→2 through 5→6). Rollback must subtract the actual persisted bucket.
-    let histogram_key =
-        keys::encode_stats_key(keys::STATS_PREFIX_BLOCK_TIME_DIST, &8i32.to_be_bytes());
-    store
-        .put_cf(store.cf_stats_chain(), &histogram_key, &5i32.to_le_bytes())
-        .unwrap();
 
     // Confirm inconsistency
     assert!(store.get_block_header(6).unwrap().is_some());
     assert!(store.list_block_txs(6).unwrap().is_empty());
 
     // Rollback to block 5 to restore consistency
-    let result: RollbackResult = store
-        .rollback_to_block_with_append_only_store(5, Some(append_store.as_ref()))
-        .unwrap();
+    let result: RollbackResult = store.rollback_to_block(5).unwrap();
     assert_eq!(
         result.blocks_removed, 1,
         "only block 6 header should be removed"

@@ -9,8 +9,16 @@
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
 use ckbadger_store::types::{CachedBlockHeader, DaoDailySnapshot, DaoDepositCacheEntry};
-use ckbadger_store::CkbadgerStore;
+use ckbadger_store::{commit_journaled_block, CkbadgerStore};
 use std::sync::Arc;
+
+/// Roll back to block 100 the way every rollback entry point does: the block
+/// journal, then the DAO tip summary at the new tip (which owns the open
+/// day's snapshot row).
+fn rollback_to_100(store: &Arc<CkbadgerStore>, tip: i64) {
+    let writer = ckbadger_indexer::db::BatchWriter::new(store.clone(), store.clone());
+    writer.cleanup_batch_range(101, tip).unwrap();
+}
 
 fn setup_store() -> Arc<CkbadgerStore> {
     let dir = tempfile::tempdir().unwrap();
@@ -20,6 +28,14 @@ fn setup_store() -> Arc<CkbadgerStore> {
     // DAO snapshot recompute needs it for the per-block miner secondary split.
     store
         .set_secondary_epoch_reward(61_369_863_013_698)
+        .unwrap();
+    // The DAO tip summary reads the genesis issuance (estimated APC).
+    store
+        .set_genesis_baseline(&ckbadger_store::GenesisBaseline {
+            total_issuance: 3_360_000_000_000_000_000,
+            burnt: 0,
+            virtual_occupied: 0,
+        })
         .unwrap();
     store
 }
@@ -204,32 +220,6 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         },
     );
 
-    // Block 101: 2026-04-08 second block with deposit #2
-    batch.put_block_header(
-        101,
-        &CachedBlockHeader {
-            hash: vec![0x65; 32],
-            parent_hash: vec![0x64; 32],
-            timestamp: day_0408_t2_ms,
-            epoch_number: 2,
-            epoch_index: 1,
-            epoch_length: 1800,
-            dao: dao_field(
-                1_200_000_000_000_000_000, // C
-                10_100_000_000_000_000,    // AR
-                10_000_000,                // S
-                120_000_000_000_000_000,   // U
-            ),
-            transactions_count: 2,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: day_0408_t2_ms,
-        },
-    );
-
     // Yesterday's (2026-04-07) snapshot — the recompute starting point.
     let y_snap = DaoDailySnapshot {
         date: "2026-04-07".to_string(),
@@ -323,8 +313,37 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
         compensation: None,
     };
     batch.put_dao_deposit(&outpoint_100, &entry_100);
-    batch.put_dao_deposit(&outpoint_101, &entry_101);
     batch.commit().unwrap();
+    // The rolled-back blocks' rows, journaled in their blocks' scopes as
+    // the live writer commits them.
+    commit_journaled_block(&store, 101, |batch| {
+        batch.put_block_header(
+            101,
+            &CachedBlockHeader {
+                hash: vec![0x65; 32],
+                parent_hash: vec![0x64; 32],
+                timestamp: day_0408_t2_ms,
+                epoch_number: 2,
+                epoch_index: 1,
+                epoch_length: 1800,
+                dao: dao_field(
+                    1_200_000_000_000_000_000, // C
+                    10_100_000_000_000_000,    // AR
+                    10_000_000,                // S
+                    120_000_000_000_000_000,   // U
+                ),
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0x1a08a97e,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: day_0408_t2_ms,
+            },
+        );
+        batch.put_dao_deposit(&outpoint_101, &entry_101);
+    })
+    .unwrap();
 
     // Seed sync_status: tip = 101
     store
@@ -336,7 +355,7 @@ fn test_partial_day_rollback_recomputes_dao_snapshot() {
 
     // ACT: partial-day rollback to block 100 (drops block 101 only).
     seed_epoch_rows_for_dao_fixture(&store);
-    store.rollback_to_block(100).unwrap();
+    rollback_to_100(&store, 101);
 
     // ASSERT: snapshot for 2026-04-08 should now reflect block 100's deposit
     // ONLY (one deposit of 100 CKB).
@@ -483,31 +502,6 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
             chain_time_ms: day_0408_mid_ms,
         },
     );
-    // Block 101: the rolled-back block containing the phase-1 request.
-    batch.put_block_header(
-        101,
-        &CachedBlockHeader {
-            hash: vec![0x65; 32],
-            parent_hash: vec![0x64; 32],
-            timestamp: day_0408_late_ms,
-            epoch_number: 2,
-            epoch_index: 2,
-            epoch_length: 1800,
-            dao: dao_field(
-                1_200_000_000_000_000_000,
-                10_100_000_000_000_000,
-                10_000_000,
-                120_000_000_000_000_000,
-            ),
-            transactions_count: 2,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: day_0408_late_ms,
-        },
-    );
 
     // Yesterday (2026-04-07) snapshot: zero baseline.
     let y_key = keys::encode_stats_key(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT, b"20260407");
@@ -583,8 +577,47 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
         withdraw_to_output_index: None,
         compensation: None,
     };
-    batch.put_dao_deposit(&outpoint, &entry);
+    // The deposit as block 100 leaves it (phase 0); block 101 below writes
+    // the phase-1 request in its journaled scope.
+    let deposited = DaoDepositCacheEntry {
+        status: 0,
+        withdraw_request_tx: None,
+        withdraw_request_output_index: None,
+        withdraw_request_block: None,
+        withdraw_request_ar: None,
+        withdraw_request_occupied_capacity: None,
+        ..entry.clone()
+    };
+    batch.put_dao_deposit(&outpoint, &deposited);
     batch.commit().unwrap();
+    commit_journaled_block(&store, 101, |batch| {
+        batch.put_block_header(
+            101,
+            &CachedBlockHeader {
+                hash: vec![0x65; 32],
+                parent_hash: vec![0x64; 32],
+                timestamp: day_0408_late_ms,
+                epoch_number: 2,
+                epoch_index: 2,
+                epoch_length: 1800,
+                dao: dao_field(
+                    1_200_000_000_000_000_000,
+                    10_100_000_000_000_000,
+                    10_000_000,
+                    120_000_000_000_000_000,
+                ),
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0x1a08a97e,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: day_0408_late_ms,
+            },
+        );
+        batch.put_dao_deposit(&outpoint, &entry);
+    })
+    .unwrap();
 
     store
         .update_sync_status(|s| {
@@ -595,7 +628,7 @@ fn test_rollback_of_phase1_withdraw_keeps_deposit_active() {
 
     // ACT: rollback to block 100 — phase-1 at block 101 is undone.
     seed_epoch_rows_for_dao_fixture(&store);
-    store.rollback_to_block(100).unwrap();
+    rollback_to_100(&store, 101);
 
     // ASSERT: after recompute, the deposit should be active again.
     let raw = store
@@ -662,56 +695,6 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0407_late_ms,
-        },
-    );
-    // Block 101: 2026-04-08 first block with deposit #1.
-    batch.put_block_header(
-        101,
-        &CachedBlockHeader {
-            hash: vec![0x65; 32],
-            parent_hash: vec![0x64; 32],
-            timestamp: day_0408_t1_ms,
-            epoch_number: 2,
-            epoch_index: 0,
-            epoch_length: 1800,
-            dao: dao_field(
-                1_100_000_000_000_000_000,
-                10_050_000_000_000_000,
-                5_000_000,
-                110_000_000_000_000_000,
-            ),
-            transactions_count: 2,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: day_0408_t1_ms,
-        },
-    );
-    // Block 102: 2026-04-08 second block with deposit #2.
-    batch.put_block_header(
-        102,
-        &CachedBlockHeader {
-            hash: vec![0x66; 32],
-            parent_hash: vec![0x65; 32],
-            timestamp: day_0408_t2_ms,
-            epoch_number: 2,
-            epoch_index: 1,
-            epoch_length: 1800,
-            dao: dao_field(
-                1_200_000_000_000_000_000,
-                10_100_000_000_000_000,
-                10_000_000,
-                120_000_000_000_000_000,
-            ),
-            transactions_count: 2,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: day_0408_t2_ms,
         },
     );
 
@@ -803,9 +786,65 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
         withdraw_to_output_index: None,
         compensation: None,
     };
-    batch.put_dao_deposit(&outpoint_bytes(&[0xA1; 32], 0), &entry_101);
-    batch.put_dao_deposit(&outpoint_bytes(&[0xA2; 32], 0), &entry_102);
     batch.commit().unwrap();
+    // The rolled-back blocks' rows, journaled in their blocks' scopes as
+    // the live writer commits them.
+    commit_journaled_block(&store, 101, |batch| {
+        batch.put_block_header(
+            101,
+            &CachedBlockHeader {
+                hash: vec![0x65; 32],
+                parent_hash: vec![0x64; 32],
+                timestamp: day_0408_t1_ms,
+                epoch_number: 2,
+                epoch_index: 0,
+                epoch_length: 1800,
+                dao: dao_field(
+                    1_100_000_000_000_000_000,
+                    10_050_000_000_000_000,
+                    5_000_000,
+                    110_000_000_000_000_000,
+                ),
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0x1a08a97e,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: day_0408_t1_ms,
+            },
+        );
+        batch.put_dao_deposit(&outpoint_bytes(&[0xA1; 32], 0), &entry_101);
+    })
+    .unwrap();
+    commit_journaled_block(&store, 102, |batch| {
+        batch.put_block_header(
+            102,
+            &CachedBlockHeader {
+                hash: vec![0x66; 32],
+                parent_hash: vec![0x65; 32],
+                timestamp: day_0408_t2_ms,
+                epoch_number: 2,
+                epoch_index: 1,
+                epoch_length: 1800,
+                dao: dao_field(
+                    1_200_000_000_000_000_000,
+                    10_100_000_000_000_000,
+                    10_000_000,
+                    120_000_000_000_000_000,
+                ),
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0x1a08a97e,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: day_0408_t2_ms,
+            },
+        );
+        batch.put_dao_deposit(&outpoint_bytes(&[0xA2; 32], 0), &entry_102);
+    })
+    .unwrap();
 
     store
         .update_sync_status(|s| {
@@ -816,7 +855,7 @@ fn test_cross_day_rollback_rebuilds_cutoff_date_snapshot() {
 
     // ACT: rollback to block 100 — drops ALL of 2026-04-08.
     seed_epoch_rows_for_dao_fixture(&store);
-    store.rollback_to_block(100).unwrap();
+    rollback_to_100(&store, 102);
 
     // ASSERT: after recompute, the 2026-04-08 snapshot should show zero
     // day-deltas (no blocks survive on that date). Accept either "absent"
@@ -923,31 +962,6 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
             miner_lock_hash: None,
             cycles: None,
             chain_time_ms: day_0408_t1_ms,
-        },
-    );
-    // Block 101: 2026-04-08 second block — second deposit from SAME lock 0xB0 (rolled back)
-    batch.put_block_header(
-        101,
-        &CachedBlockHeader {
-            hash: vec![0x65; 32],
-            parent_hash: vec![0x64; 32],
-            timestamp: day_0408_t2_ms,
-            epoch_number: 2,
-            epoch_index: 1,
-            epoch_length: 1800,
-            dao: dao_field(
-                1_100_000_000_000_000_000,
-                10_050_000_000_000_000,
-                5_000_000,
-                110_000_000_000_000_000,
-            ),
-            transactions_count: 2,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: day_0408_t2_ms,
         },
     );
 
@@ -1066,8 +1080,37 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
         compensation: None,
     };
     batch.put_dao_deposit(&outpoint_bytes(&[0xA0; 32], 0), &entry_99);
-    batch.put_dao_deposit(&outpoint_bytes(&[0xA1; 32], 0), &entry_101);
     batch.commit().unwrap();
+    // The rolled-back blocks' rows, journaled in their blocks' scopes as
+    // the live writer commits them.
+    commit_journaled_block(&store, 101, |batch| {
+        batch.put_block_header(
+            101,
+            &CachedBlockHeader {
+                hash: vec![0x65; 32],
+                parent_hash: vec![0x64; 32],
+                timestamp: day_0408_t2_ms,
+                epoch_number: 2,
+                epoch_index: 1,
+                epoch_length: 1800,
+                dao: dao_field(
+                    1_100_000_000_000_000_000,
+                    10_050_000_000_000_000,
+                    5_000_000,
+                    110_000_000_000_000_000,
+                ),
+                transactions_count: 2,
+                uncles_count: 0,
+                proposals_count: 0,
+                compact_target: 0x1a08a97e,
+                miner_lock_hash: None,
+                cycles: None,
+                chain_time_ms: day_0408_t2_ms,
+            },
+        );
+        batch.put_dao_deposit(&outpoint_bytes(&[0xA1; 32], 0), &entry_101);
+    })
+    .unwrap();
 
     store
         .update_sync_status(|s| {
@@ -1079,7 +1122,7 @@ fn test_rollback_preserves_cumulative_depositors_with_repeat_lock() {
     // ACT: rollback to block 100 — drops block 101 only.
     // fork_point_date = cutoff_date = 2026-04-08, so only 2026-04-08 is recomputed.
     seed_epoch_rows_for_dao_fixture(&store);
-    store.rollback_to_block(100).unwrap();
+    rollback_to_100(&store, 101);
 
     // ASSERT: 2026-04-07 snapshot is NOT recomputed (fork_point is on 2026-04-08).
     // It should still have its pre-existing value.

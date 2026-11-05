@@ -2912,7 +2912,6 @@ impl Indexer {
                             });
                             }
                             if let Err(cleanup_err) = self.writer.cleanup_batch_range(
-                                self.append_only_store.as_ref(),
                                 i64::try_from(start_block).map_err(|_| {
                                     anyhow!(
                                         "batch cleanup start_block exceeds i64: {}",

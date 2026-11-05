@@ -1121,7 +1121,6 @@ mod tests {
     use ckbadger_store::store::CkbadgerStore;
     use ckbadger_store::{
         CachedBlockHeader, LiveCellInfo, ScriptInfo, ScriptReferenceInfo, TxIndexEntry,
-        UndoLogEntry, UndoTxContext,
     };
     use std::sync::Arc;
 
@@ -1908,9 +1907,9 @@ mod tests {
         assert_eq!(agg.holders_count, 1, "same owner should count as 1 holder");
     }
 
-    /// The unindexed-AccountCell marker is written with a `DotBit` undo
-    /// pre-image: undo replay past its block removes it, and a marker written
-    /// at or below the fork point survives.
+    /// The unindexed-AccountCell marker is journaled in its block: a rollback
+    /// past its block removes it, and a marker written at or below the fork
+    /// point survives.
     #[test]
     fn test_dotbit_unindexed_marker_is_undone_by_rollback_and_survivor_stays() {
         let (domain, append) = test_split_stores();
@@ -1920,14 +1919,21 @@ mod tests {
         let survivor_tx = [0xE1u8; 32];
         let rolled_back_tx = [0xE2u8; 32];
 
-        let mut batch = StoreBatch::new(domain.as_ref());
-        writer
-            .insert_dotbit_unindexed_outpoint(&survivor_tx, 0, 100, &mut batch, &state)
-            .unwrap();
-        writer
-            .insert_dotbit_unindexed_outpoint(&rolled_back_tx, 1, 200, &mut batch, &state)
-            .unwrap();
-        batch.commit().unwrap();
+        // Each marker in its block's journaled scope, as the object loop
+        // writes it.
+        crate::db::writer::journal_test_support::journaled_headers(&domain, 200..=200);
+        ckbadger_store::commit_journaled_block(domain.as_ref(), 100, |batch| {
+            writer
+                .insert_dotbit_unindexed_outpoint(&survivor_tx, 0, 100, batch, &state)
+                .unwrap();
+        })
+        .unwrap();
+        ckbadger_store::commit_journaled_block(domain.as_ref(), 200, |batch| {
+            writer
+                .insert_dotbit_unindexed_outpoint(&rolled_back_tx, 1, 200, batch, &state)
+                .unwrap();
+        })
+        .unwrap();
         assert!(domain
             .is_dotbit_unindexed_outpoint(&survivor_tx, 0)
             .unwrap());
@@ -1935,7 +1941,7 @@ mod tests {
             .is_dotbit_unindexed_outpoint(&rolled_back_tx, 1)
             .unwrap());
 
-        domain.rollback_via_undo_log(append.as_ref(), 150).unwrap();
+        domain.rollback_to_block(150).unwrap();
 
         assert!(
             domain
@@ -1947,7 +1953,7 @@ mod tests {
             !domain
                 .is_dotbit_unindexed_outpoint(&rolled_back_tx, 1)
                 .unwrap(),
-            "a rolled-back marker is removed by its undo pre-image"
+            "a rolled-back marker is removed by its journal entry"
         );
     }
 
@@ -1961,33 +1967,72 @@ mod tests {
         let initial_tx_hash = vec![0xB1; 32];
         let reactivate_tx_hash = vec![0xC1; 32];
 
-        let mut create_batch = StoreBatch::new(domain.as_ref());
-        insert_account(
-            &writer,
-            &make_test_account(&account_id, &owner, "alice.bit"),
-            &initial_tx_hash,
-            100,
-            100_000,
-            &mut create_batch,
-        )
-        .unwrap();
-        create_batch.commit().unwrap();
+        // The lock script rollups each block leaves (lock code hash 0x55):
+        // created at 100, consumed at 120, a second cell created at 200.
+        let script_rows = |batch: &mut StoreBatch, cells: i64, live: i64, owned: i128| {
+            let capacity = i128::from(cells) * 100_00000000;
+            let used = i128::from(cells) * 61_00000000;
+            let knowledge = i128::from(live) * 61_00000000;
+            batch.put_script_info(
+                &[0x55; 32],
+                &ScriptInfo {
+                    code_hash: vec![0x55; 32],
+                    hash_type: 1,
+                    lock_cells_count: cells,
+                    lock_live_cells_count: live,
+                    lock_capacity_sum: capacity,
+                    lock_owned_capacity_sum: owned,
+                    lock_used_capacity_sum: used,
+                    lock_owned_knowledge_sum: knowledge,
+                    ..Default::default()
+                },
+            );
+            batch.put_script_reference_info(
+                1,
+                &[0x55; 32],
+                &ScriptReferenceInfo {
+                    reference_hash: vec![0x55; 32],
+                    hash_type: 1,
+                    lock_cells_count: cells,
+                    lock_live_cells_count: live,
+                    lock_capacity_sum: capacity,
+                    lock_owned_capacity_sum: owned,
+                    lock_used_capacity_sum: used,
+                    lock_owned_knowledge_sum: knowledge,
+                    ..Default::default()
+                },
+            );
+        };
 
-        let mut consume_batch = StoreBatch::new(domain.as_ref());
-        consume_account(&writer, &account_id, 120, &[0xD1; 32], &mut consume_batch).unwrap();
-        consume_batch.commit().unwrap();
+        // Contiguous headers across the fork point and the rolled-back range.
+        let mut headers = StoreBatch::new(domain.as_ref());
+        for block in 150..=200i64 {
+            headers.put_block_header(block, &make_header(block));
+        }
+        // Tx position 1: position 0 of every block is its cellbase.
+        headers.put_tx_index(200, 1, &make_tx_entry(1));
+        headers.commit().unwrap();
 
-        let mut reactivate_batch = StoreBatch::new(domain.as_ref());
-        insert_account(
-            &writer,
-            &make_test_account(&account_id, &owner, "alice.bit"),
-            &reactivate_tx_hash,
-            200,
-            200_000,
-            &mut reactivate_batch,
-        )
+        // Each block's rows in its journaled scope, as the live writer
+        // commits them.
+        ckbadger_store::commit_journaled_block(domain.as_ref(), 100, |batch| {
+            insert_account(
+                &writer,
+                &make_test_account(&account_id, &owner, "alice.bit"),
+                &initial_tx_hash,
+                100,
+                100_000,
+                batch,
+            )
+            .unwrap();
+            script_rows(batch, 1, 1, 100_00000000);
+        })
         .unwrap();
-        reactivate_batch.commit().unwrap();
+        ckbadger_store::commit_journaled_block(domain.as_ref(), 120, |batch| {
+            consume_account(&writer, &account_id, 120, &[0xD1; 32], batch).unwrap();
+            script_rows(batch, 1, 0, 0);
+        })
+        .unwrap();
 
         let mut append_batch = StoreBatch::new(append.as_ref());
         append_batch
@@ -1995,108 +2040,50 @@ mod tests {
             .unwrap();
         append_batch.commit().unwrap();
 
-        let mut domain_batch = StoreBatch::new(domain.as_ref());
-        // Contiguous headers across the fork point and the rolled-back range:
-        // rollback derives each orphaned block's inter-block gap from its
-        // immediate predecessor's header, and the indexer refuses to start on a
-        // store with an internal header gap, so a sparse chain is unreachable.
-        for block in 150..=200i64 {
-            domain_batch.put_block_header(block, &make_header(block));
-        }
-        domain_batch.put_live_cell_marker_by_outpoint(&reactivate_tx_hash, 0, 200);
-        // Tx position 1: position 0 of every block is its cellbase.
-        domain_batch.put_tx_index(200, 1, &make_tx_entry(1));
-        domain_batch.put_tx_hash_map(&reactivate_tx_hash, 200, 1);
-        // The forward writer records one addr_txs row per tx participant; the
-        // owner of the reactivation output is this tx's only participant.
-        domain_batch.put_addr_tx(
-            &owner,
-            200,
-            1,
-            &reactivate_tx_hash,
-            &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
-        );
-        // Seed the cell owner's balance, as the canonical forward writer does.
-        domain_batch.put_addr_balance(
-            &owner,
-            &ckbadger_store::AddressBalance {
-                balance: 100_00000000,
-                used_capacity: 61_00000000,
-                live_cells_count: 1,
-                total_cells_count: 2,
-                txs_count: 1,
-                cellbase_txs_count: 0,
-                first_seen_block: 100,
-                first_seen_tx: initial_tx_hash.clone(),
-                last_activity_block: 200,
-                last_activity_tx: reactivate_tx_hash.clone(),
-            },
-        );
-        // The fixture inserts the protocol rows directly, so mirror the
-        // parser's script rollups too: two created cells (the first consumed),
-        // with only the reactivation cell live at the fork tip.
-        domain_batch.put_script_info(
-            &[0x55; 32],
-            &ScriptInfo {
-                code_hash: vec![0x55; 32],
-                hash_type: 1,
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 200_00000000,
-                lock_owned_capacity_sum: 100_00000000,
-                lock_used_capacity_sum: 122_00000000,
-                lock_owned_knowledge_sum: 61_00000000,
-                ..Default::default()
-            },
-        );
-        domain_batch.put_script_reference_info(
-            1,
-            &[0x55; 32],
-            &ScriptReferenceInfo {
-                reference_hash: vec![0x55; 32],
-                hash_type: 1,
-                lock_cells_count: 2,
-                lock_live_cells_count: 1,
-                lock_capacity_sum: 200_00000000,
-                lock_owned_capacity_sum: 100_00000000,
-                lock_used_capacity_sum: 122_00000000,
-                lock_owned_knowledge_sum: 61_00000000,
-                ..Default::default()
-            },
-        );
-        domain_batch.put_reorg_undo_log_by_block(
-            200,
-            0,
-            &UndoLogEntry::TxContext(UndoTxContext {
-                tx_hash: reactivate_tx_hash.clone(),
-                outputs_count: 1,
-                inputs: vec![],
-            }),
-        );
-        domain_batch.commit().unwrap();
+        ckbadger_store::commit_journaled_block(domain.as_ref(), 200, |batch| {
+            insert_account(
+                &writer,
+                &make_test_account(&account_id, &owner, "alice.bit"),
+                &reactivate_tx_hash,
+                200,
+                200_000,
+                batch,
+            )
+            .unwrap();
+            batch.put_live_cell_marker_by_outpoint(&reactivate_tx_hash, 0, 200);
+            batch.put_tx_hash_map(&reactivate_tx_hash, 200, 1);
+            // The forward writer records one addr_txs row per tx participant;
+            // the owner of the reactivation output is this tx's only participant.
+            batch.put_addr_tx(
+                &owner,
+                200,
+                1,
+                &reactivate_tx_hash,
+                &ckbadger_store::types::AddrTxValue::new(0, false, true, 0),
+            );
+            batch.put_addr_balance(
+                &owner,
+                &ckbadger_store::AddressBalance {
+                    balance: 100_00000000,
+                    used_capacity: 61_00000000,
+                    live_cells_count: 1,
+                    total_cells_count: 2,
+                    txs_count: 1,
+                    cellbase_txs_count: 0,
+                    first_seen_block: 100,
+                    first_seen_tx: initial_tx_hash.clone(),
+                    last_activity_block: 200,
+                    last_activity_tx: reactivate_tx_hash.clone(),
+                },
+            );
+            script_rows(batch, 2, 1, 100_00000000);
+        })
+        .unwrap();
 
         let before = domain.get_identity(&account_id).unwrap().unwrap();
         assert!(before.is_live, "reactivation should make the account live");
 
-        let histogram_key = ckbadger_store::keys::encode_stats_key(
-            ckbadger_store::keys::STATS_PREFIX_BLOCK_TIME_DIST,
-            &1i32.to_be_bytes(),
-        );
-        domain
-            .put_cf(
-                domain.cf_stats_chain(),
-                &histogram_key,
-                &50i32.to_le_bytes(),
-            )
-            .unwrap();
-
-        // Production order (`execute_reorg`, `init_sync_start`,
-        // `cleanup_batch_range`): undo replay first, then the canonical
-        // rollback with the tx contexts the replay returned.
-        let undo = domain.rollback_via_undo_log(append.as_ref(), 150).unwrap();
-        domain
-            .rollback_to_block_with_tx_contexts(150, Some(append.as_ref()), undo.tx_contexts)
-            .unwrap();
+        domain.rollback_to_block(150).unwrap();
 
         let restored = domain.get_identity(&account_id).unwrap().unwrap();
         assert!(
