@@ -119,6 +119,23 @@ impl SporeBatchState {
         Ok(loaded)
     }
 
+    /// The cluster's aggregate as this batch sees it, or `None` when neither
+    /// the batch nor the store holds one (no default).
+    fn existing_cluster_aggregate(
+        &mut self,
+        store: &CkbadgerStore,
+        cluster_id: &[u8],
+    ) -> Result<Option<ClusterAggregate>> {
+        if let Some(cached) = self.cluster_aggs.get(cluster_id) {
+            return Ok(Some(cached.clone()));
+        }
+        let loaded = store.get_cluster_aggregate(cluster_id)?;
+        if let Some(agg) = &loaded {
+            self.cluster_aggs.insert(cluster_id.to_vec(), agg.clone());
+        }
+        Ok(loaded)
+    }
+
     fn put_cluster_aggregate(
         &mut self,
         cluster_id: &[u8],
@@ -574,16 +591,20 @@ impl BatchWriter {
     /// profile it produces lives in the spore's `spore_data` row, its tier in
     /// the cluster's `cluster_agg` tier counts and the decode itself in the
     /// spore's `dob_decoded` row, all `Journal` rows written only here, so a
-    /// rollback of the block restores all three together and the next worker
-    /// pass, which lists spores without a `dob_decoded` row, decodes the spore
-    /// again.
+    /// rollback of the block restores all three together, and the worker's
+    /// pass at the next indexer start, which lists spores without a
+    /// `dob_decoded` row, decodes the spore again.
     ///
     /// A decoded outcome merges the media sources into the profile (an
     /// empty list still clears `DecodePending`); a deterministic failure moves
     /// the tier to `Unknown`. A live spore whose tier changes moves between its
     /// cluster's tier counts. A spore that no longer exists (orphaned since it
-    /// was decoded) has nothing to update and gets no `dob_decoded` row.
-    /// Returns whether the outcome was applied.
+    /// was decoded) has nothing to update and gets no `dob_decoded` row, and
+    /// so does an outcome whose object is no longer the decoded instance (its
+    /// creating transaction differs: a reorg recreated the id, B-5i E3). The
+    /// worker makes one pass per process, so a decode a rollback undoes is
+    /// decoded again at the next indexer start. Returns whether the outcome
+    /// was applied.
     pub(crate) fn apply_dob_outcome(
         &self,
         outcome: &DobOutcome,
@@ -594,6 +615,9 @@ impl BatchWriter {
         let Some(mut entry) = state.get_spore(&self.store, spore_id)? else {
             return Ok(false);
         };
+        if entry.created_at_tx != outcome.created_at_tx() {
+            return Ok(false);
+        }
         let ObjectExtra::Spore { media_profile, .. } = &mut entry.extra else {
             bail!(
                 "DOB decode outcome for an object that is not a spore: spore_id=0x{}, standard={:?}",
@@ -622,7 +646,15 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 )
             })?;
-            let mut agg = state.get_cluster_aggregate(&self.store, &cluster_id)?;
+            let mut agg = state
+                .existing_cluster_aggregate(&self.store, &cluster_id)?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "missing cluster aggregate while applying a DOB decode outcome: spore_id=0x{}, cluster_id=0x{}",
+                        hex::encode(spore_id),
+                        hex::encode(&cluster_id)
+                    )
+                })?;
             self.adjust_cluster_tier_count(
                 &cluster_id,
                 &mut agg,
@@ -2038,6 +2070,182 @@ mod tests {
             .unwrap();
         assert_eq!(loaded.spore_id, vec![0x44; 32]);
         assert_eq!(loaded.cluster_id, Some(vec![0x55; 32]));
+    }
+
+    /// B-5i (review ask on E3): the batch's own blocks touch the decoded
+    /// spore's rows before its outcome is applied in the last block's scope.
+    /// The spore moves from owner A to owner B in block `transfer_block` (102
+    /// or the last block, 103), then its decode is applied at 103, all in one
+    /// journaled batch through one spore state, as a live batch does. Returns
+    /// the journal of blocks 102 and 103 as (block, cf, previous) and the
+    /// store.
+    #[allow(clippy::type_complexity)]
+    fn transfer_then_decode(
+        transfer_block: i64,
+    ) -> (
+        tempfile::TempDir,
+        Arc<CkbadgerStore>,
+        Vec<(i64, &'static str, Option<Vec<u8>>)>,
+    ) {
+        use crate::sync::dob_decode_worker::DobOutcome;
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+        let (cluster_id, spore_id) = (vec![0x11; 32], vec![0x22; 32]);
+        let (owner_a, owner_b) = (vec![0xA1; 32], vec![0xB2; 32]);
+        {
+            let mut seed = StoreBatch::new(&store);
+            let mut entry = make_spore_entry(&cluster_id, &owner_a);
+            if let ObjectExtra::Spore {
+                media_profile,
+                content_type,
+                ..
+            } = &mut entry.extra
+            {
+                *content_type = "dob/0".to_string();
+                media_profile.tier = CompositionTier::DecodePending;
+            }
+            seed.put_spore(&spore_id, &entry);
+            seed.put_cluster_aggregate(
+                &cluster_id,
+                &ClusterAggregate {
+                    total_count: 1,
+                    live_count: 1,
+                    owner_count: 1,
+                    unknown_count: 1,
+                    ..Default::default()
+                },
+            );
+            seed.put_cluster_owner_count(&cluster_id, &owner_a, 1);
+            seed.commit().unwrap();
+        }
+        store.enforce_journal_discipline();
+
+        let mut state = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        ckbadger_store::block_overlay::commit_journaled(&store, |batch| {
+            writer
+                .insert_spore_cell(
+                    &make_parsed_spore(&spore_id, &cluster_id, &owner_b),
+                    &[0x01; 32],
+                    0,
+                    transfer_block,
+                    3_600_000,
+                    &mut batch.at(transfer_block),
+                    &mut state,
+                )
+                .unwrap();
+            let applied = writer
+                .apply_dob_outcome(
+                    &DobOutcome::Decoded {
+                        spore_id: spore_id.clone(),
+                        created_at_tx: vec![0xAA; 32],
+                        entry: ckbadger_store::types::DobDecodedEntry {
+                            steps: vec![],
+                            media_sources: vec![],
+                            decoded_at: 1_700_000_000,
+                        },
+                    },
+                    &mut state,
+                    &mut batch.at(103),
+                )
+                .unwrap();
+            assert!(
+                applied,
+                "a transfer keeps the creating tx: still the decoded instance"
+            );
+        })
+        .unwrap();
+
+        // Final state: both writes.
+        let entry = store.get_spore(&spore_id).unwrap().unwrap();
+        assert_eq!(entry.owner_lock_hash.as_deref(), Some(owner_b.as_slice()));
+        let ObjectExtra::Spore { media_profile, .. } = &entry.extra else {
+            panic!("not a spore")
+        };
+        assert_eq!(media_profile.tier, CompositionTier::PureCkb);
+        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!(
+            (
+                agg.live_count,
+                agg.owner_count,
+                agg.unknown_count,
+                agg.pure_ckb_count
+            ),
+            (1, 1, 0, 1)
+        );
+        assert!(store.get_dob_decoded(&spore_id).unwrap().is_some());
+
+        let mut journal = Vec::new();
+        for block in [102, 103] {
+            for row in store.journal_entries(block).unwrap() {
+                if row.key == spore_id || row.key == cluster_id {
+                    journal.push((block, row.cf, row.previous));
+                }
+            }
+        }
+        (dir, store, journal)
+    }
+
+    fn spore_owner_and_tier(bytes: &[u8]) -> (Option<Vec<u8>>, CompositionTier) {
+        let entry: ObjectEntry = bincode::deserialize(bytes).unwrap();
+        let ObjectExtra::Spore { media_profile, .. } = entry.extra else {
+            panic!("not a spore")
+        };
+        (entry.owner_lock_hash, media_profile.tier)
+    }
+
+    #[test]
+    fn a_decode_after_an_earlier_block_of_the_batch_moved_the_spore() {
+        let (_dir, _store, journal) = transfer_then_decode(102);
+        let spore_rows: Vec<_> = journal
+            .iter()
+            .filter(|(_, cf, _)| *cf == ckbadger_store::CF_SPORE_DATA)
+            .collect();
+        assert_eq!(spore_rows.len(), 2, "one spore row per block: {journal:?}");
+        // Block 102 restores the seed; block 103 the value at the end of 102:
+        // owner B, still DecodePending.
+        let (b102, b103) = (spore_rows[0], spore_rows[1]);
+        assert_eq!(b102.0, 102);
+        assert_eq!(
+            spore_owner_and_tier(b102.2.as_ref().unwrap()),
+            (Some(vec![0xA1; 32]), CompositionTier::DecodePending)
+        );
+        assert_eq!(b103.0, 103);
+        assert_eq!(
+            spore_owner_and_tier(b103.2.as_ref().unwrap()),
+            (Some(vec![0xB2; 32]), CompositionTier::DecodePending)
+        );
+        // The decode's cluster tier move is journaled at 103 against the
+        // value at the end of 102 (still one unknown).
+        let agg_103: Vec<_> = journal
+            .iter()
+            .filter(|(block, cf, _)| *block == 103 && *cf == ckbadger_store::CF_CLUSTER_AGG)
+            .collect();
+        assert_eq!(agg_103.len(), 1, "{journal:?}");
+        let previous: ClusterAggregate =
+            bincode::deserialize(agg_103[0].2.as_ref().unwrap()).unwrap();
+        assert_eq!((previous.unknown_count, previous.pure_ckb_count), (1, 0));
+    }
+
+    #[test]
+    fn a_decode_in_the_block_that_moved_the_spore() {
+        let (_dir, _store, journal) = transfer_then_decode(103);
+        let spore_rows: Vec<_> = journal
+            .iter()
+            .filter(|(_, cf, _)| *cf == ckbadger_store::CF_SPORE_DATA)
+            .collect();
+        // One entry, at 103, holding the value before the block: the seed.
+        assert_eq!(spore_rows.len(), 1, "{journal:?}");
+        assert_eq!(spore_rows[0].0, 103);
+        assert_eq!(
+            spore_owner_and_tier(spore_rows[0].2.as_ref().unwrap()),
+            (Some(vec![0xA1; 32]), CompositionTier::DecodePending)
+        );
+        assert!(
+            journal.iter().all(|(block, _, _)| *block == 103),
+            "{journal:?}"
+        );
     }
 
     #[test]

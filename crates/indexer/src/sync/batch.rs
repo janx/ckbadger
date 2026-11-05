@@ -11219,6 +11219,7 @@ mod tests {
             // The worker decoded the spore (self-contained: no media sources).
             indexer.dob_outcomes.push([DobOutcome::Decoded {
                 spore_id: SPORE.to_vec(),
+                created_at_tx: vec![0x44; 32],
                 entry: DobDecodedEntry {
                     steps: vec![],
                     media_sources: vec![],
@@ -11263,7 +11264,7 @@ mod tests {
             );
 
             // A rollback of that block restores all three together, and the
-            // spore is listed for the next worker pass again.
+            // spore is listed again (decoded at the next indexer start).
             store.rollback_to_block(102).unwrap();
             assert_eq!(tier(store.as_ref()), CompositionTier::DecodePending);
             assert_eq!(tier_counts(store.as_ref()), (1, 0));
@@ -11273,7 +11274,7 @@ mod tests {
                     .list_undecoded_dob_spores(10, None)
                     .unwrap()
                     .iter()
-                    .map(|(id, _, _)| id.clone())
+                    .map(|undecoded| undecoded.spore_id.clone())
                     .collect::<Vec<_>>(),
                 vec![SPORE.to_vec()]
             );
@@ -11285,6 +11286,7 @@ mod tests {
             let queue = crate::sync::dob_decode_worker::DobOutcomeQueue::default();
             let outcome = |byte: u8| DobOutcome::Failed {
                 spore_id: vec![byte; 32],
+                created_at_tx: vec![byte; 32],
                 failure: ckbadger_store::types::DobDecodeFailure {
                     category: ckbadger_store::types::DobDecodeFailureCategory::ClusterNotFound,
                     message: "x".into(),

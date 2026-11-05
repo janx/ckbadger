@@ -39,12 +39,19 @@ const DECODE_CONCURRENCY: usize = 8;
 /// block's scope: the spore's media profile (`spore_data`), its cluster's tier
 /// counts (`cluster_agg`) and the `dob_decoded` row that marks it decoded are
 /// `Journal` rows the live writer owns, so all three roll back together with
-/// that block and the next worker pass decodes the spore again (B-5h).
+/// that block (B-5h). The worker makes one pass per process: a decode undone
+/// by a rollback, or an outcome still queued at shutdown (the queue lives in
+/// memory), is decoded again at the next indexer start.
+///
+/// An outcome names the decoded instance by its creating transaction: a
+/// reorg can recreate the spore id with other content, and an outcome whose
+/// object no longer has that creating transaction is stale (B-5i, E3).
 #[derive(Debug, Clone)]
 pub enum DobOutcome {
     /// The spore decoded; its media sources join the media profile.
     Decoded {
         spore_id: Vec<u8>,
+        created_at_tx: Vec<u8>,
         entry: DobDecodedEntry,
     },
     /// A deterministic failure: the tier moves off `DecodePending` to
@@ -52,6 +59,7 @@ pub enum DobOutcome {
     /// listed again on the next pass).
     Failed {
         spore_id: Vec<u8>,
+        created_at_tx: Vec<u8>,
         failure: DobDecodeFailure,
     },
 }
@@ -60,6 +68,15 @@ impl DobOutcome {
     pub fn spore_id(&self) -> &[u8] {
         match self {
             Self::Decoded { spore_id, .. } | Self::Failed { spore_id, .. } => spore_id,
+        }
+    }
+
+    /// The transaction that created the decoded instance of the spore.
+    pub fn created_at_tx(&self) -> &[u8] {
+        match self {
+            Self::Decoded { created_at_tx, .. } | Self::Failed { created_at_tx, .. } => {
+                created_at_tx
+            }
         }
     }
 }
@@ -204,8 +221,8 @@ impl DobDecodeWorker {
             debug!(batch_size = batch_len, "processing DOB decode batch");
 
             // Advance cursor before consuming the batch
-            if let Some((last_key, _, _)) = batch_entries.last() {
-                cursor = Some(last_key.clone());
+            if let Some(last) = batch_entries.last() {
+                cursor = Some(last.spore_id.clone());
             }
 
             // Decode spores concurrently within the batch
@@ -217,23 +234,20 @@ impl DobDecodeWorker {
                 rpc_client: self.rpc_client.clone(),
             });
 
-            let decode_futures =
-                batch_entries
-                    .into_iter()
-                    .map(|(spore_id, content_type, collection_id)| {
-                        let ctx = Arc::clone(&ctx);
+            let decode_futures = batch_entries.into_iter().map(|undecoded| {
+                let ctx = Arc::clone(&ctx);
 
-                        async move {
-                            let result = decode_single_spore(
-                                &spore_id,
-                                &content_type,
-                                collection_id.as_deref(),
-                                &ctx,
-                            )
-                            .await;
-                            (spore_id, result)
-                        }
-                    });
+                async move {
+                    let result = decode_single_spore(
+                        &undecoded.spore_id,
+                        &undecoded.content_type,
+                        undecoded.collection_id.as_deref(),
+                        &ctx,
+                    )
+                    .await;
+                    (undecoded.spore_id, undecoded.created_at_tx, result)
+                }
+            });
 
             let results: Vec<_> = stream::iter(decode_futures)
                 .buffer_unordered(DECODE_CONCURRENCY)
@@ -241,11 +255,11 @@ impl DobDecodeWorker {
                 .await;
 
             // Separate successes from failures
-            let mut decoded_results: Vec<(Vec<u8>, DobDecodedEntry)> = Vec::new();
-            let mut failed_records: Vec<(Vec<u8>, DobDecodeFailure)> = Vec::new();
+            let mut decoded_results: Vec<DobOutcome> = Vec::new();
+            let mut failed_records: Vec<DobOutcome> = Vec::new();
             let mut batch_skipped: u64 = 0;
 
-            for (spore_id, result) in results {
+            for (spore_id, created_at_tx, result) in results {
                 match result {
                     Ok(entry) => {
                         debug!(
@@ -254,7 +268,11 @@ impl DobDecodeWorker {
                             media_sources = entry.media_sources.len(),
                             "decoded DOB spore"
                         );
-                        decoded_results.push((spore_id, entry));
+                        decoded_results.push(DobOutcome::Decoded {
+                            spore_id,
+                            created_at_tx,
+                            entry,
+                        });
                     }
                     Err(e) => {
                         batch_skipped += 1;
@@ -272,14 +290,15 @@ impl DobDecodeWorker {
                                 error = %e,
                                 "recording un-decodable DOB spore"
                             );
-                            failed_records.push((
+                            failed_records.push(DobOutcome::Failed {
                                 spore_id,
-                                DobDecodeFailure {
+                                created_at_tx,
+                                failure: DobDecodeFailure {
                                     category: e.category(),
                                     message: e.to_string(),
                                     failed_at: chrono::Utc::now().timestamp(),
                                 },
-                            ));
+                            });
                         }
                     }
                 }
@@ -290,16 +309,8 @@ impl DobDecodeWorker {
             total_decoded += decoded_results.len() as u64;
             total_skipped += batch_skipped;
             total_recorded += failed_records.len() as u64;
-            self.outcomes.push(
-                decoded_results
-                    .into_iter()
-                    .map(|(spore_id, entry)| DobOutcome::Decoded { spore_id, entry })
-                    .chain(
-                        failed_records
-                            .into_iter()
-                            .map(|(spore_id, failure)| DobOutcome::Failed { spore_id, failure }),
-                    ),
-            );
+            self.outcomes
+                .push(decoded_results.into_iter().chain(failed_records));
 
             // Update progress at batch boundary
             let elapsed = start.elapsed();
@@ -1270,33 +1281,52 @@ mod tests {
     }
 
     /// Apply `outcomes` the way a live batch does: the spore writer, in one
-    /// journaled batch, in `block`'s scope. Returns which were applied.
-    fn apply_in_block(
+    /// journaled batch, in `block`'s scope. Returns which were applied, or
+    /// the first error.
+    fn try_apply_in_block(
         store: &Arc<CkbadgerStore>,
         block: i64,
         outcomes: &[DobOutcome],
-    ) -> Vec<bool> {
+    ) -> Result<Vec<bool>> {
         let writer = crate::db::BatchWriter::new(store.clone(), store.clone());
         let mut state = writer.new_spore_batch_state(
             crate::db::writer::entity_stats::SharedEntityStatsOverlay::standalone(store).unwrap(),
         );
-        let mut applied = Vec::new();
+        let mut applied = Ok(Vec::new());
         ckbadger_store::block_overlay::commit_journaled_block(store, block, |batch| {
-            for outcome in outcomes {
-                applied.push(
-                    writer
-                        .apply_dob_outcome(outcome, &mut state, batch)
-                        .unwrap(),
-                );
-            }
+            applied = outcomes
+                .iter()
+                .map(|outcome| writer.apply_dob_outcome(outcome, &mut state, batch))
+                .collect();
         })
         .unwrap();
         applied
     }
 
+    fn apply_in_block(
+        store: &Arc<CkbadgerStore>,
+        block: i64,
+        outcomes: &[DobOutcome],
+    ) -> Vec<bool> {
+        try_apply_in_block(store, block, outcomes).unwrap()
+    }
+
+    /// The creating transaction `seed_decode_pending_spore` and the
+    /// hand-built fixtures give the spore.
+    const SEED_TX: [u8; 32] = [0x44; 32];
+
     fn decoded(spore_id: &[u8], media_sources: Vec<SporeMediaSource>) -> DobOutcome {
+        decoded_instance(spore_id, &SEED_TX, media_sources)
+    }
+
+    fn decoded_instance(
+        spore_id: &[u8],
+        created_at_tx: &[u8],
+        media_sources: Vec<SporeMediaSource>,
+    ) -> DobOutcome {
         DobOutcome::Decoded {
             spore_id: spore_id.to_vec(),
+            created_at_tx: created_at_tx.to_vec(),
             entry: DobDecodedEntry {
                 steps: vec![],
                 media_sources,
@@ -1504,6 +1534,7 @@ mod tests {
 
         let failure = DobOutcome::Failed {
             spore_id: spore_id.to_vec(),
+            created_at_tx: SEED_TX.to_vec(),
             failure: DobDecodeFailure {
                 category: ckbadger_store::types::DobDecodeFailureCategory::ClusterNotFound,
                 message: "cluster missing".into(),
@@ -1541,6 +1572,91 @@ mod tests {
         );
         assert!(store.get_dob_decode_outcome(&spore_id).unwrap().is_none());
         assert!(store.journal_entries(7).unwrap().is_empty());
+    }
+
+    /// B-5i (E3): a reorg's double-spend can recreate a spore id with other
+    /// content before a queued outcome is applied. The outcome names the
+    /// decoded instance by its creating transaction; against another
+    /// instance it is stale and writes nothing.
+    #[test]
+    fn a_stale_outcome_against_a_recreated_spore_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cluster_id = vec![0x5Au8; 32];
+        let spore_id = [0x5Bu8; 32];
+        // The spore as it now is: created by SEED_TX.
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &cluster_id);
+        store.enforce_journal_discipline();
+
+        // An outcome decoded from the instance an orphaned tx created.
+        let stale = decoded_instance(&spore_id, &[0x99; 32], vec![]);
+        assert_eq!(apply_in_block(&store, 7, &[stale]), [false]);
+
+        assert!(store.get_dob_decode_outcome(&spore_id).unwrap().is_none());
+        match store.get_spore(&spore_id).unwrap().unwrap().extra {
+            ObjectExtra::Spore { media_profile, .. } => {
+                assert_eq!(media_profile.tier, CompositionTier::DecodePending)
+            }
+            other => panic!("expected spore extra, got {other:?}"),
+        }
+        let agg = store.get_cluster_aggregate(&cluster_id).unwrap().unwrap();
+        assert_eq!((agg.unknown_count, agg.pure_ckb_count), (1, 0));
+        assert!(store.journal_entries(7).unwrap().is_empty());
+        // Still listed: the next start decodes the spore that exists now.
+        assert_eq!(store.list_undecoded_dob_spores(10, None).unwrap().len(), 1);
+    }
+
+    /// B-5i (E3): the id recreated as a cluster is a stale outcome, not a
+    /// store invariant violation; the live batch does not fail over it.
+    #[test]
+    fn an_outcome_against_a_cluster_recreated_at_the_spore_id_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let id = [0x5Cu8; 32];
+        store
+            .put_spore_direct(
+                &id,
+                &ckbadger_store::types::ObjectEntry {
+                    standard: ckbadger_store::types::ObjectStandard::SporeCluster,
+                    collection_id: None,
+                    token_id: None,
+                    owner_lock_hash: Some(vec![0x22; 32]),
+                    name: None,
+                    description: None,
+                    is_live: true,
+                    created_at_block: 5,
+                    created_at_tx: vec![0x77; 32],
+                    extra: ObjectExtra::SporeCluster,
+                },
+            )
+            .unwrap();
+        store.enforce_journal_discipline();
+
+        assert_eq!(apply_in_block(&store, 7, &[decoded(&id, vec![])]), [false]);
+        assert!(store.get_dob_decode_outcome(&id).unwrap().is_none());
+        assert!(store.journal_entries(7).unwrap().is_empty());
+    }
+
+    /// B-5i (E4): a live spore whose cluster has no aggregate is a store
+    /// invariant violation, reported as such, naming the spore and cluster.
+    #[test]
+    fn a_missing_cluster_aggregate_fails_naming_the_spore_and_cluster() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let cluster_id = [0x5Du8; 32];
+        let spore_id = [0x5Eu8; 32];
+        seed_decode_pending_spore(store.as_ref(), &spore_id, &cluster_id);
+        store
+            .delete_cf(store.cf_cluster_agg(), &cluster_id)
+            .unwrap();
+
+        let error = try_apply_in_block(&store, 7, &[decoded(&spore_id, vec![])])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing cluster aggregate"), "{error}");
+        assert!(error.contains(&hex::encode(spore_id)), "{error}");
+        assert!(error.contains(&hex::encode(cluster_id)), "{error}");
+        assert!(store.get_dob_decode_outcome(&spore_id).unwrap().is_none());
     }
 
     #[test]

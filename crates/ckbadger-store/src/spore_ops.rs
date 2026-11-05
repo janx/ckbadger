@@ -9,8 +9,18 @@ use crate::batch::StoreBatch;
 
 pub(crate) type SporeBatchEntry = (Vec<u8>, Option<ObjectEntry>);
 pub(crate) type SporeOutpointLookup = (Vec<u8>, i16, Vec<u8>);
-/// `(spore_id, content_type, collection_id)` for undecoded DOB spores.
-pub type UndecodedDobEntry = (Vec<u8>, String, Option<Vec<u8>>);
+/// An undecoded DOB spore, as the decode worker lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndecodedDobEntry {
+    pub spore_id: Vec<u8>,
+    pub content_type: String,
+    pub collection_id: Option<Vec<u8>>,
+    /// The transaction that created this instance of the spore id. A reorg
+    /// can recreate the id with other content (a double-spend reusing the
+    /// same first input and output index); the creating transaction then
+    /// differs, which is how a decode of the old instance is recognised.
+    pub created_at_tx: Vec<u8>,
+}
 
 use crate::bytes_to_hex;
 
@@ -415,11 +425,12 @@ impl CkbadgerStore {
                 if content_type.to_ascii_lowercase().starts_with("dob/")
                     && self.get_cf(self.cf_dob_decoded(), &key)?.is_none()
                 {
-                    results.push((
-                        key.to_vec(),
-                        content_type.clone(),
-                        entry.collection_id.clone(),
-                    ));
+                    results.push(UndecodedDobEntry {
+                        spore_id: key.to_vec(),
+                        content_type: content_type.clone(),
+                        collection_id: entry.collection_id.clone(),
+                        created_at_tx: entry.created_at_tx.clone(),
+                    });
                     if results.len() >= limit {
                         break;
                     }
@@ -707,8 +718,8 @@ mod tests {
 
         // list_undecoded skips BOTH (decoded and failed count as processed).
         let undecoded = store.list_undecoded_dob_spores(100, None).unwrap();
-        assert!(undecoded.iter().all(|(k, _, _)| k != &decoded_id.to_vec()));
-        assert!(undecoded.iter().all(|(k, _, _)| k != &failed_id.to_vec()));
+        assert!(undecoded.iter().all(|u| u.spore_id != decoded_id.to_vec()));
+        assert!(undecoded.iter().all(|u| u.spore_id != failed_id.to_vec()));
     }
 
     #[test]
