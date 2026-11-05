@@ -194,7 +194,7 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     establish_db_network_identity(&store, &config.network, &node_genesis)?;
     store.log_config();
 
-    let mut sync_status = store.get_sync_status()?;
+    let sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
     let startup_cleanup = startup_cleanup_decision(&previous_runtime);
     let previous_run_unclean = should_force_startup_cleanup(&previous_runtime);
@@ -228,37 +228,10 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
 
     let repo = Repository::new(store.clone());
     let (db_tip, db_tip_hash) = repo.get_sync_tip().await?;
-    if let Some(reason) = sync_status_repair_reason(&sync_status, db_tip, db_tip_hash.as_deref()) {
-        info!(
-            repair_reason = ?reason,
-            sync_status_tip_block_number = sync_status.tip_block_number,
-            sync_status_tip_block_hash = if sync_status.tip_block_hash.is_empty() {
-                "none".to_string()
-            } else {
-                format!("0x{}", hex::encode(&sync_status.tip_block_hash))
-            },
-            db_tip_block_number = db_tip,
-            db_tip_block_hash = db_tip_hash
-                .as_ref()
-                .map(|hash| format!("0x{}", hex::encode(hash)))
-                .unwrap_or_else(|| "none".to_string()),
-            "sync_status tip metadata differs from authoritative block_headers tip, repairing sync_status"
-        );
-        let repaired_tip_hash = db_tip_hash.clone();
-        store.update_sync_status(|status| {
-            status.tip_block_number = db_tip;
-            match &repaired_tip_hash {
-                Some(hash) => status.tip_block_hash = hash.clone(),
-                None if db_tip == 0 => status.tip_block_hash.clear(),
-                None => {}
-            }
-        })?;
-        sync_status = store.get_sync_status()?;
-        info!(
-            "Repaired sync_status tip to {} from block_headers tip",
-            sync_status.tip_block_number
-        );
-    }
+    // sync_status is journaled with the headers in one atomic write per
+    // block (and restored with them by a rollback), so a tip that differs
+    // from the headers' is an invariant violation, never repaired here.
+    ensure_sync_status_matches_headers(&sync_status, db_tip, db_tip_hash.as_deref())?;
     let run_id = generate_run_id();
     let startup_cgroup = read_cgroup_memory_snapshot();
     let startup_oom_events_since_last_heartbeat = monotonic_counter_delta(
@@ -1166,29 +1139,60 @@ fn format_disk_queue_depth(value: Option<f64>) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SyncStatusRepairReason {
+enum SyncStatusDrift {
     TipNumberDrift,
     TipHashDrift,
     GenesisHashResidue,
 }
 
-fn sync_status_repair_reason(
+/// Refuse a store whose `sync_status` tip differs from its block headers'
+/// tip, naming both: the two are written in one atomic batch per block, so
+/// the drift is a bug upstream (or a store from before that rule) and the
+/// store must be rebuilt, not repaired at startup.
+fn ensure_sync_status_matches_headers(
     sync_status: &SyncStatus,
     db_tip: i64,
     db_tip_hash: Option<&[u8]>,
-) -> Option<SyncStatusRepairReason> {
+) -> Result<()> {
+    let Some(drift) = sync_status_drift(sync_status, db_tip, db_tip_hash) else {
+        return Ok(());
+    };
+    Err(anyhow::Error::new(
+        crate::lifecycle::RebuildRequiredError::new(format!(
+            "sync_status tip differs from the block_headers tip ({drift:?}): sync_status \
+         block={} hash={}, block_headers block={} hash={}; the two are committed in one \
+         atomic write per block, so the store is inconsistent: purge and re-sync from genesis",
+            sync_status.tip_block_number,
+            if sync_status.tip_block_hash.is_empty() {
+                "none".to_string()
+            } else {
+                format!("0x{}", hex::encode(&sync_status.tip_block_hash))
+            },
+            db_tip,
+            db_tip_hash
+                .map(|hash| format!("0x{}", hex::encode(hash)))
+                .unwrap_or_else(|| "none".to_string()),
+        )),
+    ))
+}
+
+fn sync_status_drift(
+    sync_status: &SyncStatus,
+    db_tip: i64,
+    db_tip_hash: Option<&[u8]>,
+) -> Option<SyncStatusDrift> {
     if sync_status.tip_block_number != db_tip {
-        return Some(SyncStatusRepairReason::TipNumberDrift);
+        return Some(SyncStatusDrift::TipNumberDrift);
     }
 
     if db_tip == 0 && db_tip_hash.is_none() && !sync_status.tip_block_hash.is_empty() {
-        return Some(SyncStatusRepairReason::GenesisHashResidue);
+        return Some(SyncStatusDrift::GenesisHashResidue);
     }
 
     if db_tip > 0 {
         if let Some(hash) = db_tip_hash {
             if sync_status.tip_block_hash != hash {
-                return Some(SyncStatusRepairReason::TipHashDrift);
+                return Some(SyncStatusDrift::TipHashDrift);
             }
         }
     }
@@ -1681,7 +1685,7 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_status_repair_reason_for_tip_hash_mismatch_same_height() {
+    fn test_sync_status_drift_for_tip_hash_mismatch_same_height() {
         let sync_status = SyncStatus {
             tip_block_number: 128,
             tip_block_hash: vec![0x11; 32],
@@ -1689,36 +1693,66 @@ mod tests {
         };
         let db_hash = vec![0x22; 32];
         assert_eq!(
-            sync_status_repair_reason(&sync_status, 128, Some(&db_hash)),
-            Some(SyncStatusRepairReason::TipHashDrift)
+            sync_status_drift(&sync_status, 128, Some(&db_hash)),
+            Some(SyncStatusDrift::TipHashDrift)
         );
     }
 
     #[test]
-    fn test_sync_status_repair_reason_for_genesis_hash_mismatch() {
+    fn test_sync_status_drift_for_genesis_hash_mismatch() {
         let sync_status = SyncStatus {
             tip_block_number: 0,
             tip_block_hash: vec![0x33; 32],
             ..Default::default()
         };
         assert_eq!(
-            sync_status_repair_reason(&sync_status, 0, None),
-            Some(SyncStatusRepairReason::GenesisHashResidue)
+            sync_status_drift(&sync_status, 0, None),
+            Some(SyncStatusDrift::GenesisHashResidue)
         );
     }
 
+    /// The startup check refuses a drifted sync_status with both tips in the
+    /// message instead of rewriting the tip from the headers.
     #[test]
-    fn test_sync_status_repair_reason_none_when_tip_and_hash_match() {
+    fn a_drifted_sync_status_fails_startup_with_both_tips() {
+        let sync_status = SyncStatus {
+            tip_block_number: 127,
+            tip_block_hash: vec![0x11; 32],
+            ..Default::default()
+        };
+        let db_hash = vec![0x22; 32];
+        let error =
+            ensure_sync_status_matches_headers(&sync_status, 128, Some(&db_hash)).unwrap_err();
+        assert!(error
+            .downcast_ref::<crate::lifecycle::RebuildRequiredError>()
+            .is_some());
+        let message = format!("{error:#}");
+        assert!(message.contains("TipNumberDrift"), "{message}");
+        assert!(
+            message.contains(&format!("block=127 hash=0x{}", "11".repeat(32))),
+            "{message}"
+        );
+        assert!(
+            message.contains(&format!("block=128 hash=0x{}", "22".repeat(32))),
+            "{message}"
+        );
+        let matching = SyncStatus {
+            tip_block_number: 128,
+            tip_block_hash: db_hash.clone(),
+            ..Default::default()
+        };
+        assert!(ensure_sync_status_matches_headers(&matching, 128, Some(&db_hash)).is_ok());
+    }
+
+    #[test]
+    fn test_sync_status_drift_none_when_tip_and_hash_match() {
         let db_hash = vec![0x44; 32];
         let sync_status = SyncStatus {
             tip_block_number: 42,
             tip_block_hash: db_hash.clone(),
             ..Default::default()
         };
-        assert_eq!(
-            sync_status_repair_reason(&sync_status, 42, Some(&db_hash)),
-            None
-        );
+        assert_eq!(sync_status_drift(&sync_status, 42, Some(&db_hash)), None);
     }
 
     #[test]
