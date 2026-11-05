@@ -791,6 +791,89 @@ async fn address_named_dotcell_rights_do_not_add_physical_identity_cells_or_capa
     assert_eq!(names["data"][0]["name"], "named.cell");
 }
 
+/// Every row of an address page names the cell's own lock and type script
+/// hashes, whichever class it falls in: the script hashes are derived from
+/// the payload's fields, and a row must show exactly the hash ckb-types
+/// computes for that script (plain, unknown typed, DAO, token, object and
+/// identity rows).
+#[tokio::test]
+async fn address_cell_rows_name_their_own_lock_and_type_script_hashes() {
+    let f = fixture().await;
+    let (s, j) = get(
+        &f.app,
+        &format!("/api/v1/addresses/{}/cells?limit=100", f.owner),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK, "{j}");
+    let hex_hash = |script: &packed::Script| {
+        format!("0x{}", hex::encode(script.calc_script_hash().as_slice()))
+    };
+    let mut mnft_id = vec![0x45; 24];
+    mnft_id.extend_from_slice(&7u32.to_be_bytes());
+    let unknown = packed::Script::new_builder()
+        .code_hash([0x99; 32].pack())
+        .hash_type(2u8.into())
+        .build();
+    let expected: Vec<(i64, &str, Option<String>)> = vec![
+        (0, "plain", None),
+        (1, "script", Some(hex_hash(&unknown))),
+        (2, "dao", Some(hex_hash(&script(ProtocolScript::Dao, &[])))),
+        (3, "dao", Some(hex_hash(&script(ProtocolScript::Dao, &[])))),
+        (
+            4,
+            "token",
+            Some(hex_hash(&script(ProtocolScript::Sudt, &[0x30; 32]))),
+        ),
+        (
+            5,
+            "token",
+            Some(hex_hash(&script(ProtocolScript::Sudt, &[0x30; 32]))),
+        ),
+        (
+            6,
+            "object",
+            Some(hex_hash(&script(ProtocolScript::SporeNft, &[0x41; 32]))),
+        ),
+        (
+            7,
+            "object",
+            Some(hex_hash(&script(ProtocolScript::MnftToken, &mnft_id))),
+        ),
+        (
+            8,
+            "identity",
+            Some(hex_hash(&script(ProtocolScript::DidCkb, &[0x61; 20]))),
+        ),
+        (
+            9,
+            "identity",
+            Some(hex_hash(&script(ProtocolScript::BitCell, &[0x62; 32]))),
+        ),
+        (
+            10,
+            "identity",
+            Some(hex_hash(&script(
+                ProtocolScript::DotbitAccount,
+                &[0x63; 20],
+            ))),
+        ),
+    ];
+    let rows = j["data"].as_array().unwrap();
+    assert_eq!(rows.len(), expected.len(), "{j}");
+    for (index, class, type_hash) in expected {
+        let row = rows
+            .iter()
+            .find(|row| row["outputIndex"] == index)
+            .unwrap_or_else(|| panic!("row {index} missing: {j}"));
+        assert_eq!(row["class"], class, "row {index}: {row}");
+        assert_eq!(row["lockScriptHash"], f.owner, "row {index}: {row}");
+        match type_hash {
+            Some(hash) => assert_eq!(row["typeScriptHash"], hash, "row {index}: {row}"),
+            None => assert!(row["typeScriptHash"].is_null(), "row {index}: {row}"),
+        }
+    }
+}
+
 #[tokio::test]
 async fn address_producer_wire_contract_preserves_required_nullable_fields() {
     let f = fixture().await;

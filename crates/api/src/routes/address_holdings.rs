@@ -249,6 +249,11 @@ struct Evidence {
     class: Class,
     item: Option<(Vec<u8>, Item)>,
     dao: Option<(Vec<u8>, DaoDepositCacheEntry)>,
+    /// The cell's lock script hash, derived once by `owner_cell` (and checked
+    /// against the owner index there); every later use takes it from here.
+    lock_hash: [u8; 32],
+    /// The cell's type script hash, derived once by `classify`.
+    type_hash: Option<[u8; 32]>,
 }
 enum Item {
     Object(ObjectEntry),
@@ -329,8 +334,11 @@ fn owner_cell(
             .get_cell(&hash, index, &state.append_only_store)?
             .context("owner index points to missing live marker")?;
         ensure!(info.created_at_block >= 0, "negative cell creation height");
+        // The one lock hash a row derives: the owner-index consistency check,
+        // then carried in the evidence to every later use.
+        let lock_hash = info.lock_script_hash();
         ensure!(
-            info.lock_script_hash() == owner,
+            lock_hash == owner,
             "owner index disagrees with immutable lock hash"
         );
         ensure!(
@@ -347,7 +355,7 @@ fn owner_cell(
             info.capacity,
             info.occupied_capacity()
         );
-        let evidence = classify(&state.store, &hash, index, &info)?;
+        let evidence = classify(&state.store, &hash, index, &info, lock_hash)?;
         Ok((hash.to_vec(), index, info, evidence))
     })()
     .with_context(|| context)
@@ -360,11 +368,14 @@ fn classify(
     hash: &[u8],
     index: i16,
     info: &PositionedCellInfo,
+    lock_hash: [u8; 32],
 ) -> Result<Evidence> {
     let mut result = Evidence {
         class: Class::Plain,
         item: None,
         dao: None,
+        lock_hash,
+        type_hash: None,
     };
     let Some(code) = info.type_code_hash.as_ref().map(|hash| hash.as_slice()) else {
         ensure!(
@@ -376,6 +387,7 @@ fn classify(
     let type_hash = info
         .type_script_hash()
         .context("typed cell missing type hash")?;
+    result.type_hash = Some(type_hash);
     let type_hash = type_hash.as_slice();
     let hash_type = info
         .type_hash_type
@@ -420,7 +432,7 @@ fn classify(
                 entry.status
             );
             ensure!(
-                entry.lock_script_hash == info.lock_script_hash()
+                entry.lock_script_hash == lock_hash
                     && entry.capacity == info.capacity
                     && entry.occupied_capacity == info.occupied_capacity()
                     && entry.deposit_block_number == info.created_at_block,
@@ -547,8 +559,7 @@ fn classify(
     match &item {
         Item::Object(entry) => {
             ensure!(
-                entry.is_live
-                    && entry.owner_lock_hash.as_deref() == Some(info.lock_script_hash().as_slice()),
+                entry.is_live && entry.owner_lock_hash.as_deref() == Some(lock_hash.as_slice()),
                 "indexed object liveness/owner contradicts current cell"
             );
             result.class = Class::Object;
@@ -557,7 +568,7 @@ fn classify(
             ensure!(entry.is_live, "indexed identity is not live");
             if entry.standard != IdentityStandard::DotCell {
                 ensure!(
-                    entry.owner_lock_hash.as_deref() == Some(info.lock_script_hash().as_slice()),
+                    entry.owner_lock_hash.as_deref() == Some(lock_hash.as_slice()),
                     "indexed identity owner contradicts current cell"
                 );
             }
@@ -664,7 +675,7 @@ fn summary(state: &AppState, owner: &[u8]) -> Result<Summary> {
         // The existing token balance list contains only positive balances.
         // Zero-amount cells still belong to the token capacity/class partition.
         if evidence.class == Class::Token && info.udt_amount.is_some_and(|amount| amount > 0) {
-            tokens.insert(info.type_script_hash().context("token lacks type hash")?);
+            tokens.insert(evidence.type_hash.context("token lacks type hash")?);
         }
         if let Some((id, item)) = evidence.item {
             ensure!(
@@ -1024,6 +1035,8 @@ fn cell_response(
     info: &PositionedCellInfo,
     evidence: Evidence,
 ) -> Result<Cell> {
+    // Derived once per row by `owner_cell` / `classify`; never re-hashed here.
+    let (lock_hash, type_hash) = (evidence.lock_hash, evidence.type_hash);
     let lock = script(&info.lock_code_hash, info.lock_hash_type, &info.lock_args)?;
     let typed = info
         .type_code_hash
@@ -1111,6 +1124,7 @@ fn cell_response(
                     hash,
                     index,
                     info,
+                    &lock_hash,
                 )?);
             }
         }
@@ -1133,11 +1147,8 @@ fn cell_response(
         output_index: i32::from(index),
         capacity: info.capacity.to_string(),
         occupied_capacity: info.occupied_capacity().to_string(),
-        lock_script_hash: format!("0x{}", hex::encode(info.lock_script_hash())),
-        type_script_hash: info
-            .type_script_hash()
-            .as_ref()
-            .map(|h| format!("0x{}", hex::encode(h))),
+        lock_script_hash: format!("0x{}", hex::encode(lock_hash)),
+        type_script_hash: type_hash.as_ref().map(|h| format!("0x{}", hex::encode(h))),
         type_code_hash: info
             .type_code_hash
             .as_ref()
@@ -1163,6 +1174,7 @@ fn identity_held_since(
     hash: &[u8],
     index: i16,
     info: &PositionedCellInfo,
+    lock_hash: &[u8; 32],
 ) -> Result<i64> {
     let outpoints = if standard == IdentityStandard::DotBit {
         state
@@ -1227,7 +1239,7 @@ fn identity_held_since(
             previous.consumed_at_block == since && previous.created_at_block <= since,
             "identity predecessor heights contradict consume→recreate link"
         );
-        if previous.cell.lock_script_hash() != info.lock_script_hash() {
+        if previous.cell.lock_script_hash() != *lock_hash {
             break;
         }
         since = previous.created_at_block;
