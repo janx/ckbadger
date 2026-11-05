@@ -3806,9 +3806,13 @@ pub(crate) fn materialize_bulk_artifacts_with_script_label_for_test(
     family: &ckbadger_store::ScriptFamilyInfo,
 ) -> Result<BulkArtifactSnapshot> {
     materialize_bulk_artifacts_from_block_batches_for_test_impl(&[blocks], false, |store| {
+        // The rows label import writes for one labeled version.
         store.put_script_version(version_hash, version)?;
         store.put_script_family_direct(family_id, family)?;
         store.put_script_version_by_family_direct(family_id, version_hash)?;
+        if let Some(name) = &version.name {
+            store.insert_script_version_by_label(name, version_hash)?;
+        }
         Ok(())
     })
 }
@@ -4341,9 +4345,11 @@ pub(crate) fn collect_script_binding_rows_for_test(
 ) -> Result<ScriptBindingRows> {
     let mut rows = BTreeMap::new();
     for cf in [
+        ckbadger_store::CF_SCRIPT_REFERENCE_INFO,
         ckbadger_store::CF_SCRIPT_REFERENCE_TO_VERSION,
         ckbadger_store::CF_SCRIPT_VERSIONS,
         ckbadger_store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+        ckbadger_store::CF_SCRIPT_VERSIONS_BY_LABEL,
         ckbadger_store::CF_SCRIPT_FAMILIES,
     ] {
         for row in store.iterator_cf(store.cf(cf), IteratorMode::Start) {

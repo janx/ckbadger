@@ -244,11 +244,6 @@ impl BatchWriter {
             );
         }
 
-        // Re-derive script version/family rollups on startup.  Rollups are
-        // now written atomically inside data_batch.commit(), so this covers
-        // only legacy DB state from before that change.  Idempotent and fast
-        // (reads CF_SCRIPT_REFERENCE_INFO, writes ≤3 CFs).
-        self.refresh_script_reference_rollups()?;
         // Re-derive the DAO tip summary (singletons and the open day's
         // snapshot) unconditionally on startup, so a crash between a batch
         // commit and its tip summary leaves no stale row.  Idempotent.

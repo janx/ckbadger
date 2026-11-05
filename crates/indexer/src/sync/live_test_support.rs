@@ -106,6 +106,43 @@ pub fn indexer_with_stores(
     }
 }
 
+/// The label import every start runs before it builds the indexer
+/// (`entry.rs`), with the bundled metadata; an entry error fails the test
+/// where startup would only log it.
+pub fn startup_label_import(domain: &CkbadgerStore, network: &str) -> Result<()> {
+    let result = crate::label_import::run_label_import(
+        domain,
+        &ckbadger_common::LabelImportConfig {
+            metadata_path: None,
+            network: network.to_string(),
+        },
+    )?;
+    if !result.errors.is_empty() {
+        bail!("startup label import errors: {:?}", result.errors);
+    }
+    Ok(())
+}
+
+/// The indexer a restart builds over `domain` and `append`: the startup
+/// label import, then a new `Indexer` (empty caches, trackers not loaded) at
+/// the store's tip after the store-side startup steps every run performs
+/// before its first batch (`Indexer::prepare_store_for_sync`, live mode, no
+/// forced cleanup).
+pub fn restart(
+    domain: Arc<CkbadgerStore>,
+    append: Arc<CkbadgerStore>,
+    network: &str,
+) -> Result<Indexer> {
+    startup_label_import(&domain, network)?;
+    let (tip, hash) = match domain.get_sync_tip_block()? {
+        Some((number, header)) => (number, Some(header.hash)),
+        None => (-1, None),
+    };
+    let indexer = indexer_with_stores(domain, append, network, tip, hash);
+    indexer.prepare_store_for_sync(tip, false)?;
+    Ok(indexer)
+}
+
 /// Write `blocks` as ONE live batch through the real parser precompute and
 /// `write_parsed_batch`. Every input resolves from this batch or from the
 /// store (never from a parser cache), so a batch after a rollback sees exactly

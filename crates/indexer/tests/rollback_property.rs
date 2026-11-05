@@ -17,7 +17,9 @@ use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
     TransactionView,
 };
-use ckbadger_indexer::sync::live_test_support::{indexer_with_stores, reorg_to, write_live_batch};
+use ckbadger_indexer::sync::live_test_support::{
+    indexer_with_stores, reorg_to, restart, startup_label_import, write_live_batch,
+};
 use ckbadger_indexer::sync::Indexer;
 use ckbadger_store::derive_ops::{DeriveMeta, DeriveState};
 use ckbadger_store::keys::{self, sync_meta_keys};
@@ -181,7 +183,7 @@ fn compare_dumps(actual: &Dump, expected: &Dump, context: &str) -> Result<(), St
                 hex::encode(value)
             )),
             Some(other) if other != value => diffs.push(format!(
-                "  changed  {}\n           rolled back 0x{}\n           expected    0x{}",
+                "  changed  {}\n           actual   0x{}\n           expected 0x{}",
                 render_key(cf, key),
                 hex::encode(value),
                 hex::encode(other)
@@ -202,7 +204,7 @@ fn compare_dumps(actual: &Dump, expected: &Dump, context: &str) -> Result<(), St
         Ok(())
     } else {
         Err(format!(
-            "{context}: {} row(s) differ from the store that never saw the rolled-back blocks:\n{}",
+            "{context}: {} row(s) differ from the expected store:\n{}",
             diffs.len(),
             diffs.join("\n")
         ))
@@ -1825,4 +1827,182 @@ async fn plain_transfers_fork_inside_a_multi_block_batch_roll_back_byte_equal() 
     let plan = chunked_plan(chain.len(), 5);
     // Batches 0-4, 5-9, 10-13; fork at 7 lands inside the second batch.
     assert_rollback_property(&chain, &plan, 13, 7).await;
+}
+
+// ---------------------------------------------------------------------------
+// B-5c · a restart changes no data; bulk and live write the same rollups
+// ---------------------------------------------------------------------------
+
+/// The script-reference CFs: the reference usage rows, the reference →
+/// binary mapping, the version and family rollups and their two indexes.
+const SCRIPT_REFERENCE_CFS: &[&str] = &[
+    ckbadger_store::store::CF_SCRIPT_REFERENCE_INFO,
+    ckbadger_store::store::CF_SCRIPT_REFERENCE_TO_VERSION,
+    ckbadger_store::store::CF_SCRIPT_VERSIONS,
+    ckbadger_store::store::CF_SCRIPT_VERSIONS_BY_FAMILY,
+    ckbadger_store::store::CF_SCRIPT_VERSIONS_BY_LABEL,
+    ckbadger_store::store::CF_SCRIPT_FAMILIES,
+];
+
+fn script_reference_rows(dump: &Dump) -> Dump {
+    dump.iter()
+        .filter(|((cf, _), _)| SCRIPT_REFERENCE_CFS.contains(cf))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// `SyncStatus::sync_started_block` is the block the running process started
+/// syncing at (`init_sync_start`, telemetry of the run like
+/// `sync_started_at`): a restart sets it by definition. Zero it in the
+/// `sync_status` row and in every journal entry's previous value of it; every
+/// other byte of the two stores is compared.
+fn without_run_start_block(dump: Dump) -> Dump {
+    let zero = |value: &[u8]| {
+        let mut status: SyncStatus = bincode::deserialize(value).expect("decode sync_status");
+        status.sync_started_block = 0;
+        bincode::serialize(&status).expect("encode sync_status")
+    };
+    dump.into_iter()
+        .map(|((cf, key), value)| {
+            let value = if cf == ckbadger_store::CF_SYNC_META && key == sync_meta_keys::SYNC_STATUS
+            {
+                zero(&value)
+            } else if cf == ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK {
+                let entry =
+                    ckbadger_store::decode_journal_value(&value).expect("decode a journal row");
+                match entry.previous {
+                    Some(previous)
+                        if entry.cf == ckbadger_store::CF_SYNC_META
+                            && entry.key == sync_meta_keys::SYNC_STATUS =>
+                    {
+                        ckbadger_store::encode_journal_value(
+                            entry.cf,
+                            entry.key,
+                            Some(&zero(previous)),
+                        )
+                        .expect("encode a journal row")
+                    }
+                    _ => value,
+                }
+            } else {
+                value
+            };
+            ((cf, key), value)
+        })
+        .collect()
+}
+
+/// Sync `chain` along `plan` restarting the indexer (the startup label import
+/// and a new `Indexer` through the production startup steps,
+/// `live_test_support::restart`) after each block of `restart_after`; the
+/// domain store must be byte-equal to one that synced the chain in one run
+/// (one label import before its first batch) with the same batch boundaries.
+/// A restart is not a computation point: chain progression is.
+async fn restart_property(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    restart_after: &[usize],
+) -> Result<(), String> {
+    let tip = chain.len() - 1;
+    let one_run = open_stores();
+    startup_label_import(&one_run.domain, NETWORK).map_err(|e| format!("{e:#}"))?;
+    sync_prefix(&one_run, chain, plan, 0, tip).await;
+
+    let mut restarted = open_stores();
+    startup_label_import(&restarted.domain, NETWORK).map_err(|e| format!("{e:#}"))?;
+    let mut from = 0;
+    for &at in restart_after {
+        sync_prefix(&restarted, chain, plan, from, at).await;
+        restarted.indexer = restart(restarted.domain.clone(), restarted._append.clone(), NETWORK)
+            .map_err(|e| format!("restart after block {at}: {e:#}"))?;
+        from = at + 1;
+    }
+    sync_prefix(&restarted, chain, plan, from, tip).await;
+
+    let expected = dump_domain(&one_run.domain);
+    let actual = dump_domain(&restarted.domain);
+    compare_dumps(
+        &script_reference_rows(&actual),
+        &script_reference_rows(&expected),
+        &format!("script-reference CFs after restarts at {restart_after:?}"),
+    )?;
+    compare_dumps(
+        &without_run_start_block(actual),
+        &without_run_start_block(expected),
+        &format!("domain store after restarts at {restart_after:?}"),
+    )
+}
+
+#[tokio::test]
+async fn protocol_chain_restarts_change_no_row() {
+    let chain = protocol_chain(0);
+    let plan = single_block_plan(chain.len());
+    restart_property(&chain, &plan, &[0, 3, 7, 11, 15])
+        .await
+        .unwrap_or_else(|report| panic!("{report}"));
+}
+
+#[tokio::test]
+async fn protocol_chain_restart_inside_multi_block_batches_changes_no_row() {
+    let chain = protocol_chain(0);
+    let mut plan: Vec<RangeInclusive<usize>> = single_block_plan(1);
+    plan.extend(
+        chunked_plan(16, 4)
+            .into_iter()
+            .map(|r| r.start() + 1..=r.end() + 1),
+    );
+    restart_property(&chain, &plan, &[4, 10])
+        .await
+        .unwrap_or_else(|report| panic!("{report}"));
+}
+
+/// Bulk finalize and the live per-block rollup classify every script
+/// reference with the one routine and build the rollup with the one builder,
+/// so a bulk-built store and a live-built store hold the same rows in the
+/// script-reference CFs (here: the protocol chain, whose Spore, cluster and
+/// xUDT references are data-hash references).
+#[tokio::test]
+async fn bulk_finalize_and_live_sync_write_the_same_script_reference_rows() {
+    let chain = protocol_chain(0);
+    let bulk = ckbadger_indexer::sync::materialize_bulk_artifacts_for_test(&chain)
+        .unwrap_or_else(|e| panic!("bulk materialization: {e:#}"));
+    let bulk_rows: Dump = bulk
+        .script_binding_rows
+        .iter()
+        .map(|((cf, key), value)| ((*cf, key.clone()), value.clone()))
+        .collect();
+    // The fixture has no labels, so no family rows; the label-seeded parity
+    // test in sync/batch.rs (five deployment cases) covers the family CFs.
+    for cf in [
+        ckbadger_store::store::CF_SCRIPT_REFERENCE_INFO,
+        ckbadger_store::store::CF_SCRIPT_REFERENCE_TO_VERSION,
+        ckbadger_store::store::CF_SCRIPT_VERSIONS,
+    ] {
+        assert!(
+            bulk_rows.keys().any(|(row_cf, _)| *row_cf == cf),
+            "{cf}: the bulk snapshot does not carry this CF, or the fixture does not exercise it"
+        );
+    }
+
+    let live = open_stores();
+    let tip = chain.len() - 1;
+    sync_prefix(&live, &chain, &chunked_plan(chain.len(), 4), 0, tip).await;
+    let live_rows = script_reference_rows(&dump_domain(&live.domain));
+
+    let data_hash_mappings = bulk_rows
+        .keys()
+        .filter(|(cf, key)| {
+            *cf == ckbadger_store::store::CF_SCRIPT_REFERENCE_TO_VERSION && key[0] != 1
+        })
+        .count();
+    assert!(
+        data_hash_mappings > 0,
+        "the fixture must exercise data-hash reference mappings"
+    );
+    compare_dumps(
+        &live_rows,
+        &bulk_rows,
+        "live script-reference rows vs bulk finalize",
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
 }

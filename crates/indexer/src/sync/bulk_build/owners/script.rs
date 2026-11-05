@@ -9,7 +9,9 @@ use ckbadger_store::{
 use rustc_hash::FxHashMap;
 
 use super::{BulkReducer, ReducerContext};
-use crate::db::writer::{build_script_reference_rollup_state_with_lineage, TypeIdCodeChange};
+use crate::db::writer::{
+    build_script_reference_rollup_state_with_lineage, reference_binary, TypeIdCodeChange,
+};
 use crate::rpc::BlockResponseWithCycles;
 use crate::sync::bulk_build::facts::{CellFacts, ResolvedInputFacts, ResolvedTxFacts};
 use crate::sync::bulk_build::interner::IdentityInterner;
@@ -304,15 +306,13 @@ impl ScriptOwner {
         mapping_keys.dedup();
         let mut reference_mappings = Vec::with_capacity(mapping_keys.len());
         for (reference_hash, hash_type) in mapping_keys {
-            let version_hash = match hash_type {
-                0 | 2 | 4 => Some(reference_hash.clone()),
-                1 => self.type_id_reference_versions.get(&reference_hash).cloned().flatten(),
-                _ => bail!(
-                    "unsupported script reference hash_type during bulk-build materialization: reference_hash=0x{}, hash_type={}",
-                    hex::encode(&reference_hash),
-                    hash_type
-                ),
-            };
+            let version_hash = reference_binary(&reference_hash, hash_type, || {
+                Ok(self
+                    .type_id_reference_versions
+                    .get(&reference_hash)
+                    .cloned()
+                    .flatten())
+            })?;
             reference_mappings.push(((reference_hash, hash_type), version_hash));
         }
         for ((reference_hash, hash_type), version_hash) in &reference_mappings {

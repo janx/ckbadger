@@ -792,6 +792,56 @@ impl Indexer {
         self.finalize_bulk_sync_perf_run(false);
     }
 
+    /// The store-side startup steps, run once per process before the first
+    /// batch: the startup cleanup decision and rollback, the sync-start
+    /// metadata (`init_sync_start_with_options`), then loading the HODL and
+    /// cell-distribution trackers at the tip. A restart must not change chain
+    /// data: on a clean store these steps write only the sync-start fields of
+    /// `sync_status` and the DAO tip summary as it already is.
+    pub(crate) fn prepare_store_for_sync(
+        &self,
+        actual_start: i64,
+        bulk_sync_mode: bool,
+    ) -> Result<()> {
+        let cleanup_needed = self
+            .writer
+            .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
+
+        if cleanup_needed {
+            self.startup_phase
+                .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
+            info!(
+                run_id = %self.run_id,
+                from_block = actual_start + 1,
+                "Startup rollback cleanup phase started"
+            );
+            self.record_flight_event(
+                "startup_cleanup_started",
+                format!("from_block={}", actual_start + 1),
+            );
+        }
+
+        let init_result = self.writer.init_sync_start_with_options(
+            actual_start,
+            bulk_sync_mode,
+            self.config.force_startup_cleanup,
+        );
+
+        self.startup_phase
+            .store(STARTUP_PHASE_NONE, Ordering::SeqCst);
+        if cleanup_needed {
+            info!(
+                run_id = %self.run_id,
+                "Startup rollback cleanup phase completed"
+            );
+            self.record_flight_event("startup_cleanup_completed", "ok");
+        }
+        init_result?;
+        self.reconcile_hodl_tracker_with_tip(actual_start)?;
+        self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
+        Ok(())
+    }
+
     fn start_bulk_sync_perf_run(&self, bulk_sync_mode: bool) -> Result<()> {
         if !bulk_sync_mode {
             return Ok(());
@@ -1268,44 +1318,7 @@ impl Indexer {
             );
         }
 
-        let cleanup_needed = self
-            .writer
-            .needs_startup_cleanup_with_force(actual_start, self.config.force_startup_cleanup)?;
-
-        if cleanup_needed {
-            self.startup_phase
-                .store(STARTUP_PHASE_ROLLBACK_CLEANUP, Ordering::SeqCst);
-            info!(
-                run_id = %self.run_id,
-                from_block = actual_start + 1,
-                "Startup rollback cleanup phase started"
-            );
-            self.record_flight_event(
-                "startup_cleanup_started",
-                format!("from_block={}", actual_start + 1),
-            );
-        }
-
-        let init_result = self.writer.init_sync_start_with_options(
-            actual_start,
-            bulk_sync_mode,
-            self.config.force_startup_cleanup,
-        );
-
-        self.startup_phase
-            .store(STARTUP_PHASE_NONE, Ordering::SeqCst);
-        if cleanup_needed {
-            info!(
-                run_id = %self.run_id,
-                "Startup rollback cleanup phase completed"
-            );
-            self.record_flight_event("startup_cleanup_completed", "ok");
-        }
-        init_result?;
-        // Undo-log rollback is now handled inside init_sync_start_with_options
-        // before canonical rollback, matching the normal reorg path ordering.
-        self.reconcile_hodl_tracker_with_tip(actual_start)?;
-        self.reconcile_cell_dist_tracker_with_tip(actual_start)?;
+        self.prepare_store_for_sync(actual_start, bulk_sync_mode)?;
         self.start_bulk_sync_perf_run(bulk_sync_mode)?;
 
         // Periodic hourly-retention REQUEST. The task no longer deletes

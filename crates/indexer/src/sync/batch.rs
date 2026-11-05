@@ -12889,6 +12889,10 @@ mod tests {
             live.put_script_family_direct(family_id, &family).unwrap();
             live.put_script_version_by_family_direct(family_id, &old_version_hash)
                 .unwrap();
+            // The label index row label import writes beside the version
+            // (the bulk seed writes the same rows).
+            live.insert_script_version_by_label("Parity TYPE_ID", &old_version_hash)
+                .unwrap();
             let indexer = indexer_for_live_write_test(live.clone());
             // The parser stage always hands the writer its token-daily
             // contributions; a mint's supply facts fold into them.
