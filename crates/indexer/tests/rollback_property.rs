@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use ckbadger_indexer::rpc::{
     BlockResponseWithCycles, BlockView, CellInput, CellOutput, HeaderView, OutPoint, Script,
-    TransactionView,
+    TransactionView, UncleBlockView,
 };
 use ckbadger_indexer::sync::live_test_support::{
     indexer_with_stores, reorg_to, restart, startup_label_import, write_live_batch,
@@ -2164,4 +2164,268 @@ async fn a_rollback_across_a_restart_keeps_the_running_processes_runtime_status(
         status.tip_block_hash,
         stores.domain.get_block_header(7).unwrap().unwrap().hash
     );
+}
+
+// ---------------------------------------------------------------------------
+// B-5c · the edge-case chain: an epoch boundary, an uncle, a raw timestamp
+// earlier than the parent's across a UTC+8 day boundary, a `.cell` sub-name
+// ---------------------------------------------------------------------------
+
+/// Epoch length of the edge-case chain: blocks 0..=5 are epoch 0, 6..=11
+/// epoch 1, 12..=14 epoch 2.
+const EDGE_EPOCH_LENGTH: u64 = 6;
+/// The first block of epoch 1 (epoch index 0).
+const EDGE_EPOCH_BOUNDARY: usize = 6;
+/// The block that includes one uncle (a sibling of block 7).
+const EDGE_UNCLE_BLOCK: usize = 8;
+/// The first block of the next UTC+8 day (00:05) ...
+const EDGE_NEXT_DAY: usize = 9;
+/// ... and its child, whose raw timestamp (23:58) is earlier than its
+/// parent's and on the previous UTC+8 day; its chain time is its parent's.
+const EDGE_BACKWARD_BLOCK: usize = 10;
+/// The parent `.cell` name's block and its sub-name's.
+const EDGE_PARENT_NAME_BLOCK: usize = 3;
+const EDGE_SUB_NAME_BLOCK: usize = 13;
+const EDGE_TIP: usize = 14;
+const EDGE_PARENT_LABEL: &str = "edge";
+const EDGE_SUB_LABEL: &str = "sub.edge";
+/// 2026-09-22 22:35 UTC+8: block n is at 22:35 + 10n minutes, so block 8 is
+/// at 23:55 and block 9 at 00:05 of the next UTC+8 day.
+const T_EDGE: u64 = T_EVENING - 25 * MINUTE;
+
+/// The CKB epoch field of block `number`: number | index << 24 | length << 40.
+fn edge_epoch(number: u64) -> String {
+    let epoch = (EDGE_EPOCH_LENGTH << 40)
+        | ((number % EDGE_EPOCH_LENGTH) << 24)
+        | (number / EDGE_EPOCH_LENGTH);
+    format!("0x{epoch:x}")
+}
+
+/// Plain transfers (as in `transfer_chain`: every block moves one owner's
+/// cell to the next owner) over epochs of six blocks, with the four edge
+/// cases inside the chain:
+/// - an epoch boundary at 6 (and the next at 12);
+/// - one uncle in block 8;
+/// - block 10's raw timestamp is 7 minutes before block 9's and on the
+///   previous UTC+8 day (block 9 opens the next day);
+/// - the `.cell` name `edge` minted at 3 and its sub-name `sub.edge` at 13,
+///   which writes the parent → child `identity_by_collection` row.
+fn edge_case_chain() -> Vec<BlockResponseWithCycles> {
+    let t = |n: u64| T_EDGE + n * 10 * MINUTE;
+    let mut chain = ChainBuilder::new();
+    // Outputs 0..=7 fund owners 1..=8; outputs 8 and 9 the two names.
+    let mut genesis: Vec<(CellOutput, String)> =
+        (1..=8u8).map(|owner| plain(10_000, owner)).collect();
+    genesis.push(plain(FUND, 0x40));
+    genesis.push(plain(FUND, 0x41));
+    chain.genesis(t(0), genesis);
+    let mut cells: Vec<([u8; 32], u32, u64)> = (0..8)
+        .map(|i| (tx_hash(0xc000), i as u32, 10_000))
+        .collect();
+    for n in 1..=EDGE_TIP as u64 {
+        let from = (n as usize) % 8;
+        let to = (from + 1) % 8;
+        let (prev_tx, prev_index, capacity) = cells[from];
+        let tag = 0x100 + n as u16;
+        let moved = capacity - 1;
+        let mut txs = vec![tx(
+            tag,
+            vec![input(prev_tx, prev_index)],
+            vec![
+                plain(moved / 2, to as u8 + 1),
+                plain(moved - moved / 2, from as u8 + 1),
+            ],
+            vec![],
+        )];
+        cells[from] = (tx_hash(tag), 1, moved - moved / 2);
+        let name = match n as usize {
+            EDGE_PARENT_NAME_BLOCK => Some((0x3001, 8, EDGE_PARENT_LABEL, [0x0a; 20], 0x40)),
+            EDGE_SUB_NAME_BLOCK => Some((0x3002, 9, EDGE_SUB_LABEL, [0x0b; 20], 0x41)),
+            _ => None,
+        };
+        if let Some((tag, funding_index, label, owner, change_owner)) = name {
+            txs.push(tx(
+                tag,
+                vec![funding(funding_index)],
+                vec![
+                    dotcell_name(300, label, owner),
+                    plain(FUND - 301, change_owner),
+                ],
+                vec![witness_with_records(&[0, 0]), "0x".to_string()],
+            ));
+        }
+        let timestamp = if n as usize == EDGE_BACKWARD_BLOCK {
+            t(EDGE_NEXT_DAY as u64) - 7 * MINUTE
+        } else {
+            t(n)
+        };
+        chain.push(timestamp, txs);
+    }
+    for (number, block) in chain.blocks.iter_mut().enumerate() {
+        block.block.header.epoch = edge_epoch(number as u64);
+    }
+    // The uncle: a block 7 that lost to the canonical one.
+    let sibling = EDGE_UNCLE_BLOCK as u64 - 1;
+    let mut uncle = header(sibling, t(sibling) + MINUTE);
+    uncle.epoch = edge_epoch(sibling);
+    let mut uncle_hash = block_hash(sibling);
+    uncle_hash[31] ^= 0xff;
+    uncle.hash = hex32(uncle_hash);
+    chain.blocks[EDGE_UNCLE_BLOCK]
+        .block
+        .uncles
+        .push(UncleBlockView {
+            header: uncle,
+            proposals: vec![],
+        });
+    chain.blocks
+}
+
+/// The `identity_by_collection` row listing `sub.edge` under `edge`.
+fn edge_sub_name_row() -> Vec<u8> {
+    keys::encode_identity_by_collection_key(
+        &DotCellParser::derive_id(EDGE_PARENT_LABEL),
+        &DotCellParser::derive_id(EDGE_SUB_LABEL),
+    )
+}
+
+fn has_edge_sub_name_row(store: &CkbadgerStore) -> bool {
+    store
+        .get_cf(
+            store.cf(ckbadger_store::store::CF_IDENTITY_BY_COLLECTION),
+            &edge_sub_name_row(),
+        )
+        .unwrap()
+        .is_some()
+}
+
+/// The fork points: just below and just above each edge case.
+const EDGE_FORKS: &[usize] = &[
+    EDGE_EPOCH_BOUNDARY - 1,
+    EDGE_EPOCH_BOUNDARY,
+    EDGE_UNCLE_BLOCK - 1,
+    EDGE_UNCLE_BLOCK,
+    EDGE_BACKWARD_BLOCK - 1,
+    EDGE_BACKWARD_BLOCK,
+    EDGE_SUB_NAME_BLOCK - 1,
+    EDGE_SUB_NAME_BLOCK,
+];
+
+/// Batches 0, 1-4, 5-8, 9-12, 13-14: the epoch boundary and the uncle block
+/// are inside a batch (the boundary's previous epoch start comes from the
+/// batch), the backward block's parent is in its batch (the running maximum
+/// inside the batch), the sub-name opens a batch; every fork but 12 lands
+/// inside a batch.
+fn edge_multi_block_plan() -> Vec<RangeInclusive<usize>> {
+    vec![0..=0, 1..=4, 5..=8, 9..=12, 13..=14]
+}
+
+/// Each edge case is really in the store the chain builds: two complete
+/// epochs and the open third, one uncle at block 8, the backward block's
+/// chain time held at its parent's across the day boundary, and the parent →
+/// child row of the sub-name, gone again after a rollback below its block.
+#[tokio::test]
+async fn edge_case_chain_exercises_each_edge_case() {
+    let chain = edge_case_chain();
+    assert_eq!(chain.len(), EDGE_TIP + 1);
+    let stores = open_stores();
+    sync_prefix(
+        &stores,
+        &chain,
+        &single_block_plan(chain.len()),
+        0,
+        EDGE_TIP,
+    )
+    .await;
+    let store = &stores.domain;
+    let header_at = |block: usize| store.get_block_header(block as i64).unwrap().unwrap();
+
+    // (a) The epoch boundary.
+    let boundary = header_at(EDGE_EPOCH_BOUNDARY);
+    assert_eq!((boundary.epoch_number, boundary.epoch_index), (1, 0));
+    let before = header_at(EDGE_EPOCH_BOUNDARY - 1);
+    assert_eq!((before.epoch_number, before.epoch_index), (0, 5));
+    for (epoch, start_block, blocks, complete) in
+        [(0, 0, 6, true), (1, 6, 6, true), (2, 12, 3, false)]
+    {
+        let stats = store
+            .get_epoch_stats(epoch)
+            .unwrap()
+            .unwrap_or_else(|| panic!("epoch {epoch} has no stats row at the tip"));
+        assert_eq!(
+            (stats.start_block, stats.blocks_count, stats.length),
+            (start_block, blocks, EDGE_EPOCH_LENGTH as i32),
+            "epoch {epoch}"
+        );
+        assert_eq!(stats.end_timestamp.is_some(), complete, "epoch {epoch}");
+    }
+
+    // (b) The uncle.
+    assert_eq!(header_at(EDGE_UNCLE_BLOCK).uncles_count, 1);
+    assert_eq!(header_at(EDGE_UNCLE_BLOCK - 1).uncles_count, 0);
+
+    // (c) The raw timestamp earlier than the parent's, across the day.
+    let parent = header_at(EDGE_NEXT_DAY);
+    let backward = header_at(EDGE_BACKWARD_BLOCK);
+    assert!(backward.timestamp < parent.timestamp);
+    assert_eq!(parent.chain_time_ms, parent.timestamp);
+    assert_eq!(backward.chain_time_ms, parent.chain_time_ms);
+    let day = |ms: i64| ckbadger_common::stats_bucket::stats_day(ms).unwrap();
+    assert_eq!(
+        day(header_at(EDGE_NEXT_DAY - 1).chain_time_ms).succ_opt(),
+        Some(day(parent.chain_time_ms)),
+        "block {EDGE_NEXT_DAY} opens the next UTC+8 day"
+    );
+    assert_eq!(
+        day(backward.timestamp).succ_opt(),
+        Some(day(backward.chain_time_ms)),
+        "the backward block's raw time is on the previous UTC+8 day"
+    );
+
+    // (d) The sub-name's parent → child row, gone below its block.
+    assert!(store
+        .get_identity(&DotCellParser::derive_id(EDGE_PARENT_LABEL))
+        .unwrap()
+        .is_some());
+    assert!(
+        has_edge_sub_name_row(store),
+        "no parent → child row at the tip"
+    );
+    reorg_to(&stores.indexer, EDGE_SUB_NAME_BLOCK as i64 - 1)
+        .await
+        .unwrap();
+    assert!(
+        !has_edge_sub_name_row(store),
+        "the parent → child row survives a rollback below the sub-name's block"
+    );
+    assert!(store
+        .get_identity(&DotCellParser::derive_id(EDGE_PARENT_LABEL))
+        .unwrap()
+        .is_some());
+}
+
+#[tokio::test]
+async fn edge_case_chain_single_block_batches_roll_back_byte_equal() {
+    let chain = edge_case_chain();
+    let plan = single_block_plan(chain.len());
+    assert_rollback_properties(&chain, &plan, EDGE_TIP, EDGE_FORKS).await;
+}
+
+#[tokio::test]
+async fn edge_case_chain_forks_inside_multi_block_batches_roll_back_byte_equal() {
+    let chain = edge_case_chain();
+    assert_rollback_properties(&chain, &edge_multi_block_plan(), EDGE_TIP, EDGE_FORKS).await;
+}
+
+#[tokio::test]
+async fn journal_restores_covered_cfs_of_the_edge_case_chain() {
+    let chain = edge_case_chain();
+    assert_journal_properties(
+        &chain,
+        &single_block_plan(chain.len()),
+        EDGE_TIP,
+        EDGE_FORKS,
+    )
+    .await;
+    assert_journal_properties(&chain, &edge_multi_block_plan(), EDGE_TIP, EDGE_FORKS).await;
 }
