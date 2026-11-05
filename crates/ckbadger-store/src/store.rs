@@ -578,7 +578,11 @@ pub enum RollbackClass {
     /// range, nothing is journaled.
     RangeByBlock,
     /// Never rolled back: the append-only `cells` payloads (orphaned payloads
-    /// are unreachable once their markers are gone) and the network store.
+    /// are unreachable once their markers are gone), the network store, and
+    /// `pending_proposals` (the proposal cache writes it out of band from
+    /// mempool snapshots, with no block context; a committed proposal is
+    /// removed after its batch commits and an expired one by the cache's
+    /// expiry sweep, so a proposal of an orphaned block stays until it expires).
     Never,
     /// Not rolled back; readers validate each row against canonical state.
     Validated,
@@ -629,8 +633,9 @@ const fn cf(
 /// then the domain store in open order), then the network store.
 ///
 /// `RangeByBlock` is only for CFs whose key starts with the block number;
-/// `cells` is `Never`, `dob_decoded` `Validated`, every other domain CF
-/// `Journal`. The network store is not chain data and is never rolled back.
+/// `cells` and `pending_proposals` are `Never`, `dob_decoded` `Validated`,
+/// every other domain CF `Journal`. The network store is not chain data and
+/// is never rolled back.
 pub const CF_SPECS: &[CfSpec] = cf_table::CF_SPECS;
 
 mod cf_table {
@@ -701,7 +706,7 @@ mod cf_table {
         cf(CF_OBJECT_COLLECTION_ACTIVITIES,           Domain,      AppendOnly,      High, COLD, Lz4,  Leveled,   Journal),
         cf(CF_IDENTITY_AGG,                           Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_IDENTITY_COLLECTION_ACTIVITIES,         Domain,      AppendOnly,      High, COLD, Lz4,  Leveled,   Journal),
-        cf(CF_PENDING_PROPOSALS,                      Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_PENDING_PROPOSALS,                      Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_FIBER_CHANNELS,                         Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_FIBER_CHANNEL_BY_COMMITMENT,            Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_ADDR_FIBER_CHANNELS,                    Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
@@ -4931,7 +4936,8 @@ mod tests {
     }
 
     /// `RangeByBlock` only where the key starts with the block number;
-    /// `cells` and the network store never roll back; `dob_decoded` is
+    /// `cells`, `pending_proposals` (written out of band by the proposal
+    /// cache) and the network store never roll back; `dob_decoded` is
     /// validated by its readers; every other domain CF is journaled.
     #[test]
     fn rollback_classes_follow_the_key_layout_rule() {
@@ -4942,7 +4948,9 @@ mod tests {
                 | CF_TX_ACTIONS
                 | CF_REORG_UNDO_LOG_BY_BLOCK
                 | CF_TX_GROUP_CYCLES => RollbackClass::RangeByBlock,
-                CF_CELLS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => RollbackClass::Never,
+                CF_CELLS | CF_PENDING_PROPOSALS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => {
+                    RollbackClass::Never
+                }
                 CF_DOB_DECODED => RollbackClass::Validated,
                 _ => RollbackClass::Journal,
             };
