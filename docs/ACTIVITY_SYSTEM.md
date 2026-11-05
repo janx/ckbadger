@@ -476,7 +476,7 @@ block_num_desc = i64::MAX - block_num
 tx_idx_desc   = i32::MAX - tx_idx
 ```
 
-**Descending order**: Forward RocksDB iteration yields newest transactions first. This enables efficient "latest N" queries and reorg cleanup (newest entries are encountered first during scan).
+**Descending order**: Forward RocksDB iteration yields newest transactions first. This enables efficient "latest N" queries and reorg cleanup (the rolled-back blocks' rows are one contiguous key range at the front, removed with one range delete).
 
 ```rust
 // keys.rs
@@ -583,12 +583,10 @@ StoreBatch::put_addr_tx_by_prefix(
 StoreBatch::put_addr_prefix_stats(&mut self, prefix: &[u8], stats: &AddrPrefixStats)
 ```
 
-`CF_ADDR_PREFIX_STATS` carries **no** undo pre-image. Rollback subtracts the number of
-`CF_ADDR_TXS_BY_PREFIX` rows it deletes per prefix and then asserts the counter equals the rows
-that survive (deleting the row when it reaches zero) — the same contract `addr_balance.txs_count`
-has against `CF_ADDR_TXS`. A pre-image would be recorded on one block of a multi-block live batch
-and would not be replayed for a fork point on a later block of that batch, leaving the counter
-above the rows it is supposed to count.
+`CF_ADDR_PREFIX_STATS` is written per block: `stage_addr_prefix_tx_counts` writes each prefix's
+counter in the scope of every block that adds to it, with its value at the end of that block, so
+the block journal restores it at any block of a multi-block live batch, like
+`addr_balance.txs_count` (`docs/prompts/REORG_HANDLING.md` → Rollback Mechanisms).
 
 ### Activity Filter Matching
 
@@ -974,37 +972,43 @@ During fresh-store bulk build:
 
 **File**: `crates/indexer/src/sync/batch.rs`
 
-During live sync, activities are written through the undo helper:
+During live sync, activities are written through the activity pass's row writers, in each block's
+scope of the live batch:
 
 1. Same `build_tx_actions_for_block()` call with protocol detectors
 2. Same stats accumulation
-3. `put_tx_actions()` via `sync::undo::put_tx_actions()` — records to domain batch (no undo log needed since rollback deletes directly)
-4. `put_addr_tx()` via `sync::undo::put_addr_tx()` — same pattern
+3. `put_tx_actions()` via `sync::undo::put_tx_actions()` — the `activities` row (`RangeByBlock`:
+   a rollback range-deletes it, nothing is journaled) and its `tx_actions_by_bucket` row (journaled)
+4. `put_addr_tx()` via `sync::undo::put_addr_tx()` — the `addr_txs` row (journaled)
 
-The undo helpers in `sync/undo.rs` wrap `StoreBatch` writes. Activities and addr_txs are in the domain store, so rollback deletes entries directly rather than using an undo log.
+The helpers in `sync/undo.rs` wrap `StoreBatch` writes in the caller's block scope
+(`StoreBatch::at`), so the live batch's block journal records the rows they create.
 
 ---
 
 ## Reorg Handling
 
-**File**: `crates/ckbadger-store/src/reorg_ops.rs`
+**File**: `crates/ckbadger-store/src/reorg_ops.rs` (`rollback_to_block`; see
+`docs/prompts/REORG_HANDLING.md` → Rollback Mechanisms)
 
-Activities use **direct deletion** during reorg rollback — no ghost entries, no canonical filtering needed.
+Activity rows are removed by the one rollback, the block journal — no ghost entries, no canonical
+filtering needed, no scan.
 
-### Rollback Steps
+### Rollback
 
-**Stage 8b — Delete tx actions** :
-Scan `CF_TX_ACTIONS` from start. Since keys are in descending block_num order, newest entries come first. Delete all entries where `block_num > rollback_to`. Break when `block_num <= rollback_to` (all remaining entries are valid).
-
-**Stage 8c — Delete addr_txs** :
-Full scan of `CF_ADDR_TXS`. Extract block_num from each key. Delete entries where `block_num > rollback_to`. Cannot break early because addr_txs keys are prefixed by lock_hash (entries from different addresses are interleaved).
-
-**Stage 8d/8e — Delete collection activities** :
-Same pattern for `CF_OBJECT_COLLECTION_ACTIVITIES` and `CF_IDENTITY_COLLECTION_ACTIVITIES`. Also counts surviving entries per collection for aggregate rebuild.
+- `CF_TX_ACTIONS` is `RangeByBlock`: its keys open with the block number descending, so the
+  rolled-back blocks' rows are one contiguous range at the front of the CF, removed with one range
+  delete.
+- `CF_ADDR_TXS`, `CF_ADDR_TXS_BY_PREFIX`, `CF_TX_ACTIONS_BY_BUCKET`,
+  `CF_OBJECT_COLLECTION_ACTIVITIES`, `CF_IDENTITY_COLLECTION_ACTIVITIES` and the counters beside
+  them (`addr_prefix_stats`, `collection_activity_daily`, the collection aggregates' activity
+  counts, the activity stats buckets) are `Journal`-class: each row was written in its block's
+  scope, so its journal entry deletes a row the rolled-back block created and writes back the value
+  a row had before it.
 
 ### Key Invariants
 
-- Keys in descending block_num order allow efficient early termination for `CF_TX_ACTIONS`
+- Keys in descending block_num order make the rolled-back `CF_TX_ACTIONS` rows one range
 - After rollback, the domain store contains only canonical entries — no secondary cleanup needed
 - The API's canonicality check provides a safety net during the brief window between chain reorg detection and rollback completion
 
@@ -1053,11 +1057,16 @@ transaction with three token changes is counted once in `token_count`.
 
 - **Daily**: Key prefix `0x1D` + `YYYYMMDD` in `CF_STATS_CHAIN`
 - **Hourly**: Key prefix `0x1E` + `YYYYMMDDHH` in `CF_STATS_CHAIN`
+- **Unique addresses**: bulk build writes each bucket's address set as one blob (`0x23` daily /
+  `0x24` hourly + bucket); live sync never rewrites it and records each address it sees first in a
+  bucket as its own empty row (`0x26` daily / `0x27` hourly + bucket + lock hash), raising the
+  bucket's `unique_address_count` by one (`docs/STORE_SCHEMA.md` → `stats_chain` activity address
+  sets)
 
-Live-sync stats are accumulated in memory and merged into existing buckets with
-`update_daily_activity_stats()` / `update_hourly_activity_stats()` because a day or hour can span
-multiple batches. Fresh-store bulk build instead seals completed buckets at its
-median-time-past watermark and writes each sealed aggregate once.
+Live-sync stats are accumulated per block and merged into the block's day and hour buckets, on top
+of the rows the previous block left, with `BatchWriter::update_activity_bucket_stats`, because a
+day or hour can span multiple blocks and batches. Fresh-store bulk build instead seals completed
+buckets at its median-time-past watermark and writes each sealed aggregate once.
 
 ### API Endpoints
 
@@ -1123,7 +1132,7 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 | `crates/ckbadger-store/src/activity_ops.rs` | list_activities(), get_latest_activities(), matches_activity_filter() |
 | `crates/ckbadger-store/src/keys.rs`         | Key encoding/decoding for CF_TX_ACTIONS (44B), CF_ADDR_TXS (76B)      |
 | `crates/ckbadger-store/src/batch.rs`        | put_tx_actions(), put_addr_tx()                                       |
-| `crates/ckbadger-store/src/reorg_ops.rs`    | Activity rollback (stages 8b-8e)                                      |
+| `crates/ckbadger-store/src/reorg_ops.rs`    | The rollback (range delete of `CF_TX_ACTIONS`, journal write-back)    |
 
 ### API
 
@@ -1133,9 +1142,9 @@ Protocol identification comes from the shared `ProtocolRegistry` built from
 
 ### Statistics
 
-| File                                         | Content                                                             |
-| -------------------------------------------- | ------------------------------------------------------------------- |
-| `crates/indexer/src/db/writer/statistics.rs` | accumulate_tx_actions_stats(), update_daily/hourly_activity_stats() |
+| File                                         | Content                                                       |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| `crates/indexer/src/db/writer/statistics.rs` | accumulate_tx_actions_stats(), update_activity_bucket_stats() |
 
 ### Frontend
 

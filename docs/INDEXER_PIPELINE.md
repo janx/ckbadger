@@ -172,7 +172,7 @@ unless a parsed batch is waiting. A
 live batch therefore waits at most one chunk, an idle writer derives continuously, and a chunk
 and a batch never write the same rows at once. Inside `write_parsed_batch`, `apply_live_batch`
 adds each block's deltas for every running or complete derivation to the batch's own domain
-write, with per-block undo pre-images. Bulk build runs none of this.
+write, each row in its block's scope so the block journal records it. Bulk build runs none of this.
 
 #### Commit Window Timing
 
@@ -204,11 +204,11 @@ carried `prefetch_ms`, which the pipeline writer never sets, so every batch logg
 `cells`, `inputs`. `Batch perf` (the periodic aggregate in `sync/diagnostics.rs`) reports the same
 split, with `db_commit_ms` as the wide window and the four parts beside it.
 
-`tracker_state_bytes` is the serialized size of the two tracker states that `sync_meta` rewrites in
-full every batch. It exists because the cost had to be measured before anything was changed: at
-production scale (2,495 date entries per tracker) it is ~310 KB and ~1.7 ms — 0.15% of the smallest
-observed per-block commit window — so the tracker persistence was left exactly as it is, and the
-field stays in the log so the number can be re-checked against production.
+`tracker_state_bytes` is the byte size of the HODL-wave and cell-distribution tracker rows the batch
+stages: each block's moved `hodl_capacity_by_date` / `cell_dist_cohort_by_month` rows and both
+cursors (`docs/STORE_SCHEMA.md` → `sync_meta` Fixed Keys). The trackers were two whole-state
+`sync_meta` blobs rewritten every batch when the field was added; it stays in the log so the row
+cost can be checked against production.
 
 **Writer-phase heartbeat.** Each of the five commit parts, the finalize step, and every block
 inside the staging body bump a monotonic counter (`PerfStats::mark_writer_phase`). A single
@@ -218,40 +218,41 @@ wedged commit still trips the watchdog, which is exactly what it is for. See
 
 #### Entity Statistics Write Path
 
-The eight per-entity daily/hourly stats families are rolled back **only** by the undo log
-(`docs/prompts/REORG_HANDLING.md`), and this is the path that feeds it.
+The eight per-entity daily/hourly stats families are rolled back by the block journal like every
+`Journal`-class row (`docs/prompts/REORG_HANDLING.md`); this is the path that writes them.
 
 One `EntityStatsOverlay` (`crates/indexer/src/db/writer/entity_stats.rs`) exists per committed
 batch, shared by the five daily writers and the four hourly write points
-(`udt.rs`, `spore.rs`, `mnft.rs`, `dotbit.rs`):
+(`udt.rs`, `spore.rs`, `mnft.rs`, `dotbit.rs`). It is the stats side of the live batch's
+`BlockOverlay` (`EntityStatsOverlay::sharing`):
 
 - **One read per key.** The overlay caches the key's current value — warmed by one `multi_get`
   prefetch, then read-through — so no writer re-reads RocksDB inside the loop.
-- **First touch per block records the pre-image.** The first mutation of a key inside block N
-  writes one `UndoLogEntry::KeyMutation` under `UndoSeqScope::EntityStats` holding the value at
-  the **end of block N-1** — not the value RocksDB held when the batch opened, which is what
-  makes a rollback into the middle of a multi-thousand-block batch exact. Later mutations of the
-  same key in the same block add no entry. Blocks must arrive in ascending order per key; going
-  backwards is a hard error rather than a pre-image from the future.
-- **One write per key.** `stage_final` writes each dirty key once with its final value
-  (`put_stats`, or `delete_stats` when a daily row nets to zero).
-- **Bulk records nothing.** In bulk mode the overlay skips the undo entry entirely.
+- **First touch per block journals the previous value.** The first mutation of a key inside
+  block N (`mutate(block, key, next)`) journals the value at the **end of block N-1** — not the
+  value RocksDB held when the batch opened, which is what makes a rollback into the middle of a
+  multi-thousand-block batch exact. Later mutations of the same key in the same block add no
+  entry. Blocks must arrive in ascending order per key; going backwards is a hard error rather
+  than a previous value from the future.
+- **One write per key.** Each dirty key is staged once with its final value (a daily row that
+  nets to zero is deleted).
+- **Bulk journals nothing.** In bulk mode the overlay stages values without journal entries.
 
-`stage_final` is called **after the last hourly write point and immediately before
-`domain_analytics_batch` is merged into `data_batch`**, so the stats rows, their undo pre-images
-and the sync tip land in one atomic domain commit.
+The live batch stages the block overlay — these stats keys among every other `Journal`-class key —
+with `stage_journal` right before the domain commit, so the stats rows, their journal entries and
+the sync tip land in one atomic domain commit.
 
 Two maintenance steps run in the same commit window, after the block writes and before the
 commit, and only outside bulk mode:
 
 - **Coverage floor.** `stage_entity_stats_undo_retention` advances
-  `entity_stats_undo_contract.coverage_floor_block` to `last_block - 1000` and stages the
-  `EntityStats` undo deletions it leaves behind into the same batch.
+  `entity_stats_undo_contract.coverage_floor_block` to `last_block - 1000` and stages the deletion
+  of every block journal row it leaves behind into the same batch.
 - **Hourly retention.** A 10-minute task no longer deletes anything; it only sets a
   `hourly_retention_requested` flag (and skips while more than `bulk_sync_threshold` blocks
   remain). The writer swaps that flag and, if set, runs one bounded step per family
   (≤ 5,000 keys), staging the deletions and the advanced `hourly_retention_state:<family>` row
-  into the same batch as the blocks — so a deletion can never race an undo replay restoring the
+  into the same batch as the blocks — so a deletion can never race a rollback restoring the
   same key, and the persisted boundary always matches what was actually deleted. The cutoff is
   `min(now − 48 h, hour_of(header(tip − 1000)))`, clamped up by the already-executed cutoff:
   the block-derived bound keeps retention from deleting a bucket that is still inside the undo
