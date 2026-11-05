@@ -584,7 +584,10 @@ pub enum RollbackClass {
     /// removed after its batch commits and an expired one by the cache's
     /// expiry sweep, so a proposal of an orphaned block stays until it expires).
     Never,
-    /// Not rolled back; readers validate each row against canonical state.
+    /// Not rolled back; readers validate each row against canonical state
+    /// before using it. `dob_decoded` (keyed by spore id) is read only after
+    /// the spore resolves canonically (`get_spore`): a decode cached for an
+    /// orphaned spore is never served.
     Validated,
 }
 

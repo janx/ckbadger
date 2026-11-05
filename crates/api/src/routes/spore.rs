@@ -1547,7 +1547,18 @@ async fn serve_media(
 
     let id = parse_hash32(&spore_id, "spore ID")?;
 
-    // 2. Load decoded entry to validate hash membership
+    // 2. Resolve the canonical spore first: `dob_decoded` is `Validated`
+    //    (never rolled back), so its row is read only for a spore the chain
+    //    holds. The spore also gives the collection for the blob path.
+    let store = state.store.clone();
+    let id_for_spore = id.clone();
+    let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_for_spore))
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
+
+    // 3. Load the decoded entry to validate hash membership
     let store = state.store.clone();
     let id_for_decode = id.clone();
     let decoded_entry = tokio::task::spawn_blocking(move || store.get_dob_decoded(&id_for_decode))
@@ -1556,7 +1567,7 @@ async fn serve_media(
         .map_err(|e| ApiError::internal(e.to_string()))?
         .ok_or_else(|| ApiError::not_found("No decoded data for this spore"))?;
 
-    // 3. Validate that the requested hash exists in a decode step
+    // 4. Validate that the requested hash exists in a decode step
     let matched_step = decoded_entry
         .steps
         .iter()
@@ -1564,15 +1575,6 @@ async fn serve_media(
         .ok_or_else(|| ApiError::not_found("Media hash not found for this spore"))?;
 
     let content_type = matched_step.media_type.clone();
-
-    // 4. Load spore entry to get collection_id for filesystem path
-    let store = state.store.clone();
-    let id_for_spore = id.clone();
-    let spore_entry = tokio::task::spawn_blocking(move || store.get_spore(&id_for_spore))
-        .await
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .map_err(|e| ApiError::internal(e.to_string()))?
-        .ok_or_else(|| ApiError::not_found("Spore not found"))?;
 
     let collection_id = spore_entry.collection_id.as_deref().unwrap_or(&id);
 
