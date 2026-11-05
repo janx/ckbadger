@@ -1192,19 +1192,19 @@ mod tests {
         }
     }
 
-    fn make_live_cell(account_id: &[u8], owner_lock_hash: &[u8]) -> LiveCellInfo {
+    /// The live payload of the reactivated account cell; its owner is the
+    /// derived hash of the lock `[0x55; 32]` / `type` / `[0x66; 20]`. The cell
+    /// carries no type script: the fixture inserts the `.bit` rows directly.
+    fn make_live_cell() -> LiveCellInfo {
         LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: owner_lock_hash.to_vec(),
-            lock_code_hash: vec![0x55; 32],
+            lock_code_hash: [0x55; 32],
             lock_hash_type: 1,
             lock_args: vec![0x66; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
-            type_args: Some(account_id.to_vec()),
+            type_args: None,
             data_size: 0,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
             data_hash: None,
         }
@@ -1927,7 +1927,7 @@ mod tests {
         let (domain, append) = test_split_stores();
         let writer = BatchWriter::new(domain.clone(), append.clone());
 
-        let owner = vec![0xA1; 32];
+        let owner = make_live_cell().lock_script_hash().to_vec();
         let account_id = [0x11u8; 20];
         let initial_tx_hash = vec![0xB1; 32];
         let reactivate_tx_hash = vec![0xC1; 32];
@@ -1961,11 +1961,9 @@ mod tests {
         reactivate_batch.commit().unwrap();
 
         let mut append_batch = StoreBatch::new(append.as_ref());
-        append_batch.put_cell_payload_by_outpoint(
-            &reactivate_tx_hash,
-            0,
-            &make_live_cell(&account_id, &owner),
-        );
+        append_batch
+            .put_cell_payload_by_outpoint(&reactivate_tx_hash, 0, &make_live_cell())
+            .unwrap();
         append_batch.commit().unwrap();
 
         let mut domain_batch = StoreBatch::new(domain.as_ref());

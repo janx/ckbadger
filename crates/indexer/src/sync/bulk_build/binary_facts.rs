@@ -296,6 +296,14 @@ pub(crate) fn parse_block_to_facts(
             let lock_hash_type_byte: u8 = lock.hash_type().into();
             let lock_hash_type = lock_hash_type_byte as i16;
             let lock_args_bytes: Vec<u8> = lock.args().raw_data().to_vec();
+            ensure_canonical_script(&lock, lock_args_bytes.len()).map_err(|e| {
+                anyhow!(
+                    "binary facts lock script of block={} tx_index={} output_index={}: {e}",
+                    block_number,
+                    tx_index,
+                    output_index
+                )
+            })?;
             let lock_script_hash: [u8; 32] = lock.calc_script_hash().unpack();
 
             // -- Type script (optional) --------------------------------------
@@ -306,6 +314,14 @@ pub(crate) fn parse_block_to_facts(
                     let code_hash: [u8; 32] = type_script.code_hash().unpack();
                     let ht_byte: u8 = type_script.hash_type().into();
                     let args: Vec<u8> = type_script.args().raw_data().to_vec();
+                    ensure_canonical_script(type_script, args.len()).map_err(|e| {
+                        anyhow!(
+                            "binary facts type script of block={} tx_index={} output_index={}: {e}",
+                            block_number,
+                            tx_index,
+                            output_index
+                        )
+                    })?;
                     let script_hash: [u8; 32] = type_script.calc_script_hash().unpack();
                     (
                         Some(code_hash),
@@ -545,6 +561,22 @@ pub(crate) fn parse_block_to_facts(
 // ---------------------------------------------------------------------------
 // Cycles extraction
 // ---------------------------------------------------------------------------
+
+/// Bulk index keys are ckb-types' hash of the raw script bytes, while the
+/// `cells` payload stores only the fields and every reader re-derives the hash
+/// from them. The two agree only for the canonical Molecule encoding (16-byte
+/// header, 32-byte code hash, hash-type byte, 4-byte args length, args, no
+/// extra fields), so any other byte length is refused. O(1), no hashing.
+fn ensure_canonical_script(script: &ckb_types::packed::Script, args_len: usize) -> Result<()> {
+    let canonical_len = 16 + 32 + 1 + 4 + args_len;
+    let actual_len = script.as_slice().len();
+    if actual_len != canonical_len {
+        return Err(anyhow!(
+            "script bytes are not the canonical Molecule encoding: {actual_len} bytes for {args_len} bytes of args, canonical {canonical_len}"
+        ));
+    }
+    Ok(())
+}
 
 fn parse_binary_tx_cycles(
     raw: &RawCkbBlock,
@@ -997,6 +1029,146 @@ pub(crate) fn build_bulk_facts_arena_from_raw_blocks(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod canonical_scripts {
+        use super::*;
+        use ckb_types::{bytes::Bytes, packed};
+
+        fn script(code_hash: [u8; 32], hash_type: u8, args: &[u8]) -> packed::Script {
+            packed::Script::new_builder()
+                .code_hash(code_hash.pack())
+                .hash_type(packed::Byte::new(hash_type))
+                .args(Bytes::from(args.to_vec()).pack())
+                .build()
+        }
+
+        fn block_with_output(
+            lock: packed::Script,
+            type_script: Option<packed::Script>,
+        ) -> RawCkbBlock {
+            let output = packed::CellOutput::new_builder()
+                .capacity(packed::Uint64::from_slice(&500_00000000u64.to_le_bytes()).unwrap())
+                .lock(lock)
+                .type_(type_script.pack())
+                .build();
+            let tx = packed::Transaction::new_builder()
+                .raw(
+                    packed::RawTransaction::new_builder()
+                        .outputs(packed::CellOutputVec::new_builder().push(output).build())
+                        .outputs_data(
+                            packed::BytesVec::new_builder()
+                                .push(Bytes::new().pack())
+                                .build(),
+                        )
+                        .build(),
+                )
+                .build();
+            let block = packed::Block::new_builder()
+                .header(
+                    packed::Header::new_builder()
+                        .raw(packed::RawHeader::new_builder().build())
+                        .build(),
+                )
+                .transactions(packed::TransactionVec::new_builder().push(tx).build())
+                .build();
+            RawCkbBlock {
+                block: block.into_view(),
+                cycles: Vec::new(),
+            }
+        }
+
+        /// Bulk keys the indexes by ckb-types' hash of the raw script bytes;
+        /// the payload built from the same facts re-derives the hashes from
+        /// its fields. For a real (canonical) block they are the same bytes.
+        #[test]
+        fn bulk_index_key_hashes_equal_the_payload_derived_hashes() {
+            let secp: [u8; 32] = crate::rpc::parse_hex_to_bytes(
+                "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8",
+            )
+            .try_into()
+            .unwrap();
+            let sudt: [u8; 32] = crate::rpc::parse_hex_to_bytes(
+                "0x5e7a36a77e68eecc013dfa2fe6a23f3b6c344b04005808694ae6dd45eea4cfd5",
+            )
+            .try_into()
+            .unwrap();
+            let raw = block_with_output(
+                script(secp, 1, &[0x11; 20]),
+                Some(script(sudt, 1, &[0x22; 32])),
+            );
+            let interner = IdentityInterner::default();
+            let (_, _, cells) = parse_block_to_facts(&raw, &interner).unwrap();
+            assert_eq!(cells.len(), 1);
+            let view = interner.snapshot_for_reads();
+            let info = super::super::super::cell_facts_to_live_cell_info(&cells[0], &view).unwrap();
+            assert_eq!(
+                view.resolve_bytes(cells[0].lock_script_hash_id),
+                info.lock_script_hash().as_slice()
+            );
+            assert_eq!(
+                view.resolve_bytes(cells[0].type_script_hash_id.unwrap()),
+                info.type_script_hash().unwrap().as_slice()
+            );
+        }
+
+        /// A Script table with a fourth field is valid Molecule in compatible
+        /// mode and hashes differently from its three fields: bulk refuses it
+        /// with its location instead of indexing it under that hash.
+        #[test]
+        fn non_canonical_script_bytes_fail_with_their_location() {
+            let mut bytes = Vec::new();
+            let total_size: u32 = 20 + 32 + 1 + 4 + 5;
+            for word in [total_size, 20, 52, 53, 57] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            bytes.extend_from_slice(&[0x9b; 32]); // code_hash
+            bytes.push(1); // hash_type
+            bytes.extend_from_slice(&0u32.to_le_bytes()); // args: empty
+            bytes.extend_from_slice(&1u32.to_le_bytes()); // extra Bytes field
+            bytes.push(0xee);
+            assert_eq!(bytes.len(), total_size as usize);
+            let lock = packed::Script::new_unchecked(Bytes::from(bytes));
+            assert!(lock.args().raw_data().is_empty());
+
+            let raw = block_with_output(lock, None);
+            let err = parse_block_to_facts(&raw, &IdentityInterner::default())
+                .expect_err("non-canonical script must fail")
+                .to_string();
+            assert!(
+                err.contains("not the canonical Molecule encoding")
+                    && err.contains("block=0")
+                    && err.contains("tx_index=0")
+                    && err.contains("output_index=0"),
+                "{err}"
+            );
+
+            let raw = block_with_output(
+                script([0x9b; 32], 1, &[0x11; 20]),
+                Some(packed::Script::new_unchecked(raw_extra_field_type_script())),
+            );
+            let err = parse_block_to_facts(&raw, &IdentityInterner::default())
+                .expect_err("non-canonical type script must fail")
+                .to_string();
+            assert!(
+                err.contains("type script") && err.contains("output_index=0"),
+                "{err}"
+            );
+        }
+
+        /// A type script with an extra field, built the same way.
+        fn raw_extra_field_type_script() -> Bytes {
+            let mut bytes = Vec::new();
+            for word in [62u32, 20, 52, 53, 57] {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
+            bytes.extend_from_slice(&[0x5e; 32]);
+            bytes.push(1);
+            bytes.extend_from_slice(&0u32.to_le_bytes());
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.push(0xee);
+            Bytes::from(bytes)
+        }
+    }
 
     #[test]
     fn witness_has_das_binary_prefix_detects_das() {

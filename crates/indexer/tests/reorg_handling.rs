@@ -139,20 +139,24 @@ fn make_tx_entry(is_cellbase: bool) -> TxIndexEntry {
     }
 }
 
-fn make_cell(block_num: i64, lock_hash: &[u8]) -> PositionedCellInfo {
+/// The address of the owner whose cells `make_cell` / `make_udt_cell` build
+/// from `lock_args`: the derived hash of their lock (`[0xAA; 32]`, `type`).
+fn owner_lock_hash(lock_args: &[u8]) -> Vec<u8> {
+    ckbadger_indexer::parser::ScriptParser::compute_script_hash_raw(&[0xAA; 32], 1, lock_args)
+}
+
+/// `lock_args` names the owner; its address is [`owner_lock_hash`].
+fn make_cell(block_num: i64, lock_args: &[u8]) -> PositionedCellInfo {
     PositionedCellInfo::new(
         LiveCellInfo {
             capacity: 10_000_000_000,
-            lock_script_hash: lock_hash.to_vec(),
-            lock_code_hash: vec![0xAA; 32],
+            lock_code_hash: [0xAA; 32],
             lock_hash_type: 1,
-            lock_args: vec![0xBB; 20],
-            type_script_hash: None,
+            lock_args: lock_args.to_vec(),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         },
@@ -168,7 +172,7 @@ fn insert_full_block(
     domain_store: &CkbadgerStore,
     cells_store: Option<&CkbadgerStore>,
     block_num: i64,
-    lock_hash: &[u8],
+    lock_args: &[u8],
 ) {
     let header = make_header(block_num);
     let cellbase = make_tx_entry(true);
@@ -182,7 +186,7 @@ fn insert_full_block(
     tx_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     tx_hash[8] = 0x01; // tx index 1
 
-    let cell = make_cell(block_num, lock_hash);
+    let cell = make_cell(block_num, lock_args);
 
     let mut domain_batch = StoreBatch::new(domain_store);
     domain_batch.put_block_header(block_num, &header);
@@ -194,14 +198,16 @@ fn insert_full_block(
     if let Some(cs) = cells_store {
         // Split stores: payload to append-only, marker to domain
         let mut cells_batch = StoreBatch::new(cs);
-        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell);
+        cells_batch
+            .put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell)
+            .unwrap();
         cells_batch.commit().unwrap();
         domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
         // Unified test store: combined write
         domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     }
-    domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
+    domain_batch.put_cell_by_lock(&cell.lock_script_hash(), block_num, &tx_hash, 0);
     domain_batch.commit().unwrap();
     seed_epoch_rows(domain_store, [block_num]);
 }
@@ -209,15 +215,19 @@ fn insert_full_block(
 /// Write the derived CF records (address and both script rollups) that forward sync
 /// would have produced. Rollback's inline delta code reads these CFs, so they
 /// must exist before `rollback_to_block_with_append_only_store` is called.
-fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i64) {
+fn populate_derived_cfs(store: &CkbadgerStore, lock_args: &[u8], block_count: i64) {
+    let lock_hash = owner_lock_hash(lock_args);
+    let lock_hash = lock_hash.as_slice();
     let lock_code_hash = vec![0xAA; 32]; // matches make_cell
     let cap_per_cell: i128 = 10_000_000_000; // matches make_cell
+                                             // make_cell's occupied capacity, derived from its lock args.
+    let occupied_per_cell = i128::from(make_cell(0, lock_args).occupied_capacity());
 
     let mut batch = StoreBatch::new(store);
 
     let addr_bal = AddressBalance {
         balance: block_count as i128 * cap_per_cell,
-        used_capacity: 0, // make_cell sets occupied_capacity = 0
+        used_capacity: block_count as i128 * occupied_per_cell,
         live_cells_count: block_count as i32,
         total_cells_count: block_count,
         txs_count: block_count,
@@ -236,6 +246,8 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
         lock_live_cells_count: block_count,
         lock_capacity_sum: block_count as i128 * cap_per_cell,
         lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
+        lock_used_capacity_sum: block_count as i128 * occupied_per_cell,
+        lock_owned_knowledge_sum: block_count as i128 * occupied_per_cell,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
@@ -249,6 +261,8 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
             lock_live_cells_count: block_count,
             lock_capacity_sum: block_count as i128 * cap_per_cell,
             lock_owned_capacity_sum: block_count as i128 * cap_per_cell,
+            lock_used_capacity_sum: block_count as i128 * occupied_per_cell,
+            lock_owned_knowledge_sum: block_count as i128 * occupied_per_cell,
             ..Default::default()
         },
     );
@@ -260,12 +274,15 @@ fn populate_derived_cfs(store: &CkbadgerStore, lock_hash: &[u8], block_count: i6
 fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
     let (domain, append) = setup_split_stores();
     let tx_hash = vec![0xAB; 32];
-    let lock_hash = vec![0xCD; 32];
+    let lock_args = vec![0xCD; 32];
+    let lock_hash = owner_lock_hash(&lock_args);
     let outpoint_key = ckbadger_store::keys::encode_outpoint(&tx_hash, 0);
 
-    let original = make_cell(100, &lock_hash);
+    let original = make_cell(100, &lock_args);
     let mut original_cells_batch = StoreBatch::new(&append);
-    original_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &original.cell);
+    original_cells_batch
+        .put_cell_payload_by_outpoint(&tx_hash, 0, &original.cell)
+        .unwrap();
     original_cells_batch.commit().unwrap();
 
     let mut original_domain_batch = StoreBatch::new(&domain);
@@ -281,22 +298,21 @@ fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
     rollback_batch.delete_cell_by_lock(&lock_hash, original.created_at_block, &tx_hash, 0);
     rollback_batch.commit().unwrap();
 
-    let mut reorged = make_cell(101, &lock_hash);
+    let mut reorged = make_cell(101, &lock_args);
     reorged.cell.capacity = original.capacity;
-    reorged.cell.lock_script_hash = original.lock_script_hash.clone();
-    reorged.cell.lock_code_hash = original.lock_code_hash.clone();
+    reorged.cell.lock_code_hash = original.lock_code_hash;
     reorged.cell.lock_hash_type = original.lock_hash_type;
     reorged.cell.lock_args = original.lock_args.clone();
-    reorged.cell.type_script_hash = original.type_script_hash.clone();
-    reorged.cell.type_code_hash = original.type_code_hash.clone();
+    reorged.cell.type_code_hash = original.type_code_hash;
     reorged.cell.type_hash_type = original.type_hash_type;
     reorged.cell.type_args = original.type_args.clone();
     reorged.cell.data_size = original.data_size;
-    reorged.cell.occupied_capacity = original.occupied_capacity;
     reorged.cell.udt_amount = original.udt_amount;
 
     let mut reorg_cells_batch = StoreBatch::new(&append);
-    reorg_cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &reorged.cell);
+    reorg_cells_batch
+        .put_cell_payload_by_outpoint(&tx_hash, 0, &reorged.cell)
+        .unwrap();
     reorg_cells_batch.commit().unwrap();
 
     let mut reorg_domain_batch = StoreBatch::new(&domain);
@@ -307,17 +323,17 @@ fn test_reorg_reinsert_same_outpoint_refreshes_created_at_block() {
     let live_after = domain.get_cell(&tx_hash, 0, &append).unwrap().unwrap();
     assert_eq!(live_after.created_at_block, 101);
     assert_eq!(live_after.capacity, original.capacity);
-    assert_eq!(live_after.lock_script_hash, original.lock_script_hash);
+    assert_eq!(live_after.lock_script_hash(), original.lock_script_hash());
 }
 
 #[test]
 fn test_rollback_removes_blocks() {
     let (store, append_store) = setup_split_stores();
-    let lock_hash = vec![0xFF; 32];
+    let lock_args = vec![0xFF; 32];
 
     // Insert blocks 1 through 10
     for i in 1..=10 {
-        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_args);
     }
 
     // Verify all 10 blocks exist
@@ -330,7 +346,7 @@ fn test_rollback_removes_blocks() {
     }
 
     // Populate derived CFs so inline delta code finds the records it needs.
-    populate_derived_cfs(&store, &lock_hash, 10);
+    populate_derived_cfs(&store, &lock_args, 10);
 
     // Rollback to block 5: blocks 6-10 should be removed
     let result: RollbackResult = rollback_fixture(&store, 5, Some(append_store.as_ref())).unwrap();
@@ -358,11 +374,11 @@ fn test_rollback_removes_blocks() {
 #[test]
 fn test_rollback_removes_transactions() {
     let (store, append_store) = setup_split_stores();
-    let lock_hash = vec![0xEE; 32];
+    let lock_args = vec![0xEE; 32];
 
     // Insert blocks 1 through 6
     for i in 1..=6 {
-        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_args);
     }
 
     // Verify txs in block 6 exist
@@ -370,7 +386,7 @@ fn test_rollback_removes_transactions() {
     assert_eq!(txs.len(), 2, "block 6 should have 2 txs before rollback");
 
     // Populate derived CFs so inline delta code finds the records it needs.
-    populate_derived_cfs(&store, &lock_hash, 6);
+    populate_derived_cfs(&store, &lock_args, 6);
 
     // Rollback to block 3
     let result = rollback_fixture(&store, 3, Some(append_store.as_ref())).unwrap();
@@ -390,11 +406,12 @@ fn test_rollback_removes_transactions() {
 #[test]
 fn test_rollback_removes_cells_and_indexes() {
     let (store, append_store) = setup_split_stores();
-    let lock_hash = vec![0xDD; 32];
+    let lock_args = vec![0xDD; 32];
+    let lock_hash = owner_lock_hash(&lock_args);
 
     // Insert blocks 1 through 4
     for i in 1..=4 {
-        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_args);
     }
 
     // Verify cells exist via lock index (4 blocks, 1 cell each)
@@ -404,7 +421,7 @@ fn test_rollback_removes_cells_and_indexes() {
     assert_eq!(cells_before.len(), 4, "should have 4 cells before rollback");
 
     // Populate derived CFs so inline delta code finds the records it needs.
-    populate_derived_cfs(&store, &lock_hash, 4);
+    populate_derived_cfs(&store, &lock_args, 4);
 
     // Rollback to block 2: blocks 3-4 removed
     let result = rollback_fixture(&store, 2, Some(append_store.as_ref())).unwrap();
@@ -425,15 +442,15 @@ fn test_rollback_removes_cells_and_indexes() {
 #[test]
 fn test_rollback_result_counts() {
     let (store, append_store) = setup_split_stores();
-    let lock_hash = vec![0xCC; 32];
+    let lock_args = vec![0xCC; 32];
 
     // Insert blocks 1 through 8
     for i in 1..=8 {
-        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_args);
     }
 
     // Populate derived CFs so inline delta code finds the records it needs.
-    populate_derived_cfs(&store, &lock_hash, 8);
+    populate_derived_cfs(&store, &lock_args, 8);
 
     // Rollback to block 5: remove blocks 6, 7, 8
     let result = rollback_fixture(&store, 5, Some(append_store.as_ref())).unwrap();
@@ -552,20 +569,17 @@ fn test_rollback_deletes_activities_for_rolled_back_blocks() {
 }
 
 /// Create a UDT cell with type_script_hash, type_code_hash, and udt_amount set.
-fn make_udt_cell(block_num: i64, lock_hash: &[u8]) -> PositionedCellInfo {
+fn make_udt_cell(block_num: i64, lock_args: &[u8]) -> PositionedCellInfo {
     PositionedCellInfo::new(
         LiveCellInfo {
             capacity: 14_200_000_000,
-            lock_script_hash: lock_hash.to_vec(),
-            lock_code_hash: vec![0xAA; 32],
+            lock_code_hash: [0xAA; 32],
             lock_hash_type: 1,
-            lock_args: vec![0xBB; 20],
-            type_script_hash: Some(vec![0xCC; 32]),
-            type_code_hash: Some(vec![0xDD; 32]),
+            lock_args: lock_args.to_vec(),
+            type_code_hash: Some([0xDD; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0xEE; 20]),
             data_size: 16,
-            occupied_capacity: 14_200_000_000,
             udt_amount: Some(500_000_000),
             data_hash: None,
         },
@@ -578,27 +592,29 @@ fn insert_udt_cell(
     domain_store: &CkbadgerStore,
     cells_store: Option<&CkbadgerStore>,
     block_num: i64,
-    lock_hash: &[u8],
+    lock_args: &[u8],
 ) {
     let mut tx_hash = vec![0u8; 32];
     tx_hash[0..8].copy_from_slice(&block_num.to_le_bytes());
     tx_hash[8] = 0xFF; // distinguish from regular tx hashes
 
-    let cell = make_udt_cell(block_num, lock_hash);
-    let type_hash = cell.type_script_hash.as_ref().unwrap();
+    let cell = make_udt_cell(block_num, lock_args);
+    let type_hash = &cell.type_script_hash().unwrap();
     let type_code_hash = cell.type_code_hash.as_ref().unwrap();
 
     let mut domain_batch = StoreBatch::new(domain_store);
 
     if let Some(cs) = cells_store {
         let mut cells_batch = StoreBatch::new(cs);
-        cells_batch.put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell);
+        cells_batch
+            .put_cell_payload_by_outpoint(&tx_hash, 0, &cell.cell)
+            .unwrap();
         cells_batch.commit().unwrap();
         domain_batch.put_live_cell_marker_by_outpoint(&tx_hash, 0, cell.created_at_block);
     } else {
         domain_batch.put_cell(&tx_hash, 0, &cell.cell, cell.created_at_block);
     }
-    domain_batch.put_cell_by_lock(lock_hash, block_num, &tx_hash, 0);
+    domain_batch.put_cell_by_lock(&cell.lock_script_hash(), block_num, &tx_hash, 0);
     domain_batch.put_cell_by_type(type_hash, block_num, &tx_hash, 0);
     domain_batch.put_cell_by_type_code(
         type_code_hash,
@@ -613,23 +629,32 @@ fn insert_udt_cell(
 #[test]
 fn test_rollback_updates_derived_cfs_inline() {
     let (store, append_store) = setup_split_stores();
-    let lock_hash = vec![1u8; 32];
+    let lock_args = vec![1u8; 32];
+    let lock_hash = owner_lock_hash(&lock_args);
     let lock_code_hash = vec![0xAA; 32];
-    let type_script_hash = vec![0xCC; 32];
+    // The token of `make_udt_cell`'s cells: the derived hash of their type script.
+    let type_script_hash = make_udt_cell(0, &lock_args)
+        .type_script_hash()
+        .unwrap()
+        .to_vec();
     let type_code_hash = vec![0xDD; 32];
 
     let reg_cap: i128 = 10_000_000_000;
+    // The UDT cell's derived occupied capacity is its whole capacity:
+    // 8 + 33 + 32 lock args + 33 + 20 type args + 16 data bytes = 142 CKB.
     let udt_cap: i128 = 14_200_000_000;
+    // A regular cell's derived occupied capacity: 8 + 33 + 32 lock args.
+    let reg_occ = i128::from(make_cell(0, &lock_args).occupied_capacity());
     let udt_amount: u128 = 500_000_000;
 
     // 1. Insert blocks 1-4 with regular cells for lock_hash.
     for i in 1..=4 {
-        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_args);
     }
 
     // 2. Insert UDT cells for blocks 3 and 4.
-    insert_udt_cell(&store, Some(append_store.as_ref()), 3, &lock_hash);
-    insert_udt_cell(&store, Some(append_store.as_ref()), 4, &lock_hash);
+    insert_udt_cell(&store, Some(append_store.as_ref()), 3, &lock_args);
+    insert_udt_cell(&store, Some(append_store.as_ref()), 4, &lock_args);
 
     // 3. Write initial derived CF state.
     let mut batch = StoreBatch::new(&store);
@@ -637,7 +662,7 @@ fn test_rollback_updates_derived_cfs_inline() {
     // addr_balance: 4 regular cells + 2 UDT cells = 6 live cells
     let addr_bal = AddressBalance {
         balance: 4 * reg_cap + 2 * udt_cap,
-        used_capacity: 2 * udt_cap, // only UDT cells have occupied_capacity set
+        used_capacity: 4 * reg_occ + 2 * udt_cap,
         live_cells_count: 6,
         total_cells_count: 6,
         txs_count: 4,
@@ -657,8 +682,8 @@ fn test_rollback_updates_derived_cfs_inline() {
         lock_live_cells_count: 6,
         lock_capacity_sum: 4 * reg_cap + 2 * udt_cap,
         lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-        lock_used_capacity_sum: 2 * udt_cap,
-        lock_owned_knowledge_sum: 2 * udt_cap,
+        lock_used_capacity_sum: 4 * reg_occ + 2 * udt_cap,
+        lock_owned_knowledge_sum: 4 * reg_occ + 2 * udt_cap,
         ..Default::default()
     };
     batch.put_script_info(&lock_code_hash, &lock_si);
@@ -672,8 +697,8 @@ fn test_rollback_updates_derived_cfs_inline() {
             lock_live_cells_count: 6,
             lock_capacity_sum: 4 * reg_cap + 2 * udt_cap,
             lock_owned_capacity_sum: 4 * reg_cap + 2 * udt_cap,
-            lock_used_capacity_sum: 2 * udt_cap,
-            lock_owned_knowledge_sum: 2 * udt_cap,
+            lock_used_capacity_sum: 4 * reg_occ + 2 * udt_cap,
+            lock_owned_knowledge_sum: 4 * reg_occ + 2 * udt_cap,
             ..Default::default()
         },
     );
@@ -752,8 +777,9 @@ fn test_rollback_updates_derived_cfs_inline() {
         "addr_balance balance: only 2 regular cells remain"
     );
     assert_eq!(
-        ab.used_capacity, 0,
-        "addr_balance used_capacity: UDT cells removed"
+        ab.used_capacity,
+        2 * reg_occ,
+        "addr_balance used_capacity: UDT cells and two regular cells removed"
     );
     // txs_count is not tracked by inline rollback deltas; the rebuild path
     // recomputes it from addr_txs which is not populated in this test.
@@ -766,7 +792,7 @@ fn test_rollback_updates_derived_cfs_inline() {
     );
     assert_eq!(lock_si.lock_cells_count, 2);
     assert_eq!(lock_si.lock_capacity_sum, 2 * reg_cap);
-    assert_eq!(lock_si.lock_used_capacity_sum, 0);
+    assert_eq!(lock_si.lock_used_capacity_sum, 2 * reg_occ);
     assert_eq!(
         lock_si.lock_owned_capacity_sum,
         2 * reg_cap,
@@ -1026,19 +1052,20 @@ fn test_rollback_resets_fiber_channel_closed_after_fork_point_to_open() {
 fn test_rollback_adjusts_script_reference_info_deltas() {
     let (domain, append) = setup_split_stores();
 
-    let lock_hash = vec![0x11; 32];
+    let lock_args = vec![0x11; 32];
     let lock_code_hash = vec![0xAA; 32];
 
     // Insert blocks 1..5 with cells using lock_code_hash
     for b in 1..=5 {
-        insert_full_block(&domain, Some(&append), b, &lock_hash);
+        insert_full_block(&domain, Some(&append), b, &lock_args);
     }
-    populate_derived_cfs(&domain, &lock_hash, 5);
+    populate_derived_cfs(&domain, &lock_args, 5);
 
     // Pre-populate script_reference_info for the lock code_hash.
     // hash_type=1, is_type=false (lock side).
     // Simulate 5 cells using this script as lock: 5 total, 5 live.
     let cap_per_cell: i128 = 10_000_000_000;
+    let occupied_per_cell = i128::from(make_cell(0, &lock_args).occupied_capacity());
     let sri = ScriptReferenceInfo {
         reference_hash: lock_code_hash.clone(),
         hash_type: 1,
@@ -1046,8 +1073,8 @@ fn test_rollback_adjusts_script_reference_info_deltas() {
         lock_live_cells_count: 5,
         lock_capacity_sum: 5 * cap_per_cell,
         lock_owned_capacity_sum: 5 * cap_per_cell,
-        lock_used_capacity_sum: 0,
-        lock_owned_knowledge_sum: 0,
+        lock_used_capacity_sum: 5 * occupied_per_cell,
+        lock_owned_knowledge_sum: 5 * occupied_per_cell,
         type_cells_count: 0,
         type_live_cells_count: 0,
         type_capacity_sum: 0,
@@ -1084,6 +1111,11 @@ fn test_rollback_adjusts_script_reference_info_deltas() {
         updated.lock_owned_capacity_sum,
         2 * cap_per_cell,
         "lock_owned_capacity_sum: 2 surviving cells"
+    );
+    assert_eq!(
+        updated.lock_owned_knowledge_sum,
+        2 * occupied_per_cell,
+        "lock_owned_knowledge_sum: 2 surviving cells"
     );
     // Type side untouched
     assert_eq!(updated.type_cells_count, 0);
@@ -1291,16 +1323,16 @@ fn test_rollback_deletes_multi_participant_activities() {
 #[test]
 fn test_rollback_truncates_utc_keyed_chain_hourly_stats() {
     let (domain, append) = setup_split_stores();
-    let lock_hash = vec![0xEC; 32];
+    let lock_args = vec![0xEC; 32];
 
     // make_header timestamps (1_000_000 + n*1000 ms) all sit inside the UTC
     // hour 1970-01-01T00:00 → chain-hourly key "1970010100". The UTC+8 hour
     // string for the same instant is "1970010108" — a cutoff computed on the
     // UTC+8 clock can never match these keys.
     for n in 1..=5 {
-        insert_full_block(&domain, Some(append.as_ref()), n, &lock_hash);
+        insert_full_block(&domain, Some(append.as_ref()), n, &lock_args);
     }
-    populate_derived_cfs(&domain, &lock_hash, 5);
+    populate_derived_cfs(&domain, &lock_args, 5);
 
     // Pre-rollback bucket state consistent with 5 blocks × (2 txs, 3 outputs
     // per tx, 2 inputs per non-cellbase tx) from the fixtures above, including
@@ -1405,23 +1437,25 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     use ckbadger_store::types::DailyStats;
 
     let (domain, append) = setup_split_stores();
-    let lock_hash = vec![0xF2; 32];
+    let lock_args = vec![0xF2; 32];
 
     const CAP_STD: i64 = 10_000_000_000; // make_cell capacity
     const CAP_PAIR: i64 = 700_000_000;
-    const OCC_PAIR: i64 = 300_000_000;
     const DATA_PAIR: i32 = 16;
     const CAP_RST: i64 = 900_000_000;
-    const OCC_RST: i64 = 400_000_000;
     const DATA_RST: i32 = 32;
+    // Derived occupied capacity: 8 + 33 + 32 lock args, no type, plus data.
+    const OCC_STD: i64 = (8 + 33 + 32) * 100_000_000; // make_cell, no data
+    const OCC_PAIR: i64 = (8 + 33 + 32 + DATA_PAIR as i64) * 100_000_000;
+    const OCC_RST: i64 = (8 + 33 + 32 + DATA_RST as i64) * 100_000_000;
 
     // Blocks 1..=5: make_header timestamps (1_000_000 + n*1000 ms) all sit in
     // UTC hour "1970010100" and UTC+8 date "19700101". Each block has a
     // cellbase + one normal tx whose output 0 is a live cell of CAP_STD.
     for n in 1..=5 {
-        insert_full_block(&domain, Some(append.as_ref()), n, &lock_hash);
+        insert_full_block(&domain, Some(append.as_ref()), n, &lock_args);
     }
-    populate_derived_cfs(&domain, &lock_hash, 5);
+    populate_derived_cfs(&domain, &lock_args, 5);
 
     // Normal (non-cellbase) tx hash of block n — matches insert_full_block.
     let normal_tx_hash = |n: i64| {
@@ -1430,32 +1464,33 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
         h[8] = 0x01;
         h
     };
-    let make_extra_cell = |capacity: i64, occupied: i64, data_size: i32| LiveCellInfo {
+    let make_extra_cell = |capacity: i64, data_size: i32| LiveCellInfo {
         capacity,
-        lock_script_hash: lock_hash.clone(),
-        lock_code_hash: vec![0xAA; 32],
+        lock_code_hash: [0xAA; 32],
         lock_hash_type: 1,
-        lock_args: vec![0xBB; 20],
-        type_script_hash: None,
+        lock_args: lock_args.clone(),
         type_code_hash: None,
         type_hash_type: None,
         type_args: None,
         data_size,
-        occupied_capacity: occupied,
         udt_amount: None,
         data_hash: None,
     };
 
     // Pair cell: created by block 4's normal tx (output 1), consumed in
     // block 5 — created AND consumed inside the rolled-back range.
-    let pair_cell = make_extra_cell(CAP_PAIR, OCC_PAIR, DATA_PAIR);
+    let pair_cell = make_extra_cell(CAP_PAIR, DATA_PAIR);
     // Restore cell: created by block 2's normal tx (output 1), consumed in
     // block 5 — consumption is rolled back, the cell returns to live.
-    let restore_cell = make_extra_cell(CAP_RST, OCC_RST, DATA_RST);
+    let restore_cell = make_extra_cell(CAP_RST, DATA_RST);
 
     let mut cells_batch = StoreBatch::new(&append);
-    cells_batch.put_cell_payload_by_outpoint(&normal_tx_hash(4), 1, &pair_cell);
-    cells_batch.put_cell_payload_by_outpoint(&normal_tx_hash(2), 1, &restore_cell);
+    cells_batch
+        .put_cell_payload_by_outpoint(&normal_tx_hash(4), 1, &pair_cell)
+        .unwrap();
+    cells_batch
+        .put_cell_payload_by_outpoint(&normal_tx_hash(2), 1, &restore_cell)
+        .unwrap();
     cells_batch.commit().unwrap();
     let mut domain_batch = StoreBatch::new(&domain);
     domain_batch.put_consumed_cell_meta(&normal_tx_hash(4), 1, 4, 5, Some(&normal_tx_hash(5)));
@@ -1466,7 +1501,7 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     // while their net live ownership is zero.
     let lock_code_hash = vec![0xAA; 32];
     let total_capacity = 5 * CAP_STD as i128 + CAP_PAIR as i128 + CAP_RST as i128;
-    let total_used = (OCC_PAIR + OCC_RST) as i128;
+    let total_used = (5 * OCC_STD + OCC_PAIR + OCC_RST) as i128;
     let mut script = domain.get_script_info(&lock_code_hash).unwrap().unwrap();
     script.lock_cells_count = 7;
     script.lock_capacity_sum = total_capacity;
@@ -1485,8 +1520,8 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
     // Seed the cutoff-hour and cutoff-day stats rows exactly as forward sync
     // would have written them for the fixture chain:
     // capacity_transferred = all non-cellbase output capacities by creating
-    // block; used/data flows from the two extra cells (std cells have occ=0,
-    // data=0).
+    // block; used capacity from all seven creations, consumption and data
+    // from the two extra cells (std cells have no data and are not consumed).
     let seeded_capacity: i128 = 5 * CAP_STD as i128 + CAP_PAIR as i128 + CAP_RST as i128;
     domain
         .put_hourly_stats(
@@ -1511,7 +1546,7 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
         cells_created: 30,
         cells_consumed: 10,
         capacity_transferred: seeded_capacity,
-        used_capacity_created: (OCC_PAIR + OCC_RST) as i128,
+        used_capacity_created: (5 * OCC_STD + OCC_PAIR + OCC_RST) as i128,
         used_capacity_consumed: (OCC_PAIR + OCC_RST) as i128,
         total_live_cells: 20,
         total_dead_cells: 10,
@@ -1547,8 +1582,14 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
         script.lock_owned_capacity_sum,
         3 * CAP_STD as i128 + CAP_RST as i128
     );
-    assert_eq!(script.lock_used_capacity_sum, OCC_RST as i128);
-    assert_eq!(script.lock_owned_knowledge_sum, OCC_RST as i128);
+    assert_eq!(
+        script.lock_used_capacity_sum,
+        (3 * OCC_STD + OCC_RST) as i128
+    );
+    assert_eq!(
+        script.lock_owned_knowledge_sum,
+        (3 * OCC_STD + OCC_RST) as i128
+    );
     let reference = domain
         .get_script_reference_info(1, &lock_code_hash)
         .unwrap()
@@ -1625,8 +1666,9 @@ fn test_rollback_repairs_cutoff_hour_capacity_and_pair_flows() {
         "pair-cell creation must be subtracted from cutoff-day capacity_transferred"
     );
     assert_eq!(
-        repaired_daily.used_capacity_created, OCC_RST as i128,
-        "pair-cell occupied capacity must be subtracted from used_capacity_created"
+        repaired_daily.used_capacity_created,
+        (3 * OCC_STD + OCC_RST) as i128,
+        "pair-cell and rolled-back std-cell occupied capacity must be subtracted from used_capacity_created"
     );
     assert_eq!(
         repaired_daily.used_capacity_consumed, 0,
@@ -1964,11 +2006,12 @@ fn test_rollback_preserves_dao_singleton_aggregates() {
     use ckbadger_store::types::{DaoLatestStatistics, DaoTopDepositorEntry, DaoTopDepositors};
 
     let (store, append_store) = setup_split_stores();
-    let lock_hash = vec![0xF1; 32];
+    let lock_args = vec![0xF1; 32];
+    let lock_hash = owner_lock_hash(&lock_args);
     for i in 1..=10 {
-        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_hash);
+        insert_full_block(&store, Some(append_store.as_ref()), i, &lock_args);
     }
-    populate_derived_cfs(&store, &lock_hash, 10);
+    populate_derived_cfs(&store, &lock_args, 10);
 
     store
         .put_dao_top_depositors(&DaoTopDepositors {

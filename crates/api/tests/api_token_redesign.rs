@@ -390,13 +390,10 @@ async fn token_cells_count_reads_no_cells() {
     let store = fixture();
     let cell = LiveCellInfo {
         capacity: 100,
-        occupied_capacity: 80,
-        lock_script_hash: vec![0x32; 32],
-        lock_code_hash: vec![0x33; 32],
+        lock_code_hash: [0x33; 32],
         lock_hash_type: 1,
         lock_args: vec![],
-        type_script_hash: Some(TOKEN.to_vec()),
-        type_code_hash: Some(vec![0x72; 32]),
+        type_code_hash: Some([0x72; 32]),
         type_hash_type: Some(1),
         type_args: Some(vec![0x73; 32]),
         data_size: 16,
@@ -573,13 +570,10 @@ async fn real_token_router_producer_contract() {
         0,
         &LiveCellInfo {
             capacity: 1000,
-            occupied_capacity: 600,
-            lock_script_hash: vec![0x32; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(TOKEN.to_vec()),
-            type_code_hash: Some(vec![0x72; 32]),
+            type_code_hash: Some([0x72; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x73; 32]),
             data_size: 16,
@@ -1013,25 +1007,24 @@ async fn token_transactions_rows_read_outputs_in_one_batch() {
             entry.outputs_count = outputs;
             batch.put_tx_index(block, 2, &entry);
             for index in 0..outputs {
-                batch.put_cell_payload_by_outpoint(
-                    &hash,
-                    index,
-                    &LiveCellInfo {
-                        capacity: 100,
-                        occupied_capacity: 61,
-                        lock_script_hash: vec![0x32; 32],
-                        lock_code_hash: vec![0x33; 32],
-                        lock_hash_type: 1,
-                        lock_args: vec![],
-                        type_script_hash: None,
-                        type_code_hash: None,
-                        type_hash_type: None,
-                        type_args: None,
-                        data_size: 0,
-                        udt_amount: None,
-                        data_hash: None,
-                    },
-                );
+                batch
+                    .put_cell_payload_by_outpoint(
+                        &hash,
+                        index,
+                        &LiveCellInfo {
+                            capacity: 100,
+                            lock_code_hash: [0x33; 32],
+                            lock_hash_type: 1,
+                            lock_args: vec![],
+                            type_code_hash: None,
+                            type_hash_type: None,
+                            type_args: None,
+                            data_size: 0,
+                            udt_amount: None,
+                            data_hash: None,
+                        },
+                    )
+                    .unwrap();
             }
         }
         batch.commit().unwrap();

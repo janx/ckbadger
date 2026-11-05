@@ -48,96 +48,25 @@ pub fn compute_occupied_capacity_shannons(
     ckbadger_common::dao::occupied_capacity_shannons(data_size, lock_args_len, type_args_len)
 }
 
-fn expected_occupied_capacity_for_cell(
-    info: &LiveCellInfo,
-    tx_hash: &[u8],
-    output_index: i16,
-    source: &str,
-) -> Result<i64> {
-    let data_size_i128 = i128::from(info.data_size);
-    if data_size_i128 < 0 {
-        bail!(
-            "negative data_size while loading {} cell: outpoint=0x{}:{}, data_size={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            info.data_size
-        );
-    }
-
-    let has_type_script = info.type_script_hash.is_some() || info.type_code_hash.is_some();
-    let type_args_len = if has_type_script {
-        Some(
-            info.type_args
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "missing type_args for typed {} cell: outpoint=0x{}:{}, type_script_hash={}, type_code_hash=0x{}",
-                        source,
-                        hex::encode(tx_hash),
-                        output_index,
-                        info.type_script_hash
-                            .as_ref()
-                            .map(|v| format!("0x{}", hex::encode(v)))
-                            .unwrap_or_else(|| "none".to_string()),
-                        info.type_code_hash
-                            .as_ref()
-                            .map(hex::encode)
-                            .unwrap_or_else(|| "none".to_string())
-                    )
-                })?
-                .len(),
-        )
-    } else {
-        None
-    };
-    compute_occupied_capacity_shannons(info.data_size as usize, info.lock_args.len(), type_args_len)
-        .with_context(|| {
-            format!(
-                "while computing occupied capacity for {} cell: outpoint=0x{}:{}",
-                source,
-                hex::encode(tx_hash),
-                output_index
-            )
-        })
-}
-
+/// A stored cell must hold at least the capacity its own fields occupy (CKB
+/// consensus). The occupied capacity is derived from those fields, never
+/// stored, so this compares two different things: the stored capacity and
+/// the size of the stored scripts and data.
 fn validate_input_cell_occupied_capacity(
     info: &LiveCellInfo,
     tx_hash: &[u8],
     output_index: i16,
     source: &str,
 ) -> Result<()> {
-    let expected = expected_occupied_capacity_for_cell(info, tx_hash, output_index, source)?;
-    if info.occupied_capacity <= 0 {
+    let occupied = info.occupied_capacity();
+    if occupied > info.capacity {
         bail!(
-            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, expected={}",
+            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, capacity={}",
             source,
             hex::encode(tx_hash),
             output_index,
-            info.occupied_capacity,
-            expected
-        );
-    }
-    if info.occupied_capacity != expected {
-        bail!(
-            "occupied capacity mismatch while loading {} cell: outpoint=0x{}:{}, occupied={}, expected={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            info.occupied_capacity,
-            expected
-        );
-    }
-    if info.occupied_capacity > info.capacity {
-        bail!(
-            "invalid occupied capacity while loading {} cell: outpoint=0x{}:{}, occupied={}, capacity={}, expected={}",
-            source,
-            hex::encode(tx_hash),
-            output_index,
-            info.occupied_capacity,
-            info.capacity,
-            expected
+            occupied,
+            info.capacity
         );
     }
     Ok(())
@@ -202,21 +131,23 @@ impl BatchWriter {
             })?;
             let raw_key = keys::encode_outpoint(tx_hash, *output_index);
             // Cell payload -> append-only batch
-            cells_batch.put_cell_payload(&raw_key, &info.cell);
+            cells_batch.put_cell_payload(&raw_key, &info.cell)?;
             // Live marker -> domain batch
             domain_batch.put_live_cell_marker(&raw_key, info.created_at_block);
+            // Index keys take the script hashes the parser computed for this
+            // output; the payload stores none.
             // Lock script mapping (idempotent, survives cell consumption)
             domain_batch.put_lock_script(
-                &info.lock_script_hash,
+                &cell.lock_script_hash,
                 &LockScriptEntry {
-                    code_hash: info.lock_code_hash.clone(),
+                    code_hash: info.lock_code_hash.to_vec(),
                     hash_type: info.lock_hash_type,
                     args: info.lock_args.clone(),
                 },
             );
             if !skip_cell_indices {
                 domain_batch.put_cell_by_lock(
-                    &info.lock_script_hash,
+                    &cell.lock_script_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -228,7 +159,7 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = info.type_script_hash {
+                if let Some(type_hash) = &cell.type_script_hash {
                     domain_batch.put_cell_by_type(
                         type_hash,
                         info.created_at_block,
@@ -333,7 +264,7 @@ impl BatchWriter {
             let (tx_hash, output_index) = outpoints[outpoint_idx];
             match res {
                 Ok(Some(value)) => {
-                    let info = bincode::deserialize::<LiveCellInfo>(&value).map_err(|e| {
+                    let info = LiveCellInfo::decode(&value).map_err(|e| {
                         anyhow!(
                             "failed to decode live cell payload: outpoint=0x{}:{}, error={}",
                             hex::encode(tx_hash),
@@ -396,6 +327,7 @@ impl BatchWriter {
         consumptions: &[(&[u8], i16, i64, &[u8], i64, i16)],
         preloaded_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         same_batch_cells: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+        script_hashes: &crate::sync::types::InputScriptHashes,
         domain_batch: &mut StoreBatch,
         skip_cell_indices: bool,
     ) -> Result<()> {
@@ -433,8 +365,18 @@ impl BatchWriter {
             );
             domain_batch.delete_cell_raw_key(&raw_key);
             if !skip_cell_indices {
+                // The input's script hashes, derived once by the parser.
+                let (lock_script_hash, type_script_hash) =
+                    script_hashes.get(&lookup_key).ok_or_else(|| {
+                        anyhow!(
+                            "consumed cell has no derived script hashes: outpoint=0x{}:{}, consumed_by_tx=0x{}",
+                            hex::encode(tx_hash),
+                            output_index,
+                            hex::encode(consumed_by_tx)
+                        )
+                    })?;
                 domain_batch.delete_cell_by_lock(
-                    &info.lock_script_hash,
+                    lock_script_hash,
                     info.created_at_block,
                     tx_hash,
                     *output_index,
@@ -446,7 +388,7 @@ impl BatchWriter {
                     tx_hash,
                     *output_index,
                 );
-                if let Some(ref type_hash) = info.type_script_hash {
+                if let Some(type_hash) = type_script_hash {
                     domain_batch.delete_cell_by_type(
                         type_hash,
                         info.created_at_block,
@@ -478,31 +420,24 @@ mod tests {
     use ckbadger_store::CkbadgerStore;
     use std::sync::Arc;
 
+    /// A parsed UDT output whose script hashes are the parser's, computed from
+    /// its script fields.
     fn build_udt_cell(type_code_hash: Vec<u8>, data: Vec<u8>) -> ParsedCell {
+        let script_hash = crate::parser::ScriptParser::compute_script_hash_raw;
         ParsedCell {
             capacity: 100_000_000,
             lock_code_hash: vec![0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![0x22; 20],
-            lock_script_hash: vec![0x33; 32],
+            lock_script_hash: script_hash(&[0x11; 32], 1, &[0x22; 20]),
+            type_script_hash: Some(script_hash(&type_code_hash, 1, &[0x44; 32])),
             type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x44; 32]),
-            type_script_hash: Some(vec![0x55; 32]),
             data_hash: [0x66; 32],
             data_size: data.len() as i32,
             data,
         }
-    }
-
-    fn occupied_capacity_from_parsed_cell(cell: &ParsedCell) -> i64 {
-        let type_args_len = cell.type_args.as_ref().map(|args| args.len());
-        compute_occupied_capacity_shannons(
-            cell.data_size as usize,
-            cell.lock_args.len(),
-            type_args_len,
-        )
-        .unwrap()
     }
 
     fn precomputed_info_map(
@@ -515,24 +450,12 @@ mod tests {
         HashMap::from([(
             (tx_hash.to_vec(), output_index),
             PositionedCellInfo::new(
-                LiveCellInfo {
-                    capacity: cell.capacity,
-                    lock_script_hash: cell.lock_script_hash.clone(),
-                    lock_code_hash: cell.lock_code_hash.clone(),
-                    lock_hash_type: cell.lock_hash_type,
-                    lock_args: cell.lock_args.clone(),
-                    type_script_hash: cell.type_script_hash.clone(),
-                    type_code_hash: cell.type_code_hash.clone(),
-                    type_hash_type: cell.type_hash_type,
-                    type_args: cell.type_args.clone(),
-                    data_size: cell.data_size,
-                    occupied_capacity: occupied_capacity_from_parsed_cell(cell),
-                    udt_amount,
-                    data_hash: if cell.data_size > 0 {
-                        Some(cell.data_hash.to_vec())
-                    } else {
-                        None
-                    },
+                {
+                    let mut info = cell.to_live_cell_info(udt_amount).unwrap();
+                    if cell.data_size == 0 {
+                        info.data_hash = None;
+                    }
+                    info
                 },
                 created_at_block,
             ),
@@ -633,6 +556,79 @@ mod tests {
         assert_eq!(stored.udt_amount, Some(7));
     }
 
+    /// The writer reads each consumed input's script hashes from what the
+    /// parser shipped (it derives none itself): the index rows go under those
+    /// keys, and an input missing from the shipped map is an error.
+    #[test]
+    fn test_consume_cells_batch_preloaded_uses_the_shipped_script_hashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+        let writer = BatchWriter::new(store.clone(), store.clone());
+
+        let tx_hash = vec![0xFB; 32];
+        let consumed_by = [0xBD_u8; 32];
+        let consumptions: Vec<(&[u8], i16, i64, &[u8], i64, i16)> =
+            vec![(tx_hash.as_slice(), 0, 20, consumed_by.as_slice(), 21, 1)];
+        let info = PositionedCellInfo::new(
+            build_udt_cell(vec![0x77; 32], vec![0u8; 16])
+                .to_live_cell_info(None)
+                .unwrap(),
+            20,
+        );
+        let lock_hash = info.lock_script_hash();
+        let type_hash = info.type_script_hash().unwrap();
+        let preloaded_cells = HashMap::from([((tx_hash.clone(), 0i16), info)]);
+        let same_batch_cells = HashMap::new();
+
+        let mut setup = StoreBatch::new(&store);
+        setup.put_cell_by_lock(&lock_hash, 20, &tx_hash, 0);
+        setup.put_cell_by_type(&type_hash, 20, &tx_hash, 0);
+        setup.commit().unwrap();
+
+        let mut batch = StoreBatch::new(&store);
+        let err = writer
+            .consume_cells_batch_preloaded(
+                &consumptions,
+                &preloaded_cells,
+                &same_batch_cells,
+                &crate::sync::types::InputScriptHashes::new(),
+                &mut batch,
+                false,
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("consumed cell has no derived script hashes")
+                && err.to_string().contains(&hex::encode(&tx_hash)),
+            "{err}"
+        );
+
+        let shipped = crate::sync::types::InputScriptHashes::from([(
+            (tx_hash.clone(), 0i16),
+            (lock_hash, Some(type_hash)),
+        )]);
+        let mut batch = StoreBatch::new(&store);
+        writer
+            .consume_cells_batch_preloaded(
+                &consumptions,
+                &preloaded_cells,
+                &same_batch_cells,
+                &shipped,
+                &mut batch,
+                false,
+            )
+            .unwrap();
+        batch.commit().unwrap();
+        assert!(store
+            .list_cells_by_lock(&lock_hash, 10, None, &store)
+            .unwrap()
+            .is_empty());
+        assert!(store
+            .list_cells_by_type(&type_hash, 10, None, &store)
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn test_consume_cells_batch_preloaded_errors_on_missing_cell_info() {
         let dir = tempfile::tempdir().unwrap();
@@ -652,6 +648,7 @@ mod tests {
                 &consumptions,
                 &preloaded_cells,
                 &same_batch_cells,
+                &crate::sync::types::InputScriptHashes::new(),
                 &mut batch,
                 false,
             )

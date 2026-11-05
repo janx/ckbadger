@@ -1776,22 +1776,21 @@ mod tests {
         let created_at_block = 42;
         let cell_info = ckbadger_store::types::LiveCellInfo {
             capacity: 100_00000000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x22; 32],
+            lock_code_hash: [0x22; 32],
             lock_hash_type: 1,
             lock_args: vec![0x33; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: decoder_binary.len() as i32,
-            occupied_capacity: 61_00000000,
             udt_amount: None,
-            data_hash: Some(code_hash.clone()),
+            data_hash: Some(expected_hash),
         };
 
         let mut append_batch = StoreBatch::new(append_only_store.as_ref());
-        append_batch.put_cell_payload_by_outpoint(&tx_hash, output_index, &cell_info);
+        append_batch
+            .put_cell_payload_by_outpoint(&tx_hash, output_index, &cell_info)
+            .unwrap();
         append_batch.commit().unwrap();
 
         let mut domain_batch = StoreBatch::new(store.as_ref());

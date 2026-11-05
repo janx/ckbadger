@@ -45,8 +45,8 @@ use super::indexer::{
 use super::sync_mode::*;
 use super::token_helpers::*;
 use super::types::{
-    fold_tx_address_deltas, AddressBalanceDelta, CachedCellInfo, EntityDailyChanges, ReorgAction,
-    TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
+    fold_tx_address_deltas, AddressBalanceDelta, EntityDailyChanges, InputScriptHashes,
+    ReorgAction, TokenDailyChanges, TxAddressEffects, TxData, UndatedEntityKey, UndatedScriptKey,
 };
 use crate::bulk_sync_perf::BatchSample;
 
@@ -122,7 +122,8 @@ pub(crate) fn compute_parser_input_capacities_and_fees(
             tx_data.total_input_capacity += info.capacity;
             if info
                 .type_code_hash
-                .as_deref()
+                .as_ref()
+                .map(|hash| hash.as_slice())
                 .is_some_and(DaoParser::is_dao_code_hash)
             {
                 has_dao_input = true;
@@ -377,7 +378,10 @@ pub(crate) fn classify_bulk_cell_semantic_tag(cell: &ParsedCell) -> CellSemantic
 
 /// Classify a resolved input cell (from the store) into a semantic tag.
 pub(crate) fn classify_live_cell_semantic_tag(cell: &LiveCellInfo) -> CellSemanticTag {
-    classify_type_script_semantic_tag(cell.type_code_hash.as_deref(), cell.type_hash_type)
+    classify_type_script_semantic_tag(
+        cell.type_code_hash.as_ref().map(|hash| hash.as_slice()),
+        cell.type_hash_type,
+    )
 }
 
 fn parse_bulk_dao_cell_state(
@@ -941,6 +945,7 @@ impl Indexer {
             all_tx_data: Vec<TxData>,
             input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
             batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo>,
+            input_script_hashes: InputScriptHashes,
             address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta>,
             script_usage_changes: ScriptUsageChanges,
             script_reference_usage_changes: ScriptReferenceUsageChanges,
@@ -1289,27 +1294,7 @@ impl Indexer {
                         let key = (hash_arr, *idx);
                         if let Some(cached) = cell_cache_for_parser.get(&key) {
                             attempt_cache_hits += 1;
-                            attempt_input_cell_info.insert(
-                                (tx_hash.clone(), *idx),
-                                PositionedCellInfo::new(
-                                    LiveCellInfo {
-                                        capacity: cached.capacity,
-                                        lock_script_hash: cached.lock_script_hash.clone(),
-                                        lock_code_hash: cached.lock_code_hash.clone(),
-                                        lock_hash_type: cached.lock_hash_type,
-                                        lock_args: cached.lock_args.clone(),
-                                        type_script_hash: cached.type_script_hash.clone(),
-                                        type_code_hash: cached.type_code_hash.clone(),
-                                        type_hash_type: cached.type_hash_type,
-                                        type_args: cached.type_args.clone(),
-                                        data_size: cached.data_size,
-                                        occupied_capacity: cached.occupied_capacity,
-                                        udt_amount: cached.udt_amount,
-                                        data_hash: cached.data_hash.clone(),
-                                    },
-                                    cached.created_at_block,
-                                ),
-                            );
+                            attempt_input_cell_info.insert((tx_hash.clone(), *idx), cached.clone());
                         }
                     }
 
@@ -1684,31 +1669,25 @@ impl Indexer {
                                 return;
                             }
                         };
-                        let occupied_capacity = occupied_capacity_shannons_i64(
-                            cell.lock_args.len(),
-                            cell.type_args.as_ref().map(|args| args.len()),
-                            cell.data_size,
-                        );
+                        let live_cell_info = match cell.to_live_cell_info(udt_amount) {
+                            Ok(info) => info,
+                            Err(e) => {
+                                record_worker_exit_reason(
+                                    &parser_exit_reason_for_parser,
+                                    format!(
+                                        "invalid output cell while precomputing batch_cell_infos: block={}, tx=0x{}, output_index={}, error={}",
+                                        tx_data.block_number,
+                                        hex::encode(tx_data.hash),
+                                        output_index,
+                                        e
+                                    ),
+                                );
+                                return;
+                            }
+                        };
                         batch_cell_infos.insert(
                             (tx_data.hash.to_vec(), output_index_i16),
-                            PositionedCellInfo::new(
-                                LiveCellInfo {
-                                    capacity: cell.capacity,
-                                    lock_script_hash: cell.lock_script_hash.clone(),
-                                    lock_code_hash: cell.lock_code_hash.clone(),
-                                    lock_hash_type: cell.lock_hash_type,
-                                    lock_args: cell.lock_args.clone(),
-                                    type_script_hash: cell.type_script_hash.clone(),
-                                    type_code_hash: cell.type_code_hash.clone(),
-                                    type_hash_type: cell.type_hash_type,
-                                    type_args: cell.type_args.clone(),
-                                    data_size: cell.data_size,
-                                    occupied_capacity,
-                                    udt_amount,
-                                    data_hash: Some(cell.data_hash.to_vec()),
-                                },
-                                tx_data.block_number,
-                            ),
+                            PositionedCellInfo::new(live_cell_info, tx_data.block_number),
                         );
                     }
                 }
@@ -1742,6 +1721,9 @@ impl Indexer {
                 let cache_balance_and_script_started = Instant::now();
                 let mut address_balance_changes: HashMap<Vec<u8>, AddressBalanceDelta> =
                     HashMap::new();
+                // Each input's lock / type script hash, derived here once and
+                // shipped to the writer, which reads them instead of deriving.
+                let mut input_script_hashes = InputScriptHashes::new();
                 let mut script_usage_changes: ScriptUsageChanges = HashMap::new();
                 let mut script_reference_usage_changes: ScriptReferenceUsageChanges =
                     HashMap::new();
@@ -1831,25 +1813,8 @@ impl Indexer {
                                 return;
                             }
                         };
-                        cell_cache_for_parser.insert(
-                            (tx_data.hash, output_index_i16),
-                            CachedCellInfo {
-                                capacity: info.capacity,
-                                created_at_block: info.created_at_block,
-                                lock_script_hash: info.lock_script_hash.clone(),
-                                lock_code_hash: info.lock_code_hash.clone(),
-                                lock_hash_type: info.lock_hash_type,
-                                lock_args: info.lock_args.clone(),
-                                type_script_hash: info.type_script_hash.clone(),
-                                type_code_hash: info.type_code_hash.clone(),
-                                type_hash_type: info.type_hash_type,
-                                type_args: info.type_args.clone(),
-                                data_size: info.data_size,
-                                occupied_capacity: info.occupied_capacity,
-                                udt_amount: info.udt_amount,
-                                data_hash: info.data_hash.clone(),
-                            },
-                        );
+                        cell_cache_for_parser
+                            .insert((tx_data.hash, output_index_i16), info.clone());
                     }
 
                     // This tx's TOKEN_DAILY member cells, outputs then inputs;
@@ -2090,17 +2055,24 @@ impl Indexer {
                                 }
                             };
                             {
+                                // The payload does not store script hashes:
+                                // derive them once per input cell, for this
+                                // pass and for the writer.
+                                let lock_script_hash = info.lock_script_hash();
+                                let type_script_hash = info.type_script_hash();
+                                input_script_hashes
+                                    .insert(key.clone(), (lock_script_hash, type_script_hash));
+                                let lock_script_hash = lock_script_hash.to_vec();
                                 *tx_balance_changes
-                                    .entry(info.lock_script_hash.clone())
+                                    .entry(lock_script_hash.clone())
                                     .or_default() -= i128::from(info.capacity);
                                 *tx_cells_consumed
-                                    .entry(info.lock_script_hash.clone())
+                                    .entry(lock_script_hash.clone())
                                     .or_default() += 1;
-                                *tx_occupied_changes
-                                    .entry(info.lock_script_hash.clone())
-                                    .or_default() -= i128::from(info.occupied_capacity);
+                                *tx_occupied_changes.entry(lock_script_hash).or_default() -=
+                                    i128::from(info.occupied_capacity());
                                 // script usage - inputs
-                                let lock_key = (info.lock_code_hash.clone(), false);
+                                let lock_key = (info.lock_code_hash.to_vec(), false);
                                 let lock_hash_type = match parse_script_reference_hash_type(
                                     info.lock_hash_type,
                                     "lock",
@@ -2120,23 +2092,23 @@ impl Indexer {
                                     }
                                 };
                                 let reference_entry = script_reference_usage_changes
-                                    .entry((info.lock_code_hash.clone(), lock_hash_type, false))
+                                    .entry((info.lock_code_hash.to_vec(), lock_hash_type, false))
                                     .or_insert((0, 0, 0, 0, 0, 0));
                                 reference_entry.1 -= 1;
                                 reference_entry.3 -= i128::from(info.capacity);
-                                reference_entry.5 -= i128::from(info.occupied_capacity);
+                                reference_entry.5 -= i128::from(info.occupied_capacity());
                                 let entry = script_usage_changes
                                     .entry(lock_key)
                                     .or_insert((0, 0, 0, 0, 0, 0));
                                 entry.1 -= 1;
                                 entry.3 -= i128::from(info.capacity);
-                                entry.5 -= i128::from(info.occupied_capacity);
+                                entry.5 -= i128::from(info.occupied_capacity());
                                 accumulate_daily!(
                                     script_daily_changes,
                                     tx_data.block_number,
-                                    (info.lock_code_hash.clone(), lock_hash_type, false),
+                                    (info.lock_code_hash.to_vec(), lock_hash_type, false),
                                     -i128::from(info.capacity),
-                                    -i128::from(info.occupied_capacity)
+                                    -i128::from(info.occupied_capacity())
                                 );
                                 if let Some(ref type_code_hash) = info.type_code_hash {
                                     let type_hash_type = match info.type_hash_type {
@@ -2172,40 +2144,40 @@ impl Indexer {
                                             return;
                                         }
                                     };
-                                    let type_key = (type_code_hash.clone(), true);
+                                    let type_key = (type_code_hash.to_vec(), true);
                                     let reference_entry = script_reference_usage_changes
-                                        .entry((type_code_hash.clone(), type_hash_type, true))
+                                        .entry((type_code_hash.to_vec(), type_hash_type, true))
                                         .or_insert((0, 0, 0, 0, 0, 0));
                                     reference_entry.1 -= 1;
                                     reference_entry.3 -= i128::from(info.capacity);
-                                    reference_entry.5 -= i128::from(info.occupied_capacity);
+                                    reference_entry.5 -= i128::from(info.occupied_capacity());
                                     let entry = script_usage_changes
                                         .entry(type_key)
                                         .or_insert((0, 0, 0, 0, 0, 0));
                                     entry.1 -= 1;
                                     entry.3 -= i128::from(info.capacity);
-                                    entry.5 -= i128::from(info.occupied_capacity);
+                                    entry.5 -= i128::from(info.occupied_capacity());
                                     accumulate_daily!(
                                         script_daily_changes,
                                         tx_data.block_number,
-                                        (type_code_hash.clone(), type_hash_type, true),
+                                        (type_code_hash.to_vec(), type_hash_type, true),
                                         -i128::from(info.capacity),
-                                        -i128::from(info.occupied_capacity)
+                                        -i128::from(info.occupied_capacity())
                                     );
                                 }
                                 if let Some(type_script_hash) = token_daily_member(
-                                    info.type_script_hash.as_deref(),
-                                    info.type_code_hash.as_deref(),
+                                    type_script_hash.as_ref().map(|hash| hash.as_slice()),
+                                    info.type_code_hash.as_ref().map(|hash| hash.as_slice()),
                                     info.type_hash_type,
                                 ) {
                                     tx_token_daily_members.push(token_daily_consumed(
                                         type_script_hash,
                                         info.capacity,
-                                        info.occupied_capacity,
+                                        info.occupied_capacity(),
                                     ));
                                 }
                                 if let (Some(type_script_hash), Some(type_code_hash)) =
-                                    (info.type_script_hash.as_ref(), info.type_code_hash.as_ref())
+                                    (type_script_hash.as_ref(), info.type_code_hash.as_ref())
                                 {
                                     if SporeParser::is_spore_nft_type_script(type_code_hash) {
                                         let spore_index = match load_optional_index_from_store(
@@ -2242,7 +2214,7 @@ impl Indexer {
                                                 tx_data.block_number,
                                                 index.spore_id.clone(),
                                                 -i128::from(info.capacity),
-                                                -i128::from(info.occupied_capacity)
+                                                -i128::from(info.occupied_capacity())
                                             );
 
                                             {
@@ -2255,7 +2227,7 @@ impl Indexer {
                                                     tx_data.block_number,
                                                     effective_cluster_id,
                                                     -i128::from(info.capacity),
-                                                    -i128::from(info.occupied_capacity)
+                                                    -i128::from(info.occupied_capacity())
                                                 );
                                             }
                                         }
@@ -2269,7 +2241,7 @@ impl Indexer {
                                             tx_data.block_number,
                                             collection_id,
                                             -i128::from(info.capacity),
-                                            -i128::from(info.occupied_capacity)
+                                            -i128::from(info.occupied_capacity())
                                         );
                                     }
                                 }
@@ -2426,6 +2398,7 @@ impl Indexer {
                         all_tx_data,
                         input_cell_info,
                         batch_cell_infos,
+                        input_script_hashes,
                         address_balance_changes,
                         script_usage_changes,
                         script_reference_usage_changes,
@@ -2536,6 +2509,7 @@ impl Indexer {
                     all_tx_data,
                     input_cell_info,
                     batch_cell_infos,
+                    input_script_hashes,
                     address_balance_changes,
                     script_usage_changes,
                     script_reference_usage_changes,
@@ -2855,6 +2829,7 @@ impl Indexer {
                             all_tx_data,
                             input_cell_info,
                             batch_cell_infos,
+                            input_script_hashes,
                             address_balance_changes,
                             script_usage_changes,
                             script_reference_usage_changes,
@@ -4440,16 +4415,15 @@ mod tests {
             };
             let live = LiveCellInfo {
                 capacity: 0,
-                lock_script_hash: vec![0u8; 32],
-                lock_code_hash: vec![0u8; 32],
+                lock_code_hash: [0u8; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: None,
-                type_code_hash: type_code_hash.clone(),
+                type_code_hash: type_code_hash
+                    .as_deref()
+                    .map(|hash| hash.try_into().unwrap()),
                 type_hash_type: hash_type,
                 type_args: None,
                 data_size: 0,
-                occupied_capacity: 0,
                 udt_amount: None,
                 data_hash: None,
             };

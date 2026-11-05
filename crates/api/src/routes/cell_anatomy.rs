@@ -126,11 +126,12 @@ fn append_script(
         bytes.len() == start + size,
         "{prefix} serialized size mismatch"
     );
-    let mut digest = [0u8; 32];
-    let mut hasher = ckb_hash::new_blake2b();
-    hasher.update(&bytes[start..]);
-    hasher.finalize(&mut digest);
-    Ok(format!("0x{}", hex::encode(digest)))
+    // The byte map above is for display; the hash comes from the workspace's
+    // one script-hash routine, the same one `LiveCellInfo` derives with.
+    Ok(format!(
+        "0x{}",
+        hex::encode(ckbadger_common::script_hash(code_hash, hash_type, args))
+    ))
 }
 
 pub fn cell_output(info: &PositionedCellInfo) -> Result<MoleculeCellOutput> {
@@ -211,14 +212,13 @@ mod tests {
                 |script: &packed::Script| script.calc_script_hash().as_slice().to_vec();
             let payload = LiveCellInfo {
                 capacity: i64::try_from(capacity).unwrap(),
-                lock_script_hash: script_hash(&lock),
-                lock_code_hash: lock.code_hash().as_slice().to_vec(),
+                lock_code_hash: lock.code_hash().as_slice().to_vec().try_into().unwrap(),
                 lock_hash_type: lock.hash_type().as_slice()[0] as i16,
                 lock_args: lock.args().raw_data().to_vec(),
-                type_script_hash: type_script.as_ref().map(script_hash),
-                type_code_hash: type_script
+                type_code_hash: (type_script
                     .as_ref()
-                    .map(|script| script.code_hash().as_slice().to_vec()),
+                    .map(|script| script.code_hash().as_slice().to_vec()))
+                .map(|hash| hash.try_into().unwrap()),
                 type_hash_type: type_script
                     .as_ref()
                     .map(|script| script.hash_type().as_slice()[0] as i16),
@@ -226,7 +226,6 @@ mod tests {
                     .as_ref()
                     .map(|script| script.args().raw_data().to_vec()),
                 data_size: 0,
-                occupied_capacity: 0,
                 udt_amount: None,
                 data_hash: None,
             };

@@ -1459,6 +1459,7 @@ impl BatchWriter {
         txs: &[crate::sync::types::TxData],
         input_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
         batch_cells: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
+        input_script_hashes: &crate::sync::types::InputScriptHashes,
         undo_seq: &crate::sync::undo::SharedUndoSeq,
         batch: &mut StoreBatch,
     ) -> Result<()> {
@@ -1486,37 +1487,39 @@ impl BatchWriter {
                     let cell = batch_cells.get(&key).or_else(|| input_cells.get(&key)).ok_or_else(|| anyhow::anyhow!(
                         "missing prefetched input for script lineage: block={} tx=0x{} input=0x{}:{}",
                         tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index))?;
-                    if !cell
+                    let (_, type_script_hash) = input_script_hashes.get(&key).ok_or_else(|| anyhow::anyhow!(
+                        "input has no derived script hashes for script lineage: block={} tx=0x{} input=0x{}:{}",
+                        tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index))?;
+                    let is_type_id_input = cell
                         .type_code_hash
-                        .as_deref()
+                        .as_ref()
+                        .map(|hash| hash.as_slice())
                         .zip(cell.type_hash_type)
                         .is_some_and(|(hash, kind)| {
                             kind == 1 && crate::parser::script::is_type_id(hash, 1)
-                        })
-                    {
+                        });
+                    // A type-id input's reference is its type script hash.
+                    let Some(reference) = type_script_hash.filter(|_| is_type_id_input) else {
                         continue;
-                    }
-                    let reference = cell.type_script_hash.as_ref().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "type-id input lacks script hash: block={} tx=0x{}",
-                            tx.block_number,
-                            hex::encode(tx.hash)
-                        )
-                    })?;
-                    let current = match chain_mappings.get(reference) {
+                    };
+                    let current = match chain_mappings.get(reference.as_slice()) {
                         Some(value) => value.clone(),
-                        None => self.store.get_script_reference_version_hash(1, reference)?,
+                        None => self
+                            .store
+                            .get_script_reference_version_hash(1, &reference)?,
                     };
                     if current.is_some() && cell.data_hash.is_none() {
                         bail!("active type-id input lacks data hash: reference=0x{} block={} tx=0x{} input=0x{}:{}", hex::encode(reference), tx.block_number, hex::encode(tx.hash), hex::encode(input.previous_tx_hash), index);
                     }
-                    if current.is_some() && current == cell.data_hash {
+                    if current.is_some()
+                        && current.as_deref() == cell.data_hash.as_ref().map(|hash| hash.as_slice())
+                    {
                         lineage.push(TypeIdCodeChange {
-                            reference_hash: reference.clone(),
+                            reference_hash: reference.to_vec(),
                             version_hash: None,
                             block_number: tx.block_number,
                         });
-                        chain_mappings.insert(reference.clone(), None);
+                        chain_mappings.insert(reference.to_vec(), None);
                     }
                 }
             }
@@ -2237,24 +2240,23 @@ mod tests {
             // An unrelated immutable payload guards the store boundary. The
             // metadata import and rollup must never update/delete append-only CF_CELLS.
             let mut payload = StoreBatch::new(&append);
-            payload.put_cell_payload(
-                &payload_key,
-                &ckbadger_store::LiveCellInfo {
-                    capacity: 10000,
-                    lock_script_hash: vec![0x11; 32],
-                    lock_code_hash: vec![0x22; 32],
-                    lock_hash_type: 1,
-                    lock_args: vec![],
-                    type_script_hash: None,
-                    type_code_hash: None,
-                    type_hash_type: None,
-                    type_args: None,
-                    data_size: 0,
-                    occupied_capacity: 41,
-                    udt_amount: None,
-                    data_hash: None,
-                },
-            );
+            payload
+                .put_cell_payload(
+                    &payload_key,
+                    &ckbadger_store::LiveCellInfo {
+                        capacity: 10000,
+                        lock_code_hash: [0x22; 32],
+                        lock_hash_type: 1,
+                        lock_args: vec![],
+                        type_code_hash: None,
+                        type_hash_type: None,
+                        type_args: None,
+                        data_size: 0,
+                        udt_amount: None,
+                        data_hash: None,
+                    },
+                )
+                .unwrap();
             payload.commit().unwrap();
             (
                 script_startup_rows(&store),
@@ -2639,6 +2641,11 @@ mod tests {
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&tx),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2818,6 +2825,11 @@ mod tests {
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&tx),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2870,7 +2882,13 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
-        let reference = vec![0x71; 32];
+        // The type-id reference is the derived hash of the cells' own type
+        // script (TYPE_ID, `type`, these args), as the parser computes it.
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(
+            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            1,
+            &[0x33; 32],
+        );
         let old_hash = vec![0x81; 32];
         store
             .put_script_version(
@@ -2946,6 +2964,11 @@ mod tests {
                 std::slice::from_ref(&tx),
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&tx),
+                    &HashMap::new(),
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -2970,25 +2993,27 @@ mod tests {
         let input_cell = ckbadger_store::PositionedCellInfo::new(
             ckbadger_store::LiveCellInfo {
                 capacity: 10000,
-                lock_script_hash: vec![0x22; 32],
-                lock_code_hash: vec![0x11; 32],
+                lock_code_hash: [0x11; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference.clone()),
-                type_code_hash: tx.cells[0].type_code_hash.clone(),
+                type_code_hash: tx.cells[0]
+                    .type_code_hash
+                    .as_deref()
+                    .map(|hash| hash.try_into().unwrap()),
                 type_hash_type: Some(1),
                 type_args: Some(vec![0x33; 32]),
                 data_size: tx.cells[0].data_size,
-                occupied_capacity: 0,
                 udt_amount: None,
-                data_hash: Some(new_hash.to_vec()),
+                data_hash: Some(new_hash),
             },
             20,
         );
         let payload_key = keys::encode_outpoint(&tx.hash, 0);
         let payload_before = input_cell.cell.clone();
         let mut payload_batch = StoreBatch::new(&append);
-        payload_batch.put_cell_payload(&payload_key, &payload_before);
+        payload_batch
+            .put_cell_payload(&payload_key, &payload_before)
+            .unwrap();
         payload_batch.commit().unwrap();
         let mut input_cells = HashMap::from([((tx.hash.to_vec(), 0), input_cell.clone())]);
         let mut retired = tx;
@@ -3010,7 +3035,7 @@ mod tests {
             .get_mut(&(vec![0x44; 32], 0))
             .unwrap()
             .cell
-            .data_hash = Some(vec![0xee; 32]);
+            .data_hash = Some([0xee; 32]);
         let mut inactive_batch = StoreBatch::new(&store);
         writer
             .materialize_script_versions_and_families_with_chain(
@@ -3018,6 +3043,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &inactive,
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &inactive,
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut inactive_batch,
             )
@@ -3036,6 +3066,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &input_cells,
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &input_cells,
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3081,7 +3116,7 @@ mod tests {
         );
         let non_elf_hash = retired.cells[0].data_hash;
         let mut non_elf_input = input_cell.clone();
-        non_elf_input.cell.data_hash = Some(non_elf_hash.to_vec());
+        non_elf_input.cell.data_hash = Some(non_elf_hash);
         non_elf_input.cell.data_size = 31_560;
         input_cells.insert((retired.hash.to_vec(), 0), non_elf_input);
         let previous_hash = retired.hash;
@@ -3100,6 +3135,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &input_cells,
                 &HashMap::new(),
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &input_cells,
+                    &HashMap::new(),
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3153,7 +3193,7 @@ mod tests {
             254
         );
         let mut active_input = input_cell;
-        active_input.cell.data_hash = Some(reactivated_hash.to_vec());
+        active_input.cell.data_hash = Some(reactivated_hash);
         // Exercise the same-batch prefetched input map too.
         let batch_cells = HashMap::from([((retired.hash.to_vec(), 0), active_input)]);
         let previous_hash = retired.hash;
@@ -3169,6 +3209,11 @@ mod tests {
                 std::slice::from_ref(&retired),
                 &HashMap::new(),
                 &batch_cells,
+                &crate::sync::types::derive_input_script_hashes(
+                    std::slice::from_ref(&retired),
+                    &HashMap::new(),
+                    &batch_cells,
+                ),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3283,15 +3328,21 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path().join("domain")).unwrap());
         let append = Arc::new(CkbadgerStore::open_append_only(dir.path().join("append")).unwrap());
         let writer = BatchWriter::new(store.clone(), append.clone());
-        let reference = vec![0x71; 32];
-        let old_hash = vec![0x81; 32];
+        // The type-id reference is the derived hash of the cells' own type
+        // script (TYPE_ID, `type`, these args), as the parser computes it.
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(
+            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            1,
+            &[0x33; 32],
+        );
+        let old_hash = [0x81; 32];
         let new_data = b"\x7fELFnew".to_vec();
         let new_hash = crate::parser::ScriptParser::compute_data_hash(&new_data);
         let mut seed = StoreBatch::new(&store);
         seed.put_script_version(
             &old_hash,
             &ScriptVersionInfo {
-                version_hash: old_hash.clone(),
+                version_hash: old_hash.to_vec(),
                 canonical_reference_hash: Some(reference.clone()),
                 canonical_hash_type: Some(1),
                 family_id: Some("family".into()),
@@ -3318,18 +3369,20 @@ mod tests {
         seed.commit().unwrap();
         let mut previous = ckbadger_store::LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![0x11; 32],
-            lock_code_hash: vec![0x12; 32],
+            lock_code_hash: [0x12; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(reference.clone()),
-            type_code_hash: Some(hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap()),
+            type_code_hash: Some(
+                hex::decode(crate::parser::script::TYPE_ID_CODE_HASH)
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+            ),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 32]),
             data_size: 10,
-            occupied_capacity: 0,
             udt_amount: None,
-            data_hash: Some(old_hash.clone()),
+            data_hash: Some(old_hash),
         };
         let mut inputs = HashMap::new();
         let mut txs = Vec::new();
@@ -3346,19 +3399,19 @@ mod tests {
             let hash = crate::parser::ScriptParser::compute_data_hash(&data);
             let cell = crate::parser::cell::ParsedCell {
                 capacity: 10000,
-                lock_script_hash: previous.lock_script_hash.clone(),
-                lock_code_hash: previous.lock_code_hash.clone(),
+                lock_script_hash: previous.lock_script_hash().to_vec(),
+                lock_code_hash: previous.lock_code_hash.to_vec(),
                 lock_hash_type: 1,
                 lock_args: vec![],
                 type_script_hash: Some(reference.clone()),
-                type_code_hash: previous.type_code_hash.clone(),
+                type_code_hash: previous.type_code_hash.map(|hash| hash.to_vec()),
                 type_hash_type: Some(1),
                 type_args: previous.type_args.clone(),
                 data_hash: hash,
                 data_size: data.len() as i32,
                 data,
             };
-            previous.data_hash = Some(hash.to_vec());
+            previous.data_hash = Some(hash);
             previous.data_size = cell.data_size;
             txs.push(crate::sync::types::TxData {
                 hash: [block; 32],
@@ -3390,6 +3443,7 @@ mod tests {
                 &txs,
                 &HashMap::new(),
                 &inputs,
+                &crate::sync::types::derive_input_script_hashes(&txs, &HashMap::new(), &inputs),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3413,7 +3467,7 @@ mod tests {
             (23, None),
             (22, Some(new_hash.to_vec())),
             (21, None),
-            (20, Some(old_hash.clone())),
+            (20, Some(old_hash.to_vec())),
         ] {
             store.rollback_via_undo_log(&append, fork).unwrap();
             writer.refresh_script_reference_rollups().unwrap();
@@ -3591,6 +3645,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3739,6 +3794,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut batch,
             )
@@ -3848,6 +3904,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut unchanged_batch,
             )
@@ -3899,6 +3956,7 @@ mod tests {
                 &[],
                 &HashMap::new(),
                 &HashMap::new(),
+                &crate::sync::types::InputScriptHashes::new(),
                 &crate::sync::undo::SharedUndoSeq::default(),
                 &mut changed_batch,
             )
@@ -3924,9 +3982,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let reference = vec![0x71; 32];
+        // The type-id reference is the derived hash of the code cell's own
+        // type script (TYPE_ID, `type`, empty args).
+        let reference = crate::parser::ScriptParser::compute_script_hash_raw(
+            &hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+            1,
+            &[],
+        );
         let version = vec![0x81; 32];
-        let non_elf = vec![0x91; 32];
+        let non_elf = [0x91; 32];
         let mut batch = StoreBatch::new(&store);
         batch.put_script_reference_info(
             1,
@@ -3956,20 +4020,20 @@ mod tests {
             0,
             &ckbadger_store::LiveCellInfo {
                 capacity: 100,
-                lock_script_hash: vec![0x11; 32],
-                lock_code_hash: vec![0x12; 32],
+                lock_code_hash: [0x12; 32],
                 lock_hash_type: 1,
                 lock_args: vec![],
-                type_script_hash: Some(reference.clone()),
                 type_code_hash: Some(
-                    hex::decode(crate::parser::script::TYPE_ID_CODE_HASH).unwrap(),
+                    hex::decode(crate::parser::script::TYPE_ID_CODE_HASH)
+                        .unwrap()
+                        .try_into()
+                        .unwrap(),
                 ),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 31_560,
-                occupied_capacity: 80,
                 udt_amount: None,
-                data_hash: Some(non_elf.clone()),
+                data_hash: Some(non_elf),
             },
             11,
         );

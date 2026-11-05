@@ -32,23 +32,20 @@ fn seed_tx(batch: &mut StoreBatch<'_>, hash: &[u8], block: i64, index: i32) {
 }
 
 fn cell(id: &[u8], capacity: i64, owner: u8) -> LiveCellInfo {
-    let code = vec![0x41; 32];
+    let code = [0x41; 32];
     let args = vec![owner; 20];
-    let type_code = vec![0x42; 32];
+    let type_code = [0x42; 32];
     LiveCellInfo {
         capacity,
-        occupied_capacity: 114_00000000,
-        lock_script_hash: compute_script_hash(&code, 1, &args),
         lock_code_hash: code,
         lock_hash_type: 1,
         lock_args: args,
-        type_script_hash: Some(compute_script_hash(&type_code, 1, id)),
         type_code_hash: Some(type_code),
         type_hash_type: Some(1),
         type_args: Some(id.to_vec()),
         data_size: 0,
         udt_amount: None,
-        data_hash: Some(vec![0; 32]),
+        data_hash: Some([0; 32]),
     }
 }
 
@@ -67,7 +64,7 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
         &id,
         &IdentityEntry {
             standard: IdentityStandard::DidCkb,
-            owner_lock_hash: Some(cell(&id, 320_00000000, 2).lock_script_hash),
+            owner_lock_hash: Some(cell(&id, 320_00000000, 2).lock_script_hash().to_vec()),
             name: None,
             is_live: true,
             created_at_block: 100,
@@ -88,7 +85,6 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
     let mut current = cell(&id, 320_00000000, 2);
     match corrupt {
         Some("lock") => current.lock_args[0] ^= 1,
-        Some("type") => current.type_args.as_mut().unwrap()[0] ^= 1,
         None => {}
         Some(other) => panic!("invalid fixture corruption {other}"),
     }
@@ -96,7 +92,9 @@ fn history_fixture_with_corrupt_script(corrupt: Option<&str>) -> (Arc<CkbadgerSt
     seed_tx(&mut batch, &mint, 100, 1);
     seed_tx(&mut batch, &transfer, 100, 2);
     // Immutable payload left by a reorg has no canonical reverse index/marker.
-    batch.put_cell_payload_by_outpoint(&orphan, 0, &cell(&id, 999_00000000, 3));
+    batch
+        .put_cell_payload_by_outpoint(&orphan, 0, &cell(&id, 999_00000000, 3))
+        .unwrap();
     batch.commit().unwrap();
     (store, id)
 }
@@ -191,8 +189,7 @@ async fn did_protocol_reads_original_local_cbor_and_rejects_missing_node() {
     raw.extend(&cbor);
     let mut payload = cell(&id, 320_00000000, 1);
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity += (raw.len() as i64) * 100_000000;
-    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let lock = packed::Script::new_builder()
         .code_hash(packed::Byte32::from_slice(&payload.lock_code_hash).unwrap())
         .hash_type(1u8.into())
@@ -224,7 +221,7 @@ async fn did_protocol_reads_original_local_cbor_and_rejects_missing_node() {
         &id,
         &IdentityEntry {
             standard: IdentityStandard::DidCkb,
-            owner_lock_hash: Some(payload.lock_script_hash.clone()),
+            owner_lock_hash: Some(payload.lock_script_hash().to_vec()),
             name: None,
             is_live: true,
             created_at_block: 100,
@@ -350,18 +347,14 @@ async fn spore_genetics_fixture_seeded(
                 ckbadger_indexer::parser::spore::SPORE_CODE_HASH_MAINNET_V2
                     .trim_start_matches("0x"),
             )
+            .unwrap()
+            .try_into()
             .unwrap(),
         );
-        payload.type_script_hash = Some(compute_script_hash(
-            payload.type_code_hash.as_ref().unwrap(),
-            1,
-            &id,
-        ));
         payload.data_size = raw.len() as i32;
-        payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
-        payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+        payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
         owned += i128::from(payload.capacity);
-        occupied += i128::from(payload.occupied_capacity);
+        occupied += i128::from(payload.occupied_capacity());
         let script = |code: &[u8], args: Vec<u8>| {
             packed::Script::new_builder()
                 .code_hash(packed::Byte32::from_slice(code).unwrap())
@@ -385,7 +378,7 @@ async fn spore_genetics_fixture_seeded(
                 standard: ObjectStandard::Spore,
                 collection_id: Some(cluster.clone()),
                 token_id: None,
-                owner_lock_hash: Some(payload.lock_script_hash.clone()),
+                owner_lock_hash: Some(payload.lock_script_hash().to_vec()),
                 name: None,
                 description: None,
                 is_live: true,
@@ -407,7 +400,7 @@ async fn spore_genetics_fixture_seeded(
                 20231115,
                 &SporeDailyDelta {
                     owned_capacity_delta: i128::from(payload.capacity),
-                    owned_knowledge_delta: i128::from(payload.occupied_capacity),
+                    owned_knowledge_delta: i128::from(payload.occupied_capacity()),
                 },
             )
             .unwrap();
@@ -416,11 +409,11 @@ async fn spore_genetics_fixture_seeded(
     }
     for (owner, count) in [(1, 6), (2, 2)] {
         let payload = cell(&[1; 32], 1000_00000000, owner);
-        batch.put_cluster_owner_count(&cluster, &payload.lock_script_hash, count);
+        batch.put_cluster_owner_count(&cluster, &payload.lock_script_hash(), count);
         batch.put_lock_script(
-            &payload.lock_script_hash,
+            &payload.lock_script_hash(),
             &ckbadger_store::types::LockScriptEntry {
-                code_hash: payload.lock_code_hash,
+                code_hash: payload.lock_code_hash.to_vec(),
                 hash_type: payload.lock_hash_type,
                 args: payload.lock_args,
             },
@@ -511,11 +504,9 @@ async fn spore_genetics_fixture_seeded(
     )
     .unwrap();
     let mut payload = cell(&cluster, 1000_00000000, 1);
-    payload.type_code_hash = Some(code.clone());
-    payload.type_script_hash = Some(compute_script_hash(&code, 1, &cluster));
+    payload.type_code_hash = Some(code.clone().try_into().unwrap());
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
-    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
@@ -535,13 +526,13 @@ async fn spore_genetics_fixture_seeded(
         .build();
     let cluster_tx_hash = cluster_tx.hash().as_slice().to_vec();
     entry.created_at_tx = cluster_tx_hash.clone();
-    entry.owner_lock_hash = Some(payload.lock_script_hash.clone());
+    entry.owner_lock_hash = Some(payload.lock_script_hash().to_vec());
     entry.is_live = true;
     let mut batch = StoreBatch::new(&store);
     batch.put_spore(&cluster, &entry);
     batch.put_cell(&cluster_tx_hash, 0, &payload, 99);
     batch.put_cell_by_type(
-        payload.type_script_hash.as_ref().unwrap(),
+        payload.type_script_hash().as_ref().unwrap(),
         99,
         &cluster_tx_hash,
         0,
@@ -707,7 +698,7 @@ async fn item_full_feeds_share_canonical_cursor_and_exact_item_capacity_context(
         (2, [0x52; 32], AssetAction::Transfer),
     ] {
         batch.put_tx_actions(&make_test_tx_actions(
-            &cell(&id, 320_00000000, 2).lock_script_hash,
+            &cell(&id, 320_00000000, 2).lock_script_hash(),
             &hash,
             &header.hash,
             100,
@@ -793,9 +784,7 @@ async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Ve
     let header = store.get_block_header(100).unwrap().unwrap();
     let with_type = |id: &[u8], owner: u8, type_code: u8| {
         let mut payload = cell(id, 300_00000000, owner);
-        payload.type_code_hash = Some(vec![type_code; 32]);
-        payload.type_script_hash = Some(compute_script_hash(&[type_code; 32], 1, id));
-        payload.occupied_capacity = ((8 + 53 + 33 + id.len()) as i64) * 100_000000;
+        payload.type_code_hash = Some([type_code; 32]);
         payload
     };
     let token_cell = with_type(&token_id, 2, 0x42);
@@ -808,7 +797,7 @@ async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Ve
             standard: ObjectStandard::MnftToken,
             collection_id: Some(class_id.clone()),
             token_id: Some(token_id.clone()),
-            owner_lock_hash: Some(token_cell.lock_script_hash.clone()),
+            owner_lock_hash: Some(token_cell.lock_script_hash().to_vec()),
             name: None,
             description: None,
             is_live: true,
@@ -847,7 +836,7 @@ async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Ve
         },
     );
     batch.put_tx_actions(&make_test_tx_actions(
-        &class_cell.lock_script_hash,
+        &class_cell.lock_script_hash(),
         &mint,
         &header.hash,
         100,
@@ -859,7 +848,7 @@ async fn mnft_mint_feed_fixture(class_in_tx: bool) -> (axum::Router, Vec<u8>, Ve
     (
         create_router(test_config(store)).await,
         token_id,
-        class_cell.lock_script_hash,
+        class_cell.lock_script_hash().to_vec(),
     )
 }
 
@@ -1021,7 +1010,7 @@ async fn dotcell_item_feed_rows_carry_protocol_action_or_ring_relink() {
         let version = cell(&id, 320_00000000, 1);
         seed_tx(&mut batch, hash, 100, index);
         let mut tx_actions = make_test_tx_actions(
-            &version.lock_script_hash,
+            &version.lock_script_hash(),
             hash,
             &header.hash,
             100,
@@ -1160,7 +1149,7 @@ async fn non_dotcell_item_feed_rows_have_null_protocol_action_and_ring_relink() 
         (2, [0x52; 32], AssetAction::Transfer),
     ] {
         batch.put_tx_actions(&make_test_tx_actions(
-            &cell(&id, 320_00000000, 2).lock_script_hash,
+            &cell(&id, 320_00000000, 2).lock_script_hash(),
             &hash,
             &header.hash,
             100,
@@ -1210,21 +1199,17 @@ async fn protocol_fixture(
         prelude::*,
     };
     let mut payload = cell(&id, 1000_00000000, 1);
-    payload.type_code_hash = Some(hex::decode(code.trim_start_matches("0x")).unwrap());
-    payload.type_script_hash = Some(compute_script_hash(
-        payload.type_code_hash.as_ref().unwrap(),
-        1,
-        &id,
-    ));
+    payload.type_code_hash = Some(
+        hex::decode(code.trim_start_matches("0x"))
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    );
     if let Some(args) = lock_args {
         payload.lock_args = args;
-        payload.lock_script_hash =
-            compute_script_hash(&payload.lock_code_hash, 1, &payload.lock_args);
     }
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity =
-        ((8 + 33 + payload.lock_args.len() + 33 + id.len() + raw.len()) as i64) * 100_000000;
-    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: Vec<u8>| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
@@ -1273,7 +1258,7 @@ async fn protocol_fixture(
                 owner_lock_hash: if standard == IdentityStandard::DotCell {
                     None
                 } else {
-                    Some(payload.lock_script_hash.clone())
+                    Some(payload.lock_script_hash().to_vec())
                 },
                 name: None,
                 is_live: true,
@@ -1301,7 +1286,7 @@ async fn protocol_fixture(
                 standard: ObjectStandard::MnftToken,
                 collection_id: Some(id[..24].to_vec()),
                 token_id: Some(1u32.to_be_bytes().to_vec()),
-                owner_lock_hash: Some(payload.lock_script_hash.clone()),
+                owner_lock_hash: Some(payload.lock_script_hash().to_vec()),
                 name: None,
                 description: None,
                 is_live: true,
@@ -1374,12 +1359,14 @@ fn seed_item_versions(
     let mut hashes = Vec::new();
     for (k, version) in versions.iter().enumerate() {
         let mut payload = cell(id, 1000_00000000, 1);
-        payload.type_code_hash = Some(type_code.to_vec());
-        payload.type_script_hash = Some(compute_script_hash(&type_code, 1, id));
+        payload.type_code_hash = Some(type_code);
         payload.data_size = version.data.len() as i32;
-        payload.occupied_capacity =
-            ((8 + 53 + 33 + id.len() + version.data.len()) as i64) * 100_000000;
-        payload.data_hash = Some(ckb_hash::blake2b_256(&version.data).to_vec());
+        payload.data_hash = Some(
+            ckb_hash::blake2b_256(&version.data)
+                .to_vec()
+                .try_into()
+                .unwrap(),
+        );
         let tx = TransactionBuilder::default()
             .output(
                 packed::CellOutput::new_builder()
@@ -1413,7 +1400,7 @@ fn seed_item_versions(
         seed_tx(&mut batch, hash, block, 0);
         let header = store.get_block_header(block).unwrap().unwrap();
         let mut actions = make_test_tx_actions(
-            &payloads[k].lock_script_hash,
+            &payloads[k].lock_script_hash(),
             hash,
             &header.hash,
             block,
@@ -1595,7 +1582,7 @@ async fn did_two_version_app(
         &id,
         &IdentityEntry {
             standard: IdentityStandard::DidCkb,
-            owner_lock_hash: Some(cell(&id, 1000_00000000, 1).lock_script_hash),
+            owner_lock_hash: Some(cell(&id, 1000_00000000, 1).lock_script_hash().to_vec()),
             name: None,
             is_live: true,
             created_at_block: 100,
@@ -1668,7 +1655,7 @@ async fn did_feed_row_with_unchanged_data_has_an_unchanged_handle() {
         (2, [0x52; 32], AssetAction::Transfer),
     ] {
         batch.put_tx_actions(&make_test_tx_actions(
-            &cell(&id, 320_00000000, 2).lock_script_hash,
+            &cell(&id, 320_00000000, 2).lock_script_hash(),
             &hash,
             &header.hash,
             100,
@@ -2669,11 +2656,9 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
     )
     .unwrap();
     let mut payload = cell(&id, 1000_00000000, 1);
-    payload.type_code_hash = Some(code.clone());
-    payload.type_script_hash = Some(compute_script_hash(&code, 1, &id));
+    payload.type_code_hash = Some(code.clone().try_into().unwrap());
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
-    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec());
+    payload.data_hash = Some(ckb_hash::blake2b_256(&raw).to_vec().try_into().unwrap());
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()
             .code_hash(packed::Byte32::from_slice(code).unwrap())
@@ -2704,7 +2689,7 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
             standard: ObjectStandard::SporeCluster,
             collection_id: None,
             token_id: None,
-            owner_lock_hash: Some(payload.lock_script_hash.clone()),
+            owner_lock_hash: Some(payload.lock_script_hash().to_vec()),
             name: Some("Genes".into()),
             description: Some(description.clone()),
             is_live: true,
@@ -2725,7 +2710,7 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
     if mode > 0 {
         batch.put_cell(&hash, 0, &payload, 100);
         batch.put_cell_by_type(
-            payload.type_script_hash.as_ref().unwrap(),
+            payload.type_script_hash().as_ref().unwrap(),
             if mode == 2 { 99 } else { 100 },
             &hash,
             0,
@@ -2735,7 +2720,7 @@ async fn cluster_protocol_fixture(mode: u8) -> axum::Router {
     if mode == 3 {
         batch.put_cell(&[0xff; 32], 0, &payload, 100);
         batch.put_cell_by_type(
-            payload.type_script_hash.as_ref().unwrap(),
+            payload.type_script_hash().as_ref().unwrap(),
             100,
             &[0xff; 32],
             0,
@@ -2809,29 +2794,28 @@ async fn cluster_current_cell_rejects_stale_type_key_and_multiple_live_cells() {
 }
 
 #[tokio::test]
-async fn canonical_versions_reject_payload_script_hash_mismatch() {
-    for kind in ["lock", "type"] {
-        let (store, id) = history_fixture_with_corrupt_script(Some(kind));
-        let app = create_router(test_config(store)).await;
-        let (status, json) = get_json(
-            &app,
-            &format!(
-                "/assets/identities/did/items/0x{}/cell-versions",
-                hex::encode(id)
-            ),
-        )
-        .await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{kind}: {json}");
-        let message = json["message"].as_str().unwrap();
-        assert!(
-            message.contains(&format!("{kind} script hash mismatch")),
-            "{json}"
-        );
-        assert!(
-            message.contains(&format!("outpoint=0x{}:0", hex::encode([0x52; 32]))),
-            "{json}"
-        );
-    }
+/// The v2 `cells` payload stores no script hashes (they are derived from the
+/// script fields), so a corrupted script can no longer disagree with a stored
+/// hash; it is caught where it disagrees with another indexed fact. A mutated
+/// lock no longer derives the item's indexed owner.
+async fn canonical_versions_reject_a_lock_that_disagrees_with_the_indexed_owner() {
+    let (store, id) = history_fixture_with_corrupt_script(Some("lock"));
+    let app = create_router(test_config(store)).await;
+    let (status, json) = get_json(
+        &app,
+        &format!(
+            "/assets/identities/did/items/0x{}/cell-versions",
+            hex::encode(&id)
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{json}");
+    let message = json["message"].as_str().unwrap();
+    assert!(
+        message.contains("item current owner disagrees with canonical cell"),
+        "{json}"
+    );
+    assert!(message.contains(&hex::encode(&id)), "{json}");
 }
 
 #[tokio::test]
@@ -2885,14 +2869,12 @@ async fn type_id_decoder_fixture(case: DecoderCellCase) -> axum::Router {
     .unwrap();
     let description = serde_json::json!({"dob":{"ver":0,"decoder":{"type":"type_id","hash":hex::encode(args)},"pattern":pattern}}).to_string();
     let mut payload = cell(&args, 10_000_000_000_000, 1);
-    payload.type_code_hash = Some(code.clone());
-    payload.type_script_hash = Some(type_hash.clone());
+    payload.type_code_hash = Some(code.clone().try_into().unwrap());
     payload.data_size = raw.len() as i32;
-    payload.occupied_capacity = (126 + raw.len() as i64) * 100_000000;
     payload.data_hash = Some(if matches!(case, DecoderCellCase::WrongDataHash) {
-        vec![0x99; 32]
+        [0x99; 32]
     } else {
-        ckb_hash::blake2b_256(raw).to_vec()
+        ckb_hash::blake2b_256(raw).to_vec().try_into().unwrap()
     });
     let script = |code: &[u8], args: &[u8]| {
         packed::Script::new_builder()

@@ -504,7 +504,7 @@ fn gallery_read(
         // OB-C3: the live cell's lock, named by the scripts registry only.
         object.insert(
             "lockCodeHash".into(),
-            json!(format!("0x{}", hex::encode(&current.cell.lock_code_hash))),
+            json!(format!("0x{}", hex::encode(current.cell.lock_code_hash))),
         );
         object.insert(
             "lockKind".into(),

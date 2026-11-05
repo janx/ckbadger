@@ -780,36 +780,50 @@ mod tests {
         }
     }
 
+    /// The lock of the DAO cells built with an owner: these args under a
+    /// fixed test code hash. Its hash is the owner's address.
+    const DUMMY_DAO_LOCK_CODE_HASH: [u8; 32] = [0x0D; 32];
+
+    fn dummy_dao_lock_hash(lock_args: &[u8]) -> Vec<u8> {
+        crate::parser::ScriptParser::compute_script_hash_raw(
+            &DUMMY_DAO_LOCK_CODE_HASH,
+            1,
+            lock_args,
+        )
+    }
+
     fn dummy_dao_cell_with_lock(
         capacity: i64,
         is_deposit: bool,
-        lock_script_hash: Vec<u8>,
+        lock_args: Vec<u8>,
     ) -> crate::parser::cell::ParsedCell {
         let mut cell = dummy_dao_cell(capacity, is_deposit);
-        cell.lock_script_hash = lock_script_hash;
+        cell.lock_code_hash = DUMMY_DAO_LOCK_CODE_HASH.to_vec();
+        cell.lock_hash_type = 1;
+        cell.lock_script_hash = dummy_dao_lock_hash(&lock_args);
+        cell.lock_args = lock_args;
         cell
     }
 
     fn dummy_positioned_info(
         capacity: i64,
         created_at_block: i64,
-        lock_script_hash: Vec<u8>,
+        lock_args: Vec<u8>,
     ) -> PositionedCellInfo {
         PositionedCellInfo::new(
             LiveCellInfo {
                 capacity,
-                lock_script_hash,
-                lock_code_hash: vec![],
-                lock_hash_type: 0,
-                lock_args: vec![],
-                type_script_hash: None,
-                type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
-                    crate::parser::dao::DAO_CODE_HASH,
-                )),
+                lock_code_hash: DUMMY_DAO_LOCK_CODE_HASH,
+                lock_hash_type: 1,
+                lock_args,
+                type_code_hash: Some(
+                    crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH)
+                        .try_into()
+                        .unwrap(),
+                ),
                 type_hash_type: Some(1),
                 type_args: Some(vec![]),
                 data_size: 8,
-                occupied_capacity: capacity,
                 udt_amount: None,
                 data_hash: None,
             },
@@ -1487,11 +1501,11 @@ mod tests {
 
         let mut same_batch_dao_map: DaoSameBatchMap = HashMap::new();
         let input_cell_info: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
-        let lock_hash = vec![0x55; 32];
+        let lock_args = vec![0x55; 32];
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         batch_cell_infos.insert(
             (vec![0x11; 32], 0),
-            dummy_positioned_info(20_000_000_000, 0, lock_hash.clone()),
+            dummy_positioned_info(20_000_000_000, 0, lock_args.clone()),
         );
         let mut active_deposit_counts_by_lock: HashMap<Vec<u8>, i64> = HashMap::new();
         // Lock 0xAA has one active deposit so the phase-1 decrement can succeed.
@@ -1552,14 +1566,15 @@ mod tests {
         let block_date = chrono::NaiveDate::from_ymd_opt(2026, 8, 6).unwrap();
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let deposit_tx_hash = [0x61; 32];
-        let lock_hash = vec![0x71; 32];
+        let lock_args = vec![0x71; 32];
+        let lock_hash = dummy_dao_lock_hash(&lock_args);
         let capacity = 250_00000000;
 
         let deposit = dummy_tx_data(
             deposit_tx_hash,
             false,
             vec![],
-            vec![dummy_dao_cell_with_lock(capacity, true, lock_hash.clone())],
+            vec![dummy_dao_cell_with_lock(capacity, true, lock_args.clone())],
             vec![],
         );
         let phase1 = dummy_tx_data(
@@ -1570,7 +1585,7 @@ mod tests {
                 previous_output_index: 0,
                 since: 0,
             }],
-            vec![dummy_dao_cell_with_lock(capacity, false, lock_hash.clone())],
+            vec![dummy_dao_cell_with_lock(capacity, false, lock_args.clone())],
             vec![],
         );
 
@@ -1932,7 +1947,8 @@ mod tests {
         let dao_code_hash = crate::rpc::parse_hex_to_bytes(crate::parser::dao::DAO_CODE_HASH);
         let deposit_tx_hash = [0x51; 32];
         let withdraw_req_tx_hash = [0x52; 32];
-        let lock_hash = vec![0x77; 32];
+        let lock_args = vec![0x77; 32];
+        let lock_hash = dummy_dao_lock_hash(&lock_args);
 
         // Step 1: Deposit two cells from the same lock.
         let deposit_tx = dummy_tx_data(
@@ -1940,8 +1956,8 @@ mod tests {
             false,
             vec![],
             vec![
-                dummy_dao_cell_with_lock(200_00000000, true, lock_hash.clone()),
-                dummy_dao_cell_with_lock(300_00000000, true, lock_hash.clone()),
+                dummy_dao_cell_with_lock(200_00000000, true, lock_args.clone()),
+                dummy_dao_cell_with_lock(300_00000000, true, lock_args.clone()),
             ],
             vec![],
         );
@@ -1998,11 +2014,11 @@ mod tests {
         let mut batch_cell_infos: HashMap<(Vec<u8>, i16), PositionedCellInfo> = HashMap::new();
         batch_cell_infos.insert(
             (deposit_tx_hash.to_vec(), 0),
-            dummy_positioned_info(200_00000000, 100, lock_hash.clone()),
+            dummy_positioned_info(200_00000000, 100, lock_args.clone()),
         );
         batch_cell_infos.insert(
             (deposit_tx_hash.to_vec(), 1),
-            dummy_positioned_info(300_00000000, 100, lock_hash.clone()),
+            dummy_positioned_info(300_00000000, 100, lock_args.clone()),
         );
 
         // After deposit: 2 active deposits, 1 unique depositor.

@@ -1885,7 +1885,6 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let type_hash = vec![0xAB; 32];
         let day1_ts = 1_704_067_200_000i64; // 2024-01-01T00:00:00Z
         let day2_ts = 1_704_153_600_000i64; // 2024-01-02T00:00:00Z
         let day1 = ckbadger_store::keys::timestamp_ms_to_date(day1_ts);
@@ -1925,34 +1924,30 @@ mod tests {
         };
         let live_cell = LiveCellInfo {
             capacity: 1_000,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
+            type_code_hash: Some([0x11; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x22; 32]),
             data_size: 16,
-            occupied_capacity: 600,
             udt_amount: Some(1),
             data_hash: None,
         };
         let consumed_cell = LiveCellInfo {
             capacity: 400,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: vec![0x33; 32],
+            lock_code_hash: [0x33; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x11; 32]),
+            type_code_hash: Some([0x11; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x22; 32]),
             data_size: 16,
-            occupied_capacity: 300,
             udt_amount: Some(1),
             data_hash: None,
         };
+        // Both cells are of the token whose rows the test seeds.
+        let type_hash = live_cell.type_script_hash().unwrap().to_vec();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);

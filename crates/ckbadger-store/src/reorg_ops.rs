@@ -1266,7 +1266,7 @@ fn delete_cell_index_entries(
     output_index: i16,
 ) -> anyhow::Result<()> {
     let idx_key = keys::encode_cell_index_key(
-        &cell.lock_script_hash,
+        &cell.lock_script_hash(),
         created_at_block,
         tx_hash,
         output_index,
@@ -1275,7 +1275,7 @@ fn delete_cell_index_entries(
     let (lock_code_key, type_code_key) =
         cell_code_index_keys(cell, created_at_block, tx_hash, output_index)?;
     batch.delete_cf(store.cf_cell_by_lock_code(), &lock_code_key);
-    if let Some(ref type_hash) = cell.type_script_hash {
+    if let Some(ref type_hash) = cell.type_script_hash() {
         let idx_key =
             keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.delete_cf(store.cf_cell_by_type(), &idx_key);
@@ -1321,7 +1321,7 @@ fn put_cell_index_entries(
     output_index: i16,
 ) -> anyhow::Result<()> {
     let idx_key = keys::encode_cell_index_key(
-        &cell.lock_script_hash,
+        &cell.lock_script_hash(),
         created_at_block,
         tx_hash,
         output_index,
@@ -1330,7 +1330,7 @@ fn put_cell_index_entries(
     let (lock_code_key, type_code_key) =
         cell_code_index_keys(cell, created_at_block, tx_hash, output_index)?;
     batch.put_cf(store.cf_cell_by_lock_code(), &lock_code_key, []);
-    if let Some(ref type_hash) = cell.type_script_hash {
+    if let Some(ref type_hash) = cell.type_script_hash() {
         let idx_key =
             keys::encode_cell_index_key(type_hash, created_at_block, tx_hash, output_index);
         batch.put_cf(store.cf_cell_by_type(), &idx_key, []);
@@ -1404,16 +1404,16 @@ fn reverse_created_consumed_cell_totals(
     script_reference_deltas: &mut HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta>,
 ) -> anyhow::Result<()> {
     let address = addr_deltas
-        .entry(cell.lock_script_hash.clone())
+        .entry(cell.lock_script_hash().to_vec())
         .or_insert((0, 0, 0, 0));
     address.3 = address.3.checked_sub(1).ok_or_else(|| {
         anyhow::anyhow!(
             "address created-cell count delta overflow during rollback: lock_hash=0x{}",
-            bytes_to_hex(&cell.lock_script_hash)
+            bytes_to_hex(&cell.lock_script_hash())
         )
     })?;
     let lock_key = (
-        cell.lock_code_hash.clone(),
+        cell.lock_code_hash.to_vec(),
         cell.lock_hash_type as u8,
         false,
     );
@@ -1437,7 +1437,7 @@ fn reverse_created_consumed_cell_totals(
         })?;
     lock.4 = lock
         .4
-        .checked_sub(i128::from(cell.occupied_capacity))
+        .checked_sub(i128::from(cell.occupied_capacity()))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "lock script created used delta overflow during rollback: code_hash=0x{}",
@@ -1445,7 +1445,7 @@ fn reverse_created_consumed_cell_totals(
             )
         })?;
     if let (Some(code_hash), Some(hash_type)) = (&cell.type_code_hash, cell.type_hash_type) {
-        let type_key = (code_hash.clone(), hash_type as u8, true);
+        let type_key = (code_hash.to_vec(), hash_type as u8, true);
         let type_entry = script_reference_deltas
             .entry(type_key)
             .or_insert((0, 0, 0, 0, 0, 0));
@@ -1466,7 +1466,7 @@ fn reverse_created_consumed_cell_totals(
             })?;
         type_entry.4 = type_entry
             .4
-            .checked_sub(i128::from(cell.occupied_capacity))
+            .checked_sub(i128::from(cell.occupied_capacity()))
             .ok_or_else(|| {
                 anyhow::anyhow!(
                     "type script created used delta overflow during rollback: code_hash=0x{}",
@@ -1507,13 +1507,13 @@ fn accumulate_cell_deltas(
     hodl_capacity_deltas: &mut HashMap<i64, i128>,
 ) -> anyhow::Result<()> {
     let cap = cell.capacity as i128 * sign;
-    let occ = cell.occupied_capacity as i128 * sign;
+    let occ = cell.occupied_capacity() as i128 * sign;
     let live_d = sign as i32;
 
     // cell distribution bucket: live cell count and capacity per size bucket.
     // sign=+1 when restoring a consumed cell (add back to bucket),
     // sign=-1 when removing a created cell (subtract from bucket).
-    let bucket = cell_dist_size_bucket(cell.occupied_capacity);
+    let bucket = cell_dist_size_bucket(cell.occupied_capacity());
     cell_dist_count_deltas[bucket] += live_d as i64;
     cell_dist_capacity_deltas[bucket] += occ;
 
@@ -1528,7 +1528,7 @@ fn accumulate_cell_deltas(
     // after rollback_to and should be un-counted)
     let total_d = if sign < 0 { -1i64 } else { 0 };
     let e = addr_deltas
-        .entry(cell.lock_script_hash.clone())
+        .entry(cell.lock_script_hash().to_vec())
         .or_insert((0, 0, 0, 0));
     e.0 += cap;
     e.1 += occ;
@@ -1537,7 +1537,7 @@ fn accumulate_cell_deltas(
 
     // script_info — lock side: (live_cells_delta, live_cap_delta, live_used_delta)
     let e = script_deltas
-        .entry((cell.lock_code_hash.clone(), false))
+        .entry((cell.lock_code_hash.to_vec(), false))
         .or_insert((0, 0, 0));
     e.0 += live_d as i64;
     e.1 += cap;
@@ -1546,7 +1546,7 @@ fn accumulate_cell_deltas(
     // script_reference_info — lock side
     let hash_type_u8 = cell.lock_hash_type as u8;
     let e = script_reference_deltas
-        .entry((cell.lock_code_hash.clone(), hash_type_u8, false))
+        .entry((cell.lock_code_hash.to_vec(), hash_type_u8, false))
         .or_insert((0, 0, 0, 0, 0, 0));
     e.0 += total_d; // cells_delta (total cells created/removed)
     e.1 += live_d as i64; // live_delta
@@ -1558,7 +1558,7 @@ fn accumulate_cell_deltas(
     // script_info — type side (if present)
     if let Some(ref type_code_hash) = cell.type_code_hash {
         let e = script_deltas
-            .entry((type_code_hash.clone(), true))
+            .entry((type_code_hash.to_vec(), true))
             .or_insert((0, 0, 0));
         e.0 += live_d as i64;
         e.1 += cap;
@@ -1568,7 +1568,7 @@ fn accumulate_cell_deltas(
         if let Some(type_hash_type) = cell.type_hash_type {
             let type_ht_u8 = type_hash_type as u8;
             let e = script_reference_deltas
-                .entry((type_code_hash.clone(), type_ht_u8, true))
+                .entry((type_code_hash.to_vec(), type_ht_u8, true))
                 .or_insert((0, 0, 0, 0, 0, 0));
             e.0 += total_d;
             e.1 += live_d as i64;
@@ -1581,11 +1581,11 @@ fn accumulate_cell_deltas(
 
     // token_holder (UDT cells with type_script)
     if let (Some(ref type_script_hash), Some(udt_amount)) =
-        (&cell.type_script_hash, cell.udt_amount)
+        (&cell.type_script_hash(), cell.udt_amount)
     {
         if udt_amount > 0 {
             let e = token_holder_deltas
-                .entry((type_script_hash.clone(), cell.lock_script_hash.clone()))
+                .entry((type_script_hash.to_vec(), cell.lock_script_hash().to_vec()))
                 .or_insert_with(|| (TokenBalance::zero(), TokenBalance::zero()));
             let amount = TokenBalance::from(udt_amount);
             if sign > 0 {
@@ -1593,7 +1593,7 @@ fn accumulate_cell_deltas(
                     anyhow::anyhow!(
                         "reorg holder-balance added overflow: type_hash=0x{}, lock_hash=0x{}",
                         bytes_to_hex(type_script_hash),
-                        bytes_to_hex(&cell.lock_script_hash)
+                        bytes_to_hex(&cell.lock_script_hash())
                     )
                 })?;
             } else {
@@ -1601,7 +1601,7 @@ fn accumulate_cell_deltas(
                     anyhow::anyhow!(
                         "reorg holder-balance removed overflow: type_hash=0x{}, lock_hash=0x{}",
                         bytes_to_hex(type_script_hash),
-                        bytes_to_hex(&cell.lock_script_hash)
+                        bytes_to_hex(&cell.lock_script_hash())
                     )
                 })?;
             }
@@ -2764,13 +2764,13 @@ impl CkbadgerStore {
                         *hour_cap_deltas.entry(hour_str.clone()).or_default() +=
                             cell.capacity as i128;
                     }
-                    e.1 += cell.occupied_capacity as i128; // used_capacity_created
+                    e.1 += cell.occupied_capacity() as i128; // used_capacity_created
                     e.3 += cell.data_size as i64; // data_size_created
                 }
                 if let Some(consumed_block) = consumed_at_block {
                     if let Some((date_str, _)) = block_date_map.get(&consumed_block) {
                         let e = date_cap_deltas.entry(date_str.clone()).or_default();
-                        e.2 += cell.occupied_capacity as i128; // used_capacity_consumed
+                        e.2 += cell.occupied_capacity() as i128; // used_capacity_consumed
                         e.4 += cell.data_size as i64; // data_size_consumed
                     }
                 }
@@ -3040,9 +3040,9 @@ impl CkbadgerStore {
                         tx_participants
                             .entry(ctx.tx_hash.clone())
                             .or_default()
-                            .insert(positioned.cell.lock_script_hash.clone());
-                        if let Some(type_hash) = &positioned.cell.type_script_hash {
-                            rolled_back_type_hashes.insert(type_hash.clone());
+                            .insert(positioned.cell.lock_script_hash().to_vec());
+                        if let Some(type_hash) = &positioned.cell.type_script_hash() {
+                            rolled_back_type_hashes.insert(type_hash.to_vec());
                         }
                         delete_cell_index_entries(
                             self,
@@ -3146,18 +3146,18 @@ impl CkbadgerStore {
                             tx_participants
                                 .entry(ctx.tx_hash.clone())
                                 .or_default()
-                                .insert(consumed.cell.lock_script_hash.clone());
+                                .insert(consumed.cell.lock_script_hash().to_vec());
                             if consumed.created_at_block > rollback_to {
                                 tx_participants
                                     .entry(input.tx_hash.clone())
                                     .or_default()
-                                    .insert(consumed.cell.lock_script_hash.clone());
+                                    .insert(consumed.cell.lock_script_hash().to_vec());
                             }
                             // Unconditional: the cell may predate the fork
                             // point, but the tx spending it is rolled back and
                             // its transfer record goes with it.
-                            if let Some(type_hash) = &consumed.cell.type_script_hash {
-                                rolled_back_type_hashes.insert(type_hash.clone());
+                            if let Some(type_hash) = &consumed.cell.type_script_hash() {
+                                rolled_back_type_hashes.insert(type_hash.to_vec());
                             }
                             // Per-side flow rollback: the consumption is always
                             // rolled back here; the creation as well when this
@@ -6101,13 +6101,13 @@ mod tests {
             if !live && !consumed {
                 continue;
             }
-            let cell: LiveCellInfo = bincode::deserialize(&payload).map_err(|e| {
+            let cell = LiveCellInfo::decode(&payload).map_err(|e| {
                 anyhow::anyhow!(
                     "invalid fixture cell payload: outpoint=0x{}, error={e}",
                     bytes_to_hex(&outpoint)
                 )
             })?;
-            let lock = totals.entry(cell.lock_code_hash.clone()).or_default();
+            let lock = totals.entry(cell.lock_code_hash.to_vec()).or_default();
             lock.0 = lock
                 .0
                 .checked_add(1)
@@ -6118,7 +6118,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("fixture lock capacity overflow"))?;
             lock.2 = lock
                 .2
-                .checked_add(i128::from(cell.occupied_capacity))
+                .checked_add(i128::from(cell.occupied_capacity()))
                 .ok_or_else(|| anyhow::anyhow!("fixture lock occupied overflow"))?;
             let lock_hash_type = u8::try_from(cell.lock_hash_type).map_err(|_| {
                 anyhow::anyhow!(
@@ -6128,9 +6128,9 @@ mod tests {
                 )
             })?;
             let lock_ref = references
-                .entry((cell.lock_code_hash.clone(), lock_hash_type))
+                .entry((cell.lock_code_hash.to_vec(), lock_hash_type))
                 .or_insert_with(|| ScriptReferenceInfo {
-                    reference_hash: cell.lock_code_hash.clone(),
+                    reference_hash: cell.lock_code_hash.to_vec(),
                     hash_type: lock_hash_type,
                     ..Default::default()
                 });
@@ -6148,7 +6148,7 @@ mod tests {
             )?;
             lock_ref.lock_used_capacity_sum = checked_rollback_script_i128(
                 lock_ref.lock_used_capacity_sum,
-                i128::from(cell.occupied_capacity),
+                i128::from(cell.occupied_capacity()),
                 &cell.lock_code_hash,
                 "fixture.reference.lock_used_capacity_sum",
             )?;
@@ -6167,13 +6167,13 @@ mod tests {
                 )?;
                 lock_ref.lock_owned_knowledge_sum = checked_rollback_script_i128(
                     lock_ref.lock_owned_knowledge_sum,
-                    i128::from(cell.occupied_capacity),
+                    i128::from(cell.occupied_capacity()),
                     &cell.lock_code_hash,
                     "fixture.reference.lock_owned_knowledge_sum",
                 )?;
             }
             if let Some(code_hash) = &cell.type_code_hash {
-                let type_total = totals.entry(code_hash.clone()).or_default();
+                let type_total = totals.entry(code_hash.to_vec()).or_default();
                 type_total.3 = type_total
                     .3
                     .checked_add(1)
@@ -6184,7 +6184,7 @@ mod tests {
                     .ok_or_else(|| anyhow::anyhow!("fixture type capacity overflow"))?;
                 type_total.5 = type_total
                     .5
-                    .checked_add(i128::from(cell.occupied_capacity))
+                    .checked_add(i128::from(cell.occupied_capacity()))
                     .ok_or_else(|| anyhow::anyhow!("fixture type occupied overflow"))?;
                 let hash_type = u8::try_from(cell.type_hash_type.ok_or_else(|| {
                     anyhow::anyhow!(
@@ -6199,9 +6199,9 @@ mod tests {
                     )
                 })?;
                 let type_ref = references
-                    .entry((code_hash.clone(), hash_type))
+                    .entry((code_hash.to_vec(), hash_type))
                     .or_insert_with(|| ScriptReferenceInfo {
-                        reference_hash: code_hash.clone(),
+                        reference_hash: code_hash.to_vec(),
                         hash_type,
                         ..Default::default()
                     });
@@ -6219,7 +6219,7 @@ mod tests {
                 )?;
                 type_ref.type_used_capacity_sum = checked_rollback_script_i128(
                     type_ref.type_used_capacity_sum,
-                    i128::from(cell.occupied_capacity),
+                    i128::from(cell.occupied_capacity()),
                     code_hash,
                     "fixture.reference.type_used_capacity_sum",
                 )?;
@@ -6238,7 +6238,7 @@ mod tests {
                     )?;
                     type_ref.type_owned_knowledge_sum = checked_rollback_script_i128(
                         type_ref.type_owned_knowledge_sum,
-                        i128::from(cell.occupied_capacity),
+                        i128::from(cell.occupied_capacity()),
                         code_hash,
                         "fixture.reference.type_owned_knowledge_sum",
                     )?;
@@ -7398,16 +7398,13 @@ mod tests {
                 &keys::encode_outpoint(&[0xAB; 32], 0),
                 &LiveCellInfo {
                     capacity: 10_000_000_000,
-                    lock_script_hash: vec![0xC1; 32],
-                    lock_code_hash: vec![0xC2; 32],
+                    lock_code_hash: [0xC2; 32],
                     lock_hash_type: 1,
                     lock_args: vec![0xC3; 20],
-                    type_script_hash: None,
                     type_code_hash: None,
                     type_hash_type: None,
                     type_args: None,
                     data_size: 0,
-                    occupied_capacity: 6_100_000_000,
                     udt_amount: None,
                     data_hash: None,
                 },
@@ -8696,7 +8693,6 @@ mod tests {
     fn test_rollback_restores_consumed_cells_after_fork_point() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let lock_hash = vec![0xAB; 32];
         let tx_hash = vec![0x42; 32];
 
         let header1 = CachedBlockHeader {
@@ -8733,19 +8729,17 @@ mod tests {
         };
         let cell = LiveCellInfo {
             capacity: 500,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 500,
             udt_amount: None,
             data_hash: None,
         };
+        let lock_hash = cell.lock_script_hash();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -8827,31 +8821,25 @@ mod tests {
         let consuming_tx = vec![0x32; 32];
         let input_cell = LiveCellInfo {
             capacity: 400,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xAA],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 400,
             udt_amount: None,
             data_hash: None,
         };
         let rollback_output_cell = LiveCellInfo {
             capacity: 200,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xBB],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
@@ -8868,6 +8856,8 @@ mod tests {
             semantic_tags: 0,
         };
 
+        let lock_aa = input_cell.lock_script_hash();
+        let lock_bb = rollback_output_cell.lock_script_hash();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -8890,17 +8880,17 @@ mod tests {
         );
         // Seed derived CFs so inline delta application can find them.
         batch.put_addr_balance(
-            &[0xAA; 32],
+            &lock_aa,
             &AddressBalance {
                 txs_count: 1,
                 ..Default::default()
             },
         );
         batch.put_addr_balance(
-            &[0xBB; 32],
+            &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(rollback_output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -8913,12 +8903,12 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 200,
-                lock_owned_knowledge_sum: 200,
+                lock_owned_knowledge_sum: i128::from(rollback_output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.commit().unwrap();
-        seed_tx_address_history(&store, 2, 1, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
+        seed_tx_address_history(&store, 2, 1, &consuming_tx, &[&lock_aa, &lock_bb]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         assert!(store.get_cell(&input_tx, 0, &store).unwrap().is_none());
@@ -8957,7 +8947,7 @@ mod tests {
         let addr_a = vec![0xAAu8; 32]; // input owner, active in both blocks
         let addr_b = vec![0xBBu8; 32]; // output owner, only in the rolled-back block
         let addr_c = vec![0xCCu8; 32]; // cellbase (miner) owner
-        let lock_code_hash = vec![0x11u8; 32];
+        let lock_code_hash = [0x11u8; 32];
 
         let header1 = CachedBlockHeader {
             hash: vec![0x01; 32],
@@ -8983,18 +8973,15 @@ mod tests {
             ..header1.clone()
         };
 
-        let make_cell = |capacity: i64, lock_hash: &[u8]| LiveCellInfo {
+        let make_cell = |capacity: i64, lock_args: &[u8]| LiveCellInfo {
             capacity,
-            lock_script_hash: lock_hash.to_vec(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: lock_args.to_vec(),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: capacity,
             udt_amount: None,
             data_hash: None,
         };
@@ -9006,6 +8993,10 @@ mod tests {
         let input_cell = make_cell(400, &addr_a);
         let cellbase_cell = make_cell(500, &addr_c);
         let output_cell = make_cell(200, &addr_b);
+        // The fixture's lock args name the owners; their addresses are the derived hashes.
+        let addr_a = input_cell.lock_script_hash().to_vec();
+        let addr_b = output_cell.lock_script_hash().to_vec();
+        let addr_c = cellbase_cell.lock_script_hash().to_vec();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -9131,7 +9122,7 @@ mod tests {
             &addr_b,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9146,7 +9137,7 @@ mod tests {
             &addr_c,
             &AddressBalance {
                 balance: 500,
-                used_capacity: 500,
+                used_capacity: i128::from(cellbase_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9160,11 +9151,12 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 hash_type: 1,
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 700,
-                lock_owned_knowledge_sum: 700,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity())
+                    + i128::from(cellbase_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -9229,7 +9221,7 @@ mod tests {
     ) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
         let miner = vec![0xA1u8; 32];
         let receiver = vec![0xB1u8; 32];
-        let lock_code_hash = vec![0x11u8; 32];
+        let lock_code_hash = [0x11u8; 32];
         let cellbase_1 = vec![0x41u8; 32];
         let cellbase_2 = vec![0x42u8; 32];
         let spend = vec![0x43u8; 32];
@@ -9249,18 +9241,15 @@ mod tests {
             cycles: None,
             chain_time_ms: 1_700_000_000_000 + i64::from(n) * 10_000,
         };
-        let cell = |capacity: i64, lock_hash: &[u8]| LiveCellInfo {
+        let cell = |capacity: i64, lock_args: &[u8]| LiveCellInfo {
             capacity,
-            lock_script_hash: lock_hash.to_vec(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: lock_args.to_vec(),
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: capacity,
             udt_amount: None,
             data_hash: None,
         };
@@ -9294,6 +9283,11 @@ mod tests {
         batch.delete_cell(&cellbase_1, 0);
         batch.put_cell(&cellbase_2, 0, &cell(500, &miner), 2);
         batch.put_cell(&spend, 0, &cell(500, &receiver), 2);
+        // Every fixture cell has 32 bytes of lock args, so one occupied capacity.
+        let occupied = i128::from(cell(500, &miner).occupied_capacity());
+        // The fixture's lock args name the owners; their addresses are the derived hashes.
+        let miner = cell(500, &miner).lock_script_hash().to_vec();
+        let receiver = cell(500, &receiver).lock_script_hash().to_vec();
         if with_tx_contexts {
             batch.put_reorg_undo_log_by_block(
                 2,
@@ -9324,7 +9318,7 @@ mod tests {
             &miner,
             &AddressBalance {
                 balance: 500,
-                used_capacity: 500,
+                used_capacity: occupied,
                 live_cells_count: 1,
                 total_cells_count: 2,
                 txs_count: 3,
@@ -9339,7 +9333,7 @@ mod tests {
             &receiver,
             &AddressBalance {
                 balance: 500,
-                used_capacity: 500,
+                used_capacity: occupied,
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9353,11 +9347,11 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 hash_type: 1,
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 1000,
-                lock_owned_knowledge_sum: 1000,
+                lock_owned_knowledge_sum: 2 * occupied,
                 ..Default::default()
             },
         );
@@ -9435,8 +9429,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
 
-        let addr_a = vec![0xAAu8; 32];
-        let lock_code_hash = vec![0x11u8; 32];
+        let lock_code_hash = [0x11u8; 32];
         let tx1 = vec![0x31u8; 32]; // block 1: creates A's first cell
         let tx3 = vec![0x33u8; 32]; // block 3: names A by prefix, A holds no cell
         let tx5 = vec![0x35u8; 32]; // block 5: creates A's second cell (rolled back)
@@ -9470,20 +9463,18 @@ mod tests {
         };
         let make_cell = |capacity: i64| LiveCellInfo {
             capacity,
-            lock_script_hash: addr_a.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: capacity,
             udt_amount: None,
             data_hash: None,
         };
 
+        let addr_a = make_cell(0).lock_script_hash().to_vec();
         let mut batch = StoreBatch::new(&store);
         for n in 1..=5u8 {
             batch.put_block_header(i64::from(n), &header(n));
@@ -9518,7 +9509,7 @@ mod tests {
             &addr_a,
             &AddressBalance {
                 balance: 600,
-                used_capacity: 600,
+                used_capacity: 2 * i128::from(make_cell(0).occupied_capacity()),
                 live_cells_count: 2,
                 total_cells_count: 2,
                 txs_count: 2,
@@ -9533,11 +9524,11 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 hash_type: 1,
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 600,
-                lock_owned_knowledge_sum: 600,
+                lock_owned_knowledge_sum: 2 * i128::from(make_cell(0).occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -9616,31 +9607,31 @@ mod tests {
             ..header1.clone()
         };
 
-        let type_hash = vec![0x90u8; 32];
         let lock_a = vec![0xA1u8; 32];
         let lock_b = vec![0xB1u8; 32];
-        let lock_code_hash = vec![0x11u8; 32];
-        let type_code_hash = vec![0x22u8; 32];
+        let lock_code_hash = [0x11u8; 32];
+        let type_code_hash = [0x22u8; 32];
         let input_tx = vec![0x41u8; 32];
         let transfer_tx = vec![0x42u8; 32];
 
-        let udt_cell = |lock_hash: &[u8]| LiveCellInfo {
+        let udt_cell = |lock_args: &[u8]| LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_hash.to_vec(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: lock_args.to_vec(),
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(100),
             data_hash: None,
         };
         let input_cell = udt_cell(&lock_a);
         let output_cell = udt_cell(&lock_b);
+        // The fixture's lock args name the holders; addresses and the token are derived hashes.
+        let lock_a = input_cell.lock_script_hash().to_vec();
+        let lock_b = output_cell.lock_script_hash().to_vec();
+        let type_hash = input_cell.type_script_hash().unwrap().to_vec();
 
         let transfer_record = |block_number: i64| TokenTransferRecord {
             tx_hash: transfer_tx.clone(),
@@ -9700,7 +9691,7 @@ mod tests {
             &lock_b,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -9710,27 +9701,27 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.put_script_info(
             &type_code_hash,
             &ScriptInfo {
-                code_hash: type_code_hash.clone(),
+                code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
-                type_owned_knowledge_sum: 100,
+                type_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.put_token(
             &type_hash,
             &TokenInfo {
-                type_code_hash: type_code_hash.clone(),
+                type_code_hash: type_code_hash.to_vec(),
                 hash_type: 1,
                 type_args: vec![0x33; 20],
                 standard: "sudt".to_string(),
@@ -9937,31 +9928,25 @@ mod tests {
         let consuming_tx = vec![0x32; 32];
         let input_cell = LiveCellInfo {
             capacity: 400,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xAA],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 400,
             udt_amount: None,
             data_hash: None,
         };
         let output_cell = LiveCellInfo {
             capacity: 200,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xBB],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
@@ -9978,6 +9963,8 @@ mod tests {
             semantic_tags: 0,
         };
 
+        let lock_aa = input_cell.lock_script_hash();
+        let lock_bb = output_cell.lock_script_hash();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -9999,17 +9986,17 @@ mod tests {
             }),
         );
         batch.put_addr_balance(
-            &[0xAA; 32],
+            &lock_aa,
             &AddressBalance {
                 txs_count: 1,
                 ..Default::default()
             },
         );
         batch.put_addr_balance(
-            &[0xBB; 32],
+            &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -10022,12 +10009,12 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 200,
-                lock_owned_knowledge_sum: 200,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.commit().unwrap();
-        seed_tx_address_history(&store, 2, 1, &consuming_tx, &[&[0xAA; 32], &[0xBB; 32]]);
+        seed_tx_address_history(&store, 2, 1, &consuming_tx, &[&lock_aa, &lock_bb]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 1);
 
         // Step 1: rollback_via_undo_log deletes undo entries and returns
@@ -10102,45 +10089,40 @@ mod tests {
             chain_time_ms: 1_700_000_010_000,
         };
 
-        let type_hash = vec![0x90; 32];
-        let lock_a = vec![0xA1; 32];
-        let lock_b = vec![0xB1; 32];
-        let lock_code_hash = vec![0x11; 32];
-        let type_code_hash = vec![0x22; 32];
+        let lock_code_hash = [0x11; 32];
+        let type_code_hash = [0x22; 32];
         let input_tx = vec![0x41; 32];
         let transfer_tx = vec![0x42; 32];
 
         let input_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_a.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: vec![0xA1],
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(100),
             data_hash: None,
         };
         let output_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_b.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: vec![0xB1],
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(100),
             data_hash: None,
         };
 
+        // The fixture's lock args name the holders; addresses and the token are derived hashes.
+        let lock_a = input_cell.lock_script_hash().to_vec();
+        let lock_b = output_cell.lock_script_hash().to_vec();
+        let type_hash = input_cell.type_script_hash().unwrap().to_vec();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -10172,7 +10154,7 @@ mod tests {
             &lock_b,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -10182,27 +10164,27 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.put_script_info(
             &type_code_hash,
             &ScriptInfo {
-                code_hash: type_code_hash.clone(),
+                code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
-                type_owned_knowledge_sum: 100,
+                type_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.put_token(
             &type_hash,
             &TokenInfo {
-                type_code_hash: type_code_hash.clone(),
+                type_code_hash: type_code_hash.to_vec(),
                 hash_type: 1,
                 type_args: vec![0x33; 20],
                 standard: "sudt".to_string(),
@@ -10311,46 +10293,41 @@ mod tests {
             chain_time_ms: 1_700_000_010_000,
         };
 
-        let type_hash = vec![0x90; 32];
-        let lock_a = vec![0xA1; 32];
-        let lock_b = vec![0xB1; 32];
-        let lock_code_hash = vec![0x11; 32];
-        let type_code_hash = vec![0x22; 32];
+        let lock_code_hash = [0x11; 32];
+        let type_code_hash = [0x22; 32];
         let input_tx = vec![0x41; 32];
         let transfer_tx = vec![0x42; 32];
 
         // Amounts (udt_amount) are u128 and set to `big`; capacities stay small (i128).
         let input_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_a.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: vec![0xA1],
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
         let output_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_b.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: vec![0xB1],
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
 
+        // The fixture's lock args name the holders; addresses and the token are derived hashes.
+        let lock_a = input_cell.lock_script_hash().to_vec();
+        let lock_b = output_cell.lock_script_hash().to_vec();
+        let type_hash = input_cell.type_script_hash().unwrap().to_vec();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -10382,7 +10359,7 @@ mod tests {
             &lock_b,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(output_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -10392,27 +10369,27 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.put_script_info(
             &type_code_hash,
             &ScriptInfo {
-                code_hash: type_code_hash.clone(),
+                code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
-                type_owned_knowledge_sum: 100,
+                type_owned_knowledge_sum: i128::from(output_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.put_token(
             &type_hash,
             &TokenInfo {
-                type_code_hash: type_code_hash.clone(),
+                type_code_hash: type_code_hash.to_vec(),
                 hash_type: 1,
                 type_args: vec![0x33; 20],
                 standard: "sudt".to_string(),
@@ -10528,10 +10505,8 @@ mod tests {
             chain_time_ms: 1_700_000_010_000,
         };
 
-        let type_hash = vec![0x90; 32];
-        let lock_a = vec![0xA1; 32];
-        let lock_code_hash = vec![0x11; 32];
-        let type_code_hash = vec![0x22; 32];
+        let lock_code_hash = [0x11; 32];
+        let type_code_hash = [0x22; 32];
         let input_tx = vec![0x41; 32];
         let transfer_tx = vec![0x42; 32];
 
@@ -10539,35 +10514,32 @@ mod tests {
         // back to the SAME lock + type in one tx at block 2.
         let input_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_a.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: vec![0xA1],
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
         let output_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_a.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(type_code_hash.clone()),
+            lock_args: vec![0xA1],
+            type_code_hash: Some(type_code_hash),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 100,
             udt_amount: Some(big),
             data_hash: None,
         };
 
+        // The fixture's lock args name the holder; its address and the token are derived hashes.
+        let lock_a = input_cell.lock_script_hash().to_vec();
+        let type_hash = input_cell.type_script_hash().unwrap().to_vec();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -10604,7 +10576,7 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
                 lock_owned_knowledge_sum: 100,
@@ -10614,7 +10586,7 @@ mod tests {
         batch.put_script_info(
             &type_code_hash,
             &ScriptInfo {
-                code_hash: type_code_hash.clone(),
+                code_hash: type_code_hash.to_vec(),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 100,
                 type_owned_knowledge_sum: 100,
@@ -10624,7 +10596,7 @@ mod tests {
         batch.put_token(
             &type_hash,
             &TokenInfo {
-                type_code_hash: type_code_hash.clone(),
+                type_code_hash: type_code_hash.to_vec(),
                 hash_type: 1,
                 type_args: vec![0x33; 20],
                 standard: "sudt".to_string(),
@@ -10729,46 +10701,37 @@ mod tests {
         let consuming_tx_b = vec![0x43; 32];
         let input_cell = LiveCellInfo {
             capacity: 400,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xAA],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 400,
             udt_amount: None,
             data_hash: None,
         };
         let rollback_output_cell_a = LiveCellInfo {
             capacity: 200,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xBB],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
         let rollback_output_cell_b = LiveCellInfo {
             capacity: 180,
-            lock_script_hash: vec![0xCC; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xCC],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 180,
             udt_amount: None,
             data_hash: None,
         };
@@ -10785,6 +10748,9 @@ mod tests {
             semantic_tags: 0,
         };
 
+        let lock_aa = input_cell.lock_script_hash();
+        let lock_bb = rollback_output_cell_a.lock_script_hash();
+        let lock_cc = rollback_output_cell_b.lock_script_hash();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -10817,22 +10783,22 @@ mod tests {
             }),
         );
         // Seed derived CFs so inline delta application can find them.
-        batch.put_addr_balance(&[0xAA; 32], &AddressBalance::default());
+        batch.put_addr_balance(&lock_aa, &AddressBalance::default());
         batch.put_addr_balance(
-            &[0xBB; 32],
+            &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(rollback_output_cell_a.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 ..Default::default()
             },
         );
         batch.put_addr_balance(
-            &[0xCC; 32],
+            &lock_cc,
             &AddressBalance {
                 balance: 180,
-                used_capacity: 180,
+                used_capacity: i128::from(rollback_output_cell_b.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 ..Default::default()
@@ -10844,7 +10810,8 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 380,
-                lock_owned_knowledge_sum: 380,
+                lock_owned_knowledge_sum: i128::from(rollback_output_cell_a.occupied_capacity())
+                    + i128::from(rollback_output_cell_b.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -11106,20 +11073,18 @@ mod tests {
         };
         let cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xAA],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
 
+        let lock_aa = cell.lock_script_hash();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -11140,10 +11105,10 @@ mod tests {
         );
         // Seed derived CFs so inline delta application can find them.
         batch.put_addr_balance(
-            &[0xAA; 32],
+            &lock_aa,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 txs_count: 1,
@@ -11157,12 +11122,12 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
-                lock_owned_knowledge_sum: 100,
+                lock_owned_knowledge_sum: i128::from(cell.occupied_capacity()),
                 ..Default::default()
             },
         );
         batch.commit().unwrap();
-        seed_tx_address_history(&store, 2, 0, &cellbase_tx, &[&[0xAA; 32]]);
+        seed_tx_address_history(&store, 2, 0, &cellbase_tx, &[&lock_aa]);
         seed_sync_status(&store, 2, &header2.hash, 1, 1, 0);
 
         rollback_fixture(&store, 1).unwrap();
@@ -11173,7 +11138,7 @@ mod tests {
         // The miner's address history goes with it — a cellbase tx has an
         // addr_txs row but no CF_TX_ACTIONS bundle to derive it from.
         assert!(store
-            .list_addr_txs_recent(&[0xAA; 32], 10, None)
+            .list_addr_txs_recent(&lock_aa, 10, None)
             .unwrap()
             .is_empty());
     }
@@ -11217,46 +11182,37 @@ mod tests {
         };
         let keep_cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: vec![0xAA; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xAA],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
         let drop_live_cell = LiveCellInfo {
             capacity: 200,
-            lock_script_hash: vec![0xBB; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: Some(vec![0x22; 32]),
-            type_code_hash: Some(vec![0x11; 32]),
+            lock_args: vec![0xBB],
+            type_code_hash: Some([0x11; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 0,
-            occupied_capacity: 200,
             udt_amount: None,
             data_hash: None,
         };
         let drop_consumed_cell = LiveCellInfo {
             capacity: 300,
-            lock_script_hash: vec![0xCC; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
-            lock_args: vec![],
-            type_script_hash: None,
+            lock_args: vec![0xCC],
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 300,
             udt_amount: None,
             data_hash: None,
         };
@@ -11267,10 +11223,14 @@ mod tests {
         let historical_consumed_tx = vec![0x40; 32];
         let orphan_consumed_tx = vec![0x50; 32];
         let orphan_consumed_cell = LiveCellInfo {
-            lock_script_hash: vec![0xDD; 32],
+            lock_args: vec![0xDD],
             ..drop_consumed_cell.clone()
         };
 
+        let lock_aa = keep_cell.lock_script_hash();
+        let lock_bb = drop_live_cell.lock_script_hash();
+        let lock_cc = drop_consumed_cell.lock_script_hash();
+        let lock_dd = orphan_consumed_cell.lock_script_hash();
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
         batch.put_block_header(2, &header2);
@@ -11281,19 +11241,19 @@ mod tests {
         batch.put_cell(&orphan_consumed_tx, 0, &orphan_consumed_cell, 2);
         // Seed derived CFs so inline delta application can find them.
         batch.put_addr_balance(
-            &[0xAA; 32],
+            &lock_aa,
             &AddressBalance {
                 balance: 100,
-                used_capacity: 100,
+                used_capacity: i128::from(keep_cell.occupied_capacity()),
                 live_cells_count: 1,
                 ..Default::default()
             },
         );
         batch.put_addr_balance(
-            &[0xBB; 32],
+            &lock_bb,
             &AddressBalance {
                 balance: 200,
-                used_capacity: 200,
+                used_capacity: i128::from(drop_live_cell.occupied_capacity()),
                 live_cells_count: 1,
                 total_cells_count: 1,
                 first_seen_block: 2,
@@ -11301,7 +11261,7 @@ mod tests {
             },
         );
         batch.put_addr_balance(
-            &[0xCC; 32],
+            &lock_cc,
             &AddressBalance {
                 total_cells_count: 2,
                 first_seen_block: 1,
@@ -11309,7 +11269,7 @@ mod tests {
             },
         );
         batch.put_addr_balance(
-            &[0xDD; 32],
+            &lock_dd,
             &AddressBalance {
                 total_cells_count: 1,
                 first_seen_block: 2,
@@ -11322,10 +11282,11 @@ mod tests {
                 code_hash: vec![0x11; 32],
                 lock_live_cells_count: 2,
                 lock_owned_capacity_sum: 300,
-                lock_owned_knowledge_sum: 300,
+                lock_owned_knowledge_sum: i128::from(keep_cell.occupied_capacity())
+                    + i128::from(drop_live_cell.occupied_capacity()),
                 type_live_cells_count: 1,
                 type_owned_capacity_sum: 200,
-                type_owned_knowledge_sum: 200,
+                type_owned_knowledge_sum: i128::from(drop_live_cell.occupied_capacity()),
                 ..Default::default()
             },
         );
@@ -11363,7 +11324,7 @@ mod tests {
         assert!(store.get_cell(&keep_tx, 0, &store).unwrap().is_some());
         assert!(store.get_cell(&drop_live_tx, 0, &store).unwrap().is_none());
         assert!(
-            store.get_addr_balance(&[0xBB; 32]).unwrap().is_none(),
+            store.get_addr_balance(&lock_bb).unwrap().is_none(),
             "an address first seen only in the orphaned suffix must not survive rollback"
         );
         assert!(store
@@ -11374,11 +11335,11 @@ mod tests {
             .get_consumed_cell(&drop_consumed_tx, 0, &store)
             .unwrap()
             .is_none());
-        let historical = store.get_addr_balance(&[0xCC; 32]).unwrap().unwrap();
+        let historical = store.get_addr_balance(&lock_cc).unwrap().unwrap();
         assert_eq!(historical.first_seen_block, 1);
         assert_eq!(historical.total_cells_count, 1);
         assert_eq!(historical.balance, 0);
-        assert!(store.get_addr_balance(&[0xDD; 32]).unwrap().is_none());
+        assert!(store.get_addr_balance(&lock_dd).unwrap().is_none());
         assert_eq!(
             store.get_cf(store.cf_cells(), &orphan_payload_key).unwrap(),
             orphan_payload
@@ -11779,23 +11740,20 @@ mod tests {
             chain_time_ms: 1_700_000_010_000,
         };
         let tx_hash = vec![0x21; 32];
-        let lock_hash = vec![0xAA; 32];
-        let lock_code_hash = vec![0x11; 32];
+        let lock_code_hash = [0x11; 32];
         let cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
+        let lock_hash = cell.lock_script_hash();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -11812,7 +11770,7 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
                 lock_owned_knowledge_sum: 100,
@@ -11832,7 +11790,7 @@ mod tests {
                 .contains("missing addr_balance for cell rollback"),
             "{err}"
         );
-        assert!(err.to_string().contains(&hex::encode(&lock_hash)), "{err}");
+        assert!(err.to_string().contains(&hex::encode(lock_hash)), "{err}");
         assert!(err.to_string().contains("rollback_to=1"), "{err}");
         assert_eq!(
             store.get_cf(store.cf_cells(), &outpoint).unwrap().unwrap(),
@@ -11879,23 +11837,20 @@ mod tests {
             chain_time_ms: 1_700_000_010_000,
         };
         let tx_hash = vec![0x21; 32];
-        let lock_hash = vec![0xAA; 32];
-        let lock_code_hash = vec![0x11; 32];
+        let lock_code_hash = [0x11; 32];
         let cell = LiveCellInfo {
             capacity: 100,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: lock_code_hash.clone(),
+            lock_code_hash,
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
+        let lock_hash = cell.lock_script_hash();
 
         let mut batch = StoreBatch::new(&store);
         batch.put_block_header(1, &header1);
@@ -11923,7 +11878,7 @@ mod tests {
         batch.put_script_info(
             &lock_code_hash,
             &ScriptInfo {
-                code_hash: lock_code_hash.clone(),
+                code_hash: lock_code_hash.to_vec(),
                 lock_live_cells_count: 1,
                 lock_owned_capacity_sum: 100,
                 lock_owned_knowledge_sum: 100,
@@ -12504,23 +12459,20 @@ mod tests {
     #[test]
     fn accumulate_reorg_holder_delta_supports_amount_above_u128() {
         let amount = 200u128 << 120;
-        let type_hash = vec![0x91; 32];
-        let lock_hash = vec![0x92; 32];
         let cell = LiveCellInfo {
             capacity: 200_00000000,
-            lock_script_hash: lock_hash.clone(),
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(type_hash.clone()),
-            type_code_hash: Some(vec![0x22; 32]),
+            type_code_hash: Some([0x22; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![0x33; 20]),
             data_size: 16,
-            occupied_capacity: 142_00000000,
             udt_amount: Some(amount),
             data_hash: None,
         };
+        let type_hash = cell.type_script_hash().unwrap().to_vec();
+        let lock_hash = cell.lock_script_hash().to_vec();
         let mut addr = HashMap::new();
         let mut script = HashMap::new();
         let mut token = HashMap::new();
@@ -12563,16 +12515,13 @@ mod tests {
         // created) debits.  This is what HODL tracker repair reverses.
         let cell = LiveCellInfo {
             capacity: 485_835_712_305_249,
-            lock_script_hash: vec![0xaa; 32],
-            lock_code_hash: vec![0x11; 32],
+            lock_code_hash: [0x11; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 6_100_000_000,
             udt_amount: None,
             data_hash: None,
         };
@@ -12624,30 +12573,29 @@ mod tests {
     fn created_then_consumed_cell_reverses_cumulative_creation_facts_only() {
         let cell = LiveCellInfo {
             capacity: 200,
-            lock_script_hash: vec![0xaa; 32],
-            lock_code_hash: vec![0xbb; 32],
+            lock_code_hash: [0xbb; 32],
             lock_hash_type: 1,
             lock_args: vec![],
-            type_script_hash: Some(vec![0xcc; 32]),
-            type_code_hash: Some(vec![0xdd; 32]),
+            type_code_hash: Some([0xdd; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![]),
             data_size: 0,
-            occupied_capacity: 100,
             udt_amount: None,
             data_hash: None,
         };
         let mut address = HashMap::new();
         let mut script = HashMap::new();
         reverse_created_consumed_cell_totals(&cell, &mut address, &mut script).unwrap();
-        assert_eq!(address[&cell.lock_script_hash], (0, 0, 0, -1));
+        assert_eq!(address[cell.lock_script_hash().as_slice()], (0, 0, 0, -1));
+        // Occupied is derived: 8 + 33 (no lock args) + 33 (no type args) bytes.
+        assert_eq!(cell.occupied_capacity(), 74_00000000);
         assert_eq!(
-            script[&(cell.lock_code_hash.clone(), 1, false)],
-            (-1, 0, -200, 0, -100, 0)
+            script[&(cell.lock_code_hash.to_vec(), 1, false)],
+            (-1, 0, -200, 0, -74_00000000, 0)
         );
         assert_eq!(
-            script[&(cell.type_code_hash.clone().unwrap(), 1, true)],
-            (-1, 0, -200, 0, -100, 0)
+            script[&(cell.type_code_hash.unwrap().to_vec(), 1, true)],
+            (-1, 0, -200, 0, -74_00000000, 0)
         );
     }
 
@@ -14307,16 +14255,13 @@ mod tests {
                 &cell_key,
                 &LiveCellInfo {
                     capacity: 10_000_000_000,
-                    lock_script_hash: vec![0xC1; 32],
-                    lock_code_hash: vec![0xC2; 32],
+                    lock_code_hash: [0xC2; 32],
                     lock_hash_type: 1,
                     lock_args: vec![0xC3; 20],
-                    type_script_hash: None,
                     type_code_hash: None,
                     type_hash_type: None,
                     type_args: None,
                     data_size: 0,
-                    occupied_capacity: 6_100_000_000,
                     udt_amount: None,
                     data_hash: None,
                 },

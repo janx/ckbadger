@@ -380,7 +380,7 @@ pub(super) fn deposit_to_response(
                     hex::encode(outpoint_key)
                 ))
             })?;
-            let code_hash = format!("0x{}", hex::encode(&cell_info.lock_code_hash));
+            let code_hash = format!("0x{}", hex::encode(cell_info.lock_code_hash));
             (Some(addr), Some(code_hash))
         }
         Ok(None) => (None, None),

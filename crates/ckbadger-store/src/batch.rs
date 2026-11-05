@@ -408,19 +408,38 @@ impl<'a> StoreBatch<'a> {
     /// TestUnified stores (domain + append-only CFs coexist). Production code should use
     /// separate batches: `put_cell_payload` on append-only batch +
     /// `put_live_cell_marker` on domain batch.
+    ///
+    /// # Panics
+    /// On a payload `put_cell_payload` refuses (a test-store helper; production
+    /// writers call `put_cell_payload` and propagate its error).
     pub fn put_cell_raw_key(&mut self, raw_key: &[u8], info: &LiveCellInfo, created_at_block: i64) {
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
         // Canonical cell payload is append-only in `cells`; live_cells is a marker set.
-        self.put_cf(self.store.cf_cells(), raw_key, &value);
+        self.put_test_store_cell_payload(raw_key, info);
         self.put_live_cell_marker(raw_key, created_at_block);
+    }
+
+    fn put_test_store_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
+        if let Err(error) = self.put_cell_payload(raw_key, info) {
+            panic!("{error:#}");
+        }
     }
 
     // ---- Split cell methods for cross-store writes ----
 
     /// Write cell payload to CF_CELLS. Call on append-only store batch.
-    pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) {
-        let value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.put_cf(self.store.cf_cells(), raw_key, &value);
+    ///
+    /// A payload the store could not read back (see `LiveCellInfo::decode`)
+    /// is refused with its outpoint and nothing is staged: the append-only CF
+    /// can only be repaired by a rebuild.
+    pub fn put_cell_payload(&mut self, raw_key: &[u8], info: &LiveCellInfo) -> anyhow::Result<()> {
+        let value = info.encode().map_err(|e| {
+            anyhow::anyhow!(
+                "cells payload refused: outpoint=0x{}: {e}",
+                bytes_to_hex(raw_key)
+            )
+        })?;
+        self.put_cf(self.store.cf_cells(), raw_key, value);
+        Ok(())
     }
 
     /// Write cell payload using tx_hash + output_index. Call on append-only store batch.
@@ -429,9 +448,9 @@ impl<'a> StoreBatch<'a> {
         tx_hash: &[u8],
         output_index: i16,
         info: &LiveCellInfo,
-    ) {
+    ) -> anyhow::Result<()> {
         let key = keys::encode_outpoint(tx_hash, output_index);
-        self.put_cell_payload(&key, info);
+        self.put_cell_payload(&key, info)
     }
 
     /// Write live cell marker to CF_LIVE_CELLS. Call on domain store batch.
@@ -520,8 +539,7 @@ impl<'a> StoreBatch<'a> {
         consumed_by_tx: Option<&[u8]>,
     ) {
         // Ensure canonical payload exists even when callers only write consumed entries.
-        let cell_value = bincode::serialize(info).expect("serialize LiveCellInfo");
-        self.put_cf(self.store.cf_cells(), raw_key, &cell_value);
+        self.put_test_store_cell_payload(raw_key, info);
         let consumed = ConsumedCellMeta {
             created_at_block,
             consumed_at_block,
@@ -1912,16 +1930,13 @@ mod tests {
         let tx_hash = [42u8; 32];
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -1948,16 +1963,13 @@ mod tests {
         let tx_hash = [0x33u8; 32];
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2058,23 +2070,24 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
-        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
+        batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         let err = batch.commit().unwrap_err();
         assert!(err
             .to_string()
@@ -2187,29 +2200,30 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
 
         let mut batch = StoreBatch::new(&store);
-        batch.put_cell_payload_by_outpoint(&[0x11; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0x11; 32], 0, &info)
+            .unwrap();
         batch.commit().unwrap();
 
         // Overwrite with a DIFFERENT value should be rejected
         let mut different_info = info.clone();
         different_info.capacity = 99999;
         let mut overwrite_batch = StoreBatch::new(&store);
-        overwrite_batch.put_cell_payload_by_outpoint(&[0x11; 32], 0, &different_info);
+        overwrite_batch
+            .put_cell_payload_by_outpoint(&[0x11; 32], 0, &different_info)
+            .unwrap();
         let err = overwrite_batch.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
@@ -2265,16 +2279,13 @@ mod tests {
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let info = LiveCellInfo {
             capacity: 10_000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2282,7 +2293,9 @@ mod tests {
         const CELLS: u8 = 64;
         let mut batch = StoreBatch::new(&store);
         for index in 0..CELLS {
-            batch.put_cell_payload_by_outpoint(&[index; 32], 0, &info);
+            batch
+                .put_cell_payload_by_outpoint(&[index; 32], 0, &info)
+                .unwrap();
         }
         store.reset_read_call_counters();
         batch.commit().unwrap();
@@ -2301,7 +2314,9 @@ mod tests {
         // one probe.
         let mut replay = StoreBatch::new(&store);
         for index in 0..CELLS {
-            replay.put_cell_payload_by_outpoint(&[index; 32], 0, &info);
+            replay
+                .put_cell_payload_by_outpoint(&[index; 32], 0, &info)
+                .unwrap();
         }
         store.reset_read_call_counters();
         replay.commit().unwrap();
@@ -2324,16 +2339,13 @@ mod tests {
         let store = CkbadgerStore::open_append_only(dir.path()).unwrap();
         let info = LiveCellInfo {
             capacity: 10_000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2344,7 +2356,9 @@ mod tests {
         for index in 0..cells {
             let mut tx_hash = [0u8; 32];
             tx_hash[..4].copy_from_slice(&(index as u32).to_le_bytes());
-            batch.put_cell_payload_by_outpoint(&tx_hash, 0, &info);
+            batch
+                .put_cell_payload_by_outpoint(&tx_hash, 0, &info)
+                .unwrap();
         }
         store.reset_read_call_counters();
         batch.commit().unwrap();
@@ -2361,7 +2375,9 @@ mod tests {
         for index in 0..cells {
             let mut tx_hash = [0u8; 32];
             tx_hash[..4].copy_from_slice(&(index as u32).to_le_bytes());
-            replay.put_cell_payload_by_outpoint(&tx_hash, 0, &info);
+            replay
+                .put_cell_payload_by_outpoint(&tx_hash, 0, &info)
+                .unwrap();
         }
         replay.commit().unwrap();
 
@@ -2371,7 +2387,9 @@ mod tests {
         tx_hash[..4].copy_from_slice(&((cells - 1) as u32).to_le_bytes());
         let mut changed = info.clone();
         changed.capacity = 20_000;
-        overwrite.put_cell_payload_by_outpoint(&tx_hash, 0, &changed);
+        overwrite
+            .put_cell_payload_by_outpoint(&tx_hash, 0, &changed)
+            .unwrap();
         let err = overwrite.commit().unwrap_err();
         assert!(err.to_string().contains("append-only overwrite blocked"));
     }
@@ -2383,27 +2401,28 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        first_batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         first_batch.commit().unwrap();
 
         // Replay with identical value should succeed (idempotent)
         let mut replay_batch = StoreBatch::new(&store);
-        replay_batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        replay_batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         replay_batch.commit().unwrap();
 
         // Cell should still be readable
@@ -2419,32 +2438,33 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
 
         let mut first_batch = StoreBatch::new(&store);
-        first_batch.put_cell_payload_by_outpoint(&[0xB1; 32], 0, &info);
+        first_batch
+            .put_cell_payload_by_outpoint(&[0xB1; 32], 0, &info)
+            .unwrap();
         first_batch.commit().unwrap();
 
         let replay = info.clone();
         let mut replay_batch = StoreBatch::new(&store);
-        replay_batch.put_cell_payload_by_outpoint(&[0xB1; 32], 0, &replay);
+        replay_batch
+            .put_cell_payload_by_outpoint(&[0xB1; 32], 0, &replay)
+            .unwrap();
         replay_batch.commit().unwrap();
 
         let key = keys::encode_outpoint(&[0xB1; 32], 0);
         let stored = store.get_cf(store.cf_cells(), &key).unwrap().unwrap();
-        let payload: LiveCellInfo = bincode::deserialize(&stored).unwrap();
+        let payload = LiveCellInfo::decode(&stored).unwrap();
         assert_eq!(payload, info);
     }
 
@@ -2459,16 +2479,13 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 50000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: Some(vec![4u8; 32]),
-            type_code_hash: Some(vec![5u8; 32]),
+            type_code_hash: Some([5u8; 32]),
             type_hash_type: Some(1),
             type_args: Some(vec![6u8; 32]),
             data_size: 64,
-            occupied_capacity: 10200000000,
             udt_amount: Some(999),
             data_hash: None,
         };
@@ -2504,16 +2521,13 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2540,7 +2554,7 @@ mod tests {
             .unwrap();
         assert_eq!(cell_a.capacity, cell_b.capacity);
         assert_eq!(cell_a.created_at_block, cell_b.created_at_block);
-        assert_eq!(cell_a.lock_script_hash, cell_b.lock_script_hash);
+        assert_eq!(cell_a.lock_script_hash(), cell_b.lock_script_hash());
 
         // Both should have live markers
         let key_a = keys::encode_outpoint(&tx_hash_a, output_index);
@@ -2565,16 +2579,13 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 20000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2615,9 +2626,9 @@ mod tests {
 
         // Verify canonical cell payload is still present in CF_CELLS
         let cell_bytes = store.get_cf(store.cf_cells(), &raw_key).unwrap().unwrap();
-        let cell: LiveCellInfo = bincode::deserialize(&cell_bytes).unwrap();
+        let cell = LiveCellInfo::decode(&cell_bytes).unwrap();
         assert_eq!(cell.capacity, 20000);
-        assert_eq!(cell.lock_script_hash, info.lock_script_hash);
+        assert_eq!(cell.lock_script_hash(), info.lock_script_hash());
     }
 
     #[test]
@@ -2631,16 +2642,13 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 30000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2840,16 +2848,13 @@ mod tests {
 
         let info = LiveCellInfo {
             capacity: 10000,
-            lock_script_hash: vec![1u8; 32],
-            lock_code_hash: vec![2u8; 32],
+            lock_code_hash: [2u8; 32],
             lock_hash_type: 1,
             lock_args: vec![3u8; 20],
-            type_script_hash: None,
             type_code_hash: None,
             type_hash_type: None,
             type_args: None,
             data_size: 0,
-            occupied_capacity: 0,
             udt_amount: None,
             data_hash: None,
         };
@@ -2858,14 +2863,20 @@ mod tests {
         assert_eq!(batch.len(), 0);
         assert!(batch.is_empty());
 
-        batch.put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA1; 32], 0, &info)
+            .unwrap();
         assert_eq!(batch.len(), 1);
         assert!(!batch.is_empty());
 
-        batch.put_cell_payload_by_outpoint(&[0xA2; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA2; 32], 0, &info)
+            .unwrap();
         assert_eq!(batch.len(), 2);
 
-        batch.put_cell_payload_by_outpoint(&[0xA3; 32], 0, &info);
+        batch
+            .put_cell_payload_by_outpoint(&[0xA3; 32], 0, &info)
+            .unwrap();
         assert_eq!(batch.len(), 3);
     }
 

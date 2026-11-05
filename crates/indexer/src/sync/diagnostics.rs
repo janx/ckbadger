@@ -1198,22 +1198,21 @@ mod tests {
         use super::super::types::CachedCellInfo;
 
         fn dummy_cached_cell_info(created_at_block: i64) -> CachedCellInfo {
-            CachedCellInfo {
-                capacity: 1,
+            CachedCellInfo::new(
+                ckbadger_store::LiveCellInfo {
+                    capacity: 1,
+                    lock_code_hash: [2u8; 32],
+                    lock_hash_type: 1,
+                    lock_args: vec![],
+                    type_code_hash: None,
+                    type_hash_type: None,
+                    type_args: None,
+                    data_size: 0,
+                    udt_amount: None,
+                    data_hash: None,
+                },
                 created_at_block,
-                lock_script_hash: vec![1u8; 32],
-                lock_code_hash: vec![2u8; 32],
-                lock_hash_type: 1,
-                lock_args: vec![],
-                type_script_hash: None,
-                type_code_hash: None,
-                type_hash_type: None,
-                type_args: None,
-                data_size: 0,
-                occupied_capacity: 1,
-                udt_amount: None,
-                data_hash: None,
-            }
+            )
         }
 
         let cache = dashmap::DashMap::new();

@@ -53,22 +53,42 @@ pub(crate) struct XudtExtensionScript {
 
 // ── Cell caches ────────────────────────────────────────────────────────
 
-#[derive(Clone)]
-pub(crate) struct CachedCellInfo {
-    pub(crate) capacity: i64,
-    pub(crate) created_at_block: i64,
-    pub(crate) lock_script_hash: Vec<u8>,
-    pub(crate) lock_code_hash: Vec<u8>,
-    pub(crate) lock_hash_type: i16,
-    pub(crate) lock_args: Vec<u8>,
-    pub(crate) type_script_hash: Option<Vec<u8>>,
-    pub(crate) type_code_hash: Option<Vec<u8>>,
-    pub(crate) type_hash_type: Option<i16>,
-    pub(crate) type_args: Option<Vec<u8>>,
-    pub(crate) data_size: i32,
-    pub(crate) occupied_capacity: i64,
-    pub(crate) udt_amount: Option<u128>,
-    pub(crate) data_hash: Option<Vec<u8>>,
+/// The parser's input-cell cache entry: the `cells` payload and the block
+/// that created it, exactly as the writer holds a resolved input cell.
+pub(crate) type CachedCellInfo = ckbadger_store::PositionedCellInfo;
+
+/// Lock and (if typed) type script hash of each input cell of a live batch,
+/// keyed by its outpoint. The `cells` payload stores no script hashes: the
+/// parser's pass 3 derives each input's once and ships them with the batch, and
+/// every writer site reads them from here instead of deriving them again.
+pub(crate) type InputScriptHashes = HashMap<(Vec<u8>, i16), ([u8; 32], Option<[u8; 32]>)>;
+
+/// What pass 3 ships, for writer tests that build a batch by hand: the script
+/// hashes of every input of `txs` whose cell is in `cell_info` or
+/// `batch_cell_info` (an input without one is left out; the writer reports it).
+#[cfg(test)]
+pub(crate) fn derive_input_script_hashes<'t>(
+    txs: impl IntoIterator<Item = &'t TxData>,
+    cell_info: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
+    batch_cell_info: &HashMap<(Vec<u8>, i16), ckbadger_store::PositionedCellInfo>,
+) -> InputScriptHashes {
+    let mut hashes = InputScriptHashes::new();
+    for tx in txs {
+        if tx.is_cellbase {
+            continue;
+        }
+        for input in &tx.inputs {
+            let Ok(output_index) = i16::try_from(input.previous_output_index) else {
+                continue;
+            };
+            let key = (input.previous_tx_hash.to_vec(), output_index);
+            if let Some(info) = cell_info.get(&key).or_else(|| batch_cell_info.get(&key)) {
+                let derived = (info.lock_script_hash(), info.type_script_hash());
+                hashes.insert(key, derived);
+            }
+        }
+    }
+    hashes
 }
 
 #[derive(Clone)]
