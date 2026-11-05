@@ -282,7 +282,7 @@ process telemetry (`runtime_status`, `sync_progress`, `memory_stats`, `backgroun
 session marker; `network_identity`, `genesis_baseline`, `secondary_epoch_reward`; derive state
 (`derive:*`) and the three derived aggregates' rows (derive scheduler and reset); reorg events
 (`reorg:*`, `reorg_reconcile_pending`) and the deep-fork withdrawal of `live_cell_summary:current`;
-the DAO tip summary's rows; the B-4 tracker blob conversion; and label import's rows (`tokens`,
+the DAO tip summary's rows; and label import's rows (`tokens`,
 `script_info`, `script_versions` with their label / family indexes, `script_families`,
 `script_family_by_name`). Label metadata is not chain state: a rollback through a block journaled
 before a label change restores that block's pre-change rows until the next import. An entry marked

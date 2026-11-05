@@ -458,17 +458,8 @@ impl Indexer {
         // from a second tip sample is exactly the divergence P3.1 removes.
         let bulk_sync_allowed = startup_decision.is_bulk_build();
         let was_bulk = bulk_sync_allowed;
-        // The one-time conversion of the legacy tracker blobs to rows (B-4,
-        // deleted after the store refactor's re-sync), then the trackers as
-        // their rows persist them. Startup reconciles them with the tip.
-        let converted = store.convert_tracker_blobs_to_rows()?;
-        if converted != ckbadger_store::TrackerBlobConversion::default() {
-            info!(
-                hodl_rows = ?converted.hodl_rows,
-                cell_dist_rows = ?converted.cell_dist_rows,
-                "Converted the legacy tracker blobs to rows"
-            );
-        }
+        // The trackers as their rows persist them; startup reconciles them
+        // with the tip.
         let hodl_tracker = HodlWaveTracker::load(&store)?;
         let cell_dist_tracker = CellDistributionTracker::load(&store)?;
         info!(

@@ -385,9 +385,8 @@ namespace includes:
   scope, the rows the block moved plus both cursors, so the block journal restores them, and bulk
   finalize writes them all once. A block's day (a consumed cell's creation day, an address's
   first-seen month) is `stats_day` of its stored header's `chain_time_ms`; no block→day map is
-  persisted. The legacy whole-state blobs `hodl_tracker` / `cell_dist_tracker` are converted to
-  these rows once at indexer start and deleted (development-only conversion, removed after the
-  store refactor's re-sync)
+  persisted. (The legacy whole-state blobs `hodl_tracker` / `cell_dist_tracker` and their
+  one-time conversion are gone: every store is re-synced from genesis.)
 - chain identity: `network_identity`, persisted at first sync and validated on later starts
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths

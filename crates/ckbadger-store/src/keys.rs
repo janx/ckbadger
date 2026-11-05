@@ -2201,16 +2201,6 @@ pub mod sync_meta_keys {
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
-    /// Legacy whole-state HODL tracker blob (bincode `HodlTrackerState`). No
-    /// writer is left: B-4 split it into `hodl_capacity_by_date` rows and the
-    /// `HODL_CURSOR` row, and the one-time conversion
-    /// (`CkbadgerStore::convert_tracker_blobs_to_rows`) reads and deletes it.
-    /// Deleted with that conversion after the re-sync of
-    /// docs/superpowers/plans/2026-11-04-store-cf-refactor-plan.md.
-    pub const HODL_TRACKER: &[u8] = b"hodl_tracker";
-    /// Legacy whole-state cell-distribution tracker blob (bincode
-    /// `CellDistributionTrackerState`); see [`HODL_TRACKER`].
-    pub const CELL_DIST_TRACKER: &[u8] = b"cell_dist_tracker";
     /// The HODL wave tracker's scalars (bincode `HodlTrackerCursor`): holder
     /// count, open snapshot day, last processed block. Its per-day capacity
     /// is `CF_HODL_CAPACITY_BY_DATE`.

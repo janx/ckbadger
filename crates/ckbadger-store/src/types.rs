@@ -1968,23 +1968,6 @@ pub struct DailyHodlWave {
     pub holder_count: i64,
 }
 
-/// Legacy whole-state HODL tracker blob (`sync_meta` `hodl_tracker`). Read
-/// only by the one-time conversion to rows
-/// (`CkbadgerStore::convert_tracker_blobs_to_rows`); deleted with it after the
-/// re-sync of docs/superpowers/plans/2026-11-04-store-cf-refactor-plan.md
-/// (B-4).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct HodlTrackerState {
-    pub capacity_by_date: Vec<(String, i128)>,
-    pub date_transitions: Vec<(i64, String)>,
-    pub holder_count: i64,
-    pub last_snapshot_date: Option<String>,
-    /// The last block number processed by this tracker.
-    /// Distinct from `date_transitions.last()` which only records date boundary changes.
-    #[serde(default)]
-    pub last_processed_block: Option<i64>,
-}
-
 // ============================================
 // Group G3: Cell Distribution & Address Cohort
 // ============================================
@@ -2009,24 +1992,6 @@ pub struct AddressCohortEntry {
     pub cohort_month: String, // "YYYY-MM"
     pub used_capacity: i128,
     pub total_balance: i128,
-}
-
-/// Legacy whole-state cell-distribution tracker blob (`sync_meta`
-/// `cell_dist_tracker`). Read only by the one-time conversion to rows; see
-/// [`HodlTrackerState`].
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CellDistributionTrackerState {
-    pub count_by_bucket: [i64; 6],
-    pub total_capacity_by_bucket: [i128; 6],
-    pub date_transitions: Vec<(i64, String)>,
-    pub last_snapshot_date: Option<String>,
-    /// Incremental address cohort accumulator: (YYYY-MM, used_capacity, balance).
-    #[serde(default)]
-    pub cohort_accum: Vec<(String, i128, i128)>,
-    /// The last block number processed by this tracker.
-    /// Distinct from `date_transitions.last()` which only records date boundary changes.
-    #[serde(default)]
-    pub last_processed_block: Option<i64>,
 }
 
 /// The HODL wave tracker's scalars, one `sync_meta` row (`hodl_cursor`). With

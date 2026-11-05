@@ -888,52 +888,6 @@ pub const OUTSIDE_JOURNAL: &[OutsideJournal] = &[
         ALSO_JOURNALED,
     ),
     outside(
-        CF_SYNC_META,
-        keys::sync_meta_keys::HODL_TRACKER,
-        "B-4 tracker blob conversion (one-time, before the re-sync)",
-        "the legacy blob is deleted when its rows are written",
-        NEVER,
-    ),
-    outside(
-        CF_SYNC_META,
-        keys::sync_meta_keys::CELL_DIST_TRACKER,
-        "B-4 tracker blob conversion (one-time, before the re-sync)",
-        "the legacy blob is deleted when its rows are written",
-        NEVER,
-    ),
-    outside(
-        CF_SYNC_META,
-        keys::sync_meta_keys::HODL_CURSOR,
-        "B-4 tracker blob conversion (one-time, before the re-sync)",
-        "the conversion writes the cursor of the state the blob held at the tip; live batches \
-         journal it per block",
-        ALSO_JOURNALED,
-    ),
-    outside(
-        CF_SYNC_META,
-        keys::sync_meta_keys::CELL_DIST_CURSOR,
-        "B-4 tracker blob conversion (one-time, before the re-sync)",
-        "the conversion writes the cursor of the state the blob held at the tip; live batches \
-         journal it per block",
-        ALSO_JOURNALED,
-    ),
-    outside(
-        CF_HODL_CAPACITY_BY_DATE,
-        b"",
-        "B-4 tracker blob conversion (one-time, before the re-sync)",
-        "the conversion writes the rows of the state the blob held at the tip; live batches \
-         journal them per block",
-        ALSO_JOURNALED,
-    ),
-    outside(
-        CF_CELL_DIST_COHORT_BY_MONTH,
-        b"",
-        "B-4 tracker blob conversion (one-time, before the re-sync)",
-        "the conversion writes the rows of the state the blob held at the tip; live batches \
-         journal them per block",
-        ALSO_JOURNALED,
-    ),
-    outside(
         CF_STATS_DAO,
         &[keys::STATS_PREFIX_DAO_LATEST_STATS],
         "DAO tip summary (refresh_latest_dao_statistics)",
