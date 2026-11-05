@@ -509,6 +509,10 @@ pub const CF_FIBER_CHANNELS: &str = "fiber_channels";
 pub const CF_FIBER_CHANNEL_BY_COMMITMENT: &str = "fiber_channel_by_commitment";
 pub const CF_ADDR_FIBER_CHANNELS: &str = "addr_fiber_channels";
 pub const CF_DOB_DECODED: &str = "dob_decoded";
+/// A transaction's lazy script-group cycles (`TxGroupCyclesRecord`), keyed by
+/// its canonical slot (`block ‖ tx_idx`): written by the on-demand cycles
+/// worker after the block committed, removed with the block on rollback.
+pub const CF_TX_GROUP_CYCLES: &str = "tx_group_cycles";
 pub const CF_LOCK_SCRIPTS: &str = "lock_scripts";
 /// Address-tx index for parties a protocol named by a 20-byte lock-hash prefix.
 pub const CF_ADDR_TXS_BY_PREFIX: &str = "addr_txs_by_prefix";
@@ -712,6 +716,7 @@ mod cf_table {
         cf(CF_DAO_LIVE_AGG,                           Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_OBJECT_COLLECTION_ACTIVITY_COUNT,       Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_BIT_CELL_BY_ACCOUNT,                    Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_TX_GROUP_CYCLES,                        Domain,      BulkDisabled,    Low,  COLD, Lz4,  Leveled,   RangeByBlock),
         cf(CF_NET_NODES,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_STATS,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
         cf(CF_NET_CRAWL,                              Network,     FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Never),
@@ -1903,6 +1908,9 @@ impl CkbadgerStore {
     }
     pub fn cf_dob_decoded(&self) -> &ColumnFamily {
         self.cf(CF_DOB_DECODED)
+    }
+    pub fn cf_tx_group_cycles(&self) -> &ColumnFamily {
+        self.cf(CF_TX_GROUP_CYCLES)
     }
     pub fn cf_lock_scripts(&self) -> &ColumnFamily {
         self.cf(CF_LOCK_SCRIPTS)
@@ -3460,7 +3468,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 70);
+        assert_eq!(DOMAIN_CFS.len(), 71);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -4891,8 +4899,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 74);
-        assert_eq!(DOMAIN_CFS.len(), 70);
+        assert_eq!(CF_SPECS.len(), 75);
+        assert_eq!(DOMAIN_CFS.len(), 71);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -4929,9 +4937,11 @@ mod tests {
     fn rollback_classes_follow_the_key_layout_rule() {
         for spec in CF_SPECS {
             let expected = match spec.name {
-                CF_BLOCK_HEADERS | CF_TX_INDEX | CF_TX_ACTIONS | CF_REORG_UNDO_LOG_BY_BLOCK => {
-                    RollbackClass::RangeByBlock
-                }
+                CF_BLOCK_HEADERS
+                | CF_TX_INDEX
+                | CF_TX_ACTIONS
+                | CF_REORG_UNDO_LOG_BY_BLOCK
+                | CF_TX_GROUP_CYCLES => RollbackClass::RangeByBlock,
                 CF_CELLS | CF_NET_NODES | CF_NET_STATS | CF_NET_CRAWL => RollbackClass::Never,
                 CF_DOB_DECODED => RollbackClass::Validated,
                 _ => RollbackClass::Journal,
@@ -4946,7 +4956,8 @@ mod tests {
     /// @b2409d4c: `cells` is lz4 (store refactor plan J3). Changing any value
     /// here is an option change, which needs its own paired bulk run. B-4
     /// adds two rows (`hodl_capacity_by_date`, `cell_dist_cohort_by_month`,
-    /// the trackers' rows); every other row is unchanged.
+    /// the trackers' rows) and B-5c one (`tx_group_cycles`, the lazy cycles
+    /// record moved out of `sync_meta`); every other row is unchanged.
     #[test]
     fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
         let actual = cf_option_snapshot();
@@ -5036,6 +5047,7 @@ mod tests {
     "dao_live_agg BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "object_collection_activity_count BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "bit_cell_by_account BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "tx_group_cycles BulkDisabled live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_nodes FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_stats FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "net_crawl FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(2,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

@@ -115,6 +115,7 @@ requires re-sync from genesis; there is no migration.
 | `dao_live_agg`                   | kind(1B) + kind-specific key (see [Derived Aggregates](#derived-aggregates))  | signed components, 16B LE each                                                 | **Derived** (bulk-disabled): live NervosDAO cells by depositor lock, deposit epoch and (deposit, request) epoch, plus one global row                                                                                                                       |
 | `object_collection_activity_count` | collection_id (32B, padded)                                                 | `[count]` (16B LE)                                                             | **Derived** (bulk-disabled): `object_collection_activities` rows per collection — the Spore cluster `activitiesCount`                                                                                                                                      |
 | `bit_cell_by_account`            | account_id (20B) + `.bit Cell` identity id (32B)                              | `[1]` (16B LE)                                                                 | **Derived** (bulk-disabled): live `.bit Cell` items naming each `.bit` account                                                                                                                                                                            |
+| `tx_group_cycles`               | block_number + tx_index (12B, the canonical slot)                             | TxGroupCyclesRecord (Complete(TransactionCycles) \| Failed)                   | Lazy script-group cycles of one transaction, written by the on-demand cycles worker after the block committed (bulk-disabled); `RangeByBlock`: removed with its block on rollback |
 | `net_nodes` **(network store)**  | peer_id (raw bytes)                                                           | NodeRecord                                                                     | TTL-retained same-network crawler-Identify records, latest dialability, and exact Discovery evidence                                                                                                                                                       |
 | `net_stats` **(network store)**  | `0x00` singleton, or metric(1B)+gran(1B)+bucket(8B BE)                        | LatestStatus / HistoryPoint                                                    | Checked completed dial/session/Discovery aggregates plus time-bucketed verified/reachable/share history                                                                                                                                                    |
 | `net_crawl` **(network store)**  | `0x00` singleton, or `0x01` + peer_id                                         | ActiveCrawl / CrawlCandidate                                                   | Durable logical-round state: dial aliases, target-centric advertisements, direct sessions, active probes, and stable completed evidence                                                                                                                    |
@@ -249,6 +250,26 @@ because:
 See [docs/SCRIPTS_CODE_CELLS_AND_REFS.md](./SCRIPTS_CODE_CELLS_AND_REFS.md) for the terminology and
 model that future script schema refactors should follow.
 
+### `tx_group_cycles`: lazy VM results
+
+Key = the transaction's canonical slot, `block_number (8B BE) ‖ tx_index (4B BE)` — the
+`tx_index` key. The value is `TxGroupCyclesRecord::Complete(TransactionCycles { block_hash,
+cycles, groups })` or `Failed { block_hash, failure: ReplayFailure }`. Failure evidence is
+fixed-size: dependency resolution, invalid chain data, lock/type group plus script hash, no groups,
+or cycles overflow. Raw diagnostics are logged, never persisted or exposed by the public API. RPC
+transport/body errors, RPC errors, uncommitted transactions and commit-block mismatches are
+retryable: they leave both the group record and scalar cycles untouched. Open transaction pages
+retry every two seconds while the node is unavailable and recover when it returns.
+
+Only the indexer's on-demand cycles worker writes these records, atomically with
+`tx_index.cycles`, after checking canonical identity; bulk emits no such row. Cellbase/genesis
+transactions reject group records; a Complete record cannot regress to Failed. Failed may become
+Failed or Complete. Readers resolve the transaction's canonical slot through `tx_hash_map` /
+`tx_index` and read that key, then validate group sum and uniqueness. The CF is `RangeByBlock`: a
+rollback range-deletes the rolled-back blocks' slots with `tx_index`, so a transaction re-included
+by the winning branch has no record until the worker computes it again (until B-5c the record
+lived in `sync_meta` under `tx_group_cycles:<tx_hash>`, which the journal rollback left behind).
+
 ### DAO Secondary Index Notes
 
 - `dao_by_block`: key = `i64::MAX - deposit_block` (big-endian) + deposit outpoint, supports global DAO deposit pagination in newest-first order.
@@ -373,20 +394,7 @@ virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledg
 - hourly retention evidence: `hourly_retention_state:<family>`
 - derived aggregate state: `derive:<aggregate>` (bincode `DeriveMeta`, see
   [Derived Aggregates](#derived-aggregates))
-- lazy VM results: `tx_group_cycles:<tx_hash_32B>` stores
-  `TxGroupCyclesRecord::Complete(TransactionCycles { block_hash, cycles, groups })` or
-  `Failed { block_hash, failure: ReplayFailure }`. Failure evidence is fixed-size: dependency
-  resolution, invalid chain data, lock/type group plus script hash, no groups, or cycles overflow.
-  Raw diagnostics are logged, never persisted or exposed by the public API. RPC transport/body
-  errors, RPC errors, uncommitted transactions and commit-block mismatches are retryable: they
-  leave both the group record and scalar cycles untouched. Open transaction pages retry every
-  two seconds while the node is unavailable and recover when it returns.
-  Only the indexer's on-demand cycles worker writes these domain records, atomically with
-  `tx_index.cycles`, after checking canonical identity. Cellbase/genesis transactions reject
-  group records; a Complete record cannot regress to Failed. Failed may become Failed or
-  Complete. Readers validate group sum, uniqueness and canonical identity. Rollback deletes
-  the record alongside `tx_hash_map`; bulk emits no such row. Append-only cell payloads are
-  untouched. The bincode format changed; existing chain stores require a genesis re-sync.
+- lazy VM results are not in `sync_meta`: see [`tx_group_cycles`](#tx_group_cycles-lazy-vm-results).
 - fork reconciliation: `reorg_reconcile_pending` names the automatic event waiting for
   canonical replay. Once the winning tip is replayed, the indexer verifies abandoned-tip
   ancestry and atomically adds full event-key `reverted_by_event` / `reverses_events` links.

@@ -2006,3 +2006,143 @@ async fn bulk_finalize_and_live_sync_write_the_same_script_reference_rows() {
     )
     .unwrap_or_else(|report| panic!("{report}"));
 }
+
+// ---------------------------------------------------------------------------
+// B-5c · the lazy cycles record lives at its transaction's canonical slot
+// ---------------------------------------------------------------------------
+
+/// Persist a lazy cycles record (here a replay failure) for every
+/// non-cellbase transaction of `blocks`, the way the cycles worker does after
+/// the block committed: outside any batch.
+fn persist_cycles_records(store: &CkbadgerStore, blocks: RangeInclusive<usize>) {
+    for block in blocks {
+        let block = block as i64;
+        for (index, entry) in store.list_block_txs(block).unwrap() {
+            if entry.is_cellbase {
+                continue;
+            }
+            persist_replay_failure(store, block, index, &entry.tx_hash);
+        }
+    }
+}
+
+fn persist_replay_failure(store: &CkbadgerStore, block: i64, index: i32, tx_hash: &[u8; 32]) {
+    let header = store.get_block_header(block).unwrap().unwrap();
+    let block_hash: [u8; 32] = header.hash.as_slice().try_into().unwrap();
+    store
+        .persist_tx_cycles(
+            block,
+            index,
+            tx_hash,
+            ckbadger_store::TxCyclesWrite::ReplayFailed {
+                block_hash,
+                failure: ckbadger_common::cycles::ReplayFailure::NoScriptGroups,
+            },
+        )
+        .unwrap_or_else(|e| panic!("persist cycles at block {block} tx {index}: {e:#}"));
+}
+
+/// The cycles worker writes a transaction's lazy cycles record after its
+/// block committed, outside every block's journal; the record is keyed by the
+/// transaction's canonical slot, so it goes with its block when the block is
+/// rolled back, and the records of the blocks kept stay.
+#[tokio::test]
+async fn lazy_cycles_records_of_rolled_back_blocks_go_with_their_blocks() {
+    let chain = protocol_chain(0);
+    let plan = single_block_plan(chain.len());
+    let (tip, fork) = (16, 10);
+
+    let forward = open_stores();
+    sync_prefix(&forward, &chain, &plan, 0, fork).await;
+    persist_cycles_records(&forward.domain, 1..=fork);
+
+    let rolled = open_stores();
+    sync_prefix(&rolled, &chain, &plan, 0, tip).await;
+    persist_cycles_records(&rolled.domain, 1..=tip);
+    let records_above_fork = (fork + 1..=tip)
+        .flat_map(|block| rolled.domain.list_block_txs(block as i64).unwrap())
+        .filter(|(_, entry)| !entry.is_cellbase)
+        .count();
+    assert!(
+        records_above_fork > 0,
+        "the fixture must have non-cellbase transactions above the fork"
+    );
+
+    reorg_to(&rolled.indexer, fork as i64).await.unwrap();
+    compare_dumps(
+        &dump_domain(&rolled.domain),
+        &dump_domain(&forward.domain),
+        &format!("rolled back {tip} -> {fork} with lazy cycles records"),
+    )
+    .unwrap_or_else(|report| panic!("{report}"));
+}
+
+/// Cycles computed for a transaction of a block that is then orphaned; the
+/// competing block re-includes the transaction. Read through the API's reader
+/// (`get_tx_group_cycles_record`), the transaction has no record (the
+/// orphaned block's went with it); computed again, it reads back exactly.
+#[tokio::test]
+async fn a_transaction_re_included_after_a_reorg_has_no_cycles_record_until_recomputed() {
+    let chain = transfer_chain(8);
+    let plan = single_block_plan(chain.len());
+    let stores = open_stores();
+    sync_prefix(&stores, &chain, &plan, 0, 7).await;
+
+    let orphaned = 7i64;
+    let (index, entry) = stores
+        .domain
+        .list_block_txs(orphaned)
+        .unwrap()
+        .into_iter()
+        .find(|(_, entry)| !entry.is_cellbase)
+        .expect("block 7 has a non-cellbase transaction");
+    persist_replay_failure(&stores.domain, orphaned, index, &entry.tx_hash);
+    assert!(stores
+        .domain
+        .get_tx_group_cycles_record(&entry.tx_hash)
+        .unwrap()
+        .is_some());
+
+    reorg_to(&stores.indexer, orphaned - 1).await.unwrap();
+    // The competing block at 7: same parent, same transactions, another hash.
+    let mut competing = chain[7].clone();
+    let mut hash = block_hash(7);
+    hash[31] ^= 0xff;
+    competing.block.header.hash = hex32(hash);
+    write_live_batch(&stores.indexer, vec![competing])
+        .await
+        .unwrap_or_else(|e| panic!("competing block 7: {e:#}"));
+    let (re_included_block, re_included_index, _) = stores
+        .domain
+        .get_tx_by_hash(&entry.tx_hash)
+        .unwrap()
+        .expect("the transaction is canonical again");
+    assert_eq!((re_included_block, re_included_index), (orphaned, index));
+
+    assert_eq!(
+        stores
+            .domain
+            .get_tx_group_cycles_record(&entry.tx_hash)
+            .unwrap_or_else(|e| panic!("reading the re-included transaction's cycles: {e:#}")),
+        None,
+        "the orphaned block's record must not survive the reorg"
+    );
+    persist_replay_failure(&stores.domain, orphaned, index, &entry.tx_hash);
+    match stores
+        .domain
+        .get_tx_group_cycles_record(&entry.tx_hash)
+        .unwrap()
+    {
+        Some(ckbadger_common::cycles_task::TxGroupCyclesRecord::Failed {
+            block_hash,
+            failure,
+        }) => {
+            assert_eq!(block_hash, hash, "recomputed against the competing block");
+            assert_eq!(
+                failure,
+                ckbadger_common::cycles::ReplayFailure::NoScriptGroups
+            );
+        }
+        other => panic!("recomputed record: {other:?}"),
+    }
+}

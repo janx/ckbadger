@@ -2183,14 +2183,13 @@ pub fn decode_object_collection_activity_key(key: &[u8]) -> ([u8; 32], i64, i32,
     (collection_id, block_num, tx_idx, block_hash, tx_hash)
 }
 
-/// Sync meta keys
-/// On-demand script-group cycles in domain sync_meta; no bulk writer emits it.
-pub fn encode_tx_group_cycles_key(tx_hash: &[u8]) -> Vec<u8> {
-    let mut key = b"tx_group_cycles:".to_vec();
-    key.extend_from_slice(tx_hash);
-    key
+/// A transaction's canonical slot, `block_number (8B BE) ‖ tx_idx (4B BE)`:
+/// the key of `tx_index` and of `tx_group_cycles`.
+pub fn encode_tx_slot_key(block_number: i64, tx_idx: i32) -> Vec<u8> {
+    encode_composite(&[&encode_block_num(block_number), &encode_tx_idx(tx_idx)])
 }
 
+/// Sync meta keys
 pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
     pub const SYNC_STATUS: &[u8] = b"sync_status";

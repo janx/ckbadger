@@ -295,11 +295,12 @@ impl CkbadgerStore {
             ]);
             let mut batch = rocksdb::WriteBatch::default();
             batch.put_cf(self.cf_tx_index(), &key, bincode::serialize(&entry).with_context(|| format!("failed to serialize tx index entry {block_num}:{tx_idx}"))?);
-            let groups_key = keys::encode_tx_group_cycles_key(expected_hash);
+            // The record lives at the transaction's canonical slot, so the
+            // rollback that removes the slot's tx_index row removes it too.
             if let Some(record) = record {
-                batch.put_cf(self.cf_sync_meta(), &groups_key, bincode::serialize(&record)?);
+                batch.put_cf(self.cf_tx_group_cycles(), &key, bincode::serialize(&record)?);
             } else {
-                batch.delete_cf(self.cf_sync_meta(), &groups_key);
+                batch.delete_cf(self.cf_tx_group_cycles(), &key);
             }
             db.write(batch).with_context(|| format!(
                 "failed to write canonical tx cycles: hash=0x{}, block={block_num}, index={tx_idx}",
@@ -308,33 +309,29 @@ impl CkbadgerStore {
         })
     }
 
+    /// The lazy cycles record of a canonical transaction: read at the
+    /// transaction's canonical slot (`tx_hash_map` -> `block ‖ tx_idx`), so a
+    /// record of a slot another block once held cannot be read.
     pub fn get_tx_group_cycles_record(
         &self,
         tx_hash: &[u8],
     ) -> anyhow::Result<Option<TxGroupCyclesRecord>> {
-        let Some((block_num, _, tx)) = self.get_tx_by_hash(tx_hash)? else {
+        let Some((block_num, tx_idx, tx)) = self.get_tx_by_hash(tx_hash)? else {
             return Ok(None);
         };
         let Some(bytes) = self.get_cf(
-            self.cf_sync_meta(),
-            &keys::encode_tx_group_cycles_key(tx_hash),
+            self.cf_tx_group_cycles(),
+            &keys::encode_tx_slot_key(block_num, tx_idx),
         )?
         else {
             return Ok(None);
         };
-        let record: TxGroupCyclesRecord = bincode::deserialize(&bytes)?;
-        let header = self
-            .get_block_header(block_num)?
-            .ok_or_else(|| anyhow!("lazy group cycles lack canonical block: {block_num}"))?;
-        anyhow::ensure!(
-            header.hash.as_slice()
-                == match &record {
-                    TxGroupCyclesRecord::Complete(result) => result.block_hash,
-                    TxGroupCyclesRecord::Failed { block_hash, .. } => *block_hash,
-                },
-            "lazy group cycles belong to another block: tx=0x{}",
-            hex::encode(tx_hash)
-        );
+        let record: TxGroupCyclesRecord = bincode::deserialize(&bytes).with_context(|| {
+            format!(
+                "undecodable lazy group cycles: tx=0x{} block={block_num} index={tx_idx}",
+                hex::encode(tx_hash)
+            )
+        })?;
         if let TxGroupCyclesRecord::Complete(result) = &record {
             result.validate().map_err(anyhow::Error::msg)?;
             anyhow::ensure!(
@@ -542,14 +539,15 @@ mod tests {
                 failure: ReplayFailure::DependencyResolution
             })
         );
-        let mut replacement = StoreBatch::new(&store);
-        replacement.put_block_header(block_num, &make_header(0x88));
-        replacement.commit().unwrap();
-        let error = store.get_tx_group_cycles_record(&tx_hash).unwrap_err();
-        assert!(error.to_string().contains("another block"), "{error:#}");
-        let mut restore = StoreBatch::new(&store);
-        restore.put_block_header(block_num, &make_header(0x77));
-        restore.commit().unwrap();
+        // The record lives at the transaction's canonical slot, in its own
+        // RangeByBlock CF, so a rollback of the block removes it.
+        assert!(store
+            .get_cf(
+                store.cf_tx_group_cycles(),
+                &keys::encode_tx_slot_key(block_num, tx_idx)
+            )
+            .unwrap()
+            .is_some());
         let result = TransactionCycles {
             block_hash: [0x77; 32],
             cycles: 12_345,

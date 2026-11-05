@@ -494,10 +494,13 @@ mod tests {
         entry.cycles = Some(5);
         let mut batch = StoreBatch::new(&store);
         batch.put_tx_index(0, 1, &entry);
-        batch.put_sync_meta(
-            &ckbadger_store::keys::encode_tx_group_cycles_key(&hash),
-            &bincode::serialize(&TxGroupCyclesRecord::Complete(groups)).unwrap(),
-        );
+        batch
+            .put_raw_cf_by_name(
+                ckbadger_store::CF_TX_GROUP_CYCLES,
+                &ckbadger_store::keys::encode_tx_slot_key(0, 1),
+                &bincode::serialize(&TxGroupCyclesRecord::Complete(groups)).unwrap(),
+            )
+            .unwrap();
         batch.put_block_header(0, &header);
         batch.commit().unwrap();
         assert_eq!(
@@ -829,8 +832,8 @@ mod tests {
         batch.commit().unwrap();
         store
             .delete_cf(
-                store.cf_sync_meta(),
-                &ckbadger_store::keys::encode_tx_group_cycles_key(&hash),
+                store.cf_tx_group_cycles(),
+                &ckbadger_store::keys::encode_tx_slot_key(123, 0),
             )
             .unwrap();
         let retry = process_cycles_task(&store, "http://127.0.0.1:1", &tx_hash).await;

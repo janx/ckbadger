@@ -28,7 +28,8 @@ use crate::block_overlay::{decode_journal_value, is_outside_journal};
 use crate::bytes_to_hex;
 use crate::keys::{self, UndoSeqScope};
 use crate::store::{
-    cf_spec, CkbadgerStore, RollbackClass, CF_LIVE_CELLS, CF_REORG_UNDO_LOG_BY_BLOCK,
+    cf_spec, CkbadgerStore, RollbackClass, CF_LIVE_CELLS, CF_REORG_UNDO_LOG_BY_BLOCK, CF_SPECS,
+    CF_TX_ACTIONS,
 };
 
 /// What one rollback removed and restored.
@@ -332,11 +333,19 @@ impl CkbadgerStore {
         }
 
         let mut batch = WriteBatch::default();
-        batch.delete_range_cf(self.cf_block_headers(), first_key, end_key);
-        batch.delete_range_cf(self.cf_tx_index(), first_key, end_key);
-        batch.delete_range_cf(self.cf_reorg_undo_log_by_block(), first_key, end_key);
+        // Every `RangeByBlock` CF loses the rolled-back blocks' key range:
+        // ascending block keys, except activities' descending ones.
         let (activities_start, activities_end) = activities_range(first, tip);
-        batch.delete_range_cf(self.cf_tx_actions(), activities_start, activities_end);
+        for spec in CF_SPECS
+            .iter()
+            .filter(|spec| spec.rollback_class == RollbackClass::RangeByBlock)
+        {
+            if spec.name == CF_TX_ACTIONS {
+                batch.delete_range_cf(self.cf(spec.name), &activities_start, &activities_end);
+            } else {
+                batch.delete_range_cf(self.cf(spec.name), &first_key, &end_key);
+            }
+        }
         // Key order is (block, seq) ascending: reversed, it is the blocks from
         // the top down, each in reverse sequence order.
         for entry in entries.iter().rev() {
@@ -374,7 +383,9 @@ mod tests {
 
     use super::*;
     use crate::block_overlay::{journal_seq, SharedBlockOverlay};
-    use crate::store::{CF_BLOCK_HEADERS, CF_SYNC_META, CF_TX_ACTIONS, CF_TX_INDEX};
+    use crate::store::{
+        CF_BLOCK_HEADERS, CF_SYNC_META, CF_TX_ACTIONS, CF_TX_GROUP_CYCLES, CF_TX_INDEX,
+    };
     use crate::DOMAIN_CFS;
 
     /// A hand-written journal row (`UndoSeqScope::Journal`, local `seq`).
@@ -421,15 +432,17 @@ mod tests {
     }
 
     /// The rows of the block-numbered CFs a block writes: its header, two
-    /// tx_index rows and one `activities` row.
+    /// tx_index rows with their lazy cycles records and one `activities` row.
     fn block_rows(batch: &mut StoreBatch, block: i64) {
         batch
             .put_raw_cf_by_name(CF_BLOCK_HEADERS, &keys::encode_block_num(block), b"header")
             .unwrap();
         for tx in 0..2i32 {
-            let key =
-                keys::encode_composite(&[&keys::encode_block_num(block), &keys::encode_tx_idx(tx)]);
+            let key = keys::encode_tx_slot_key(block, tx);
             batch.put_raw_cf_by_name(CF_TX_INDEX, &key, b"tx").unwrap();
+            batch
+                .put_raw_cf_by_name(CF_TX_GROUP_CYCLES, &key, b"cycles")
+                .unwrap();
         }
         batch
             .put_raw_cf_by_name(
@@ -577,7 +590,7 @@ mod tests {
     }
 
     #[test]
-    fn the_four_range_deletes_take_exactly_the_rolled_back_blocks() {
+    fn every_range_by_block_cf_loses_exactly_the_rolled_back_blocks() {
         let (store, _dir) = open();
         chain(&store);
         let result = store.rollback_to_block(2).unwrap();
@@ -602,6 +615,7 @@ mod tests {
         };
         assert_eq!(blocks_of(CF_BLOCK_HEADERS), vec![0, 1, 2]);
         assert_eq!(blocks_of(CF_TX_INDEX), vec![0, 1, 2]);
+        assert_eq!(blocks_of(CF_TX_GROUP_CYCLES), vec![0, 1, 2]);
         assert_eq!(blocks_of(CF_TX_ACTIONS), vec![0, 1, 2], "descending keys");
         let undo_blocks = blocks_of(CF_REORG_UNDO_LOG_BY_BLOCK);
         assert!(
@@ -612,12 +626,11 @@ mod tests {
         // Down to genesis: block 0's activities range ends at 2^63.
         store.rollback_to_block(-1).unwrap();
         let rows = self::rows(&store);
-        for cf in [
-            CF_BLOCK_HEADERS,
-            CF_TX_INDEX,
-            CF_TX_ACTIONS,
-            CF_REORG_UNDO_LOG_BY_BLOCK,
-        ] {
+        for cf in CF_SPECS
+            .iter()
+            .filter(|spec| spec.rollback_class == RollbackClass::RangeByBlock)
+            .map(|spec| spec.name)
+        {
             assert!(
                 rows.keys().all(|(row_cf, _)| *row_cf != cf),
                 "{cf} keeps rows after a rollback to -1"
