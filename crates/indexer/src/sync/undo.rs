@@ -1,190 +1,11 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-use anyhow::{anyhow, bail, Result};
+//! The activity pass's row writers (`addr_txs`, `addr_txs_by_prefix`,
+//! `tx_actions`): each writes in the caller's block scope, so the live batch's
+//! block journal records what it creates.
 
 use ckbadger_store::batch::StoreBatch;
 
-#[cfg(any(test, debug_assertions))]
-use super::types::UNDO_SEQ_SCOPE_SHIFT;
-use super::types::{TxData, UndoSeqScope, UNDO_SEQ_LOCAL_MAX};
-
-/// The block-scoped undo sequence counter for one committed batch.
-///
-/// Every writer that records an undo entry for a block must draw from the SAME
-/// counter. The Spore, mNFT and .bit batch states used to own three private
-/// maps that all started at 0 and all stamped `UndoSeqScope::Object`, so two
-/// object writes in one block computed the identical undo key and the second
-/// overwrote the first inside the batch — the first entity's pre-image was gone
-/// before rollback ever ran (POSTMORTEM IDX-008, pinned by
-/// `db::writer::undo_seq_tests::object_scope_undo_seq_is_shared_across_entity_batch_states`).
-///
-/// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the batch write path is an
-/// async fn whose future must stay `Send`.
-#[derive(Clone, Default)]
-pub(crate) struct SharedUndoSeq(Arc<Mutex<HashMap<i64, u64>>>);
-
-impl SharedUndoSeq {
-    pub(crate) fn next(&self, block_num: i64, scope: UndoSeqScope) -> u64 {
-        let mut guard = self.0.lock().expect("shared undo seq mutex poisoned");
-        next_undo_seq(&mut guard, block_num, scope)
-    }
-
-    /// Run `f` against the shared map itself, for callers that still take a
-    /// plain `&mut HashMap` (the entity stats overlay).
-    pub(crate) fn with<R>(&self, f: impl FnOnce(&mut HashMap<i64, u64>) -> R) -> R {
-        let mut guard = self.0.lock().expect("shared undo seq mutex poisoned");
-        f(&mut guard)
-    }
-}
-
-pub(crate) fn next_undo_seq(
-    undo_seq_by_block: &mut HashMap<i64, u64>,
-    block_num: i64,
-    scope: UndoSeqScope,
-) -> u64 {
-    let seq_entry = undo_seq_by_block.entry(block_num).or_insert(0);
-    let local_seq = *seq_entry;
-    assert!(
-        local_seq <= UNDO_SEQ_LOCAL_MAX,
-        "undo seq local counter overflow: block_num={}, scope={:?}, local_seq={}",
-        block_num,
-        scope,
-        local_seq
-    );
-    *seq_entry = local_seq
-        .checked_add(1)
-        .expect("undo seq overflow for block-scoped rollback log");
-    scope.seq_base() | local_seq
-}
-
-/// One `(block, cf, key)` whose pre-image more than one undo scope recorded.
-#[cfg(any(test, debug_assertions))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct UndoScopeOverlap {
-    pub(crate) block: i64,
-    pub(crate) cf_name: String,
-    pub(crate) key: Vec<u8>,
-    /// The scope ids (`UndoSeqScope as u64`) that recorded it, ascending.
-    pub(crate) scopes: Vec<u64>,
-}
-
-/// Every key mutation in `from_block..=to_block` that more than one undo scope
-/// recorded a pre-image for.
-///
-/// The undo key is `block ‖ scope.seq_base() | local seq`, so rollback replays one
-/// block's entries scope-major (highest scope first), not in the order they
-/// were written across scopes. That is exact only while each key a block
-/// mutates is recorded by ONE scope: then its entries all sit in one scope and
-/// replay LIFO within it. Debug builds check this on each committed batch,
-/// and tests pin the same invariant.
-#[cfg(any(test, debug_assertions))]
-pub(crate) fn undo_scope_overlaps(
-    store: &ckbadger_store::CkbadgerStore,
-    from_block: i64,
-    to_block: i64,
-) -> Result<Vec<UndoScopeOverlap>> {
-    use std::collections::{BTreeMap, BTreeSet};
-
-    let start = ckbadger_store::keys::encode_reorg_undo_log_key(from_block, 0);
-    let mut recorded: BTreeMap<(i64, String, Vec<u8>), BTreeSet<u64>> = BTreeMap::new();
-    for item in store.iterator_cf(
-        store.cf_reorg_undo_log_by_block(),
-        rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
-    ) {
-        let (key, value) = item?;
-        let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-        if block > to_block {
-            break;
-        }
-        // The block journal records every key a block writes alongside the
-        // per-writer scopes and is replayed on its own, so it is no overlap.
-        if UndoSeqScope::Journal.owns(seq) {
-            continue;
-        }
-        let entry: ckbadger_store::types::UndoLogEntry =
-            bincode::deserialize(&value).map_err(|e| {
-                anyhow!("undo log entry at block {block} seq {seq} is not decodable: {e}")
-            })?;
-        if let ckbadger_store::types::UndoLogEntry::KeyMutation { cf_name, key, .. } = entry {
-            recorded
-                .entry((block, cf_name, key))
-                .or_default()
-                .insert(seq >> UNDO_SEQ_SCOPE_SHIFT);
-        }
-    }
-    Ok(recorded
-        .into_iter()
-        .filter(|(_, scopes)| scopes.len() > 1)
-        .map(|((block, cf_name, key), scopes)| UndoScopeOverlap {
-            block,
-            cf_name,
-            key,
-            scopes: scopes.into_iter().collect(),
-        })
-        .collect())
-}
-
-pub(crate) fn put_tx_context_undo_entries(
-    domain_batch: &mut StoreBatch<'_>,
-    undo_seq_by_block: &mut HashMap<i64, u64>,
-    txs: &[TxData],
-) -> Result<()> {
-    for tx in txs {
-        let mut inputs = Vec::with_capacity(tx.inputs.len());
-        for input in &tx.inputs {
-            let is_cellbase_sentinel =
-                input.previous_output_index == -1 && input.previous_tx_hash == [0u8; 32];
-            if is_cellbase_sentinel {
-                if !tx.is_cellbase {
-                    bail!(
-                        "non-cellbase tx contains cellbase sentinel input in rollback tx-context: tx_hash=0x{}, block={}",
-                        hex::encode(tx.hash),
-                        tx.block_number
-                    );
-                }
-                continue;
-            }
-            if input.previous_output_index < 0 {
-                bail!(
-                    "negative rollback tx-context input index: tx_hash=0x{}, block={}, previous_output_index={}",
-                    hex::encode(tx.hash),
-                    tx.block_number,
-                    input.previous_output_index
-                );
-            }
-            let output_index = i16::try_from(input.previous_output_index).map_err(|_| {
-                anyhow!(
-                    "rollback tx-context input index exceeds i16 range: tx_hash=0x{}, block={}, previous_output_index={}",
-                    hex::encode(tx.hash),
-                    tx.block_number,
-                    input.previous_output_index
-                )
-            })?;
-            inputs.push(ckbadger_store::types::UndoInputOutPoint {
-                tx_hash: input.previous_tx_hash.to_vec(),
-                output_index,
-            });
-        }
-
-        let ctx = ckbadger_store::types::UndoTxContext {
-            tx_hash: tx.hash.to_vec(),
-            outputs_count: tx.outputs_count,
-            inputs,
-        };
-        let seq = next_undo_seq(undo_seq_by_block, tx.block_number, UndoSeqScope::TxContext);
-        domain_batch.put_reorg_undo_log_by_block(
-            tx.block_number,
-            seq,
-            &ckbadger_store::types::UndoLogEntry::TxContext(ctx),
-        );
-    }
-    Ok(())
-}
-
 pub(crate) fn put_addr_tx(
     batch: &mut StoreBatch<'_>,
-    _undo_seq_by_block: &mut HashMap<i64, u64>,
     lock_hash: &[u8],
     block_num: i64,
     tx_idx: i32,
@@ -192,8 +13,7 @@ pub(crate) fn put_addr_tx(
     value: &ckbadger_store::types::AddrTxValue,
 ) {
     // Written in the caller's block scope: the live batch's block journal
-    // records the row's creation (until B-5 the old rollback still deletes
-    // the row directly).
+    // records the row's creation.
     batch.put_addr_tx(lock_hash, block_num, tx_idx, tx_hash, value);
 }
 
@@ -203,7 +23,6 @@ pub(crate) fn put_addr_tx(
 /// (the block journal records the creation) — exactly like [`put_addr_tx`].
 pub(crate) fn put_addr_tx_by_prefix(
     batch: &mut StoreBatch<'_>,
-    _undo_seq_by_block: &mut HashMap<i64, u64>,
     prefix: &[u8],
     block_num: i64,
     tx_idx: i32,
@@ -215,13 +34,12 @@ pub(crate) fn put_addr_tx_by_prefix(
 
 pub(crate) fn put_tx_actions(
     batch: &mut StoreBatch<'_>,
-    _undo_seq_by_block: &mut HashMap<i64, u64>,
     block_num: i64,
     actions: &ckbadger_store::types::TxActions,
 ) {
     assert_eq!(
         actions.block_number, block_num,
-        "tx actions block number mismatch in undo helper"
+        "tx actions block number mismatch"
     );
     // The `activities` row is RangeByBlock (rollback deletes it by block);
     // its `tx_actions_by_bucket` row is journaled in the caller's block scope.
@@ -231,136 +49,9 @@ pub(crate) fn put_tx_actions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use ckbadger_store::batch::StoreBatch;
     use ckbadger_store::keys;
     use ckbadger_store::CkbadgerStore;
-
-    /// The indexer composes sequence numbers with the store's own
-    /// `UndoSeqScope` (a re-export, not a copy), and the store's retention
-    /// prune reads them back with the same table, so the two cannot drift.
-    /// This compiles only while that holds; the discriminant values
-    /// themselves are pinned by the store's own table test.
-    #[test]
-    fn undo_seq_scope_is_the_stores_type() {
-        fn same_type<T>(_: T, _: T) {}
-        same_type(
-            UndoSeqScope::EntityStats,
-            ckbadger_store::keys::UndoSeqScope::EntityStats,
-        );
-        let seq = next_undo_seq(&mut HashMap::new(), 9, UndoSeqScope::EntityStats);
-        assert_eq!(
-            seq,
-            ckbadger_store::keys::UndoSeqScope::EntityStats.seq_base()
-        );
-    }
-
-    #[test]
-    fn undo_scope_overlaps_reports_a_key_recorded_by_two_scopes() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-        let entry = |key: &[u8]| ckbadger_store::types::UndoLogEntry::KeyMutation {
-            target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-            cf_name: ckbadger_store::CF_IDENTITY_AGG.to_string(),
-            key: key.to_vec(),
-            previous_value: None,
-        };
-        let seq = SharedUndoSeq::default();
-        let mut batch = StoreBatch::new(&store);
-        // Block 7: the same key under DotBit and Object — an overlap.
-        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::DotBit), &entry(b"shared"));
-        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::Object), &entry(b"shared"));
-        // Block 7: one key per scope, twice under one scope — fine.
-        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::Object), &entry(b"obj"));
-        batch.put_reorg_undo_log_by_block(7, seq.next(7, UndoSeqScope::Object), &entry(b"obj"));
-        // Block 8: the same key again, but in another block — fine.
-        batch.put_reorg_undo_log_by_block(
-            8,
-            seq.next(8, UndoSeqScope::EntityStats),
-            &entry(b"shared"),
-        );
-        batch.commit().unwrap();
-
-        assert_eq!(
-            undo_scope_overlaps(&store, 7, 8).unwrap(),
-            vec![UndoScopeOverlap {
-                block: 7,
-                cf_name: ckbadger_store::CF_IDENTITY_AGG.to_string(),
-                key: b"shared".to_vec(),
-                scopes: vec![UndoSeqScope::DotBit as u64, UndoSeqScope::Object as u64],
-            }]
-        );
-        assert!(undo_scope_overlaps(&store, 8, 8).unwrap().is_empty());
-    }
-
-    fn dummy_dao_cell(capacity: i64, is_deposit: bool) -> crate::parser::cell::ParsedCell {
-        crate::parser::cell::ParsedCell {
-            capacity,
-            lock_code_hash: vec![],
-            lock_hash_type: 0,
-            lock_args: vec![],
-            lock_script_hash: vec![],
-            type_code_hash: Some(crate::rpc::parse_hex_to_bytes(
-                crate::parser::dao::DAO_CODE_HASH,
-            )),
-            type_hash_type: Some(1),
-            type_args: Some(vec![]),
-            type_script_hash: None,
-            data_hash: [0u8; 32],
-            data_size: 8,
-            data: if is_deposit {
-                vec![0u8; 8]
-            } else {
-                1u64.to_le_bytes().to_vec()
-            },
-        }
-    }
-
-    fn dummy_tx_data(
-        hash: [u8; 32],
-        is_cellbase: bool,
-        inputs: Vec<crate::parser::transaction::ParsedInput>,
-        cells: Vec<crate::parser::cell::ParsedCell>,
-        witnesses: Vec<String>,
-    ) -> TxData {
-        let inputs_count =
-            i16::try_from(inputs.len()).expect("test helper inputs_count exceeds i16 range");
-        let outputs_count =
-            i16::try_from(cells.len()).expect("test helper outputs_count exceeds i16 range");
-        TxData {
-            hash,
-            block_number: 0,
-            tx_index: 0,
-            inputs_count,
-            outputs_count,
-            is_cellbase,
-            inputs,
-            cells,
-            witnesses,
-            total_input_capacity: 0,
-            total_output_capacity: 0,
-            fee: 0,
-            tx_size: 0,
-            cycles: None,
-            timestamp: Utc::now(),
-            semantic_tags: 0,
-        }
-    }
-
-    #[test]
-    fn test_next_undo_seq_scoped_increments_correctly() {
-        let mut scope_map = HashMap::new();
-        let block_num = 42;
-
-        let seq1 = next_undo_seq(&mut scope_map, block_num, UndoSeqScope::TxContext);
-        let seq2 = next_undo_seq(&mut scope_map, block_num, UndoSeqScope::TxContext);
-
-        assert_ne!(seq1, seq2);
-        assert!(UndoSeqScope::TxContext.owns(seq1));
-        assert!(UndoSeqScope::TxContext.owns(seq2));
-        // Second call should have local seq = 1
-        assert_eq!(seq2 & UNDO_SEQ_LOCAL_MAX, 1);
-    }
 
     #[test]
     fn test_put_tx_actions_writes_to_domain_without_undo() {
@@ -387,8 +78,7 @@ mod tests {
         };
 
         let mut domain_batch = StoreBatch::new(&domain_store);
-        let mut undo_seq_by_block = HashMap::new();
-        put_tx_actions(&mut domain_batch, &mut undo_seq_by_block, 42, &actions);
+        put_tx_actions(&mut domain_batch, 42, &actions);
         domain_batch.commit().unwrap();
 
         let iter = domain_store.iterator_cf(
@@ -400,67 +90,6 @@ mod tests {
             .get_tx_actions(42, 3, &actions.tx_hash)
             .unwrap()
             .is_some());
-    }
-
-    #[test]
-    fn test_put_tx_context_undo_entries_skips_cellbase_sentinel_input() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        let cellbase_tx = dummy_tx_data(
-            [0xAA; 32],
-            true,
-            vec![crate::parser::transaction::ParsedInput {
-                previous_tx_hash: [0u8; 32],
-                previous_output_index: -1,
-                since: 0,
-            }],
-            vec![dummy_dao_cell(100_00000000, true)],
-            vec![],
-        );
-
-        let mut batch = StoreBatch::new(&store);
-        let mut undo_seq_by_block = HashMap::new();
-        put_tx_context_undo_entries(&mut batch, &mut undo_seq_by_block, &[cellbase_tx]).unwrap();
-        batch.commit().unwrap();
-
-        let mut iter = store.iterator_cf(
-            store.cf_reorg_undo_log_by_block(),
-            rocksdb::IteratorMode::Start,
-        );
-        let (_key, value) = iter.next().unwrap().unwrap();
-        let entry: ckbadger_store::types::UndoLogEntry = bincode::deserialize(&value).unwrap();
-        let ckbadger_store::types::UndoLogEntry::TxContext(ctx) = entry else {
-            panic!("undo entry should be tx context");
-        };
-        assert!(ctx.inputs.is_empty());
-        assert_eq!(ctx.outputs_count, 1);
-    }
-
-    #[test]
-    fn test_put_tx_context_undo_entries_rejects_cellbase_sentinel_in_non_cellbase_tx() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
-
-        let invalid_tx = dummy_tx_data(
-            [0xBB; 32],
-            false,
-            vec![crate::parser::transaction::ParsedInput {
-                previous_tx_hash: [0u8; 32],
-                previous_output_index: -1,
-                since: 0,
-            }],
-            vec![],
-            vec![],
-        );
-
-        let mut batch = StoreBatch::new(&store);
-        let mut undo_seq_by_block = HashMap::new();
-        let err = put_tx_context_undo_entries(&mut batch, &mut undo_seq_by_block, &[invalid_tx])
-            .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("non-cellbase tx contains cellbase sentinel input"));
     }
 
     #[test]

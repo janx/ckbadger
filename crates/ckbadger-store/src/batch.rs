@@ -1092,12 +1092,6 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_dotcell_ring(), namespace_args, &encoded);
     }
 
-    pub fn put_reorg_undo_log_by_block(&mut self, block_num: i64, seq: u64, entry: &UndoLogEntry) {
-        let key = keys::encode_reorg_undo_log_key(block_num, seq);
-        let value = bincode::serialize(entry).expect("serialize UndoLogEntry");
-        self.put_cf(self.store.cf_reorg_undo_log_by_block(), key, &value);
-    }
-
     /// Remove one undo-log entry by its full `block + seq` key.
     pub fn delete_reorg_undo_log_key(&mut self, key: &[u8]) {
         self.delete_cf(self.store.cf_reorg_undo_log_by_block(), key);
@@ -1111,14 +1105,22 @@ impl<'a> StoreBatch<'a> {
         self.put_sync_meta(&key, &value);
     }
 
-    /// Persist the entity-stats rollback coverage contract in the same atomic
-    /// batch as the writes it describes.
+    /// Persist the rollback coverage contract in the same atomic batch as the
+    /// journal prune it describes, OUTSIDE the block journal: on a journaled
+    /// batch it goes straight into this batch's `WriteBatch` instead of the
+    /// block overlay, so no journal entry records it and no rollback restores
+    /// an older floor over journal rows the prune already deleted (the
+    /// overlay refuses the key, see `block_overlay::is_outside_journal`).
     pub fn put_entity_stats_undo_contract(
         &mut self,
         contract: &crate::types::EntityStatsUndoContract,
     ) {
         let value = bincode::serialize(contract).expect("serialize EntityStatsUndoContract");
-        self.put_sync_meta(keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT, &value);
+        self.batch.put_cf(
+            self.store.cf_sync_meta(),
+            keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+            &value,
+        );
     }
 
     // ---- DAO ----
@@ -2233,30 +2235,6 @@ mod tests {
         assert_eq!(decoded.created_at_block, 1);
         assert_eq!(decoded.consumed_at_block, 22);
         assert_eq!(decoded.consumed_by_tx, Some(vec![0x44; 32]));
-    }
-
-    #[test]
-    fn test_reorg_undo_log_by_block_batch_write() {
-        let dir = TempDir::new().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-        let entry = UndoLogEntry::KeyMutation {
-            target_store: UndoLogStoreTarget::Domain,
-            cf_name: crate::store::CF_SYNC_META.to_string(),
-            key: b"k".to_vec(),
-            previous_value: Some(b"v1".to_vec()),
-        };
-
-        let mut batch = StoreBatch::new(&store);
-        batch.put_reorg_undo_log_by_block(88, 3, &entry);
-        batch.commit().unwrap();
-
-        let key = keys::encode_reorg_undo_log_key(88, 3);
-        let value = store
-            .get_cf(store.cf_reorg_undo_log_by_block(), &key)
-            .unwrap()
-            .unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&value).unwrap();
-        assert_eq!(decoded, entry);
     }
 
     #[test]

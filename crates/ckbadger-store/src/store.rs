@@ -2323,12 +2323,11 @@ impl CkbadgerStore {
 
     /// Resolve the stats CF **name** for a stats key prefix.
     ///
-    /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which an
-    /// undo-log entry cannot carry: `UndoLogEntry::KeyMutation` is CF-name
-    /// addressed so the rollback can re-resolve the handle in whichever
-    /// process replays it. Both must stay in step — a prefix that
-    /// resolves to a handle here but not to a name would silently lose its
-    /// pre-images.
+    /// `stats_cf_by_prefix` hands back a live `&ColumnFamily` handle, which a
+    /// block journal row cannot carry: journal rows are CF-name addressed so
+    /// the rollback can re-resolve the handle in whichever process replays
+    /// them. Both must stay in step — a prefix that resolves to a handle here
+    /// but not to a name would silently lose its journal entries.
     pub fn stats_cf_name_by_prefix(prefix: u8) -> anyhow::Result<&'static str> {
         match prefix {
             keys::STATS_PREFIX_DAILY

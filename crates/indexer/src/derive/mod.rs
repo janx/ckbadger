@@ -15,9 +15,9 @@
 //!   being written.
 //! - [`live::apply_live_batch`] adds each live block's signed deltas
 //!   `f(new) - f(old)` to every aggregate whose derivation is running or
-//!   complete, in the batch's own atomic write, with per-block undo
-//!   pre-images under `UndoSeqScope::Derived`. Rollback is therefore owned by
-//!   the undo log, exactly like the entity stats families.
+//!   complete, in the batch's own atomic write, each moved row in its block's
+//!   scope. Rollback is therefore the block journal's, like every other
+//!   `Journal`-class row.
 //! - [`invalidate_for_rollback`] runs before every rollback (reorg, startup
 //!   cleanup, partial-batch cleanup): a running derivation, or a complete one
 //!   whose rows became exact above the rollback target, is reset and derived
@@ -149,8 +149,8 @@ pub fn resume_key(cursor: Option<&[u8]>) -> Vec<u8> {
 /// rows (see `ckbadger_store::derive_ops`): the rebuild folds the rows of a
 /// snapshot, live sync folds `f(new) - f(old)` for each row a block changes.
 /// Clearing and rollback are the framework's: `clear` is a range delete of
-/// [`DerivedAggregateId::cf_name`], and rollback replays the per-block undo
-/// pre-images [`live::apply_live_batch`] records.
+/// [`DerivedAggregateId::cf_name`], and rollback writes back the block
+/// journal entries of the rows [`live::apply_live_batch`] writes per block.
 pub trait DerivedAggregate: Send + Sync {
     fn id(&self) -> DerivedAggregateId;
 
@@ -186,15 +186,15 @@ pub fn registry() -> Vec<Box<dyn DerivedAggregate>> {
 /// the rollback writes anything.
 ///
 /// - A running derivation is reset by any rollback that removes a block: its
-///   rows mix snapshot contributions with live deltas, and the undo
-///   pre-images recorded while chunks were still writing would put stale
+///   rows mix snapshot contributions with live deltas, and the journal
+///   entries recorded while chunks were still writing would put stale
 ///   values back.
 /// - A complete derivation is reset when `rollback_to` is below the tip it
-///   completed at, for the same reason; at or above it every undo pre-image
-///   was recorded after the rows became exact, so undo replay restores them.
+///   completed at, for the same reason; at or above it every journal entry
+///   was recorded after the rows became exact, so the rollback restores them.
 ///
-/// The reset (meta `NotStarted` + range delete) commits before the undo
-/// replay, so a crash anywhere in the rollback leaves the aggregate reset,
+/// The reset (meta `NotStarted` + range delete) commits before the journal
+/// rollback, so a crash anywhere in the rollback leaves the aggregate reset,
 /// never half-restored. The scheduler derives it again.
 pub fn invalidate_for_rollback(store: &CkbadgerStore, rollback_to: i64) -> Result<()> {
     invalidate_registered_for_rollback(store, &registry(), rollback_to)

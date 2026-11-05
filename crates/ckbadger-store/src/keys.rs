@@ -268,34 +268,24 @@ pub fn encode_reorg_undo_log_key(block_num: i64, seq: u64) -> [u8; REORG_UNDO_LO
 }
 
 /// Bit position of an undo sequence number's scope. The top 16 bits of the
-/// `seq` in `encode_reorg_undo_log_key` name the writer family that recorded
-/// the entry; the low 48 bits count entries within the block. This is the ONE
-/// definition: the indexer composes sequence numbers from it and the store's
-/// retention prune reads it back.
+/// `seq` in `encode_reorg_undo_log_key` name the scope of the row; the low 48
+/// bits count entries within the block. This is the ONE definition: the
+/// journal composes sequence numbers from it and the rollback reads it back.
 pub const UNDO_SEQ_SCOPE_SHIFT: u32 = 48;
 /// Largest per-block counter value a sequence number can carry.
 pub const UNDO_SEQ_LOCAL_MAX: u64 = (1u64 << UNDO_SEQ_SCOPE_SHIFT) - 1;
 
-/// The writer family an undo-log entry belongs to.
+/// The scope of an undo-log row. One scope exists: the block journal. A row
+/// of any other scope bits is not a row this store writes, and the rollback
+/// refuses it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u16)]
 pub enum UndoSeqScope {
-    TxContext = 0x0001,
-    DotBit = 0x0002,
-    Object = 0x0003,
-    /// Entity daily/hourly stats buckets (`SCRIPT_DAILY`, `TOKEN_DAILY`,
-    /// `CLUSTER_DAILY`, `SPORE_DAILY`, `OBJECT_DAILY`, `TOKEN_HOURLY`,
-    /// `SPORE_HOURLY`, `OBJECT_HOURLY`). Its own scope so the retention window
-    /// can prune exactly these entries without touching the other three.
-    EntityStats = 0x0004,
-    /// Derived aggregate rows (`dao_live_agg`, `object_collection_activity_count`,
-    /// `bit_cell_by_account`), written by the live maintenance of the
-    /// indexer's background derivations. Pruned behind the same coverage
-    /// floor as `EntityStats`.
-    Derived = 0x0005,
     /// The block journal (`block_overlay::BlockOverlay`): one entry per
     /// `(block, key)` of every `Journal`-class column family a live batch
     /// writes, holding the key's value at the end of the previous block.
+    /// The value 0x0006 is the one the journal has used since it was the
+    /// sixth scope; the per-writer scopes 0x0001–0x0005 are gone.
     Journal = 0x0006,
 }
 
@@ -4398,33 +4388,21 @@ mod tests {
         let _ = encode_outpoint(&[0x9B; 31], 0);
     }
 
-    /// The scope table is part of the persisted undo-log key: its values are
-    /// pinned so a renumbering cannot silently re-scope stored entries.
+    /// The scope is part of the persisted undo-log key: its value is pinned
+    /// so a renumbering cannot silently re-scope stored entries.
     #[test]
     fn test_undo_seq_scope_table_is_pinned() {
         assert_eq!(UNDO_SEQ_SCOPE_SHIFT, 48);
         assert_eq!(UNDO_SEQ_LOCAL_MAX, 0x0000_FFFF_FFFF_FFFF);
-        let table = [
-            (UndoSeqScope::TxContext, 0x0001u64),
-            (UndoSeqScope::DotBit, 0x0002),
-            (UndoSeqScope::Object, 0x0003),
-            (UndoSeqScope::EntityStats, 0x0004),
-            (UndoSeqScope::Derived, 0x0005),
-        ];
-        for (scope, bits) in table {
-            assert_eq!(scope.seq_base(), bits << 48, "{scope:?}");
-            assert!(scope.owns(scope.seq_base()), "{scope:?}");
-            assert!(
-                scope.owns(scope.seq_base() | UNDO_SEQ_LOCAL_MAX),
-                "{scope:?}"
-            );
-            for (other, _) in table.iter().filter(|(other, _)| *other != scope) {
-                assert!(!scope.owns(other.seq_base()), "{scope:?} vs {other:?}");
-            }
+        let journal = UndoSeqScope::Journal;
+        assert_eq!(journal.seq_base(), 0x0006 << 48);
+        assert!(journal.owns(journal.seq_base()));
+        assert!(journal.owns(journal.seq_base() | UNDO_SEQ_LOCAL_MAX));
+        // The retired per-writer scopes' bits, a counter that overflowed into
+        // the scope bits, and no scope bits at all are not journal rows.
+        for bits in [0x0000u64, 0x0001, 0x0002, 0x0003, 0x0004, 0x0005, 0x0007] {
+            assert!(!journal.owns(bits << 48), "{bits:#06x}");
         }
-        // A counter that overflowed into the scope bits is no scope's entry.
-        assert!(!UndoSeqScope::EntityStats.owns(6 << 48));
-        assert!(!UndoSeqScope::TxContext.owns(0));
     }
 
     #[test]

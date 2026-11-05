@@ -306,16 +306,15 @@ fn blk(n: i64) -> BlockChanges {
 }
 
 /// Apply one committed batch of blocks exactly the way the writer will: a
-/// single `StoreBatch`, a single `EntityStatsOverlay`, a single shared
-/// `undo_seq_by_block` map, per-block undo pre-images and one final write per
-/// touched key.
+/// single journaled `StoreBatch`, a single `EntityStatsOverlay` on its block
+/// overlay, per-block journal entries and one final write per touched key.
 fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockChanges]) {
     // The live batch's shape: one block overlay journals every block's
     // pre-images, the entity stats overlay is its stats side.
     let block_overlay = SharedBlockOverlay::new(domain);
     let mut batch = StoreBatch::journaled(domain, &block_overlay, 0);
     let mut overlay = EntityStatsOverlay::sharing(&block_overlay);
-    let mut undo_seq: HashMap<i64, u64> = HashMap::new();
+    let mut journal_seqs: HashMap<i64, u64> = HashMap::new();
 
     let mut script = EntityDailyChanges::<ScriptDailyKey>::new();
     // Each token contribution is one transaction touching the token's cells.
@@ -348,19 +347,19 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
     }
 
     writer
-        .update_script_daily_deltas_batch(&script, &mut overlay, &mut undo_seq, &mut batch)
+        .update_script_daily_deltas_batch(&script, &mut overlay)
         .unwrap();
     writer
-        .update_token_daily_deltas_batch(&token, &mut overlay, &mut undo_seq, &mut batch)
+        .update_token_daily_deltas_batch(&token, &mut overlay)
         .unwrap();
     writer
-        .update_cluster_daily_deltas_batch(&cluster, &mut overlay, &mut undo_seq, &mut batch)
+        .update_cluster_daily_deltas_batch(&cluster, &mut overlay)
         .unwrap();
     writer
-        .update_spore_daily_deltas_batch(&spore, &mut overlay, &mut undo_seq, &mut batch)
+        .update_spore_daily_deltas_batch(&spore, &mut overlay)
         .unwrap();
     writer
-        .update_object_daily_deltas_batch(&object, &mut overlay, &mut undo_seq, &mut batch)
+        .update_object_daily_deltas_batch(&object, &mut overlay)
         .unwrap();
 
     // The four hourly write points route through the same overlay; driving them
@@ -373,9 +372,7 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
                 format!("test hourly key=0x{}", hex::encode(key))
             })
             .unwrap();
-            overlay
-                .mutate(domain, &mut batch, &mut undo_seq, b.block, key, next)
-                .unwrap();
+            overlay.mutate(b.block, key, next).unwrap();
         }
     }
 
@@ -392,7 +389,7 @@ fn apply_commit(writer: &BatchWriter, domain: &CkbadgerStore, blocks: &[BlockCha
         batch.at(b.block).put_block_header(b.block, &header);
     }
     batch
-        .stage_journal(&mut |block| journal_seq(&mut undo_seq, block))
+        .stage_journal(&mut |block| journal_seq(&mut journal_seqs, block))
         .unwrap();
     batch.commit().unwrap();
     seed_epoch_rows(domain, blocks.iter().map(|b| (b.block, b.timestamp)));
@@ -1217,29 +1214,30 @@ async fn startup_fails_on_nonfresh_store_without_contract() {
 async fn prune_keeps_window_and_updates_floor() {
     let (domain, _append) = setup_split_stores();
 
-    const ENTITY: u64 = UndoSeqScope::EntityStats.seq_base();
-    const TX_CONTEXT: u64 = UndoSeqScope::TxContext.seq_base();
+    // Two journal rows per block (a token daily row and a sync_meta key).
     let mut batch = StoreBatch::new(&domain);
     for block in 1..=1_200i64 {
-        batch.put_reorg_undo_log_by_block(
-            block,
-            ENTITY,
-            &ckbadger_store::types::UndoLogEntry::KeyMutation {
-                target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-                cf_name: ckbadger_store::CF_STATS_TOKEN.to_string(),
-                key: keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec(),
-                previous_value: None,
-            },
-        );
-        batch.put_reorg_undo_log_by_block(
-            block,
-            TX_CONTEXT,
-            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
-                tx_hash: vec![block as u8; 32],
-                outputs_count: 1,
-                inputs: vec![],
-            }),
-        );
+        for (seq, (cf, key)) in [
+            (
+                ckbadger_store::CF_STATS_TOKEN,
+                keys::encode_token_daily_key(&TOKEN_X, DAY).to_vec(),
+            ),
+            (ckbadger_store::CF_SYNC_META, b"fixture".to_vec()),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            batch
+                .put_raw_cf_by_name(
+                    ckbadger_store::CF_REORG_UNDO_LOG_BY_BLOCK,
+                    &keys::encode_reorg_undo_log_key(
+                        block,
+                        UndoSeqScope::Journal.seq_base() | seq as u64,
+                    ),
+                    &ckbadger_store::encode_journal_value(cf, &key, None).unwrap(),
+                )
+                .unwrap();
+        }
     }
     batch.commit().unwrap();
 
@@ -1255,23 +1253,25 @@ async fn prune_keeps_window_and_updates_floor() {
     );
 
     let mut entity_blocks = Vec::new();
-    let mut tx_context_entries = 0usize;
+    let mut other_entries = 0usize;
     let iter = domain.iterator_cf(domain.cf_reorg_undo_log_by_block(), IteratorMode::Start);
     for item in iter {
-        let (key, _) = item.unwrap();
-        let (block, seq) = keys::decode_reorg_undo_log_key(&key);
-        if UndoSeqScope::EntityStats.owns(seq) {
+        let (key, value) = item.unwrap();
+        let (block, _) = keys::decode_reorg_undo_log_key(&key);
+        if ckbadger_store::decode_journal_value(&value).unwrap().cf
+            == ckbadger_store::CF_STATS_TOKEN
+        {
             entity_blocks.push(block);
         } else {
-            tx_context_entries += 1;
+            other_entries += 1;
         }
     }
     assert_eq!(entity_blocks.len(), 1_000);
     assert_eq!(*entity_blocks.iter().min().unwrap(), 201);
     assert_eq!(*entity_blocks.iter().max().unwrap(), 1_200);
     assert_eq!(
-        tx_context_entries, 1_000,
-        "retention prunes every undo-log scope below the floor (one range delete)"
+        other_entries, 1_000,
+        "retention prunes every journal row below the floor (one range delete)"
     );
 
     let contract = domain.get_entity_stats_undo_contract().unwrap().unwrap();

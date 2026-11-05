@@ -1029,17 +1029,11 @@ mod tests {
         let (_dir, store, _append_store, writer) = setup();
         assert!(!writer.needs_startup_cleanup(0).unwrap());
 
-        let mut batch = StoreBatch::new(&store);
-        batch.put_reorg_undo_log_by_block(
-            2,
-            0,
-            &ckbadger_store::types::UndoLogEntry::TxContext(ckbadger_store::types::UndoTxContext {
-                tx_hash: vec![0xAA; 32],
-                outputs_count: 0,
-                inputs: vec![],
-            }),
-        );
-        batch.commit().unwrap();
+        // A journal row of block 2 (a block-2 write through a journaled batch).
+        ckbadger_store::commit_journaled_block(&store, 2, |batch| {
+            batch.put_sync_meta(b"fixture", b"written at block 2")
+        })
+        .unwrap();
 
         assert!(writer.needs_startup_cleanup(0).unwrap());
         assert!(!writer.needs_startup_cleanup(2).unwrap());

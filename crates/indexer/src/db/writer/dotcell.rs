@@ -1,7 +1,8 @@
 //! Live-sync writer for `.cell` (DotCell) names.
 //!
-//! Mirrors the did:ckb identity writer: an undo pre-image for every key it
-//! touches, checked arithmetic on every counter, and the owner index keyed by
+//! Mirrors the did:ckb identity writer: every key it touches written in the
+//! block's scope (the block journal records its previous value), checked
+//! arithmetic on every counter, and the owner index keyed by
 //! the 20-byte owner prefix the chain actually stores. The ring root is
 //! protocol infrastructure and deliberately never becomes an identity.
 
@@ -9,7 +10,6 @@ use anyhow::{anyhow, bail, Result};
 
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::{CF_DOTCELL_NAME_BY_OWNER, CF_DOTCELL_RING, CF_IDENTITY_DATA};
 use ckbadger_store::types::{
     derive_dotcell_id, DotCellNameData, DotCellRecord, DotCellRingRoot, IdentityEntry,
     IdentityExtra, IdentityStandard, DOTCELL_SENTINEL_COLLECTION,
@@ -87,23 +87,6 @@ impl BatchWriter {
             // name anyone holds. It still needs a reverse index row so its
             // re-creation resolves on the consume side.
             let previous = state.get_dotcell_ring(self.store.as_ref(), namespace_args)?;
-            self.record_object_undo(
-                batch,
-                block_number,
-                CF_DOTCELL_RING,
-                namespace_args,
-                previous
-                    .as_ref()
-                    .map(bincode::serialize)
-                    .transpose()
-                    .map_err(|e| {
-                        anyhow!(
-                            "failed to serialize DotCellRingRoot pre-image: namespace=0x{}, {e}",
-                            hex::encode(namespace_args)
-                        )
-                    })?,
-                &state.undo_seq_by_block,
-            );
             let root = DotCellRingRoot {
                 root_tx_hash: tx_hash.to_vec(),
                 root_output_index: output_index,
@@ -116,14 +99,7 @@ impl BatchWriter {
             batch.put_dotcell_ring(namespace_args, &root);
             state.put_dotcell_ring(namespace_args, root);
             let root_id = dotcell_root_id();
-            self.put_object_outpoint_rows(
-                &root_id,
-                tx_hash,
-                output_index,
-                block_number,
-                batch,
-                state,
-            )?;
+            self.put_object_outpoint_rows(&root_id, tx_hash, output_index, batch, state)?;
             return Ok(());
         }
 
@@ -137,17 +113,6 @@ impl BatchWriter {
                 );
             }
         }
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_IDENTITY_DATA,
-            &name.id,
-            existing
-                .as_ref()
-                .map(|e| super::undo_pre_image(e, ".cell identity", &name.id, block_number))
-                .transpose()?,
-            &state.undo_seq_by_block,
-        );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_owner20 = existing
             .as_ref()
@@ -187,32 +152,15 @@ impl BatchWriter {
         };
         batch.put_identity(&name.id, &entry);
         state.put_identity(&name.id, entry);
-        self.put_object_outpoint_rows(&name.id, tx_hash, output_index, block_number, batch, state)?;
+        self.put_object_outpoint_rows(&name.id, tx_hash, output_index, batch, state)?;
 
-        // Owner index. The row's value is empty, so its pre-image is
-        // `Some(empty)` when the row existed and `None` when it did not.
+        // Owner index (an empty value: the key is the fact).
         if let Some(old) = old_owner20 {
             if old != name.owner_hash20 {
-                self.record_object_undo(
-                    batch,
-                    block_number,
-                    CF_DOTCELL_NAME_BY_OWNER,
-                    &keys::encode_dotcell_name_by_owner_key(&old, &name.id),
-                    Some(Vec::new()),
-                    &state.undo_seq_by_block,
-                );
                 batch.delete_dotcell_name_by_owner(&old, &name.id);
             }
         }
         if old_owner20 != Some(name.owner_hash20) {
-            self.record_object_undo(
-                batch,
-                block_number,
-                CF_DOTCELL_NAME_BY_OWNER,
-                &keys::encode_dotcell_name_by_owner_key(&name.owner_hash20, &name.id),
-                None,
-                &state.undo_seq_by_block,
-            );
             batch.put_dotcell_name_by_owner(&name.owner_hash20, &name.id);
         }
 
@@ -256,7 +204,6 @@ impl BatchWriter {
     pub(crate) fn consume_dotcell_name(
         &self,
         id: &[u8; 20],
-        block_number: i64,
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<Option<DotCellNameData>> {
@@ -289,33 +236,12 @@ impl BatchWriter {
         let previous = dotcell_name_from_extra(&entry.extra, id)?;
         let old_owner = previous.owner_hash20;
 
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_IDENTITY_DATA,
-            id,
-            Some(bincode::serialize(&entry).map_err(|e| {
-                anyhow!(
-                    "failed to serialize dotcell identity pre-image: id=0x{}, {e}",
-                    hex::encode(id)
-                )
-            })?),
-            &state.undo_seq_by_block,
-        );
         // `owner_hash20` stays as it was so a recycled name can still show its
         // last owner; only the live index and counters drop it.
         entry.is_live = false;
         batch.put_identity(id, &entry);
         state.put_identity(id, entry);
 
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_DOTCELL_NAME_BY_OWNER,
-            &keys::encode_dotcell_name_by_owner_key(&old_owner, id),
-            Some(Vec::new()),
-            &state.undo_seq_by_block,
-        );
         batch.delete_dotcell_name_by_owner(&old_owner, id);
 
         let collection = &DOTCELL_SENTINEL_COLLECTION;
@@ -427,15 +353,12 @@ mod tests {
     use crate::parser::{DotCellNameData, DotCellParser};
     use crate::rpc::parse_hex_to_bytes;
     use ckbadger_store::batch::StoreBatch;
-    use ckbadger_store::types::{
-        IdentityExtra, IdentityStandard, UndoLogEntry, DOTCELL_SENTINEL_COLLECTION,
-    };
+    use ckbadger_store::types::{IdentityExtra, IdentityStandard, DOTCELL_SENTINEL_COLLECTION};
     use ckbadger_store::CkbadgerStore;
     use std::sync::Arc;
 
     use crate::db::writer::entity_stats::SharedEntityStatsOverlay;
     use crate::db::writer::BatchWriter;
-    use crate::sync::undo::SharedUndoSeq;
 
     /// 2023-11-14: every fixture name's expiry lies after this, so no test
     /// write here is a takeover unless it says so.
@@ -449,7 +372,7 @@ mod tests {
     }
 
     fn new_state(writer: &BatchWriter) -> SporeBatchState {
-        writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default())
+        writer.new_spore_batch_state(SharedEntityStatsOverlay::new())
     }
 
     fn mainnet_namespace() -> [u8; 20] {
@@ -469,23 +392,6 @@ mod tests {
 
     fn ring_root_name() -> DotCellNameData {
         DotCellParser::parse_name_data(&parse_hex_to_bytes(fixture::M1_OUT0_DATA)).unwrap()
-    }
-
-    fn undo_cfs(store: &CkbadgerStore) -> Vec<String> {
-        let mut out = Vec::new();
-        for item in store.iterator_cf(
-            store.cf_reorg_undo_log_by_block(),
-            rocksdb::IteratorMode::Start,
-        ) {
-            let (_, value) = item.unwrap();
-            if let UndoLogEntry::KeyMutation { cf_name, .. } = bincode::deserialize(&value).unwrap()
-            {
-                out.push(cf_name);
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
     }
 
     #[test]
@@ -705,7 +611,7 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = new_state(&writer);
         let prev = writer
-            .consume_dotcell_name(&name.id, 101, &mut batch, &mut state)
+            .consume_dotcell_name(&name.id, &mut batch, &mut state)
             .unwrap()
             .expect("consume returns the state the name had");
         assert_eq!(prev.owner_hash20, owner_a);
@@ -783,7 +689,7 @@ mod tests {
         let mut batch = StoreBatch::new(writer.store());
         let mut state = new_state(&writer);
         writer
-            .consume_dotcell_name(&name.id, 101, &mut batch, &mut state)
+            .consume_dotcell_name(&name.id, &mut batch, &mut state)
             .unwrap();
         batch.commit().unwrap();
 
@@ -811,7 +717,6 @@ mod tests {
         let err = writer
             .consume_dotcell_name(
                 &name.id,
-                102,
                 &mut StoreBatch::new(writer.store()),
                 &mut new_state(&writer),
             )
@@ -825,7 +730,6 @@ mod tests {
         let err = writer
             .consume_dotcell_name(
                 &[0x11; 20],
-                100,
                 &mut StoreBatch::new(writer.store()),
                 &mut new_state(&writer),
             )
@@ -836,48 +740,61 @@ mod tests {
         );
     }
 
+    /// Every `.cell` row the writer touches is written in the block's
+    /// journaled scope, so the block journal records its previous value.
     #[test]
-    fn every_dotcell_write_records_undo_previous_values() {
-        let (store, writer, _dir) = writer_for_test();
-        let mut batch = StoreBatch::new(writer.store());
-        let mut state = new_state(&writer);
-        writer
-            .insert_dotcell_name(
-                &ring_root_name(),
-                &[],
-                &mainnet_namespace(),
-                &[0xAA; 32],
-                0,
-                100,
-                TEST_BLOCK_TIME_MS,
-                &mut batch,
-                &mut state,
-            )
-            .unwrap();
-        writer
-            .insert_dotcell_name(
-                &support_name(),
-                &[],
-                &mainnet_namespace(),
-                &[0xBB; 32],
-                0,
-                100,
-                TEST_BLOCK_TIME_MS,
-                &mut batch,
-                &mut state,
-            )
-            .unwrap();
-        batch.commit().unwrap();
+    fn every_dotcell_write_is_journaled_with_its_previous_value() {
+        use crate::db::writer::journal_test_support::journal_entries;
 
-        let cfs = undo_cfs(&store);
-        for expected in [
-            ckbadger_store::CF_IDENTITY_DATA,
-            ckbadger_store::CF_DOTCELL_NAME_BY_OWNER,
-            ckbadger_store::CF_DOTCELL_RING,
+        let (store, writer, _dir) = writer_for_test();
+        let mut state = new_state(&writer);
+        ckbadger_store::commit_journaled_block(store.as_ref(), 100, |batch| {
+            writer
+                .insert_dotcell_name(
+                    &ring_root_name(),
+                    &[],
+                    &mainnet_namespace(),
+                    &[0xAA; 32],
+                    0,
+                    100,
+                    TEST_BLOCK_TIME_MS,
+                    batch,
+                    &mut state,
+                )
+                .unwrap();
+            writer
+                .insert_dotcell_name(
+                    &support_name(),
+                    &[],
+                    &mainnet_namespace(),
+                    &[0xBB; 32],
+                    0,
+                    100,
+                    TEST_BLOCK_TIME_MS,
+                    batch,
+                    &mut state,
+                )
+                .unwrap();
+        })
+        .unwrap();
+
+        let name = support_name();
+        for (cf, key) in [
+            (ckbadger_store::CF_IDENTITY_DATA, name.id.to_vec()),
+            (
+                ckbadger_store::CF_DOTCELL_NAME_BY_OWNER,
+                keys::encode_dotcell_name_by_owner_key(&name.owner_hash20, &name.id).to_vec(),
+            ),
+            (
+                ckbadger_store::CF_DOTCELL_RING,
+                mainnet_namespace().to_vec(),
+            ),
         ] {
             assert!(
-                cfs.iter().any(|cf| cf == expected),
-                "no undo pre-image recorded for {expected}: {cfs:?}"
+                journal_entries(&store, cf).contains(&(100, key.clone(), None)),
+                "no journal entry for {cf} key 0x{}: {:?}",
+                hex::encode(&key),
+                journal_entries(&store, cf)
             );
         }
     }

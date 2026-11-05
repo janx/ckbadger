@@ -1350,9 +1350,7 @@ mod tests {
     #[test]
     fn test_live_dao_batch_stages_each_transition_in_its_block() {
         use crate::db::writer::journal_test_support::journal_entries;
-        use crate::sync::undo::SharedUndoSeq;
-        use ckbadger_store::block_overlay::SharedBlockOverlay;
-        use ckbadger_store::keys::UndoSeqScope;
+        use ckbadger_store::block_overlay::{journal_seq, SharedBlockOverlay};
 
         let mut fx = Fixture::new();
         fx.commit_cell(DEPOSIT, &deposit_cell(DEPOSIT_CAPACITY, &LOCK), 101);
@@ -1370,11 +1368,11 @@ mod tests {
         );
 
         let overlay = SharedBlockOverlay::new(&fx.store);
-        let undo_seq = SharedUndoSeq::default();
         let mut batch = StoreBatch::journaled(&fx.store, &overlay, 0);
         resolved.stage(&mut batch).unwrap();
+        let mut counters = std::collections::HashMap::new();
         batch
-            .stage_journal(&mut |block| Ok(undo_seq.next(block, UndoSeqScope::Journal)))
+            .stage_journal(&mut |block| journal_seq(&mut counters, block))
             .unwrap();
         batch.commit().unwrap();
 

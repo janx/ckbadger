@@ -95,41 +95,22 @@ fn normalize_sync_meta(key: &[u8], value: &[u8]) -> Vec<u8> {
 /// A journal entry of a `sync_meta` key carries the key's previous value,
 /// which holds the same wall-clock fields as the row itself (the previous
 /// batch's `sync_status.last_synced_at`, ...): normalise it the same way.
-/// Journal rows use the store's journal value codec, the other undo scopes'
-/// rows bincode `UndoLogEntry`.
+/// Every undo-log row is a journal row (the store's journal value codec).
 fn normalize_undo_entry(key: &[u8], value: &[u8]) -> Vec<u8> {
-    let (_, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(key);
-    if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) {
-        let entry = ckbadger_store::decode_journal_value(value).expect("decode a journal row");
-        return match entry.previous {
-            Some(previous) if entry.cf == ckbadger_store::CF_SYNC_META => {
-                ckbadger_store::encode_journal_value(
-                    entry.cf,
-                    entry.key,
-                    Some(&normalize_sync_meta(entry.key, previous)),
-                )
-                .expect("encode a journal row")
-            }
-            _ => value.to_vec(),
-        };
-    }
-    match bincode::deserialize::<ckbadger_store::types::UndoLogEntry>(value)
-        .expect("decode an undo log row")
-    {
-        ckbadger_store::types::UndoLogEntry::KeyMutation {
-            target_store,
-            cf_name,
-            key,
-            previous_value: Some(previous),
-        } if cf_name == ckbadger_store::CF_SYNC_META => {
-            let previous = normalize_sync_meta(&key, &previous);
-            bincode::serialize(&ckbadger_store::types::UndoLogEntry::KeyMutation {
-                target_store,
-                cf_name,
-                key,
-                previous_value: Some(previous),
-            })
-            .expect("encode an undo log row")
+    let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(key);
+    assert!(
+        ckbadger_store::keys::UndoSeqScope::Journal.owns(seq),
+        "undo-log row at block {block} seq {seq:#x} is not a journal row"
+    );
+    let entry = ckbadger_store::decode_journal_value(value).expect("decode a journal row");
+    match entry.previous {
+        Some(previous) if entry.cf == ckbadger_store::CF_SYNC_META => {
+            ckbadger_store::encode_journal_value(
+                entry.cf,
+                entry.key,
+                Some(&normalize_sync_meta(entry.key, previous)),
+            )
+            .expect("encode a journal row")
         }
         _ => value.to_vec(),
     }
@@ -666,13 +647,11 @@ const JOURNAL_COVERED_KEYS: &[(&str, &[u8])] = &[
         ckbadger_store::CF_SYNC_META,
         sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
     ),
-    // B-3 statistics.rs: the entity-stats undo contract and the hourly
-    // retention states depend only on the committed tip and are written in
-    // the batch's first block's scope.
-    (
-        ckbadger_store::CF_SYNC_META,
-        sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
-    ),
+    // B-3 statistics.rs: the hourly retention states depend only on the
+    // committed tip and are written in the batch's first block's scope. The
+    // coverage contract (`entity_stats_undo_contract`) is not covered: since
+    // B-5b it is written outside the journal (it describes which journal rows
+    // exist, so a rollback must not restore it); the B-0 dump compares it.
     (
         ckbadger_store::CF_SYNC_META,
         sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX,
@@ -711,9 +690,10 @@ fn read_journal(store: &CkbadgerStore) -> BTreeMap<i64, Vec<JournalEntry>> {
     ) {
         let (key, value) = row.expect("iterate the undo log");
         let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-        if !ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) {
-            continue;
-        }
+        assert!(
+            ckbadger_store::keys::UndoSeqScope::Journal.owns(seq),
+            "undo-log row at block {block} seq {seq:#x} is not a journal row"
+        );
         let entry = ckbadger_store::decode_journal_value(&value).expect("decode a journal row");
         journal.entry(block).or_default().push((
             seq,

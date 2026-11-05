@@ -2340,51 +2340,22 @@ pub struct ReorgEventRecord {
     pub event: ReorgEvent,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum UndoLogStoreTarget {
-    Domain,
-    AppendOnly,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UndoInputOutPoint {
-    pub tx_hash: Vec<u8>,
-    pub output_index: i16,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct UndoTxContext {
-    pub tx_hash: Vec<u8>,
-    pub outputs_count: i16,
-    pub inputs: Vec<UndoInputOutPoint>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub enum UndoLogEntry {
-    /// Previous value before the forward write.
-    /// `None` means the key did not exist and rollback should delete it.
-    KeyMutation {
-        target_store: UndoLogStoreTarget,
-        cf_name: String,
-        key: Vec<u8>,
-        previous_value: Option<Vec<u8>>,
-    },
-    /// Transaction context for deriving cell/consumed rollback from canonical tx data.
-    TxContext(UndoTxContext),
-}
-
-/// What this store guarantees about rolling entity daily/hourly stats back.
+/// What this store guarantees about rolling the chain view back.
 ///
 /// `coverage_floor_block` is the lowest block a shallow reorg can still be
-/// undone to: `EntityStats` undo entries at or below it have been pruned. A
-/// rollback target below the floor is a hard error — there is no honest way to
-/// reconstruct those buckets, and fabricating one would be exactly the silent
+/// undone to: block journal rows at or below it have been pruned. A rollback
+/// target below the floor is a hard error — there is no honest way to
+/// reconstruct those rows, and fabricating one would be exactly the silent
 /// repair this whole change removes.
+///
+/// The contract describes which journal rows exist, so it is written outside
+/// the journal (`StoreBatch::put_entity_stats_undo_contract`): a rollback never
+/// restores an older floor over rows the prune already deleted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntityStatsUndoContract {
     /// Format version of the entity-stats undo contract.
     pub version: u32,
-    /// Lowest block still coverable by `EntityStats` undo entries.
+    /// Lowest block still coverable by the block journal.
     pub coverage_floor_block: i64,
     /// Committed tip when the floor was last advanced.
     pub updated_at_block: i64,
@@ -3576,53 +3547,6 @@ mod tests {
         let info = sample_live_cell_info();
         let bytes = info.encode().unwrap();
         assert!(decode_consumed_cell_meta(&bytes).is_err());
-    }
-
-    #[test]
-    fn test_undo_log_entry_roundtrip() {
-        let entry = UndoLogEntry::KeyMutation {
-            target_store: UndoLogStoreTarget::AppendOnly,
-            cf_name: "addr_txs".to_string(),
-            key: vec![0xAA; 12],
-            previous_value: Some(vec![0xBB; 8]),
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, entry);
-    }
-
-    #[test]
-    fn test_undo_log_entry_none_previous_value_roundtrip() {
-        let entry = UndoLogEntry::KeyMutation {
-            target_store: UndoLogStoreTarget::Domain,
-            cf_name: "sync_meta".to_string(),
-            key: b"new_key".to_vec(),
-            previous_value: None,
-        };
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, entry);
-    }
-
-    #[test]
-    fn test_undo_log_tx_context_roundtrip() {
-        let entry = UndoLogEntry::TxContext(UndoTxContext {
-            tx_hash: vec![0x11; 32],
-            outputs_count: 2,
-            inputs: vec![
-                UndoInputOutPoint {
-                    tx_hash: vec![0x22; 32],
-                    output_index: 0,
-                },
-                UndoInputOutPoint {
-                    tx_hash: vec![0x33; 32],
-                    output_index: 1,
-                },
-            ],
-        });
-        let bytes = bincode::serialize(&entry).unwrap();
-        let decoded: UndoLogEntry = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(decoded, entry);
     }
 
     // ---- TxActions / ItemDelta / ParticipantDelta ----

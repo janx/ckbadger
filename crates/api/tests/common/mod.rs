@@ -1876,9 +1876,9 @@ fn seed_writer_fixture_epoch(store: &CkbadgerStore, blocks: &[TokenDailyBlock]) 
 }
 
 /// Commit one batch of blocks through the real per-block token daily writer:
-/// one `StoreBatch`, one `EntityStatsOverlay`, one shared `undo_seq_by_block`,
-/// per-block undo pre-images, one final write per touched key — the exact shape
-/// `write_parsed_batch` uses in production.
+/// one journaled `StoreBatch`, one `EntityStatsOverlay` on its block overlay,
+/// per-block journal entries, one final write per touched key — the exact
+/// shape `write_parsed_batch` uses in production.
 pub fn commit_token_daily_blocks(
     writer: &BatchWriter,
     store: &CkbadgerStore,
@@ -1889,7 +1889,7 @@ pub fn commit_token_daily_blocks(
     let block_overlay = ckbadger_store::SharedBlockOverlay::new(store);
     let mut batch = StoreBatch::journaled(store, &block_overlay, 0);
     let mut overlay = EntityStatsOverlay::sharing(&block_overlay);
-    let mut undo_seq: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
+    let mut journal_seqs: std::collections::HashMap<i64, u64> = std::collections::HashMap::new();
 
     // Each entry is one transaction touching the token's cells.
     let mut changes = TokenDailyChanges::<EntityDateKey>::new();
@@ -1907,7 +1907,7 @@ pub fn commit_token_daily_blocks(
             .unwrap();
     }
     writer
-        .update_token_daily_deltas_batch(&changes, &mut overlay, &mut undo_seq, &mut batch)
+        .update_token_daily_deltas_batch(&changes, &mut overlay)
         .unwrap();
     overlay.stage_final(&mut batch).unwrap();
     // This fixture starts at block 1. Materialize its genesis predecessor.
@@ -1923,7 +1923,7 @@ pub fn commit_token_daily_blocks(
     }
     batch
         .stage_journal(&mut |block| {
-            ckbadger_store::block_overlay::journal_seq(&mut undo_seq, block)
+            ckbadger_store::block_overlay::journal_seq(&mut journal_seqs, block)
         })
         .unwrap();
     batch.commit().unwrap();

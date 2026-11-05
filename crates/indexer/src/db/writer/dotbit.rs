@@ -4,18 +4,15 @@ use std::hash::BuildHasher;
 use tracing::warn;
 
 use ckbadger_store::batch::StoreBatch;
-use ckbadger_store::store::CF_STATS_IDENTITY;
 use ckbadger_store::types::{
     AssetAction, IdentityCollectionAggregate, IdentityEntry, IdentityExtra, IdentityStandard,
-    ObjectCollectionActivityEntry, UndoLogEntry, UndoLogStoreTarget,
+    ObjectCollectionActivityEntry,
 };
-use ckbadger_store::{CkbadgerStore, CF_IDENTITY_AGG, CF_IDENTITY_DATA, CF_STATS_MNFT};
+use ckbadger_store::CkbadgerStore;
 
 use crate::parser::dotbit::ParsedDotbitAccountOutput;
-use crate::sync::types::UndoSeqScope;
 
 use super::entity_stats::SharedEntityStatsOverlay;
-use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
 
@@ -381,7 +378,6 @@ pub(crate) struct DotbitBatchState {
     stats: SharedEntityStatsOverlay,
     identity_aggs: HashMap<Vec<u8>, IdentityCollectionAggregate>,
     identity_owner_counts: HashMap<(Vec<u8>, Vec<u8>), i64>,
-    undo_seq_by_block: SharedUndoSeq,
 }
 
 impl DotbitBatchState {
@@ -402,19 +398,20 @@ impl DotbitBatchState {
         self.accounts.insert(account_id.to_vec(), Some(entry));
     }
 
-    fn get_identity_agg_with_existence(
+    fn get_identity_agg(
         &mut self,
         store: &CkbadgerStore,
         collection_id: &[u8],
-    ) -> Result<(IdentityCollectionAggregate, bool)> {
+    ) -> Result<IdentityCollectionAggregate> {
         if let Some(cached) = self.identity_aggs.get(collection_id) {
-            return Ok((cached.clone(), true));
+            return Ok(cached.clone());
         }
-        let loaded = store.get_identity_collection_aggregate(collection_id)?;
-        let agg = loaded.clone().unwrap_or_default();
+        let agg = store
+            .get_identity_collection_aggregate(collection_id)?
+            .unwrap_or_default();
         self.identity_aggs
             .insert(collection_id.to_vec(), agg.clone());
-        Ok((agg, loaded.is_some()))
+        Ok(agg)
     }
 
     fn put_identity_agg(
@@ -495,122 +492,12 @@ impl DotbitBatchState {
 }
 
 impl BatchWriter {
-    fn record_dotbit_domain_undo(
-        &self,
-        batch: &mut StoreBatch<'_>,
-        block_number: i64,
-        cf_name: &'static str,
-        key: &[u8],
-        previous_value: Option<Vec<u8>>,
-        undo_seq: &SharedUndoSeq,
-    ) {
-        if self.store.is_bulk_sync_mode() {
-            return;
-        }
-        let seq = undo_seq.next(block_number, UndoSeqScope::DotBit);
-        batch.put_reorg_undo_log_by_block(
-            block_number,
-            seq,
-            &UndoLogEntry::KeyMutation {
-                target_store: UndoLogStoreTarget::Domain,
-                cf_name: cf_name.to_string(),
-                key: key.to_vec(),
-                previous_value,
-            },
-        );
-    }
-
-    fn record_dotbit_identity_undo(
-        &self,
-        batch: &mut StoreBatch<'_>,
-        block_number: i64,
-        account_id: &[u8],
-        previous_entry: Option<&IdentityEntry>,
-        undo_seq: &SharedUndoSeq,
-    ) {
-        let previous_value = previous_entry.map(|entry| {
-            bincode::serialize(entry).expect("serialize previous dotbit identity entry for undo")
-        });
-        self.record_dotbit_domain_undo(
-            batch,
-            block_number,
-            CF_IDENTITY_DATA,
-            account_id,
-            previous_value,
-            undo_seq,
-        );
-    }
-
-    fn record_dotbit_identity_agg_undo(
-        &self,
-        batch: &mut StoreBatch<'_>,
-        block_number: i64,
-        collection_id: &[u8],
-        previous_agg: &IdentityCollectionAggregate,
-        existed: bool,
-        undo_seq: &SharedUndoSeq,
-    ) {
-        let previous_value = existed.then(|| {
-            bincode::serialize(previous_agg)
-                .expect("serialize previous dotbit identity aggregate for undo")
-        });
-        self.record_dotbit_domain_undo(
-            batch,
-            block_number,
-            CF_IDENTITY_AGG,
-            collection_id,
-            previous_value,
-            undo_seq,
-        );
-    }
-
-    fn record_dotbit_identity_owner_undo(
-        &self,
-        batch: &mut StoreBatch<'_>,
-        block_number: i64,
-        collection_id: &[u8],
-        lock_hash: &[u8],
-        previous_count: i64,
-        undo_seq: &SharedUndoSeq,
-    ) {
-        let key = ckbadger_store::keys::encode_identity_owner_key(collection_id, lock_hash);
-        let previous_value = (previous_count > 0).then(|| previous_count.to_le_bytes().to_vec());
-        self.record_dotbit_domain_undo(
-            batch,
-            block_number,
-            CF_STATS_IDENTITY,
-            &key,
-            previous_value,
-            undo_seq,
-        );
-    }
-
-    fn record_dotbit_stats_object_undo(
-        &self,
-        batch: &mut StoreBatch<'_>,
-        block_number: i64,
-        key: &[u8],
-        previous_value: Option<Vec<u8>>,
-        undo_seq: &SharedUndoSeq,
-    ) {
-        self.record_dotbit_domain_undo(
-            batch,
-            block_number,
-            CF_STATS_MNFT,
-            key,
-            previous_value,
-            undo_seq,
-        );
-    }
-
     pub(crate) fn new_dotbit_batch_state(
         &self,
         stats: SharedEntityStatsOverlay,
-        undo_seq: SharedUndoSeq,
     ) -> DotbitBatchState {
         DotbitBatchState {
             stats,
-            undo_seq_by_block: undo_seq,
             ..Default::default()
         }
     }
@@ -668,14 +555,6 @@ impl BatchWriter {
                         .unwrap_or_else(|| "None".to_string()),
                 );
             } else if old_count == 1 {
-                self.record_dotbit_identity_owner_undo(
-                    batch,
-                    ctx.block_number,
-                    collection_id,
-                    old_lock,
-                    old_count,
-                    &state.undo_seq_by_block,
-                );
                 if agg.holders_count <= 0 {
                     bail!(
                         "dotbit identity aggregate holders_count underflow: \
@@ -692,14 +571,6 @@ impl BatchWriter {
                 state.delete_identity_owner(collection_id, old_lock, batch);
                 agg.holders_count -= 1;
             } else {
-                self.record_dotbit_identity_owner_undo(
-                    batch,
-                    ctx.block_number,
-                    collection_id,
-                    old_lock,
-                    old_count,
-                    &state.undo_seq_by_block,
-                );
                 state.put_identity_owner_count(collection_id, old_lock, old_count - 1, batch);
             }
         }
@@ -707,14 +578,6 @@ impl BatchWriter {
         if let Some(new_lock) = new_owner {
             let (cur_count, _) =
                 state.get_identity_owner_count(self.store.as_ref(), collection_id, new_lock)?;
-            self.record_dotbit_identity_owner_undo(
-                batch,
-                ctx.block_number,
-                collection_id,
-                new_lock,
-                cur_count,
-                &state.undo_seq_by_block,
-            );
             if cur_count == 0 {
                 agg.holders_count = agg
                     .holders_count
@@ -816,29 +679,12 @@ impl BatchWriter {
                 status: account.status,
             },
         };
-        self.record_dotbit_identity_undo(
-            batch,
-            block_number,
-            &account.account_id,
-            existing.as_ref(),
-            &state.undo_seq_by_block,
-        );
         batch.put_identity(&account.account_id, &entry);
         state.put_account(&account.account_id, entry);
 
         // Update identity collection aggregate
         let cid = &DOTBIT_SENTINEL_COLLECTION;
-        let (agg_before, agg_existed) =
-            state.get_identity_agg_with_existence(self.store.as_ref(), cid)?;
-        self.record_dotbit_identity_agg_undo(
-            batch,
-            block_number,
-            cid,
-            &agg_before,
-            agg_existed,
-            &state.undo_seq_by_block,
-        );
-        let mut agg = agg_before;
+        let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
         if agg.standard == IdentityStandard::default() && agg.total_count == 0 {
             agg.standard = IdentityStandard::DotBit;
             agg.name = Some(".bit".to_string());
@@ -909,8 +755,6 @@ impl BatchWriter {
                 );
                 state.stats.mutate_hourly(
                     self.store.as_ref(),
-                    batch,
-                    &state.undo_seq_by_block,
                     block_number,
                     &key,
                     1,
@@ -922,35 +766,10 @@ impl BatchWriter {
                 )?;
             }
         }
-        let fwd_key = ckbadger_store::keys::encode_dotbit_account_outpoint_key(
-            tx_hash,
-            account_output.output_index,
-        );
-        let fwd_previous = self.store.get_cf(self.store.cf_stats_mnft(), &fwd_key)?;
-        self.record_dotbit_stats_object_undo(
-            batch,
-            block_number,
-            &fwd_key,
-            fwd_previous,
-            &state.undo_seq_by_block,
-        );
         batch.put_dotbit_account_outpoint(
             tx_hash,
             account_output.output_index,
             &account.account_id,
-        );
-        let rev_key = ckbadger_store::keys::encode_dotbit_outpoint_by_account_id_key(
-            &account.account_id,
-            tx_hash,
-            account_output.output_index,
-        );
-        let rev_previous = self.store.get_cf(self.store.cf_stats_mnft(), &rev_key)?;
-        self.record_dotbit_stats_object_undo(
-            batch,
-            block_number,
-            &rev_key,
-            rev_previous,
-            &state.undo_seq_by_block,
         );
         batch.put_dotbit_outpoint_by_account_id(
             &account.account_id,
@@ -964,25 +783,14 @@ impl BatchWriter {
     /// Record an AccountCell-typed output that names no indexable account, so
     /// its later consumption is classified as "never an account" instead of
     /// failing as a lost `CF_DOTBIT_OUTPOINT` row. Domain store
-    /// (`stats_mnft`), with a `DotBit`-scope undo pre-image like the account
-    /// outpoint rows.
+    /// (`stats_mnft`), in the writing block's scope like the account outpoint
+    /// rows (the block journal records its creation).
     pub(crate) fn insert_dotbit_unindexed_outpoint(
         &self,
         tx_hash: &[u8],
         output_index: i16,
-        block_number: i64,
         batch: &mut StoreBatch,
-        state: &DotbitBatchState,
     ) -> Result<()> {
-        let key = ckbadger_store::keys::encode_dotbit_unindexed_outpoint_key(tx_hash, output_index);
-        let previous = self.store.get_cf(self.store.cf_stats_mnft(), &key)?;
-        self.record_dotbit_stats_object_undo(
-            batch,
-            block_number,
-            &key,
-            previous,
-            &state.undo_seq_by_block,
-        );
         batch.put_dotbit_unindexed_outpoint(tx_hash, output_index);
         Ok(())
     }
@@ -1031,29 +839,12 @@ impl BatchWriter {
             );
             entry.is_live = false;
             entry.owner_lock_hash = None;
-            self.record_dotbit_identity_undo(
-                batch,
-                block_number,
-                account_id,
-                Some(&entry_snapshot),
-                &state.undo_seq_by_block,
-            );
             batch.put_identity(account_id, &entry);
             state.put_account(account_id, entry);
 
             // Update identity collection aggregate
             let cid = &DOTBIT_SENTINEL_COLLECTION;
-            let (agg_before, agg_existed) =
-                state.get_identity_agg_with_existence(self.store.as_ref(), cid)?;
-            self.record_dotbit_identity_agg_undo(
-                batch,
-                block_number,
-                cid,
-                &agg_before,
-                agg_existed,
-                &state.undo_seq_by_block,
-            );
-            let mut agg = agg_before;
+            let mut agg = state.get_identity_agg(self.store.as_ref(), cid)?;
             if agg.live_count <= 0 {
                 bail!(
                     "dotbit identity live_count underflow on consume: account_id=0x{}, \
@@ -1125,15 +916,14 @@ mod tests {
     use std::sync::Arc;
 
     /// One batch's .bit writer state, built the way `write_parsed_batch`
-    /// builds it (one overlay, ONE undo sequence), around a single write.
+    /// builds it (one entity stats overlay), around a single write.
     fn in_one_batch<R>(
         writer: &BatchWriter,
         batch: &mut StoreBatch,
         f: impl FnOnce(&mut StoreBatch, &mut DotbitBatchState) -> Result<R>,
     ) -> Result<R> {
         let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state =
-            writer.new_dotbit_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(entity_stats.clone());
         let out = f(batch, &mut state)?;
         entity_stats.stage_final(batch)?;
         Ok(out)
@@ -1496,8 +1286,7 @@ mod tests {
         let recreate_tx_hash = vec![0x43; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1511,8 +1300,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .consume_dotbit_account_with_state(
                 &account.account.account_id,
@@ -1525,8 +1313,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1570,8 +1357,7 @@ mod tests {
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_dotbit_account_with_state(&account, &tx_hash, 1, 0, &mut batch, &mut state)
             .unwrap();
@@ -1600,8 +1386,7 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
 
         let key = ckbadger_store::keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);
         let mut seed = StoreBatch::new(writer.store());
@@ -1780,8 +1565,7 @@ mod tests {
         let owner_b = vec![0xB2; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner_a, "alice.bit"),
@@ -1825,8 +1609,7 @@ mod tests {
         let account_id = [0x01u8; 20];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&account_id, &owner, "alice.bit"),
@@ -1840,8 +1623,7 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         let result = writer
             .consume_dotbit_account_with_state(
                 &account_id,
@@ -1874,8 +1656,7 @@ mod tests {
         let owner = vec![0xA1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner, "alice.bit"),
@@ -1914,8 +1695,6 @@ mod tests {
     fn test_dotbit_unindexed_marker_is_undone_by_rollback_and_survivor_stays() {
         let (domain, append) = test_split_stores();
         let writer = BatchWriter::new(domain.clone(), append.clone());
-        let state = writer
-            .new_dotbit_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
         let survivor_tx = [0xE1u8; 32];
         let rolled_back_tx = [0xE2u8; 32];
 
@@ -1924,13 +1703,13 @@ mod tests {
         crate::db::writer::journal_test_support::journaled_headers(&domain, 200..=200);
         ckbadger_store::commit_journaled_block(domain.as_ref(), 100, |batch| {
             writer
-                .insert_dotbit_unindexed_outpoint(&survivor_tx, 0, 100, batch, &state)
+                .insert_dotbit_unindexed_outpoint(&survivor_tx, 0, batch)
                 .unwrap();
         })
         .unwrap();
         ckbadger_store::commit_journaled_block(domain.as_ref(), 200, |batch| {
             writer
-                .insert_dotbit_unindexed_outpoint(&rolled_back_tx, 1, 200, batch, &state)
+                .insert_dotbit_unindexed_outpoint(&rolled_back_tx, 1, batch)
                 .unwrap();
         })
         .unwrap();

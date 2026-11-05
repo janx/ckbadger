@@ -15,8 +15,8 @@
 //! reverse sequence order. There is no other stage: nothing is reversed from
 //! deleted rows, rebuilt from survivors, or found by scanning a column family.
 //!
-//! Undo-log rows of the per-writer scopes (`UndoSeqScope` other than
-//! `Journal`) are not read here; they go with their block's undo-log range.
+//! Every row of `reorg_undo_log_by_block` is a journal row
+//! (`UndoSeqScope::Journal`); a row of any other scope is an error.
 //!
 //! Store boundary: domain store only. `cells` (append-only) is `Never`.
 
@@ -24,7 +24,7 @@ use rocksdb::{Direction, IteratorMode, WriteBatch};
 use tracing::info;
 
 use crate::batch::StoreBatch;
-use crate::block_overlay::decode_journal_value;
+use crate::block_overlay::{decode_journal_value, is_outside_journal};
 use crate::bytes_to_hex;
 use crate::keys::{self, UndoSeqScope};
 use crate::store::{
@@ -59,11 +59,11 @@ pub struct JournalEntry {
     pub previous: Option<Vec<u8>>,
 }
 
-/// One row of `reorg_undo_log_by_block`: its block, and the journal entry it
-/// holds (`None` for a row of a per-writer scope, which the journal does not
-/// read). A malformed key, an undecodable journal row, or a journal row that
-/// names a column family that is not `Journal`-class is an error.
-fn decode_undo_row(key: &[u8], value: &[u8]) -> anyhow::Result<(i64, Option<JournalEntry>)> {
+/// One row of `reorg_undo_log_by_block`, decoded as the journal entry it
+/// holds. A malformed key, a row of a scope other than `Journal`, an
+/// undecodable journal row, or a journal row that names a column family that
+/// is not `Journal`-class is an error.
+fn decode_undo_row(key: &[u8], value: &[u8]) -> anyhow::Result<JournalEntry> {
     if key.len() != keys::REORG_UNDO_LOG_KEY_SIZE {
         anyhow::bail!(
             "journal: undo-log key of {} bytes (expected {}): 0x{}",
@@ -74,7 +74,11 @@ fn decode_undo_row(key: &[u8], value: &[u8]) -> anyhow::Result<(i64, Option<Jour
     }
     let (block, seq) = keys::decode_reorg_undo_log_key(key);
     if !UndoSeqScope::Journal.owns(seq) {
-        return Ok((block, None));
+        anyhow::bail!(
+            "journal: undo-log row at block {block} seq {seq:#x} is not a journal row (scope bits {:#06x}); \
+             the per-writer undo scopes no longer exist",
+            seq >> keys::UNDO_SEQ_SCOPE_SHIFT
+        );
     }
     let entry = decode_journal_value(value).map_err(|e| {
         anyhow::anyhow!("journal: undecodable entry at block {block} seq {seq:#x}: {e}")
@@ -93,16 +97,19 @@ fn decode_undo_row(key: &[u8], value: &[u8]) -> anyhow::Result<(i64, Option<Jour
             bytes_to_hex(entry.key)
         );
     }
-    Ok((
+    if is_outside_journal(cf_name, entry.key) {
+        anyhow::bail!(
+            "journal: entry at block {block} seq {seq:#x} restores cf={cf_name} key 0x{}, which is written outside the journal",
+            bytes_to_hex(entry.key)
+        );
+    }
+    Ok(JournalEntry {
         block,
-        Some(JournalEntry {
-            block,
-            seq,
-            cf: spec.name,
-            key: entry.key.to_vec(),
-            previous: entry.previous.map(<[u8]>::to_vec),
-        }),
-    ))
+        seq,
+        cf: spec.name,
+        key: entry.key.to_vec(),
+        previous: entry.previous.map(<[u8]>::to_vec),
+    })
 }
 
 /// The `activities` key range of blocks `first..=last`: its keys open with
@@ -149,9 +156,7 @@ impl CkbadgerStore {
         ) {
             let (key, value) =
                 item.map_err(|e| anyhow::anyhow!("journal: reading blocks from {first}: {e}"))?;
-            if let (_, Some(entry)) = decode_undo_row(&key, &value)? {
-                entries.push(entry);
-            }
+            entries.push(decode_undo_row(&key, &value)?);
         }
         Ok(entries)
     }
@@ -166,11 +171,12 @@ impl CkbadgerStore {
         ) {
             let (key, value) =
                 item.map_err(|e| anyhow::anyhow!("journal: reading block {block}: {e}"))?;
-            let (row_block, entry) = decode_undo_row(&key, &value)?;
-            if row_block != block {
+            if key.len() == keys::REORG_UNDO_LOG_KEY_SIZE
+                && keys::decode_reorg_undo_log_key(&key).0 != block
+            {
                 break;
             }
-            entries.extend(entry);
+            entries.push(decode_undo_row(&key, &value)?);
         }
         Ok(entries)
     }
@@ -205,10 +211,10 @@ impl CkbadgerStore {
         }
     }
 
-    /// Stage into `batch` the deletion of every undo-log row of blocks
+    /// Stage into `batch` the deletion of every journal row of blocks
     /// `from_block + 1 ..= to_block` (they fall behind the coverage floor
-    /// `to_block`, below which no rollback reaches): one range delete, every
-    /// scope. Nothing is staged when the floor does not move up.
+    /// `to_block`, below which no rollback reaches): one range delete.
+    /// Nothing is staged when the floor does not move up.
     pub fn prune_journal_below(
         &self,
         batch: &mut StoreBatch,
@@ -265,9 +271,10 @@ impl CkbadgerStore {
     /// down, each block's entries in reverse sequence order, so the last write
     /// of a key is its value at the end of `target`.
     ///
-    /// Errors, with nothing written: a target below -1 or above the tip, a
-    /// journal row that cannot be decoded or names a CF that is not `Journal`,
-    /// a `tx_index` or undo-log row above the tip.
+    /// Errors, with nothing written: a target below -1 or above the tip, an
+    /// undo-log row of a scope other than `Journal`, a journal row that cannot
+    /// be decoded or names a CF that is not `Journal`, a `tx_index` or undo-log
+    /// row above the tip.
     pub fn rollback_to_block(&self, target: i64) -> anyhow::Result<RollbackResult> {
         if target < -1 {
             anyhow::bail!("rollback: invalid target {target} (expected >= -1)");
@@ -368,7 +375,6 @@ mod tests {
     use super::*;
     use crate::block_overlay::{journal_seq, SharedBlockOverlay};
     use crate::store::{CF_BLOCK_HEADERS, CF_SYNC_META, CF_TX_ACTIONS, CF_TX_INDEX};
-    use crate::types::{UndoLogEntry, UndoLogStoreTarget};
     use crate::DOMAIN_CFS;
 
     /// A hand-written journal row (`UndoSeqScope::Journal`, local `seq`).
@@ -642,25 +648,31 @@ mod tests {
         );
     }
 
+    /// The per-writer undo scopes are gone: a row with any other scope bits
+    /// is not a row this store writes, and reading it is an error (the
+    /// rollback's case is in `rollback_errors_leave_the_store_untouched`).
     #[test]
-    fn per_writer_scope_rows_are_dropped_with_their_block_not_replayed() {
+    fn a_row_of_another_scope_is_refused_by_every_journal_read() {
         let (store, _dir) = open();
         chain(&store);
-        let mut batch = StoreBatch::new(&store);
-        batch.put_reorg_undo_log_by_block(
-            5,
-            UndoSeqScope::Object.seq_base(),
-            &UndoLogEntry::KeyMutation {
-                target_store: UndoLogStoreTarget::Domain,
-                cf_name: CF_SYNC_META.to_string(),
-                key: b"a".to_vec(),
-                previous_value: Some(b"object scope".to_vec()),
-            },
+        store
+            .put_cf(
+                store.cf_reorg_undo_log_by_block(),
+                &keys::encode_reorg_undo_log_key(5, 0x0003 << keys::UNDO_SEQ_SCOPE_SHIFT),
+                b"per-writer row",
+            )
+            .unwrap();
+        let error = store.journal_entries(5).unwrap_err().to_string();
+        assert!(
+            error.contains("block 5") && error.contains("not a journal row (scope bits 0x0003)"),
+            "{error}"
         );
-        batch.commit().unwrap();
-        store.rollback_to_block(4).unwrap();
-        assert_eq!(meta(&store, b"a"), Some(b"a4".to_vec()));
-        assert!(!store.has_journal_after(4).unwrap());
+        let mut batch = StoreBatch::new(&store);
+        let error = store
+            .stage_delete_journal_above(&mut batch, &[crate::store::CF_DAO_LIVE_AGG], 4)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not a journal row"), "{error}");
     }
 
     #[test]
@@ -681,6 +693,38 @@ mod tests {
                         .unwrap()
                 }),
                 "undecodable entry at block 4",
+            ),
+            (
+                "per-writer scope",
+                Box::new(|store| {
+                    store
+                        .put_cf(
+                            store.cf_reorg_undo_log_by_block(),
+                            &keys::encode_reorg_undo_log_key(
+                                4,
+                                0x0004 << keys::UNDO_SEQ_SCOPE_SHIFT,
+                            ),
+                            b"entity stats scope row",
+                        )
+                        .unwrap()
+                }),
+                "undo-log row at block 4 seq 0x4000000000000 is not a journal row",
+            ),
+            (
+                "the coverage contract",
+                Box::new(|store| {
+                    let mut batch = StoreBatch::new(store);
+                    put_journal_row(
+                        &mut batch,
+                        4,
+                        97,
+                        CF_SYNC_META,
+                        keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+                        Some(b"older floor"),
+                    );
+                    batch.commit().unwrap();
+                }),
+                "which is written outside the journal",
             ),
             (
                 "non-Journal CF",
@@ -791,22 +835,12 @@ mod tests {
     }
 
     #[test]
-    fn prune_is_one_range_delete_of_every_scope_below_the_floor() {
+    fn prune_is_one_range_delete_of_every_row_below_the_floor() {
         let (store, _dir) = open();
         let mut batch = StoreBatch::new(&store);
         for block in 1..=10i64 {
-            for scope in [
-                UndoSeqScope::Journal,
-                UndoSeqScope::TxContext,
-                UndoSeqScope::EntityStats,
-            ] {
-                batch
-                    .put_raw_cf_by_name(
-                        CF_REORG_UNDO_LOG_BY_BLOCK,
-                        &keys::encode_reorg_undo_log_key(block, scope.seq_base()),
-                        b"row",
-                    )
-                    .unwrap();
+            for seq in 0..3u64 {
+                put_journal_row(&mut batch, block, seq, CF_SYNC_META, b"k", None);
             }
         }
         batch.commit().unwrap();

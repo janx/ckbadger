@@ -1946,18 +1946,6 @@ impl Indexer {
         let block_overlay = SharedBlockOverlay::new(self.writer.store());
         let mut data_batch = StoreBatch::journaled(self.writer.store(), &block_overlay, 0);
         // Live sync: serial writes in a single batch.
-        //
-        // ONE block-scoped undo sequence counter for the whole batch. Every
-        // writer that records an undo entry draws from it — TxContext, .bit,
-        // object and entity stats alike — so two entries for the same block can
-        // never compute the same undo key and silently overwrite each other
-        // (POSTMORTEM IDX-008).
-        let batch_undo_seq = SharedUndoSeq::default();
-        if !all_tx_data.is_empty() {
-            batch_undo_seq.with(|undo_seq| {
-                put_tx_context_undo_entries(&mut data_batch, undo_seq, &all_tx_data)
-            })?;
-        }
         if !txs_for_batch.is_empty() {
             self.writer
                 .insert_transactions_batch(&txs_for_batch, &mut data_batch)?;
@@ -2105,29 +2093,17 @@ impl Indexer {
             cluster_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
         let object_daily_changes =
             object_daily_changes.remap_keys(|block, id| Ok((id, chain_day_key(block)?)))?;
-        entity_stats.with(|overlay| -> Result<()> {
-            batch_undo_seq.with(|undo_seq| {
-                self.writer.update_script_daily_deltas_batch(
-                    &script_daily_changes,
-                    overlay,
-                    undo_seq,
-                    &mut domain_analytics_batch,
-                )
-            })
+        entity_stats.with(|overlay| {
+            self.writer
+                .update_script_daily_deltas_batch(&script_daily_changes, overlay)
         })?;
         for (block, changes) in &spore_type_index_changes {
             self.writer
                 .update_spore_type_index_batch(changes, &mut data_batch.at(*block))?;
         }
-        entity_stats.with(|overlay| -> Result<()> {
-            batch_undo_seq.with(|undo_seq| {
-                self.writer.update_spore_daily_deltas_batch(
-                    &spore_daily_changes,
-                    overlay,
-                    undo_seq,
-                    &mut domain_analytics_batch,
-                )
-            })
+        entity_stats.with(|overlay| {
+            self.writer
+                .update_spore_daily_deltas_batch(&spore_daily_changes, overlay)
         })?;
         // Each object type-index row at the block whose output carried it.
         for (block, changes) in &object_type_index_changes {
@@ -2135,20 +2111,10 @@ impl Indexer {
                 .update_object_type_index_batch(changes, &mut data_batch.at(*block))?;
         }
         entity_stats.with(|overlay| -> Result<()> {
-            batch_undo_seq.with(|undo_seq| {
-                self.writer.update_object_daily_deltas_batch(
-                    &object_daily_changes,
-                    overlay,
-                    undo_seq,
-                    &mut domain_analytics_batch,
-                )?;
-                self.writer.update_cluster_daily_deltas_batch(
-                    &cluster_daily_changes,
-                    overlay,
-                    undo_seq,
-                    &mut domain_analytics_batch,
-                )
-            })
+            self.writer
+                .update_object_daily_deltas_batch(&object_daily_changes, overlay)?;
+            self.writer
+                .update_cluster_daily_deltas_batch(&cluster_daily_changes, overlay)
         })?;
 
         // Group A: DAO lifecycle — stage exactly what `live_dao` resolved,
@@ -2389,9 +2355,7 @@ impl Indexer {
                         .zip(&chain_times_ms)
                         .map(|(p, &chain_time_ms)| (p.number, chain_time_ms))
                         .collect();
-                    let mut udt_state = self
-                        .writer
-                        .new_udt_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+                    let mut udt_state = self.writer.new_udt_batch_state(entity_stats.clone());
                     self.writer.process_udt_transfers_batch_with_state(
                         &transfer_refs,
                         &max_supply_observations,
@@ -2404,15 +2368,9 @@ impl Indexer {
                 }
             }
         }
-        entity_stats.with(|overlay| -> Result<()> {
-            batch_undo_seq.with(|undo_seq| {
-                self.writer.update_token_daily_deltas_batch(
-                    &token_daily_changes,
-                    overlay,
-                    undo_seq,
-                    &mut domain_analytics_batch,
-                )
-            })
+        entity_stats.with(|overlay| {
+            self.writer
+                .update_token_daily_deltas_batch(&token_daily_changes, overlay)
         })?;
 
         let mut object_activity_batch =
@@ -2485,15 +2443,9 @@ impl Indexer {
             let mut batch_dotbit_outpoints: HashMap<(Vec<u8>, i16), Vec<u8>> = HashMap::new();
             let mut batch_dotbit_unindexed_outpoints: HashSet<(Vec<u8>, i16)> = HashSet::new();
             let mut batch_dotbit_latest_create_order: HashMap<Vec<u8>, u64> = HashMap::new();
-            let mut spore_state = self
-                .writer
-                .new_spore_batch_state(entity_stats.clone(), batch_undo_seq.clone());
-            let mut dotbit_state = self
-                .writer
-                .new_dotbit_batch_state(entity_stats.clone(), batch_undo_seq.clone());
-            let mut mnft_state = self
-                .writer
-                .new_mnft_batch_state(entity_stats.clone(), batch_undo_seq.clone());
+            let mut spore_state = self.writer.new_spore_batch_state(entity_stats.clone());
+            let mut dotbit_state = self.writer.new_dotbit_batch_state(entity_stats.clone());
+            let mut mnft_state = self.writer.new_mnft_batch_state(entity_stats.clone());
 
             // --- Pre-pass: collect all input outpoints for batch DB lookup ---
             let bulk_sync_active = self.is_bulk_sync_active();
@@ -2700,7 +2652,6 @@ impl Indexer {
                                         })?;
                                     if let Some(previous) = self.writer.consume_dotcell_name(
                                         &name_id,
-                                        parsed.number,
                                         &mut data_batch,
                                         &mut spore_state,
                                     )? {
@@ -3133,9 +3084,7 @@ impl Indexer {
                         self.writer.insert_dotbit_unindexed_outpoint(
                             &tx_data.hash,
                             output_index,
-                            parsed.number,
                             &mut data_batch,
-                            &dotbit_state,
                         )?;
                         batch_dotbit_unindexed_outpoints
                             .insert((tx_data.hash.to_vec(), output_index));
@@ -3311,28 +3260,22 @@ impl Indexer {
                         &built.participant_io,
                     )? {
                         match id {
-                            ParticipantId::Lock(hash) => batch_undo_seq.with(|undo_seq| {
-                                put_addr_tx(
-                                    &mut append_history_batch,
-                                    undo_seq,
-                                    &hash,
-                                    tx_actions.block_number,
-                                    tx_actions.tx_index,
-                                    &tx_actions.tx_hash,
-                                    &value,
-                                )
-                            }),
-                            ParticipantId::LockPrefix(prefix) => batch_undo_seq.with(|undo_seq| {
-                                put_addr_tx_by_prefix(
-                                    &mut append_history_batch,
-                                    undo_seq,
-                                    &prefix,
-                                    tx_actions.block_number,
-                                    tx_actions.tx_index,
-                                    &tx_actions.tx_hash,
-                                    &value,
-                                )
-                            }),
+                            ParticipantId::Lock(hash) => put_addr_tx(
+                                &mut append_history_batch,
+                                &hash,
+                                tx_actions.block_number,
+                                tx_actions.tx_index,
+                                &tx_actions.tx_hash,
+                                &value,
+                            ),
+                            ParticipantId::LockPrefix(prefix) => put_addr_tx_by_prefix(
+                                &mut append_history_batch,
+                                &prefix,
+                                tx_actions.block_number,
+                                tx_actions.tx_index,
+                                &tx_actions.tx_hash,
+                                &value,
+                            ),
                         }
                     }
                     for prefix in crate::db::writer::participant_rows::standalone_prefixes(
@@ -3413,14 +3356,7 @@ impl Indexer {
                         continue;
                     }
 
-                    batch_undo_seq.with(|undo_seq| {
-                        put_tx_actions(
-                            &mut activity_batch,
-                            undo_seq,
-                            tx_actions.block_number,
-                            tx_actions,
-                        )
-                    });
+                    put_tx_actions(&mut activity_batch, tx_actions.block_number, tx_actions);
 
                     // Process Fiber channel lifecycle events
                     crate::db::writer::fiber::process_fiber_channel_events(
@@ -4063,22 +3999,22 @@ impl Indexer {
                     })?;
             }
 
-            // Advance the entity-stats undo coverage floor and drop the
-            // entries it leaves behind — in THIS batch, so the floor and its
-            // deletions are never separately durable. A fresh store gets its
-            // first contract here (bulk build writes its own at completion).
+            // Advance the journal coverage floor and drop the journal rows it
+            // leaves behind — in THIS batch, so the floor and its deletions
+            // are never separately durable. A fresh store gets its first
+            // contract here (bulk build writes its own at completion).
             //
-            // Bulk build records no undo entries at all and has no reorg
+            // Bulk build records no journal at all and has no reorg
             // workflow, so it neither prunes nor needs a window.
             //
             // Both retention stages are bounded by the tip this batch builds on
             // (`first_block - 1`), never by `last_block`: this batch's headers
-            // and undo entries are not committed yet. A batch longer than the
-            // undo window leaves some of its own entries below the floor its
-            // tip implies; the next batch, built on this tip, prunes them.
+            // and journal rows are not committed yet. A batch longer than the
+            // window leaves some of its own rows below the floor its tip
+            // implies; the next batch, built on this tip, prunes them.
             // Derived aggregates (round 3 lane L): this batch's signed
             // deltas for every derivation that is running or complete, in
-            // this same atomic write, with per-block undo pre-images. A
+            // this same atomic write, each moved row in its block's scope. A
             // failure is a deterministic invariant violation: the batch is
             // not committed and the indexer stops (fail fast).
             if !bulk_sync_mode {
@@ -4103,7 +4039,6 @@ impl Indexer {
                     &crate::derive::registry(),
                     &derive_ctx,
                     &mut data_batch,
-                    &batch_undo_seq,
                 )
                 .map_err(|source| {
                     PreCommitInvariantError::new(
@@ -4117,17 +4052,20 @@ impl Indexer {
                 HourlyRetentionRequest::read(&self.hourly_retention_requested, !bulk_sync_mode);
             if !bulk_sync_mode {
                 let committed_tip = committed_tip_before_batch(self.writer.store(), first_block)?;
-                // Both retention stages depend only on the committed tip this
-                // batch builds on, so their writes (the coverage contract, the
-                // retention state, the expired hourly rows) belong to the
-                // batch's first block: rolling back to any block of the batch
-                // keeps them, rolling back below it undoes them.
-                let mut data_batch = data_batch.at(first_block);
+                // The coverage contract describes which journal rows exist,
+                // and the rows it prunes are never restored, so it is written
+                // outside the journal: no rollback restores an older floor.
                 stage_entity_stats_undo_retention(
                     self.writer.store(),
                     &mut data_batch,
                     committed_tip,
                 )?;
+                // The hourly retention step depends only on the committed tip
+                // this batch builds on, so its writes (the retention state,
+                // the expired hourly rows) belong to the batch's first block:
+                // rolling back to any block of the batch keeps them, rolling
+                // back below it undoes them.
+                let mut data_batch = data_batch.at(first_block);
 
                 // One bounded hourly-retention step, if the periodic task asked
                 // for one. Deletions and the advanced retention state go into the
@@ -4209,7 +4147,6 @@ impl Indexer {
                     &input_cell_info,
                     &batch_cell_infos,
                     &input_script_hashes,
-                    &batch_undo_seq,
                     &mut data_batch,
                 )
                 .with_context(|| {
@@ -4262,9 +4199,10 @@ impl Indexer {
             // A single `db.write()` cannot be marked from inside — RocksDB
             // gives no progress callback — so a genuinely wedged commit still
             // trips the watchdog, which is exactly what it is for.
+            let mut journal_seqs: HashMap<i64, u64> = HashMap::new();
             let journal = data_batch
                 .stage_journal(&mut |block| {
-                    Ok(batch_undo_seq.next(block, super::types::UndoSeqScope::Journal))
+                    ckbadger_store::block_overlay::journal_seq(&mut journal_seqs, block)
                 })
                 .map_err(|source| {
                     PreCommitInvariantError::new(
@@ -4278,7 +4216,6 @@ impl Indexer {
                 journal_entries = journal.entries,
                 journal_bytes = journal.bytes,
                 journal_keys_written = journal.keys_written,
-                unattributed_cfs = ?block_overlay.with(|overlay| overlay.unattributed_cfs().clone()),
                 "Live batch journal staged"
             );
             let domain_commit_started = Instant::now();
@@ -4291,22 +4228,6 @@ impl Indexer {
             })?;
             retention_request.served();
             domain_commit_ms = domain_commit_started.elapsed().as_secs_f64() * 1000.0;
-            // Debug-build invariant (plan Task 5.3): rollback replays a block's
-            // undo entries scope-major, which is exact only while each key the
-            // block mutates is recorded by one scope.
-            #[cfg(debug_assertions)]
-            {
-                let overlaps = crate::sync::undo::undo_scope_overlaps(
-                    self.writer.store(),
-                    first_block,
-                    last_block,
-                )?;
-                assert!(
-                    overlaps.is_empty(),
-                    "undo scopes overlap in blocks {first_block}-{last_block}; rollback would \
-                     replay these keys out of write order: {overlaps:?}"
-                );
-            }
 
             let commit_ms = commit_started.elapsed().as_secs_f64() * 1000.0;
             commit_phase_total_ms = commit_ms;
@@ -7684,22 +7605,26 @@ mod tests {
             assert_eq!(&hourly_rows[0].0[1..33], type_script_hash.as_slice());
 
             // The token daily/hourly rows and the lock/type script daily rows
-            // each carry an EntityStats undo entry for a shallow fork.
-            let mut entity_undo_prefixes = Vec::new();
-            for item in store.iterator_cf(
-                store.cf_reorg_undo_log_by_block(),
-                rocksdb::IteratorMode::Start,
-            ) {
-                let (key, value) = item.unwrap();
-                let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if block_num == 101 && crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
-                    let entry: ckbadger_store::UndoLogEntry = bincode::deserialize(&value).unwrap();
-                    let ckbadger_store::UndoLogEntry::KeyMutation { key, .. } = entry else {
-                        panic!("EntityStats undo must be a key mutation");
-                    };
-                    entity_undo_prefixes.push(key[0]);
-                }
-            }
+            // each carry a block journal entry at block 101 for a shallow fork.
+            let entity_families = [
+                ckbadger_store::keys::STATS_PREFIX_TOKEN_DAILY,
+                ckbadger_store::keys::STATS_PREFIX_TOKEN_HOURLY,
+                ckbadger_store::keys::STATS_PREFIX_SCRIPT_DAILY,
+            ];
+            let mut entity_undo_prefixes: Vec<u8> = store
+                .journal_entries(101)
+                .unwrap()
+                .into_iter()
+                .filter(|entry| {
+                    [
+                        ckbadger_store::CF_STATS_TOKEN,
+                        ckbadger_store::CF_STATS_SCRIPT,
+                    ]
+                    .contains(&entry.cf)
+                })
+                .filter_map(|entry| entry.key.first().copied())
+                .filter(|prefix| entity_families.contains(prefix))
+                .collect();
             entity_undo_prefixes.sort_unstable();
             let mut expected_prefixes = vec![
                 ckbadger_store::keys::STATS_PREFIX_TOKEN_DAILY,
@@ -8962,58 +8887,19 @@ mod tests {
             out
         }
 
-        /// Every `CF_ADDR_PREFIX_STATS` undo entry of the per-writer scopes the
-        /// pre-journal rollback replays, as (block, previous_value).
-        fn prefix_stats_undo_entries(store: &CkbadgerStore) -> Vec<(i64, Option<Vec<u8>>)> {
-            prefix_stats_entries(store, false)
-        }
-
         /// Every `CF_ADDR_PREFIX_STATS` block journal entry, as (block,
         /// previous_value).
         fn prefix_stats_journal_entries(store: &CkbadgerStore) -> Vec<(i64, Option<Vec<u8>>)> {
-            prefix_stats_entries(store, true)
-        }
-
-        fn prefix_stats_entries(
-            store: &CkbadgerStore,
-            journal: bool,
-        ) -> Vec<(i64, Option<Vec<u8>>)> {
-            let mut out = Vec::new();
-            for item in store.iterator_cf(
-                store.cf_reorg_undo_log_by_block(),
-                rocksdb::IteratorMode::Start,
-            ) {
-                let (key, value) = item.unwrap();
-                let (block_num, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) != journal {
-                    continue;
-                }
-                let entry: ckbadger_store::types::UndoLogEntry = if journal {
-                    let row = ckbadger_store::decode_journal_value(&value).unwrap();
-                    ckbadger_store::types::UndoLogEntry::KeyMutation {
-                        target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-                        cf_name: row.cf.to_string(),
-                        key: row.key.to_vec(),
-                        previous_value: row.previous.map(<[u8]>::to_vec),
-                    }
-                } else {
-                    bincode::deserialize(&value).unwrap()
-                };
-                if let ckbadger_store::types::UndoLogEntry::KeyMutation {
-                    cf_name,
-                    key: mutated_key,
-                    previous_value,
-                    ..
-                } = entry
-                {
-                    if cf_name == ckbadger_store::CF_ADDR_PREFIX_STATS {
-                        assert_eq!(mutated_key, NAMED_PREFIX.to_vec());
-                        out.push((block_num, previous_value));
-                    }
-                }
-            }
-            out.sort();
-            out
+            crate::db::writer::journal_test_support::journal_entries(
+                store,
+                ckbadger_store::CF_ADDR_PREFIX_STATS,
+            )
+            .into_iter()
+            .map(|(block, key, previous)| {
+                assert_eq!(key, NAMED_PREFIX.to_vec());
+                (block, previous)
+            })
+            .collect()
         }
 
         /// A detector that names lock A's 20-byte prefix in every non-cellbase
@@ -9373,12 +9259,6 @@ mod tests {
             assert_eq!(set, expected);
 
             assert_eq!(
-                prefix_stats_undo_entries(&store),
-                Vec::new(),
-                "the prefix counter owns no undo pre-images: rollback reverses it \
-                 from the prefix rows it deletes"
-            );
-            assert_eq!(
                 prefix_stats_journal_entries(&store),
                 vec![(101, None)],
                 "the block journal records the counter's creation in the naming block"
@@ -9436,11 +9316,6 @@ mod tests {
                     .unwrap()
                     .txs_count,
                 2
-            );
-            assert_eq!(
-                prefix_stats_undo_entries(&store),
-                Vec::new(),
-                "the prefix counter is reversed from the deleted rows, never from undo pre-images"
             );
             assert_eq!(
                 prefix_stats_journal_entries(&store),
@@ -11258,16 +11133,34 @@ mod tests {
             changes
         }
 
-        /// Blocks that still hold an `EntityStats`-scope undo entry.
+        /// Blocks that still hold a block journal entry of one of the eight
+        /// entity daily/hourly stats families.
         fn entity_stats_undo_blocks(store: &CkbadgerStore) -> Vec<i64> {
+            use ckbadger_store::keys::*;
+            const ENTITY_FAMILIES: [u8; 8] = [
+                STATS_PREFIX_SCRIPT_DAILY,
+                STATS_PREFIX_TOKEN_DAILY,
+                STATS_PREFIX_TOKEN_HOURLY,
+                STATS_PREFIX_CLUSTER_DAILY,
+                STATS_PREFIX_SPORE_DAILY,
+                STATS_PREFIX_SPORE_HOURLY,
+                STATS_PREFIX_OBJECT_DAILY,
+                STATS_PREFIX_OBJECT_HOURLY,
+            ];
             let mut out = Vec::new();
             for item in store.iterator_cf(
                 store.cf_reorg_undo_log_by_block(),
                 rocksdb::IteratorMode::Start,
             ) {
-                let (key, _) = item.unwrap();
-                let (block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if crate::sync::types::UndoSeqScope::EntityStats.owns(seq) {
+                let (key, value) = item.unwrap();
+                let (block, _) = decode_reorg_undo_log_key(&key);
+                let row = ckbadger_store::decode_journal_value(&value).unwrap();
+                if row.cf.starts_with("stats_")
+                    && row
+                        .key
+                        .first()
+                        .is_some_and(|prefix| ENTITY_FAMILIES.contains(prefix))
+                {
                     out.push(block);
                 }
             }
@@ -11362,6 +11255,96 @@ mod tests {
                     .coverage_floor_block,
                 1600
             );
+        }
+
+        /// B-5a finding, closed by B-5b: the coverage contract describes which
+        /// journal rows still exist, and the rows its prune deletes are never
+        /// restored, so it is written outside the journal. A batch that
+        /// advances the floor and is then rolled back leaves the floor exactly
+        /// where its prune put it — journaled, the rollback would restore the
+        /// lower floor over blocks whose journal rows are gone, and a later
+        /// rollback into that gap would pass the coverage check with nothing to
+        /// restore it from.
+        #[tokio::test]
+        async fn a_rollback_leaves_the_coverage_floor_where_the_last_prune_put_it() {
+            let _guard =
+                crate::db::writer::activities::test_detector_override::without_extra_detectors();
+            let dir = tempfile::tempdir().unwrap();
+            let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
+            let indexer = indexer_for_live_write_test(store.clone());
+            store
+                .set_secondary_epoch_reward(61_369_863_013_698)
+                .unwrap();
+
+            // Committed tip 1100, inside the window: the floor stays at -1.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(100..=1100),
+                TokenDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                store
+                    .get_entity_stats_undo_contract()
+                    .unwrap()
+                    .unwrap()
+                    .coverage_floor_block,
+                -1
+            );
+            // Block 1101's batch builds on 1100: its floor 100 prunes the
+            // journal rows of blocks 100..=100.
+            write_live_blocks_with_entity_changes(
+                &indexer,
+                blocks(1101..=1101),
+                TokenDailyChanges::new(),
+            )
+            .await
+            .unwrap();
+            let pruned = store.get_entity_stats_undo_contract().unwrap().unwrap();
+            assert_eq!(
+                (pruned.coverage_floor_block, pruned.updated_at_block),
+                (100, 1100)
+            );
+            assert!(store.journal_entries(100).unwrap().is_empty());
+            assert!(!store.journal_entries(101).unwrap().is_empty());
+
+            // Roll back the block whose batch advanced the floor.
+            store.rollback_to_block(1100).unwrap();
+            assert!(store.get_block_header(1101).unwrap().is_none());
+            assert_eq!(
+                store.get_entity_stats_undo_contract().unwrap(),
+                Some(pruned),
+                "the rollback leaves the floor exactly where the last prune put it"
+            );
+            assert!(
+                store.journal_entries(100).unwrap().is_empty(),
+                "pruned journal rows are never restored"
+            );
+
+            // A rollback into the pruned blocks is refused before anything
+            // is written; one at the floor is allowed.
+            let error = indexer
+                .writer
+                .ensure_rollback_within_entity_stats_coverage(
+                    99,
+                    crate::db::writer::ContractRequirement::Required,
+                    "rollback target",
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("coverage floor 100 is above rollback target 99"),
+                "{error}"
+            );
+            indexer
+                .writer
+                .ensure_rollback_within_entity_stats_coverage(
+                    100,
+                    crate::db::writer::ContractRequirement::Required,
+                    "rollback target",
+                )
+                .unwrap();
         }
     }
 
@@ -13488,59 +13471,15 @@ mod tests {
             )
         }
 
-        /// The pre-images of the `CF_TOKENS` rows block `block` recorded.
-        /// The token writer's own (pre-journal) undo pre-images of `block`.
-        fn token_pre_images(store: &CkbadgerStore, block: i64) -> Vec<Option<Vec<u8>>> {
-            token_undo_entries(store, block, false)
-        }
-
         /// The block journal's `CF_TOKENS` entries of `block`.
         fn token_journal_entries(store: &CkbadgerStore, block: i64) -> Vec<Option<Vec<u8>>> {
-            token_undo_entries(store, block, true)
-        }
-
-        fn token_undo_entries(
-            store: &CkbadgerStore,
-            block: i64,
-            journal: bool,
-        ) -> Vec<Option<Vec<u8>>> {
-            let start = ckbadger_store::keys::encode_reorg_undo_log_key(block, 0);
-            let mut pre_images = Vec::new();
-            for item in store.iterator_cf(
-                store.cf_reorg_undo_log_by_block(),
-                rocksdb::IteratorMode::From(&start, rocksdb::Direction::Forward),
-            ) {
-                let (key, value) = item.unwrap();
-                let (key_block, seq) = ckbadger_store::keys::decode_reorg_undo_log_key(&key);
-                if key_block != block {
-                    break;
-                }
-                if ckbadger_store::keys::UndoSeqScope::Journal.owns(seq) != journal {
-                    continue;
-                }
-                let entry: ckbadger_store::types::UndoLogEntry = if journal {
-                    let row = ckbadger_store::decode_journal_value(&value).unwrap();
-                    ckbadger_store::types::UndoLogEntry::KeyMutation {
-                        target_store: ckbadger_store::types::UndoLogStoreTarget::Domain,
-                        cf_name: row.cf.to_string(),
-                        key: row.key.to_vec(),
-                        previous_value: row.previous.map(<[u8]>::to_vec),
-                    }
-                } else {
-                    bincode::deserialize(&value).unwrap()
-                };
-                if let ckbadger_store::types::UndoLogEntry::KeyMutation {
-                    cf_name,
-                    previous_value,
-                    ..
-                } = entry
-                {
-                    if cf_name == ckbadger_store::CF_TOKENS {
-                        pre_images.push(previous_value);
-                    }
-                }
-            }
-            pre_images
+            store
+                .journal_entries(block)
+                .unwrap()
+                .into_iter()
+                .filter(|entry| entry.cf == ckbadger_store::CF_TOKENS)
+                .map(|entry| entry.previous)
+                .collect()
         }
 
         /// D-1: with the molecule `Bytes` header read as the content length,
@@ -13976,11 +13915,12 @@ mod tests {
             assert_eq!(token_state(&store, &ext_type_hash()), expected);
         }
 
-        /// J4 (4): only a block that changes the row's metadata (or creates
-        /// it) records a pre-image; a plain transfer records none, and its
-        /// transfer count still rolls back by arithmetic.
+        /// J4 (4), on the journal: the block journal records the token row at
+        /// every block that changes it, transfer count included — its creation
+        /// at 101, its value at the end of 101 before the plain transfer at
+        /// 102 — and the rollback restores the row of the end of 101.
         #[tokio::test]
-        async fn only_a_block_that_changes_token_metadata_records_a_pre_image() {
+        async fn the_journal_records_the_token_row_at_every_block_that_changes_it() {
             let store = write_batches_live(
                 &[
                     vec![funding_block()],
@@ -13991,19 +13931,6 @@ mod tests {
             )
             .await;
 
-            assert_eq!(
-                token_pre_images(&store, 101),
-                vec![None],
-                "the creating block records that the row did not exist"
-            );
-            assert_eq!(
-                token_pre_images(&store, 102),
-                Vec::<Option<Vec<u8>>>::new(),
-                "a transfer that changes no metadata records nothing"
-            );
-            // The block journal (store refactor lane B) records the row at
-            // every block that changes it, transfer count included: its
-            // creation at 101, its value at the end of 101 before 102.
             let reference =
                 write_batches_live(&[vec![funding_block()], vec![ext_issuance_block()]], None)
                     .await;

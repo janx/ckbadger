@@ -22,7 +22,13 @@
 //! it: restoring that value would be a no-op.
 //!
 //! Blocks must reach a key in ascending order; a write for an older block than
-//! the key's last one is an error, never a silently wrong pre-image.
+//! the key's last one is an error, never a silently wrong pre-image. Every
+//! write must name its block ([`crate::StoreBatch::at`]): a write without one
+//! could not be journaled, so it fails the batch.
+//!
+//! One `Journal`-class key is written outside the journal: the coverage
+//! contract (`sync_meta` `entity_stats_undo_contract`), which describes which
+//! journal rows still exist ([`is_outside_journal`]). The overlay refuses it.
 //!
 //! Pre-images of keys the batch did not touch before are the committed values;
 //! they are read in one `multi_get` per column family when the batch finishes
@@ -34,23 +40,32 @@
 //! Store boundary: domain store only. `cells` is `RollbackClass::Never` and
 //! never reaches an overlay.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Result};
 use rocksdb::WriteBatch;
 
 use crate::keys::{self, UndoSeqScope, UNDO_SEQ_LOCAL_MAX};
-use crate::store::{cf_spec, CkbadgerStore, RollbackClass};
+use crate::store::{cf_spec, CkbadgerStore, RollbackClass, CF_SYNC_META};
 
 type CfKey = (&'static str, Vec<u8>);
+
+/// Whether `(cf, key)` is a `Journal`-class key written outside the block
+/// journal. Only the coverage contract is: it describes which journal rows
+/// exist (the prune that advances it deletes rows no rollback can restore), so
+/// a rollback must never write an older floor back. It is staged straight
+/// into the commit (`StoreBatch::put_entity_stats_undo_contract`); the overlay
+/// refuses it and the rollback refuses a journal row that names it.
+pub fn is_outside_journal(cf: &str, key: &[u8]) -> bool {
+    cf == CF_SYNC_META && key == keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT
+}
 
 /// A key's state inside the batch.
 #[derive(Debug, Clone)]
 struct KeyState {
-    /// The block whose end this value is; `None` for a write without a block
-    /// (see [`BlockOverlay::write`]).
-    last_block: Option<i64>,
+    /// The block whose end this value is.
+    last_block: i64,
     value: Option<Vec<u8>>,
 }
 
@@ -88,11 +103,6 @@ pub struct BlockOverlay {
     /// Committed values read so far (pre-batch), by `current` or `prefetch`.
     committed: HashMap<CfKey, Option<Vec<u8>>>,
     entries: Vec<PendingEntry>,
-    /// Keys written without a block: their journal is incomplete, so no
-    /// entry is staged for them. Allowed only while the writers are being
-    /// moved onto block scopes (store refactor lane B, B-3).
-    unattributed: HashSet<CfKey>,
-    unattributed_cfs: BTreeSet<&'static str>,
     /// Which sub-batch first wrote each key, to catch a key written from two
     /// sub-batches whose merge order could disagree with program order.
     origin: HashMap<CfKey, u32>,
@@ -189,8 +199,9 @@ impl BlockOverlay {
 
     /// Set `key` to `value` (`None` deletes it) as part of `block`.
     ///
-    /// `block = None` is a write no block scope claimed: the key is staged
-    /// but carries no journal entry in this batch (transitional, B-3).
+    /// `block = None` is a write no block scope claimed ([`crate::StoreBatch::at`]):
+    /// its previous value could not be journaled, so it is an error naming the
+    /// CF and key, and the batch fails before anything is committed.
     /// `origin` names the sub-batch the write came from.
     pub fn write(
         &mut self,
@@ -207,6 +218,20 @@ impl BlockOverlay {
             );
         }
         let cf = Self::journal_cf(cf)?;
+        if is_outside_journal(cf, key) {
+            bail!(
+                "block overlay: cf={cf} key=0x{} is written outside the block journal \
+                 (StoreBatch::put_entity_stats_undo_contract), never through the overlay",
+                hex::encode(key)
+            );
+        }
+        let Some(block) = block else {
+            bail!(
+                "block overlay: a Journal-class write without a block scope (StoreBatch::at): \
+                 cf={cf} key=0x{}",
+                hex::encode(key)
+            );
+        };
         let cf_key = (cf, key.to_vec());
         match self.origin.get(&cf_key) {
             Some(first) if *first != origin => bail!(
@@ -219,24 +244,6 @@ impl BlockOverlay {
                 self.origin.insert(cf_key.clone(), origin);
             }
         }
-        let Some(block) = block else {
-            // Transitional diagnostic (B-3): name the first unscoped write.
-            if std::env::var_os("CKBADGER_JOURNAL_STRICT").is_some() {
-                bail!(
-                    "block overlay: write without a block scope: cf={cf} key=0x{}\n{}",
-                    hex::encode(key),
-                    std::backtrace::Backtrace::force_capture()
-                );
-            }
-            self.unattributed_cfs.insert(cf);
-            self.unattributed.insert(cf_key.clone());
-            let state = self.keys.entry(cf_key).or_insert(KeyState {
-                last_block: None,
-                value: None,
-            });
-            state.value = value;
-            return Ok(());
-        };
         match self.keys.get_mut(&cf_key) {
             None => {
                 if self.journaling {
@@ -254,41 +261,35 @@ impl BlockOverlay {
                 self.keys.insert(
                     cf_key,
                     KeyState {
-                        last_block: Some(block),
+                        last_block: block,
                         value,
                     },
                 );
             }
             Some(state) => {
-                match state.last_block {
-                    Some(last) if block < last => bail!(
+                let last = state.last_block;
+                if block < last {
+                    bail!(
                         "block overlay requires ascending block order per key: cf={cf} key=0x{} \
                          last_block={last} block={block}",
                         hex::encode(key)
-                    ),
-                    Some(last) if block == last => {}
-                    _ => {
-                        if self.journaling && !self.unattributed.contains(&cf_key) {
-                            self.entries.push(PendingEntry {
-                                block,
-                                cf,
-                                key: key.to_vec(),
-                                previous: Previous::Known(state.value.clone()),
-                            });
-                        }
-                        state.last_block = Some(block);
+                    );
+                }
+                if block > last {
+                    if self.journaling {
+                        self.entries.push(PendingEntry {
+                            block,
+                            cf,
+                            key: key.to_vec(),
+                            previous: Previous::Known(state.value.clone()),
+                        });
                     }
+                    state.last_block = block;
                 }
                 state.value = value;
             }
         }
         Ok(())
-    }
-
-    /// Column families that received a write without a block scope in this
-    /// batch (transitional, B-3).
-    pub fn unattributed_cfs(&self) -> &BTreeSet<&'static str> {
-        &self.unattributed_cfs
     }
 
     /// Keys this batch has written (each is staged once).
@@ -334,22 +335,6 @@ impl BlockOverlay {
             self.read_committed(store, cf, &refs)?;
         }
 
-        // Transitional diagnostic (B-3): list the unscoped writes by CF and
-        // first key byte.
-        if let Some(path) = std::env::var_os("CKBADGER_JOURNAL_UNATTRIBUTED_LOG") {
-            use std::io::Write;
-            let mut seen: BTreeSet<(&str, u8)> = BTreeSet::new();
-            for (cf, key) in &self.unattributed {
-                seen.insert((cf, key.first().copied().unwrap_or(0)));
-            }
-            let mut file = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)?;
-            for (cf, first) in seen {
-                writeln!(file, "{cf} {first:#04x}")?;
-            }
-        }
         let mut stats = JournalStats::default();
         let mut cf_keys: Vec<(&CfKey, &KeyState)> = self.keys.iter().collect();
         cf_keys.sort_by(|a, b| a.0.cmp(b.0));
@@ -372,9 +357,6 @@ impl BlockOverlay {
         let mut value_after: HashMap<CfKey, Option<Vec<u8>>> = HashMap::new();
         for (index, entry) in self.entries.iter().enumerate().rev() {
             let cf_key = (entry.cf, entry.key.clone());
-            if self.unattributed.contains(&cf_key) {
-                continue;
-            }
             let previous_value = match &entry.previous {
                 Previous::Known(previous) => previous.clone(),
                 Previous::Committed => self.committed.get(&cf_key).cloned().ok_or_else(|| {
@@ -1028,27 +1010,92 @@ mod tests {
         assert!(plain.get_current("no_such_cf", b"k").is_err());
     }
 
-    /// A write no block scope claimed is staged but journals nothing, and
-    /// its CF is reported (transitional, B-3).
+    /// A `Journal`-class write no block scope claimed cannot be journaled:
+    /// it fails the batch before anything is committed, naming the CF and the
+    /// key.
     #[test]
-    fn an_unattributed_write_is_staged_without_journal_entries() {
+    fn an_unscoped_journal_write_fails_the_batch() {
         let (store, _dir) = store();
         let overlay = SharedBlockOverlay::new(&store);
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
-        batch.put_sync_meta(b"k", b"v");
+        batch.at(3).put_sync_meta(b"scoped", b"v");
+        batch.put_sync_meta(b"unscoped", b"v");
         let mut counters = HashMap::new();
-        batch
+        let error = batch
+            .stage_journal(&mut |block| journal_seq(&mut counters, block))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("without a block scope")
+                && error.contains("cf=sync_meta")
+                && error.contains(&format!("key=0x{}", hex::encode(b"unscoped"))),
+            "{error}"
+        );
+        assert!(
+            batch.commit().is_err(),
+            "the batch refuses to commit once its overlay was not staged"
+        );
+        assert_eq!(store.get_cf(store.cf_sync_meta(), b"scoped").unwrap(), None);
+        assert!(journal_rows(&store).is_empty());
+
+        // The bare overlay refuses it too, in bulk mode as well.
+        store.set_bulk_sync_mode(true);
+        let bulk = SharedBlockOverlay::new(&store);
+        let error = bulk
+            .with(|o| o.write(None, CF_ADDR_BALANCE, b"k", Some(vec![1]), 0))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("without a block scope"), "{error}");
+    }
+
+    /// The coverage contract is written outside the journal: through a
+    /// journaled batch it is staged into the commit directly, journals
+    /// nothing in any block, and the overlay refuses it as a scoped write.
+    #[test]
+    fn the_coverage_contract_is_written_outside_the_journal() {
+        let (store, _dir) = store();
+        let contract = crate::types::EntityStatsUndoContract {
+            version: crate::types::ENTITY_STATS_UNDO_CONTRACT_VERSION,
+            coverage_floor_block: 7,
+            updated_at_block: 1_007,
+        };
+        let overlay = SharedBlockOverlay::new(&store);
+        let mut batch = StoreBatch::journaled(&store, &overlay, 0);
+        batch.at(9).put_sync_meta(b"other", b"x");
+        batch.at(9).put_entity_stats_undo_contract(&contract);
+        let mut counters = HashMap::new();
+        let stats = batch
             .stage_journal(&mut |block| journal_seq(&mut counters, block))
             .unwrap();
         batch.commit().unwrap();
-        assert!(journal_rows(&store).is_empty());
+        assert_eq!(stats.entries, 1, "only the other key is journaled");
         assert_eq!(
-            store.get_cf(store.cf_sync_meta(), b"k").unwrap(),
-            Some(b"v".to_vec())
+            journal_rows(&store),
+            vec![(9, CF_SYNC_META.into(), b"other".to_vec(), None)]
         );
         assert_eq!(
-            overlay.with(|o| o.unattributed_cfs().iter().copied().collect::<Vec<_>>()),
-            vec![CF_SYNC_META]
+            store.get_entity_stats_undo_contract().unwrap(),
+            Some(contract)
         );
+
+        let overlay = SharedBlockOverlay::new(&store);
+        let error = overlay
+            .with(|o| {
+                o.write(
+                    Some(10),
+                    CF_SYNC_META,
+                    keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT,
+                    Some(vec![0]),
+                    0,
+                )
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("outside the block journal"), "{error}");
+        assert!(is_outside_journal(
+            CF_SYNC_META,
+            keys::sync_meta_keys::ENTITY_STATS_UNDO_CONTRACT
+        ));
+        assert!(!is_outside_journal(CF_SYNC_META, b"sync_status"));
     }
 }

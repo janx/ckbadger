@@ -7,7 +7,7 @@ use crate::parser::{
 };
 use ckbadger_store::batch::StoreBatch;
 use ckbadger_store::keys;
-use ckbadger_store::store::{CF_IDENTITY_DATA, CF_SPORE_DATA, CF_STATS_SPORE};
+use ckbadger_store::store::CF_STATS_SPORE;
 use ckbadger_store::types::{
     ClusterAggregate, CompositionTier, DotCellRingRoot, IdentityCollectionAggregate, IdentityEntry,
     IdentityExtra, IdentityStandard, ObjectEntry, ObjectExtra, ObjectStandard, SporeTypeIndex,
@@ -23,7 +23,6 @@ use ckbadger_store::types::SporeMediaProfile;
 use super::dotbit::IdentityActionState;
 use super::entity_stats::{apply_daily_pair, EntityStatsOverlay, SharedEntityStatsOverlay};
 use crate::sync::types::{EntityDailyChanges, EntityDateKey};
-use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
 
@@ -55,7 +54,6 @@ pub(crate) struct SporeBatchState {
     dotcell_namespaces: HashSet<[u8; 20]>,
     dotcell_namespaces_loaded: bool,
     dotcell_rings: HashMap<[u8; 20], DotCellRingRoot>,
-    pub(super) undo_seq_by_block: SharedUndoSeq,
     /// `.bit Cell` identity entry transitions, in write order, for the derived
     /// `bit_cell_by_account` index.
     bit_cell_transitions: Vec<IdentityTransition>,
@@ -358,19 +356,14 @@ impl SporeBatchState {
 }
 
 impl BatchWriter {
-    pub(crate) fn new_spore_batch_state(
-        &self,
-        stats: SharedEntityStatsOverlay,
-        undo_seq: SharedUndoSeq,
-    ) -> SporeBatchState {
+    pub(crate) fn new_spore_batch_state(&self, stats: SharedEntityStatsOverlay) -> SporeBatchState {
         SporeBatchState {
             stats,
-            undo_seq_by_block: undo_seq,
             ..Default::default()
         }
     }
 
-    /// Write an item's outpoint reverse-index rows, with undo pre-images.
+    /// Write an item's outpoint reverse-index rows.
     ///
     /// `CF_STATS_SPORE` carries two rows per (item, outpoint): the forward
     /// `outpoint -> id` row every per-item lifecycle feed seeks, and the
@@ -387,37 +380,9 @@ impl BatchWriter {
         id: &[u8],
         tx_hash: &[u8],
         output_index: i16,
-        block_number: i64,
         batch: &mut StoreBatch,
         state: &mut SporeBatchState,
     ) -> Result<()> {
-        for key in [
-            keys::encode_spore_outpoint_key(tx_hash, output_index).to_vec(),
-            keys::encode_spore_outpoint_by_id_key(id, tx_hash, output_index),
-        ] {
-            // A failed read is NOT "the row did not exist": recording `None`
-            // for it would make the rollback delete a row that had a value.
-            let previous = self
-                .store
-                .get_cf(self.store.cf_stats_spore(), &key)
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to read the outpoint reverse-index pre-image: id=0x{}, key=0x{}, block={}, {}",
-                        hex::encode(id),
-                        hex::encode(&key),
-                        block_number,
-                        e
-                    )
-                })?;
-            self.record_object_undo(
-                batch,
-                block_number,
-                CF_STATS_SPORE,
-                &key,
-                previous,
-                &state.undo_seq_by_block,
-            );
-        }
         batch.put_spore_outpoint(tx_hash, output_index, id);
         state.put_spore_outpoint(tx_hash, output_index, id);
         Ok(())
@@ -602,19 +567,6 @@ impl BatchWriter {
         state: &mut SporeBatchState,
     ) -> Result<()> {
         let existing = state.get_spore(self.store.as_ref(), &cluster.cluster_id)?;
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_SPORE_DATA,
-            &cluster.cluster_id,
-            existing
-                .as_ref()
-                .map(|e| {
-                    super::undo_pre_image(e, "Spore cluster", &cluster.cluster_id, block_number)
-                })
-                .transpose()?,
-            &state.undo_seq_by_block,
-        );
         let entry = ObjectEntry {
             standard: ObjectStandard::SporeCluster,
             collection_id: None, // This IS a cluster, not a spore in a cluster
@@ -665,17 +617,6 @@ impl BatchWriter {
         super::ensure_outpoint_indexable_item_id(&did.did_id, "did:ckb", tx_hash, output_index)?;
 
         let existing = state.get_identity(self.store.as_ref(), &did.did_id)?;
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_IDENTITY_DATA,
-            &did.did_id,
-            existing
-                .as_ref()
-                .map(|e| super::undo_pre_image(e, "did:ckb identity", &did.did_id, block_number))
-                .transpose()?,
-            &state.undo_seq_by_block,
-        );
         let consumed = state
             .consumed_for_actions
             .remove(&(did.did_id.to_vec(), tx_hash.to_vec()));
@@ -715,14 +656,7 @@ impl BatchWriter {
         };
         batch.put_identity(&did.did_id, &identity);
         state.put_identity(&did.did_id, identity);
-        self.put_object_outpoint_rows(
-            &did.did_id,
-            tx_hash,
-            output_index,
-            block_number,
-            batch,
-            state,
-        )?;
+        self.put_object_outpoint_rows(&did.did_id, tx_hash, output_index, batch, state)?;
         let action_key = keys::encode_spore_outpoint_by_id_key(&did.did_id, tx_hash, output_index);
         batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
 
@@ -800,17 +734,6 @@ impl BatchWriter {
         }
 
         let existing = state.get_spore(self.store.as_ref(), &spore.spore_id)?;
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_SPORE_DATA,
-            &spore.spore_id,
-            existing
-                .as_ref()
-                .map(|e| super::undo_pre_image(e, "Spore", &spore.spore_id, block_number))
-                .transpose()?,
-            &state.undo_seq_by_block,
-        );
         let was_live = existing.as_ref().is_some_and(|e| e.is_live);
         let old_live_tier = if was_live {
             existing
@@ -886,14 +809,7 @@ impl BatchWriter {
         };
         batch.put_spore(&spore.spore_id, &entry);
         state.put_spore(&spore.spore_id, entry);
-        self.put_object_outpoint_rows(
-            &spore.spore_id,
-            tx_hash,
-            output_index,
-            block_number,
-            batch,
-            state,
-        )?;
+        self.put_object_outpoint_rows(&spore.spore_id, tx_hash, output_index, batch, state)?;
 
         if old_cluster != effective_cluster {
             if let Some(ref old_cluster_id) = old_cluster {
@@ -985,14 +901,9 @@ impl BatchWriter {
                 // Re-insert (transfer) — increment hourly bucket for 24h tracking
                 let hour_bucket = ckbadger_common::stats_bucket::stats_hour_index(timestamp_ms)?;
                 let key = ckbadger_store::keys::encode_spore_hourly_key(cluster_id, hour_bucket);
-                state.stats.mutate_hourly(
-                    self.store.as_ref(),
-                    batch,
-                    &state.undo_seq_by_block,
-                    block_number,
-                    &key,
-                    1,
-                    &|| {
+                state
+                    .stats
+                    .mutate_hourly(self.store.as_ref(), block_number, &key, 1, &|| {
                         format!(
                             "spore_hourly cluster_id=0x{} hour_bucket={} block={} spore_id=0x{}",
                             hex::encode(cluster_id),
@@ -1000,8 +911,7 @@ impl BatchWriter {
                             block_number,
                             hex::encode(&spore.spore_id)
                         )
-                    },
-                )?;
+                    })?;
                 if old_live_tier != new_live_tier {
                     self.adjust_cluster_tier_count(
                         cluster_id,
@@ -1060,19 +970,6 @@ impl BatchWriter {
             }
         }
 
-        self.record_object_undo(
-            batch,
-            block_number,
-            CF_IDENTITY_DATA,
-            identity_id,
-            existing
-                .as_ref()
-                .map(|entry| {
-                    super::undo_pre_image(entry, ".bit Cell identity", identity_id, block_number)
-                })
-                .transpose()?,
-            &state.undo_seq_by_block,
-        );
         let consumed = state
             .consumed_for_actions
             .remove(&(identity_id.to_vec(), tx_hash.to_vec()));
@@ -1123,14 +1020,7 @@ impl BatchWriter {
             new: identity.clone(),
         });
         state.put_identity(identity_id, identity);
-        self.put_object_outpoint_rows(
-            identity_id,
-            tx_hash,
-            output_index,
-            block_number,
-            batch,
-            state,
-        )?;
+        self.put_object_outpoint_rows(identity_id, tx_hash, output_index, batch, state)?;
         let action_key = keys::encode_spore_outpoint_by_id_key(identity_id, tx_hash, output_index);
         batch.put_raw_cf_by_name(CF_STATS_SPORE, &action_key, &[item_action.compact()])?;
 
@@ -1199,19 +1089,6 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 );
             }
-            self.record_object_undo(
-                batch,
-                block_number,
-                CF_IDENTITY_DATA,
-                spore_id,
-                Some(super::undo_pre_image(
-                    &identity,
-                    "identity",
-                    spore_id,
-                    block_number,
-                )?),
-                &state.undo_seq_by_block,
-            );
             state.consumed_for_actions.insert(
                 (spore_id.to_vec(), tx_hash.to_vec()),
                 IdentityActionState::from_entry(&identity).with_context(|| {
@@ -1271,19 +1148,6 @@ impl BatchWriter {
                     hex::encode(spore_id)
                 );
             }
-            self.record_object_undo(
-                batch,
-                block_number,
-                CF_SPORE_DATA,
-                spore_id,
-                Some(super::undo_pre_image(
-                    &entry,
-                    "Spore",
-                    spore_id,
-                    block_number,
-                )?),
-                &state.undo_seq_by_block,
-            );
 
             let old_owner = entry.owner_lock_hash.clone();
             let cluster_id = entry.collection_id.clone();
@@ -1342,8 +1206,6 @@ impl BatchWriter {
         &self,
         changes: &EntityDailyChanges<EntityDateKey>,
         overlay: &mut EntityStatsOverlay,
-        undo_seq: &mut HashMap<i64, u64>,
-        batch: &mut StoreBatch,
     ) -> Result<()> {
         // One `multi_get` for every key this family touches, instead of a point
         // read per key inside the loop. The overlay keeps whatever a previous
@@ -1380,7 +1242,7 @@ impl BatchWriter {
                 let prev = overlay.current(self.store.as_ref(), &key)?;
                 let next =
                     apply_daily_pair(prev.as_deref(), *capacity_delta, *knowledge_delta, &ctx)?;
-                overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
+                overlay.mutate(*block, &key, next)?;
             }
         }
         Ok(())
@@ -1391,7 +1253,7 @@ impl BatchWriter {
     ///
     /// The value semantics these callers assert (accumulate, delete on net
     /// zero, fail on a corrupt existing row) are unchanged by Task 2.3; the
-    /// per-block undo semantics are covered by `entity_stats`' own unit tests
+    /// per-block journal semantics are covered by `entity_stats`' own unit tests
     /// and by `tests/entity_stats_rollback.rs`.
     #[cfg(test)]
     pub(crate) fn update_spore_daily_deltas_batch_flat_for_test(
@@ -1404,8 +1266,7 @@ impl BatchWriter {
             by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
         let mut overlay = EntityStatsOverlay::new();
-        let mut undo_seq = HashMap::new();
-        self.update_spore_daily_deltas_batch(&by_block, &mut overlay, &mut undo_seq, batch)?;
+        self.update_spore_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }
 
@@ -1419,8 +1280,6 @@ impl BatchWriter {
         &self,
         changes: &EntityDailyChanges<EntityDateKey>,
         overlay: &mut EntityStatsOverlay,
-        undo_seq: &mut HashMap<i64, u64>,
-        batch: &mut StoreBatch,
     ) -> Result<()> {
         // One `multi_get` for every key this family touches, instead of a point
         // read per key inside the loop. The overlay keeps whatever a previous
@@ -1458,7 +1317,7 @@ impl BatchWriter {
                 let prev = overlay.current(self.store.as_ref(), &key)?;
                 let next =
                     apply_daily_pair(prev.as_deref(), *capacity_delta, *knowledge_delta, &ctx)?;
-                overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
+                overlay.mutate(*block, &key, next)?;
             }
         }
         Ok(())
@@ -1469,7 +1328,7 @@ impl BatchWriter {
     ///
     /// The value semantics these callers assert (accumulate, delete on net
     /// zero, fail on a corrupt existing row) are unchanged by Task 2.3; the
-    /// per-block undo semantics are covered by `entity_stats`' own unit tests
+    /// per-block journal semantics are covered by `entity_stats`' own unit tests
     /// and by `tests/entity_stats_rollback.rs`.
     #[cfg(test)]
     pub(crate) fn update_cluster_daily_deltas_batch_flat_for_test(
@@ -1482,8 +1341,7 @@ impl BatchWriter {
             by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
         let mut overlay = EntityStatsOverlay::new();
-        let mut undo_seq = HashMap::new();
-        self.update_cluster_daily_deltas_batch(&by_block, &mut overlay, &mut undo_seq, batch)?;
+        self.update_cluster_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }
 
@@ -1597,13 +1455,10 @@ mod tests {
     /// The outpoint reverse index must not outlive the rows it describes.
     ///
     /// `CF_STATS_SPORE`'s outpoint rows are written by four protocols and read
-    /// by every per-item lifecycle feed and by the DOB decoder. The rollback
-    /// cleans them in the identity/object repair stage, which only sees
-    /// entries that SURVIVE — but production replays the undo log first
-    /// (`db/writer/reorg.rs:153-160`), so a rolled-back mint's entry is gone
-    /// before the repair runs, and a rolled-back TRANSFER of a surviving item
-    /// is never a candidate at all. Only a pre-image per row makes either
-    /// case exact.
+    /// by every per-item lifecycle feed and by the DOB decoder. A rolled-back
+    /// mint's rows and a rolled-back TRANSFER of a surviving item are both
+    /// exact only because every row is journaled with its previous value in
+    /// the writing block's scope.
     mod outpoint_rollback {
         use super::*;
 
@@ -1639,7 +1494,7 @@ mod tests {
         }
 
         fn new_state(writer: &BatchWriter) -> SporeBatchState {
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default())
+            writer.new_spore_batch_state(SharedEntityStatsOverlay::new())
         }
 
         /// One live block through the writer functions: every write in the
@@ -1787,7 +1642,6 @@ mod tests {
                 &crate::derive::registry(),
                 &ctx,
                 &mut batch,
-                &state.undo_seq_by_block,
             )
             .unwrap();
             drop(batch);
@@ -2136,8 +1990,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner_b),
@@ -2215,8 +2068,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner_b),
@@ -2288,8 +2140,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner_new),
@@ -2334,8 +2185,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &new_cluster, &owner_new),
@@ -2378,8 +2228,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let err = writer
             .consume_spore(&spore_id, 100, &[0xAA; 32], &mut batch, &mut state)
             .unwrap_err();
@@ -2416,8 +2265,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &new_cluster, &owner_new),
@@ -2459,8 +2307,7 @@ mod tests {
         for bad_width in [16usize, 31, 33, 64] {
             let cluster_id = vec![0x81; bad_width];
             let mut batch = StoreBatch::new(writer.store());
-            let mut state = writer
-                .new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+            let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
             let err = writer
                 .insert_spore_cell(
                     &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -2496,8 +2343,7 @@ mod tests {
         let output_index = 3i16;
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -2532,8 +2378,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(&store);
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let did = make_parsed_did(&[0x11; 20], &[0x22; 32]);
         writer
             .insert_did_ckb_cell(&did, &[0x33; 32], 0, 1, &mut batch, &mut state)
@@ -2575,8 +2420,7 @@ mod tests {
         let owner = vec![0xE1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&did_id, &owner),
@@ -2616,8 +2460,7 @@ mod tests {
         let item_id = crate::rpc::parse_hex_to_bytes(real_did_ckb::CELL_32_ARGS);
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(&parsed, &tx_hash, 0, 18_082_860, &mut batch, &mut state)
             .unwrap();
@@ -2683,8 +2526,7 @@ mod tests {
         assert_eq!(item_id.len(), 20);
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(&parsed, &tx_hash, 0, 21_080_336, &mut batch, &mut state)
             .unwrap();
@@ -2728,8 +2570,7 @@ mod tests {
 
         for bad_id in [Vec::new(), vec![0x01; 33]] {
             let mut batch = StoreBatch::new(writer.store());
-            let mut state = writer
-                .new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+            let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
             let err = writer
                 .insert_did_ckb_cell(
                     &make_parsed_did(&bad_id, &[0xE1; 32]),
@@ -2765,8 +2606,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
 
         let cluster_id = vec![0xCC; 32];
         let key = ckbadger_store::keys::encode_spore_hourly_key(&cluster_id, 5);
@@ -2794,8 +2634,7 @@ mod tests {
 
         {
             let mut batch = StoreBatch::new(writer.store());
-            let mut state = writer
-                .new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+            let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
             writer
                 .insert_did_ckb_cell(
                     &make_parsed_did(&did_id, &owner),
@@ -2810,8 +2649,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let result = writer
             .consume_spore(&did_id, 301, &[0x23; 32], &mut batch, &mut state)
             .unwrap();
@@ -2852,8 +2690,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -2903,8 +2740,7 @@ mod tests {
         }
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let err = writer
             .insert_spore_cell(
                 &make_parsed_spore(&spore_id, &cluster_id, &owner),
@@ -2940,8 +2776,7 @@ mod tests {
         let tx_hash_b = vec![0xF2; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id_a, &owner_a),
@@ -2986,8 +2821,7 @@ mod tests {
 
         // Insert
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
@@ -3002,8 +2836,7 @@ mod tests {
 
         // Consume
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         let result = writer
             .consume_spore(&spore_id, 200, &[0xFF; 32], &mut batch, &mut state)
             .unwrap();
@@ -3030,8 +2863,7 @@ mod tests {
         let owner = vec![0xA1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&[0x01; 32], &owner),
@@ -3074,8 +2906,7 @@ mod tests {
 
         // Insert
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
@@ -3090,8 +2921,7 @@ mod tests {
 
         // Consume
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .consume_spore(&spore_id, 200, &[0xFF; 32], &mut batch, &mut state)
             .unwrap();
@@ -3099,8 +2929,7 @@ mod tests {
 
         // Reactivate
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .insert_did_ckb_cell(
                 &make_parsed_did(&spore_id, &owner),
@@ -3133,8 +2962,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
 
         let spore_id = [0x11u8; 32];
         let owner = [0x22u8; 32];
@@ -3176,8 +3004,7 @@ mod tests {
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
 
         let spore_id = [0x11u8; 32];
         let owner = [0x22u8; 32];
@@ -3242,8 +3069,7 @@ mod tests {
         changes.insert((cluster_b.clone(), 20260101), (300, 100));
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
         writer
             .apply_cluster_capacity_deltas(&changes, &mut batch, &mut state)
             .unwrap();
@@ -3290,14 +3116,16 @@ mod tests {
         corrupted
     }
 
-    /// a5241239: an outpoint reverse-index pre-image is read with `get_cf`,
-    /// and a failed read stops the write. Recording it as `None` ("the row did
-    /// not exist") would make a rollback delete a row that had a value — here,
+    /// a5241239: a failed read of an outpoint reverse-index row's previous
+    /// value stops the write. Journaling it as `None` ("the row did not
+    /// exist") would make a rollback delete a row that had a value — here,
     /// the forward row already sitting at the outpoint being written. Spore,
     /// did:ckb, `.bit Cell` and `.cell` all write these rows through
-    /// `put_object_outpoint_rows`, which is where that commit's fix now lives.
+    /// `put_object_outpoint_rows`; the block journal reads their previous
+    /// values when the batch stages it, and that read's failure fails the
+    /// batch with the CF and key.
     #[test]
-    fn a_failed_outpoint_pre_image_read_stops_the_write_instead_of_recording_absent() {
+    fn a_failed_outpoint_previous_value_read_stops_the_batch_instead_of_journaling_absent() {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_domain(dir.path()).unwrap());
         let writer = BatchWriter::new(store.clone(), store.clone());
@@ -3313,21 +3141,26 @@ mod tests {
             "the seeded outpoint row must live in an SST for the read to fail"
         );
 
-        let mut batch = StoreBatch::new(writer.store());
-        let mut state =
-            writer.new_spore_batch_state(SharedEntityStatsOverlay::new(), SharedUndoSeq::default());
-        let err = writer
-            .put_object_outpoint_rows(&item_id, &tx_hash, 0, 100, &mut batch, &mut state)
-            .expect_err("a failed pre-image read must not be recorded as an absent row");
+        let block_overlay = ckbadger_store::SharedBlockOverlay::new(writer.store());
+        let mut batch = StoreBatch::journaled(writer.store(), &block_overlay, 0);
+        let mut state = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
+        writer
+            .put_object_outpoint_rows(&item_id, &tx_hash, 0, &mut batch.at(100), &mut state)
+            .unwrap();
+        let mut counters = std::collections::HashMap::new();
+        let err = batch
+            .stage_journal(&mut |block| {
+                ckbadger_store::block_overlay::journal_seq(&mut counters, block)
+            })
+            .expect_err("a failed previous-value read must not be journaled as an absent row");
         let message = format!("{err:#}");
+        assert!(message.contains("cf=stats_spore"), "{message}");
         assert!(
-            message.contains("failed to read the outpoint reverse-index pre-image"),
+            message.contains(&format!(
+                "key=0x{}",
+                hex::encode(keys::encode_spore_outpoint_key(&tx_hash, 0))
+            )),
             "{message}"
         );
-        assert!(
-            message.contains(&format!("id=0x{}", hex::encode(item_id))),
-            "{message}"
-        );
-        assert!(message.contains("block=100"), "{message}");
     }
 }

@@ -13,28 +13,22 @@ use ckbadger_store::keys;
 
 use super::entity_stats::{apply_token_daily, EntityStatsOverlay, SharedEntityStatsOverlay};
 use crate::sync::types::{EntityDateKey, TokenDailyChanges};
-use crate::sync::undo::SharedUndoSeq;
 
 use super::BatchWriter;
 
 /// Batch state for UDT writes.
 ///
 /// The hourly transfer counters are no longer cached here: they live in the
-/// batch-wide `EntityStatsOverlay`, which is also what records their per-block
-/// undo pre-images. A private cache beside the overlay would be a second source
-/// of "the current value".
+/// batch-wide `EntityStatsOverlay`, whose block overlay journals them per
+/// block. A private cache beside the overlay would be a second source of "the
+/// current value".
 pub(crate) struct UdtBatchState {
     stats: SharedEntityStatsOverlay,
-    undo_seq: SharedUndoSeq,
 }
 
 impl BatchWriter {
-    pub(crate) fn new_udt_batch_state(
-        &self,
-        stats: SharedEntityStatsOverlay,
-        undo_seq: SharedUndoSeq,
-    ) -> UdtBatchState {
-        UdtBatchState { stats, undo_seq }
+    pub(crate) fn new_udt_batch_state(&self, stats: SharedEntityStatsOverlay) -> UdtBatchState {
+        UdtBatchState { stats }
     }
 
     /// Per-block token daily capacity/knowledge deltas and transaction counts.
@@ -48,8 +42,6 @@ impl BatchWriter {
         &self,
         changes: &TokenDailyChanges<EntityDateKey>,
         overlay: &mut EntityStatsOverlay,
-        undo_seq: &mut HashMap<i64, u64>,
-        batch: &mut StoreBatch,
     ) -> Result<()> {
         // One `multi_get` for every key this family touches, instead of a point
         // read per key inside the loop. The overlay keeps whatever a previous
@@ -82,7 +74,7 @@ impl BatchWriter {
                 }
                 let prev = overlay.current(self.store.as_ref(), &key)?;
                 let next = apply_token_daily(prev.as_deref(), contribution, &ctx)?;
-                overlay.mutate(self.store.as_ref(), batch, undo_seq, *block, &key, next)?;
+                overlay.mutate(*block, &key, next)?;
             }
         }
         Ok(())
@@ -93,7 +85,7 @@ impl BatchWriter {
     /// stage the overlay.
     ///
     /// The value semantics these callers assert (accumulate, fail on a corrupt
-    /// existing row) are covered here; the per-block undo semantics by
+    /// existing row) are covered here; the per-block journal semantics by
     /// `entity_stats`' own unit tests and `tests/entity_stats_rollback.rs`.
     #[cfg(test)]
     pub(crate) fn update_token_daily_deltas_batch_flat_for_test(
@@ -106,8 +98,7 @@ impl BatchWriter {
             by_block.add_tx(1, key.clone(), *capacity_delta, *knowledge_delta, 0)?;
         }
         let mut overlay = EntityStatsOverlay::new();
-        let mut undo_seq = HashMap::new();
-        self.update_token_daily_deltas_batch(&by_block, &mut overlay, &mut undo_seq, batch)?;
+        self.update_token_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }
 
@@ -239,7 +230,7 @@ impl BatchWriter {
                         max_supply: max_supply_observations.get(type_hash).copied(),
                         onchain: onchain_token_info.get(type_hash),
                     }
-                    .write(self, batch, &state.undo_seq)?;
+                    .write(batch)?;
                 }
             }
             return Ok(());
@@ -315,7 +306,7 @@ impl BatchWriter {
                 max_supply: max_supply_observations.get(type_hash).copied(),
                 onchain: onchain_token_info.get(type_hash),
             }
-            .write(self, batch, &state.undo_seq)?;
+            .write(batch)?;
             // The counter as of the end of every block that moves it, in
             // that block's scope.
             for &block_number in update.transfers_by_block.keys() {
@@ -340,12 +331,12 @@ impl BatchWriter {
                     max_supply: max_supply_observations.get(type_hash).copied(),
                     onchain: None,
                 }
-                .write(self, batch, &state.undo_seq)?;
+                .write(batch)?;
             }
         }
 
         // Step 2.6: Update per-hour transfer counts using each transfer's block
-        // timestamp, in ascending block order so each block's undo pre-image is
+        // timestamp, in ascending block order so each block's journal entry is
         // the previous block's value.
         let mut hourly_in_block_order: Vec<((i64, Vec<u8>, i64), i64)> =
             hourly_transfer_updates.into_iter().collect();
@@ -354,8 +345,6 @@ impl BatchWriter {
             let key = ckbadger_store::keys::encode_token_hourly_key(&type_hash, hour_bucket);
             state.stats.mutate_hourly(
                 self.store.as_ref(),
-                batch,
-                &state.undo_seq,
                 block_number,
                 &key,
                 count_delta,
@@ -612,10 +601,6 @@ impl TokenTransfersThroughBatch<'_> {
 /// N": [`Self::write`] writes `row_through(N)` in the scope of every block N
 /// that changes the row — creates it, moves its metadata or its transfer
 /// count — so the block journal restores the row as of the end of any block.
-/// For the pre-journal rollback, every block that changes the row's metadata
-/// — or creates it — still records `row_through(N - 1)` as its undo
-/// pre-image; a block that changes only the transfer count records none:
-/// rollback stage 9d reverses the count from the deleted transfer rows.
 struct TokenRowThroughBatch<'a> {
     type_hash: &'a [u8],
     base: TokenRowBase<'a>,
@@ -680,14 +665,8 @@ impl TokenRowThroughBatch<'_> {
     }
 
     /// Write the row in the scope of every block of the batch that changes
-    /// it (its value at the end of that block), recording the pre-journal
-    /// undo pre-image of every block that changes its metadata or creates it.
-    fn write(
-        &self,
-        writer: &BatchWriter,
-        batch: &mut StoreBatch,
-        undo_seq: &SharedUndoSeq,
-    ) -> Result<()> {
+    /// it (its value at the end of that block).
+    fn write(&self, batch: &mut StoreBatch) -> Result<()> {
         let mut change_blocks = BTreeSet::new();
         if let TokenRowBase::CreatedBy { block_number, .. } = &self.base {
             change_blocks.insert(*block_number);
@@ -707,20 +686,6 @@ impl TokenRowThroughBatch<'_> {
             let after = self.row_through(block_number, false)?;
             if before == after {
                 continue;
-            }
-            if without_transfer_count(&before) != without_transfer_count(&after) {
-                let pre_image = before
-                    .as_ref()
-                    .map(|row| super::undo_pre_image(row, "token", self.type_hash, block_number))
-                    .transpose()?;
-                writer.record_object_undo(
-                    batch,
-                    block_number,
-                    ckbadger_store::CF_TOKENS,
-                    self.type_hash,
-                    pre_image,
-                    undo_seq,
-                );
             }
             let after = after.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -746,14 +711,6 @@ impl TokenRowThroughBatch<'_> {
         }
         Ok(())
     }
-}
-
-/// A row's metadata and existence: everything but the transfer count.
-fn without_transfer_count(row: &Option<TokenInfo>) -> Option<TokenInfo> {
-    row.clone().map(|mut row| {
-        row.transfers_count = 0;
-        row
-    })
 }
 
 /// How a token's on-chain Unique Cell metadata merges into the row about to
@@ -806,7 +763,7 @@ mod tests {
     use ckbadger_store::CkbadgerStore;
 
     /// One batch's UDT writer state, built the way `write_parsed_batch` builds
-    /// it (one overlay, ONE undo sequence), around one transfer pass.
+    /// it (one entity stats overlay), around one transfer pass.
     fn process_transfers_in_one_batch(
         writer: &BatchWriter,
         transfers: &[(&ParsedUdtTransfer, &[u8], i64)],
@@ -816,7 +773,7 @@ mod tests {
         batch: &mut StoreBatch,
     ) -> Result<()> {
         let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = writer.new_udt_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let mut state = writer.new_udt_batch_state(entity_stats.clone());
         writer.process_udt_transfers_batch_with_state(
             transfers,
             max_supply_observations,
@@ -1407,8 +1364,7 @@ mod tests {
     #[test]
     fn test_process_udt_transfers_batch_journals_every_row_per_block() {
         use crate::db::writer::journal_test_support::journal_entries;
-        use ckbadger_store::block_overlay::SharedBlockOverlay;
-        use ckbadger_store::keys::UndoSeqScope;
+        use ckbadger_store::block_overlay::{journal_seq, SharedBlockOverlay};
 
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(CkbadgerStore::open_test_unified(dir.path()).unwrap());
@@ -1455,11 +1411,7 @@ mod tests {
             HashMap::from([(101, 1_700_000_000_000), (102, 1_700_000_010_000)]);
 
         let overlay = SharedBlockOverlay::new(&store);
-        let undo_seq = SharedUndoSeq::default();
-        let mut state = writer.new_udt_batch_state(
-            SharedEntityStatsOverlay::sharing(&overlay),
-            undo_seq.clone(),
-        );
+        let mut state = writer.new_udt_batch_state(SharedEntityStatsOverlay::sharing(&overlay));
         let mut batch = StoreBatch::journaled(&store, &overlay, 0);
         writer
             .process_udt_transfers_batch_with_state(
@@ -1472,8 +1424,9 @@ mod tests {
                 &mut state,
             )
             .unwrap();
+        let mut counters = HashMap::new();
         batch
-            .stage_journal(&mut |block| Ok(undo_seq.next(block, UndoSeqScope::Journal)))
+            .stage_journal(&mut |block| journal_seq(&mut counters, block))
             .unwrap();
         batch.commit().unwrap();
 
@@ -1698,7 +1651,7 @@ mod tests {
         let second = vec![(&transfer_b, tx_hash_b.as_slice(), 402i64)];
         let mut batch = StoreBatch::new(&store);
         let entity_stats = SharedEntityStatsOverlay::new();
-        let mut state = writer.new_udt_batch_state(entity_stats.clone(), SharedUndoSeq::default());
+        let mut state = writer.new_udt_batch_state(entity_stats.clone());
         writer
             .process_udt_transfers_batch_with_state(
                 &first,
