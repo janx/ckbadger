@@ -582,7 +582,8 @@ pub enum RollbackClass {
     /// `pending_proposals` (the proposal cache writes it out of band from
     /// mempool snapshots, with no block context; a committed proposal is
     /// removed after its batch commits and an expired one by the cache's
-    /// expiry sweep, so a proposal of an orphaned block stays until it expires).
+    /// expiry sweep, so a proposal of an orphaned block stays until it is
+    /// committed or expires).
     Never,
     /// Not rolled back; readers validate each row against canonical state
     /// before using it. `dob_decoded` (keyed by spore id) is read only after
@@ -2758,7 +2759,10 @@ impl CkbadgerStore {
             return Ok(());
         }
         anyhow::bail!(
-            "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf}              key=0x{}; a live write goes through a journaled batch in its block's scope, and a              write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner              and reason",
+            "unjournaled write to a Journal-class key outside the OUTSIDE_JOURNAL table: cf={cf} \
+             key=0x{}; a live write goes through a journaled batch in its block's scope, and a \
+             write that belongs outside the journal is listed in OUTSIDE_JOURNAL with its owner \
+             and reason",
             crate::bytes_to_hex(key)
         )
     }
@@ -2796,7 +2800,9 @@ impl CkbadgerStore {
     fn check_raw_write_batch(&self) -> anyhow::Result<()> {
         if self.journal_discipline_applies() {
             anyhow::bail!(
-                "raw WriteBatch commit on a store under journal discipline outside bulk sync:                  its writes cannot be checked against OUTSIDE_JOURNAL; commit through a                  StoreBatch"
+                "raw WriteBatch commit on a store under journal discipline outside bulk sync: \
+                 its writes cannot be checked against OUTSIDE_JOURNAL; commit through a \
+                 StoreBatch"
             );
         }
         Ok(())
@@ -5319,6 +5325,10 @@ mod tests {
             .unwrap();
         let error = batch.commit().unwrap_err().to_string();
         assert!(error.contains("cf=addr_balance"), "{error}");
+        assert!(
+            !error.contains("  "),
+            "the message reads as one line: {error}"
+        );
         assert_eq!(
             store
                 .get_cf(store.cf_sync_meta(), keys::sync_meta_keys::RUNTIME_STATUS)
@@ -5356,6 +5366,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(error.contains("raw WriteBatch"), "{error}");
+        assert!(
+            !error.contains("  "),
+            "the message reads as one line: {error}"
+        );
 
         // Bulk sync is not checked.
         store.set_bulk_sync_mode(true);
