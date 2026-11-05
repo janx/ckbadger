@@ -2429,3 +2429,166 @@ async fn journal_restores_covered_cfs_of_the_edge_case_chain() {
     .await;
     assert_journal_properties(&chain, &edge_multi_block_plan(), EDGE_TIP, EDGE_FORKS).await;
 }
+
+// ---------------------------------------------------------------------------
+// B-5c · a reset derived aggregate derives again to the fork's rows
+// ---------------------------------------------------------------------------
+
+/// The rows of the three derived aggregates' CFs.
+fn aggregate_rows(dump: &Dump) -> Dump {
+    let cfs: Vec<&str> = ckbadger_indexer::derive::registry()
+        .iter()
+        .map(|aggregate| aggregate.id().cf_name)
+        .collect();
+    dump.iter()
+        .filter(|((cf, _), _)| cfs.contains(cf))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+/// Derive every aggregate to completion (`derive_to_completion`, the
+/// scheduler's own loop); every derivation must end `Complete`.
+fn derive_complete(
+    store: &CkbadgerStore,
+    context: &str,
+) -> Result<Vec<(&'static str, DeriveState)>, String> {
+    let states = ckbadger_indexer::derive::derive_to_completion(store)
+        .map_err(|e| format!("{context}: derive to completion: {e:#}"))?;
+    if let Some((name, state)) = states
+        .iter()
+        .find(|(_, state)| !matches!(state, DeriveState::Complete { .. }))
+    {
+        return Err(format!(
+            "{context}: {name} is not Complete after derivation: {state:?}"
+        ));
+    }
+    Ok(states)
+}
+
+/// A rollback that resets the derived aggregates leaves them to the
+/// scheduler. Derived again on the rolled-back store, the three aggregates'
+/// rows must be byte-equal to a derivation on a store that synced only to the
+/// fork (with the same batch boundaries, never derived before), and every
+/// derivation must be `Complete` on both, at the fork, over the same rows.
+/// Returns the aggregate CFs that hold rows at the fork.
+async fn rederive_after_reset_property(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    fork: usize,
+    derive: Derive,
+) -> Result<Vec<&'static str>, String> {
+    let context = format!("re-derived after rollback {tip} -> {fork}");
+    let rolled = open_stores();
+    sync_with_derive(&rolled, chain, plan, tip, Some(derive)).await;
+    reorg_to(&rolled.indexer, fork as i64)
+        .await
+        .map_err(|e| format!("rollback {tip} -> {fork}: {e:#}"))?;
+    assert_aggregates_reset(&rolled.domain).map_err(|e| format!("{context}: {e}"))?;
+
+    let reference = open_stores();
+    sync_prefix(&reference, chain, plan, 0, fork).await;
+
+    let rolled_states = derive_complete(&rolled.domain, &context)?;
+    let reference_states = derive_complete(&reference.domain, "reference")?;
+    for (name, state) in &rolled_states {
+        if !matches!(
+            state,
+            DeriveState::Complete { derived_from_tip, completed_at_tip, .. }
+                if *derived_from_tip == fork as i64 && *completed_at_tip == fork as i64
+        ) {
+            return Err(format!(
+                "{context}: {name} is not complete at the fork: {state:?}"
+            ));
+        }
+    }
+    if rolled_states != reference_states {
+        return Err(format!(
+            "{context}: derive states differ from the reference's:\n  rolled    {rolled_states:?}\n  reference {reference_states:?}"
+        ));
+    }
+
+    let rolled_rows = aggregate_rows(&dump_domain(&rolled.domain));
+    if rolled_rows.is_empty() {
+        return Err(format!(
+            "{context}: no derived aggregate holds a row at the fork; the case exercises nothing"
+        ));
+    }
+    compare_dumps(
+        &rolled_rows,
+        &aggregate_rows(&dump_domain(&reference.domain)),
+        &context,
+    )?;
+    Ok(ckbadger_indexer::derive::registry()
+        .iter()
+        .map(|aggregate| aggregate.id().cf_name)
+        .filter(|cf| rolled_rows.keys().any(|(row_cf, _)| row_cf == cf))
+        .collect())
+}
+
+async fn assert_rederive_after_reset(
+    chain: &[BlockResponseWithCycles],
+    plan: &[RangeInclusive<usize>],
+    tip: usize,
+    forks: &[usize],
+    derive: Derive,
+) {
+    let mut failures = Vec::new();
+    let mut exercised: Vec<&'static str> = Vec::new();
+    for &fork in forks {
+        match rederive_after_reset_property(chain, plan, tip, fork, derive).await {
+            Ok(cfs) => exercised.extend(cfs),
+            Err(report) => failures.push(report),
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n\n"));
+    for aggregate in ckbadger_indexer::derive::registry() {
+        let cf = aggregate.id().cf_name;
+        assert!(
+            exercised.contains(&cf),
+            "{cf} holds no row at any fork of {forks:?}; the case does not exercise it"
+        );
+    }
+}
+
+/// Completed at 9: a rollback below 9 resets the aggregates (the
+/// `derived_aggregates_complete_above_the_target_are_reset` case and forks
+/// just below the completion and near genesis), and deriving them again
+/// gives the fork's rows.
+#[tokio::test]
+async fn derived_aggregates_reset_below_their_completion_derive_again_to_the_forks_rows() {
+    let chain = protocol_chain(0);
+    assert_rederive_after_reset(
+        &chain,
+        &chunked_plan(chain.len(), 3),
+        16,
+        &[8, 5, 2],
+        Derive::CompleteAt(9),
+    )
+    .await;
+    assert_rederive_after_reset(
+        &chain,
+        &single_block_plan(chain.len()),
+        16,
+        &[5],
+        Derive::CompleteAt(9),
+    )
+    .await;
+}
+
+/// Running since 8: every rollback resets the aggregates (the
+/// `derived_aggregates_running_are_reset` case, a fork at the block the
+/// derivation started at and one below it), and deriving them again gives
+/// the fork's rows.
+#[tokio::test]
+async fn derived_aggregates_reset_while_running_derive_again_to_the_forks_rows() {
+    let chain = protocol_chain(0);
+    assert_rederive_after_reset(
+        &chain,
+        &single_block_plan(chain.len()),
+        16,
+        &[12, 8, 5],
+        Derive::RunningAt(8),
+    )
+    .await;
+}
