@@ -372,7 +372,7 @@ mod tests {
     }
 
     fn new_state(writer: &BatchWriter) -> SporeBatchState {
-        writer.new_spore_batch_state(SharedEntityStatsOverlay::new())
+        writer.new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap())
     }
 
     fn mainnet_namespace() -> [u8; 20] {

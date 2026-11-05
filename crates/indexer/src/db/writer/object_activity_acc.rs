@@ -802,9 +802,12 @@ mod tests {
     fn states(store: &std::sync::Arc<CkbadgerStore>) -> States {
         use super::super::entity_stats::SharedEntityStatsOverlay;
         let writer = super::super::BatchWriter::new(store.clone(), store.clone());
-        let mnft = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
-        let spore = writer.new_spore_batch_state(SharedEntityStatsOverlay::new());
-        let dotbit = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mnft = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let spore = writer
+            .new_spore_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
+        let dotbit = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         States {
             writer,
             mnft,

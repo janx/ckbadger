@@ -95,8 +95,10 @@ pub struct JournalStats {
     pub bytes: u64,
 }
 
-/// One live batch's overlay over the `Journal`-class domain CFs.
-#[derive(Debug, Default)]
+/// One live batch's overlay over the `Journal`-class domain CFs. No
+/// `Default`: every overlay, test fixtures' included, is built through
+/// [`BlockOverlay::new`], which refuses a store in bulk-sync mode.
+#[derive(Debug)]
 pub struct BlockOverlay {
     keys: HashMap<CfKey, KeyState>,
     /// Committed values read so far (pre-batch), by `current` or `prefetch`.
@@ -119,7 +121,17 @@ impl BlockOverlay {
                  bulk writes no journal"
             );
         }
-        Ok(Self::default())
+        Ok(Self::empty())
+    }
+
+    fn empty() -> Self {
+        Self {
+            keys: HashMap::new(),
+            committed: HashMap::new(),
+            entries: Vec::new(),
+            origin: HashMap::new(),
+            finished: false,
+        }
     }
 
     /// The column family's spec must be `Journal`; anything else reaching the
@@ -504,7 +516,7 @@ pub fn decode_journal_value(value: &[u8]) -> Result<JournalValue<'_>> {
 
 /// The one [`BlockOverlay`] of a live batch, shared by every sub-batch and
 /// writer of it. `Arc<Mutex<_>>`: the batch write future must stay `Send`.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SharedBlockOverlay(Arc<Mutex<BlockOverlay>>);
 
 impl SharedBlockOverlay {

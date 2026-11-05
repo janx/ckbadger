@@ -1917,7 +1917,7 @@ impl BatchWriter {
         for (key, (capacity_delta, knowledge_delta)) in changes {
             by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(self.store())?;
         self.update_script_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }

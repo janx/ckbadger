@@ -371,7 +371,6 @@ struct OwnerTransitionContext<'a> {
     existing_entry: Option<&'a IdentityEntry>,
 }
 
-#[derive(Default)]
 pub(crate) struct DotbitBatchState {
     accounts: HashMap<Vec<u8>, Option<IdentityEntry>>,
     consumed_for_actions: HashMap<(Vec<u8>, Vec<u8>), IdentityActionState>,
@@ -497,8 +496,11 @@ impl BatchWriter {
         stats: SharedEntityStatsOverlay,
     ) -> DotbitBatchState {
         DotbitBatchState {
+            accounts: HashMap::new(),
+            consumed_for_actions: HashMap::new(),
             stats,
-            ..Default::default()
+            identity_aggs: HashMap::new(),
+            identity_owner_counts: HashMap::new(),
         }
     }
 
@@ -922,7 +924,7 @@ mod tests {
         batch: &mut StoreBatch,
         f: impl FnOnce(&mut StoreBatch, &mut DotbitBatchState) -> Result<R>,
     ) -> Result<R> {
-        let entity_stats = SharedEntityStatsOverlay::new();
+        let entity_stats = SharedEntityStatsOverlay::standalone(writer.store()).unwrap();
         let mut state = writer.new_dotbit_batch_state(entity_stats.clone());
         let out = f(batch, &mut state)?;
         entity_stats.stage_final(batch)?;
@@ -1286,7 +1288,8 @@ mod tests {
         let recreate_tx_hash = vec![0x43; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1300,7 +1303,8 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .consume_dotbit_account_with_state(
                 &account.account.account_id,
@@ -1313,7 +1317,8 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_dotbit_account_with_state(
                 &account,
@@ -1357,7 +1362,8 @@ mod tests {
         let tx_hash = vec![0x41; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_dotbit_account_with_state(&account, &tx_hash, 1, 0, &mut batch, &mut state)
             .unwrap();
@@ -1386,7 +1392,8 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
 
         let key = ckbadger_store::keys::encode_object_hourly_key(&DOTBIT_SENTINEL_COLLECTION, 1);
         let mut seed = StoreBatch::new(writer.store());
@@ -1565,7 +1572,8 @@ mod tests {
         let owner_b = vec![0xB2; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner_a, "alice.bit"),
@@ -1609,7 +1617,8 @@ mod tests {
         let account_id = [0x01u8; 20];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&account_id, &owner, "alice.bit"),
@@ -1623,7 +1632,8 @@ mod tests {
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         let result = writer
             .consume_dotbit_account_with_state(
                 &account_id,
@@ -1656,7 +1666,8 @@ mod tests {
         let owner = vec![0xA1; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_dotbit_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_dotbit_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_dotbit_account_with_state(
                 &make_test_account(&[0x01; 20], &owner, "alice.bit"),

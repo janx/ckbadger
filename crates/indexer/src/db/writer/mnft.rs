@@ -24,7 +24,6 @@ enum MnftOutpointKind {
     Token,
 }
 
-#[derive(Default)]
 pub(crate) struct MnftBatchState {
     tokens: HashMap<Vec<u8>, Option<ObjectEntry>>,
     collection_aggs: HashMap<Vec<u8>, Option<MnftCollectionAggregate>>,
@@ -150,8 +149,10 @@ impl MnftBatchState {
 impl BatchWriter {
     pub(crate) fn new_mnft_batch_state(&self, stats: SharedEntityStatsOverlay) -> MnftBatchState {
         MnftBatchState {
+            tokens: HashMap::new(),
+            collection_aggs: HashMap::new(),
+            collection_owner_counts: HashMap::new(),
             stats,
-            ..Default::default()
         }
     }
 
@@ -798,7 +799,7 @@ impl BatchWriter {
         for (key, (capacity_delta, knowledge_delta)) in changes {
             by_block.add(1, key.clone(), *capacity_delta, *knowledge_delta)?;
         }
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(self.store())?;
         self.update_object_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }
@@ -819,7 +820,7 @@ mod tests {
         batch: &mut StoreBatch,
         f: impl FnOnce(&mut StoreBatch, &mut MnftBatchState) -> Result<R>,
     ) -> Result<R> {
-        let entity_stats = SharedEntityStatsOverlay::new();
+        let entity_stats = SharedEntityStatsOverlay::standalone(writer.store()).unwrap();
         let mut state = writer.new_mnft_batch_state(entity_stats.clone());
         let out = f(batch, &mut state)?;
         entity_stats.stage_final(batch)?;
@@ -971,7 +972,8 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut batch, &mut state)
             .unwrap();
@@ -1014,7 +1016,7 @@ mod tests {
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let entity_stats = SharedEntityStatsOverlay::new();
+        let entity_stats = SharedEntityStatsOverlay::standalone(writer.store()).unwrap();
         let mut state = writer.new_mnft_batch_state(entity_stats.clone());
         let transfer_a = sample_token(0x12, class.class_id.clone(), 0x55);
         let transfer_b = sample_token(0x12, class.class_id.clone(), 0x66);
@@ -1063,7 +1065,8 @@ mod tests {
 
         // Seed class with one token so the DB aggregate starts at 1.
         let mut seed = StoreBatch::new(writer.store());
-        let mut seed_state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let mut seed_state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
@@ -1075,7 +1078,8 @@ mod tests {
         // In one uncommitted batch, add a new token then re-write class metadata.
         // Class upsert must not clobber collection counts already updated in this batch.
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_mnft_token_with_state(&token_b, &tx_hash, 9, 2, 0, &mut batch, &mut state)
             .unwrap();
@@ -1100,7 +1104,8 @@ mod tests {
         let store = CkbadgerStore::open_domain(dir.path()).unwrap();
         let store = Arc::new(store);
         let writer = BatchWriter::new(store.clone(), store.clone());
-        let state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
 
         let collection_id = vec![0x88; 24];
         let key = ckbadger_store::keys::encode_object_hourly_key(&collection_id, 1);
@@ -1130,7 +1135,8 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut seed = StoreBatch::new(writer.store());
-        let mut seed_state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let mut seed_state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut seed, &mut seed_state)
             .unwrap();
@@ -1143,7 +1149,8 @@ mod tests {
         seed.commit().unwrap();
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .consume_mnft_token_with_state(&token_a.token_id, 2, &tx_hash, &mut batch, &mut state)
             .unwrap();
@@ -1211,7 +1218,8 @@ mod tests {
         let tx_hash = vec![0x51; 32];
 
         let mut batch = StoreBatch::new(writer.store());
-        let mut state = writer.new_mnft_batch_state(SharedEntityStatsOverlay::new());
+        let mut state = writer
+            .new_mnft_batch_state(SharedEntityStatsOverlay::standalone(writer.store()).unwrap());
         writer
             .insert_mnft_class_with_state(&class, &tx_hash, 7, 1, &mut batch, &mut state)
             .unwrap();

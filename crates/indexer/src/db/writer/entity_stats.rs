@@ -46,20 +46,17 @@ pub struct EntityStatsOverlay {
     owns_overlay: bool,
 }
 
-impl Default for EntityStatsOverlay {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl EntityStatsOverlay {
-    /// A standalone overlay: it keeps its own values and stages them, with
-    /// their journal entries, in [`Self::stage_final`].
-    pub fn new() -> Self {
-        Self {
-            overlay: SharedBlockOverlay::default(),
+    /// Tests only: a standalone overlay on `store`, which keeps its own
+    /// values and stages them, with their journal entries, in
+    /// [`Self::stage_final`]. Production shares the live batch's overlay
+    /// ([`Self::sharing`]).
+    #[cfg(test)]
+    pub(crate) fn standalone(store: &CkbadgerStore) -> Result<Self> {
+        Ok(Self {
+            overlay: SharedBlockOverlay::new(store)?,
             owns_overlay: true,
-        }
+        })
     }
 
     /// The stats side of a live batch's block overlay, which the batch
@@ -146,13 +143,16 @@ impl EntityStatsOverlay {
 ///
 /// `Arc<Mutex<_>>` rather than `Rc<RefCell<_>>`: the batch write future must
 /// stay `Send`.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct SharedEntityStatsOverlay(Arc<Mutex<EntityStatsOverlay>>);
 
 impl SharedEntityStatsOverlay {
+    /// Tests only: see [`EntityStatsOverlay::standalone`].
     #[cfg(test)]
-    pub fn new() -> Self {
-        Self::default()
+    pub(crate) fn standalone(store: &CkbadgerStore) -> Result<Self> {
+        Ok(Self(Arc::new(Mutex::new(EntityStatsOverlay::standalone(
+            store,
+        )?))))
     }
 
     /// The stats side of a live batch's block overlay.
@@ -462,9 +462,10 @@ mod tests {
     /// bytes — silently. The overlay refuses instead of trusting its callers.
     #[test]
     fn mutate_rejects_a_block_going_backwards_for_the_same_key() {
+        let (_dir, store) = open_store();
         let key = keys::encode_token_daily_key(&[0x22; 32], 20_260_922).to_vec();
 
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(&store).unwrap();
 
         overlay.mutate(7, &key, Some(daily(10, 1))).unwrap();
         // Same block again is fine (many txs per block).
@@ -482,12 +483,27 @@ mod tests {
         overlay.mutate(3, &other, Some(daily(5, 1))).unwrap();
     }
 
+    /// No overlay exists without the bulk-mode check, the tests' standalone
+    /// one included: neither overlay type has a `Default`.
+    #[test]
+    fn a_standalone_overlay_on_a_bulk_mode_store_is_an_error() {
+        let (_dir, store) = open_store();
+        store.set_bulk_sync_mode(true);
+        let error = EntityStatsOverlay::standalone(&store)
+            .err()
+            .expect("a standalone overlay on a bulk-mode store")
+            .to_string();
+        assert!(error.contains("bulk-sync mode"), "{error}");
+        store.set_bulk_sync_mode(false);
+        assert!(EntityStatsOverlay::standalone(&store).is_ok());
+    }
+
     #[test]
     fn stage_final_writes_each_key_once() {
         let (_dir, store) = open_store();
         let key = keys::encode_object_daily_key(&[0x55; 32], 20_260_922).to_vec();
 
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(&store).unwrap();
         let mut batch = StoreBatch::new(&store);
         let before = batch.len();
         for block in 1..=3i64 {
@@ -523,7 +539,7 @@ mod tests {
         let key = keys::encode_token_daily_key(&[0x22; 32], 20_260_922).to_vec();
         store.put_stats_key(&key, &daily(10, 1)).unwrap();
 
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(&store).unwrap();
         let mut batch = StoreBatch::new(&store);
         overlay.mutate(4, &key, None).unwrap();
         overlay.stage_final(&mut batch).unwrap();
@@ -728,7 +744,7 @@ mod tests {
         let key = keys::encode_token_daily_key(&[0x22; 32], 20_260_922).to_vec();
         store.put_stats_key(&key, &daily(10, 1)).unwrap();
 
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(&store).unwrap();
         overlay.mutate(2, &key, Some(daily(99, 9))).unwrap();
         overlay
             .prefetch(&store, std::slice::from_ref(&key))

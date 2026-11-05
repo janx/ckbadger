@@ -97,7 +97,7 @@ impl BatchWriter {
         for (key, (capacity_delta, knowledge_delta)) in changes {
             by_block.add_tx(1, key.clone(), *capacity_delta, *knowledge_delta, 0)?;
         }
-        let mut overlay = EntityStatsOverlay::new();
+        let mut overlay = EntityStatsOverlay::standalone(self.store())?;
         self.update_token_daily_deltas_batch(&by_block, &mut overlay)?;
         overlay.stage_final(batch)
     }
@@ -772,7 +772,7 @@ mod tests {
         block_timestamps: &HashMap<i64, i64>,
         batch: &mut StoreBatch,
     ) -> Result<()> {
-        let entity_stats = SharedEntityStatsOverlay::new();
+        let entity_stats = SharedEntityStatsOverlay::standalone(writer.store()).unwrap();
         let mut state = writer.new_udt_batch_state(entity_stats.clone());
         writer.process_udt_transfers_batch_with_state(
             transfers,
@@ -1650,7 +1650,7 @@ mod tests {
         let first = vec![(&transfer_a, tx_hash_a.as_slice(), 401i64)];
         let second = vec![(&transfer_b, tx_hash_b.as_slice(), 402i64)];
         let mut batch = StoreBatch::new(&store);
-        let entity_stats = SharedEntityStatsOverlay::new();
+        let entity_stats = SharedEntityStatsOverlay::standalone(writer.store()).unwrap();
         let mut state = writer.new_udt_batch_state(entity_stats.clone());
         writer
             .process_udt_transfers_batch_with_state(
