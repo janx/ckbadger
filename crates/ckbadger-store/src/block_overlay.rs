@@ -1091,4 +1091,77 @@ mod tests {
         ));
         assert!(!is_outside_journal(CF_SYNC_META, b"sync_status"));
     }
+
+    /// A block's journal sequence numbers carry a 48-bit local counter under
+    /// the journal's scope bits: the last counter value is allocated, the
+    /// next one is an overflow error naming the block, never a number that
+    /// spills into the scope bits.
+    #[test]
+    fn journal_seq_overflows_past_the_local_maximum_with_the_block_named() {
+        let block = 4_242;
+        let mut counters = HashMap::from([(block, UNDO_SEQ_LOCAL_MAX - 1)]);
+        assert_eq!(
+            journal_seq(&mut counters, block).unwrap(),
+            UndoSeqScope::Journal.seq_base() | (UNDO_SEQ_LOCAL_MAX - 1)
+        );
+        let last = journal_seq(&mut counters, block).unwrap();
+        assert_eq!(last, UndoSeqScope::Journal.seq_base() | UNDO_SEQ_LOCAL_MAX);
+        assert!(UndoSeqScope::Journal.owns(last));
+        for _ in 0..2 {
+            let error = journal_seq(&mut counters, block).unwrap_err().to_string();
+            assert!(error.contains("overflow"), "{error}");
+            assert!(error.contains(&format!("block={block}")), "{error}");
+        }
+        // The counter is per block: another block still starts at 0.
+        assert_eq!(
+            journal_seq(&mut counters, block + 1).unwrap(),
+            UndoSeqScope::Journal.seq_base()
+        );
+    }
+
+    /// `continuing_journal_seq` continues after the journal rows the store
+    /// already holds for a block: after a row at the second-to-last local
+    /// sequence it allocates the last one and then fails; after a row at the
+    /// last local sequence its first allocation for that block fails, with
+    /// the block named.
+    #[test]
+    fn continuing_journal_seq_overflows_after_a_stored_row_at_the_local_maximum() {
+        let (store, _dir) = store();
+        let put_journal_row = |block: i64, local: u64| {
+            store
+                .put_cf(
+                    store.cf_reorg_undo_log_by_block(),
+                    &keys::encode_reorg_undo_log_key(
+                        block,
+                        UndoSeqScope::Journal.seq_base() | local,
+                    ),
+                    &encode_journal_value(CF_ADDR_BALANCE, b"k", None).unwrap(),
+                )
+                .unwrap();
+        };
+        let (below_max, at_max) = (31, 32);
+        put_journal_row(below_max, UNDO_SEQ_LOCAL_MAX - 1);
+        put_journal_row(at_max, UNDO_SEQ_LOCAL_MAX);
+        assert_eq!(
+            store.journal_entries(at_max).unwrap()[0].seq,
+            UndoSeqScope::Journal.seq_base() | UNDO_SEQ_LOCAL_MAX
+        );
+
+        let mut seq = continuing_journal_seq(&store);
+        assert_eq!(
+            seq(below_max).unwrap(),
+            UndoSeqScope::Journal.seq_base() | UNDO_SEQ_LOCAL_MAX,
+            "the last local sequence is still allocated"
+        );
+        let error = seq(below_max).unwrap_err().to_string();
+        assert!(error.contains("overflow"), "{error}");
+        assert!(error.contains(&format!("block={below_max}")), "{error}");
+
+        let error = seq(at_max).unwrap_err().to_string();
+        assert!(error.contains("overflow"), "{error}");
+        assert!(error.contains(&format!("block={at_max}")), "{error}");
+
+        // A block with no stored row starts at 0.
+        assert_eq!(seq(at_max + 1).unwrap(), UndoSeqScope::Journal.seq_base());
+    }
 }
