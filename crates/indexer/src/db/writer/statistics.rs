@@ -1201,13 +1201,31 @@ impl BatchWriter {
     /// and no row may exist for a day after the tip's (such a row can only be
     /// the open-day row of a former tip, which a journal replay restores as
     /// the previous value of a sealed write), so they are removed.
+    ///
+    /// Each call logs one debug line, [`DAO_TIP_SUMMARY_LOG`], with its
+    /// elapsed time, the open day's headers walked and the live DAO cells
+    /// scanned (the 24 h run's sampler reads it; keep the text and fields).
     pub fn refresh_latest_dao_statistics(&self) -> Result<()> {
-        self.refresh_dao_statistics()
+        let started = std::time::Instant::now();
+        let work = self.refresh_dao_statistics()?;
+        tracing::debug!(
+            elapsed_ms = started.elapsed().as_secs_f64() * 1_000.0,
+            tip_block = work.tip_block,
+            open_day_headers = work.open_day_headers,
+            live_dao_cells = work.live_dao_cells,
+            "{}",
+            DAO_TIP_SUMMARY_LOG
+        );
+        Ok(())
     }
 
-    fn refresh_dao_statistics(&self) -> Result<()> {
+    fn refresh_dao_statistics(&self) -> Result<DaoTipSummaryWork> {
         let Some((tip_block_number, header)) = self.store.get_sync_tip_block()? else {
-            return Ok(());
+            return Ok(DaoTipSummaryWork {
+                tip_block: -1,
+                open_day_headers: 0,
+                live_dao_cells: 0,
+            });
         };
 
         let tip_ar = extract_ar_from_dao_field(&header.dao).ok_or_else(|| {
@@ -1564,8 +1582,26 @@ impl BatchWriter {
 
         dao_batch.commit()?;
 
-        Ok(())
+        Ok(DaoTipSummaryWork {
+            tip_block: tip_block_number,
+            open_day_headers: tip_block_number - open_day_start + 1,
+            live_dao_cells: i64::from(active_deposits),
+        })
     }
+}
+
+/// The debug message of one DAO tip summary refresh
+/// (`refresh_latest_dao_statistics`); a sampler matches it verbatim.
+pub const DAO_TIP_SUMMARY_LOG: &str = "DAO tip summary refreshed";
+
+/// What one DAO tip summary refresh walked, for its debug line.
+struct DaoTipSummaryWork {
+    tip_block: i64,
+    /// The open day's blocks, `open_day_start ..= tip`, whose headers the
+    /// open-day snapshot walks.
+    open_day_headers: i64,
+    /// Live DAO cells (deposits and withdraw requests) the summary scanned.
+    live_dao_cells: i64,
 }
 
 fn extract_ar_from_dao_field(dao: &[u8]) -> Option<u64> {
@@ -1953,7 +1989,23 @@ mod tests {
         seed.commit().unwrap();
 
         seal_dao_days_before_tip(&store);
-        writer.refresh_latest_dao_statistics().unwrap();
+        let (refreshed, logs) =
+            crate::label_import::test_log_capture::capture_logs(tracing::Level::DEBUG, || {
+                writer.refresh_latest_dao_statistics()
+            });
+        refreshed.unwrap();
+        // One debug line per call, the 24 h run's sampler reads it: the open
+        // day is blocks 0..=10 (one UTC+8 day), one live DAO cell (the other
+        // deposit is withdrawn).
+        let line = logs
+            .lines()
+            .find(|line| line.contains(super::DAO_TIP_SUMMARY_LOG))
+            .unwrap_or_else(|| panic!("no DAO tip summary line in: {logs}"));
+        assert!(line.contains("DEBUG"), "{line}");
+        assert!(line.contains("elapsed_ms="), "{line}");
+        assert!(line.contains("tip_block=10"), "{line}");
+        assert!(line.contains("open_day_headers=11"), "{line}");
+        assert!(line.contains("live_dao_cells=1"), "{line}");
         assert!(
             store.get_dao_daily_snapshot("20231116").unwrap().is_none(),
             "the refresh removes the rows of days after the tip's"
