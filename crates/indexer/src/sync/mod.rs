@@ -1,5 +1,6 @@
 mod adaptive;
 mod batch;
+pub(crate) mod block_days;
 pub(crate) mod bottleneck;
 pub(crate) mod bulk_build;
 pub(crate) mod dao_helpers;

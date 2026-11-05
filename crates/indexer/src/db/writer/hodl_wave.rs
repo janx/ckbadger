@@ -3,25 +3,34 @@
 //! Maintains an in-memory `HashMap<NaiveDate, i128>` mapping cell creation dates
 //! to their total live capacity. At each day boundary, computes age-band snapshots
 //! for the HODL wave chart.
+//!
+//! Persisted as rows (store refactor lane B, B-4): one `hodl_capacity_by_date`
+//! row per creation day and the `hodl_cursor` row for the scalars. The live
+//! writer stages, in each block's scope, the rows that block moved
+//! ([`HodlWaveTracker::stage_block_rows`]); bulk finalize stages them all
+//! ([`HodlWaveTracker::stage_all_rows`]). The tracker never maps a block to its
+//! day itself: the caller passes the creation day of a consumed cell, derived
+//! from the creating block's canonical header (`sync::block_days`).
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use chrono::NaiveDate;
-use ckbadger_store::{DailyHodlWave, HodlTrackerState};
+use ckbadger_store::batch::StoreBatch;
+use ckbadger_store::{CkbadgerStore, DailyHodlWave, HodlTrackerCursor};
 
 /// Tracks live cell capacity by creation date for HODL wave chart computation.
 #[derive(Debug, Clone)]
 pub struct HodlWaveTracker {
-    /// Total live capacity (shannons) per cell creation date.
+    /// Total live capacity (shannons) per cell creation date. A day whose
+    /// capacity reaches zero is removed (and its row deleted).
     capacity_by_creation_date: HashMap<NaiveDate, i128>,
-    /// Sorted list of (block_number, date) transitions for block→date lookup.
-    block_date_transitions: Vec<(i64, NaiveDate)>,
     /// Number of addresses with at least one live cell.
     pub holder_count: i64,
-    /// The date of the last snapshot written (to detect day boundaries).
+    /// The day of the last processed block: the open day, sealed by the first
+    /// block of the next day.
     pub last_snapshot_date: Option<NaiveDate>,
-    /// The last block number processed (updated for every block, not just date transitions).
+    /// The last block number processed.
     last_processed_block: Option<i64>,
 }
 
@@ -29,96 +38,125 @@ impl HodlWaveTracker {
     pub fn new() -> Self {
         Self {
             capacity_by_creation_date: HashMap::new(),
-            block_date_transitions: Vec::new(),
             holder_count: 0,
             last_snapshot_date: None,
             last_processed_block: None,
         }
     }
 
-    /// Restore tracker from persisted state.
-    pub fn from_state(state: HodlTrackerState) -> Result<Self> {
-        if state.holder_count < 0 {
+    /// The tracker its persisted rows describe: `hodl_capacity_by_date` and
+    /// the `hodl_cursor` (both validated by the store's row codecs).
+    pub fn from_rows(rows: Vec<(NaiveDate, i128)>, cursor: HodlTrackerCursor) -> Result<Self> {
+        let last_snapshot_date = NaiveDate::parse_from_str(&cursor.last_snapshot_date, "%Y%m%d")
+            .map_err(|e| {
+                anyhow!(
+                    "corrupt hodl cursor last_snapshot_date '{}': {e}",
+                    cursor.last_snapshot_date
+                )
+            })?;
+        let mut capacity_by_creation_date = HashMap::with_capacity(rows.len());
+        for (day, capacity) in rows {
+            if capacity <= 0 {
+                bail!("hodl_capacity_by_date row {day} holds non-positive capacity {capacity}");
+            }
+            if capacity_by_creation_date.insert(day, capacity).is_some() {
+                bail!("hodl_capacity_by_date row {day} appears twice");
+            }
+        }
+        if cursor.holder_count < 0 {
             bail!(
-                "invalid hodl tracker state: negative holder_count={}",
-                state.holder_count
+                "invalid hodl cursor: negative holder_count={}",
+                cursor.holder_count
             );
         }
-
-        let mut capacity_by_creation_date = HashMap::new();
-        for (date_str, cap) in state.capacity_by_date {
-            let date = NaiveDate::parse_from_str(&date_str, "%Y%m%d").map_err(|e| {
-                anyhow::anyhow!(
-                    "corrupt hodl capacity_by_date entry: date='{}': {}",
-                    date_str,
-                    e
-                )
-            })?;
-            capacity_by_creation_date.insert(date, cap);
-        }
-        let mut block_date_transitions = Vec::new();
-        for (block, date_str) in state.date_transitions {
-            let date = NaiveDate::parse_from_str(&date_str, "%Y%m%d").map_err(|e| {
-                anyhow::anyhow!(
-                    "corrupt hodl date_transitions entry: block={}, date='{}': {}",
-                    block,
-                    date_str,
-                    e
-                )
-            })?;
-            block_date_transitions.push((block, date));
-        }
-        let last_snapshot_date = state
-            .last_snapshot_date
-            .map(|s| {
-                NaiveDate::parse_from_str(&s, "%Y%m%d").map_err(|e| {
-                    anyhow::anyhow!("corrupt hodl last_snapshot_date: date='{}': {}", s, e)
-                })
-            })
-            .transpose()?;
         Ok(Self {
             capacity_by_creation_date,
-            block_date_transitions,
-            holder_count: state.holder_count,
-            last_snapshot_date,
-            last_processed_block: state.last_processed_block,
+            holder_count: cursor.holder_count,
+            last_snapshot_date: Some(last_snapshot_date),
+            last_processed_block: Some(cursor.last_processed_block),
         })
     }
 
-    /// Serialize tracker state for persistence.
-    pub fn to_state(&self) -> HodlTrackerState {
-        let capacity_by_date = self
-            .capacity_by_creation_date
-            .iter()
-            .map(|(d, c)| (d.format("%Y%m%d").to_string(), *c))
-            .collect();
-        let date_transitions = self
-            .block_date_transitions
-            .iter()
-            .map(|(b, d)| (*b, d.format("%Y%m%d").to_string()))
-            .collect();
-        let last_snapshot_date = self
-            .last_snapshot_date
-            .map(|d| d.format("%Y%m%d").to_string());
-        HodlTrackerState {
-            capacity_by_date,
-            date_transitions,
-            holder_count: self.holder_count,
-            last_snapshot_date,
-            last_processed_block: self.last_processed_block,
+    /// The tracker as persisted in `store`: its rows and cursor, or a fresh
+    /// tracker when nothing was ever processed (no cursor and no row).
+    pub fn load(store: &CkbadgerStore) -> Result<Self> {
+        let rows = store.list_hodl_capacity_by_date()?;
+        match store.get_hodl_cursor()? {
+            Some(cursor) => Self::from_rows(rows, cursor),
+            None if rows.is_empty() => Ok(Self::new()),
+            None => bail!(
+                "hodl_capacity_by_date holds {} rows but there is no hodl_cursor. automatic rebuild is disabled; delete RocksDB and re-sync from genesis",
+                rows.len()
+            ),
         }
     }
 
-    /// Record a block→date mapping. Only records transitions (when date changes),
-    /// but always updates `last_processed_block` for consistency tracking.
-    pub fn record_block_date(&mut self, block_number: i64, date: NaiveDate) {
-        self.last_processed_block = Some(block_number);
-        if let Some((_, last_date)) = self.block_date_transitions.last() {
-            if *last_date == date {
-                return; // Same date, no transition needed
+    /// The last block this tracker processed, `None` for a fresh tracker.
+    pub fn last_processed_block(&self) -> Option<i64> {
+        self.last_processed_block
+    }
+
+    /// The scalar state as its `hodl_cursor` row; defined once a block was
+    /// processed.
+    pub fn cursor(&self) -> Result<HodlTrackerCursor> {
+        let (Some(last_processed_block), Some(last_snapshot_date)) =
+            (self.last_processed_block, self.last_snapshot_date)
+        else {
+            bail!("hodl tracker has processed no block: no cursor to persist");
+        };
+        Ok(HodlTrackerCursor {
+            holder_count: self.holder_count,
+            last_snapshot_date: last_snapshot_date.format("%Y%m%d").to_string(),
+            last_processed_block,
+        })
+    }
+
+    /// The live capacity of one creation day, `None` when it holds none.
+    pub fn capacity_on(&self, day: NaiveDate) -> Option<i128> {
+        self.capacity_by_creation_date.get(&day).copied()
+    }
+
+    /// Stage the rows one block moved — the current value of each day in
+    /// `moved_days` (deleted when it holds no capacity any more) — and the
+    /// cursor, into `batch` (the caller scopes it to the block). Returns the
+    /// value bytes staged.
+    pub fn stage_block_rows(
+        &self,
+        batch: &mut StoreBatch<'_>,
+        moved_days: &BTreeSet<NaiveDate>,
+    ) -> Result<usize> {
+        let mut bytes = 0;
+        for &day in moved_days {
+            match self.capacity_on(day) {
+                Some(capacity) => bytes += batch.put_hodl_capacity_by_date(day, capacity)?,
+                None => batch.delete_hodl_capacity_by_date(day)?,
             }
         }
-        self.block_date_transitions.push((block_number, date));
+        Ok(bytes + batch.put_hodl_cursor(&self.cursor()?)?)
+    }
+
+    /// Stage every row and the cursor (bulk finalize, onto a store without
+    /// tracker rows). Returns the value bytes staged.
+    pub fn stage_all_rows(&self, batch: &mut StoreBatch<'_>) -> Result<usize> {
+        let mut bytes = 0;
+        for (&day, &capacity) in &self.capacity_by_creation_date {
+            bytes += batch.put_hodl_capacity_by_date(day, capacity)?;
+        }
+        Ok(bytes + batch.put_hodl_cursor(&self.cursor()?)?)
+    }
+
+    /// Record that `block_number` is being processed. Blocks arrive in
+    /// ascending order.
+    pub fn record_block(&mut self, block_number: i64) -> Result<()> {
+        if let Some(last) = self.last_processed_block {
+            if block_number <= last {
+                bail!(
+                    "hodl tracker received block {block_number} after block {last}: blocks must ascend"
+                );
+            }
+        }
+        self.last_processed_block = Some(block_number);
+        Ok(())
     }
 
     /// A cell was created at the given date with the given capacity.
@@ -129,38 +167,30 @@ impl HodlWaveTracker {
             .or_insert(0) += capacity as i128;
     }
 
-    /// A cell was consumed. Look up its creation date from block number and subtract capacity.
-    pub fn cell_consumed(&mut self, created_at_block: i64, capacity: i64) -> Result<()> {
+    /// A cell created on `creation_date` was consumed: subtract its capacity
+    /// from that day.
+    pub fn cell_consumed(&mut self, creation_date: NaiveDate, capacity: i64) -> Result<()> {
         if capacity <= 0 {
             bail!(
-                "invalid consumed cell capacity: created_at_block={}, capacity={}",
-                created_at_block,
+                "invalid consumed cell capacity: creation_date={}, capacity={}",
+                creation_date,
                 capacity
             );
         }
-
-        let creation_date = self.block_number_to_date(created_at_block).ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing block-date transition for consumed cell: created_at_block={}, transitions={}",
-                created_at_block,
-                self.block_date_transitions.len()
-            )
-        })?;
 
         let current = self
             .capacity_by_creation_date
             .get(&creation_date)
             .copied()
             .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "missing live capacity bucket for consumed cell: created_at_block={}, creation_date={}",
-                    created_at_block,
+                anyhow!(
+                    "missing live capacity bucket for consumed cell: creation_date={}",
                     creation_date
                 )
             })?;
 
         let next = current.checked_sub(capacity as i128).ok_or_else(|| {
-            anyhow::anyhow!(
+            anyhow!(
                 "capacity subtraction overflow: current={}, capacity={}",
                 current,
                 capacity
@@ -169,8 +199,7 @@ impl HodlWaveTracker {
 
         if next < 0 {
             bail!(
-                "live capacity underflow on consume: created_at_block={}, creation_date={}, current={}, capacity={}",
-                created_at_block,
+                "live capacity underflow on consume: creation_date={}, current={}, capacity={}",
                 creation_date,
                 current,
                 capacity
@@ -256,23 +285,6 @@ impl HodlWaveTracker {
 
         wave
     }
-
-    /// Look up the date for a given block number using binary search on transitions.
-    fn block_number_to_date(&self, block_number: i64) -> Option<NaiveDate> {
-        if self.block_date_transitions.is_empty() {
-            return None;
-        }
-        // Binary search for the last transition where block_number >= transition.block_number
-        let idx = self
-            .block_date_transitions
-            .partition_point(|(b, _)| *b <= block_number);
-        if idx == 0 {
-            // Block is before our first recorded transition — use first date
-            Some(self.block_date_transitions[0].1)
-        } else {
-            Some(self.block_date_transitions[idx - 1].1)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -292,9 +304,8 @@ mod tests {
     fn test_cell_consumed_reduces_capacity() {
         let mut tracker = HodlWaveTracker::new();
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
         tracker.cell_created(date, 200_00000000);
-        tracker.cell_consumed(100, 50_00000000).unwrap();
+        tracker.cell_consumed(date, 50_00000000).unwrap();
         assert_eq!(tracker.capacity_by_creation_date[&date], 150_00000000_i128);
     }
 
@@ -302,9 +313,8 @@ mod tests {
     fn test_cell_consumed_removes_zero_entries() {
         let mut tracker = HodlWaveTracker::new();
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
         tracker.cell_created(date, 100_00000000);
-        tracker.cell_consumed(100, 100_00000000).unwrap();
+        tracker.cell_consumed(date, 100_00000000).unwrap();
         assert!(!tracker.capacity_by_creation_date.contains_key(&date));
     }
 
@@ -312,10 +322,9 @@ mod tests {
     fn test_cell_consumed_errors_on_underflow() {
         let mut tracker = HodlWaveTracker::new();
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
         tracker.cell_created(date, 100_00000000);
 
-        let err = tracker.cell_consumed(100, 150_00000000).unwrap_err();
+        let err = tracker.cell_consumed(date, 150_00000000).unwrap_err();
         assert!(err.to_string().contains("underflow"));
     }
 
@@ -323,33 +332,8 @@ mod tests {
     fn test_cell_consumed_errors_when_no_matching_live_bucket() {
         let mut tracker = HodlWaveTracker::new();
         let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
-
-        let err = tracker.cell_consumed(100, 10_00000000).unwrap_err();
+        let err = tracker.cell_consumed(date, 10_00000000).unwrap_err();
         assert!(err.to_string().contains("missing live capacity bucket"));
-    }
-
-    #[test]
-    fn test_block_date_lookup() {
-        let mut tracker = HodlWaveTracker::new();
-        let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        let jan16 = NaiveDate::from_ymd_opt(2024, 1, 16).unwrap();
-        let jan17 = NaiveDate::from_ymd_opt(2024, 1, 17).unwrap();
-        tracker.record_block_date(100, jan15);
-        tracker.record_block_date(200, jan16);
-        tracker.record_block_date(300, jan17);
-        // Blocks within jan15 range
-        assert_eq!(tracker.block_number_to_date(100), Some(jan15));
-        assert_eq!(tracker.block_number_to_date(150), Some(jan15));
-        assert_eq!(tracker.block_number_to_date(199), Some(jan15));
-        // Blocks within jan16 range
-        assert_eq!(tracker.block_number_to_date(200), Some(jan16));
-        assert_eq!(tracker.block_number_to_date(250), Some(jan16));
-        // Block in jan17
-        assert_eq!(tracker.block_number_to_date(300), Some(jan17));
-        assert_eq!(tracker.block_number_to_date(999), Some(jan17));
-        // Block before first transition
-        assert_eq!(tracker.block_number_to_date(50), Some(jan15));
     }
 
     #[test]
@@ -433,67 +417,82 @@ mod tests {
     }
 
     #[test]
-    fn test_record_block_date_dedup() {
+    fn record_block_requires_ascending_blocks() {
         let mut tracker = HodlWaveTracker::new();
-        let date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
-        tracker.record_block_date(100, date);
-        tracker.record_block_date(101, date);
-        tracker.record_block_date(102, date);
-        // Only one transition recorded (dedup)
-        assert_eq!(tracker.block_date_transitions.len(), 1);
+        tracker.record_block(100).unwrap();
+        tracker.record_block(101).unwrap();
+        let err = tracker.record_block(101).unwrap_err();
+        assert!(err.to_string().contains("must ascend"), "{err}");
     }
 
+    /// The tracker's persisted form is its rows and cursor: staging them all
+    /// and loading them back yields the same tracker, and a block's rows
+    /// delete an emptied day.
     #[test]
-    fn test_state_roundtrip() {
-        let mut tracker = HodlWaveTracker::new();
+    fn rows_and_cursor_round_trip_through_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        assert!(HodlWaveTracker::new().cursor().is_err());
+        assert_eq!(
+            HodlWaveTracker::load(&store)
+                .unwrap()
+                .last_processed_block(),
+            None
+        );
+
         let jan15 = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
         let jan16 = NaiveDate::from_ymd_opt(2024, 1, 16).unwrap();
-        tracker.record_block_date(100, jan15);
-        tracker.record_block_date(200, jan16);
+        let mut tracker = HodlWaveTracker::new();
+        tracker.record_block(100).unwrap();
+        assert!(tracker.maybe_snapshot(jan15).is_none());
         tracker.cell_created(jan15, 500_00000000);
+        tracker.record_block(200).unwrap();
+        assert!(tracker.maybe_snapshot(jan16).is_some());
         tracker.cell_created(jan16, 300_00000000);
         tracker.holder_count = 42;
-        tracker.last_snapshot_date = Some(jan16);
 
-        let state = tracker.to_state();
-        let restored = HodlWaveTracker::from_state(state).unwrap();
-
-        assert_eq!(restored.block_date_transitions.len(), 2);
+        let mut batch = StoreBatch::new(&store);
+        tracker.stage_all_rows(&mut batch).unwrap();
+        batch.commit().unwrap();
+        let restored = HodlWaveTracker::load(&store).unwrap();
         assert_eq!(restored.holder_count, 42);
         assert_eq!(restored.last_snapshot_date, Some(jan16));
+        assert_eq!(restored.last_processed_block(), Some(200));
+        assert_eq!(restored.capacity_on(jan15), Some(500_00000000));
+        assert_eq!(restored.capacity_on(jan16), Some(300_00000000));
+
+        let mut tracker = restored;
+        tracker.record_block(201).unwrap();
+        tracker.cell_consumed(jan15, 500_00000000).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        tracker
+            .stage_block_rows(&mut batch, &BTreeSet::from([jan15]))
+            .unwrap();
+        batch.commit().unwrap();
         assert_eq!(
-            restored.capacity_by_creation_date[&jan15],
-            500_00000000_i128
+            store.list_hodl_capacity_by_date().unwrap(),
+            vec![(jan16, 300_00000000)]
         );
         assert_eq!(
-            restored.capacity_by_creation_date[&jan16],
-            300_00000000_i128
+            store
+                .get_hodl_cursor()
+                .unwrap()
+                .unwrap()
+                .last_processed_block,
+            201
         );
     }
 
     #[test]
-    fn test_from_state_rejects_negative_holder_count() {
-        let state = HodlTrackerState {
-            capacity_by_date: vec![],
-            date_transitions: vec![],
-            holder_count: -5,
-            last_snapshot_date: None,
-            last_processed_block: None,
-        };
-        let err = HodlWaveTracker::from_state(state).unwrap_err();
-        assert!(err.to_string().contains("negative holder_count"));
-    }
-
-    #[test]
-    fn test_from_state_rejects_corrupt_date() {
-        let state = HodlTrackerState {
-            capacity_by_date: vec![("not-a-date".to_string(), 100)],
-            date_transitions: vec![],
-            holder_count: 0,
-            last_snapshot_date: None,
-            last_processed_block: None,
-        };
-        let err = HodlWaveTracker::from_state(state).unwrap_err();
-        assert!(err.to_string().contains("corrupt hodl capacity_by_date"));
+    fn rows_without_a_cursor_fail_to_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = CkbadgerStore::open_domain(dir.path()).unwrap();
+        let mut batch = StoreBatch::new(&store);
+        batch
+            .put_hodl_capacity_by_date(NaiveDate::from_ymd_opt(2024, 1, 15).unwrap(), 5)
+            .unwrap();
+        batch.commit().unwrap();
+        let err = HodlWaveTracker::load(&store).unwrap_err();
+        assert!(err.to_string().contains("no hodl_cursor"), "{err}");
     }
 }

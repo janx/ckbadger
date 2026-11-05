@@ -1968,6 +1968,11 @@ pub struct DailyHodlWave {
     pub holder_count: i64,
 }
 
+/// Legacy whole-state HODL tracker blob (`sync_meta` `hodl_tracker`). Read
+/// only by the one-time conversion to rows
+/// (`CkbadgerStore::convert_tracker_blobs_to_rows`); deleted with it after the
+/// re-sync of docs/superpowers/plans/2026-11-04-store-cf-refactor-plan.md
+/// (B-4).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HodlTrackerState {
     pub capacity_by_date: Vec<(String, i128)>,
@@ -2006,8 +2011,9 @@ pub struct AddressCohortEntry {
     pub total_balance: i128,
 }
 
-/// Serializable state for the cell distribution tracker.
-/// Persisted to sync_meta for crash recovery.
+/// Legacy whole-state cell-distribution tracker blob (`sync_meta`
+/// `cell_dist_tracker`). Read only by the one-time conversion to rows; see
+/// [`HodlTrackerState`].
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CellDistributionTrackerState {
     pub count_by_bucket: [i64; 6],
@@ -2021,6 +2027,34 @@ pub struct CellDistributionTrackerState {
     /// Distinct from `date_transitions.last()` which only records date boundary changes.
     #[serde(default)]
     pub last_processed_block: Option<i64>,
+}
+
+/// The HODL wave tracker's scalars, one `sync_meta` row (`hodl_cursor`). With
+/// the `hodl_capacity_by_date` rows it is the tracker's whole persisted state
+/// at `last_processed_block`; both are written in the scope of every block
+/// that moves them, so the block journal restores them on a rollback.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HodlTrackerCursor {
+    /// Addresses holding at least one live cell.
+    pub holder_count: i64,
+    /// UTC+8 day (`YYYYMMDD`) of `last_processed_block`: the open day, whose
+    /// snapshot the first block of the next day seals.
+    pub last_snapshot_date: String,
+    pub last_processed_block: i64,
+}
+
+/// The cell-distribution tracker's scalars, one `sync_meta` row
+/// (`cell_dist_cursor`); its cohort accumulator is the
+/// `cell_dist_cohort_by_month` rows. See [`HodlTrackerCursor`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CellDistTrackerCursor {
+    /// Live cell count per size bucket.
+    pub count_by_bucket: [i64; 6],
+    /// Live occupied capacity (shannons) per size bucket.
+    pub total_capacity_by_bucket: [i128; 6],
+    /// UTC+8 day (`YYYYMMDD`) of `last_processed_block`.
+    pub last_snapshot_date: String,
+    pub last_processed_block: i64,
 }
 
 // ============================================

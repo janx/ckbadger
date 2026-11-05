@@ -222,7 +222,7 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) finalize_ms: f64,
     // ── commit window, split into five non-overlapping parts ────────────
     /// Batch merge + address-balance prefetch + HODL and cell-distribution
-    /// tracker preparation (both stage their whole state into the batch).
+    /// tracker preparation (each block stages the tracker rows it moved).
     pub(crate) commit_prepare_ms: f64,
     /// `materialize_script_versions_and_families`.
     pub(crate) script_rollup_ms: f64,
@@ -232,10 +232,9 @@ pub(crate) struct BatchWriteMetrics {
     pub(crate) domain_commit_ms: f64,
     /// The whole window, from the first merge to the domain commit returning.
     pub(crate) commit_phase_total_ms: f64,
-    /// Bytes the HODL and cell-distribution trackers serialized into
-    /// `sync_meta` in this batch. Both write their WHOLE state every batch, so
-    /// this is the fixed per-batch cost of the "tracker state matches the
-    /// committed tip" recovery rule.
+    /// Value bytes of the HODL and cell-distribution tracker rows this batch
+    /// staged: per block, the creation-day / cohort-month rows the block
+    /// moved and the two cursor rows (store refactor lane B, B-4).
     pub(crate) tracker_state_bytes: usize,
     pub(crate) txs: u64,
     pub(crate) cells: u64,

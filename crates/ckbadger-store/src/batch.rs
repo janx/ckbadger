@@ -1838,18 +1838,35 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
-    /// Stage the whole HODL tracker state. Returns the serialized byte count so
-    /// the writer can report how much of each commit window this fixed-size
-    /// `sync_meta` rewrite costs.
-    pub fn put_hodl_tracker_state(&mut self, state: &HodlTrackerState) -> usize {
-        let value = bincode::serialize(state).expect("failed to serialize hodl tracker state");
-        let bytes = value.len();
+    /// Stage one creation day's live capacity (`hodl_capacity_by_date`).
+    /// Returns the value bytes staged. A day whose capacity reached zero is
+    /// deleted, never written as zero.
+    pub fn put_hodl_capacity_by_date(
+        &mut self,
+        day: chrono::NaiveDate,
+        capacity: i128,
+    ) -> anyhow::Result<usize> {
+        let key = crate::tracker_ops::encode_hodl_day_key(day)?;
+        let value = crate::tracker_ops::encode_hodl_capacity(day, capacity)?;
+        self.put_cf(self.store.cf_hodl_capacity_by_date(), key, value);
+        Ok(value.len())
+    }
+
+    pub fn delete_hodl_capacity_by_date(&mut self, day: chrono::NaiveDate) -> anyhow::Result<()> {
+        let key = crate::tracker_ops::encode_hodl_day_key(day)?;
+        self.delete_cf(self.store.cf_hodl_capacity_by_date(), key);
+        Ok(())
+    }
+
+    /// Stage the HODL tracker's cursor row. Returns the value bytes staged.
+    pub fn put_hodl_cursor(&mut self, cursor: &HodlTrackerCursor) -> anyhow::Result<usize> {
+        let value = crate::tracker_ops::encode_hodl_cursor(cursor)?;
         self.put_cf(
             self.store.cf_sync_meta(),
-            keys::sync_meta_keys::HODL_TRACKER,
+            keys::sync_meta_keys::HODL_CURSOR,
             &value,
         );
-        bytes
+        Ok(value.len())
     }
 
     pub fn put_cell_distribution(&mut self, date: &str, snapshot: &DailyCellDistribution) {
@@ -1864,17 +1881,32 @@ impl<'a> StoreBatch<'a> {
         self.put_cf(self.store.cf_stats_hodl(), &key, &value);
     }
 
-    /// Stage the whole cell-distribution tracker state. Returns the serialized
-    /// byte count; see [`Self::put_hodl_tracker_state`].
-    pub fn put_cell_dist_tracker_state(&mut self, state: &CellDistributionTrackerState) -> usize {
-        let value = bincode::serialize(state).expect("failed to serialize cell dist tracker state");
-        let bytes = value.len();
+    /// Stage one cohort month's `(used_capacity, balance)`
+    /// (`cell_dist_cohort_by_month`). Returns the value bytes staged.
+    pub fn put_cell_dist_cohort(
+        &mut self,
+        month: &str,
+        used: i128,
+        balance: i128,
+    ) -> anyhow::Result<usize> {
+        let value = crate::tracker_ops::encode_cohort(month, used, balance)?;
+        self.put_cf(self.store.cf_cell_dist_cohort_by_month(), month, value);
+        Ok(value.len())
+    }
+
+    /// Stage the cell-distribution tracker's cursor row. Returns the value
+    /// bytes staged.
+    pub fn put_cell_dist_cursor(
+        &mut self,
+        cursor: &CellDistTrackerCursor,
+    ) -> anyhow::Result<usize> {
+        let value = crate::tracker_ops::encode_cell_dist_cursor(cursor)?;
         self.put_cf(
             self.store.cf_sync_meta(),
-            keys::sync_meta_keys::CELL_DIST_TRACKER,
+            keys::sync_meta_keys::CELL_DIST_CURSOR,
             &value,
         );
-        bytes
+        Ok(value.len())
     }
 
     // ---- Sync meta ----

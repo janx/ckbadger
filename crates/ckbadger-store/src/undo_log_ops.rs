@@ -31,6 +31,27 @@ fn flush_undo_batches(
     Ok(())
 }
 
+/// Journal entries this transitional replay writes back: the rows whose only
+/// rollback is the block journal since B-4 — the HODL / cell-distribution
+/// tracker rows and cursors and the day snapshots they seal (`stats_hodl`).
+/// The rollback cleanup (`rollback_to_block_*`) no longer repairs any of
+/// them. B-5 replays the whole journal and deletes this list.
+fn is_journal_owned(entry: &UndoLogEntry) -> bool {
+    match entry {
+        UndoLogEntry::KeyMutation { cf_name, key, .. } => match cf_name.as_str() {
+            crate::store::CF_HODL_CAPACITY_BY_DATE
+            | crate::store::CF_CELL_DIST_COHORT_BY_MONTH
+            | crate::store::CF_STATS_HODL => true,
+            crate::store::CF_SYNC_META => {
+                key.as_slice() == keys::sync_meta_keys::HODL_CURSOR
+                    || key.as_slice() == keys::sync_meta_keys::CELL_DIST_CURSOR
+            }
+            _ => false,
+        },
+        UndoLogEntry::TxContext(_) => false,
+    }
+}
+
 impl CkbadgerStore {
     /// Returns true if reorg undo-log contains entries with `entry_block > block_num`.
     pub fn has_undo_log_entries_after(&self, block_num: i64) -> anyhow::Result<bool> {
@@ -232,12 +253,6 @@ impl CkbadgerStore {
             if block_num <= rollback_to {
                 continue;
             }
-            if keys::UndoSeqScope::Journal.owns(seq) {
-                // The block journal is replayed only by the journal rollback
-                // (store refactor lane B); this replay drops its rows.
-                journal_rows.push(key.to_vec());
-                continue;
-            }
             let entry: UndoLogEntry = bincode::deserialize(&value).map_err(|e| {
                 anyhow::anyhow!(
                     "failed to decode undo log entry during rollback: key=0x{}, error={}",
@@ -245,6 +260,13 @@ impl CkbadgerStore {
                     e
                 )
             })?;
+            if keys::UndoSeqScope::Journal.owns(seq) && !is_journal_owned(&entry) {
+                // The rest of the block journal is replayed only by the
+                // journal rollback (store refactor lane B, B-5); this replay
+                // drops its rows.
+                journal_rows.push(key.to_vec());
+                continue;
+            }
             pending.push((key.to_vec(), entry));
         }
 
@@ -314,6 +336,162 @@ mod tests {
         let domain = CkbadgerStore::open_domain(&domain_path).unwrap();
         let append = CkbadgerStore::open_append_only(&append_path).unwrap();
         (domain, append, root)
+    }
+
+    /// B-4: the tracker rows, their cursors and the day snapshots they seal
+    /// are journal-owned — this replay writes their journal entries back (the
+    /// rollback cleanup no longer repairs them), and still drops every other
+    /// journal row. Blocks 10..=12 are one journaled live batch; rolling back
+    /// to 10 must leave exactly the rows block 10 left.
+    #[test]
+    fn rollback_via_undo_log_restores_the_journal_owned_tracker_rows() {
+        use crate::block_overlay::{journal_seq, SharedBlockOverlay};
+        use crate::types::{CellDistTrackerCursor, DailyHodlWave, HodlTrackerCursor};
+
+        let (domain, append, _root) = open_dual_store();
+        let day = |text: &str| chrono::NaiveDate::parse_from_str(text, "%Y%m%d").unwrap();
+        let hodl_cursor = |block: i64, holders: i64, open_day: &str| HodlTrackerCursor {
+            holder_count: holders,
+            last_snapshot_date: open_day.to_string(),
+            last_processed_block: block,
+        };
+        let cell_dist_cursor = |block: i64, count: i64, open_day: &str| CellDistTrackerCursor {
+            count_by_bucket: [count, 0, 0, 0, 0, 0],
+            total_capacity_by_bucket: [count as i128 * 61, 0, 0, 0, 0, 0],
+            last_snapshot_date: open_day.to_string(),
+            last_processed_block: block,
+        };
+
+        // State committed before the batch: block 9.
+        let mut batch = StoreBatch::new(&domain);
+        batch
+            .put_hodl_capacity_by_date(day("20240101"), 100)
+            .unwrap();
+        batch.put_cell_dist_cohort("2024-01", 61, 100).unwrap();
+        batch
+            .put_hodl_cursor(&hodl_cursor(9, 1, "20240101"))
+            .unwrap();
+        batch
+            .put_cell_dist_cursor(&cell_dist_cursor(9, 1, "20240101"))
+            .unwrap();
+        batch.commit().unwrap();
+
+        let overlay = SharedBlockOverlay::new(&domain);
+        let mut batch = StoreBatch::journaled(&domain, &overlay, 0);
+        {
+            // Block 10: a cell of 20240101 grows the day, a second holder.
+            let mut at = batch.at(10);
+            at.put_hodl_capacity_by_date(day("20240101"), 150).unwrap();
+            at.put_cell_dist_cohort("2024-01", 122, 150).unwrap();
+            at.put_hodl_cursor(&hodl_cursor(10, 2, "20240101")).unwrap();
+            at.put_cell_dist_cursor(&cell_dist_cursor(10, 2, "20240101"))
+                .unwrap();
+        }
+        let after_block_10 = (
+            domain_rows(&domain, &overlay),
+            hodl_cursor(10, 2, "20240101"),
+            cell_dist_cursor(10, 2, "20240101"),
+        );
+        {
+            // Block 11 opens 20240102: seals 20240101, spends the day's cells.
+            let mut at = batch.at(11);
+            at.put_hodl_wave("20240101", &DailyHodlWave::default());
+            at.delete_hodl_capacity_by_date(day("20240101")).unwrap();
+            at.put_hodl_capacity_by_date(day("20240102"), 140).unwrap();
+            at.put_cell_dist_cohort("2024-02", 61, 140).unwrap();
+            at.put_hodl_cursor(&hodl_cursor(11, 1, "20240102")).unwrap();
+            at.put_cell_dist_cursor(&cell_dist_cursor(11, 2, "20240102"))
+                .unwrap();
+            // A journaled row this replay does not own.
+            at.put_raw_cf_by_name(crate::store::CF_SYNC_META, b"other", b"v11")
+                .unwrap();
+        }
+        {
+            let mut at = batch.at(12);
+            at.put_hodl_capacity_by_date(day("20240102"), 200).unwrap();
+            at.put_hodl_cursor(&hodl_cursor(12, 2, "20240102")).unwrap();
+            at.put_cell_dist_cursor(&cell_dist_cursor(12, 3, "20240102"))
+                .unwrap();
+        }
+        let mut counters = std::collections::HashMap::new();
+        batch
+            .stage_journal(&mut |block| journal_seq(&mut counters, block))
+            .unwrap();
+        batch.commit().unwrap();
+
+        domain.rollback_via_undo_log(&append, 10).unwrap();
+
+        assert_eq!(
+            domain.list_hodl_capacity_by_date().unwrap(),
+            after_block_10.0 .0
+        );
+        assert_eq!(
+            domain.list_cell_dist_cohorts().unwrap(),
+            after_block_10.0 .1
+        );
+        assert_eq!(domain.get_hodl_cursor().unwrap(), Some(after_block_10.1));
+        assert_eq!(
+            domain.get_cell_dist_cursor().unwrap(),
+            Some(after_block_10.2)
+        );
+        assert!(
+            domain.get_hodl_wave("20240101").unwrap().is_none(),
+            "the snapshot block 11 sealed is gone"
+        );
+        assert_eq!(
+            domain.get_cf(domain.cf_sync_meta(), b"other").unwrap(),
+            Some(b"v11".to_vec()),
+            "a journal row this replay does not own is dropped, not replayed"
+        );
+        assert_eq!(
+            domain
+                .iterator_cf(domain.cf_reorg_undo_log_by_block(), IteratorMode::Start)
+                .filter(|row| keys::decode_reorg_undo_log_key(&row.as_ref().unwrap().0).0 > 10)
+                .count(),
+            0,
+            "every journal row above the target is consumed"
+        );
+    }
+
+    type TrackerRows = (Vec<(chrono::NaiveDate, i128)>, Vec<(String, i128, i128)>);
+
+    /// The tracker rows as of the overlay's latest writes (the state a block
+    /// left), read back through a batch of the same overlay.
+    fn domain_rows(
+        store: &CkbadgerStore,
+        overlay: &crate::block_overlay::SharedBlockOverlay,
+    ) -> TrackerRows {
+        let batch = StoreBatch::journaled(store, overlay, 0);
+        let hodl = [("20240101", 0u8), ("20240102", 0)]
+            .iter()
+            .filter_map(|(day, _)| {
+                batch
+                    .get_current(crate::store::CF_HODL_CAPACITY_BY_DATE, day.as_bytes())
+                    .unwrap()
+                    .map(|value| {
+                        (
+                            chrono::NaiveDate::parse_from_str(day, "%Y%m%d").unwrap(),
+                            i128::from_le_bytes(value.try_into().unwrap()),
+                        )
+                    })
+            })
+            .collect();
+        let cohorts = ["2024-01", "2024-02"]
+            .iter()
+            .filter_map(|month| {
+                batch
+                    .get_current(crate::store::CF_CELL_DIST_COHORT_BY_MONTH, month.as_bytes())
+                    .unwrap()
+                    .map(|value| {
+                        (
+                            month.to_string(),
+                            i128::from_le_bytes(value[..16].try_into().unwrap()),
+                            i128::from_le_bytes(value[16..].try_into().unwrap()),
+                        )
+                    })
+            })
+            .collect();
+        (hodl, cohorts)
     }
 
     #[test]

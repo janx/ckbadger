@@ -430,28 +430,21 @@ impl BatchWriter {
             return Ok(true);
         }
 
-        // Check tracker state for blocks beyond start_block.
-        // Tracker writes (T_TRACK) use direct put_cf outside the finalize batch,
-        // so they can be committed even when block headers haven't been finalized.
-        if let Some(hodl_state) = self.store.get_hodl_tracker_state()? {
-            let last_block = hodl_state
-                .last_processed_block
-                .or_else(|| hodl_state.date_transitions.last().map(|(b, _)| *b));
-            if let Some(last_block) = last_block {
-                if last_block > start_block {
-                    return Ok(true);
-                }
-            }
-        }
-        if let Some(cell_dist_state) = self.store.get_cell_dist_tracker_state()? {
-            let last_block = cell_dist_state
-                .last_processed_block
-                .or_else(|| cell_dist_state.date_transitions.last().map(|(b, _)| *b));
-            if let Some(last_block) = last_block {
-                if last_block > start_block {
-                    return Ok(true);
-                }
-            }
+        // Check the tracker cursors for blocks beyond start_block. They are
+        // written in the same atomic batch as the blocks they processed, so a
+        // cursor ahead of the tip means rows of an unfinished tail survived.
+        let hodl_last = self
+            .store
+            .get_hodl_cursor()?
+            .map(|cursor| cursor.last_processed_block);
+        let cell_dist_last = self
+            .store
+            .get_cell_dist_cursor()?
+            .map(|cursor| cursor.last_processed_block);
+        if hodl_last.is_some_and(|last| last > start_block)
+            || cell_dist_last.is_some_and(|last| last > start_block)
+        {
+            return Ok(true);
         }
 
         Ok(false)

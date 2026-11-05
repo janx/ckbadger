@@ -1,8 +1,8 @@
 #![allow(clippy::type_complexity)]
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use tracing::{error, info, warn};
 
 use ckbadger_store::batch::StoreBatch;
@@ -11,21 +11,19 @@ use ckbadger_store::types::PositionedCellInfo;
 
 use crate::cache::CacheInvalidator;
 use crate::config::DEEP_FORK_DEPTH;
-use crate::db::writer::cell_distribution::CellDistributionTracker;
+use crate::db::writer::cell_distribution::{cohort_month, CellDistributionTracker};
 use crate::db::writer::hodl_wave::HodlWaveTracker;
 use crate::rpc::CkbRpcClient;
 
+use super::block_days::LiveBlockDays;
 use super::checked_tx_count;
 use super::dao_helpers::occupied_capacity_shannons_i64;
 use super::helpers::*;
-use super::indexer::{
-    mempool_short_tx_id, rebuild_cell_dist_tracker_from_state, rebuild_hodl_tracker_from_state,
-    Indexer,
-};
+use super::indexer::{mempool_short_tx_id, Indexer};
 use super::types::{ReorgAction, TxData};
 
 /// Open a block on the cell-distribution tracker: seal the previous day if this
-/// block starts a new one, then record the block→date transition.
+/// block starts a new one, then record the block.
 ///
 /// MUST run **before** the block's transactions are applied. A snapshot labelled
 /// day D is the tracker state at the *end* of day D, and the block that triggers
@@ -42,16 +40,18 @@ pub(crate) fn begin_cell_distribution_block(
     tracker: &mut CellDistributionTracker,
     block_number: i64,
     block_date: chrono::NaiveDate,
-) -> Option<(
-    chrono::NaiveDate,
-    ckbadger_store::DailyCellDistribution,
-    ckbadger_store::DailyAddressCohort,
-)> {
+) -> Result<
+    Option<(
+        chrono::NaiveDate,
+        ckbadger_store::DailyCellDistribution,
+        ckbadger_store::DailyAddressCohort,
+    )>,
+> {
     let sealed = tracker
         .maybe_snapshot(block_date)
         .map(|(date, distribution)| (date, distribution, tracker.cohort_snapshot()));
-    tracker.record_block_date(block_number, block_date);
-    sealed
+    tracker.record_block(block_number)?;
+    Ok(sealed)
 }
 
 /// Open a block on the HODL wave tracker, with the same end-of-day contract as
@@ -61,17 +61,66 @@ pub(crate) fn begin_hodl_wave_block(
     tracker: &mut HodlWaveTracker,
     block_number: i64,
     block_date: chrono::NaiveDate,
-) -> Option<(chrono::NaiveDate, ckbadger_store::DailyHodlWave)> {
+) -> Result<Option<(chrono::NaiveDate, ckbadger_store::DailyHodlWave)>> {
     let sealed = tracker.maybe_snapshot(block_date);
-    tracker.record_block_date(block_number, block_date);
-    sealed
+    tracker.record_block(block_number)?;
+    Ok(sealed)
+}
+
+/// Check a tracker loaded from its rows against the committed sync tip: it
+/// must have processed exactly the tip, or — when nothing was processed (no
+/// cursor) — the store must be empty below a non-positive tip.
+fn ensure_tracker_matches_tip(
+    tracker: &str,
+    last_processed_block: Option<i64>,
+    tip_block: i64,
+) -> Result<()> {
+    match last_processed_block {
+        None if tip_block <= 0 => Ok(()),
+        None => Err(anyhow!(
+            "missing {tracker} tracker state at tip {tip_block}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis"
+        )),
+        Some(last) if last > tip_block => Err(anyhow!(
+            "invalid {tracker} tracker state: last processed block {last} ahead of sync tip {tip_block}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis"
+        )),
+        Some(last) if last < tip_block => Err(anyhow!(
+            "invalid {tracker} tracker state: last processed block {last} behind sync tip {tip_block}. automatic rebuild is disabled; delete RocksDB and re-sync from genesis"
+        )),
+        Some(_) => Ok(()),
+    }
+}
+
+/// The HODL tracker persisted in `store`, checked against the sync tip.
+pub(crate) fn load_hodl_tracker_at_tip(
+    store: &ckbadger_store::CkbadgerStore,
+    tip_block: i64,
+) -> Result<HodlWaveTracker> {
+    let tracker = HodlWaveTracker::load(store)?;
+    ensure_tracker_matches_tip("HODL", tracker.last_processed_block(), tip_block)?;
+    Ok(tracker)
+}
+
+/// The cell-distribution tracker persisted in `store`, checked against the
+/// sync tip.
+pub(crate) fn load_cell_dist_tracker_at_tip(
+    store: &ckbadger_store::CkbadgerStore,
+    tip_block: i64,
+) -> Result<CellDistributionTracker> {
+    let tracker = CellDistributionTracker::load(store)?;
+    ensure_tracker_matches_tip(
+        "cell distribution",
+        tracker.last_processed_block(),
+        tip_block,
+    )?;
+    Ok(tracker)
 }
 
 impl Indexer {
+    /// Reload the in-memory HODL tracker from its rows and cursor (after a
+    /// reorg, a cleanup or the bulk handoff the journal or the finalize has
+    /// already left them at the tip).
     pub(crate) fn reconcile_hodl_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
-        let state = self.writer.store().get_hodl_tracker_state()?;
-        let rebuilt = rebuild_hodl_tracker_from_state(state, tip_block)?;
-
+        let rebuilt = load_hodl_tracker_at_tip(self.writer.store(), tip_block)?;
         let mut tracker = self.hodl_tracker.lock().unwrap();
         *tracker = rebuilt;
         Ok(())
@@ -83,7 +132,10 @@ impl Indexer {
     /// loop, and each block opens with [`begin_hodl_wave_block`], so a
     /// day-boundary snapshot holds exactly that day's blocks — neither the rest
     /// of the batch nor the first block of the next day (matching bulk-build
-    /// behavior).
+    /// behavior). Each block's sealed snapshot, the creation days it moved and
+    /// the cursor are written in that block's scope, from the tracker's state
+    /// at the block's end (B-4). Returns the tracker and the value bytes of the
+    /// tracker rows staged.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_hodl_wave_batch(
         &self,
@@ -93,6 +145,7 @@ impl Indexer {
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
+        block_days: &mut LiveBlockDays<'_>,
         batch: &mut StoreBatch<'_>,
     ) -> Result<(crate::db::writer::hodl_wave::HodlWaveTracker, usize)> {
         let mut tracker = self.hodl_tracker.lock().unwrap().clone();
@@ -104,6 +157,7 @@ impl Indexer {
             .collect();
 
         let mut block_tx_idx = 0usize;
+        let mut staged_bytes = 0usize;
         if all_parsed_blocks.len() != chain_times_ms.len() {
             anyhow::bail!(
                 "HODL tracker block/chain-time count mismatch: blocks={} times={}",
@@ -113,12 +167,14 @@ impl Indexer {
         }
         for (parsed, &chain_time_ms) in all_parsed_blocks.iter().zip(chain_times_ms) {
             let block_date = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
+            let mut batch = batch.at(parsed.number);
             if let Some((snapshot_date, snapshot)) =
-                begin_hodl_wave_block(&mut tracker, parsed.number, block_date)
+                begin_hodl_wave_block(&mut tracker, parsed.number, block_date)?
             {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
                 batch.put_hodl_wave(&date_str, &snapshot);
             }
+            let mut moved_days = BTreeSet::new();
 
             let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
@@ -166,7 +222,20 @@ impl Indexer {
                         }
                         tracker.update_holder_count(old_live, new_live)?;
                         live_cells_by_lock.insert(lock_hash, new_live);
-                        tracker.cell_consumed(info.created_at_block, info.capacity)?;
+                        let creation_day = block_days.day_of(info.created_at_block)?;
+                        tracker
+                            .cell_consumed(creation_day, info.capacity)
+                            .with_context(|| {
+                                format!(
+                                    "HODL tracker consume: block={}, tx_hash=0x{}, prev_outpoint=0x{}:{}, created_at_block={}",
+                                    parsed.number,
+                                    hex::encode(tx_data.hash),
+                                    hex::encode(input.previous_tx_hash),
+                                    input.previous_output_index,
+                                    info.created_at_block
+                                )
+                            })?;
+                        moved_days.insert(creation_day);
                     }
                 }
                 // Cell creates — update holder count then age tracker
@@ -183,18 +252,19 @@ impl Indexer {
                     tracker.update_holder_count(old_live, new_live)?;
                     live_cells_by_lock.insert(lock_hash.clone(), new_live);
                     tracker.cell_created(block_date, cell.capacity);
+                    moved_days.insert(block_date);
                 }
             }
+            staged_bytes += tracker.stage_block_rows(&mut batch, &moved_days)?;
         }
 
-        let state_bytes = batch.put_hodl_tracker_state(&tracker.to_state());
-        Ok((tracker, state_bytes))
+        Ok((tracker, staged_bytes))
     }
 
+    /// Reload the in-memory cell-distribution tracker from its rows and
+    /// cursor; see [`Self::reconcile_hodl_tracker_with_tip`].
     pub(crate) fn reconcile_cell_dist_tracker_with_tip(&self, tip_block: i64) -> Result<()> {
-        let state = self.writer.store().get_cell_dist_tracker_state()?;
-        let rebuilt = rebuild_cell_dist_tracker_from_state(state, tip_block)?;
-
+        let rebuilt = load_cell_dist_tracker_at_tip(self.writer.store(), tip_block)?;
         let mut tracker = self.cell_dist_tracker.lock().unwrap();
         *tracker = rebuilt;
         Ok(())
@@ -205,7 +275,10 @@ impl Indexer {
     /// Cohort deltas are applied per-tx within the per-block loop, and each block
     /// opens with [`begin_cell_distribution_block`], so a day-boundary snapshot
     /// holds exactly that day's blocks — neither the rest of the batch nor the
-    /// first block of the next day (matching bulk-build behavior).
+    /// first block of the next day (matching bulk-build behavior). Each block's
+    /// sealed snapshots, the cohort months it moved and the cursor are written
+    /// in that block's scope (B-4). Returns the tracker and the value bytes of
+    /// the tracker rows staged.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn prepare_cell_distribution_batch(
         &self,
@@ -215,6 +288,7 @@ impl Indexer {
         input_cell_info: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         batch_cell_infos: &HashMap<(Vec<u8>, i16), PositionedCellInfo>,
         prefetched_balances: &HashMap<Vec<u8>, Option<AddressBalance>>,
+        block_days: &mut LiveBlockDays<'_>,
         batch: &mut StoreBatch<'_>,
     ) -> Result<(
         crate::db::writer::cell_distribution::CellDistributionTracker,
@@ -231,6 +305,7 @@ impl Indexer {
             .collect();
 
         let mut block_tx_idx = 0usize;
+        let mut staged_bytes = 0usize;
         if all_parsed_blocks.len() != chain_times_ms.len() {
             anyhow::bail!(
                 "cell distribution block/chain-time count mismatch: blocks={} times={}",
@@ -240,13 +315,15 @@ impl Indexer {
         }
         for (parsed, &chain_time_ms) in all_parsed_blocks.iter().zip(chain_times_ms) {
             let block_date = ckbadger_common::stats_bucket::stats_day(chain_time_ms)?;
+            let mut batch = batch.at(parsed.number);
             if let Some((snapshot_date, snapshot, cohort)) =
-                begin_cell_distribution_block(&mut tracker, parsed.number, block_date)
+                begin_cell_distribution_block(&mut tracker, parsed.number, block_date)?
             {
                 let date_str = snapshot_date.format("%Y%m%d").to_string();
                 batch.put_cell_distribution(&date_str, &snapshot);
                 batch.put_address_cohort(&date_str, &cohort);
             }
+            let mut moved_months = BTreeSet::new();
 
             let tx_count = checked_tx_count(parsed.transactions_count, parsed.number)?;
             let tx_slice = &all_tx_data[block_tx_idx..block_tx_idx + tx_count];
@@ -307,19 +384,27 @@ impl Indexer {
                     }
                 }
 
-                // Apply cohort deltas for this tx
+                // Apply cohort deltas for this tx. Every lock here owned a cell
+                // before this tx (an address balance row) or created one in it.
                 for (lock_hash, (used_delta, balance_delta)) in &tx_addr_deltas {
-                    let first_seen_block = first_seen_by_lock
-                        .get(lock_hash)
-                        .copied()
-                        .unwrap_or(parsed.number);
-                    tracker.apply_cohort_delta(first_seen_block, *used_delta, *balance_delta)?;
+                    let first_seen_block =
+                        *first_seen_by_lock.get(lock_hash).ok_or_else(|| {
+                            anyhow!(
+                                "no first-seen block for a lock whose cells move: block={}, tx_hash=0x{}, lock_hash=0x{}",
+                                parsed.number,
+                                hex::encode(tx_data.hash),
+                                hex::encode(lock_hash)
+                            )
+                        })?;
+                    let first_seen_day = block_days.day_of(first_seen_block)?;
+                    tracker.apply_cohort_delta(first_seen_day, *used_delta, *balance_delta)?;
+                    moved_months.insert(cohort_month(first_seen_day));
                 }
             }
+            staged_bytes += tracker.stage_block_rows(&mut batch, &moved_months)?;
         }
 
-        let state_bytes = batch.put_cell_dist_tracker_state(&tracker.to_state());
-        Ok((tracker, state_bytes))
+        Ok((tracker, staged_bytes))
     }
     // === get_chain_block_hash, get_chain_tip ===
 
@@ -663,19 +748,23 @@ mod tests {
         let mut tracker = CellDistributionTracker::new();
 
         // First block ever: nothing to seal, only the date is recorded.
-        assert!(begin_cell_distribution_block(&mut tracker, 100, jan(15)).is_none());
+        assert!(begin_cell_distribution_block(&mut tracker, 100, jan(15))
+            .unwrap()
+            .is_none());
         tracker.cell_created(61_00000000);
         tracker
-            .apply_cohort_delta(100, 61_00000000, 140_00000000)
+            .apply_cohort_delta(jan(15), 61_00000000, 140_00000000)
             .unwrap();
 
         // First block of the next day: the seal happens here, and only then are
         // this block's cells applied.
         let (date, distribution, cohort) =
-            begin_cell_distribution_block(&mut tracker, 200, jan(16)).expect("sealed day");
+            begin_cell_distribution_block(&mut tracker, 200, jan(16))
+                .unwrap()
+                .expect("sealed day");
         tracker.cell_created(61_00000000);
         tracker
-            .apply_cohort_delta(200, 61_00000000, 140_00000000)
+            .apply_cohort_delta(jan(15), 61_00000000, 140_00000000)
             .unwrap();
 
         assert_eq!(date, jan(15));
@@ -689,8 +778,9 @@ mod tests {
         assert_eq!(cohort.cohorts[0].total_balance, 140_00000000);
 
         // The next day carries both cells forward.
-        let (date, distribution, _) =
-            begin_cell_distribution_block(&mut tracker, 300, jan(17)).expect("sealed day");
+        let (date, distribution, _) = begin_cell_distribution_block(&mut tracker, 300, jan(17))
+            .unwrap()
+            .expect("sealed day");
         assert_eq!(date, jan(16));
         assert_eq!(distribution.size_bucket_counts, [2, 0, 0, 0, 0, 0]);
     }
@@ -699,11 +789,15 @@ mod tests {
     fn hodl_wave_day_boundary_seals_before_the_new_days_block_is_applied() {
         let mut tracker = HodlWaveTracker::new();
 
-        assert!(begin_hodl_wave_block(&mut tracker, 100, jan(15)).is_none());
+        assert!(begin_hodl_wave_block(&mut tracker, 100, jan(15))
+            .unwrap()
+            .is_none());
         tracker.update_holder_count(0, 1).unwrap();
         tracker.cell_created(jan(15), 140_00000000);
 
-        let (date, wave) = begin_hodl_wave_block(&mut tracker, 200, jan(16)).expect("sealed day");
+        let (date, wave) = begin_hodl_wave_block(&mut tracker, 200, jan(16))
+            .unwrap()
+            .expect("sealed day");
         tracker.update_holder_count(0, 1).unwrap();
         tracker.cell_created(jan(16), 61_00000000);
 
@@ -714,26 +808,110 @@ mod tests {
         // 2024-01-15 snapshot and land in the oldest band.
         assert_eq!(wave.band_gt_3y, 0);
 
-        let (date, wave) = begin_hodl_wave_block(&mut tracker, 300, jan(17)).expect("sealed day");
+        let (date, wave) = begin_hodl_wave_block(&mut tracker, 300, jan(17))
+            .unwrap()
+            .expect("sealed day");
         assert_eq!(date, jan(16));
         assert_eq!(wave.holder_count, 2);
         assert_eq!(wave.band_24h, 61_00000000);
         assert_eq!(wave.band_1d_1w, 140_00000000);
     }
 
+    /// The helpers record each block before its transactions apply, and
+    /// refuse a block that does not ascend (a replay over a stale tracker).
     #[test]
-    fn day_boundary_helpers_record_every_block_date_for_cohort_lookups() {
+    fn day_boundary_helpers_record_every_block_in_ascending_order() {
         let mut tracker = CellDistributionTracker::new();
+        begin_cell_distribution_block(&mut tracker, 100, jan(15)).unwrap();
+        begin_cell_distribution_block(&mut tracker, 101, jan(15)).unwrap();
+        assert_eq!(tracker.last_processed_block(), Some(101));
+        assert!(begin_cell_distribution_block(&mut tracker, 101, jan(15)).is_err());
 
-        begin_cell_distribution_block(&mut tracker, 100, jan(15));
-        begin_cell_distribution_block(&mut tracker, 101, jan(15));
-        begin_cell_distribution_block(&mut tracker, 200, jan(16));
+        let mut tracker = HodlWaveTracker::new();
+        begin_hodl_wave_block(&mut tracker, 7, jan(15)).unwrap();
+        assert_eq!(tracker.last_processed_block(), Some(7));
+        assert!(begin_hodl_wave_block(&mut tracker, 6, jan(15)).is_err());
+    }
 
-        // An address first seen in this very block must resolve to its cohort
-        // month, which requires the transition to be recorded before the block's
-        // transactions are applied.
-        assert_eq!(tracker.block_number_to_date(100), Some(jan(15)));
-        assert_eq!(tracker.block_number_to_date(150), Some(jan(15)));
-        assert_eq!(tracker.block_number_to_date(200), Some(jan(16)));
+    fn store_with_trackers_at(
+        block: Option<i64>,
+    ) -> (ckbadger_store::CkbadgerStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ckbadger_store::CkbadgerStore::open_domain(dir.path()).unwrap();
+        if let Some(block) = block {
+            let mut hodl = HodlWaveTracker::new();
+            let mut cell_dist = CellDistributionTracker::new();
+            for number in 0..=block {
+                begin_hodl_wave_block(&mut hodl, number, jan(15)).unwrap();
+                begin_cell_distribution_block(&mut cell_dist, number, jan(15)).unwrap();
+            }
+            hodl.cell_created(jan(15), 10);
+            hodl.update_holder_count(0, 1).unwrap();
+            cell_dist.cell_created(61_00000000);
+            cell_dist
+                .apply_cohort_delta(jan(15), 61_00000000, 61_00000000)
+                .unwrap();
+            let mut batch = StoreBatch::new(&store);
+            hodl.stage_all_rows(&mut batch).unwrap();
+            cell_dist.stage_all_rows(&mut batch).unwrap();
+            batch.commit().unwrap();
+        }
+        (store, dir)
+    }
+
+    /// The trackers load from their rows only when they processed exactly
+    /// the sync tip.
+    #[test]
+    fn trackers_load_only_at_the_tip_they_processed() {
+        let (store, _dir) = store_with_trackers_at(Some(100));
+        let hodl = load_hodl_tracker_at_tip(&store, 100).unwrap();
+        assert_eq!(hodl.holder_count, 1);
+        assert_eq!(hodl.capacity_on(jan(15)), Some(10));
+        let cell_dist = load_cell_dist_tracker_at_tip(&store, 100).unwrap();
+        assert_eq!(
+            cell_dist.cohort("2024-01"),
+            Some((61_00000000, 61_00000000))
+        );
+
+        let ahead = load_hodl_tracker_at_tip(&store, 99).unwrap_err();
+        assert!(ahead.to_string().contains("ahead of sync tip"), "{ahead}");
+        let behind = load_cell_dist_tracker_at_tip(&store, 101).unwrap_err();
+        assert!(behind.to_string().contains("behind sync tip"), "{behind}");
+
+        let (empty, _dir) = store_with_trackers_at(None);
+        assert_eq!(
+            load_hodl_tracker_at_tip(&empty, 0)
+                .unwrap()
+                .last_processed_block(),
+            None
+        );
+        let missing = load_hodl_tracker_at_tip(&empty, 1).unwrap_err();
+        assert!(
+            missing.to_string().contains("missing HODL tracker state"),
+            "{missing}"
+        );
+        let missing = load_cell_dist_tracker_at_tip(&empty, 1).unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("missing cell distribution tracker state"),
+            "{missing}"
+        );
+    }
+
+    /// A store synced to genesis only has tip 0 and a tracker that processed
+    /// block 0: it is loaded, not reset (the pre-B-4 rebuild returned a fresh
+    /// tracker for every tip <= 0, so the next block's consume of a genesis
+    /// cell found no capacity on the genesis day).
+    #[test]
+    fn a_tracker_that_processed_genesis_is_loaded_at_tip_zero() {
+        let (store, _dir) = store_with_trackers_at(Some(0));
+        let hodl = load_hodl_tracker_at_tip(&store, 0).unwrap();
+        assert_eq!(hodl.last_processed_block(), Some(0));
+        assert_eq!(hodl.capacity_on(jan(15)), Some(10));
+        let cell_dist = load_cell_dist_tracker_at_tip(&store, 0).unwrap();
+        assert_eq!(cell_dist.last_processed_block(), Some(0));
+        let (store, _dir) = store_with_trackers_at(Some(3));
+        assert!(load_hodl_tracker_at_tip(&store, 0).is_err());
     }
 }

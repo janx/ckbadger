@@ -70,25 +70,6 @@ fn normalize_sync_status(value: &[u8]) -> Vec<u8> {
     bincode::serialize(&status).expect("encode sync_status")
 }
 
-/// The HODL / cell-distribution tracker blobs serialise maps as vectors in
-/// hash-map iteration order; sort them so two stores holding the same tracker
-/// compare equal.
-fn normalize_tracker(key: &[u8], value: &[u8]) -> Vec<u8> {
-    if key == sync_meta_keys::HODL_TRACKER {
-        let mut state: ckbadger_store::types::HodlTrackerState =
-            bincode::deserialize(value).expect("decode hodl_tracker");
-        state.capacity_by_date.sort();
-        bincode::serialize(&state).expect("encode hodl_tracker")
-    } else if key == sync_meta_keys::CELL_DIST_TRACKER {
-        let mut state: ckbadger_store::types::CellDistributionTrackerState =
-            bincode::deserialize(value).expect("decode cell_dist_tracker");
-        state.cohort_accum.sort();
-        bincode::serialize(&state).expect("encode cell_dist_tracker")
-    } else {
-        value.to_vec()
-    }
-}
-
 /// A derivation's start / finish wall-clock times are telemetry; its state,
 /// version and run counter are compared.
 fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
@@ -98,16 +79,16 @@ fn normalize_derive_meta(value: &[u8]) -> Vec<u8> {
     bincode::serialize(&meta).expect("encode derive meta")
 }
 
-/// The dump's normalisation of one `sync_meta` value (wall-clock fields and
-/// hash-map ordering), applied alike to rows read from a store and to values
-/// the journal oracle writes back.
+/// The dump's normalisation of one `sync_meta` value (wall-clock fields),
+/// applied alike to rows read from a store and to values the journal oracle
+/// writes back.
 fn normalize_sync_meta(key: &[u8], value: &[u8]) -> Vec<u8> {
     if key == sync_meta_keys::SYNC_STATUS {
         normalize_sync_status(value)
     } else if key.starts_with(sync_meta_keys::DERIVE_META_PREFIX) {
         normalize_derive_meta(value)
     } else {
-        normalize_tracker(key, value)
+        value.to_vec()
     }
 }
 
@@ -642,6 +623,14 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
         ckbadger_store::CF_STATS_DAO,
         Some(keys::STATS_PREFIX_DAO_DAILY_SNAPSHOT),
     ),
+    // B-4: the HODL / cell-distribution trackers are rows (creation day →
+    // capacity, cohort month → (used, balance)) written per block that moves
+    // them, and the day snapshots they seal (`stats_hodl` HODL_WAVE,
+    // CELL_DISTRIBUTION, ADDR_COHORT — the CF's only families) in the sealer
+    // block's scope.
+    (ckbadger_store::CF_HODL_CAPACITY_BY_DATE, None),
+    (ckbadger_store::CF_CELL_DIST_COHORT_BY_MONTH, None),
+    (ckbadger_store::CF_STATS_HODL, None),
 ];
 
 /// Covered keys of a column family that is not covered as a whole: a
@@ -674,6 +663,12 @@ const JOURNAL_COVERED_KEYS: &[(&str, &[u8])] = &[
     (
         ckbadger_store::CF_SYNC_META,
         sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX,
+    ),
+    // B-4: each tracker's cursor row is written in the scope of every block.
+    (ckbadger_store::CF_SYNC_META, sync_meta_keys::HODL_CURSOR),
+    (
+        ckbadger_store::CF_SYNC_META,
+        sync_meta_keys::CELL_DIST_CURSOR,
     ),
 ];
 

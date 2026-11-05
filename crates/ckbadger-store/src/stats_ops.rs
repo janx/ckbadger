@@ -601,27 +601,6 @@ impl CkbadgerStore {
         Ok(results)
     }
 
-    // ---- HODL tracker state persistence ----
-
-    pub fn get_hodl_tracker_state(&self) -> anyhow::Result<Option<HodlTrackerState>> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::HODL_TRACKER,
-        )? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn put_hodl_tracker_state(&self, state: &HodlTrackerState) -> anyhow::Result<()> {
-        let value = bincode::serialize(state)?;
-        self.put_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::HODL_TRACKER,
-            &value,
-        )
-    }
-
     // ---- Cell distribution snapshots ----
 
     pub fn put_cell_distribution(
@@ -739,32 +718,6 @@ impl CkbadgerStore {
         }
 
         Ok(None)
-    }
-
-    // ---- Cell distribution tracker state persistence ----
-
-    pub fn get_cell_dist_tracker_state(
-        &self,
-    ) -> anyhow::Result<Option<CellDistributionTrackerState>> {
-        match self.get_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
-        )? {
-            Some(value) => Ok(Some(bincode::deserialize(&value)?)),
-            None => Ok(None),
-        }
-    }
-
-    pub fn put_cell_dist_tracker_state(
-        &self,
-        state: &CellDistributionTrackerState,
-    ) -> anyhow::Result<()> {
-        let value = bincode::serialize(state)?;
-        self.put_cf(
-            self.cf_sync_meta(),
-            crate::keys::sync_meta_keys::CELL_DIST_TRACKER,
-            &value,
-        )
     }
 
     // ---- Daily activity stats ----
@@ -1976,34 +1929,6 @@ mod tests {
     }
 
     #[test]
-    fn test_hodl_tracker_state_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
-
-        // Initially none
-        assert!(store.get_hodl_tracker_state().unwrap().is_none());
-
-        let state = HodlTrackerState {
-            capacity_by_date: vec![
-                ("20240101".to_string(), 1_000_000),
-                ("20240102".to_string(), 2_000_000),
-            ],
-            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
-            holder_count: 500,
-            last_snapshot_date: Some("20240102".to_string()),
-            last_processed_block: Some(100),
-        };
-
-        store.put_hodl_tracker_state(&state).unwrap();
-
-        let retrieved = store.get_hodl_tracker_state().unwrap().unwrap();
-        assert_eq!(retrieved.capacity_by_date.len(), 2);
-        assert_eq!(retrieved.holder_count, 500);
-        assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
-        assert_eq!(retrieved.date_transitions[1].0, 100);
-    }
-
-    #[test]
     fn test_script_daily_delta_roundtrip_and_list() {
         let dir = tempfile::tempdir().unwrap();
         let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
@@ -2689,34 +2614,6 @@ mod cell_distribution_tests {
         assert_eq!(date, "20240215");
         assert_eq!(latest.cohorts.len(), 1);
         assert_eq!(latest.cohorts[0].cohort_month, "2024-02");
-    }
-
-    #[test]
-    fn test_cell_dist_tracker_state_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path().to_str().unwrap()).unwrap();
-
-        // Initially none
-        assert!(store.get_cell_dist_tracker_state().unwrap().is_none());
-
-        let state = CellDistributionTrackerState {
-            count_by_bucket: [10, 20, 30, 40, 50, 60],
-            total_capacity_by_bucket: [1000, 2000, 3000, 4000, 5000, 6000],
-            date_transitions: vec![(0, "20240101".to_string()), (100, "20240102".to_string())],
-            last_snapshot_date: Some("20240102".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(100),
-        };
-
-        store.put_cell_dist_tracker_state(&state).unwrap();
-
-        let retrieved = store.get_cell_dist_tracker_state().unwrap().unwrap();
-        assert_eq!(retrieved.count_by_bucket, [10, 20, 30, 40, 50, 60]);
-        assert_eq!(
-            retrieved.total_capacity_by_bucket,
-            [1000, 2000, 3000, 4000, 5000, 6000]
-        );
-        assert_eq!(retrieved.last_snapshot_date, Some("20240102".to_string()));
     }
 }
 

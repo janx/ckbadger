@@ -249,21 +249,6 @@ fn prepare_live_cell_summary_rollback(
     }))
 }
 
-/// Cell distribution size bucket — must match the logic in
-/// `crates/indexer/src/db/writer/cell_distribution.rs::size_bucket`.
-fn cell_dist_size_bucket(occupied_capacity: i64) -> usize {
-    const CKB: i64 = 100_000_000;
-    let ckb = occupied_capacity / CKB;
-    match ckb {
-        0..=99 => 0,
-        100..=999 => 1,
-        1_000..=9_999 => 2,
-        10_000..=99_999 => 3,
-        100_000..=999_999 => 4,
-        _ => 5,
-    }
-}
-
 /// Fail-fast subtraction for a non-negative `i32` counter in a stats row.
 ///
 /// `checked_sub` alone only catches arithmetic overflow — `0i32.checked_sub(5)`
@@ -1511,27 +1496,10 @@ fn accumulate_cell_deltas(
     script_deltas: &mut HashMap<(Vec<u8>, bool), (i64, i128, i128)>,
     token_holder_deltas: &mut HashMap<(Vec<u8>, Vec<u8>), TokenHolderDelta>,
     script_reference_deltas: &mut HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta>,
-    cell_dist_count_deltas: &mut [i64; 6],
-    cell_dist_capacity_deltas: &mut [i128; 6],
-    created_at_block: i64,
-    hodl_capacity_deltas: &mut HashMap<i64, i128>,
 ) -> anyhow::Result<()> {
     let cap = cell.capacity as i128 * sign;
     let occ = cell.occupied_capacity() as i128 * sign;
     let live_d = sign as i32;
-
-    // cell distribution bucket: live cell count and capacity per size bucket.
-    // sign=+1 when restoring a consumed cell (add back to bucket),
-    // sign=-1 when removing a created cell (subtract from bucket).
-    let bucket = cell_dist_size_bucket(cell.occupied_capacity());
-    cell_dist_count_deltas[bucket] += live_d as i64;
-    cell_dist_capacity_deltas[bucket] += occ;
-
-    // HODL wave: full capacity credited/debited to the cell's creation-date
-    // bucket, keyed by created_at_block (resolved to a date during tracker
-    // repair).  Uses `cap` (full capacity, signed) to match the forward HODL
-    // path, not `occ`.
-    *hodl_capacity_deltas.entry(created_at_block).or_insert(0) += cap;
 
     // addr_balance: (balance_delta, used_delta, live_cells_delta, total_cells_delta)
     // total_cells_delta only counts cells being removed (sign == -1 means cell was created
@@ -1771,267 +1739,6 @@ fn entity_survived_undo_replay(
         "{cf_name} entry created above the fork point survived undo replay: {id_label}=0x{}, standard={standard}, created_at_block={created_at_block}, rollback_to={rollback_to} — missing undo pre-image from writer",
         bytes_to_hex(id)
     )
-}
-
-fn truncate_hodl_tracker_state_for_rollback(
-    state: &mut HodlTrackerState,
-    rollback_to: i64,
-    holder_count_delta: i64,
-    block_capacity_deltas: &HashMap<i64, i128>,
-) -> anyhow::Result<bool> {
-    if rollback_to < 0 {
-        return Ok(true);
-    }
-
-    let mut changed = false;
-
-    // Reverse per-creation-date capacity deltas from the rolled-back cell walk
-    // BEFORE truncating date_transitions: a removed cell created in a rolled-back
-    // block has a creation date above the surviving tip and can only be resolved
-    // against the pre-truncation transitions.  Resolution mirrors the forward
-    // path's block_number_to_date so the bucket credited/debited here is exactly
-    // the one a re-sync consume/create will later touch.
-    if !block_capacity_deltas.is_empty() {
-        if state.date_transitions.is_empty() {
-            anyhow::bail!(
-                "cannot reverse HODL capacity deltas during rollback: no date transitions, rollback_to={}",
-                rollback_to
-            );
-        }
-        let mut cap_by_date: HashMap<String, i128> =
-            state.capacity_by_date.iter().cloned().collect();
-        for (created_block, delta) in block_capacity_deltas {
-            if *delta == 0 {
-                continue;
-            }
-            let idx = state
-                .date_transitions
-                .partition_point(|(b, _)| *b <= *created_block);
-            let date = if idx == 0 {
-                &state.date_transitions[0].1
-            } else {
-                &state.date_transitions[idx - 1].1
-            };
-            *cap_by_date.entry(date.clone()).or_insert(0) += *delta;
-        }
-        // Rebuild sorted by date for deterministic ordering.
-        let mut rebuilt: Vec<(String, i128)> = cap_by_date.into_iter().collect();
-        rebuilt.sort_by(|a, b| a.0.cmp(&b.0));
-        state.capacity_by_date = rebuilt;
-        changed = true;
-    }
-
-    let original_transitions = state.date_transitions.len();
-    state
-        .date_transitions
-        .retain(|(block_num, _)| *block_num <= rollback_to);
-    if state.date_transitions.len() != original_transitions {
-        changed = true;
-    }
-
-    if state.date_transitions.is_empty() {
-        anyhow::bail!(
-            "invalid HODL tracker state after rollback truncate: rollback_to={}, no remaining date transitions",
-            rollback_to
-        );
-    }
-
-    let max_date = state
-        .date_transitions
-        .last()
-        .map(|(_, date)| date.clone())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing last date transition while truncating HODL tracker state: rollback_to={}",
-                rollback_to
-            )
-        })?;
-
-    let original_capacity_dates = state.capacity_by_date.len();
-    state
-        .capacity_by_date
-        .retain(|(date, _)| date.as_str() <= max_date.as_str());
-    if state.capacity_by_date.len() != original_capacity_dates {
-        changed = true;
-    }
-
-    // Surviving creation-date buckets must be non-negative.  A negative value
-    // means the rolled-back cell walk disagreed with the tracker's accounting —
-    // fail fast with context rather than masking it.  Drop buckets that netted to
-    // exactly zero (matching the forward path, which removes emptied buckets).
-    for (date, cap) in &state.capacity_by_date {
-        if *cap < 0 {
-            anyhow::bail!(
-                "HODL capacity_by_date underflow after rollback repair: date={}, capacity={}, rollback_to={}",
-                date,
-                cap,
-                rollback_to
-            );
-        }
-    }
-    let before_zero_drop = state.capacity_by_date.len();
-    state.capacity_by_date.retain(|(_, cap)| *cap != 0);
-    if state.capacity_by_date.len() != before_zero_drop {
-        changed = true;
-    }
-
-    if let Some(last_snapshot_date) = state.last_snapshot_date.as_ref() {
-        if last_snapshot_date.as_str() > max_date.as_str() {
-            state.last_snapshot_date = Some(max_date);
-            changed = true;
-        }
-    }
-
-    // Apply holder_count correction from addr_balance rollback deltas.
-    if holder_count_delta != 0 {
-        let new_holder_count = state.holder_count + holder_count_delta;
-        if new_holder_count < 0 {
-            anyhow::bail!(
-                "holder_count underflow during rollback repair: current={}, delta={}, result={}",
-                state.holder_count,
-                holder_count_delta,
-                new_holder_count
-            );
-        }
-        state.holder_count = new_holder_count;
-        changed = true;
-    }
-
-    // Update last_processed_block to match rollback target.
-    if state.last_processed_block.is_some_and(|b| b > rollback_to) {
-        state.last_processed_block = Some(rollback_to);
-        changed = true;
-    }
-
-    Ok(changed)
-}
-
-fn truncate_cell_dist_tracker_state_for_rollback(
-    state: &mut CellDistributionTrackerState,
-    rollback_to: i64,
-    count_deltas: &[i64; 6],
-    capacity_deltas: &[i128; 6],
-    cohort_deltas: &HashMap<String, (i128, i128)>,
-) -> anyhow::Result<bool> {
-    if rollback_to < 0 {
-        return Ok(true);
-    }
-
-    let mut changed = false;
-
-    // 1. Truncate date_transitions to blocks <= rollback_to.
-    let original_transitions = state.date_transitions.len();
-    state
-        .date_transitions
-        .retain(|(block_num, _)| *block_num <= rollback_to);
-    if state.date_transitions.len() != original_transitions {
-        changed = true;
-    }
-
-    if state.date_transitions.is_empty() {
-        anyhow::bail!(
-            "invalid cell_dist tracker state after rollback truncate: rollback_to={}, no remaining date transitions",
-            rollback_to
-        );
-    }
-
-    // 2. Get max surviving date.
-    let max_date = state
-        .date_transitions
-        .last()
-        .map(|(_, date)| date.clone())
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "missing last date transition while truncating cell_dist tracker state: rollback_to={}",
-                rollback_to
-            )
-        })?;
-
-    // 3. Clamp last_snapshot_date.
-    if let Some(last_snapshot_date) = state.last_snapshot_date.as_ref() {
-        if last_snapshot_date.as_str() > max_date.as_str() {
-            state.last_snapshot_date = Some(max_date);
-            changed = true;
-        }
-    }
-
-    // Each affected address's first-seen block supplies its immutable cohort
-    // month. Apply the exact inverse of its balance/used-capacity change.
-    let mut cohorts = std::collections::BTreeMap::new();
-    for (month, used, balance) in &state.cohort_accum {
-        if *used < 0 || *balance < 0 {
-            anyhow::bail!("negative cohort accumulator before rollback repair: month={month}, used={used}, balance={balance}");
-        }
-        if cohorts.insert(month.clone(), (*used, *balance)).is_some() {
-            anyhow::bail!("duplicate cohort month before rollback repair: month={month}");
-        }
-    }
-    for (month, (used_delta, balance_delta)) in cohort_deltas {
-        let entry = cohorts.entry(month.clone()).or_insert((0, 0));
-        if entry.0 < 0 || entry.1 < 0 {
-            anyhow::bail!("negative cohort accumulator before rollback repair: month={month}, used={}, balance={}", entry.0, entry.1);
-        }
-        entry.0 = entry.0.checked_add(*used_delta).ok_or_else(|| anyhow::anyhow!(
-            "cohort used-capacity overflow during rollback: month={month}, current={}, delta={used_delta}", entry.0
-        ))?;
-        entry.1 = entry.1.checked_add(*balance_delta).ok_or_else(|| anyhow::anyhow!(
-            "cohort balance overflow during rollback: month={month}, current={}, delta={balance_delta}", entry.1
-        ))?;
-        if entry.0 < 0 || entry.1 < 0 {
-            anyhow::bail!(
-                "cohort accumulator underflow during rollback: month={month}, used={}, balance={}",
-                entry.0,
-                entry.1
-            );
-        }
-        changed = true;
-    }
-    if changed {
-        state.cohort_accum = cohorts
-            .into_iter()
-            .map(|(month, (used, balance))| (month, used, balance))
-            .collect();
-    }
-
-    // 4. Apply cell distribution bucket deltas from cell rollback.
-    // count_deltas/capacity_deltas were accumulated during stages 4-5:
-    //   cells removed  → bucket -= 1 / capacity -= occ
-    //   cells restored → bucket += 1 / capacity += occ
-    for i in 0..6 {
-        if count_deltas[i] != 0 || capacity_deltas[i] != 0 {
-            let new_count = state.count_by_bucket[i] + count_deltas[i];
-            let new_cap = state.total_capacity_by_bucket[i] + capacity_deltas[i];
-            if new_count < 0 {
-                anyhow::bail!(
-                    "cell_dist count_by_bucket underflow during rollback: bucket={}, current={}, delta={}, result={}",
-                    i,
-                    state.count_by_bucket[i],
-                    count_deltas[i],
-                    new_count
-                );
-            }
-            if new_cap < 0 {
-                anyhow::bail!(
-                    "cell_dist total_capacity_by_bucket underflow during rollback: bucket={}, current={}, delta={}, result={}",
-                    i,
-                    state.total_capacity_by_bucket[i],
-                    capacity_deltas[i],
-                    new_cap
-                );
-            }
-            state.count_by_bucket[i] = new_count;
-            state.total_capacity_by_bucket[i] = new_cap;
-            changed = true;
-        }
-    }
-
-    // Update last_processed_block to match rollback target.
-    if state.last_processed_block.is_some_and(|b| b > rollback_to) {
-        state.last_processed_block = Some(rollback_to);
-        changed = true;
-    }
-
-    Ok(changed)
 }
 
 fn normalize_dao_entry_for_rollback(
@@ -2800,16 +2507,6 @@ impl CkbadgerStore {
         // script_reference_deltas: (code_hash, hash_type, is_type) -> ScriptReferenceDelta
         let mut script_reference_deltas: HashMap<(Vec<u8>, u8, bool), ScriptReferenceDelta> =
             HashMap::new();
-        // cell_dist_bucket_deltas: per-bucket (count_delta, capacity_delta) for cell
-        // distribution tracker repair.  Cells removed (created after fork_point)
-        // subtract from buckets; cells restored (consumed after fork_point) add back.
-        let mut cell_dist_count_deltas: [i64; 6] = [0; 6];
-        let mut cell_dist_capacity_deltas: [i128; 6] = [0; 6];
-        // hodl_capacity_deltas: created_at_block → signed full-capacity delta for
-        // HODL wave repair.  Cells removed (created after fork_point) subtract from
-        // their creation-date bucket; cells restored (consumed after fork_point) add
-        // back.  Resolved from block to creation date during HODL tracker repair.
-        let mut hodl_capacity_deltas: HashMap<i64, i128> = HashMap::new();
         // Participant lock hashes per rolled-back tx, keyed by tx hash. The
         // forward writer creates one addr_txs row per (participant, tx), where
         // the participants are the lock hashes of the tx's output cells plus,
@@ -2886,10 +2583,6 @@ impl CkbadgerStore {
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
                         &mut script_reference_deltas,
-                        &mut cell_dist_count_deltas,
-                        &mut cell_dist_capacity_deltas,
-                        positioned.created_at_block,
-                        &mut hodl_capacity_deltas,
                     )?;
                     accumulate_stats_capacity_delta(
                         &positioned.cell,
@@ -2983,10 +2676,6 @@ impl CkbadgerStore {
                         &mut script_info_deltas,
                         &mut token_holder_deltas,
                         &mut script_reference_deltas,
-                        &mut cell_dist_count_deltas,
-                        &mut cell_dist_capacity_deltas,
-                        meta.created_at_block,
-                        &mut hodl_capacity_deltas,
                     )?;
                 } else {
                     // Created inside the rolled-back range too: the cell ceases to
@@ -3070,10 +2759,6 @@ impl CkbadgerStore {
                             &mut script_info_deltas,
                             &mut token_holder_deltas,
                             &mut script_reference_deltas,
-                            &mut cell_dist_count_deltas,
-                            &mut cell_dist_capacity_deltas,
-                            positioned.created_at_block,
-                            &mut hodl_capacity_deltas,
                         )?;
                         accumulate_stats_capacity_delta(
                             &positioned.cell,
@@ -3204,10 +2889,6 @@ impl CkbadgerStore {
                                     &mut script_info_deltas,
                                     &mut token_holder_deltas,
                                     &mut script_reference_deltas,
-                                    &mut cell_dist_count_deltas,
-                                    &mut cell_dist_capacity_deltas,
-                                    consumed.created_at_block,
-                                    &mut hodl_capacity_deltas,
                                 )?;
                             } else {
                                 // Created inside the rolled-back range too (its
@@ -4484,14 +4165,6 @@ impl CkbadgerStore {
         let mut all_addr_keys: HashSet<Vec<u8>> = addr_balance_deltas.keys().cloned().collect();
         all_addr_keys.extend(addr_txs_count_deltas.keys().cloned());
 
-        // Track holder count transitions for HODL tracker repair in stage 11.
-        let mut holder_count_delta: i64 = 0;
-        // A store without a cell-distribution tracker has no cohort state to
-        // reverse (for example, an isolated rollback fixture).
-        let cell_dist_state_for_rollback = self.get_cell_dist_tracker_state()?;
-        let mut cohort_deltas = HashMap::<String, (i128, i128)>::new();
-        let mut cohort_month_by_first_seen = HashMap::<i64, String>::new();
-
         for lock_hash in &all_addr_keys {
             let (balance_delta, used_delta, live_delta, total_cells_delta) = addr_balance_deltas
                 .get(lock_hash)
@@ -4527,18 +4200,9 @@ impl CkbadgerStore {
                 }
                 continue;
             };
-            // Track holder transitions: capture pre-rollback live count, then
-            // compare with post-rollback to detect 0↔>0 transitions.
-            let old_live = ab.live_cells_count;
             ab.balance += balance_delta;
             ab.used_capacity += used_delta;
             ab.live_cells_count += live_delta;
-            let new_live = ab.live_cells_count;
-            if old_live > 0 && new_live == 0 {
-                holder_count_delta -= 1;
-            } else if old_live == 0 && new_live > 0 {
-                holder_count_delta += 1;
-            }
             let next_total_cells_count = ab
                 .total_cells_count
                 .checked_add(total_cells_delta)
@@ -4603,39 +4267,6 @@ impl CkbadgerStore {
                     ab.used_capacity,
                     ab.live_cells_count
                 );
-            }
-            if cell_dist_state_for_rollback.is_some() && (balance_delta != 0 || used_delta != 0) {
-                let month = match cohort_month_by_first_seen.get(&ab.first_seen_block) {
-                    Some(month) => month.clone(),
-                    None => {
-                        let first_seen = self.get_block_header(ab.first_seen_block)?.ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "missing first-seen header for cohort rollback: lock_hash=0x{}, first_seen_block={}",
-                                bytes_to_hex(lock_hash),
-                                ab.first_seen_block
-                            )
-                        })?;
-                        let month =
-                            ckbadger_common::stats_bucket::stats_day(first_seen.chain_time_ms)?
-                                .format("%Y-%m")
-                                .to_string();
-                        cohort_month_by_first_seen.insert(ab.first_seen_block, month.clone());
-                        month
-                    }
-                };
-                let entry = cohort_deltas.entry(month.clone()).or_insert((0, 0));
-                entry.0 = entry.0.checked_add(used_delta).ok_or_else(|| {
-                    anyhow::anyhow!(
-                    "cohort rollback used-capacity delta overflow: month={month}, lock_hash=0x{}",
-                    bytes_to_hex(lock_hash)
-                )
-                })?;
-                entry.1 = entry.1.checked_add(balance_delta).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "cohort rollback balance delta overflow: month={month}, lock_hash=0x{}",
-                        bytes_to_hex(lock_hash)
-                    )
-                })?;
             }
             // A first appearance in the orphaned suffix has no canonical
             // address after rollback. Keeping its zero row would make replay
@@ -5761,76 +5392,9 @@ impl CkbadgerStore {
 
         stage.finish(secondary_keys_written + aggregate_rows_written + cluster_owner_rows_written);
 
-        // 11. Keep HODL tracker state aligned with rollback tip in the same write batch.
-        let mut stage = RollbackStageProgress::new("repair_hodl_tracker_state");
-        let mut hodl_tracker_repaired = 0u64;
-        if rollback_to < 0 {
-            if self
-                .get_cf(self.cf_sync_meta(), keys::sync_meta_keys::HODL_TRACKER)?
-                .is_some()
-            {
-                batch.delete_cf(self.cf_sync_meta(), keys::sync_meta_keys::HODL_TRACKER);
-                hodl_tracker_repaired += 1;
-            }
-        } else if let Some(mut state) = self.get_hodl_tracker_state()? {
-            if truncate_hodl_tracker_state_for_rollback(
-                &mut state,
-                rollback_to,
-                holder_count_delta,
-                &hodl_capacity_deltas,
-            )? {
-                let encoded = bincode::serialize(&state).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to serialize repaired HODL tracker state during rollback cleanup: {}",
-                        e
-                    )
-                })?;
-                batch.put_cf(
-                    self.cf_sync_meta(),
-                    keys::sync_meta_keys::HODL_TRACKER,
-                    &encoded,
-                );
-                hodl_tracker_repaired += 1;
-            }
-        }
-        stage.tick(hodl_tracker_repaired);
-        stage.finish(hodl_tracker_repaired);
-
-        // 12. Keep cell distribution tracker state aligned with rollback tip.
-        let mut stage = RollbackStageProgress::new("repair_cell_dist_tracker_state");
-        let mut cell_dist_tracker_repaired = 0u64;
-        if rollback_to < 0 {
-            if self
-                .get_cf(self.cf_sync_meta(), keys::sync_meta_keys::CELL_DIST_TRACKER)?
-                .is_some()
-            {
-                batch.delete_cf(self.cf_sync_meta(), keys::sync_meta_keys::CELL_DIST_TRACKER);
-                cell_dist_tracker_repaired += 1;
-            }
-        } else if let Some(mut state) = cell_dist_state_for_rollback {
-            if truncate_cell_dist_tracker_state_for_rollback(
-                &mut state,
-                rollback_to,
-                &cell_dist_count_deltas,
-                &cell_dist_capacity_deltas,
-                &cohort_deltas,
-            )? {
-                let encoded = bincode::serialize(&state).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to serialize repaired cell_dist tracker state during rollback cleanup: {}",
-                        e
-                    )
-                })?;
-                batch.put_cf(
-                    self.cf_sync_meta(),
-                    keys::sync_meta_keys::CELL_DIST_TRACKER,
-                    &encoded,
-                );
-                cell_dist_tracker_repaired += 1;
-            }
-        }
-        stage.tick(cell_dist_tracker_repaired);
-        stage.finish(cell_dist_tracker_repaired);
+        // The HODL / cell-distribution tracker rows and cursors and their day
+        // snapshots (`stats_hodl`) are restored from the block journal by
+        // `rollback_via_undo_log`, which runs before this cleanup (B-4).
 
         // Compute the updated sync_status BEFORE the batch commit so we can
         // include it in the same atomic WriteBatch.  This eliminates the crash
@@ -5993,11 +5557,11 @@ mod tests {
     use crate::keys;
     use crate::store::CkbadgerStore;
     use crate::types::{
-        AddrTxValue, AddressBalance, AssetAction, CachedBlockHeader, CellDistributionTrackerState,
-        CompositionTier, DaoDailySnapshot, DaoDepositCacheEntry, HodlTrackerState, LiveCellInfo,
-        LiveCellSummary, MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry,
-        ObjectExtra, ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus,
-        TokenInfo, TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
+        AddrTxValue, AddressBalance, AssetAction, CachedBlockHeader, CompositionTier,
+        DaoDailySnapshot, DaoDepositCacheEntry, LiveCellInfo, LiveCellSummary,
+        MnftCollectionAggregate, ObjectCollectionActivityEntry, ObjectEntry, ObjectExtra,
+        ObjectStandard, ParticipantDelta, ScriptInfo, SporeMediaProfile, SyncStatus, TokenInfo,
+        TxActions, TxIndexEntry, UndoInputOutPoint, UndoLogEntry, UndoTxContext,
     };
 
     /// Complete the synthetic forward chain state before exercising production
@@ -7084,7 +6648,7 @@ mod tests {
     /// B. orphaning the sealer block (first block of D+1) has cutoff D+1, so the
     ///    row keyed D — the one that sealer wrote — is likewise `date < cutoff`
     ///    and survives byte-for-byte; replay re-seals the identical content from
-    ///    the tracker state that stage 11/12 truncated back to the fork point.
+    ///    the tracker state at the fork point (restored by the block journal).
     ///
     /// If either leg ever fails, these three prefixes have lost their owner and
     /// must be moved to the EntityStats undo scope like the other eight.
@@ -7268,10 +6832,11 @@ mod tests {
                 "no row keyed D+1 exists — only D+2's first block could seal it"
             );
 
-            // Replay of block 5 re-seals day D from the tracker state that
-            // stage 11/12 truncated back to block 4 — the same tracker state
-            // that produced these bytes — so the re-seal is a byte-identical
-            // rewrite, never a double count.
+            // Replay of block 5 re-seals day D from the tracker state at
+            // block 4 (the tracker rows and cursors the block journal
+            // restores, B-4) — the same tracker state that produced these
+            // bytes — so the re-seal is a byte-identical rewrite, never a
+            // double count.
             store.put_hodl_wave("20260921", &wave(22)).unwrap();
             store.put_cell_distribution("20260921", &dist(22)).unwrap();
             store.put_address_cohort("20260921", &cohort(22)).unwrap();
@@ -12360,133 +11925,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rollback_truncates_hodl_tracker_state_to_tip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: 1_700_000_000_000,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            parent_hash: vec![0u8; 32],
-            timestamp: 1_700_086_400_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: 1_700_086_400_000,
-        };
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        batch.commit().unwrap();
-
-        store
-            .put_hodl_tracker_state(&HodlTrackerState {
-                capacity_by_date: vec![
-                    ("20231114".to_string(), 100),
-                    ("20231115".to_string(), 200),
-                ],
-                date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
-                holder_count: 9,
-                last_snapshot_date: Some("20231115".to_string()),
-                last_processed_block: Some(2),
-            })
-            .unwrap();
-
-        rollback_fixture(&store, 1).unwrap();
-
-        let repaired = store.get_hodl_tracker_state().unwrap().unwrap();
-        assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
-        assert_eq!(
-            repaired.capacity_by_date,
-            vec![("20231114".to_string(), 100)]
-        );
-        assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
-    }
-
-    #[test]
-    fn test_truncate_hodl_tracker_applies_holder_count_delta() {
-        // Direct unit test of the truncation function with holder_count_delta.
-        let mut state = HodlTrackerState {
-            capacity_by_date: vec![("20231114".to_string(), 100), ("20231115".to_string(), 200)],
-            date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
-            holder_count: 10,
-            last_snapshot_date: Some("20231115".to_string()),
-            last_processed_block: Some(2),
-        };
-
-        // Simulate: one address lost all live cells during rollback (delta = -1).
-        let changed =
-            truncate_hodl_tracker_state_for_rollback(&mut state, 1, -1, &HashMap::new()).unwrap();
-        assert!(changed);
-        assert_eq!(state.holder_count, 9);
-        assert_eq!(state.date_transitions, vec![(1, "20231114".to_string())]);
-        assert_eq!(state.capacity_by_date, vec![("20231114".to_string(), 100)]);
-
-        // Test with positive delta (address gained live cells on rollback — consumed cell restored).
-        let mut state2 = HodlTrackerState {
-            capacity_by_date: vec![("20231114".to_string(), 100)],
-            date_transitions: vec![(1, "20231114".to_string())],
-            holder_count: 5,
-            last_snapshot_date: Some("20231114".to_string()),
-            last_processed_block: Some(1),
-        };
-        let changed =
-            truncate_hodl_tracker_state_for_rollback(&mut state2, 1, 2, &HashMap::new()).unwrap();
-        assert!(changed);
-        assert_eq!(state2.holder_count, 7);
-
-        // Test with zero delta — holder_count unchanged.
-        let mut state3 = HodlTrackerState {
-            capacity_by_date: vec![("20231114".to_string(), 100), ("20231115".to_string(), 200)],
-            date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
-            holder_count: 10,
-            last_snapshot_date: Some("20231115".to_string()),
-            last_processed_block: Some(2),
-        };
-        let changed =
-            truncate_hodl_tracker_state_for_rollback(&mut state3, 1, 0, &HashMap::new()).unwrap();
-        assert!(changed); // dates were truncated
-        assert_eq!(state3.holder_count, 10); // holder_count unchanged
-    }
-
-    #[test]
-    fn test_truncate_hodl_tracker_rejects_holder_count_underflow() {
-        let mut state = HodlTrackerState {
-            capacity_by_date: vec![("20231114".to_string(), 100)],
-            date_transitions: vec![(1, "20231114".to_string())],
-            holder_count: 2,
-            last_snapshot_date: Some("20231114".to_string()),
-            last_processed_block: Some(1),
-        };
-        // Delta of -5 would make holder_count negative → should error.
-        let err = truncate_hodl_tracker_state_for_rollback(&mut state, 1, -5, &HashMap::new())
-            .unwrap_err();
-        assert!(err.to_string().contains("holder_count underflow"));
-    }
-
-    #[test]
     fn accumulate_reorg_holder_delta_supports_amount_above_u128() {
         let amount = 200u128 << 120;
         let cell = LiveCellInfo {
@@ -12507,11 +11945,8 @@ mod tests {
         let mut script = HashMap::new();
         let mut token = HashMap::new();
         let mut script_ref = HashMap::new();
-        let mut cell_dist_count = [0i64; 6];
-        let mut cell_dist_capacity = [0i128; 6];
-        let mut hodl = HashMap::new();
 
-        for created_at_block in [1, 2] {
+        for _ in 0..2 {
             accumulate_cell_deltas(
                 &cell,
                 1,
@@ -12519,10 +11954,6 @@ mod tests {
                 &mut script,
                 &mut token,
                 &mut script_ref,
-                &mut cell_dist_count,
-                &mut cell_dist_capacity,
-                created_at_block,
-                &mut hodl,
             )
             .unwrap();
         }
@@ -12536,67 +11967,6 @@ mod tests {
         assert_eq!(script_ref[&(vec![0x22; 32], 1, true)].0, 0);
         assert_eq!(script_ref[&(vec![0x22; 32], 1, true)].2, 0);
         assert_eq!(script_ref[&(vec![0x22; 32], 1, true)].4, 0);
-    }
-
-    #[test]
-    fn test_accumulate_cell_deltas_records_hodl_capacity_by_created_block() {
-        // The rolled-back cell walk must record each cell's FULL capacity against
-        // its creation block, signed: +1 (restore consumed) credits, -1 (remove
-        // created) debits.  This is what HODL tracker repair reverses.
-        let cell = LiveCellInfo {
-            capacity: 485_835_712_305_249,
-            lock_code_hash: [0x11; 32],
-            lock_hash_type: 1,
-            lock_args: vec![],
-            type_code_hash: None,
-            type_hash_type: None,
-            type_args: None,
-            data_size: 0,
-            udt_amount: None,
-            data_hash: None,
-        };
-        let mut addr = HashMap::new();
-        let mut script = HashMap::new();
-        let mut token = HashMap::new();
-        let mut script_ref = HashMap::new();
-        let mut cd_count = [0i64; 6];
-        let mut cd_cap = [0i128; 6];
-        let mut hodl: HashMap<i64, i128> = HashMap::new();
-
-        // Restore a consumed cell (sign +1) → credit full capacity to its creation block.
-        accumulate_cell_deltas(
-            &cell,
-            1,
-            &mut addr,
-            &mut script,
-            &mut token,
-            &mut script_ref,
-            &mut cd_count,
-            &mut cd_cap,
-            19_665_025,
-            &mut hodl,
-        )
-        .unwrap();
-        assert_eq!(
-            hodl.get(&19_665_025).copied(),
-            Some(485_835_712_305_249_i128)
-        );
-
-        // Remove a created cell (sign -1) at the same block → nets back to zero.
-        accumulate_cell_deltas(
-            &cell,
-            -1,
-            &mut addr,
-            &mut script,
-            &mut token,
-            &mut script_ref,
-            &mut cd_count,
-            &mut cd_cap,
-            19_665_025,
-            &mut hodl,
-        )
-        .unwrap();
-        assert_eq!(hodl.get(&19_665_025).copied(), Some(0_i128));
     }
 
     #[test]
@@ -12627,343 +11997,6 @@ mod tests {
             script[&(cell.type_code_hash.unwrap().to_vec(), 1, true)],
             (-1, 0, -200, 0, -74_00000000, 0)
         );
-    }
-
-    #[test]
-    fn test_truncate_hodl_tracker_restores_consumed_cell_capacity_on_rollback() {
-        // Regression for the "live capacity underflow on consume" crash-loop: a
-        // rolled-back block consumed a cell created on an earlier date, depleting
-        // that date's bucket.  Rollback MUST add the capacity back so the re-sync's
-        // re-consume does not drive the bucket negative.
-        let mut state = HodlTrackerState {
-            capacity_by_date: vec![
-                // 20260623 bucket already had the big cell subtracted by the fork consume.
-                ("20260623".to_string(), 137_750_464_591_717_i128),
-                ("20260701".to_string(), 50_000_000_000_i128),
-            ],
-            date_transitions: vec![
-                (19_665_025, "20260623".to_string()),
-                (19_755_400, "20260701".to_string()),
-            ],
-            holder_count: 10,
-            last_snapshot_date: Some("20260701".to_string()),
-            last_processed_block: Some(19_755_471),
-        };
-        // Rollback restores the cell created at block 19_665_025 (consumed on the fork).
-        let mut deltas: HashMap<i64, i128> = HashMap::new();
-        deltas.insert(19_665_025, 485_835_712_305_249_i128);
-
-        let changed =
-            truncate_hodl_tracker_state_for_rollback(&mut state, 19_755_470, 0, &deltas).unwrap();
-        assert!(changed);
-
-        let bucket = state
-            .capacity_by_date
-            .iter()
-            .find(|(d, _)| d == "20260623")
-            .map(|(_, c)| *c);
-        assert_eq!(
-            bucket,
-            Some(137_750_464_591_717_i128 + 485_835_712_305_249_i128)
-        );
-    }
-
-    #[test]
-    fn test_truncate_hodl_tracker_removes_created_cell_capacity_on_boundary_date() {
-        // A cell created by a rolled-back block that shares the surviving boundary
-        // date must have its capacity subtracted from that date's bucket, else the
-        // bucket is silently over-counted (date truncation alone cannot catch this).
-        let mut state = HodlTrackerState {
-            capacity_by_date: vec![("20260701".to_string(), 30_000_000_000_i128)],
-            date_transitions: vec![(19_755_400, "20260701".to_string())],
-            holder_count: 5,
-            last_snapshot_date: Some("20260701".to_string()),
-            last_processed_block: Some(19_755_480),
-        };
-        // Rollback to 19_755_470; a cell created at rolled-back block 19_755_480
-        // (creation date 20260701, the boundary date) is removed.
-        let mut deltas: HashMap<i64, i128> = HashMap::new();
-        deltas.insert(19_755_480, -10_000_000_000_i128);
-
-        truncate_hodl_tracker_state_for_rollback(&mut state, 19_755_470, 0, &deltas).unwrap();
-
-        let bucket = state
-            .capacity_by_date
-            .iter()
-            .find(|(d, _)| d == "20260701")
-            .map(|(_, c)| *c);
-        assert_eq!(bucket, Some(20_000_000_000_i128));
-    }
-
-    #[test]
-    fn test_truncate_hodl_tracker_fails_fast_on_capacity_underflow() {
-        // A delta that would drive a surviving bucket negative signals an upstream
-        // inconsistency — fail fast with context instead of clamping/masking.
-        let mut state = HodlTrackerState {
-            capacity_by_date: vec![("20260701".to_string(), 100_i128)],
-            date_transitions: vec![(19_755_400, "20260701".to_string())],
-            holder_count: 5,
-            last_snapshot_date: Some("20260701".to_string()),
-            last_processed_block: Some(19_755_480),
-        };
-        let mut deltas: HashMap<i64, i128> = HashMap::new();
-        deltas.insert(19_755_480, -500_i128);
-
-        let err = truncate_hodl_tracker_state_for_rollback(&mut state, 19_755_470, 0, &deltas)
-            .unwrap_err();
-        assert!(err.to_string().contains("underflow"));
-    }
-
-    #[test]
-    fn test_rollback_truncates_cell_dist_tracker_state_to_tip() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = CkbadgerStore::open_test_unified(dir.path()).unwrap();
-
-        let header1 = CachedBlockHeader {
-            hash: vec![0x01; 32],
-            parent_hash: vec![0u8; 32],
-            timestamp: 1_700_000_000_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: 1_700_000_000_000,
-        };
-        let header2 = CachedBlockHeader {
-            hash: vec![0x02; 32],
-            parent_hash: vec![0u8; 32],
-            timestamp: 1_700_086_400_000,
-            epoch_number: 0,
-            epoch_index: 0,
-            epoch_length: 1,
-            dao: vec![0; 32],
-            transactions_count: 1,
-            uncles_count: 0,
-            proposals_count: 0,
-            compact_target: 0x1a08a97e,
-            miner_lock_hash: None,
-            cycles: None,
-            chain_time_ms: 1_700_086_400_000,
-        };
-        let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(1, &header1);
-        batch.put_block_header(2, &header2);
-        put_canonical_tx(&mut batch, 1, 0, &[0x10; 32]);
-        put_canonical_tx(&mut batch, 2, 0, &[0x20; 32]);
-        batch.commit().unwrap();
-
-        store
-            .put_cell_dist_tracker_state(&CellDistributionTrackerState {
-                count_by_bucket: [5, 3, 0, 0, 0, 0],
-                total_capacity_by_bucket: [100, 200, 0, 0, 0, 0],
-                date_transitions: vec![(1, "20231114".to_string()), (2, "20231115".to_string())],
-                last_snapshot_date: Some("20231115".to_string()),
-                cohort_accum: vec![],
-                last_processed_block: Some(2),
-            })
-            .unwrap();
-
-        rollback_fixture(&store, 1).unwrap();
-
-        let repaired = store.get_cell_dist_tracker_state().unwrap().unwrap();
-        assert_eq!(repaired.date_transitions, vec![(1, "20231114".to_string())]);
-        // Size totals are preserved; rollback does not have enough per-cell data to recompute them.
-        assert_eq!(repaired.total_capacity_by_bucket, [100, 200, 0, 0, 0, 0]);
-        // Count totals are preserved for the same reason.
-        assert_eq!(repaired.count_by_bucket, [5, 3, 0, 0, 0, 0]);
-        assert_eq!(repaired.last_snapshot_date, Some("20231114".to_string()));
-    }
-
-    #[test]
-    fn test_truncate_cell_dist_tracker_preserves_total_capacity() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [10, 5, 3, 2, 0, 0],
-            total_capacity_by_bucket: [80, 100, 200, 500, 0, 0],
-            date_transitions: vec![
-                (1, "20231114".to_string()),
-                (100, "20231115".to_string()),
-                (200, "20231116".to_string()),
-            ],
-            last_snapshot_date: Some("20231116".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(200),
-        };
-
-        let changed = truncate_cell_dist_tracker_state_for_rollback(
-            &mut state,
-            150,
-            &[0; 6],
-            &[0; 6],
-            &HashMap::new(),
-        )
-        .unwrap();
-        assert!(changed);
-        assert_eq!(state.date_transitions.len(), 2);
-        assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
-        assert_eq!(state.last_snapshot_date, Some("20231115".to_string()));
-    }
-
-    #[test]
-    fn test_truncate_cell_dist_tracker_preserves_totals_without_age_entries() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [10, 5, 3, 2, 0, 0],
-            total_capacity_by_bucket: [80, 100, 200, 500, 0, 0],
-            date_transitions: vec![
-                (1, "20231114".to_string()),
-                (100, "20231115".to_string()),
-                (200, "20231116".to_string()),
-            ],
-            last_snapshot_date: Some("20231116".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(200),
-        };
-
-        let changed = truncate_cell_dist_tracker_state_for_rollback(
-            &mut state,
-            150,
-            &[0; 6],
-            &[0; 6],
-            &HashMap::new(),
-        )
-        .unwrap();
-        assert!(changed);
-        assert_eq!(state.date_transitions.len(), 2);
-        assert_eq!(state.total_capacity_by_bucket, [80, 100, 200, 500, 0, 0]);
-        assert_eq!(state.last_snapshot_date, Some("20231115".to_string()));
-    }
-
-    #[test]
-    fn test_truncate_cell_dist_tracker_rejects_empty_transitions() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [1, 0, 0, 0, 0, 0],
-            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
-            date_transitions: vec![(100, "20231115".to_string())],
-            last_snapshot_date: Some("20231115".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(100),
-        };
-        // Rollback to block 50 — before any transition → should error.
-        let err = truncate_cell_dist_tracker_state_for_rollback(
-            &mut state,
-            50,
-            &[0; 6],
-            &[0; 6],
-            &HashMap::new(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("no remaining date transitions"));
-    }
-
-    #[test]
-    fn test_cell_dist_bucket_deltas_applied_during_rollback() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [10, 5, 3, 0, 0, 0],
-            total_capacity_by_bucket: [500, 3000, 50000, 0, 0, 0],
-            date_transitions: vec![(1, "20231114".to_string()), (100, "20231115".to_string())],
-            last_snapshot_date: Some("20231115".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(100),
-        };
-        // Simulate: 2 cells removed from bucket 0, 1 cell restored to bucket 1.
-        let count_deltas: [i64; 6] = [-2, 1, 0, 0, 0, 0];
-        let cap_deltas: [i128; 6] = [-100, 800, 0, 0, 0, 0];
-        let changed = truncate_cell_dist_tracker_state_for_rollback(
-            &mut state,
-            50,
-            &count_deltas,
-            &cap_deltas,
-            &HashMap::new(),
-        )
-        .unwrap();
-        assert!(changed);
-        assert_eq!(state.count_by_bucket[0], 8); // 10 - 2
-        assert_eq!(state.count_by_bucket[1], 6); // 5 + 1
-        assert_eq!(state.total_capacity_by_bucket[0], 400); // 500 - 100
-        assert_eq!(state.total_capacity_by_bucket[1], 3800); // 3000 + 800
-    }
-
-    #[test]
-    fn test_cell_dist_cohort_deltas_exactly_reverse_address_changes() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [1, 0, 0, 0, 0, 0],
-            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
-            date_transitions: vec![(1, "20231115".to_string())],
-            last_snapshot_date: Some("20231115".to_string()),
-            cohort_accum: vec![("2023-11".to_string(), 50, 300)],
-            last_processed_block: Some(3),
-        };
-        let deltas = HashMap::from([("2023-11".to_string(), (-20, -100))]);
-        assert!(truncate_cell_dist_tracker_state_for_rollback(
-            &mut state, 2, &[0; 6], &[0; 6], &deltas,
-        )
-        .unwrap());
-        assert_eq!(state.cohort_accum, vec![("2023-11".to_string(), 30, 200)]);
-
-        let impossible = HashMap::from([("2023-11".to_string(), (-31, 0))]);
-        let error = truncate_cell_dist_tracker_state_for_rollback(
-            &mut state,
-            2,
-            &[0; 6],
-            &[0; 6],
-            &impossible,
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("cohort accumulator underflow"));
-    }
-
-    #[test]
-    fn test_cell_dist_rollback_preserves_preexisting_zero_cohort_month() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [1, 0, 0, 0, 0, 0],
-            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
-            date_transitions: vec![(1, "20231115".to_string())],
-            last_snapshot_date: Some("20231115".to_string()),
-            cohort_accum: vec![
-                ("2023-10".to_string(), 0, 0),
-                ("2023-11".to_string(), 50, 300),
-            ],
-            last_processed_block: Some(3),
-        };
-        let deltas = HashMap::from([("2023-11".to_string(), (-50, -300))]);
-        assert!(truncate_cell_dist_tracker_state_for_rollback(
-            &mut state, 2, &[0; 6], &[0; 6], &deltas,
-        )
-        .unwrap());
-        assert_eq!(
-            state.cohort_accum,
-            vec![("2023-10".to_string(), 0, 0), ("2023-11".to_string(), 0, 0)]
-        );
-    }
-
-    #[test]
-    fn test_cell_dist_bucket_underflow_is_rejected() {
-        let mut state = CellDistributionTrackerState {
-            count_by_bucket: [1, 0, 0, 0, 0, 0],
-            total_capacity_by_bucket: [100, 0, 0, 0, 0, 0],
-            date_transitions: vec![(1, "20231114".to_string())],
-            last_snapshot_date: Some("20231114".to_string()),
-            cohort_accum: vec![],
-            last_processed_block: Some(1),
-        };
-        // Try to remove 5 cells from bucket 0 which only has 1.
-        let count_deltas: [i64; 6] = [-5, 0, 0, 0, 0, 0];
-        let cap_deltas: [i128; 6] = [0; 6];
-        // rollback_to must be > 0 to avoid the early-return for genesis reset.
-        let err = truncate_cell_dist_tracker_state_for_rollback(
-            &mut state,
-            1,
-            &count_deltas,
-            &cap_deltas,
-            &HashMap::new(),
-        )
-        .unwrap_err();
-        assert!(err.to_string().contains("count_by_bucket underflow"));
     }
 
     #[test]

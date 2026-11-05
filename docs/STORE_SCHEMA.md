@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (72 total: 68 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (74 total: 70 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 68 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 70 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -96,6 +96,8 @@ requires re-sync from genesis; there is no migration.
 | `stats_chain`                    | prefixed keys                                                                 | chain chart snapshots                                                          | Daily/hourly/epoch/miner/block stats (DailyActivityStats includes protocol_action_counts)                                                                                                                                                                  |
 | `stats_dao`                      | prefixed keys                                                                 | DAO snapshots                                                                  | DAO daily snapshots (including exact unclaimed and frozen phase-1 compensation), plus latest/top summaries; sealed aggregates in bulk build                                                                                                                |
 | `stats_hodl`                     | prefixed keys                                                                 | HODL/chart snapshots                                                           | HODL waves, cell distribution, address cohorts                                                                                                                                                                                                             |
+| `hodl_capacity_by_date`          | creation day `YYYYMMDD` (8B ASCII, UTC+8)                                     | i128 LE (16B), > 0                                                             | HODL wave tracker: live capacity per cell creation day (a day with no live capacity has no row); scalars in `sync_meta` `hodl_cursor`. Written per block that moves it (B-4)                                                                               |
+| `cell_dist_cohort_by_month`      | cohort month `YYYY-MM` (7B ASCII)                                             | (used, balance): 2 × i128 LE (32B), >= 0                                       | Cell-distribution tracker: address cohort accumulator by first-seen month; bucket totals in `sync_meta` `cell_dist_cursor`. Written per block that moves it (B-4)                                                                                          |
 | `stats_script`                   | prefixed keys                                                                 | ScriptDailyDelta                                                               | Script daily deltas (per `code_hash` + `hash_type` + lock/type + day; sealed in bulk build)                                                                                                                                                                |
 | `stats_token`                    | prefixed keys                                                                 | token rollups + deltas                                                         | Token transfer totals, hourly buckets, and daily deltas (sealed in bulk build)                                                                                                                                                                             |
 | `stats_spore`                    | prefixed keys                                                                 | spore rollups/indexes                                                          | Spore/cluster daily + owner/index stats                                                                                                                                                                                                                    |
@@ -380,7 +382,17 @@ namespace includes:
   `memory_stats`, and `background_tasks`
 - rollback state: `rollback_cleanup_in_progress`, latest/history reorg records, and `deep_fork`
 - bulk-build state: batch/session-in-progress markers
-- materialization trackers: HODL and cell-distribution trackers
+- materialization tracker cursors: `hodl_cursor` (bincode `HodlTrackerCursor`: holder count,
+  open snapshot day, last processed block) and `cell_dist_cursor` (bincode
+  `CellDistTrackerCursor`: per-size-bucket live cell counts and occupied capacities, open snapshot
+  day, last processed block). With the `hodl_capacity_by_date` and `cell_dist_cohort_by_month`
+  rows they are the trackers' whole persisted state; the live writer writes, in each block's
+  scope, the rows the block moved plus both cursors, so the block journal restores them, and bulk
+  finalize writes them all once. A block's day (a consumed cell's creation day, an address's
+  first-seen month) is `stats_day` of its stored header's `chain_time_ms`; no block→day map is
+  persisted. The legacy whole-state blobs `hodl_tracker` / `cell_dist_tracker` are converted to
+  these rows once at indexer start and deleted (development-only conversion, removed after the
+  store refactor's re-sync)
 - chain identity: `network_identity`, persisted at first sync and validated on later starts
 - exact economics: `genesis_baseline` (`GenesisBaseline { total_issuance, burnt,
 virtual_occupied }`), derived from block 0 and used by supply, APC, and knowledge-size paths

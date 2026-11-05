@@ -451,6 +451,18 @@ pub const CF_STATS_IDENTITY: &str = "stats_identity";
 pub const CF_STATS_CHAIN: &str = "stats_chain";
 pub const CF_STATS_DAO: &str = "stats_dao";
 pub const CF_STATS_HODL: &str = "stats_hodl";
+/// The HODL wave tracker's live capacity per cell creation day (B-4): key the
+/// UTC+8 day `YYYYMMDD` (8 ASCII bytes), value the live capacity in shannons
+/// (i128, 16 bytes little-endian, always > 0: a day whose cells are all
+/// consumed has no row). The tracker's scalars are the `sync_meta` row
+/// `hodl_cursor`.
+pub const CF_HODL_CAPACITY_BY_DATE: &str = "hodl_capacity_by_date";
+/// The cell-distribution tracker's address cohort accumulator (B-4): key the
+/// cohort month `YYYY-MM` (7 ASCII bytes) of the addresses' first-seen block,
+/// value `(used_capacity, balance)` in shannons (two i128, 32 bytes
+/// little-endian, both >= 0). The tracker's scalars are the `sync_meta` row
+/// `cell_dist_cursor`.
+pub const CF_CELL_DIST_COHORT_BY_MONTH: &str = "cell_dist_cohort_by_month";
 pub const CF_STATS_SCRIPT: &str = "stats_script";
 pub const CF_STATS_TOKEN: &str = "stats_token";
 pub const CF_STATS_SPORE: &str = "stats_spore";
@@ -661,6 +673,8 @@ mod cf_table {
         cf(CF_STATS_CHAIN,                            Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
         cf(CF_STATS_DAO,                              Domain,      SealedAggregate, Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_STATS_HODL,                             Domain,      SealedAggregate, Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_HODL_CAPACITY_BY_DATE,                  Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
+        cf(CF_CELL_DIST_COHORT_BY_MONTH,              Domain,      FinalSnapshot,   Low,  COLD, Lz4,  Leveled,   Journal),
         cf(CF_STATS_SCRIPT,                           Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
         cf(CF_STATS_TOKEN,                            Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
         cf(CF_STATS_SPORE,                            Domain,      SealedAggregate, High, COLD, Lz4,  Leveled,   Journal),
@@ -1796,6 +1810,12 @@ impl CkbadgerStore {
     }
     pub fn cf_stats_hodl(&self) -> &ColumnFamily {
         self.cf(CF_STATS_HODL)
+    }
+    pub fn cf_hodl_capacity_by_date(&self) -> &ColumnFamily {
+        self.cf(CF_HODL_CAPACITY_BY_DATE)
+    }
+    pub fn cf_cell_dist_cohort_by_month(&self) -> &ColumnFamily {
+        self.cf(CF_CELL_DIST_COHORT_BY_MONTH)
     }
     pub fn cf_stats_script(&self) -> &ColumnFamily {
         self.cf(CF_STATS_SCRIPT)
@@ -3488,7 +3508,7 @@ mod tests {
 
     #[test]
     fn test_domain_schema_has_no_ambiguous_fiber_funding_args_index() {
-        assert_eq!(DOMAIN_CFS.len(), 68);
+        assert_eq!(DOMAIN_CFS.len(), 70);
         assert!(!DOMAIN_CFS.contains(&"fiber_channel_by_funding_args"));
     }
 
@@ -4926,8 +4946,8 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before, "a CF name appears twice in CF_SPECS");
-        assert_eq!(CF_SPECS.len(), 72);
-        assert_eq!(DOMAIN_CFS.len(), 68);
+        assert_eq!(CF_SPECS.len(), 74);
+        assert_eq!(DOMAIN_CFS.len(), 70);
         assert_eq!(APPEND_CFS, &[CF_CELLS]);
         assert_eq!(NETWORK_CFS, &[CF_NET_NODES, CF_NET_STATS, CF_NET_CRAWL]);
         assert_eq!(ALL_CFS.len(), DOMAIN_CFS.len() + APPEND_CFS.len());
@@ -4979,7 +4999,9 @@ mod tests {
     /// options and write policy the hand-maintained tables produced before it
     /// (main @8f8404da), plus Lane A's one measured change merged from main
     /// @b2409d4c: `cells` is lz4 (store refactor plan J3). Changing any value
-    /// here is an option change, which needs its own paired bulk run.
+    /// here is an option change, which needs its own paired bulk run. B-4
+    /// adds two rows (`hodl_capacity_by_date`, `cell_dist_cohort_by_month`,
+    /// the trackers' rows); every other row is unchanged.
     #[test]
     fn cf_options_and_policies_match_the_pre_cfspec_snapshot() {
         let actual = cf_option_snapshot();
@@ -5030,6 +5052,8 @@ mod tests {
     "stats_chain SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "stats_dao SealedAggregate live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "stats_hodl SealedAggregate live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "hodl_capacity_by_date FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
+    "cell_dist_cohort_by_month FinalSnapshot live(low,2) kLZ4Compression kCompactionStyleLevel bulk(6,low) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=6,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "stats_script SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "stats_token SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",
     "stats_spore SealedAggregate live(high,4) kLZ4Compression kCompactionStyleLevel bulk(8,high) [level0_slowdown_writes_trigger=96,level0_stop_writes_trigger=192,max_write_buffer_number=8,max_bytes_for_level_base=bulk_level_base,target_file_size_base=bulk_file_size]",

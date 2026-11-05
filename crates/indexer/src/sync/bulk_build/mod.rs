@@ -22,14 +22,13 @@ use ckbadger_common::TokenBalance;
 use ckbadger_store::keys;
 use ckbadger_store::store::CF_TOKEN_TRANSFERS;
 use ckbadger_store::types::{
-    decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader,
-    CellDistributionTrackerState, ConsumedCellMeta, DailyActivityStats, DailyAddressCohort,
-    DailyCellDistribution, DailyHodlWave, DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors,
-    HodlTrackerState, HourlyStats, LiveCellInfo, LiveCellSummary, LockScriptEntry, MinerStats,
-    ObjectStandard, ParticipantId, ScriptDailyDelta, SporeTypeIndex, SyncStatus,
-    TokenTransferRecord, TxActions, TxIndexEntry, BIT_CELL_SENTINEL_COLLECTION,
-    DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION, DOTCELL_SENTINEL_COLLECTION,
-    SOLE_SPORES_SENTINEL_COLLECTION,
+    decode_live_cell_marker, BulkBuildSessionMarker, CachedBlockHeader, CellDistTrackerCursor,
+    ConsumedCellMeta, DailyActivityStats, DailyAddressCohort, DailyCellDistribution, DailyHodlWave,
+    DaoDailySnapshot, DaoLatestStatistics, DaoTopDepositors, HodlTrackerCursor, HourlyStats,
+    LiveCellInfo, LiveCellSummary, LockScriptEntry, MinerStats, ObjectStandard, ParticipantId,
+    ScriptDailyDelta, SporeTypeIndex, SyncStatus, TokenTransferRecord, TxActions, TxIndexEntry,
+    BIT_CELL_SENTINEL_COLLECTION, DID_CKB_SENTINEL_COLLECTION, DOTBIT_SENTINEL_COLLECTION,
+    DOTCELL_SENTINEL_COLLECTION, SOLE_SPORES_SENTINEL_COLLECTION,
 };
 use ckbadger_store::{
     AddressBalance, CkbadgerStore, ScriptInfo, CF_ADDR_TXS, CF_ADDR_TXS_BY_PREFIX,
@@ -1364,17 +1363,13 @@ fn materialize_finalize_phases(
         owners.materialize_all(&mut materializer)?;
     }
 
-    // Step 11: metadata (HODL + cell distribution tracker state)
+    // Step 11: metadata (the HODL + cell distribution tracker rows and
+    // cursors, B-4: a few thousand small rows, written once)
     {
         fail_if_bulk_finalize_cancelled(shutdown_requested, "metadata")?;
         let _guard = tracing::info_span!("bulk_finalize", phase = 11, label = "metadata").entered();
         perf_stats.record_finalize_step(11, finalize_started.elapsed());
-        let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
-        meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
-        meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
-        if !meta_batch.is_empty() {
-            meta_batch.commit()?;
-        }
+        stage_tracker_rows(domain_store, &hodl_tracker, &cell_dist_tracker)?;
     }
 
     Ok(materializer.finish())
@@ -2582,6 +2577,9 @@ struct BulkBuildRuntimeState {
     hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker,
     cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker,
     hodl_live_cells_by_lock: FxHashMap<crate::sync::types::InternId, i32>,
+    /// The day of every block of the run, for the trackers' creation-day and
+    /// first-seen-month lookups (in memory only: the run reads no store).
+    block_days: crate::sync::block_days::BulkBlockDays,
 }
 
 impl Default for BulkBuildRuntimeState {
@@ -2597,6 +2595,7 @@ impl Default for BulkBuildRuntimeState {
             hodl_tracker: crate::db::writer::hodl_wave::HodlWaveTracker::new(),
             cell_dist_tracker: crate::db::writer::cell_distribution::CellDistributionTracker::new(),
             hodl_live_cells_by_lock: FxHashMap::default(),
+            block_days: crate::sync::block_days::BulkBlockDays::default(),
         }
     }
 }
@@ -2733,8 +2732,19 @@ impl BulkBuildRuntimeState {
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
+            block_days,
             ..
         } = self;
+        // The day of every block of this batch, recorded before the reducers
+        // that look days up run (a consumed cell may have been created, an
+        // address first seen, earlier in this very batch).
+        for block in &arena.blocks {
+            block_days.record(
+                block.number,
+                ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?,
+            )?;
+        }
+        let block_days = &*block_days;
         let ctx = owners::ReducerContext::new(&frozen);
 
         // 3-way parallel tree via nested rayon::join:
@@ -2791,6 +2801,7 @@ impl BulkBuildRuntimeState {
                         let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(
                             hodl_tracker,
                             hodl_live_cells_by_lock,
+                            block_days,
                             &arena,
                             &resolved,
                         )?;
@@ -2820,7 +2831,7 @@ impl BulkBuildRuntimeState {
                                             cell_dist_tracker,
                                             block.number,
                                             block_date,
-                                        )
+                                        )?
                                     {
                                         let date_str =
                                             snapshot_date.format("%Y%m%d").to_string();
@@ -2860,6 +2871,7 @@ impl BulkBuildRuntimeState {
                                             address.apply_tx_with_deltas(tx, &ctx)?;
                                         apply_cell_dist_cohort_deltas(
                                             cell_dist_tracker,
+                                            block_days,
                                             address,
                                             &address_deltas,
                                             tx,
@@ -3074,8 +3086,19 @@ impl BulkBuildRuntimeState {
             hodl_live_cells_by_lock,
             activity_stats,
             chain_stats,
+            block_days,
             ..
         } = self;
+        // The day of every block of this batch, recorded before the reducers
+        // that look days up run (a consumed cell may have been created, an
+        // address first seen, earlier in this very batch).
+        for block in &arena.blocks {
+            block_days.record(
+                block.number,
+                ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?,
+            )?;
+        }
+        let block_days = &*block_days;
         let ctx = owners::ReducerContext::new(&frozen);
 
         // 3-way parallel tree (same structure as apply_blocks):
@@ -3115,7 +3138,7 @@ impl BulkBuildRuntimeState {
                 rayon::join(
                 || -> Result<()> { chain_stats.apply_blocks(&arena, &resolved) },
                 || -> Result<(Vec<materialize::MaterializedRow>, Vec<materialize::MaterializedRow>, std::time::Duration)> {
-                    let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(hodl_tracker, hodl_live_cells_by_lock, &arena, &resolved)?;
+                    let hodl_sealed_rows = apply_hodl_tracker_batch_standalone(hodl_tracker, hodl_live_cells_by_lock, block_days, &arena, &resolved)?;
                     let CoreOwners { ref mut address, ref mut script, ref mut token, ref mut dao, ref mut fiber, ref mut object } = *owners;
                     let address_started = Instant::now();
                     let (addr_result, reducers_result) = rayon::join(
@@ -3123,7 +3146,7 @@ impl BulkBuildRuntimeState {
                             let mut cell_dist_sealed_rows = Vec::new();
                             for block in &arena.blocks {
                                 let block_date = ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?;
-                                if let Some((snapshot_date, snapshot, cohort)) = begin_cell_distribution_block(cell_dist_tracker, block.number, block_date) {
+                                if let Some((snapshot_date, snapshot, cohort)) = begin_cell_distribution_block(cell_dist_tracker, block.number, block_date)? {
                                     let date_str = snapshot_date.format("%Y%m%d").to_string();
                                     cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::CELL_DISTRIBUTION, date_str.as_bytes()), bincode::serialize(&snapshot)?));
                                     cell_dist_sealed_rows.push(materialize::MaterializedRow::new(ckbadger_store::CF_STATS_HODL, ckbadger_store::keys::encode_stats_key(ckbadger_store::keys::stats_prefix::ADDR_COHORT, date_str.as_bytes()), bincode::serialize(&cohort)?));
@@ -3132,7 +3155,7 @@ impl BulkBuildRuntimeState {
                                     for input in &tx.resolved_inputs { cell_dist_tracker.cell_consumed(input.occupied_capacity)?; }
                                     for cell in tx.cells.iter() { cell_dist_tracker.cell_created(cell.occupied_capacity); }
                                     let address_deltas = address.apply_tx_with_deltas(tx, &ctx)?;
-                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, address, &address_deltas, tx)?;
+                                    apply_cell_dist_cohort_deltas(cell_dist_tracker, block_days, address, &address_deltas, tx)?;
                                 }
                             }
                             Ok(cell_dist_sealed_rows)
@@ -3266,12 +3289,7 @@ impl BulkBuildRuntimeState {
 
         owners.materialize_all(materializer)?;
 
-        let mut meta_batch = ckbadger_store::batch::StoreBatch::new(domain_store);
-        meta_batch.put_hodl_tracker_state(&hodl_tracker.to_state());
-        meta_batch.put_cell_dist_tracker_state(&cell_dist_tracker.to_state());
-        if !meta_batch.is_empty() {
-            meta_batch.commit()?;
-        }
+        stage_tracker_rows(domain_store, &hodl_tracker, &cell_dist_tracker)?;
         Ok(live_cell_summaries)
     }
 
@@ -3286,11 +3304,32 @@ impl BulkBuildRuntimeState {
     }
 }
 
+/// Bulk finalize's tracker rows: every `hodl_capacity_by_date` and
+/// `cell_dist_cohort_by_month` row and the two cursors, in one batch onto a
+/// store that holds none (a fresh bulk build). A tracker that processed no
+/// block (an empty run) has nothing to persist.
+fn stage_tracker_rows(
+    domain_store: &CkbadgerStore,
+    hodl_tracker: &crate::db::writer::hodl_wave::HodlWaveTracker,
+    cell_dist_tracker: &crate::db::writer::cell_distribution::CellDistributionTracker,
+) -> Result<()> {
+    if hodl_tracker.last_processed_block().is_none()
+        && cell_dist_tracker.last_processed_block().is_none()
+    {
+        return Ok(());
+    }
+    let mut batch = ckbadger_store::batch::StoreBatch::new(domain_store);
+    hodl_tracker.stage_all_rows(&mut batch)?;
+    cell_dist_tracker.stage_all_rows(&mut batch)?;
+    batch.commit()
+}
+
 /// Standalone hodl tracker batch processing. Extracted from `BulkBuildRuntimeState`
 /// to allow split borrows in `rayon::join` (hodl fields borrowed separately from other fields).
 fn apply_hodl_tracker_batch_standalone(
     hodl_tracker: &mut crate::db::writer::hodl_wave::HodlWaveTracker,
     hodl_live_cells_by_lock: &mut FxHashMap<crate::sync::types::InternId, i32>,
+    block_days: &crate::sync::block_days::BulkBlockDays,
     arena: &facts::FactsArena,
     resolved: &[facts::ResolvedTxFacts<'_>],
 ) -> Result<Vec<materialize::MaterializedRow>> {
@@ -3306,7 +3345,7 @@ fn apply_hodl_tracker_batch_standalone(
     for block in &arena.blocks {
         let block_date = ckbadger_common::stats_bucket::stats_day(block.chain_time_ms)?;
         if let Some((snapshot_date, snapshot)) =
-            begin_hodl_wave_block(hodl_tracker, block.number, block_date)
+            begin_hodl_wave_block(hodl_tracker, block.number, block_date)?
         {
             let date_str = snapshot_date.format("%Y%m%d").to_string();
             sealed_rows.push(materialize::MaterializedRow::new(
@@ -3325,7 +3364,18 @@ fn apply_hodl_tracker_batch_standalone(
                     -1,
                     tx,
                 )?;
-                hodl_tracker.cell_consumed(input.created_at_block, input.capacity)?;
+                let creation_day = block_days.day_of(input.created_at_block)?;
+                hodl_tracker
+                    .cell_consumed(creation_day, input.capacity)
+                    .map_err(|e| {
+                        anyhow!(
+                            "bulk HODL tracker consume: tx=0x{} block={} tx_index={} created_at_block={}: {e}",
+                            hex::encode(tx.tx_hash),
+                            tx.block_number,
+                            tx.tx_index,
+                            input.created_at_block
+                        )
+                    })?;
             }
             for cell in tx.cells.iter() {
                 update_hodl_holder_count(
@@ -3388,6 +3438,7 @@ fn update_hodl_holder_count(
 
 fn apply_cell_dist_cohort_deltas(
     tracker: &mut crate::db::writer::cell_distribution::CellDistributionTracker,
+    block_days: &crate::sync::block_days::BulkBlockDays,
     addresses: &owners::address::AddressOwner,
     deltas: &FxHashMap<[u8; 32], owners::address::AddressTxDelta>,
     tx: &facts::ResolvedTxFacts<'_>,
@@ -3402,12 +3453,15 @@ fn apply_cell_dist_cohort_deltas(
                 tx.tx_index
             )
         })?;
-        tracker
-            .apply_cohort_delta(
-                balance.first_seen_block,
-                delta.used_capacity_delta,
-                delta.balance_delta,
-            )
+        block_days
+            .day_of(balance.first_seen_block)
+            .and_then(|first_seen_day| {
+                tracker.apply_cohort_delta(
+                    first_seen_day,
+                    delta.used_capacity_delta,
+                    delta.balance_delta,
+                )
+            })
             .map_err(|e| {
                 anyhow!(
                     "failed to apply cell distribution cohort delta: lock_hash=0x{}, first_seen_block={}, block={}, tx=0x{}, tx_index={}, error={}",
@@ -3676,8 +3730,14 @@ pub struct BulkArtifactSnapshot {
     pub sync_status: SyncStatus,
     pub live_cell_summary: Option<LiveCellSummary>,
     pub bulk_build_session_marker: Option<BulkBuildSessionMarker>,
-    pub hodl_tracker_state: Option<HodlTrackerState>,
-    pub cell_dist_tracker_state: Option<CellDistributionTrackerState>,
+    /// The HODL tracker's persisted rows: `hodl_capacity_by_date` and the
+    /// `hodl_cursor`.
+    pub hodl_capacity_by_date: Vec<(chrono::NaiveDate, i128)>,
+    pub hodl_cursor: Option<HodlTrackerCursor>,
+    /// The cell-distribution tracker's persisted rows:
+    /// `cell_dist_cohort_by_month` and the `cell_dist_cursor`.
+    pub cell_dist_cohorts: Vec<(String, i128, i128)>,
+    pub cell_dist_cursor: Option<CellDistTrackerCursor>,
     pub hodl_waves: HashMap<String, DailyHodlWave>,
     pub cell_distribution_snapshots: HashMap<String, DailyCellDistribution>,
     pub address_cohort_snapshots: HashMap<String, DailyAddressCohort>,
@@ -4225,16 +4285,20 @@ fn collect_bulk_artifact_snapshot(
     let token_rows = collect_token_raw_rows(domain_store)?;
     let bulk_build_session_marker = domain_store.get_bulk_build_session_marker()?;
     let live_cell_summary = domain_store.get_live_cell_summary()?;
-    let hodl_tracker_state = domain_store.get_hodl_tracker_state()?;
-    let cell_dist_tracker_state = domain_store.get_cell_dist_tracker_state()?;
+    let hodl_capacity_by_date = domain_store.list_hodl_capacity_by_date()?;
+    let hodl_cursor = domain_store.get_hodl_cursor()?;
+    let cell_dist_cohorts = domain_store.list_cell_dist_cohorts()?;
+    let cell_dist_cursor = domain_store.get_cell_dist_cursor()?;
 
     Ok(BulkArtifactSnapshot {
         report,
         sync_status,
         live_cell_summary,
         bulk_build_session_marker,
-        hodl_tracker_state,
-        cell_dist_tracker_state,
+        hodl_capacity_by_date,
+        hodl_cursor,
+        cell_dist_cohorts,
+        cell_dist_cursor,
         hodl_waves,
         cell_distribution_snapshots,
         address_cohort_snapshots,
