@@ -1,8 +1,8 @@
-# ckbadger-store Column Families (74 total: 70 domain + 1 append-only + 3 network)
+# ckbadger-store Column Families (75 total: 71 domain + 1 append-only + 3 network)
 
 ckbadger runs three logical RocksDB store classes (all backed by `ckbadger-store`):
 
-- **Domain store** (`[store].domain_data_path`, 70 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
+- **Domain store** (`[store].domain_data_path`, 71 CFs) — canonical chain view, all mutable state including activities, addr_txs, live/consumed cell markers, indexes, stats, and aggregates. May perform create/update/delete as required by chain progression and reorg handling.
 - **Append-only store** (`[store].append_only_data_path`, 1 CF: `cells`) — immutable cell payloads, content-addressed by outpoint. Write-once, never updated or deleted.
 - **Network store** (`[store].network_data_path`, 3 CFs: `net_nodes`, `net_stats`, `net_crawl`) —
   crawler p2p probes, configured-local-node session observations, and durable in-progress crawl
@@ -666,7 +666,7 @@ Cell distribution and address cohort snapshots are materialized by the indexer d
 
 ## Network Store
 
-The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 74 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
+The **network store** (`[store].network_data_path`, default `data/network`, CFs `net_nodes` + `net_stats` + `net_crawl`) is a distinct third RocksDB store class holding whole-network CKB L1 crawler observations, configured-local-node session observations, and resumable crawl state. This remains exactly 3 network CFs and 75 CFs overall; the richer evidence model adds no CF. Unlike the two chain stores it is:
 
 - **Non-chain / non-deterministic** — contents are derived from live peer-to-peer observation
   (crawler Identify/Discovery probes and configured-node `local_node_info`/`get_peers` sessions),
@@ -876,7 +876,7 @@ Memory sizing is per network rather than a fixed host-wide peak:
 ### Live Write Buffers and Flush Frequency
 
 `atomic_flush = 1` means any single CF hitting its write buffer switches memtables for the
-**whole** database, so the smallest per-CF buffer decides how often all 70 CFs flush together.
+**whole** database, so the smallest per-CF buffer decides how often all 71 CFs flush together.
 
 - Per-CF write buffers come from the memory profile, in three tiers: `write_buffer_mega_bytes`
   (base 256 MB, clamped 64 MB-1 GB), `write_buffer_high_bytes` (base 128 MB, clamped 32-512 MB)
