@@ -293,16 +293,30 @@ impl CkbadgerStore {
                 &keys::encode_block_num(block_num),
                 &keys::encode_tx_idx(tx_idx),
             ]);
-            let mut batch = rocksdb::WriteBatch::default();
-            batch.put_cf(self.cf_tx_index(), &key, bincode::serialize(&entry).with_context(|| format!("failed to serialize tx index entry {block_num}:{tx_idx}"))?);
+            // An unjournaled StoreBatch, so the journal discipline sees each
+            // write (both CFs are RangeByBlock), written under the gate the
+            // closure holds: the store's only raw WriteBatch commit is the
+            // rollback core's.
+            let mut batch = crate::StoreBatch::new(self);
+            batch.put_raw_cf_by_name(
+                crate::store::CF_TX_INDEX,
+                &key,
+                &bincode::serialize(&entry).with_context(|| {
+                    format!("failed to serialize tx index entry {block_num}:{tx_idx}")
+                })?,
+            )?;
             // The record lives at the transaction's canonical slot, so the
             // rollback that removes the slot's tx_index row removes it too.
             if let Some(record) = record {
-                batch.put_cf(self.cf_tx_group_cycles(), &key, bincode::serialize(&record)?);
+                batch.put_raw_cf_by_name(
+                    crate::store::CF_TX_GROUP_CYCLES,
+                    &key,
+                    &bincode::serialize(&record)?,
+                )?;
             } else {
-                batch.delete_cf(self.cf_tx_group_cycles(), &key);
+                batch.delete_raw_cf_by_name(crate::store::CF_TX_GROUP_CYCLES, &key)?;
             }
-            db.write(batch).with_context(|| format!(
+            db.write(batch.into_write_batch()?).with_context(|| format!(
                 "failed to write canonical tx cycles: hash=0x{}, block={block_num}, index={tx_idx}",
                 bytes_to_hex(expected_hash)
             ))
@@ -513,6 +527,10 @@ mod tests {
         let mut header_batch = StoreBatch::new(&store);
         header_batch.put_block_header(block_num, &make_header(0x77));
         header_batch.commit().unwrap();
+        // The cycles worker runs under the indexer's journal discipline: its
+        // writes (tx_index, tx_group_cycles) go through an unjournaled
+        // StoreBatch and pass it, with no raw WriteBatch.
+        store.enforce_journal_discipline();
         store
             .persist_tx_cycles(
                 block_num,

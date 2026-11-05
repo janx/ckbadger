@@ -82,7 +82,11 @@ impl CkbadgerStore {
                 crate::bytes_to_hex(expected_block_hash), header.cycles);
             header.cycles = Some(total);
             let value = bincode::serialize(&header)?;
-            db.put_cf(self.cf_block_headers(), key, &value)?;
+            // The header row only (block_headers is RangeByBlock); through an
+            // unjournaled StoreBatch so the journal discipline sees the write.
+            let mut batch = crate::StoreBatch::new(self);
+            batch.put_raw_cf_by_name(crate::store::CF_BLOCK_HEADERS, &key, &value)?;
+            db.write(batch.into_write_batch()?)?;
             Ok(total)
         })
     }
@@ -433,6 +437,10 @@ mod tests {
         batch.put_tx_index(42, 0, &cellbase);
         batch.put_tx_index(42, 1, &tx);
         batch.commit().unwrap();
+        // The cycles worker runs under the indexer's journal discipline: the
+        // header write goes through an unjournaled StoreBatch and passes it
+        // (the fixture's later rows are RangeByBlock tx_index rows).
+        store.enforce_journal_discipline();
         let identities = [(0, [1; 32]), (1, [2; 32])];
         let error = store
             .update_block_cycles_if_complete(42, &hash, &identities)
@@ -490,8 +498,15 @@ mod tests {
         for cached_total in [-2, -1, 0, 76, 78] {
             let mut contradictory = header.clone();
             contradictory.cycles = Some(cached_total);
+            // The header row only (its hash index row is unchanged).
             let mut batch = StoreBatch::new(&store);
-            batch.put_block_header(42, &contradictory);
+            batch
+                .put_raw_cf_by_name(
+                    crate::store::CF_BLOCK_HEADERS,
+                    &keys::encode_block_num(42),
+                    &bincode::serialize(&contradictory).unwrap(),
+                )
+                .unwrap();
             batch.commit().unwrap();
             let error = store
                 .update_block_cycles_if_complete(42, &hash, &identities)
@@ -508,7 +523,13 @@ mod tests {
         let mut correct_header = header.clone();
         correct_header.cycles = Some(77);
         let mut batch = StoreBatch::new(&store);
-        batch.put_block_header(42, &correct_header);
+        batch
+            .put_raw_cf_by_name(
+                crate::store::CF_BLOCK_HEADERS,
+                &keys::encode_block_num(42),
+                &bincode::serialize(&correct_header).unwrap(),
+            )
+            .unwrap();
         batch.commit().unwrap();
 
         let mut batch = StoreBatch::new(&store);
