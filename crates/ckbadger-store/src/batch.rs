@@ -582,7 +582,12 @@ impl<'a> StoreBatch<'a> {
     /// discipline: a refusal is kept and fails the commit. (A journaled
     /// batch routes its `Journal`-class writes into the overlay instead.)
     fn check_discipline(&mut self, cf: &ColumnFamily, key: &[u8]) {
-        if self.journal.is_some() || self.discipline_error.is_some() {
+        // Bulk sync (and a store without the discipline) pays nothing per row:
+        // the discipline is decided before any handle-to-name lookup.
+        if self.journal.is_some()
+            || self.discipline_error.is_some()
+            || !self.store.journal_discipline_applies()
+        {
             return;
         }
         let checked = self

@@ -2788,7 +2788,7 @@ impl CkbadgerStore {
         self.journal_discipline.store(true, Ordering::Relaxed);
     }
 
-    fn journal_discipline_applies(&self) -> bool {
+    pub(crate) fn journal_discipline_applies(&self) -> bool {
         self.journal_discipline.load(Ordering::Relaxed) && !self.is_bulk_sync_mode()
     }
 
