@@ -2253,31 +2253,20 @@ impl SyncStatus {
         }
     }
 
+    /// [`SyncRuntimeStatus::init_sync_start`] on this status's runtime part
+    /// (the one rule).
     pub fn init_sync_start(&mut self, start_block: i64, is_bulk_sync: bool) {
-        if is_bulk_sync {
-            let should_start_new_bulk_session = self.sync_started_at.is_none()
-                || self.bulk_sync_completed_at.is_some()
-                || start_block < self.sync_started_block;
-
-            if should_start_new_bulk_session {
-                self.sync_started_at = Some(chrono::Utc::now().timestamp());
-                self.sync_started_block = start_block;
-                self.bulk_sync_completed_at = None;
-                self.bulk_sync_completed_block = None;
-            }
-        } else {
-            if self.sync_started_at.is_none() || start_block < self.sync_started_block {
-                self.sync_started_at = Some(chrono::Utc::now().timestamp());
-            }
-            self.sync_started_block = start_block;
-        }
+        let mut runtime = self.runtime();
+        runtime.init_sync_start(start_block, is_bulk_sync);
+        *self = Self::from_parts(self.chain(), runtime);
     }
 
+    /// [`SyncRuntimeStatus::mark_bulk_sync_completed`] on this status's
+    /// runtime part (the one rule).
     pub fn mark_bulk_sync_completed(&mut self, chain_tip: i64) {
-        if self.bulk_sync_completed_at.is_none() {
-            self.bulk_sync_completed_at = Some(chrono::Utc::now().timestamp());
-            self.bulk_sync_completed_block = Some(chain_tip);
-        }
+        let mut runtime = self.runtime();
+        runtime.mark_bulk_sync_completed(chain_tip);
+        *self = Self::from_parts(self.chain(), runtime);
     }
 
     pub fn bulk_sync_total_seconds(&self) -> Option<i64> {
