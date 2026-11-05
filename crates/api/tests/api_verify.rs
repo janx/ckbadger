@@ -393,36 +393,6 @@ async fn a_matching_expected_anchor_is_accepted() {
 }
 
 #[tokio::test]
-async fn a_rollback_cleanup_in_progress_withholds_the_numbers() {
-    let store = test_store();
-    let hash = token_hash(0xdd);
-    seed_anchor(&store, 42, &token_hash(0x06));
-    seed_token(&store, &hash, &[(20260101, 7, 7)]);
-    store.set_rollback_cleanup_in_progress(true).unwrap();
-
-    let app = create_router_without_warmup(test_config(store));
-    let (status, body) = post(
-        app,
-        serde_json::json!({ "entities": [{ "kind": "token", "id": hex0x(&hash) }] }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(body["state"]["rollbackCleanupInProgress"], true);
-    assert_eq!(body["complete"], false);
-    let entity = &body["entities"][0];
-    assert_eq!(entity["complete"], false);
-    assert!(
-        entity["currentCapacity"].is_null(),
-        "a withheld export publishes no totals either"
-    );
-    assert!(
-        entity["daily"].as_array().unwrap().is_empty(),
-        "a mid-rollback view must not be published as raw statistics"
-    );
-}
-
-#[tokio::test]
 async fn an_unfinished_bulk_session_withholds_the_numbers() {
     let store = test_store();
     let hash = token_hash(0xde);
@@ -991,7 +961,9 @@ async fn indexed_calendar_withheld_state_does_not_read_incomplete_headers() {
             request["expectedAnchor"] =
                 serde_json::json!({ "blockNumber": 9, "blockHash": hex0x(&token_hash(9)) });
         } else {
-            store.set_rollback_cleanup_in_progress(true).unwrap();
+            store
+                .update_sync_status(|status| status.deep_fork_detected = true)
+                .unwrap();
         }
         let (status, body) = post(create_router_without_warmup(test_config(store)), request).await;
         assert_eq!(status, StatusCode::OK, "{body}");

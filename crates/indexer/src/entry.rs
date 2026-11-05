@@ -196,16 +196,13 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
 
     let mut sync_status = store.get_sync_status()?;
     let previous_runtime = store.get_runtime_status()?;
-    let rollback_cleanup_in_progress = store.is_rollback_cleanup_in_progress()?;
-    let startup_cleanup = startup_cleanup_decision(&previous_runtime, rollback_cleanup_in_progress);
-    let previous_run_unclean =
-        should_force_startup_cleanup(&previous_runtime, rollback_cleanup_in_progress);
+    let startup_cleanup = startup_cleanup_decision(&previous_runtime);
+    let previous_run_unclean = should_force_startup_cleanup(&previous_runtime);
     debug_assert_eq!(previous_run_unclean, startup_cleanup.force_cleanup);
     config.force_startup_cleanup = previous_run_unclean;
     info!(
         force_startup_cleanup = startup_cleanup.force_cleanup,
         startup_cleanup_reason = startup_cleanup.reason,
-        rollback_cleanup_in_progress,
         previous_active_run_id = ?previous_runtime.active_run_id,
         previous_last_run_id = ?previous_runtime.last_run_id,
         previous_last_shutdown_reason = ?previous_runtime.last_shutdown_reason,
@@ -218,7 +215,6 @@ pub async fn run_indexer_sync(mut config: Config) -> Result<()> {
     );
     if previous_run_unclean {
         info!(
-            rollback_cleanup_in_progress,
             startup_cleanup_reason = startup_cleanup.reason,
             "Forcing startup rollback cleanup to reconcile append-only state"
         );
@@ -1213,17 +1209,7 @@ struct StartupCleanupDecision {
     reason: &'static str,
 }
 
-fn startup_cleanup_decision(
-    previous_runtime: &RuntimeStatus,
-    rollback_cleanup_in_progress: bool,
-) -> StartupCleanupDecision {
-    if rollback_cleanup_in_progress {
-        return StartupCleanupDecision {
-            force_cleanup: true,
-            reason: "rollback_cleanup_in_progress",
-        };
-    }
-
+fn startup_cleanup_decision(previous_runtime: &RuntimeStatus) -> StartupCleanupDecision {
     let Some(active_run_id) = previous_runtime.active_run_id.as_deref() else {
         let incident_requires_cleanup = previous_runtime.last_incident_summary.as_deref()
             == Some("pipeline_batch_write_failed")
@@ -1261,11 +1247,8 @@ fn startup_cleanup_decision(
     }
 }
 
-fn should_force_startup_cleanup(
-    previous_runtime: &RuntimeStatus,
-    rollback_cleanup_in_progress: bool,
-) -> bool {
-    startup_cleanup_decision(previous_runtime, rollback_cleanup_in_progress).force_cleanup
+fn should_force_startup_cleanup(previous_runtime: &RuntimeStatus) -> bool {
+    startup_cleanup_decision(previous_runtime).force_cleanup
 }
 
 fn monotonic_counter_delta(current: Option<u64>, previous: Option<u64>) -> Option<u64> {
@@ -1774,13 +1757,13 @@ mod tests {
             active_run_id: Some("run-xyz".to_string()),
             ..Default::default()
         };
-        assert!(should_force_startup_cleanup(&runtime, false));
+        assert!(should_force_startup_cleanup(&runtime));
     }
 
     #[test]
     fn test_should_not_force_startup_cleanup_when_no_active_run() {
         let runtime = RuntimeStatus::default();
-        assert!(!should_force_startup_cleanup(&runtime, false));
+        assert!(!should_force_startup_cleanup(&runtime));
     }
 
     #[test]
@@ -1794,7 +1777,7 @@ mod tests {
             last_exit_code: Some(0),
             ..Default::default()
         };
-        assert!(!should_force_startup_cleanup(&runtime, false));
+        assert!(!should_force_startup_cleanup(&runtime));
     }
 
     #[test]
@@ -1808,21 +1791,7 @@ mod tests {
             last_exit_code: Some(0),
             ..Default::default()
         };
-        assert!(should_force_startup_cleanup(&runtime, false));
-    }
-
-    #[test]
-    fn test_should_force_startup_cleanup_when_rollback_marker_set() {
-        let runtime = RuntimeStatus::default();
-        assert!(should_force_startup_cleanup(&runtime, true));
-    }
-
-    #[test]
-    fn test_startup_cleanup_decision_reason_for_rollback_marker() {
-        let runtime = RuntimeStatus::default();
-        let decision = startup_cleanup_decision(&runtime, true);
-        assert!(decision.force_cleanup);
-        assert_eq!(decision.reason, "rollback_cleanup_in_progress");
+        assert!(should_force_startup_cleanup(&runtime));
     }
 
     #[test]
@@ -1836,7 +1805,7 @@ mod tests {
             last_exit_code: Some(0),
             ..Default::default()
         };
-        let decision = startup_cleanup_decision(&runtime, false);
+        let decision = startup_cleanup_decision(&runtime);
         assert!(!decision.force_cleanup);
         assert_eq!(decision.reason, "active_run_has_clean_shutdown_marker");
     }
@@ -1849,7 +1818,7 @@ mod tests {
             last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
             ..Default::default()
         };
-        let decision = startup_cleanup_decision(&runtime, false);
+        let decision = startup_cleanup_decision(&runtime);
         assert!(decision.force_cleanup);
         assert_eq!(decision.reason, "last_incident_pipeline_batch_write_failed");
     }
@@ -1862,7 +1831,7 @@ mod tests {
             last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
             ..Default::default()
         };
-        assert!(should_force_startup_cleanup(&runtime, false));
+        assert!(should_force_startup_cleanup(&runtime));
     }
 
     #[test]
@@ -1873,7 +1842,7 @@ mod tests {
             last_incident_summary: Some("pipeline_batch_write_failed".to_string()),
             ..Default::default()
         };
-        assert!(!should_force_startup_cleanup(&runtime, false));
+        assert!(!should_force_startup_cleanup(&runtime));
     }
 
     #[test]

@@ -2149,36 +2149,8 @@ impl Indexer {
                         break Some((attempt_input_cell_info, attempt_cache_hits, db_lookups));
                     }
 
-                    // A reorg rollback stages its writes and commits them
-                    // atomically at the end, so until it lands the store still
-                    // shows the orphaned view these inputs are missing from.
-                    // Waiting it out is expected; see
-                    // `advance_unresolved_retry_budget`.
-                    let rollback_in_progress = match writer_for_parser
-                        .store()
-                        .is_rollback_cleanup_in_progress()
-                    {
-                        Ok(flag) => flag,
-                        Err(e) => {
-                            error!(
-                                start_block,
-                                end_block,
-                                error = %e,
-                                "Parser: cannot read rollback-cleanup marker; stopping parser task"
-                            );
-                            record_worker_exit_reason(
-                                &parser_exit_reason_for_parser,
-                                format!(
-                                    "failed to read rollback-cleanup marker while resolving inputs for range {start_block}-{end_block}: {e}"
-                                ),
-                            );
-                            return;
-                        }
-                    };
-                    let retry_decision = advance_unresolved_retry_budget(
-                        &mut unresolved_retry_count,
-                        rollback_in_progress,
-                    );
+                    let retry_decision =
+                        advance_unresolved_retry_budget(&mut unresolved_retry_count);
                     unresolved_attempts += 1;
                     if should_log_unresolved_retry(unresolved_attempts) {
                         let unresolved_local_probe = classify_unresolved_local_probe(
@@ -2208,7 +2180,6 @@ impl Indexer {
                             end_block,
                             attempt = unresolved_attempts,
                             retry = unresolved_retry_count,
-                            rollback_in_progress,
                             unresolved_count = unresolved_outpoints.len(),
                             unresolved_sample = %format_outpoint_sample(&unresolved_outpoints, 5),
                             db_lookup_failed,

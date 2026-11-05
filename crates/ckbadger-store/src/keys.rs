@@ -804,8 +804,7 @@ pub fn encode_stats_key(prefix: u8, suffix: &[u8]) -> Vec<u8> {
 ///   hourly activity series aligned with its UTC+8 daily parent.
 ///
 /// Any cutoff/window computation against an hour-keyed prefix MUST use the
-/// clock of that prefix (see reorg `should_delete_stats_for_replay`, which
-/// carries one cutoff per clock).
+/// clock of that prefix.
 pub mod stats_prefix {
     /// Chain daily stats. Suffix: `%Y%m%d`, UTC+8 calendar day.
     pub const DAILY: u8 = 0x01;
@@ -2206,7 +2205,6 @@ pub mod sync_meta_keys {
     pub const TIP_BLOCK: &[u8] = b"tip_block";
     pub const SYNC_STATUS: &[u8] = b"sync_status";
     pub const RUNTIME_STATUS: &[u8] = b"runtime_status";
-    pub const ROLLBACK_CLEANUP_IN_PROGRESS: &[u8] = b"rollback_cleanup_in_progress";
     /// Automatic fork event awaiting canonical replay and reversal reconciliation.
     pub const REORG_RECONCILE_PENDING: &[u8] = b"reorg_reconcile_pending";
     pub const DEEP_FORK: &[u8] = b"deep_fork";
@@ -2273,41 +2271,6 @@ pub fn encode_hourly_retention_state_key(family: &str) -> Vec<u8> {
     let mut key = sync_meta_keys::HOURLY_RETENTION_STATE_PREFIX.to_vec();
     key.extend_from_slice(family.as_bytes());
     key
-}
-
-/// Block-end summary history used only for bounded shallow-reorg restoration.
-pub const LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX: &[u8] = b"live_cell_summary:history:";
-pub const LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE: usize =
-    LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX.len() + BLOCK_NUM_KEY_SIZE;
-
-pub fn encode_live_cell_summary_history_key(block_number: i64) -> Vec<u8> {
-    let mut key = Vec::with_capacity(LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE);
-    key.extend_from_slice(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX);
-    key.extend_from_slice(&encode_block_num(block_number));
-    key
-}
-
-pub fn decode_live_cell_summary_history_key(key: &[u8]) -> anyhow::Result<i64> {
-    if key.len() != LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE
-        || !key.starts_with(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX)
-    {
-        anyhow::bail!(
-            "malformed live-cell summary history key: expected prefix=0x{} length={}, got key=0x{} length={}",
-            crate::bytes_to_hex(LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX),
-            LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE,
-            crate::bytes_to_hex(key),
-            key.len(),
-        );
-    }
-    let block_number = decode_block_num(&key[LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX.len()..]);
-    if block_number < 0 {
-        anyhow::bail!(
-            "live-cell summary history key contains negative block: block={} key=0x{}",
-            block_number,
-            crate::bytes_to_hex(key),
-        );
-    }
-    Ok(block_number)
 }
 
 // -- Reorg event history (CF_SYNC_META) --
@@ -2500,28 +2463,6 @@ pub fn decode_addr_fiber_channel_key(key: &[u8]) -> (&[u8], &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn live_cell_summary_history_key_roundtrip_and_order() {
-        let first = encode_live_cell_summary_history_key(12_345_678);
-        let second = encode_live_cell_summary_history_key(12_345_679);
-
-        assert_eq!(first.len(), LIVE_CELL_SUMMARY_HISTORY_KEY_SIZE);
-        assert_eq!(
-            decode_live_cell_summary_history_key(&first).unwrap(),
-            12_345_678
-        );
-        assert!(first < second);
-    }
-
-    #[test]
-    fn live_cell_summary_history_key_rejects_wrong_shape() {
-        let error =
-            decode_live_cell_summary_history_key(b"live_cell_summary:history:short").unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("malformed live-cell summary history key"));
-    }
 
     #[test]
     fn test_reorg_event_key_roundtrip_and_shape() {

@@ -41,9 +41,8 @@ impl BatchWriter {
     ///
     /// Every mutation goes through the batch overlay, which records the value
     /// as of the end of the previous block the first time a given block touches
-    /// a given key. That undo entry is the ONLY thing that restores these rows
-    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
-    /// them (Task 2.4). Every contribution carries at least one transaction,
+    /// a given key. Its block journal entry is what restores these rows
+    /// after a shallow fork. Every contribution carries at least one transaction,
     /// so every one is written, including a net-zero capacity change.
     pub fn update_token_daily_deltas_batch(
         &self,

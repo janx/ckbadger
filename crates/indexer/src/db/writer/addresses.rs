@@ -1810,9 +1810,8 @@ impl BatchWriter {
     ///
     /// Every mutation goes through the batch overlay, which records the value
     /// as of the end of the previous block the first time a given block touches
-    /// a given key. That undo entry is the ONLY thing that restores these rows
-    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
-    /// them (Task 2.4).
+    /// a given key. Its block journal entry is what restores these rows
+    /// after a shallow fork.
     pub fn update_script_daily_deltas_batch(
         &self,
         changes: &EntityDailyChanges<ScriptDailyKey>,

@@ -1180,7 +1180,6 @@ mod tests {
         assert_eq!(info.chain_tip, 130);
         assert_eq!(info.depth, 20);
         assert_eq!(store.get_live_cell_summary().unwrap(), None);
-        assert_eq!(store.get_live_cell_summary_at(120).unwrap(), Some(summary));
     }
 
     #[tokio::test]

@@ -1833,18 +1833,6 @@ async fn get_live_cell_summary(
             if !initialized {
                 return Err(initializing());
             }
-            let rollback_in_progress =
-                state
-                    .store
-                    .is_rollback_cleanup_in_progress()
-                    .map_err(|error| {
-                        ApiError::internal(format!(
-                            "failed to read live-cell summary rollback state: {error}"
-                        ))
-                    })?;
-            if rollback_in_progress {
-                return Err(initializing());
-            }
             let status = state.store.get_sync_status().map_err(|error| {
                 ApiError::internal(format!(
                     "failed to read sync status for live-cell summary: {error}"

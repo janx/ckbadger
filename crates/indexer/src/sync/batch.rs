@@ -318,22 +318,6 @@ fn prepare_live_cell_summary_snapshots(
                 hex::encode(&status.tip_block_hash),
             );
         }
-        let history = store
-            .get_live_cell_summary_at(expected_previous)?
-            .ok_or_else(|| {
-                anyhow!(
-                    "missing live-cell summary history at current tip: block={}; purge and re-sync from genesis",
-                    expected_previous,
-                )
-            })?;
-        if history != current {
-            bail!(
-                "current/history live-cell summary mismatch: block={} current={:?} history={:?}",
-                expected_previous,
-                current,
-                history,
-            );
-        }
         LiveCellSummaryCounter::from_summary(&current)?
     };
 

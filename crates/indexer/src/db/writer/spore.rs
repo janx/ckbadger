@@ -378,13 +378,10 @@ impl BatchWriter {
     /// `.cell` all write them through here, so there is one definition of what
     /// a rollback has to undo.
     ///
-    /// The pre-images are what make the rollback exact. The repair stage
-    /// cleans these rows by scanning entries that SURVIVE, and neither case
-    /// that matters survives in the right shape: a rolled-back mint's entry is
-    /// already deleted by the undo replay that runs first
-    /// (`db/writer/reorg.rs:153-160`), and a rolled-back TRANSFER leaves the
-    /// item alive, so it is never a delete candidate at all while its second
-    /// outpoint row sits there pointing at a transaction that no longer exists.
+    /// The block journal records each row's previous value in the writing
+    /// block's scope: a rolled-back mint's rows and a rolled-back TRANSFER's
+    /// second outpoint row (the item itself survives) both go with their
+    /// block.
     pub(super) fn put_object_outpoint_rows(
         &self,
         id: &[u8],
@@ -1339,9 +1336,8 @@ impl BatchWriter {
     ///
     /// Every mutation goes through the batch overlay, which records the value
     /// as of the end of the previous block the first time a given block touches
-    /// a given key. That undo entry is the ONLY thing that restores these rows
-    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
-    /// them (Task 2.4).
+    /// a given key. Its block journal entry is what restores these rows
+    /// after a shallow fork.
     pub fn update_spore_daily_deltas_batch(
         &self,
         changes: &EntityDailyChanges<EntityDateKey>,
@@ -1417,9 +1413,8 @@ impl BatchWriter {
     ///
     /// Every mutation goes through the batch overlay, which records the value
     /// as of the end of the previous block the first time a given block touches
-    /// a given key. That undo entry is the ONLY thing that restores these rows
-    /// after a shallow fork — `should_delete_stats_for_replay` no longer deletes
-    /// them (Task 2.4).
+    /// a given key. Its block journal entry is what restores these rows
+    /// after a shallow fork.
     pub fn update_cluster_daily_deltas_batch(
         &self,
         changes: &EntityDailyChanges<EntityDateKey>,

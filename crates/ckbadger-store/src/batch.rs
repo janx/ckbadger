@@ -1911,11 +1911,10 @@ impl<'a> StoreBatch<'a> {
 
     // ---- Sync meta ----
 
-    /// Stage block-end live-cell summaries into the bounded history ring and
-    /// publish each as the API-visible current value, every summary's writes
-    /// in its own block's scope (on a live batch the block journal then holds
-    /// the ring entry, the expired entry and the current value as of the end
-    /// of every block); the last one stays current.
+    /// Publish block-end live-cell summaries as the API-visible current value,
+    /// each in its own block's scope (on a live batch the block journal then
+    /// holds the current value as of the end of every block, which is how a
+    /// rollback restores it); the last one stays current.
     ///
     /// This is a domain-store mutation. It intentionally has no append-only
     /// equivalent: `CF_CELLS` remains immutable cell payload history.
@@ -1960,17 +1959,6 @@ impl<'a> StoreBatch<'a> {
                 )
             })?;
             let mut scope = self.at(summary.tip_block_number);
-            let history_key = keys::encode_live_cell_summary_history_key(summary.tip_block_number);
-            scope.put_sync_meta(&history_key, &value);
-
-            if let Some(expired_block) = summary
-                .tip_block_number
-                .checked_sub(LIVE_CELL_SUMMARY_HISTORY_BLOCKS)
-                .filter(|block| *block >= 0)
-            {
-                let expired_key = keys::encode_live_cell_summary_history_key(expired_block);
-                scope.delete_sync_meta(&expired_key);
-            }
             if previous_block.is_none() {
                 scope.put_sync_meta(keys::sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED, &[1u8]);
             }

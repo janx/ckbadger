@@ -1,9 +1,9 @@
 //! Task 1.2 — per-block entity stats rollback and replay-equivalence matrix.
 //!
 //! These tests drive the real `BatchWriter` daily writers and the real
-//! `EntityStatsOverlay` hourly path, then roll back with the production
-//! two-phase path (`rollback_via_undo_log` + `rollback_to_block_with_append_only_store`,
-//! the exact order `BatchWriter::execute_reorg` uses) and compare the resulting
+//! `EntityStatsOverlay` hourly path through a journaled batch, then roll back
+//! with the production rollback (`CkbadgerStore::rollback_to_block`, the block
+//! journal `BatchWriter::execute_reorg` replays) and compare the resulting
 //! eight entity stats families byte-for-byte against a second, independently
 //! built store that synced the surviving branch directly.
 //!

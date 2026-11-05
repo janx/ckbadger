@@ -2088,9 +2088,6 @@ pub struct SyncStatus {
 /// `live_cells` is deliberately not persisted: it is the checked sum of the
 /// three mutually-exclusive classes, so a stored total can never drift from
 /// its partition. Every field has a fixed-width binary representation.
-pub const LIVE_CELL_SUMMARY_HISTORY_BLOCKS: i64 =
-    ckbadger_common::MAX_SHALLOW_REORG_DEPTH as i64 + 1;
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LiveCellSummary {
     pub tip_block_number: i64,

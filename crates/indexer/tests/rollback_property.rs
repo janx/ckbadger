@@ -638,8 +638,8 @@ const JOURNAL_COVERED: &[(&str, Option<u8>)] = &[
 /// its block.
 const JOURNAL_COVERED_KEYS: &[(&str, &[u8])] = &[
     // B-3 sync/batch.rs: `sync_status` is written per block (that block's tip
-    // and running totals) and each live-cell summary (current value, history
-    // ring entry, the expired entry it deletes) in its block's scope.
+    // and running totals) and each live-cell summary (current value) in its
+    // block's scope.
     (ckbadger_store::CF_SYNC_META, sync_meta_keys::SYNC_STATUS),
     (
         ckbadger_store::CF_SYNC_META,
@@ -648,10 +648,6 @@ const JOURNAL_COVERED_KEYS: &[(&str, &[u8])] = &[
     (
         ckbadger_store::CF_SYNC_META,
         sync_meta_keys::LIVE_CELL_SUMMARY_INITIALIZED,
-    ),
-    (
-        ckbadger_store::CF_SYNC_META,
-        keys::LIVE_CELL_SUMMARY_HISTORY_KEY_PREFIX,
     ),
     // B-3 statistics.rs: the entity-stats undo contract and the hourly
     // retention states depend only on the committed tip and are written in

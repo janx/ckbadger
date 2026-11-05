@@ -793,8 +793,7 @@ impl BulkBuildEngine {
         let finalize_started_copy = finalize_started;
         let materialize_shutdown = indexer.shutdown_flag();
 
-        let live_cell_summaries: Vec<LiveCellSummary> =
-            runtime.sequencer.live_cell_summaries().copied().collect();
+        let live_cell_summary = runtime.sequencer.last_live_cell_summary().copied();
 
         let BulkBuildRuntimeState {
             owners,
@@ -927,7 +926,7 @@ impl BulkBuildEngine {
             sync_totals.finalize_success(
                 indexer.writer.store().as_ref(),
                 false,
-                &live_cell_summaries,
+                live_cell_summary.as_ref(),
             )?;
             indexer.writer.refresh_latest_dao_statistics()?;
         }
@@ -1049,7 +1048,7 @@ impl BulkBuildSyncTotals {
         self,
         store: &CkbadgerStore,
         mark_bulk_sync_completed: bool,
-        live_cell_summaries: &[LiveCellSummary],
+        live_cell_summary: Option<&LiveCellSummary>,
     ) -> Result<SyncStatus> {
         let mut status = store.get_sync_status()?;
 
@@ -1083,9 +1082,9 @@ impl BulkBuildSyncTotals {
             status.mark_bulk_sync_completed(status.tip_block_number);
         }
 
-        let summary = live_cell_summaries.last().ok_or_else(|| {
+        let summary = live_cell_summary.ok_or_else(|| {
             anyhow!(
-                "bulk build produced no live-cell summary snapshots: status_tip_block={} status_tip_hash=0x{}",
+                "bulk build produced no live-cell summary: status_tip_block={} status_tip_hash=0x{}",
                 status.tip_block_number,
                 hex::encode(&status.tip_block_hash),
             )
@@ -1107,7 +1106,7 @@ impl BulkBuildSyncTotals {
         )?;
 
         let mut batch = ckbadger_store::batch::StoreBatch::new(store);
-        batch.put_live_cell_summary_snapshots(live_cell_summaries)?;
+        batch.put_live_cell_summary_snapshots(std::slice::from_ref(summary))?;
         let status_bytes = bincode::serialize(&status)
             .with_context(|| "failed to serialize bulk-build sync status")?;
         batch.put_sync_meta(keys::sync_meta_keys::SYNC_STATUS, &status_bytes);
@@ -3256,7 +3255,7 @@ impl BulkBuildRuntimeState {
         self,
         domain_store: &CkbadgerStore,
         materializer: &mut materialize::Materializer<'_>,
-    ) -> Result<Vec<LiveCellSummary>> {
+    ) -> Result<Option<LiveCellSummary>> {
         // Genesis-derived burn adjustment for knowledge_size. Fail-fast if the
         // baseline was never derived (single calculation path, no fallback).
         let virtual_occupied = domain_store
@@ -3266,11 +3265,7 @@ impl BulkBuildRuntimeState {
             })?
             .virtual_occupied;
         let prepared_finalize = self.prepare_finalize_artifacts(virtual_occupied)?;
-        let live_cell_summaries = self
-            .sequencer
-            .live_cell_summaries()
-            .copied()
-            .collect::<Vec<_>>();
+        let live_cell_summary = self.sequencer.last_live_cell_summary().copied();
         let BulkBuildRuntimeState {
             owners,
             sequencer,
@@ -3290,7 +3285,7 @@ impl BulkBuildRuntimeState {
         owners.materialize_all(materializer)?;
 
         stage_tracker_rows(domain_store, &hodl_tracker, &cell_dist_tracker)?;
-        Ok(live_cell_summaries)
+        Ok(live_cell_summary)
     }
 
     fn prepare_finalize_artifacts(
@@ -3999,10 +3994,13 @@ where
             processed_blocks = block_idx + 1;
         }
 
-        let live_cell_summaries = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
         flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
-        let sync_status =
-            sync_totals.finalize_success(domain_store.as_ref(), false, &live_cell_summaries)?;
+        let sync_status = sync_totals.finalize_success(
+            domain_store.as_ref(),
+            false,
+            live_cell_summary.as_ref(),
+        )?;
         crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
             .refresh_latest_dao_statistics()?;
         domain_store.clear_bulk_build_session_marker()?;
@@ -4201,10 +4199,13 @@ fn materialize_bulk_artifacts_from_block_batches_for_test_impl(
             }
             sync_totals.record_batch(&batch_stats)?;
         }
-        let live_cell_summaries = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
+        let live_cell_summary = runtime.finalize(domain_store.as_ref(), &mut materializer)?;
         flush_bulk_build_materialized_state(domain_store.as_ref(), append_store.as_ref())?;
-        let sync_status =
-            sync_totals.finalize_success(domain_store.as_ref(), true, &live_cell_summaries)?;
+        let sync_status = sync_totals.finalize_success(
+            domain_store.as_ref(),
+            true,
+            live_cell_summary.as_ref(),
+        )?;
         if include_latest_dao {
             crate::db::writer::BatchWriter::new(domain_store.clone(), append_store.clone())
                 .refresh_latest_dao_statistics()?;
